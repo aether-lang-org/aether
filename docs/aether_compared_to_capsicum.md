@@ -345,6 +345,192 @@ perl.run_sandboxed(restricted, "open(my $f, '<', '/app/config.yaml') or die")
 
 ---
 
+## Part 1.5 Closing the Gap: What LD_PRELOAD Needs to Match Capsicum
+
+#### Current LD_PRELOAD Capabilities
+
+Aether's LD_PRELOAD layer (`libaether_sandbox_preload.so`) currently intercepts:
+
+| Category | Syscalls Intercepted | Status |
+|----------|----------------------|--------|
+| **File I/O (read)** | `open()`, `openat()`, `open64()`, `openat64()`, `fopen()`, `fopen64()` | ✓ Full |
+| **File I/O (write)** | Same as above with write-flag detection | ✓ Full |
+| **TCP outbound** | `connect()` (IPv4, IPv6 with normalization) | ✓ Full |
+| **TCP inbound** | `bind()`, `listen()`, `accept()`, `accept4()` | ✓ Full |
+| **Process control** | `fork()`, `vfork()`, `clone3()` | ✓ Full |
+| **Program execution** | `execve()` | ✓ Full |
+| **Environment** | `getenv()` | ✓ Full |
+
+#### Current Limitations vs. Capsicum
+
+| Gap | Capsicum | LD_PRELOAD | Impact |
+|-----|----------|-----------|--------|
+| **stat/access bypass** | Blocked by kernel | Not intercepted (glibc inlines as asm) | Can stat() files without permission check |
+| **Metadata access** | CAP_FSTAT denied | Uncontrolled | Can learn file size, permissions, inode |
+| **Memory protection** | CAP_MMAP denied | Not intercepted | Can mmap() arbitrary files |
+| **Irreversible isolation** | `cap_enter()` is irreversible | Sandboxing can be disabled (LD_PRELOAD unloaded at runtime) | No guarantee against circumvention |
+| **File descriptor leaks** | Only passed fds exist | All inherited fds remain open | Inherited sockets, files still accessible |
+| **Signal handling** | CAP_SIGNAL restricted | Not intercepted | Can send signals outside sandbox |
+| **Device access** | All /dev/* access denied | Only open() is checked | Can access /dev/zero, /dev/random |
+| **Socket options** | CAP_SETSOCKOPT denied | Not intercepted | Can set socket options (SO_REUSEADDR, etc.) |
+| **Resource limits** | CAP_FCNTL denied | Not intercepted | Unlimited file descriptors, etc. |
+| **ptrace() access** | Not permitted | Not intercepted | Can ptrace() sibling processes |
+| **Process accounting** | Hidden from sandboxed process | Still visible in /proc | Can enumerate other processes |
+
+#### What LD_PRELOAD Would Need
+
+To match Capsicum's **bulletproof guarantee**, LD_PRELOAD would need:
+
+##### 1. **Kernel Collaboration (Most Critical)**
+
+Capsicum's strength comes from the **kernel enforcing restrictions**. LD_PRELOAD cannot match this without kernel support:
+
+```c
+// Capsicum: irreversible, kernel-enforced
+cap_enter();  // No code can ever undo this
+
+// LD_PRELOAD: can be unloaded at runtime
+dlclose(sandbox_handle);  // Sandbox disappears
+```
+
+**Needed for Linux:** A capability mode like Capsicum (patch to the kernel itself):
+- `prctl(PR_ENTER_CAPMODE)` — irreversible mode that denies all global namespace access
+- Kernel-enforced checks on every syscall
+- ENOTCAPABLE errno for denied operations
+
+##### 2. **Mandatory Interception of All Syscalls**
+
+Some syscalls bypass LD_PRELOAD because glibc inlines them as direct asm:
+
+```c
+// These bypass LD_PRELOAD entirely
+stat(path, &sb);       // glibc inlines this
+access(path, X_OK);    // kernel call, no libc wrapper
+```
+
+**Needed for Linux:** Either:
+- **seccomp + BPF (Secure Computing)** — filter all syscalls at kernel level
+- **ptrace (Tracer process)** — intercept ALL syscalls, including inlined ones
+- **eBPF (extended Berkeley Packet Filter)** — hook syscalls before kernel processing
+
+##### 3. **File Descriptor Tracking & Enforcement**
+
+Capsicum tracks which fds a process can access. LD_PRELOAD cannot:
+
+```c
+// Capsicum: only fds passed are accessible
+// Process cannot open new ones even if code tries
+
+// LD_PRELOAD: inherited fds are accessible, untracked
+// All open fds from parent are available
+```
+
+**Needed for Linux:**
+- Kernel tracking of fd capabilities (fd → rights mapping)
+- Deny operations on fds without proper capabilities
+- Revoke fds when capabilities change
+
+##### 4. **Metadata Access Control**
+
+Capsicum prevents even **reading** metadata (size, permissions, etc.). LD_PRELOAD allows this:
+
+```c
+// Capsicum: stat() on restricted path fails with ENOTCAPABLE
+stat("/etc/passwd", &sb);  // DENIED
+
+// LD_PRELOAD: stat() succeeds (no hook)
+stat("/etc/passwd", &sb);  // ALLOWED (information leak)
+```
+
+**Needed for Linux:**
+- Hook all stat/lstat/fstat/statx variants
+- Deny metadata access for restricted paths
+- Prevent information leaks
+
+##### 5. **Irreversible Sandboxing**
+
+Capsicum's `cap_enter()` is **permanent**. LD_PRELOAD can be circumvented:
+
+```c
+// Capsicum: impossible to escape
+cap_enter();
+// No dlopen, no dlsym, no libc tricks — blocked forever
+
+// LD_PRELOAD: can be unloaded
+if (dlopen("/lib64/ld-linux.so", RTLD_NOW)) {
+    // Manually reload libc without interception
+    // Sandbox bypassed
+}
+```
+
+**Needed for Linux:**
+- Kernel prevents loading additional libraries after sandboxing
+- Deny dlopen/dlsym syscalls in capability mode
+- Lock down LD_PRELOAD at kernel level
+
+##### 6. **Signal & IPC Restrictions**
+
+Capsicum denies signal operations to processes outside the sandbox. LD_PRELOAD doesn't:
+
+```c
+// Capsicum: kill() of arbitrary processes fails
+kill(victim_pid, SIGTERM);  // ENOTCAPABLE if victim outside sandbox
+
+// LD_PRELOAD: no hook for kill()
+kill(victim_pid, SIGTERM);  // ALLOWED
+```
+
+**Needed for Linux:**
+- Hook kill/sigqueue/pidfd_send_signal
+- Check if target is outside sandbox
+- Deny inter-sandbox signaling
+
+#### The Fundamental Limitation
+
+**LD_PRELOAD is a userspace enforcement layer.** It cannot provide the same guarantees as Capsicum because:
+
+1. **Userspace can be patched** — Compiled-in LD_PRELOAD hooks can be circumvented with asm tricks, dlopen of alternative libc, or ptrace self-modification.
+2. **Inlined syscalls bypass interception** — glibc optimizes common syscalls to direct asm, avoiding the libc wrapper that LD_PRELOAD hooks.
+3. **Inherited resources leak** — All file descriptors, signals, memory pages are inherited and accessible; LD_PRELOAD can't revoke them.
+4. **Kernel doesn't enforce** — The kernel doesn't know about sandbox policies; it just executes syscalls.
+
+#### Closest Approximation on Linux: seccomp + BPF
+
+To get **close to** Capsicum's guarantees on Linux, use **seccomp with Berkley Packet Filter (BPF)**:
+
+```c
+// Instead of LD_PRELOAD, use seccomp to block syscalls
+prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
+seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(open), ...);
+seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(clone), ...);
+seccomp_load(ctx);
+```
+
+**Benefits over LD_PRELOAD:**
+- ✓ Kernel-enforced (cannot be bypassed from userspace)
+- ✓ Intercepts all syscalls (including inlined ones)
+- ✓ BPF programs run in the kernel (efficient)
+- ✓ Supports parameter inspection (fd numbers, path arguments)
+
+**Still not equivalent to Capsicum:**
+- ✗ Per-fd capability rights not available (seccomp operates at syscall level, not fd level)
+- ✗ No irreversible "capability mode" (can disable seccomp with CAP_SYS_ADMIN)
+- ✗ File descriptor tracking is manual (need to track fds yourself)
+- ✗ No Casper-style privilege delegation
+
+#### Recommendation
+
+**On Linux without Capsicum:**
+
+1. **For maximum security:** Use `seccomp + BPF` (kernel-enforced) + language-level checks
+2. **For ease of use:** Use LD_PRELOAD + language-level checks (accept inherent limitations)
+3. **For production:** Use both LD_PRELOAD + seccomp + language checks (defense in depth)
+
+**On FreeBSD:** Use Capsicum as layer 4, which is **ironclad** and requires no workarounds.
+
+---
+
 ## Part 2: Architectural Parallels
 
 ### 2.1 Common Principles
