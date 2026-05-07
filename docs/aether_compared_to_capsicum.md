@@ -95,23 +95,46 @@ int main() {
 
 #### Design Principles
 
-Aether's sandbox model uses **three language features** to achieve isolation:
+Aether's sandbox model is actually **three-layered**, combining language-level, hosted-language, and OS-level enforcement:
+
+**Layer 1: Language-level isolation** uses **three language features**:
 
 1. **Closures** — hoisted functions that cannot reach parent locals unless explicitly passed
 2. **Permission contexts** — a data structure (list/map) representing granted capabilities
 3. **Scope hygiene** — `hide` and `seal except` declarations that prevent name lookup in outer scopes
 
+**Layer 2: Hosted-language integration** — Host modules (Ruby, Python, Go) wrap foreign-language interpreters and:
+
+- Install Aether's permission checker (`_aether_sandbox_checker`) before evaluating code
+- Scrub runtime caches (e.g., Ruby's ENV hash) to remove unauthorized variables
+- Push/pop the permission context on the Aether sandbox stack
+- Intercept all libc calls from the host language (open, connect, execve, getenv)
+
+**Layer 3: OS-level enforcement** — An LD_PRELOAD sandbox library (`libaether_sandbox_preload.so`) intercepts syscalls:
+
+- Resolves paths (defeating symlink/`..` bypasses)
+- Pattern-matches grants (category:resource)
+- Blocks denied syscalls at the OS boundary
+- Logs violations for forensics
+
+This three-layer approach means:
+- Aether code is protected by the compiler (layer 1)
+- Host languages (Ruby, Python, Go) are protected by the host module (layer 2)
+- Even if a host module is compromised, LD_PRELOAD blocks syscalls (layer 3)
+
 **Core concepts:**
 
 | Concept | Meaning |
 |---------|---------|
-| **Closure** | A function value that captures a subset of variables; hoisted away from its declaration scope |
-| **Permission context** | A list/map of (category, resource_pattern) tuples representing what a scope can do |
-| **Permission category** | A string like "tcp", "fs_read", "fs_write", "exec", "env" |
-| **Resource pattern** | A glob or exact match for a resource (e.g., "db.internal:5432", "/tmp/*") |
-| **Hide** | A declaration that the enclosing scope cannot see names from outer scopes |
-| **Seal except** | A declaration that the enclosing scope cannot see names except the ones listed |
-| **Containment principle** | The container can see the contained, but the contained cannot reach the container |
+| **Closure** | A function value that captures a subset of variables; hoisted away from its declaration scope (layer 1) |
+| **Permission context** | A list/map of (category, resource_pattern) tuples representing what a scope can do (layer 1-3) |
+| **Permission category** | A string like "tcp", "fs_read", "fs_write", "exec", "env" (layer 1-3) |
+| **Resource pattern** | A glob or exact match for a resource (e.g., "db.internal:5432", "/tmp/*") (layer 1-3) |
+| **Host module** | A C wrapper for a foreign language (Ruby, Python, Go) that installs the permission checker (layer 2) |
+| **LD_PRELOAD sandbox** | A shared library that intercepts libc syscalls and blocks denied operations (layer 3) |
+| **Hide** | A declaration that the enclosing scope cannot see names from outer scopes (layer 1) |
+| **Seal except** | A declaration that the enclosing scope cannot see names except the ones listed (layer 1) |
+| **Containment principle** | The container can see the contained, but the contained cannot reach the container (all layers) |
 
 #### How Aether's Sandbox Works
 
@@ -176,28 +199,125 @@ main() {
 
 **Key properties:**
 
-1. **Language-enforced** — The compiler ensures closures can't reach parent locals.
-2. **Type-safe** — Closure signatures are checked at compile time.
-3. **Transparent** — Permission checks are just function calls; can be optimized away for fully-trusted code.
-4. **Composable** — Actors can nest, each with its own permission context.
-5. **Portable** — Works on any OS; no OS-specific APIs needed.
+1. **Language-enforced** — The compiler ensures closures can't reach parent locals (layer 1).
+2. **Type-safe** — Closure signatures are checked at compile time (layer 1).
+3. **Host-language integration** — Foreign languages (Ruby, Python, Go) get the same isolation via host modules (layer 2).
+4. **OS-level fallback** — LD_PRELOAD intercepts syscalls as a final enforcement layer (layer 3).
+5. **Transparent** — Permission checks are just function calls; can be optimized for fully-trusted code.
+6. **Composable** — Actors can nest, each with its own permission context.
+7. **Portable** — Works on any OS; LD_PRELOAD is available on all POSIX systems.
+
+#### Three-Layer Architecture Diagram
+
+```
++======================== Aether Native Code =========================+
+| Closure (can't reach parent locals) + Permission Context (layer 1) |
++======================================================================+
+          |
+          v
++================ Hosted Language Code (Ruby/Python/Go) ==============+
+| Foreign language interpreter running sandboxed (layer 2)            |
+| - Host module scrubs runtime caches (ENV, $LOAD_PATH, etc.)        |
+| - Permission checker installed: all I/O checked before syscall     |
++======================================================================+
+          |
+          v
++===================== OS Boundary (libc) ===========================+
+| LD_PRELOAD interception of open, connect, execve, getenv (layer 3)|
+| - Resolves paths (defeats symlinks, .., etc.)                      |
+| - Pattern-matches grants (category:resource)                       |
+| - Blocks denied syscalls with errno = EACCES / EPERM              |
++======================================================================+
+          |
+          v
+       [ Kernel ]
+```
+
+**Defense in depth:**
+- If layer 1 is exploited: layer 2 host module still checks
+- If layer 2 is exploited: layer 3 LD_PRELOAD still blocks
+- If code is native Aether: layer 1 is sufficient; layers 2-3 are optional
 
 ---
 
 ### 1.3 Side-by-Side Comparison
 
-| Aspect | Capsicum | Aether |
-|--------|----------|--------|
-| **Enforcement layer** | OS kernel (syscall-level) | Language runtime (function-call level) |
-| **Isolation mechanism** | File descriptor restrictions + capability mode | Closure scope + permission lists |
-| **Granularity** | Per-fd rights (CAP_READ, CAP_WRITE, etc.) | Per-category patterns (tcp, fs_read, etc.) |
-| **Revocation** | Implicit (close the fd) | Implicit (actor dies, context goes away) |
-| **Nested restrictions** | Process forking; each child inherits restricted fds | Lexical nesting; each closure inherits parent's context |
-| **Overhead** | Zero for allowed ops; syscall overhead for denied ops | Function-call overhead for permission checks |
-| **Failure mode** | ENOTCAPABLE errno | Return code / exception (language-defined) |
-| **OS coupling** | Tightly coupled to FreeBSD/POSIX | OS-agnostic |
-| **Privilege separation** | Casper daemon (separate process) | Actor delegation (same actor model) |
-| **Audit trail** | Not built-in; requires additional instrumentation | Not built-in; requires explicit logging |
+| Aspect | Capsicum | Aether (Layer 1) | Aether (Layers 1-3) |
+|--------|----------|------------------|-------------------|
+| **Enforcement layer** | OS kernel (syscall-level) | Language runtime (function-call level) | Language + host module + LD_PRELOAD (syscall interception) |
+| **Isolation mechanism** | File descriptor restrictions + capability mode | Closure scope + permission lists | Closures + host wrappers + libc interception |
+| **Granularity** | Per-fd rights (CAP_READ, CAP_WRITE, etc.) | Per-category patterns (tcp, fs_read, etc.) | Same (pattern-matched at layers 2-3) |
+| **Revocation** | Implicit (close the fd) | Implicit (actor dies, context goes away) | Same (context dies; LD_PRELOAD unloaded) |
+| **Nested restrictions** | Process forking; each child inherits restricted fds | Lexical nesting; each closure inherits parent's context | Same + host-language nesting |
+| **Overhead** | Zero for allowed ops; syscall overhead for denied ops | Function-call overhead for permission checks | Minimal (LD_PRELOAD only on denied syscalls) |
+| **Failure mode** | ENOTCAPABLE errno | Return code / exception | EACCES / EPERM (layer 3) overrides layer 1-2 |
+| **OS coupling** | Tightly coupled to FreeBSD/POSIX | OS-agnostic (layer 1 only) | Requires POSIX + LD_PRELOAD (layer 3) |
+| **Host language support** | Not applicable | Language-level only | Full support via host modules (layers 2-3) |
+| **Privilege separation** | Casper daemon (separate process) | Actor delegation (same actor model) | Host modules delegate to parent actor |
+| **Audit trail** | Not built-in; requires additional instrumentation | Not built-in; requires explicit logging | LD_PRELOAD can log all denied syscalls |
+| **Portability** | FreeBSD only | All platforms | Linux/macOS/POSIX (layer 3); all platforms (layer 1) |
+
+---
+
+## Part 1.4 Aether's LD_PRELOAD Sandbox Layer: Syscall Interception
+
+#### How It Works
+
+Aether includes a third enforcement layer (`libaether_sandbox_preload.so`) that intercepts libc syscalls at runtime:
+
+```c
+// Grant file format (one per line)
+tcp:*.example.com
+fs_read:/app/data/*
+fs_write:/tmp/*
+env:HOME
+env:PATH
+*:*
+```
+
+When loaded via `LD_PRELOAD`, the library intercepts:
+
+| Syscall | Interceptor | Checks |
+|---------|-------------|--------|
+| `open(path, flags)` | `open()` hook | fs_read / fs_write based on flags |
+| `connect(fd, addr)` | `connect()` hook | tcp category + IP:port resource |
+| `getenv(var)` | `getenv()` hook | env category + var name |
+| `execve(path, args)` | `execve()` hook | exec category + command path |
+
+**Key features:**
+
+1. **Path resolution** — Resolves symlinks and `..` components before pattern-matching, preventing directory-traversal bypasses.
+2. **Pattern matching** — Supports globs (`*`, `*suffix`, `prefix*`) and exact matches.
+3. **IPv4-mapped IPv6 normalization** — Normalizes addresses like `::ffff:10.0.0.1` to `10.0.0.1` for consistent matching.
+4. **Logging** — Can log all denied/allowed syscalls to a file or stderr (configured via `AETHER_SANDBOX_LOG`).
+5. **Transparent to code** — The host language (Ruby, Python, Go) doesn't know it's being sandboxed; calls just fail gracefully.
+
+#### Example: Ruby Sandboxing with LD_PRELOAD
+
+```aether
+import contrib.host.ruby
+
+main() {
+    // Create a sandbox context
+    restricted = sandbox("worker") {
+        grant_fs_read("/app/config.yaml")
+        grant_tcp("api.example.com", 443)
+    }
+    
+    // Ruby code runs with layer 1 (closure) + layer 2 (host module) + layer 3 (LD_PRELOAD) protection
+    ruby.run_sandboxed(restricted, "
+        File.read('/app/config.yaml')      # Allowed: matches fs_read:/app/config.yaml
+        File.read('/etc/passwd')            # Denied by layer 3: EACCES
+        TCPSocket.new('api.example.com', 443)  # Allowed
+        TCPSocket.new('evil.com', 443)     # Denied by layer 3: EACCES
+    ")
+}
+```
+
+**Defense in depth:**
+- Layer 1: Ruby code is a closure; can't access parent locals
+- Layer 2: Host module scrubs ENV, $LOAD_PATH, installs permission checker
+- Layer 3: Even if layers 1-2 are bypassed, LD_PRELOAD blocks the syscalls
 
 ---
 
@@ -266,34 +386,58 @@ This inverts the traditional Unix model (allow by default, explicitly restrict),
 
 ## Part 3: Opportunities for Aether on FreeBSD
 
-### 3.1 A Hybrid Approach: Aether + Capsicum
+### 3.1 A Fourth Layer: Capsicum as Process-Level Enforcement
 
-**Vision:** An Aether runtime that can optionally leverage Capsicum for OS-enforced containment of sandboxed actors.
+**Current state:** Aether has three layers (language, host module, LD_PRELOAD).
 
-#### Design
+**Opportunity:** Add a fourth layer on FreeBSD using Capsicum for process-level enforcement, enabling truly bulletproof sandboxing.
+
+**Vision:** An Aether runtime that optionally leverages Capsicum as a fourth layer on FreeBSD, combining:
+- Layer 1: Language-level isolation (closures)
+- Layer 2: Host-language integration (Ruby, Python, Go)
+- Layer 3: LD_PRELOAD syscall interception (all POSIX systems)
+- **Layer 4: Capsicum file-descriptor capabilities (FreeBSD only)**
+
+#### Design: Four Layers of Defense
 
 ```
-+------------------+
-|   Aether Code    |
-|  (untrusted      |
-|   plugin)        |
-+------------------+
-        |
-        v
-+------------------+
-| Permission Check |  (language-level, fast path)
-|  (Aether runtime)|
-+------------------+
-        |
-        v (if Aether running on FreeBSD in Capsicum mode)
-+------------------+
-| Capsicum Rights  |  (OS-level, ultimate enforcement)
-|   Enforcement    |
-+------------------+
-        |
-        v
-  [ Kernel ]
++============================ Layer 1 ============================+
+| Aether Code (native or closure)                                 |
+| - Closures can't reach parent locals (compiler-enforced)       |
++================================================================+
+          |
+          v
++============================ Layer 2 ============================+
+| Host Language Integration (Ruby/Python/Go)                      |
+| - Host module installs permission checker                      |
+| - Scrubs runtime caches (ENV, LOAD_PATH, etc.)               |
++================================================================+
+          |
+          v
++============================ Layer 3 ============================+
+| LD_PRELOAD Syscall Interception (all POSIX systems)           |
+| - open(), connect(), execve(), getenv() hooks                 |
+| - Path resolution (defeats symlinks, ..)                      |
+| - Pattern matching (category:resource globs)                  |
+| - EACCES/EPERM on denied syscalls                             |
++================================================================+
+          |
+          v
++============================ Layer 4 ============================+
+| Capsicum (FreeBSD only, optional)                             |
+| - File descriptor capability restrictions (CAP_READ, etc.)   |
+| - cap_enter() to irreversibly enter capability mode           |
+| - ENOTCAPABLE errno on denied operations                      |
++================================================================+
+          |
+          v
+       [ Kernel ]
 ```
+
+**Each layer is optional and stacks orthogonally:**
+- Native Aether code: layer 1 is sufficient
+- Hosted Ruby/Python: layers 1-3 (layer 1 for calling code, layers 2-3 for guest code)
+- On FreeBSD with Capsicum enabled: layers 1-4 for maximum defense
 
 **How it works:**
 
