@@ -103,7 +103,7 @@ Aether's sandbox model is actually **three-layered**, combining language-level, 
 2. **Permission contexts** — a data structure (list/map) representing granted capabilities
 3. **Scope hygiene** — `hide` and `seal except` declarations that prevent name lookup in outer scopes
 
-**Layer 2: Hosted-language integration** — Host modules (Ruby, Python, Go) wrap foreign-language interpreters and:
+**Layer 2: Hosted-language integration** — Host modules (Ruby, Python, Perl, Lua, Tcl, JavaScript, Go, Java) wrap foreign-language interpreters and:
 
 - Install Aether's permission checker (`_aether_sandbox_checker`) before evaluating code
 - Scrub runtime caches (e.g., Ruby's ENV hash) to remove unauthorized variables
@@ -215,11 +215,12 @@ main() {
 +======================================================================+
           |
           v
-+================ Hosted Language Code (Ruby/Python/Go) ==============+
-| Foreign language interpreter running sandboxed (layer 2)            |
++========= Hosted Language Code (8 languages supported) ============+
+| Ruby, Python, Perl, Lua, Tcl, JavaScript, Go, Java (layer 2)       |
+| - In-process (Ruby, Python, Perl, Lua, Tcl, JS) or subprocess (Go, Java) |
 | - Host module scrubs runtime caches (ENV, $LOAD_PATH, etc.)        |
 | - Permission checker installed: all I/O checked before syscall     |
-+======================================================================+
++====================================================================+
           |
           v
 +===================== OS Boundary (libc) ===========================+
@@ -292,7 +293,17 @@ When loaded via `LD_PRELOAD`, the library intercepts:
 4. **Logging** — Can log all denied/allowed syscalls to a file or stderr (configured via `AETHER_SANDBOX_LOG`).
 5. **Transparent to code** — The host language (Ruby, Python, Go) doesn't know it's being sandboxed; calls just fail gracefully.
 
-#### Example: Ruby Sandboxing with LD_PRELOAD
+#### Example: Ruby Sandboxing with LD_PRELOAD (and 7 other languages)
+
+Aether supports **8 hosted languages**, each with the same three-layer protection:
+
+**In-process languages** (use native interpreters):
+- Ruby, Python, Perl, Lua, Tcl, JavaScript (Duktape)
+
+**Out-of-process languages** (run as subprocesses under LD_PRELOAD):
+- Go, Java (JVM via Panama FFI)
+
+Example with Ruby:
 
 ```aether
 import contrib.host.ruby
@@ -314,8 +325,21 @@ main() {
 }
 ```
 
+Same pattern works for Python, Perl, Lua, Tcl, JavaScript:
+
+```aether
+import contrib.host.python
+python.run_sandboxed(restricted, "open('/app/config.yaml').read()")
+
+import contrib.host.lua
+lua.run_sandboxed(restricted, "io.open('/app/config.yaml'):read('*a')")
+
+import contrib.host.perl
+perl.run_sandboxed(restricted, "open(my $f, '<', '/app/config.yaml') or die")
+```
+
 **Defense in depth:**
-- Layer 1: Ruby code is a closure; can't access parent locals
+- Layer 1: Guest code is a closure; can't access parent locals
 - Layer 2: Host module scrubs ENV, $LOAD_PATH, installs permission checker
 - Layer 3: Even if layers 1-2 are bypassed, LD_PRELOAD blocks the syscalls
 
@@ -394,7 +418,7 @@ This inverts the traditional Unix model (allow by default, explicitly restrict),
 
 **Vision:** An Aether runtime that optionally leverages Capsicum as a fourth layer on FreeBSD, combining:
 - Layer 1: Language-level isolation (closures)
-- Layer 2: Host-language integration (Ruby, Python, Go)
+- Layer 2: Host-language integration (Ruby, Python, Perl, Lua, Tcl, JS, Go, Java)
 - Layer 3: LD_PRELOAD syscall interception (all POSIX systems)
 - **Layer 4: Capsicum file-descriptor capabilities (FreeBSD only)**
 
@@ -407,8 +431,10 @@ This inverts the traditional Unix model (allow by default, explicitly restrict),
 +================================================================+
           |
           v
-+============================ Layer 2 ============================+
-| Host Language Integration (Ruby/Python/Go)                      |
++========== Layer 2: Host Language Integration (8 langs) ==========+
+| Ruby, Python, Perl, Lua, Tcl, JavaScript, Go, Java             |
+| In-process: Ruby, Python, Perl, Lua, Tcl, JS                   |
+| Out-of-process: Go (LD_PRELOAD), Java (JVM + Panama FFI)      |
 | - Host module installs permission checker                      |
 | - Scrubs runtime caches (ENV, LOAD_PATH, etc.)               |
 +================================================================+
@@ -436,7 +462,7 @@ This inverts the traditional Unix model (allow by default, explicitly restrict),
 
 **Each layer is optional and stacks orthogonally:**
 - Native Aether code: layer 1 is sufficient
-- Hosted Ruby/Python: layers 1-3 (layer 1 for calling code, layers 2-3 for guest code)
+- Hosted languages (Ruby, Python, Perl, Lua, Tcl, JS, Go, Java): layers 1-3 (layer 1 for calling code, layers 2-3 for guest code)
 - On FreeBSD with Capsicum enabled: layers 1-4 for maximum defense
 
 **How it works:**
@@ -550,7 +576,7 @@ audit_log() -> ptr
 
 #### Phase 4: Cross-Language Capsicum Callbacks (High effort, speculative)
 
-Allow hosted modules (Java, Python, Go) to declare Capsicum requirements:
+Allow hosted modules (all 8 languages: Ruby, Python, Perl, Lua, Tcl, JS, Go, Java) to declare Capsicum requirements:
 
 ```aether
 // Aether code compiled to library, embedded in Java
