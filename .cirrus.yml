@@ -1,0 +1,16 @@
+task:
+  name: FreeBSD / Clang
+  freebsd_instance:
+    image_family: freebsd-13-3
+    cpu: 2
+    memory: 4G
+
+  env:
+    CC: clang
+
+  install_script: |
+    pkg update
+    pkg install -y gcc clang make pkgconf
+
+  build_script:
+    - CC=$CC make ci

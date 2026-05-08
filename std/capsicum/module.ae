@@ -1,0 +1,34 @@
+exports (
+    capsicum_available,
+    capsicum_enter,
+    capsicum_limit_rights,
+    capsicum_pdwait4,
+)
+
+// Capsicum capability-based security framework (FreeBSD).
+//
+// Capsicum provides OS-level sandboxing on FreeBSD: file descriptor
+// capabilities restrict what operations are allowed on each fd, and
+// cap_enter() enters an irreversible capability mode where only those
+// restricted capabilities are available.
+//
+// These bindings allow Aether code to:
+// 1. Check if Capsicum is available at runtime
+// 2. Restrict file descriptors to specific capabilities
+// 3. Enter capability mode irreversibly
+// 4. Wait on sandboxed child processes with pdwait4()
+//
+// Example:
+//
+//   if capsicum.capsicum_available() {
+//       fd = std.fs.open("data.txt", "r")
+//       capsicum.capsicum_limit_rights(fd, 0x0000000000000001)  // CAP_READ
+//       capsicum.capsicum_enter()
+//       content = std.fs.read(fd)  // OK, fd has CAP_READ
+//       // From here on, only capability-restricted operations allowed
+//   }
+
+extern capsicum_available() -> int
+extern capsicum_enter() -> int
+extern capsicum_limit_rights(fd: int, rights: u64) -> int
+extern capsicum_pdwait4(pd: int, status_ptr: ptr, options: int, rusage_ptr: ptr) -> int

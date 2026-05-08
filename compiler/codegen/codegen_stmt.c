@@ -552,14 +552,24 @@ static int has_list_patterns(ASTNode* match_stmt) {
 static int is_heap_string_expr(ASTNode* expr) {
     if (!expr) return 0;
 
-    // Function calls that return malloc'd strings
-    if (expr->type == AST_FUNCTION_CALL && expr->value) {
-        const char* fn = expr->value;
-        return (strcmp(fn, "string_concat") == 0 ||
-                strcmp(fn, "string_substring") == 0 ||
-                strcmp(fn, "string_to_upper") == 0 ||
-                strcmp(fn, "string_to_lower") == 0 ||
-                strcmp(fn, "string_trim") == 0);
+    // Function calls that return malloc'd strings: check if node_type is string
+    if (expr->type == AST_FUNCTION_CALL) {
+        // Check the return type of the function call
+        if (expr->node_type && expr->node_type->kind == TYPE_STRING) {
+            return 1;
+        }
+        // Fallback to hardcoded list for safety (in case node_type is not set)
+        if (expr->value) {
+            const char* fn = expr->value;
+            return (strcmp(fn, "string_concat") == 0 ||
+                    strcmp(fn, "string_substring") == 0 ||
+                    strcmp(fn, "string_to_upper") == 0 ||
+                    strcmp(fn, "string_to_lower") == 0 ||
+                    strcmp(fn, "string_trim") == 0 ||
+                    strcmp(fn, "string_copy") == 0 ||
+                    strcmp(fn, "string_from_int") == 0 ||
+                    strcmp(fn, "string_repeat") == 0);
+        }
     }
 
     // String interpolation (non-printf mode) allocates via _aether_interp
