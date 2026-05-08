@@ -1613,8 +1613,19 @@ static void build_gcc_cmd(char* cmd, size_t size,
         char* slash = strrchr(lib_dir, '/');
         if (slash) *slash = '\0';
 
+        /* -rdynamic on POSIX: adds the executable's static-linked
+         * symbols (everything from libaether.a) to the dynamic
+         * symbol table, so std.http.script_gateway and std.dl
+         * can dlopen plugins that reference runtime symbols
+         * (http_response_set_*, string_concat, etc.) without the
+         * .so having to link against libaether itself. macOS gets
+         * the same effect via -Wl,-export_dynamic which `-rdynamic`
+         * maps to. Without this flag, a host built by `ae build`
+         * would dlopen a script.so with RTLD_NOW and the resolver
+         * would fail to find any libaether symbol — silently on
+         * macOS via dynamic_lookup, hard-failing on Linux. */
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s %s %s",
+            "gcc %s %s \"%s\"%s %s -rdynamic -L%s -laether -o \"%s\" -pthread -lm %s %s %s %s",
             opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
@@ -1625,7 +1636,7 @@ static void build_gcc_cmd(char* cmd, size_t size,
         }
     } else {
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s %s %s",
+            "gcc %s %s \"%s\"%s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s",
             opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
