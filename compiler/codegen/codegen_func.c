@@ -433,6 +433,9 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
             }
         }
     }
+    if (first_param) {
+        fprintf(gen->output, "void");
+    }
 
     fprintf(gen->output, ");\n\n");
 }
@@ -637,6 +640,9 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         if (param_count > 0) fprintf(gen->output, ", ");
         fprintf(gen->output, "void* _builder");
         param_count++;
+    }
+    if (param_count == 0) {
+        fprintf(gen->output, "void");
     }
 
     fprintf(gen->output, ") {\n");
