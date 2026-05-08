@@ -1,0 +1,95 @@
+// Eiffel-style runtime contracts: `requires` / `ensures` clauses
+// on function declarations (issue #348).
+//
+// Surface:
+//
+//   add(a: int, b: int) -> int
+//       requires a >= 0
+//       requires b >= 0
+//       ensures result >= a
+//       ensures result >= b
+//   {
+//       return a + b
+//   }
+//
+// Lowering:
+//   `requires <expr>` → `if (!(<expr>)) aether_panic("precondition
+//                       violation: <expr> in <fn>");` at function
+//                       entry, after parameters declared.
+//   `ensures <expr>`  → emitted in a fresh C scope before each
+//                       `return`, with `result` bound to the
+//                       about-to-be-returned value.
+//
+// Build with `--no-contracts` to skip emission entirely (zero per-
+// call cost — the analog of C's `-DNDEBUG`).
+//
+// See docs/language-reference.md "Function contracts" for the full
+// design rationale.
+
+import std.string
+
+extern exit(code: int)
+
+// Precondition only — caller must satisfy `b != 0`. The check fires
+// before the divide so we never hit C's UB on integer division by
+// zero.
+safe_div(a: int, b: int) -> int
+    requires b != 0
+{
+    return a / b
+}
+
+// Postcondition only — `result` is the return value. The check
+// fires before the `return` so a buggy `clamp` implementation that
+// went out of range surfaces as a panic, not silently-wrong output
+// flowing into the next stage.
+clamp(x: int, lo: int, hi: int) -> int
+    requires lo <= hi
+    ensures result >= lo
+    ensures result <= hi
+{
+    if x < lo {
+        return lo
+    }
+    if x > hi {
+        return hi
+    }
+    return x
+}
+
+// Mixed pre + post — both checks run on every call. If the caller
+// passes a negative number the precondition trips; if the
+// implementation went rogue and returned a negative the
+// postcondition trips. Either way you get a precise diagnostic.
+abs_int(x: int) -> int
+    requires x >= 0 - 100000
+    ensures result >= 0
+{
+    if x < 0 {
+        return 0 - x
+    }
+    return x
+}
+
+main() {
+    println("=== contracts demo ===")
+
+    // Happy paths — no panic.
+    println("safe_div(10, 2) = ${safe_div(10, 2)}")
+    println("clamp(50, 0, 100) = ${clamp(50, 0, 100)}")
+    println("clamp(-5, 0, 100) = ${clamp(0 - 5, 0, 100)}")
+    println("abs_int(7) = ${abs_int(7)}")
+    println("abs_int(-9) = ${abs_int(0 - 9)}")
+
+    // Uncomment any of these to see the panic + stack trace:
+    //
+    //   safe_div(10, 0)         → precondition violation: b != 0 in safe_div
+    //   clamp(0, 100, 50)       → precondition violation: lo <= hi in clamp
+    //   abs_int(-200000)        → precondition violation: x >= 0 - 100000 in abs_int
+    //
+    // Each panic prints the specific failed predicate and a stack
+    // trace pointing at the offending call site. Build with
+    // `--no-contracts` to suppress check emission entirely.
+
+    println("=== ok ===")
+}

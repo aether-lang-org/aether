@@ -117,6 +117,18 @@ typedef struct {
     // Current function's return type (for multi-return codegen)
     Type* current_func_return_type;
 
+    // Current function's AST node — needed by AST_RETURN_STATEMENT
+    // codegen to find the function's `ensures` clauses (issue #348).
+    // Set by generate_function_definition / generate_main_function on
+    // entry, restored on exit. NULL outside a function-body context.
+    ASTNode* current_function;
+
+    // Issue #348 — when 1, codegen skips `requires`/`ensures` check
+    // emission entirely (the per-call cost goes to zero, matching C's
+    // -DNDEBUG for assert). Set from `--no-contracts` on the aetherc
+    // command line.
+    int no_contracts;
+
     // Tuple struct registry: track generated tuple typedefs to avoid duplicates
     char** tuple_type_names;    // e.g., "_tuple_int_string"
     int tuple_type_count;

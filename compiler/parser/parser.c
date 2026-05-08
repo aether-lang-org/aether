@@ -2916,6 +2916,39 @@ ASTNode* parse_function_definition(Parser* parser) {
                 free_type(func->node_type);
                 func->node_type = parsed_type;
             }
+            // Issue #348 — Eiffel-style contracts. Between the
+            // typed return and the body, consume zero or more
+            // `requires <expr>` and `ensures <expr>` clauses (in
+            // any order, freely interleaved). Each becomes an
+            // AST_REQUIRES_CLAUSE or AST_ENSURES_CLAUSE child of
+            // the function node, with the predicate expression as
+            // its single child. Codegen emits an `if (!(<expr>))
+            // aether_panic(...)` at the right scope: function
+            // entry for `requires`, before each `return` for
+            // `ensures`.
+            for (;;) {
+                Token* clause_peek = peek_token(parser);
+                if (!clause_peek) break;
+                if (clause_peek->type != TOKEN_REQUIRES &&
+                    clause_peek->type != TOKEN_ENSURES) break;
+                ASTNodeType kind = (clause_peek->type == TOKEN_REQUIRES)
+                    ? AST_REQUIRES_CLAUSE
+                    : AST_ENSURES_CLAUSE;
+                int line = clause_peek->line;
+                int col  = clause_peek->column;
+                advance_token(parser);  // consume the keyword
+                ASTNode* expr = parse_expression(parser);
+                if (!expr) {
+                    parser_error(parser,
+                        kind == AST_REQUIRES_CLAUSE
+                          ? "expected expression after 'requires'"
+                          : "expected expression after 'ensures'");
+                    break;
+                }
+                ASTNode* clause = create_ast_node(kind, NULL, line, col);
+                add_child(clause, expr);
+                add_child(func, clause);
+            }
             // Now expect the traditional block body `{ ... }`.
             ASTNode* body = parse_block(parser);
             if (body) {

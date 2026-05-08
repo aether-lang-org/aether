@@ -48,6 +48,8 @@ typedef enum {
     AST_PATTERN_LIST,
     AST_PATTERN_CONS,
     AST_GUARD_CLAUSE,
+    AST_REQUIRES_CLAUSE,       // `requires <expr>` precondition (issue #348)
+    AST_ENSURES_CLAUSE,        // `ensures <expr>` postcondition  (issue #348)
     AST_RECEIVE_STATEMENT,
     AST_SEND_STATEMENT,
     AST_SPAWN_ACTOR_STATEMENT,

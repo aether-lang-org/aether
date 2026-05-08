@@ -51,6 +51,8 @@ typedef enum {
     TOKEN_TRY,              // 'try' — start of a try/catch block
     TOKEN_CATCH,            // 'catch' — catch clause binding the panic reason
     TOKEN_PANIC,            // 'panic' — unwind the current actor/try frame
+    TOKEN_REQUIRES,         // 'requires' — function-level precondition (issue #348)
+    TOKEN_ENSURES,          // 'ensures'  — function-level postcondition (issue #348)
 
     // Types
     TOKEN_INT,

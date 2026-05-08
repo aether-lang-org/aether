@@ -104,6 +104,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->match_result_var = NULL;
     gen->preempt_loops = 0;
     gen->current_func_return_type = NULL;
+    gen->current_function = NULL;
+    gen->no_contracts = 0;
     gen->tuple_type_names = NULL;
     gen->tuple_type_count = 0;
     gen->tuple_type_capacity = 0;

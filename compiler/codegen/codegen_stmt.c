@@ -966,6 +966,178 @@ static int has_identifier_ref(ASTNode* node, const char* name) {
     return 0;
 }
 
+// ============================================================
+// Issue #348 — Eiffel-style `requires` / `ensures` contracts.
+// ============================================================
+//
+// The parser attaches each clause as an AST_REQUIRES_CLAUSE or
+// AST_ENSURES_CLAUSE child of AST_FUNCTION_DEFINITION; the predicate
+// expression is the clause node's single child. Codegen lowers each
+// to an `if (!(<expr>)) aether_panic(...)` shaped check at the right
+// scope:
+//
+//   `requires`  → emitted at function entry, after parameters are
+//                  declared and before any user code runs.
+//                  Parameters are in scope.
+//
+//   `ensures`   → emitted before every `return <expr>;` site,
+//                  wrapped in a C block scope `{ <T> result = <expr>;
+//                  ... return result; }` so the predicate's `result`
+//                  identifier resolves to a fresh local that holds
+//                  the about-to-be-returned value. Each return site
+//                  gets its own copy of every check; partial-return
+//                  paths through if/else / match all stay correct.
+//
+// `--no-contracts` (CodeGenerator::no_contracts) skips emission
+// entirely — the per-call cost goes to zero, mirroring C's
+// `-DNDEBUG` for assert.
+//
+// Diagnostic message format:
+//
+//   precondition violation: <predicate-text> in <fn-name>
+//   postcondition violation: <predicate-text> in <fn-name>
+//
+// `<predicate-text>` comes from a small reverse-printer
+// (`fprint_expr_text`) that round-trips the AST back to source-like
+// form. It's intentionally simple — covers identifiers, literals,
+// binary/unary ops, member access, function calls — so the panic
+// message names the specific failed predicate even when a function
+// has multiple clauses. Anything the round-tripper doesn't handle
+// falls through to the literal string `"<expr>"`, which is still
+// disambiguated by the surrounding "<predicate-text> in <fn-name>"
+// line+column info from the panic stack trace (issue #347).
+
+// Round-trip a predicate-expression AST back to source-like text so
+// the diagnostic names the specific failed check. Best-effort —
+// covers the operator subset most contracts use.
+static void fprint_expr_text(FILE* out, ASTNode* e) {
+    if (!e) { fputs("?", out); return; }
+    switch (e->type) {
+        case AST_IDENTIFIER:
+        case AST_LITERAL:
+            if (e->value) fputs(e->value, out);
+            else fputs("?", out);
+            return;
+        case AST_NULL_LITERAL:
+            fputs("null", out);
+            return;
+        case AST_BINARY_EXPRESSION:
+            if (e->child_count == 2) {
+                fprint_expr_text(out, e->children[0]);
+                fputc(' ', out);
+                if (e->value) fputs(e->value, out);
+                fputc(' ', out);
+                fprint_expr_text(out, e->children[1]);
+                return;
+            }
+            break;
+        case AST_UNARY_EXPRESSION:
+            if (e->child_count == 1) {
+                if (e->value) fputs(e->value, out);
+                fprint_expr_text(out, e->children[0]);
+                return;
+            }
+            break;
+        case AST_MEMBER_ACCESS:
+            if (e->child_count == 1) {
+                fprint_expr_text(out, e->children[0]);
+                fputc('.', out);
+                if (e->value) fputs(e->value, out);
+                return;
+            }
+            break;
+        case AST_FUNCTION_CALL:
+            if (e->value) fputs(e->value, out);
+            fputc('(', out);
+            for (int i = 0; i < e->child_count; i++) {
+                if (i) fputs(", ", out);
+                fprint_expr_text(out, e->children[i]);
+            }
+            fputc(')', out);
+            return;
+        default:
+            break;
+    }
+    fputs("<expr>", out);
+}
+
+// Emit one `if (!(<predicate>)) aether_panic("<role> violation: <text>
+// in <fn>");` block for a single clause.
+static void emit_contract_check(CodeGenerator* gen,
+                                ASTNode* clause,
+                                const char* role,
+                                const char* fn_name) {
+    if (!clause || clause->child_count == 0) return;
+    ASTNode* predicate = clause->children[0];
+    print_indent(gen);
+    fprintf(gen->output, "if (!(");
+    generate_expression(gen, predicate);
+    fprintf(gen->output, ")) aether_panic(\"%s violation: ", role);
+    /* Re-render the predicate text into the C string literal. We
+     * escape backslash and double-quote; everything else passes
+     * through (Aether-source-level printable ASCII is safe in C
+     * literals). */
+    char buf[1024];
+    FILE* mem = fmemopen(buf, sizeof(buf) - 1, "w");
+    if (mem) {
+        fprint_expr_text(mem, predicate);
+        long n = ftell(mem);
+        if (n < 0) n = 0;
+        if ((size_t)n >= sizeof(buf)) n = sizeof(buf) - 1;
+        buf[n] = '\0';
+        fclose(mem);
+    } else {
+        buf[0] = '\0';
+    }
+    for (const char* p = buf; *p; p++) {
+        if (*p == '\\' || *p == '"') fputc('\\', gen->output);
+        fputc(*p, gen->output);
+    }
+    fprintf(gen->output, " in %s\");\n", fn_name ? fn_name : "<fn>");
+}
+
+void emit_contract_preconditions(CodeGenerator* gen, ASTNode* func) {
+    if (!gen || !func || gen->no_contracts) return;
+    const char* fn_name = func->value ? func->value : "<fn>";
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* c = func->children[i];
+        if (c && c->type == AST_REQUIRES_CLAUSE) {
+            emit_contract_check(gen, c, "precondition", fn_name);
+        }
+    }
+}
+
+// Emit `ensures` checks before a return. Caller has already opened a
+// fresh `{` scope and emitted `<T> result = <expr>;` so `result` is
+// in scope as a C local. Returns 1 if any check was emitted.
+int emit_contract_postconditions(CodeGenerator* gen, ASTNode* func) {
+    if (!gen || !func || gen->no_contracts) return 0;
+    const char* fn_name = func->value ? func->value : "<fn>";
+    int emitted = 0;
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* c = func->children[i];
+        if (c && c->type == AST_ENSURES_CLAUSE) {
+            emit_contract_check(gen, c, "postcondition", fn_name);
+            emitted = 1;
+        }
+    }
+    return emitted;
+}
+
+// Returns 1 iff `func` has at least one AST_ENSURES_CLAUSE child.
+// Used by the AST_RETURN_STATEMENT codegen to decide whether to
+// route through the result-local + post-check wrapper.
+static int function_has_ensures(ASTNode* func) {
+    if (!func) return 0;
+    for (int i = 0; i < func->child_count; i++) {
+        if (func->children[i] &&
+            func->children[i]->type == AST_ENSURES_CLAUSE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void hoist_if_branch_vars(CodeGenerator* gen, ASTNode* body) {
     if (!body) return;
     /* First: collect names that appear as top-level declarations in
@@ -2323,6 +2495,56 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             break;
             
         case AST_RETURN_STATEMENT: {
+            // Issue #348 — postcondition checks. When the enclosing
+            // function has any `ensures` clauses AND we're emitting
+            // a single-value, non-main return AND --no-contracts is
+            // off, route through a fresh C scope: assign the return
+            // expression to a local `result`, run the checks, then
+            // `return result`. Each return site gets its own copy of
+            // every check; the C scope hides any outer `result`.
+            //
+            // Skip when the function is `main` (the existing
+            // main_exit goto chain is fine — main has no callers
+            // expecting postconditions) or when the return is
+            // multi-value (tuple semantics for `result` aren't yet
+            // defined; multi-value contracts are an out-of-scope
+            // follow-up).
+            if (!gen->in_main_function &&
+                stmt->child_count == 1 &&
+                gen->current_function &&
+                function_has_ensures(gen->current_function) &&
+                !gen->no_contracts) {
+                Type* ret_type = stmt->children[0]->node_type;
+                const char* ret_c_type =
+                    (ret_type && ret_type->kind != TYPE_VOID && ret_type->kind != TYPE_UNKNOWN)
+                    ? get_c_type(ret_type)
+                    : (gen->current_func_return_type &&
+                       gen->current_func_return_type->kind != TYPE_VOID &&
+                       gen->current_func_return_type->kind != TYPE_UNKNOWN)
+                        ? get_c_type(gen->current_func_return_type)
+                        : "int";
+                print_indent(gen);
+                fprintf(gen->output, "{\n");
+                gen->indent_level++;
+                print_indent(gen);
+                fprintf(gen->output, "%s result = ", ret_c_type);
+                generate_expression(gen, stmt->children[0]);
+                fprintf(gen->output, ";\n");
+                emit_contract_postconditions(gen, gen->current_function);
+                /* Drain function-level defers BEFORE returning so
+                 * cleanup happens between the postcondition check
+                 * and the return — same ordering as the regular
+                 * defer-aware return path further down. */
+                if (gen->defer_count > 0) {
+                    emit_all_defers(gen);
+                }
+                print_indent(gen);
+                fprintf(gen->output, "return result;\n");
+                gen->indent_level--;
+                print_indent(gen);
+                fprintf(gen->output, "}\n");
+                break;
+            }
             // In main(), all returns go through main_exit so scheduler_wait() always runs
             if (gen->in_main_function) {
                 if (gen->defer_count > 0) {

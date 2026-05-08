@@ -53,6 +53,24 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt);
    the body's top-level statements. */
 void hoist_if_branch_vars(CodeGenerator* gen, ASTNode* body);
 
+/* Issue #348 — Eiffel-style runtime contracts. Emit pre- /
+   postcondition checks for `requires` / `ensures` clauses attached
+   to a function as AST_REQUIRES_CLAUSE / AST_ENSURES_CLAUSE
+   children. Both are no-ops when CodeGenerator::no_contracts is set
+   (matches C's -DNDEBUG for assert).
+
+   emit_contract_preconditions is called once at function entry,
+   immediately after parameters are declared and before the body.
+
+   emit_contract_postconditions is called by AST_RETURN_STATEMENT
+   codegen after writing `<T> result = <expr>;` into a fresh C scope
+   so the predicate's `result` identifier resolves to the local.
+   Returns 1 if any check was emitted (the caller uses this to
+   decide whether to route through the result-local wrapper).
+*/
+void emit_contract_preconditions(CodeGenerator* gen, ASTNode* func);
+int  emit_contract_postconditions(CodeGenerator* gen, ASTNode* func);
+
 /* Hoist `_heap_<name>` companion trackers for every string variable
    in `body` to function-entry scope. Closes #405 — the architectural
    blocker that kept user-defined `-> string` functions from

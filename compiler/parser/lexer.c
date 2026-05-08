@@ -341,6 +341,8 @@ Token* read_identifier() {
     else if (strcmp(buffer, "try") == 0) token = create_token(TOKEN_TRY, buffer, current_line, current_column);
     else if (strcmp(buffer, "catch") == 0) token = create_token(TOKEN_CATCH, buffer, current_line, current_column);
     else if (strcmp(buffer, "panic") == 0) token = create_token(TOKEN_PANIC, buffer, current_line, current_column);
+    else if (strcmp(buffer, "requires") == 0) token = create_token(TOKEN_REQUIRES, buffer, current_line, current_column);
+    else if (strcmp(buffer, "ensures") == 0) token = create_token(TOKEN_ENSURES, buffer, current_line, current_column);
     else if (strcmp(buffer, "ptr") == 0) token = create_token(TOKEN_PTR, buffer, current_line, current_column);
     else if (strcmp(buffer, "int") == 0) token = create_token(TOKEN_INT, buffer, current_line, current_column);
     else if (strcmp(buffer, "long") == 0) token = create_token(TOKEN_INT64, buffer, current_line, current_column);
@@ -727,6 +729,8 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_TRY: return "TRY";
         case TOKEN_CATCH: return "CATCH";
         case TOKEN_PANIC: return "PANIC";
+        case TOKEN_REQUIRES: return "REQUIRES";
+        case TOKEN_ENSURES: return "ENSURES";
         case TOKEN_LEFT_PAREN: return "LEFT_PAREN";
         case TOKEN_RIGHT_PAREN: return "RIGHT_PAREN";
         case TOKEN_LEFT_BRACE: return "LEFT_BRACE";

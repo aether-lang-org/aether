@@ -787,6 +787,46 @@ checked_op(x: int) -> {
 }
 ```
 
+### Function contracts: `requires` / `ensures` (issue #348)
+
+Eiffel-style runtime-checked preconditions and postconditions. Clauses appear after the typed return arrow and before the body; each is a single boolean expression, panic on violation.
+
+```aether
+add(a: int, b: int) -> int
+    requires a >= 0
+    requires b >= 0
+    ensures result >= a
+    ensures result >= b
+{
+    return a + b
+}
+```
+
+**Lowering**:
+
+- `requires <expr>` lowers to `if (!(<expr>)) aether_panic("precondition violation: <expr> in <fn>");` emitted at function entry, after parameters are declared and before any user code runs. Parameters are in scope.
+- `ensures <expr>` lowers to a pre-return wrapper `{ <T> result = <return-expr>; if (!(<expr>)) aether_panic("postcondition violation: <expr> in <fn>"); return result; }` emitted before each `return` statement. The synthetic `result` local is the return value about to be returned and is scoped to the wrapper block — it shadows any outer `result` cleanly.
+
+Multiple clauses in any order, freely interleaved. Each is checked independently, so the panic message names the specific failed predicate. The diagnostic plays nicely with `panic` stack traces for actionable error reporting.
+
+**`--no-contracts` build flag**:
+
+```sh
+aetherc --no-contracts script.ae out.c    # zero per-call cost
+```
+
+Suppresses contract-check emission entirely. Equivalent to C's `-DNDEBUG` for `assert`. Intended for release builds where the contracts have been validated upstream.
+
+**Limitations / out-of-scope for v1**:
+
+- Postconditions are checked only at explicit `return <expr>` statements with a single value. Multi-value (tuple) returns and fall-off-the-end of void functions are not yet wrapped — calling `aether_panic` from those paths is a follow-up.
+- Compile-time const-fold rejection of guaranteed-false predicates is a follow-up; at MVP, all checks fire at runtime.
+- The `--emit=lib` `aether_describe()` metadata doesn't yet surface contracts to FFI consumers; that's the next layer.
+
+See [examples/basics/contracts.ae](../examples/basics/contracts.ae) for runnable demos. Closes issue #348.
+
+---
+
 ### String ownership for `-> string` functions
 
 Strings are special-cased in the memory model: every reassignment to a string variable that previously held a heap-allocated value frees the old buffer through a compiler-emitted wrapper. **You do not write `defer string.free(s)` for in-Aether assignments** — the compiler tracks ownership transitions automatically per [docs/memory-management.md "String memory model"](memory-management.md#string-memory-model-heap-string-tracker).

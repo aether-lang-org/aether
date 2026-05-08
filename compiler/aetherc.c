@@ -48,6 +48,12 @@ static bool dump_ast_mode = false;
 static bool emit_c_mode = false;
 static bool check_only_mode = false;
 static bool preempt_mode = false;
+// Issue #348 — suppress runtime emission of `requires` / `ensures`
+// contract checks. Default is OFF (contracts checked at runtime).
+// `--no-contracts` is the analog of C's `-DNDEBUG`: zero per-call
+// cost, intended for release builds where the contracts have been
+// validated upstream.
+static bool no_contracts_mode = false;
 static const char* emit_header_path = NULL;
 
 // --emit=<exe|lib|both> — which artifact(s) to produce.
@@ -775,6 +781,7 @@ int compile_source(const char* input_path, const char* output_path) {
         codegen = create_code_generator(output);
     }
     if (preempt_mode) codegen->preempt_loops = 1;
+    if (no_contracts_mode) codegen->no_contracts = 1;
     codegen->emit_exe = emit_exe ? 1 : 0;
     codegen->emit_lib = emit_lib ? 1 : 0;
     codegen->emit_main_target = emit_main_target;  // NULL when not requested
@@ -1143,6 +1150,7 @@ void print_help(const char* program_name) {
     printf("                                   that calls <func>(). Closes the exe/lib symmetry.\n");
     printf("  --emit-namespace-manifest        Print the manifest JSON for a manifest.ae and exit\n");
     printf("  --check                          Type-check only (no code generation)\n");
+    printf("  --no-contracts                   Skip runtime emission of `requires`/`ensures` checks (#348)\n");
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
     printf("  --help, -h                       Show this help message\n");
     printf("\n");
@@ -1201,6 +1209,9 @@ int main(int argc, char *argv[]) {
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--preempt") == 0) {
             preempt_mode = true;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--no-contracts") == 0) {
+            no_contracts_mode = true;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-header") == 0) {
             // Check for optional explicit path argument (must end in .h)

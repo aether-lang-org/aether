@@ -473,6 +473,10 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
 
     // Track current function's return type for multi-return codegen
     gen->current_func_return_type = func->node_type;
+    // Track the function's AST node so AST_RETURN_STATEMENT codegen
+    // can find any `ensures` clauses attached to it (issue #348).
+    ASTNode* prev_current_function = gen->current_function;
+    gen->current_function = func;
 
     // Functions cloned from imported modules are emitted with the C
     // `static` storage class so each translation unit gets a private copy.
@@ -775,6 +779,16 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     get_promoted_names_for_func(gen, func->value,
         &gen->current_promoted_captures, &gen->current_promoted_capture_count);
 
+    // Issue #348 — emit `requires` precondition checks at function
+    // entry. Each AST_REQUIRES_CLAUSE child of the function carries
+    // a single boolean-expression child; codegen emits
+    //   if (!(<expr>)) aether_panic("precondition violation: <expr> in <fn>");
+    // immediately after parameters are declared and before any
+    // user code runs. Skipped entirely when --no-contracts is set.
+    if (!gen->no_contracts) {
+        emit_contract_preconditions(gen, func);
+    }
+
     // Generate body
     if (body) {
         // Pre-hoist variables first-declared inside if-statement
@@ -811,6 +825,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
 
     gen->current_promoted_captures = prev_promoted;
     gen->current_promoted_capture_count = prev_promoted_count;
+    gen->current_function = prev_current_function;
 
     unindent(gen);
     print_line(gen, "}");
