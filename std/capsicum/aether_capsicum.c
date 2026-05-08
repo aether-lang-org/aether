@@ -15,7 +15,7 @@
 
 #include <sys/types.h>
 
-#if defined(__FreeBSD__) && AETHER_HAS_CAPSICUM
+#ifdef __FreeBSD__
 
 #include <sys/capsicum.h>
 #include <string.h>
