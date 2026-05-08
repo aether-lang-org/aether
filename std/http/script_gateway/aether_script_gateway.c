@@ -122,8 +122,12 @@ _aether_sg_tuple script_gateway_mount_so_raw(void* server,
      * the host's global namespace. */
     void* h = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
     if (!h) {
+        /* dlerror() clears the internal error state on read — calling
+         * it twice in a ternary returns the message on the first call
+         * and NULL on the second. Capture once. */
+        const char* err = dlerror();
         _aether_sg_tuple out = { 0, AETHER_SCRIPT_GATEWAY_KIND_IO,
-                                 dlerror() ? dlerror() : "dlopen failed" };
+                                 err ? err : "dlopen failed" };
         return out;
     }
 
