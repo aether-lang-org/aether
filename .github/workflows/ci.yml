@@ -25,21 +25,39 @@ jobs:
           - name: Linux / GCC
             os: ubuntu-22.04
             cc: gcc
+            harden: "0"
             install: sudo apt-get update && sudo apt-get install -y gcc make bc pkg-config libgtk-4-dev
 
           - name: Linux / Clang
             os: ubuntu-22.04
             cc: clang
+            harden: "0"
             install: sudo apt-get update && sudo apt-get install -y clang make bc pkg-config libgtk-4-dev
+
+          # Hardened gcc build (issue #396). Same OS + compiler as
+          # Linux / GCC but with HARDEN=1 set in the environment, which
+          # adds -fstack-protector-all + -D_FORTIFY_SOURCE=2 +
+          # -Wformat-security to CFLAGS in the Makefile. A regression
+          # that introduces an unchecked memcpy / strncpy / printf-
+          # format-injection trips the gcc compile-time diagnostic here
+          # before merge — defence-in-depth without imposing the
+          # runtime overhead on the default release builds.
+          - name: Linux / Hardened (gcc)
+            os: ubuntu-22.04
+            cc: gcc
+            harden: "1"
+            install: sudo apt-get update && sudo apt-get install -y gcc make bc pkg-config libgtk-4-dev
 
           - name: macOS / Clang (ARM64)
             os: macos-latest
             cc: clang
+            harden: "0"
             install: ""
 
           - name: macOS / Clang (x86_64)
             os: macos-15-intel
             cc: clang
+            harden: "0"
             install: ""
 
     steps:
@@ -50,7 +68,7 @@ jobs:
       run: ${{ matrix.install }}
 
     - name: Run full CI suite
-      run: CC=${{ matrix.cc }} make ci
+      run: HARDEN=${{ matrix.harden }} CC=${{ matrix.cc }} make ci
 
   # ============================================================
   # contrib/host bridge check — syntax check of every host bridge
