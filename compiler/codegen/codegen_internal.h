@@ -53,6 +53,20 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt);
    the body's top-level statements. */
 void hoist_if_branch_vars(CodeGenerator* gen, ASTNode* body);
 
+/* Hoist `_heap_<name>` companion trackers for every string variable
+   in `body` to function-entry scope. Closes #405 — the architectural
+   blocker that kept user-defined `-> string` functions from
+   participating in the heap-string-reassignment wrapper. Called from
+   codegen_func.c immediately after hoist_if_branch_vars. */
+void hoist_heap_string_trackers(CodeGenerator* gen, ASTNode* body);
+
+/* Set the program-root AST that `is_heap_string_expr` should consult
+   when deciding whether a user-defined `-> string` function returns
+   a heap-allocated string. Called once at codegen entry from
+   generate_program; cleared with NULL at exit so iterative codegen
+   sessions (LSP, REPL) don't see a stale pointer. */
+void codegen_set_program_for_heap_lookup(ASTNode* program);
+
 /* Actor generation (codegen_actor.c) */
 void generate_actor_definition(CodeGenerator* gen, ASTNode* actor);
 

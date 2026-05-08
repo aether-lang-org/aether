@@ -459,6 +459,33 @@ Raw out-parameter externs are preserved as `string_to_int_raw`, `string_to_long_
 - `string.release(str)` - Decrement reference count (frees when zero)
 - `string.free(str)` - Alias for `release`
 
+### String ownership and the heap-string tracker (issue #405)
+
+Strings reassigned to a variable are reclaimed automatically by a compiler-emitted wrapper — you do **not** write `defer string.free(s)` for in-Aether assignments. For every string variable in a function, the compiler emits a companion `_heap_<name>` tracker at function-entry scope that flips between 0 (current value is a literal) and 1 (current value is heap-allocated) as you reassign. On every reassignment, the wrapper `if (_heap_<name>) free(<old>)` decides whether to release the previous buffer.
+
+Both the **stdlib** functions in the table above (`string.concat`, `string.substring`, `string.to_upper`, `string.to_lower`, `string.trim`) and **string interpolation** (`"foo ${x}"`) are recognised as heap-allocated.
+
+A **user-defined `-> string` function** is recognised as heap-allocated iff every return statement in its body yields a heap-string-expression (recursive structural check with cycle detection):
+
+```aether
+my_concat(a: string, b: string) -> string {
+    return string.concat(a, b)        // RHS is heap → my_concat is heap-returning
+}
+
+s = ""
+i = 0
+while i < 1000000 {
+    s = my_concat(s, "x")              // O(1) memory — old s is freed automatically
+    i = i + 1
+}
+```
+
+A function returning a string literal — or a function whose returns mix heap and literal sources — is NOT recognised, and the wrapper won't try to free its result. This is the structural escape analysis added to close issue #405.
+
+The function-entry hoist closes the cross-block visibility gap that previously kept the simpler `node_type == TYPE_STRING` recognition unsafe: the tracker is now visible at every nesting depth, so a variable first-assigned in an if-then and reassigned in an else-if (or in a deeply nested loop) sees the same `_heap_<name>` cell and follows the same free/no-free rules.
+
+For the full memory-management background, see [Memory Management](memory-management.md#string-memory-model-heap-string-tracker).
+
 ---
 
 ## File System

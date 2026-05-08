@@ -1233,6 +1233,16 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
         int prev_promoted_count = gen->current_promoted_capture_count;
         get_promoted_names_for_func(gen, "main",
             &gen->current_promoted_captures, &gen->current_promoted_capture_count);
+        // Issue #405: hoist `_heap_<name>` companions for every
+        // string variable in main() to function-entry scope so the
+        // tracker is visible across every nesting depth. Without
+        // this, cross-block reassignment from a heap-string-returning
+        // user function fails to compile (`'_heap_x' undeclared`)
+        // because the lazy tracker init was scope-local. Mirror of
+        // the call in codegen_func.c::generate_function_definition.
+        if (main->children[0] && main->children[0]->type == AST_BLOCK) {
+            hoist_heap_string_trackers(gen, main->children[0]);
+        }
         generate_statement(gen, main->children[0]);
         gen->current_promoted_captures = prev_promoted;
         gen->current_promoted_capture_count = prev_promoted_count;
@@ -1290,6 +1300,10 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
 void generate_program(CodeGenerator* gen, ASTNode* program) {
     if (!program || program->type != AST_PROGRAM) return;
     gen->program = program;
+    // Publish the program root to codegen_stmt.c's heap-string
+    // lookup so user-defined `-> string` functions can be analysed
+    // structurally for heap-allocation status (issue #405).
+    codegen_set_program_for_heap_lookup(program);
 
     // If emitting header, write prologue
     if (gen->emit_header && gen->header_file) {
@@ -2191,4 +2205,9 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     if (gen->emit_header && gen->header_file) {
         emit_header_epilogue(gen);
     }
+
+    // Clear the program-root cache on the way out so iterative
+    // codegen sessions (LSP, REPL) don't retain a stale pointer to
+    // the previous program's AST.
+    codegen_set_program_for_heap_lookup(NULL);
 }

@@ -1,6 +1,18 @@
 #include "codegen_internal.h"
 #include "optimizer.h"
 
+// File-local cache of the program-root AST set at codegen entry. Used
+// by is_heap_string_expr's structural escape analysis to look up
+// callee function-definition bodies by name when deciding whether a
+// user-defined `-> string` function returns a heap-allocated string
+// (issue #405). Clearing on codegen completion matters when the
+// codegen library is used iteratively (LSP, REPL).
+static ASTNode* g_codegen_program_for_heap_lookup = NULL;
+
+void codegen_set_program_for_heap_lookup(ASTNode* program) {
+    g_codegen_program_for_heap_lookup = program;
+}
+
 // Is `name` the variable name of a known closure? If yes, also returns the
 // closure id via *out_id. Used by return-site Bug B protection.
 static int lookup_closure_var(CodeGenerator* gen, const char* name, int* out_id) {
@@ -548,26 +560,239 @@ static int has_list_patterns(ASTNode* match_stmt) {
     return 0;
 }
 
-// Returns 1 if the expression allocates a new heap string that the caller must free.
+// Forward declarations.
+static int function_def_returns_heap_string(ASTNode* fn_def);
+
+// Linear scan over program-root children matching by `value`. Mirror
+// of count_function_clauses in codegen.c (kept module-local here to
+// avoid an internal-header churn). Returns the first match — for
+// pattern-matched multi-clause functions, the first clause's body is
+// representative for return-type purposes.
+static ASTNode* find_function_definition_by_name(ASTNode* program,
+                                                 const char* name) {
+    if (!program || !name) return NULL;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && (c->type == AST_FUNCTION_DEFINITION ||
+                  c->type == AST_BUILDER_FUNCTION) &&
+            c->value && strcmp(c->value, name) == 0) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+// Heap-allocated string sources. Used by the reassignment / scope-
+// exit machinery to decide whether to free the previous value.
+//
+// Recognised:
+//   1. Hardcoded stdlib functions that always malloc
+//      (string_concat / string_substring / string_to_upper /
+//      string_to_lower / string_trim).
+//   2. String interpolation — always allocates via `_aether_interp`.
+//   3. A user-defined string-returning function whose body's every
+//      return path yields a heap-string-expr (recursive structural
+//      check). This closes the bug_repo.md leak referenced from
+//      issue #405: `s = my_concat(s, "x")` in a loop now goes
+//      through the heap-aware reassignment wrapper. Functions that
+//      return a string literal (or forward a borrowed parameter)
+//      are explicitly NOT recognised — treating them as heap would
+//      free a literal at scope exit and abort.
+//
+// The recursion is bounded by the AST depth and a depth counter
+// (function_def_returns_heap_string clears its memo on cycle).
 static int is_heap_string_expr(ASTNode* expr) {
     if (!expr) return 0;
 
-    // Function calls that return malloc'd strings
-    if (expr->type == AST_FUNCTION_CALL && expr->value) {
-        const char* fn = expr->value;
-        return (strcmp(fn, "string_concat") == 0 ||
-                strcmp(fn, "string_substring") == 0 ||
-                strcmp(fn, "string_to_upper") == 0 ||
-                strcmp(fn, "string_to_lower") == 0 ||
-                strcmp(fn, "string_trim") == 0);
-    }
-
-    // String interpolation (non-printf mode) allocates via _aether_interp
+    // String interpolation (non-printf mode) allocates via _aether_interp.
     if (expr->type == AST_STRING_INTERP) {
         return 1;
     }
 
+    if (expr->type == AST_FUNCTION_CALL && expr->value) {
+        const char* fn = expr->value;
+        // Hardcoded stdlib fast-path.
+        if (strcmp(fn, "string_concat") == 0 ||
+            strcmp(fn, "string_substring") == 0 ||
+            strcmp(fn, "string_to_upper") == 0 ||
+            strcmp(fn, "string_to_lower") == 0 ||
+            strcmp(fn, "string_trim") == 0) {
+            return 1;
+        }
+        // User-defined function: only heap if its body provably
+        // returns heap strings. Structurally analyse the function
+        // definition (memoised on the def node's annotation slot to
+        // bound recursion). Look up the def by name in the program
+        // root cached at codegen entry. Without the program (e.g.
+        // unit tests of is_heap_string_expr in isolation) we fall
+        // through to the conservative "not heap" answer, which is
+        // strictly better than the literal-free abort the naive
+        // node_type-only check produced.
+        if (expr->node_type && expr->node_type->kind == TYPE_STRING &&
+            g_codegen_program_for_heap_lookup) {
+            ASTNode* fn_def = find_function_definition_by_name(
+                g_codegen_program_for_heap_lookup, fn);
+            if (fn_def) {
+                return function_def_returns_heap_string(fn_def);
+            }
+        }
+    }
+
     return 0;
+}
+
+// Walk a function body; return 1 iff every AST_RETURN_STATEMENT
+// inside yields a heap-string-expr. Returns 0 for functions with
+// no return statements (void/implicit return — cannot be heap).
+//
+// Cycle protection: the AST node uses its `annotation` slot to
+// memoise the result via the strings "heap_yes" / "heap_no" /
+// "heap_pending". A pending mark means we hit a cycle (two
+// mutually-recursive `-> string` user functions); we conservatively
+// return 0 in that case.
+static void walk_returns_for_heap_check(ASTNode* node, int* found, int* all_heap) {
+    if (!node || !*all_heap) return;
+    if (node->type == AST_RETURN_STATEMENT) {
+        *found = 1;
+        if (node->child_count == 0 || !is_heap_string_expr(node->children[0])) {
+            *all_heap = 0;
+        }
+        return;
+    }
+    // Don't descend into nested function/lambda definitions.
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_CLOSURE) {
+        return;
+    }
+    for (int i = 0; i < node->child_count && *all_heap; i++) {
+        walk_returns_for_heap_check(node->children[i], found, all_heap);
+    }
+}
+
+static int function_def_returns_heap_string(ASTNode* fn_def) {
+    if (!fn_def ||
+        (fn_def->type != AST_FUNCTION_DEFINITION &&
+         fn_def->type != AST_BUILDER_FUNCTION)) {
+        return 0;
+    }
+    // Memoised result on the annotation field. Three values:
+    //   "heap_yes"     — all returns yield heap strings
+    //   "heap_no"      — at least one return yields a non-heap value
+    //   "heap_pending" — currently being analysed (cycle break)
+    if (fn_def->annotation) {
+        if (strcmp(fn_def->annotation, "heap_yes") == 0)     return 1;
+        if (strcmp(fn_def->annotation, "heap_no") == 0)      return 0;
+        if (strcmp(fn_def->annotation, "heap_pending") == 0) return 0;
+        // Some other annotation (e.g. "c_callback:..."). Don't clobber
+        // — analyse afresh, but skip caching to preserve the original
+        // annotation for downstream codegen.
+    }
+    int memoise = (fn_def->annotation == NULL);
+    if (memoise) fn_def->annotation = strdup("heap_pending");
+
+    ASTNode* body = NULL;
+    for (int i = 0; i < fn_def->child_count; i++) {
+        ASTNode* c = fn_def->children[i];
+        if (c && c->type == AST_BLOCK) { body = c; break; }
+    }
+    int found = 0;
+    int all_heap = 1;
+    if (body) walk_returns_for_heap_check(body, &found, &all_heap);
+    int result = (found && all_heap) ? 1 : 0;
+
+    if (memoise) {
+        free(fn_def->annotation);
+        fn_def->annotation = strdup(result ? "heap_yes" : "heap_no");
+    }
+    return result;
+}
+
+// Recursive: collect every variable name that may need a heap-string
+// tracker — i.e. every variable that appears as the LHS of an
+// AST_VARIABLE_DECLARATION (in Aether, "decl" covers both first-
+// assignment and reassignment) where the RHS could yield a string.
+//
+// "Could yield a string" is intentionally conservative:
+//   - The RHS is a heap-string-expr (string_concat, interp, or a
+//     user-defined `-> string` function) → definitely needs tracking.
+//   - The variable's type-annotated TYPE_STRING → tracking is cheap
+//     defence (one int per string var); makes follow-up reassignments
+//     to heap RHS in a different scope correct.
+//
+// Walking is purely structural: every nested block, every loop body,
+// every if-then / if-else, every match arm. The hoist must see all
+// of them so a name first-assigned at depth-3 and reassigned at
+// depth-1 still has a function-scope tracker.
+//
+// Issue #405 — the architectural fix that unblocks the string-leak
+// bug from bug_repo.md. Without this pre-pass, `_heap_<name>` was
+// declared at the C scope where the variable was first seen, which
+// went out of scope when control left that block. Cross-block
+// reassignment of a string variable then either failed to compile
+// (`'_heap_x' undeclared`) or silently leaked the old value.
+static void collect_heap_string_var_names(ASTNode* node,
+                                          const char** names,
+                                          int* count, int cap) {
+    if (!node || *count >= cap) return;
+
+    if (node->type == AST_VARIABLE_DECLARATION && node->value) {
+        // Decide whether this declaration's LHS deserves a tracker.
+        int needs_tracker = 0;
+        if (node->child_count > 0 && is_heap_string_expr(node->children[0])) {
+            needs_tracker = 1;
+        }
+        // Type-annotated string variable (covers `s: string = ""`).
+        if (!needs_tracker && node->node_type &&
+            node->node_type->kind == TYPE_STRING) {
+            needs_tracker = 1;
+        }
+        // Initializer-typed string (covers `s = ""` where the
+        // typechecker stamped TYPE_STRING on the RHS).
+        if (!needs_tracker && node->child_count > 0 && node->children[0] &&
+            node->children[0]->node_type &&
+            node->children[0]->node_type->kind == TYPE_STRING) {
+            needs_tracker = 1;
+        }
+        if (needs_tracker) {
+            int already = 0;
+            for (int i = 0; i < *count; i++) {
+                if (strcmp(names[i], node->value) == 0) { already = 1; break; }
+            }
+            if (!already && *count < cap) {
+                names[(*count)++] = node->value;
+            }
+        }
+    }
+
+    for (int i = 0; i < node->child_count; i++) {
+        collect_heap_string_var_names(node->children[i], names, count, cap);
+    }
+}
+
+// Emit `int _heap_<name> = 0; (void)_heap_<name>;` at function-entry
+// scope for every string variable in `body`. Caller invokes this
+// after parameters are declared and before the body is generated.
+//
+// After this runs, `is_heap_string_var(gen, name)` returns true for
+// every collected name, so:
+//   - the per-stmt first-decl codegen at line ~1359 emits an
+//     assignment (`_heap_<name> = 0;`) instead of a redeclaration;
+//   - the per-stmt reassignment codegen at line ~1110 skips its
+//     defensive lazy-init and goes straight to the wrapper.
+void hoist_heap_string_trackers(CodeGenerator* gen, ASTNode* body) {
+    if (!body || !gen) return;
+    const char* names[256];  // 256 string vars per fn is generous
+    int count = 0;
+    collect_heap_string_var_names(body, names, &count, 256);
+    for (int i = 0; i < count; i++) {
+        if (is_heap_string_var(gen, names[i])) continue;
+        print_indent(gen);
+        fprintf(gen->output,
+                "int _heap_%s = 0; (void)_heap_%s;\n",
+                names[i], names[i]);
+        mark_heap_string_var(gen, names[i]);
+    }
 }
 
 // Collect the names of top-level AST_VARIABLE_DECLARATION nodes in a
@@ -1101,18 +1326,53 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                 // Check if this is a reassignment (Python-style)
                 if (is_var_declared(gen, stmt->value)) {
-                    // Already declared - generate assignment only
-                    if (stmt->child_count > 0 && is_heap_string_expr(stmt->children[0])) {
-                        // If the variable was originally declared as a non-heap
-                        // string, its _heap_<name> tracker was never emitted —
-                        // declare it lazily before the reassignment wrapper that
-                        // references it.
+                    // Already declared - generate assignment only.
+                    //
+                    // For string-tracked variables (issue #405) the
+                    // assignment must go through the heap-aware
+                    // wrapper for *every* string→string transition so
+                    // the tracker stays in lock-step with the actual
+                    // pointer's heap-ness. Four transitions, all
+                    // handled by one shape:
+                    //   heap → heap  : free old, _heap=1
+                    //   heap → lit   : free old, _heap=0
+                    //   lit  → heap  : no free (_heap was 0), _heap=1
+                    //   lit  → lit   : no free, _heap=0
+                    // The wrapper does this uniformly via `if (_heap_X)
+                    // free(_tmp_old); _heap_X = <init_heap>`. Without
+                    // this, heap→lit would leave _heap stale and a
+                    // later free could attempt to release a literal.
+                    int rhs_is_heap = (stmt->child_count > 0 &&
+                                       is_heap_string_expr(stmt->children[0]));
+                    int var_is_string = is_heap_string_var(gen, stmt->value);
+                    if (var_is_string && stmt->child_count > 0) {
+                        // Defensive: if the hoist somehow missed this
+                        // name (e.g. promoted via a path the pre-pass
+                        // doesn't walk), declare the tracker now.
+                        // Should be unreachable post-#405; kept as
+                        // belt-and-braces.
                         if (!is_heap_string_var(gen, stmt->value)) {
                             fprintf(gen->output, "int _heap_%s = 0; (void)_heap_%s; ",
                                     stmt->value, stmt->value);
                             mark_heap_string_var(gen, stmt->value);
                         }
-                        // Free old heap string before reassignment.
+                        fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
+                        fprintf(gen->output, "%s = ", stmt->value);
+                        generate_expression(gen, stmt->children[0]);
+                        fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
+                                stmt->value);
+                        fprintf(gen->output, " _heap_%s = %d; }\n",
+                                stmt->value, rhs_is_heap ? 1 : 0);
+                    } else if (rhs_is_heap) {
+                        // Non-string-typed variable being reassigned
+                        // to a heap string. Rare (type-inference
+                        // edge cases). Lazy-init the tracker and use
+                        // the wrapper.
+                        if (!is_heap_string_var(gen, stmt->value)) {
+                            fprintf(gen->output, "int _heap_%s = 0; (void)_heap_%s; ",
+                                    stmt->value, stmt->value);
+                            mark_heap_string_var(gen, stmt->value);
+                        }
                         fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
                         fprintf(gen->output, "%s = ", stmt->value);
                         generate_expression(gen, stmt->children[0]);
@@ -1120,6 +1380,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                 stmt->value);
                         fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
                     } else {
+                        // Plain non-string assignment.
                         fprintf(gen->output, "%s", stmt->value);
                         if (stmt->child_count > 0) {
                             fprintf(gen->output, " = ");
@@ -1356,9 +1617,22 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             int init_heap = (stmt->child_count > 0 &&
                                              is_heap_string_expr(stmt->children[0]));
                             print_indent(gen);
-                            fprintf(gen->output, "int _heap_%s = %d; (void)_heap_%s;\n",
-                                    stmt->value, init_heap ? 1 : 0, stmt->value);
-                            mark_heap_string_var(gen, stmt->value);
+                            // Issue #405: the function-entry hoist
+                            // (hoist_heap_string_trackers, called from
+                            // generate_function_definition before this
+                            // statement runs) may have already declared
+                            // `int _heap_<name> = 0;`. Re-declaring it
+                            // here would be a duplicate-definition C
+                            // error. Detect via is_heap_string_var and
+                            // emit assignment-only when already hoisted.
+                            if (is_heap_string_var(gen, stmt->value)) {
+                                fprintf(gen->output, "_heap_%s = %d;\n",
+                                        stmt->value, init_heap ? 1 : 0);
+                            } else {
+                                fprintf(gen->output, "int _heap_%s = %d; (void)_heap_%s;\n",
+                                        stmt->value, init_heap ? 1 : 0, stmt->value);
+                                mark_heap_string_var(gen, stmt->value);
+                            }
                         }
                     }
                     // Record variable→closure mapping for closure invocation.

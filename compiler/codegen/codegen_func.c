@@ -783,6 +783,15 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         // fail to compile. See #278.
         if (body->type == AST_BLOCK) {
             hoist_if_branch_vars(gen, body);
+            // Pre-hoist `_heap_<name>` companions for every string
+            // variable in the body so the tracker is visible across
+            // every nesting depth — closes the architectural blocker
+            // from issue #405. The first-decl codegen path becomes
+            // an assignment-only after this; cross-block reassignment
+            // resolves to the function-scope tracker instead of an
+            // undeclared local. See codegen_stmt.c::
+            // hoist_heap_string_trackers for the full rationale.
+            hoist_heap_string_trackers(gen, body);
         }
         // If body is a block, it handles its own scope
         // If not a block, we still need to generate the statements

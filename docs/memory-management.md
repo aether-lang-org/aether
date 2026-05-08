@@ -209,6 +209,79 @@ while i < n {
 
 ---
 
+## String memory model (heap-string-tracker)
+
+Strings have a more granular model than other allocations: every reassignment to a string variable that has held a heap-allocated value frees the old buffer through a compiler-emitted wrapper. You don't write `defer string.free(s)` — the compiler tracks ownership transitions automatically.
+
+### What gets freed automatically
+
+For every string variable in a function, the compiler emits a companion `int _heap_<name>` tracker that's set to `1` after every heap-string assignment and `0` after every literal assignment. On reassignment, the wrapper `if (_heap_<name>) free(<old>)` decides whether to release the previous buffer.
+
+```aether
+s = ""                          // _heap_s = 0 (literal)
+s = string.concat(s, "x")       // free(""): no — _heap_s was 0; _heap_s = 1
+s = string.concat(s, "y")       // free(prev concat): yes — _heap_s was 1; _heap_s = 1
+s = "literal end"               // free(prev concat): yes — _heap_s was 1; _heap_s = 0
+```
+
+The wrapper handles all four transitions (heap→heap, heap→literal, literal→heap, literal→literal) uniformly, so heap memory used by string-returning expressions is reclaimed eagerly without any user-visible `defer`.
+
+### Heap-string sources
+
+The compiler treats these expressions as heap-allocated:
+
+| Expression | Reason |
+|---|---|
+| `string.concat(a, b)` | Stdlib — always `malloc`'d |
+| `string.substring(s, i, j)` | Stdlib — always `malloc`'d |
+| `string.to_upper(s)` / `string.to_lower(s)` | Stdlib — always `malloc`'d |
+| `string.trim(s)` | Stdlib — always `malloc`'d |
+| String interpolation `"foo ${x}"` | Compiler-allocated via `_aether_interp` |
+| User-defined `-> string` function whose body provably returns heap | Structural escape analysis (see below) |
+
+### User-defined `-> string` functions (issue #405)
+
+A user-defined function that returns `string` is treated as heap-allocated **iff every return statement in its body yields a heap-string-expression** (recursively considering other heap-returning user functions). This rules out functions that return string literals or forward borrowed parameters — those are NOT treated as heap and the wrapper won't try to free their results.
+
+```aether
+my_concat(a: string, b: string) -> string {
+    return string.concat(a, b)        // RHS is heap → my_concat returns heap
+}
+
+format_msg() -> string {
+    return "constant"                  // RHS is literal → format_msg does NOT return heap
+}
+
+s = my_concat("a", "b")               // _heap_s = 1
+s = my_concat(s, "c")                 // free(prev); _heap_s = 1
+s = format_msg()                       // free(prev); _heap_s = 0  — literal preserved
+```
+
+The recursive walk has cycle detection (mutual recursion through `-> string` user functions returns "not heap" conservatively, which is the safe answer when the structural analysis can't decide).
+
+### Cross-block reassignment (the architectural piece of #405)
+
+`_heap_<name>` trackers are emitted at **function-entry scope**, not at the C scope where the variable is first assigned. This means a string variable first-assigned in one if-branch and reassigned in another — or first-assigned at the top of a function and reassigned inside a deeply-nested loop — has a tracker visible at every reassignment site:
+
+```aether
+result = ""                            // _heap_result = 0 at function entry
+if cond1 {
+    result = my_concat("a", "b")       // _heap_result = 1; tracker is at fn scope
+} else if cond2 {
+    result = my_concat("c", "d")       // free(""): no; _heap_result = 1
+}
+// `result` is heap-allocated here regardless of which branch ran;
+// scope-exit cleanup uses _heap_result to free correctly.
+```
+
+Pre-fix, the second branch couldn't see the first branch's tracker (it was C-scoped to the first `if` body) and the build failed with `'_heap_result' undeclared`. The function-entry hoist closes that scope mismatch.
+
+### When you DO need explicit cleanup
+
+Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*`) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments only.
+
+---
+
 ## Examples
 
 See the following runnable examples:
