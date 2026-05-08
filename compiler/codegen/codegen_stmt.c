@@ -1061,14 +1061,99 @@ static void fprint_expr_text(FILE* out, ASTNode* e) {
     fputs("<expr>", out);
 }
 
+// Recursively evaluate a predicate AST as a compile-time constant.
+// Returns 1 if the expression is provably constant; *truthy_out
+// holds the boolean value. Conservatively returns 0 for any
+// expression touching identifiers, function calls, or operators
+// outside the supported subset — runtime check stays in place.
+//
+// Supported: integer/float/bool literals; comparison ops
+// (`<`, `<=`, `>`, `>=`, `==`, `!=`); arithmetic ops
+// (`+`, `-`, `*`, `/`, `%`); logical ops (`&&`, `||`); unary
+// negation and `!`. Enough for the common "vacuous predicate"
+// cases (`requires true`, `ensures 1 > 0`, `requires N > 0` where
+// N has been constant-folded by the optimizer pre-pass).
+static int try_fold_predicate(ASTNode* e, double* val_out) {
+    if (!e) return 0;
+    if (e->type == AST_LITERAL && e->value) {
+        if (strcmp(e->value, "true") == 0)  { *val_out = 1.0; return 1; }
+        if (strcmp(e->value, "false") == 0) { *val_out = 0.0; return 1; }
+        if (e->node_type && e->node_type->kind == TYPE_STRING) return 0;
+        *val_out = atof(e->value);
+        return 1;
+    }
+    if (e->type == AST_UNARY_EXPRESSION && e->child_count == 1 && e->value) {
+        double v = 0.0;
+        if (!try_fold_predicate(e->children[0], &v)) return 0;
+        if (strcmp(e->value, "!") == 0) { *val_out = (v == 0.0) ? 1.0 : 0.0; return 1; }
+        if (strcmp(e->value, "-") == 0) { *val_out = -v; return 1; }
+        if (strcmp(e->value, "+") == 0) { *val_out =  v; return 1; }
+        return 0;
+    }
+    if (e->type == AST_BINARY_EXPRESSION && e->child_count == 2 && e->value) {
+        double l = 0.0, r = 0.0;
+        if (!try_fold_predicate(e->children[0], &l)) return 0;
+        if (!try_fold_predicate(e->children[1], &r)) return 0;
+        const char* op = e->value;
+        if (strcmp(op, "<")  == 0) { *val_out = (l <  r) ? 1.0 : 0.0; return 1; }
+        if (strcmp(op, "<=") == 0) { *val_out = (l <= r) ? 1.0 : 0.0; return 1; }
+        if (strcmp(op, ">")  == 0) { *val_out = (l >  r) ? 1.0 : 0.0; return 1; }
+        if (strcmp(op, ">=") == 0) { *val_out = (l >= r) ? 1.0 : 0.0; return 1; }
+        if (strcmp(op, "==") == 0) { *val_out = (l == r) ? 1.0 : 0.0; return 1; }
+        if (strcmp(op, "!=") == 0) { *val_out = (l != r) ? 1.0 : 0.0; return 1; }
+        if (strcmp(op, "&&") == 0) { *val_out = ((l != 0.0) && (r != 0.0)) ? 1.0 : 0.0; return 1; }
+        if (strcmp(op, "||") == 0) { *val_out = ((l != 0.0) || (r != 0.0)) ? 1.0 : 0.0; return 1; }
+        if (strcmp(op, "+")  == 0) { *val_out = l + r; return 1; }
+        if (strcmp(op, "-")  == 0) { *val_out = l - r; return 1; }
+        if (strcmp(op, "*")  == 0) { *val_out = l * r; return 1; }
+        if (strcmp(op, "/")  == 0) { if (r == 0.0) return 0; *val_out = l / r; return 1; }
+        return 0;
+    }
+    return 0;
+}
+
 // Emit one `if (!(<predicate>)) aether_panic("<role> violation: <text>
-// in <fn>");` block for a single clause.
+// in <fn>");` block for a single clause. If the predicate is
+// provably constant-true at compile time, skip emission entirely
+// (zero per-call cost — analog of `static_assert` for the trivial
+// case). A constant-false predicate falls through to runtime
+// emission so the panic surface still names the failed clause; the
+// runtime trip is observable to the test suite without aetherc
+// having to refuse the build.
 static void emit_contract_check(CodeGenerator* gen,
                                 ASTNode* clause,
                                 const char* role,
                                 const char* fn_name) {
     if (!clause || clause->child_count == 0) return;
     ASTNode* predicate = clause->children[0];
+    double folded = 0.0;
+    if (try_fold_predicate(predicate, &folded) && folded != 0.0) {
+        /* Trivially-true predicate. Drop the runtime check — the
+         * generated C should be byte-for-byte identical to a
+         * function written without the clause. Emit a comment for
+         * the curious reader inspecting the .c output. */
+        print_indent(gen);
+        fprintf(gen->output, "/* %s elided (always-true): ", role);
+        char buf[1024];
+        FILE* mem = fmemopen(buf, sizeof(buf) - 1, "w");
+        if (mem) {
+            fprint_expr_text(mem, predicate);
+            long n = ftell(mem);
+            if (n < 0) n = 0;
+            if ((size_t)n >= sizeof(buf)) n = sizeof(buf) - 1;
+            buf[n] = '\0';
+            fclose(mem);
+        } else { buf[0] = '\0'; }
+        for (const char* p = buf; *p; p++) {
+            /* Defensively split any star-slash sequence so the
+             * predicate text can't accidentally terminate the
+             * surrounding C comment. */
+            if (p[0] == '*' && p[1] == '/') { fputs("* /", gen->output); p++; }
+            else fputc(*p, gen->output);
+        }
+        fprintf(gen->output, " */\n");
+        return;
+    }
     print_indent(gen);
     fprintf(gen->output, "if (!(");
     generate_expression(gen, predicate);

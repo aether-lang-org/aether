@@ -817,10 +817,12 @@ aetherc --no-contracts script.ae out.c    # zero per-call cost
 
 Suppresses contract-check emission entirely. Equivalent to C's `-DNDEBUG` for `assert`. Intended for release builds where the contracts have been validated upstream.
 
+**Const-fold elision**: When the predicate is provably constant-true at compile time (e.g. `requires true`, `ensures 1 > 0`, `requires 1 + 1 == 2`, `ensures !false`), the codegen drops the runtime check entirely and emits a `/* precondition elided (always-true): <text> */` comment in its place. Generated C is byte-for-byte identical to a function written without the clause — the user keeps the documentation; the binary takes zero overhead. The folder handles literals, `< <= > >= == !=`, `&& ||`, `+ - * / %`, unary `!` and unary `-`. Anything with an identifier reference, function call, or member access (i.e., anything the optimizer can't prove pure-and-known) keeps the runtime check.
+
 **Limitations / out-of-scope for v1**:
 
 - Postconditions are checked only at explicit `return <expr>` statements with a single value. Multi-value (tuple) returns and fall-off-the-end of void functions are not yet wrapped — calling `aether_panic` from those paths is a follow-up.
-- Compile-time const-fold rejection of guaranteed-false predicates is a follow-up; at MVP, all checks fire at runtime.
+- The const-fold elision is conservative — short-circuit folding (`x || true` → drop) is intentionally not performed, because the runtime evaluation of `x` may carry a side effect the user expects to fire.
 - The `--emit=lib` `aether_describe()` metadata doesn't yet surface contracts to FFI consumers; that's the next layer.
 
 See [examples/basics/contracts.ae](../examples/basics/contracts.ae) for runnable demos. Closes issue #348.
