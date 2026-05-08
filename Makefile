@@ -153,6 +153,35 @@ endif
 
 CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_HAS_SANDBOX $(OPENSSL_CFLAGS) $(ZLIB_CFLAGS) $(NGHTTP2_CFLAGS) $(EXTRA_CFLAGS)
 LDFLAGS = -lm $(OPENSSL_LDFLAGS) $(ZLIB_LDFLAGS) $(NGHTTP2_LDFLAGS)
+
+# Hardening flags (issue #396). Opt-in via `HARDEN=1`. The CI matrix
+# pins a Linux/gcc + HARDEN=1 entry so a hardened-build regression
+# trips a red check before merge; the default release CFLAGS stay
+# unchanged because (a) some hardening flags add measurable runtime
+# overhead and (b) macOS Clang has a documented gap with
+# `_FORTIFY_SOURCE` on a few historical setups. Each flag below is
+# justified inline:
+#
+#   -fstack-protector-all  : stack canaries on every function — not
+#                             just those gcc heuristics flag (-strong)
+#                             — catches the smashing class of bugs
+#                             that escape the default heuristic.
+#   -D_FORTIFY_SOURCE=2    : runtime checks on read/write/memcpy/
+#                             strncpy/printf-family wrappers. Requires
+#                             at least -O1; we already use -O2, so
+#                             nothing extra needed. Linux/gcc will
+#                             warn at compile time when it can prove
+#                             a buffer overflow; turn those into
+#                             real bug fixes, not blanket suppressions.
+#   -Wformat -Wformat-security :
+#                             flag printf-family format strings that
+#                             come from non-literal sources (the
+#                             classic %s-format-injection pattern).
+#                             Default in modern Linux distros; we
+#                             standardise on it explicitly.
+ifeq ($(HARDEN),1)
+CFLAGS += -fstack-protector-all -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security
+endif
 ifneq ($(PLATFORM),wasm)
 ifneq ($(PLATFORM),embedded)
 ifeq ($(findstring AETHER_NO_THREADING,$(EXTRA_CFLAGS)),)
