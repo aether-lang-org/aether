@@ -3,6 +3,28 @@
 
 #include <stddef.h>
 
+// ---- Structured-error kinds (pilot — issue #392) ----
+//
+// Mirror of the KIND_* `const` block in std/fs/module.ae. Update both
+// in lock-step. Translation from `errno` to one of these values is
+// done by `aether_fs_errno_to_kind()` (see aether_fs.c) — that helper
+// is the *only* errno→kind site, so the four pilot primitives
+// (fs.copy, fs.move, fs.realpath, fs.chmod) all classify failures the
+// same way.
+#define AETHER_FS_KIND_OK                0
+#define AETHER_FS_KIND_NOT_FOUND         1
+#define AETHER_FS_KIND_PERMISSION_DENIED 2
+#define AETHER_FS_KIND_EXISTS            3
+#define AETHER_FS_KIND_CROSS_DEVICE      4
+#define AETHER_FS_KIND_IO                5
+#define AETHER_FS_KIND_INVALID           6
+#define AETHER_FS_KIND_LOOP              7
+#define AETHER_FS_KIND_NAME_TOO_LONG     8
+#define AETHER_FS_KIND_NO_SPACE          9
+#define AETHER_FS_KIND_IS_DIR           10
+#define AETHER_FS_KIND_NOT_DIR          11
+#define AETHER_FS_KIND_UNAVAILABLE      99
+
 // File operations
 typedef struct {
     void* handle;

@@ -8,6 +8,12 @@
 //     convention. They are the escape hatch for advanced callers.
 //   - Aether-native wrappers (below) use Go-style `(value, err)` tuple
 //     returns and are the idiomatic way to call fs operations.
+//   - A small set of newer wrappers (`copy`, `move`, `realpath`,
+//     `chmod`) ship the structured-error pilot from issue #392 —
+//     they return `(value, kind, message)` so callers can switch on
+//     the `KIND_*` enum below without parsing English. The pilot
+//     sits *next to* the (value, err) shape, not in place of it;
+//     existing wrappers are unchanged.
 
 exports (
     file_open_raw, file_close, file_read_all_raw, file_write_raw,
@@ -26,8 +32,39 @@ exports (
     create_dir, create_dir_with_mode, delete_dir, mkdir_p,
     symlink, readlink, unlink,
     list_dir, glob, glob_multi,
-    write_binary, write_atomic, rename, file_stat, read_binary
+    write_binary, write_atomic, rename, file_stat, read_binary,
+    KIND_OK, KIND_NOT_FOUND, KIND_PERMISSION_DENIED, KIND_EXISTS,
+    KIND_CROSS_DEVICE, KIND_IO, KIND_INVALID, KIND_LOOP,
+    KIND_NAME_TOO_LONG, KIND_NO_SPACE, KIND_IS_DIR, KIND_NOT_DIR,
+    KIND_UNAVAILABLE
 )
+
+// ---- Structured-error kinds (pilot — issue #392) ----
+// Returned as the second element of the (value, kind, message) tuple
+// from `copy`, `move`, `realpath`, and `chmod`. Switch on these to
+// programmatically discriminate between common failure modes without
+// parsing the human-readable message. Non-fs callers should treat
+// any non-zero kind as "an error happened" — the message remains the
+// authoritative human-readable diagnostic.
+//
+// Values are stable; new kinds may be appended (always with a fresh
+// integer above the existing range) but existing values are part of
+// the surface contract. Mirror these in std/fs/aether_fs.h as
+// AETHER_FS_KIND_* macros so the C side and the Aether surface
+// remain in lock-step.
+const KIND_OK                = 0
+const KIND_NOT_FOUND         = 1   // ENOENT — path or component missing
+const KIND_PERMISSION_DENIED = 2   // EACCES, EPERM
+const KIND_EXISTS            = 3   // EEXIST — destination already there (when caller asked not to overwrite)
+const KIND_CROSS_DEVICE      = 4   // EXDEV — rename across filesystems (move falls back transparently)
+const KIND_IO                = 5   // EIO and other partial-I/O failures
+const KIND_INVALID           = 6   // EINVAL — illegal argument (e.g. src == dst)
+const KIND_LOOP              = 7   // ELOOP — symlink cycle on realpath
+const KIND_NAME_TOO_LONG     = 8   // ENAMETOOLONG
+const KIND_NO_SPACE          = 9   // ENOSPC — disk full
+const KIND_IS_DIR            = 10  // EISDIR — operation on a directory where a regular file was required (or vice-versa for copy/move src)
+const KIND_NOT_DIR           = 11  // ENOTDIR — component of path is not a directory
+const KIND_UNAVAILABLE       = 99  // platform feature compiled out (reserved for follow-up modules; fs primitives never return this)
 
 // File operations - raw externs
 extern file_open_raw(path: string, mode: string) -> ptr

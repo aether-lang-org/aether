@@ -92,6 +92,45 @@ is not an error — the caller asked if X exists. Only return a non-empty
 error string when something actually went wrong (null receiver, wrong
 type, allocation failure).
 
+### Structured errors (pilot — issue #392)
+
+A small set of newer wrappers extends the (value, err) shape with a
+**third element**: an integer "kind" that lets callers
+programmatically discriminate between failure modes without parsing
+the human-readable message. The tuple is `(value, kind: int,
+message: string)`. `kind == 0` means success (constant `KIND_OK`);
+non-zero means an error of the named class.
+
+```
+// (bytes_copied, kind, message)
+//   on success:  (n, KIND_OK, "")
+//   on failure:  (bytes_so_far, KIND_NOT_FOUND, "open src: ...")
+copy(src: string, dst: string) -> (int, int, string) {
+    return fs_copy_raw(src, dst)
+}
+```
+
+Why kinds are returned per-call (not via process-global accessors like
+`vcr.last_kind()`): std.fs is called concurrently from actors; a
+shared mutable slot would race. The triple costs one extra register
+on every ABI we target (x86-64 SysV, AArch64 AAPCS, MS x64).
+
+The kinds themselves are exported `const int` values from the module
+that uses them (e.g. `fs.KIND_NOT_FOUND`, `fs.KIND_PERMISSION_DENIED`).
+Modules that use kinds **must** also export a matching
+`AETHER_<MODULE>_KIND_*` C macro set in their header so the C side
+and the Aether surface stay in lock-step.
+
+This shape is **opt-in and additive**. Existing wrappers keep their
+(value, err) or string-error returns — converting them is a
+non-breaking but wider change tracked separately. The pilot scope is
+`std.fs.{copy, move, realpath, chmod}`. Future modules may adopt the
+shape after the pilot has shaken out.
+
+| Operation | Success return | Failure return |
+|---|---|---|
+| Structured-error producer | `(value, KIND_OK, "")` | `(zero-value-or-partial, KIND_*, "reason")` |
+
 ### Docstring
 
 Every wrapper gets a short docstring stating what it does and **the
