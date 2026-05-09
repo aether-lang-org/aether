@@ -25,7 +25,7 @@ Aether is a compiled language that brings actor-based concurrency to systems pro
 - **`--emit=lib` resource caps** — sandbox untrusted Aether plugins inside trusted hosts. Embedders set a process-wide memory ceiling (`aether_set_memory_cap`) and per-thread wall-clock deadline (`aether_set_call_deadline`) via the public C surface in `include/libaether.h`. The codegen emits a tripwire at every loop head under `--emit=lib` (zero overhead on `--emit=exe`), so guests that allocate uncapped or spin in infinite loops are bounded predictably. Memory accounting tracks current usage, not high-water-mark, so long-running guests aren't tripped by cumulative churn.
 - **DSL block receiver scoping** — inside `receiver.method(args) { body }`, bare-name function references resolve through the receiver's namespace before erroring. SDK builders no longer require an `import X (setter1, setter2, ...)` line to make trailing-block setters resolve.
 - **`@derive(eq)` on structs** — annotate a struct with `@derive(eq)` to synthesize `int T_eq(T a, T b)` automatically (field-by-field `==` chain); supports primitive numeric and string fields.
-- **Automatic string-ownership tracking** — every string variable carries a compiler-emitted `_heap_<name>` companion that flips between literal/heap on every reassignment; the wrapper `if (_heap_x) free(<old>)` reclaims heap-allocated buffers eagerly without an explicit `defer string.free(s)`. Recognised heap sources are stdlib `string.concat` / `string.substring` / `string.{to_upper, to_lower, trim}`, string interpolation, and **user-defined `-> string` functions whose body provably returns heap** (recursive structural escape analysis with cycle detection). The tracker is hoisted to function-entry scope so cross-block reassignment — variable first-set in an if-then, reassigned in an else-if or a deeply-nested loop — works correctly. See [String memory model](docs/memory-management.md#string-memory-model-heap-string-tracker).
+- **Automatic string-ownership tracking** — every string variable carries a compiler-emitted `_heap_<name>` companion that flips on every reassignment, so heap-allocated buffers are reclaimed eagerly without an explicit `defer string.free(s)`. Covers single-value reassignment, tuple destructure, cross-block flow, function-exit cleanup, and escape detection through call-args (`@retain` annotation marks "stored" parameters; default `string`-param treatment is read-only). Recognised heap sources include stdlib `string.concat` / `substring` / `to_upper` / `to_lower` / `trim`, string interpolation, user-defined `-> string` functions whose body provably returns heap (recursive structural escape analysis with cycle detection), and tuple-returning externs annotated `(string @heap, ...)`. See [String memory model](docs/memory-management.md#string-memory-model-heap-string-tracker) for the full picture.
 - **Eiffel-style runtime contracts** — `requires` and `ensures` clauses attach pre/postconditions directly to function declarations: `add(a, b) -> int requires a >= 0 ensures result >= a { return a + b }`. Each clause lowers to `if (!(<expr>)) aether_panic("<role> violation: <text> in <fn>");` — preconditions at function entry, postconditions before every `return` (with `result` bound to the about-to-be-returned value). Multiple clauses, freely interleaved, each checked independently so the panic message names the specific failed predicate. `--no-contracts` build flag suppresses emission entirely (zero per-call cost — the analog of C's `-DNDEBUG`). See [Function contracts](docs/language-reference.md#function-contracts-requires--ensures-issue-348).
 
 ## Runtime Features
@@ -42,6 +42,7 @@ The Aether runtime implements a native actor system with optimized message passi
 
 ### Memory Management
 - **Manual by default** — use `defer` for cleanup. All allocations cleaned up explicitly.
+- **Automatic string-ownership tracking** — heap-allocated strings auto-freed on reassignment, tuple destructure, and function exit; opt-in `@retain` extern annotation for parameters that store the pointer beyond the call. See [String memory model](docs/memory-management.md#string-memory-model-heap-string-tracker).
 - **Arena allocators** for actor lifetimes
 - **Memory pools** with thread-local allocation
 - **Actor pooling** reducing allocation overhead
@@ -481,13 +482,13 @@ make examples
 # Full CI suite (8 steps, -Werror) — runs on your current platform
 make ci
 
-# Unit tests only (166 tests)
+# Unit tests only (215 tests)
 make test
 
-# Integration tests only (108 .ae tests)
+# Integration + regression .ae tests (463 tests)
 make test-ae
 
-# Build all examples (61 programs)
+# Build all examples (89 programs)
 make examples
 
 # Full CI + Valgrind + ASan in Docker (Linux)
