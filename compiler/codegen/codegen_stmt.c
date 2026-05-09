@@ -1,5 +1,6 @@
 #include "codegen_internal.h"
 #include "optimizer.h"
+#include "../aether_module.h"
 
 // Is `name` the variable name of a known closure? If yes, also returns the
 // closure id via *out_id. Used by return-site Bug B protection.
@@ -611,7 +612,13 @@ static int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
     }
 
     if (expr->type == AST_FUNCTION_CALL && expr->value) {
-        const char* fn = expr->value;
+        // Source-level `string.concat(...)` lands in the AST as the
+        // dotted string `"string.concat"`, but stdlib externs and the
+        // generated C call sites use the underscore form. Normalise
+        // before both the hardcoded allowlist and the user-fn lookup
+        // below.
+        char fn_norm[256];
+        const char* fn = codegen_normalise_callee(expr->value, fn_norm, sizeof(fn_norm));
         // Hardcoded stdlib fast-path.
         if (strcmp(fn, "string_concat") == 0 ||
             strcmp(fn, "string_substring") == 0 ||
@@ -772,28 +779,321 @@ static void collect_heap_string_var_names(CodeGenerator* gen, ASTNode* node,
 }
 
 // Emit `int _heap_<name> = 0; (void)_heap_<name>;` at function-entry
-// scope for every string variable in `body`. Caller invokes this
-// after parameters are declared and before the body is generated.
+// scope for every string variable in `body`, AND additionally hoist
+// the C-level `const char* <name> = NULL;` declaration to the same
+// scope. Caller invokes this after parameters are declared and
+// before the body is generated.
 //
-// After this runs, `is_heap_string_var(gen, name)` returns true for
-// every collected name, so:
-//   - the per-stmt first-decl codegen at line ~1359 emits an
-//     assignment (`_heap_<name> = 0;`) instead of a redeclaration;
-//   - the per-stmt reassignment codegen at line ~1110 skips its
-//     defensive lazy-init and goes straight to the wrapper.
+// After this runs, `is_heap_string_var(gen, name)` and
+// `is_var_declared(gen, name)` both return true for every collected
+// non-special name, so the per-stmt codegen routes ALL assignments
+// (including the original "first" assignment) through the
+// reassignment path at line 1839+ and emits the wrapper. The
+// wrapper reads `_tmp_old` from the function-scoped slot — never
+// from a freshly-declared per-block stack slot.
+//
+// History: the original 0.135.0 fix (#405) hoisted only the tracker
+// (the `int _heap_<name>`). The C-level variable declaration stayed
+// at its original first-use point, which `hoist_loop_vars` /
+// `hoist_if_branch_vars` then promoted to the loop-enclosing or if-
+// referenced-outside C scope — but NOT to function scope. When the
+// same Aether name was first-assigned in two sibling C-blocks (e.g.
+// `if (...) { ... name = ... }` followed by another `if (...)
+// { ... name = ... }`), the codegen emitted two separate
+// uninitialised C variables sharing one function-scoped tracker.
+// The wrapper at the second block's first assignment read
+// `_tmp_old = name` from the freshly-declared (uninitialised) stack
+// slot, evaluated `if (_heap_name)` against the tracker (= 1 from
+// the first block's last iteration), and called `free()` on stack
+// garbage — glibc abort. The fix here makes the architectural
+// intent self-consistent: tracker AND the variable it tracks both
+// at function scope, lock-step.
+//
+// Skipped names (tracker is still hoisted; only the C var hoist is
+// skipped):
+//   - already-declared (function parameters, vars hoisted by
+//     hoist_if_branch_vars before this pass) — would emit a
+//     duplicate declaration.
+//   - actor state vars — accessed via `self->name`; a local
+//     `const char* name = NULL` would be unused (-Wunused-variable
+//     under -Werror) and shadow nothing useful.
+//   - env captures — closure body accesses via `_env->name`.
+//   - promoted captures — declared as `int* name = malloc(...)` by
+//     the closure-promotion path; declaring `const char*` here
+//     would create a conflicting pre-decl.
 void hoist_heap_string_trackers(CodeGenerator* gen, ASTNode* body) {
     if (!body || !gen) return;
     const char* names[256];  // 256 string vars per fn is generous
     int count = 0;
     collect_heap_string_var_names(gen, body, names, &count, 256);
     for (int i = 0; i < count; i++) {
-        if (is_heap_string_var(gen, names[i])) continue;
+        const char* name = names[i];
+        /* Tracker hoist (existing) — applies to ALL collected names
+         * including state vars / env caps / promoted caps, because
+         * the wrapper sites for those still reference _heap_<name>. */
+        if (!is_heap_string_var(gen, name)) {
+            print_indent(gen);
+            fprintf(gen->output,
+                    "int _heap_%s = 0; (void)_heap_%s;\n",
+                    name, name);
+            mark_heap_string_var(gen, name);
+        }
+
+        /* C-variable hoist (the second half of the architectural fix
+         * — see the function comment above). Skip names that aren't
+         * simple function-local C vars. */
+        if (is_var_declared(gen, name)) continue;
+        if (gen->current_actor) {
+            int is_state = 0;
+            for (int s = 0; s < gen->state_var_count; s++) {
+                if (gen->actor_state_vars[s] &&
+                    strcmp(gen->actor_state_vars[s], name) == 0) {
+                    is_state = 1; break;
+                }
+            }
+            if (is_state) continue;
+        }
+        int is_env_cap = 0;
+        for (int e = 0; e < gen->current_env_capture_count; e++) {
+            if (gen->current_env_captures[e] &&
+                strcmp(gen->current_env_captures[e], name) == 0) {
+                is_env_cap = 1; break;
+            }
+        }
+        if (is_env_cap) continue;
+        if (is_promoted_capture(gen, name)) continue;
+
         print_indent(gen);
-        fprintf(gen->output,
-                "int _heap_%s = 0; (void)_heap_%s;\n",
-                names[i], names[i]);
-        mark_heap_string_var(gen, names[i]);
+        fprintf(gen->output, "const char* %s = NULL;\n", name);
+        mark_var_declared(gen, name);
     }
+}
+
+// =====================================================================
+// Escape analysis for heap-string variables
+//
+// Pre-pass that walks a function body and marks heap-tracked string
+// variables as "escaped" when their value is passed somewhere the
+// recipient may store the pointer raw — most commonly a function-call
+// argument that isn't the RHS of `V = ...` (where V is the LHS), or a
+// closure capture. The wrapper at codegen_stmt.c:1611 then skips its
+// `free(_tmp_old)` for escaped vars: freeing a value that has been
+// adopted by `map.put`/`list.add`/an actor message/etc. would dangle
+// the stored copy and produce a use-after-free.
+//
+// The "consumed transiently" exception covers the canonical bug_repo
+// pattern from #405:
+//
+//     while i < N {
+//         s = my_concat(s, "x")    // s on RHS, but LHS is also s
+//         i = i + 1
+//     }
+//
+// Here the call only reads the old `s` to build the new one — the
+// recipient (my_concat) returns a fresh value and the result replaces
+// `s`. The old `s` is genuinely unreachable after the call. So we
+// don't mark `s` escaped on the strength of its appearance inside its
+// own assignment's RHS — only on appearances outside that exception.
+//
+// Conservative everywhere else: any other call argument, any closure
+// capture, any non-RHS use is treated as "may have stored the
+// pointer". That makes the analysis alias-safe: heap-tracked vars
+// either get freed correctly (no escape → wrapper fires) or leak for
+// the function's lifetime (escape → wrapper skipped). Strictly
+// better than the pre-pass UAF.
+//
+// Soundness boundary: this catches function-call arguments (which is
+// where 90%+ of the alias bugs live: map.put, list.add, actor
+// `send`, struct/message field init via fn-call wrappers). It does
+// not yet catch direct struct-field writes (`s.field = x`) or array
+// element writes (`a[i] = x`); those land as AST_ASSIGNMENT (LHS-as-
+// expr shape) rather than AST_FUNCTION_CALL, and the rare cases
+// they cover would also leak rather than UAF if added. Worth a
+// follow-up if a downstream surfaces one.
+// =====================================================================
+
+// Walks `node` looking for AST_FUNCTION_CALL or AST_METHOD_CALL whose
+// arguments include identifiers that name a heap-tracked string var.
+// `consumed_lhs`, when non-NULL, names the variable whose own
+// assignment RHS we're inside — that LHS is exempted from the escape
+// mark for the duration of this subwalk (the bug_repo "consumed
+// transiently" exception above).
+static void escape_walk(CodeGenerator* gen, ASTNode* node,
+                         const char* consumed_lhs);
+
+/* Look up the parameter type-kind for the n-th argument of a callee
+ * named `func_name` (in either dotted source-form or underscored
+ * extern-form). Returns the param's TypeKind, or TYPE_UNKNOWN if the
+ * callee can't be resolved. */
+static TypeKind lookup_callee_param_kind(CodeGenerator* gen,
+                                          const char* func_name,
+                                          int param_idx) {
+    if (!gen || !func_name || param_idx < 0) return TYPE_UNKNOWN;
+    char fn_norm[256];
+    const char* fn = codegen_normalise_callee(func_name, fn_norm, sizeof(fn_norm));
+    /* Externs first — registered with param-kind table. */
+    TypeKind k = lookup_extern_param_kind(gen, fn, param_idx);
+    if (k != TYPE_UNKNOWN) return k;
+    /* Fall back to user-defined fn lookup via the program AST. */
+    if (gen->program) {
+        ASTNode* fn_def = find_function_definition_by_name(gen->program, fn);
+        if (fn_def && param_idx < fn_def->child_count) {
+            ASTNode* param = fn_def->children[param_idx];
+            if (param && param->node_type) {
+                return param->node_type->kind;
+            }
+        }
+    }
+    return TYPE_UNKNOWN;
+}
+
+/* Decide whether passing a heap-string variable as an argument to
+ * `func_name` at position `param_idx` should be treated as an escape.
+ *
+ * The heuristic: storage usually happens through a `ptr` parameter
+ * (opaque pointer — the callee can stash it anywhere). Other typed
+ * parameters (`string`, `int`, `bool`, structs, etc.) are typically
+ * read-and-consume — `string.length`, `string.equals`, `print`,
+ * comparison ops. Treating those as escape would re-create the leak
+ * the wrapper is meant to fix (#405's bug_repo loop has
+ * `string.length(s)` outside the loop, which would otherwise mark
+ * `s` escaped and skip the wrapper inside the loop).
+ *
+ * Conservative when the callee can't be resolved (TYPE_UNKNOWN): we
+ * assume escape rather than not, because mis-marking as non-escape
+ * costs a UAF (worse than the leak from over-marking). The common
+ * case — known stdlib + user fns visible in the program — resolves
+ * cleanly. */
+static int call_arg_escapes(TypeKind param_kind) {
+    switch (param_kind) {
+        case TYPE_STRING:
+        case TYPE_INT:
+        case TYPE_INT64:
+        case TYPE_UINT64:
+        case TYPE_BYTE:
+        case TYPE_FLOAT:
+        case TYPE_BOOL:
+        case TYPE_VOID:
+            return 0;
+        case TYPE_PTR:
+        case TYPE_UNKNOWN:
+        case TYPE_WILDCARD:
+        default:
+            return 1;
+    }
+}
+
+static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
+                                      const char* consumed_lhs) {
+    if (!call) return;
+    /* Children of an AST_FUNCTION_CALL are the arg expressions. Each
+     * is itself walked recursively in case it nests further calls. */
+    for (int i = 0; i < call->child_count; i++) {
+        ASTNode* arg = call->children[i];
+        if (!arg) continue;
+        if (arg->type == AST_IDENTIFIER && arg->value) {
+            /* Bare identifier in argument position. */
+            if (is_heap_string_var(gen, arg->value) &&
+                (consumed_lhs == NULL ||
+                 strcmp(arg->value, consumed_lhs) != 0)) {
+                /* Type-based escape: only mark escaped if the callee's
+                 * matching parameter is `ptr` (storage likely) or
+                 * unknown (safe-default). Read-only scalar/string
+                 * parameters don't escape — that's the precision that
+                 * keeps `string.length(s)` from leaking. */
+                TypeKind k = lookup_callee_param_kind(gen, call->value, i);
+                if (call_arg_escapes(k)) {
+                    mark_escaped_string_var(gen, arg->value);
+                }
+            }
+        } else {
+            /* Non-identifier arg (literal, nested call, etc.) —
+             * still recurse to find any identifiers buried inside. */
+            escape_walk(gen, arg, consumed_lhs);
+        }
+    }
+}
+
+static void escape_walk(CodeGenerator* gen, ASTNode* node,
+                         const char* consumed_lhs) {
+    if (!node) return;
+
+    /* Closure body — every captured outer heap-string var escapes
+     * conservatively. Closures may outlive the enclosing scope (stored
+     * in actor state, queued in scheduler, returned from the function),
+     * so we cannot reason locally about whether the closure stores the
+     * captured pointer. Walk the closure body looking for identifiers
+     * that name heap-tracked vars; mark each. */
+    if (node->type == AST_CLOSURE) {
+        /* The "consumed_lhs" exception does not apply inside a closure
+         * — even if the closure happens to be the RHS of `V = closure
+         * { ... uses V ... }`, the closure may run later, after V has
+         * been reassigned, with V already freed. Walk the closure body
+         * unconditionally. */
+        for (int i = 0; i < node->child_count; i++) {
+            escape_walk(gen, node->children[i], NULL);
+        }
+        return;
+    }
+
+    /* Identifier referenced bare in a non-call, non-RHS context (e.g.
+     * a struct-field expr, an array index expr, a return value). The
+     * caller's recursion handles call-arg-identifier specifically; here
+     * we skip — bare identifier reads (not stores) don't escape. */
+
+    /* Function call — inspect args. Method calls (`receiver.method(args)`)
+     * are also AST_FUNCTION_CALL nodes (with the dotted callee in
+     * `value`); the receiver appears as a regular argument among the
+     * children. */
+    if (node->type == AST_FUNCTION_CALL) {
+        escape_inspect_call_args(gen, node, consumed_lhs);
+        return;
+    }
+
+    /* Variable assignment / declaration: `V = <expr>`. The RHS is
+     * walked with `consumed_lhs = V` so a `V = f(V, ...)` pattern
+     * doesn't mark V escaped. Other LHS values inside the RHS still
+     * follow normal rules. */
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        node->child_count > 0) {
+        const char* lhs = node->value;
+        for (int i = 0; i < node->child_count; i++) {
+            escape_walk(gen, node->children[i], lhs);
+        }
+        return;
+    }
+
+    /* Return statement — the returned value escapes. If it's a bare
+     * identifier naming a heap-tracked var, mark escaped. */
+    if (node->type == AST_RETURN_STATEMENT) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* c = node->children[i];
+            if (c && c->type == AST_IDENTIFIER && c->value &&
+                is_heap_string_var(gen, c->value)) {
+                mark_escaped_string_var(gen, c->value);
+            } else {
+                escape_walk(gen, c, consumed_lhs);
+            }
+        }
+        return;
+    }
+
+    /* Don't descend into nested function definitions — their own pass
+     * handles them. */
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION) {
+        return;
+    }
+
+    /* Default: recurse with the same consumed_lhs context. */
+    for (int i = 0; i < node->child_count; i++) {
+        escape_walk(gen, node->children[i], consumed_lhs);
+    }
+}
+
+void mark_escaped_heap_string_vars(CodeGenerator* gen, ASTNode* body) {
+    if (!gen || !body) return;
+    escape_walk(gen, body, NULL);
 }
 
 // Collect the names of top-level AST_VARIABLE_DECLARATION nodes in a
@@ -1477,12 +1777,23 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (is_state_var) {
                 // Generate as assignment to self->field
                 if (stmt->child_count > 0 && is_heap_string_expr(gen, stmt->children[0])) {
-                    fprintf(gen->output, "{ const char* _tmp_old = self->%s; ", stmt->value);
-                    fprintf(gen->output, "self->%s = ", stmt->value);
-                    generate_expression(gen, stmt->children[0]);
-                    fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
-                            stmt->value);
-                    fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
+                    /* Skip the free if the var has escaped (passed to
+                     * a function that may have stored the pointer):
+                     * freeing now would dangle the stored copy. Leak
+                     * instead — strictly better than a UAF. See
+                     * mark_escaped_heap_string_vars. */
+                    if (is_escaped_string_var(gen, stmt->value)) {
+                        fprintf(gen->output, "self->%s = ", stmt->value);
+                        generate_expression(gen, stmt->children[0]);
+                        fprintf(gen->output, ";\n");
+                    } else {
+                        fprintf(gen->output, "{ const char* _tmp_old = self->%s; ", stmt->value);
+                        fprintf(gen->output, "self->%s = ", stmt->value);
+                        generate_expression(gen, stmt->children[0]);
+                        fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
+                                stmt->value);
+                        fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
+                    }
                 } else {
                     fprintf(gen->output, "self->%s", stmt->value);
                     if (stmt->child_count > 0) {
@@ -1611,7 +1922,24 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     int rhs_is_heap = (stmt->child_count > 0 &&
                                        is_heap_string_expr(gen, stmt->children[0]));
                     int var_is_string = is_heap_string_var(gen, stmt->value);
-                    if (var_is_string && stmt->child_count > 0) {
+                    /* Escape gate (mark_escaped_heap_string_vars): if
+                     * the var's value has been passed to a function
+                     * that may have stored the pointer (`map.put`
+                     * value, `list.add`, struct field write via fn,
+                     * actor message field, closure capture), the
+                     * `free(_tmp_old)` here would dangle the stored
+                     * copy. Conservative: emit a plain assignment
+                     * instead, leaving the previous heap value alive
+                     * for the recipient — the variable's lifetime
+                     * leak is strictly better than a UAF. See
+                     * mark_escaped_heap_string_vars in this file for
+                     * the analysis. */
+                    int var_escaped = is_escaped_string_var(gen, stmt->value);
+                    if (var_is_string && stmt->child_count > 0 && var_escaped) {
+                        fprintf(gen->output, "%s = ", stmt->value);
+                        generate_expression(gen, stmt->children[0]);
+                        fprintf(gen->output, ";\n");
+                    } else if (var_is_string && stmt->child_count > 0) {
                         // Defensive: if the hoist somehow missed this
                         // name (e.g. promoted via a path the pre-pass
                         // doesn't walk), declare the tracker now.
@@ -1629,6 +1957,12 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                 stmt->value);
                         fprintf(gen->output, " _heap_%s = %d; }\n",
                                 stmt->value, rhs_is_heap ? 1 : 0);
+                    } else if (rhs_is_heap && var_escaped) {
+                        /* Non-string-typed escaped var reassigned to
+                         * a heap string. Same gate — skip the free. */
+                        fprintf(gen->output, "%s = ", stmt->value);
+                        generate_expression(gen, stmt->children[0]);
+                        fprintf(gen->output, ";\n");
                     } else if (rhs_is_heap) {
                         // Non-string-typed variable being reassigned
                         // to a heap string. Rare (type-inference
@@ -3307,4 +3641,216 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             }
             break;
     }
+}
+
+// =====================================================================
+// Ownership diagnosis (--diagnose=ownership)
+//
+// The dot-normalisation fix in this same release flipped a class of
+// latent leaks into latent UAFs in downstream code that aliased a
+// heap-string across an ownership-transfer boundary (e.g. handing
+// the string to map.put then reassigning the local). This pass walks
+// the program after parse + typecheck and prints the same heap/non-
+// heap verdicts the wrapper terminator at codegen_stmt.c:1611-1631
+// would emit — without running codegen. The goal is to surface
+// "this variable is now heap-tracked, the wrapper will free its
+// previous value at the next reassignment" so a porter can audit
+// whether the previous value is aliased anywhere before the crash
+// hits at runtime.
+// =====================================================================
+
+static void diag_walk_assignments(CodeGenerator* gen, ASTNode* node,
+                                   FILE* out, int* found_any) {
+    if (!node) return;
+    /* Don't descend into nested function/closure definitions — they
+     * get their own pass at the top level. */
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_CLOSURE) {
+        return;
+    }
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        node->child_count > 0) {
+        ASTNode* rhs = node->children[0];
+        int rhs_heap = is_heap_string_expr(gen, rhs);
+        int lhs_string =
+            (node->node_type && node->node_type->kind == TYPE_STRING) ||
+            rhs_heap;
+        if (lhs_string) {
+            const char* shape = "non-heap RHS";
+            if (rhs->type == AST_STRING_INTERP) {
+                shape = "string interpolation → HEAP";
+            } else if (rhs->type == AST_FUNCTION_CALL && rhs->value) {
+                shape = rhs_heap ? "heap-returning fn → HEAP"
+                                 : "fn call (not heap-classified)";
+            } else if (rhs->type == AST_LITERAL) {
+                shape = "literal";
+            } else if (rhs->type == AST_IDENTIFIER) {
+                shape = "borrow from another variable";
+            }
+            int escaped = is_escaped_string_var(gen, node->value);
+            fprintf(out,
+                    "    line %4d: %-20s = ...   _heap_%s = %d   [%s]%s\n",
+                    node->line,
+                    node->value, node->value, rhs_heap ? 1 : 0, shape,
+                    escaped ? "  ESCAPED — wrapper skips free" : "");
+            *found_any = 1;
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        diag_walk_assignments(gen, node->children[i], out, found_any);
+    }
+}
+
+void codegen_diagnose_ownership(ASTNode* program, FILE* out) {
+    if (!program || !out) return;
+
+    /* Build a minimal CodeGenerator. The predicates below read
+     * `gen->program` (for the user-fn structural-escape lookup) and
+     * `gen->extern_registry` (for the type-based escape param lookup
+     * `lookup_callee_param_kind` does to keep `string.length(s)` from
+     * over-marking `s` as escaped). The rest of the struct stays
+     * zeroed. */
+    CodeGenerator gen;
+    memset(&gen, 0, sizeof(gen));
+    gen.program = program;
+    /* Populate the extern registry so type-based escape analysis can
+     * resolve `string.length`-style param kinds — without this every
+     * call falls into the TYPE_UNKNOWN branch of call_arg_escapes,
+     * which over-marks vars as escaped (because the conservative
+     * answer is "may store"). Mirrors the registration generate_program
+     * does at the top of normal codegen — both direct extern children
+     * AND externs reachable via `import` statements (the std.string,
+     * std.map, … pulled in by the program live in module ASTs, not
+     * the program's own children). */
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* ch = program->children[i];
+        if (!ch) continue;
+        if (ch->type == AST_EXTERN_FUNCTION && ch->value) {
+            register_extern_func(&gen, ch);
+        } else if (ch->type == AST_IMPORT_STATEMENT && ch->value) {
+            AetherModule* mod_entry = module_find(ch->value);
+            ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
+            if (mod_ast) {
+                for (int j = 0; j < mod_ast->child_count; j++) {
+                    ASTNode* decl = mod_ast->children[j];
+                    if (decl && decl->type == AST_EXTERN_FUNCTION &&
+                        decl->value) {
+                        register_extern_func(&gen, decl);
+                    }
+                }
+            }
+        }
+    }
+
+    fprintf(out, "=== aether ownership diagnosis ===\n");
+    fprintf(out, "(prints the heap/non-heap verdicts codegen will\n"
+                 " use at the wrapper terminator in\n"
+                 " codegen_stmt.c:1611-1631)\n\n");
+
+    /* Pass 1 — string-returning user functions, with HEAP verdict. */
+    fprintf(out, "[1] string-returning user functions\n");
+    int sr_count = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (!c) continue;
+        if (c->type != AST_FUNCTION_DEFINITION &&
+            c->type != AST_BUILDER_FUNCTION) continue;
+        /* For function defs, `node_type` holds the return type
+         * directly (not a TYPE_FUNCTION wrapper) — see codegen_func.c
+         * where `func->node_type` is read straight as the return type. */
+        if (!c->node_type || c->node_type->kind != TYPE_STRING) continue;
+        int heap = function_def_returns_heap_string(&gen, c);
+        fprintf(out, "  %-30s line %4d   %s\n",
+                c->value ? c->value : "(anonymous)",
+                c->line,
+                heap ? "HEAP — every return path heap-classified"
+                     : "NOT HEAP — ≥ 1 return literal/borrowed/unclassified");
+        sr_count++;
+    }
+    if (sr_count == 0) {
+        fprintf(out, "  (none)\n");
+    }
+
+    /* Pass 2 — heap-tracked variable assignments, by function.
+     *
+     * Per-function we replay the same prelude codegen runs:
+     * collect_heap_string_var_names → mark_heap_string_var (the
+     * non-emitting half of hoist_heap_string_trackers) → then
+     * mark_escaped_heap_string_vars. This populates the gen-side
+     * registries that diag_walk_assignments queries
+     * (is_heap_string_var, is_escaped_string_var) so the printed
+     * verdicts match what the codegen would actually emit for the
+     * same program. State is cleared between functions so a name
+     * shadowed across fns doesn't carry over. */
+    fprintf(out,
+            "\n[2] string-typed variable assignments\n"
+            "    (the codegen wrapper at line 1611-1631 emits\n"
+            "     `if (_heap_<lhs>) free(_tmp_old); _heap_<lhs> = N`\n"
+            "     after each assignment, with N as shown — except\n"
+            "     where the var is marked ESCAPED, in which case the\n"
+            "     wrapper emits a plain assignment instead, leaving\n"
+            "     the previous heap value alive for the function's\n"
+            "     lifetime so a stored alias stays valid)\n\n");
+    int total = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (!c) continue;
+        if (c->type != AST_FUNCTION_DEFINITION &&
+            c->type != AST_BUILDER_FUNCTION &&
+            c->type != AST_MAIN_FUNCTION) continue;
+
+        /* Prelude — replicate what generate_function_definition runs
+         * before the body, minus the emit. */
+        clear_heap_string_vars(&gen);
+        clear_escaped_string_vars(&gen);
+        const char* heap_names[256];
+        int heap_count = 0;
+        for (int j = 0; j < c->child_count; j++) {
+            collect_heap_string_var_names(&gen, c->children[j],
+                                          heap_names, &heap_count, 256);
+        }
+        for (int n = 0; n < heap_count; n++) {
+            if (!is_heap_string_var(&gen, heap_names[n])) {
+                mark_heap_string_var(&gen, heap_names[n]);
+            }
+        }
+        for (int j = 0; j < c->child_count; j++) {
+            mark_escaped_heap_string_vars(&gen, c->children[j]);
+        }
+
+        fprintf(out, "  %s (line %d):\n",
+                c->value ? c->value : "(anonymous)", c->line);
+        int found = 0;
+        for (int j = 0; j < c->child_count; j++) {
+            diag_walk_assignments(&gen, c->children[j], out, &found);
+        }
+        if (!found) {
+            fprintf(out, "    (no string-typed assignments)\n");
+        }
+        total++;
+    }
+    /* Final cleanup so the temporary registries don't outlive the
+     * stack-allocated `gen`. */
+    clear_heap_string_vars(&gen);
+    clear_escaped_string_vars(&gen);
+    if (total == 0) {
+        fprintf(out, "  (no functions in program)\n");
+    }
+
+    fprintf(out,
+            "\nUAF triage: any line above with `_heap_<lhs> = 1` AND\n"
+            "no ESCAPED tag will have the wrapper free `<lhs>`'s\n"
+            "previous value at the next reassignment. Lines tagged\n"
+            "ESCAPED already had their wrapper-free skipped by the\n"
+            "type-based escape analysis (the var was passed to a `ptr`\n"
+            "parameter, captured by a closure, or returned from the\n"
+            "function — all of which let the recipient store the\n"
+            "pointer past the next reassignment); those leak the value\n"
+            "across the function's lifetime in exchange for alias\n"
+            "safety. If you see an ESCAPED-tagged line that you expected\n"
+            "to free, check whether the recipient really retains the\n"
+            "pointer — and if not, the conservative analysis is leaking\n"
+            "more than necessary (file an issue with a repro).\n"
+            "\n=== end diagnosis ===\n");
 }

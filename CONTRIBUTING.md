@@ -515,6 +515,36 @@ After merge, the pipeline transforms this into:
 - If `[current]` is missing, create it at the top (below the header)
 - Keep entries concise but specific — mention what changed and why
 
+### `### Upgrade notes` for memory-fix releases
+
+When a PR touches `compiler/codegen/codegen_stmt.c` (the heap-string-tracker wrapper), `runtime/aether_string.c` (the refcount allocator), or anything else that changes when the runtime frees a heap-allocated value, add an `### Upgrade notes` block to the same `[current]` entry. The block names the alias / ownership patterns whose downstream behaviour the change can break, and gives a recommended pre-upgrade play.
+
+The hazard the section guards against: a memory-fix release that closes a leak can flip latent UAFs in downstream code from "harmless slow leak" to "hard crash". The leak was kindly keeping the dangling pointer alive; once the leak is fixed, the alias dangles for real. If the CHANGELOG doesn't call this out, downstreams hit "rebuilt under new aetherc, my server crashes" and run a manual debugging ladder to figure out what changed semantically.
+
+**Template:**
+
+```markdown
+### Upgrade notes
+
+This release tightens <ownership behaviour>: <one-sentence statement of the new
+runtime guarantee>. The previous version <one-sentence statement of what was
+loose / broken before>.
+
+If your project <names the aliasing pattern that's now dangerous — e.g. stores
+a heap-string in a long-lived structure and also keeps a local pointer that's
+later reassigned>, the previous compiler tolerated this as <a leak / a no-op>;
+this release will <name the new visible behaviour — free the alias / panic
+on the use / etc.>. This shape is a use-after-free / double-free / etc.
+
+**Recommended pre-upgrade play:**
+
+1. <First step — usually `aetherc --diagnose=ownership` or a similar audit>.
+2. <Second step — what to look for in the audit output>.
+3. <Third step — sanitiser run, integration test, etc.>
+```
+
+Only include the section when the change can plausibly break downstream code that compiled fine before. A pure leak fix that has no UAF surface (e.g. the wrapper is right and only the diagnostic is new) doesn't need one. When in doubt, write the section — the cost of an unneeded note is low; the cost of a surprised porter is a debugging day.
+
 ### Building locally
 
 ```bash

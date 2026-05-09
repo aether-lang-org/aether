@@ -2422,14 +2422,9 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     // outermost call in `abi() { describe("trading") { ... }
                     // }` work.
                     {
-                        // Normalize func_name (dots to underscores) for comparison
-                        // since builder_funcs are registered with underscores
+                        // builder_funcs registry is keyed on the underscored form.
                         char bf_normalized[256];
-                        strncpy(bf_normalized, func_name, 255);
-                        bf_normalized[255] = '\0';
-                        for (char* p = bf_normalized; *p; p++) {
-                            if (*p == '.') *p = '_';
-                        }
+                        codegen_normalise_callee(func_name, bf_normalized, sizeof(bf_normalized));
                         int is_builder = 0;
                         for (int bi = 0; bi < gen->builder_func_count; bi++) {
                             if (strcmp(gen->builder_funcs[bi], bf_normalized) == 0) {

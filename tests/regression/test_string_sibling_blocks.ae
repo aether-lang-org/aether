@@ -1,0 +1,94 @@
+// Regression: same Aether string variable name first-assigned in two
+// sibling C-blocks must share one function-scoped C variable + one
+// function-scoped tracker.
+//
+// Pre-fix shape (the `rebuild_dir`-style pattern from a real downstream):
+//   - hoist_heap_string_trackers hoisted `int _heap_<name> = 0;` to
+//     function-entry scope (the architectural fix from #405).
+//   - The C-level `const char* <name>;` declaration was NOT hoisted.
+//     hoist_loop_vars / hoist_if_branch_vars promoted it to the
+//     loop-enclosing or if-referenced-outside scope but never to
+//     function scope.
+//   - Sibling block 1 declared and used `name`, leaving `_heap_name = 1`
+//     after its loop's last iteration. Sibling block 2 declared a
+//     fresh uninitialised C `name`. The wrapper at block 2's first
+//     assignment did `_tmp_old = name` (uninit stack slot),
+//     `if (_heap_name)` was 1 (stale tracker), `free(stack garbage)`
+//     → glibc abort.
+//
+// Post-fix: hoist_heap_string_trackers also emits `const char*
+// <name> = NULL;` at function entry and marks the var as declared,
+// so the per-block first-decl path doesn't fire and there's only
+// one C-level slot for `<name>` in the function.
+
+import std.string
+
+extern exit(code: int)
+
+trip_shared_name(seed: string) -> string {
+    out = ""
+    name = ""
+    if string.length(seed) > 0 {
+        // Block A: heap-loop that sets `_heap_name = 1` on its last
+        // iteration. Pre-fix, `name`'s C declaration was emitted
+        // inside this block; the tracker was function-scoped.
+        i = 0
+        while i < 5 {
+            name = string.concat("a_", string.from_int(i))
+            out = string.concat(out, name)
+            i = i + 1
+        }
+    }
+    // Block B: separate sibling if-block. Pre-fix, this declared a
+    // fresh uninitialised `const char* name;` in its block scope, and
+    // the wrapper at the first reassignment read `_tmp_old` from the
+    // stack-garbage slot while `_heap_name` was still 1 from Block A
+    // — `free()` on stack garbage, glibc abort.
+    if string.length(seed) > 0 {
+        name = string.concat("b_", string.from_int(0))
+        out = string.concat(out, name)
+    }
+    return out
+}
+
+main() {
+    println("=== sibling-block regression ===")
+
+    // Pre-fix: glibc abort. Post-fix: returns the concatenated string.
+    res = trip_shared_name("trigger")
+    if string.length(res) < 1 {
+        println("FAIL: empty result; trip_shared_name didn't run")
+        exit(1)
+    }
+    // Concatenation order: out starts empty,
+    //   block A appends "a_0a_1a_2a_3a_4" (15 chars),
+    //   block B appends "b_0" (3 chars) → 18 chars total.
+    if string.length(res) != 18 {
+        println("FAIL: expected 18 chars, got ${string.length(res)} ('${res}')")
+        exit(1)
+    }
+    println("  PASS: 18 chars from block A + block B; no abort, no UAF")
+
+    // Run again with seed-empty: block A skipped, block B skipped, out stays "".
+    res2 = trip_shared_name("")
+    if res2 != "" {
+        println("FAIL: empty seed should produce empty out, got '${res2}'")
+        exit(1)
+    }
+    println("  PASS: empty-seed path leaves both blocks unentered")
+
+    // Stress: run 200 iterations to make sure no leak-induced OOM
+    // surfaces and no per-call corruption accumulates.
+    j = 0
+    while j < 200 {
+        r = trip_shared_name("seed")
+        if string.length(r) != 18 {
+            println("FAIL stress iter ${j}: length ${string.length(r)} (expected 18)")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 200x stress run stable")
+
+    println("=== sibling-block regression: all cases passed ===")
+}

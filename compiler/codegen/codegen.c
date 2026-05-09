@@ -136,6 +136,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     // Heap string ownership tracking
     gen->heap_string_vars = NULL;
     gen->heap_string_var_count = 0;
+    gen->escaped_string_vars = NULL;
+    gen->escaped_string_var_count = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -167,6 +169,7 @@ void free_code_generator(CodeGenerator* gen) {
             free(gen->declared_vars);
         }
         clear_heap_string_vars(gen);
+        clear_escaped_string_vars(gen);
         if (gen->message_registry) {
             free_message_registry(gen->message_registry);
         }
@@ -257,6 +260,69 @@ void clear_heap_string_vars(CodeGenerator* gen) {
     }
     gen->heap_string_vars = NULL;
     gen->heap_string_var_count = 0;
+}
+
+// Helper: check whether a heap-string variable has escaped — its
+// value has been passed somewhere (call argument outside its own
+// assignment's RHS, closure capture, etc.) where the recipient may
+// have stored the pointer. The wrapper at codegen_stmt.c:1611 uses
+// this to gate `free(_tmp_old)` and avoid dangling the stored copy.
+// Conservative: alias-safe (no UAF) at the cost of leaking. See
+// mark_escaped_heap_string_vars for the analysis.
+int is_escaped_string_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->escaped_string_var_count; i++) {
+        if (strcmp(gen->escaped_string_vars[i], var_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Helper: mark a heap-string variable as escaped.
+void mark_escaped_string_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_escaped_string_var(gen, var_name)) return;
+    char** new_vars = realloc(gen->escaped_string_vars,
+                              sizeof(char*) * (gen->escaped_string_var_count + 1));
+    if (!new_vars) return;
+    gen->escaped_string_vars = new_vars;
+    gen->escaped_string_vars[gen->escaped_string_var_count] = strdup(var_name);
+    gen->escaped_string_var_count++;
+}
+
+// Helper: clear escaped string vars (call at function start, alongside
+// clear_heap_string_vars).
+void clear_escaped_string_vars(CodeGenerator* gen) {
+    if (!gen) return;
+    if (gen->escaped_string_vars) {
+        for (int i = 0; i < gen->escaped_string_var_count; i++) {
+            free(gen->escaped_string_vars[i]);
+        }
+        free(gen->escaped_string_vars);
+    }
+    gen->escaped_string_vars = NULL;
+    gen->escaped_string_var_count = 0;
+}
+
+// Normalise a callee name's dots to underscores. Used by every
+// callee-name lookup in codegen — heap-string allowlist
+// (codegen_stmt.c:is_heap_string_expr), builder-funcs registry
+// (codegen_expr.c), extern param-type lookup
+// (codegen_stmt.c:lookup_callee_param_kind). Source-level
+// `"string.concat"` becomes `"string_concat"` so it matches the
+// underscored form the registries are keyed on.
+const char* codegen_normalise_callee(const char* raw, char* out, size_t out_size) {
+    if (!out || out_size == 0) return out;
+    if (!raw) { out[0] = '\0'; return out; }
+    size_t n = strlen(raw);
+    if (n >= out_size) n = out_size - 1;
+    memcpy(out, raw, n);
+    out[n] = '\0';
+    for (char* p = out; *p; p++) {
+        if (*p == '.') *p = '_';
+    }
+    return out;
 }
 
 // Helper: check if a function was already generated
@@ -1390,6 +1456,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     indent(gen);
     clear_declared_vars(gen);  // Reset for main function
     clear_heap_string_vars(gen);
+    clear_escaped_string_vars(gen);
     // Reset defer state for main function and enter scope
     gen->defer_count = 0;
     gen->scope_depth = 0;
@@ -1452,6 +1519,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
         // the call in codegen_func.c::generate_function_definition.
         if (main->children[0] && main->children[0]->type == AST_BLOCK) {
             hoist_heap_string_trackers(gen, main->children[0]);
+            mark_escaped_heap_string_vars(gen, main->children[0]);
         }
         generate_statement(gen, main->children[0]);
         gen->current_promoted_captures = prev_promoted;

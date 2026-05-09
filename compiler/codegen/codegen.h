@@ -206,6 +206,23 @@ typedef struct {
     char** heap_string_vars;
     int heap_string_var_count;
 
+    // Subset of `heap_string_vars`: names whose value is passed as a
+    // function-call argument (or captured by a closure) somewhere in
+    // the function body, in any context other than the RHS of `V = ...`
+    // where the LHS is V itself. The wrapper at codegen_stmt.c:1611
+    // skips the `free(_tmp_old)` when the var is escaped — the
+    // recipient of the escape may have stored the pointer (map.put,
+    // list.add, struct field, actor message field, closure capture)
+    // and freeing the local would dangle the stored copy. Conservative
+    // analysis: we do not know which callees store vs. consume, so we
+    // assume any non-trivial use means storage. Result: alias-safe
+    // (no UAF) at the cost of leaking the value over the function's
+    // lifetime — strictly better than the pre-pass UAF. Populated by
+    // mark_escaped_heap_string_vars (codegen_stmt.c) before the body
+    // is generated, alongside hoist_heap_string_trackers.
+    char** escaped_string_vars;
+    int escaped_string_var_count;
+
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.
     struct ReplyTypeEntry {
@@ -225,6 +242,14 @@ void generate_program(CodeGenerator* gen, ASTNode* program);
    actor state fields. Call before generate_program. Returns 1 on
    success, 0 if errors were reported (compilation should abort). */
 int validate_closure_state_mutations(CodeGenerator* gen, ASTNode* program);
+
+/* `aetherc --diagnose=ownership` entry point. Prints to `out` the
+   per-function string-ownership verdicts the codegen will use for the
+   heap-string-tracker wrapper at codegen_stmt.c:1611-1631 — without
+   actually running codegen. Lets downstreams find the "heap-string
+   handed across an ownership-transfer boundary then variable
+   reassigned" UAF shape at diagnose-time rather than at run-time. */
+void codegen_diagnose_ownership(ASTNode* program, FILE* out);
 
 // Header generation (for C embedding)
 void emit_header_prologue(CodeGenerator* gen, const char* guard_name);

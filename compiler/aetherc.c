@@ -102,6 +102,14 @@ static bool emit_namespace_describe = false;
 // what aether_<name>() exports the .so will contain.
 static bool list_functions_mode = false;
 
+// --diagnose=ownership: print the per-function string-ownership
+// verdicts the codegen would use at the wrapper terminator
+// (codegen_stmt.c:1611-1631) — without running codegen. Helps
+// downstreams localise the "heap-string handed to a collection then
+// variable reassigned" UAF shape that the heap-string-tracker fix
+// can unmask.
+static bool diagnose_ownership_mode = false;
+
 #ifdef _WIN32
     #include <windows.h>
     #include <io.h>
@@ -720,6 +728,19 @@ int compile_source(const char* input_path, const char* output_path) {
         return 1;
     }
 
+    // --diagnose=ownership: print per-function string-ownership
+    // verdicts and exit. Post-typecheck so node_type is populated for
+    // the user-fn structural-escape recursion.
+    if (diagnose_ownership_mode) {
+        codegen_diagnose_ownership(program, stdout);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        return 1;
+    }
+
     // --check: stop after typecheck + type inference, no codegen
     if (check_only_mode) {
         int warnings = aether_warning_count();
@@ -1152,6 +1173,7 @@ void print_help(const char* program_name) {
     printf("  --check                          Type-check only (no code generation)\n");
     printf("  --no-contracts                   Skip runtime emission of `requires`/`ensures` checks (#348)\n");
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
+    printf("  --diagnose=ownership             Print string-ownership verdicts and exit (no code generation)\n");
     printf("  --help, -h                       Show this help message\n");
     printf("\n");
     printf("Examples:\n");
@@ -1212,6 +1234,9 @@ int main(int argc, char *argv[]) {
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--no-contracts") == 0) {
             no_contracts_mode = true;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--diagnose=ownership") == 0) {
+            diagnose_ownership_mode = true;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-header") == 0) {
             // Check for optional explicit path argument (must end in .h)
@@ -1366,6 +1391,15 @@ int main(int argc, char *argv[]) {
     
     // --dump-ast only needs the input file
     if (dump_ast_mode) {
+        if (!compile_source(argv[arg_offset], "/dev/null")) {
+            return 1;
+        }
+        return 0;
+    }
+
+    // --diagnose=ownership only needs the input file. The branch in
+    // compile_source emits to stdout and short-circuits before codegen.
+    if (diagnose_ownership_mode) {
         if (!compile_source(argv[arg_offset], "/dev/null")) {
             return 1;
         }

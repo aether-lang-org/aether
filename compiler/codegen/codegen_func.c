@@ -615,6 +615,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     indent(gen);
     clear_declared_vars(gen);  // Reset for each function
     clear_heap_string_vars(gen);
+    clear_escaped_string_vars(gen);
 
     // Mark function parameters as declared so they aren't re-declared
     // (e.g., by hoist_loop_vars when a parameter is reassigned in a loop).
@@ -806,6 +807,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             // undeclared local. See codegen_stmt.c::
             // hoist_heap_string_trackers for the full rationale.
             hoist_heap_string_trackers(gen, body);
+            // Mark heap-string vars that escape via call argument or
+            // closure capture. The wrapper at codegen_stmt.c:1611
+            // skips its `free(_tmp_old)` for escaped vars to avoid
+            // dangling pointers held by `map.put`/`list.add`/actor
+            // message fields/etc. Conservative — alias-safe at the
+            // cost of leaking the value over the function's lifetime.
+            mark_escaped_heap_string_vars(gen, body);
         }
         // If body is a block, it handles its own scope
         // If not a block, we still need to generate the statements

@@ -1,0 +1,119 @@
+// Regression: heap-string-tracker wrapper uses escape analysis to skip
+// `free(_tmp_old)` when a variable's value has been passed across an
+// ownership-transfer boundary. Closes the latent UAF that the
+// dot-normalisation fix in this same release would otherwise unmask:
+// once the wrapper actually fires, any heap-string the user had handed
+// to a function that stores the pointer raw (map.put values, list.add
+// elements, actor message fields with `: ptr`, closures) would dangle
+// at the next reassignment of the local that built it.
+//
+// The escape gate (mark_escaped_heap_string_vars in
+// compiler/codegen/codegen_stmt.c) walks each function body and marks
+// vars that escape through:
+//   - call argument matching a `ptr`-typed parameter
+//   - return statement
+//   - closure capture
+// For escaped vars, the wrapper emits a plain assignment instead of
+// the `if (_heap_X) free(_tmp_old)` pattern. Conservative: alias-safe
+// (no UAF) at the cost of leaking the value over the function's
+// lifetime — strictly better than the pre-pass UAF.
+//
+// What this test guards (each case described inline):
+
+import std.string
+import std.map
+
+extern exit(code: int)
+
+main() {
+    println("=== string escape analysis regression ===")
+
+    // --- Case 1: alias via map.put (ptr-typed value param) ---
+    //
+    // Pre-fix this would UAF on Test 2's lookup:
+    //   v = string.concat(...)         heap → tracker = 1
+    //   _ = map.put(m, k, v)           map stores v pointer raw
+    //   v = string.concat(...)         wrapper would free old v
+    //                                  but map still holds it → UAF
+    // With the escape gate, v is recognised as escaping (map.put's
+    // value param is `ptr`), wrapper-free is skipped, the map's stored
+    // pointer stays valid.
+    m1 = map.new()
+    n = 0
+    while n < 100 {
+        k = string.concat("k_", string.from_int(n))
+        v = string.concat("v_", string.from_int(n))
+        _ = map.put(m1, k, v)
+        n = n + 1
+    }
+    n = 0
+    failures1 = 0
+    while n < 100 {
+        probe = string.concat("k_", string.from_int(n))
+        expected = string.concat("v_", string.from_int(n))
+        got, _ = map.get(m1, probe)
+        if string.equals(got, expected) != 1 {
+            failures1 = failures1 + 1
+        }
+        n = n + 1
+    }
+    if failures1 != 0 {
+        println("FAIL 1: ${failures1} of 100 stored values danged")
+        exit(1)
+    }
+    println("  PASS 1: 100 alias-via-map.put values survive reassignment")
+    map.free(m1)
+
+    // --- Case 2: bug_repo `s = my_concat(s, "x")` still freed ---
+    //
+    // The "consumed transiently" exception preserves #405's leak fix.
+    // s is on the RHS of its own assignment — the call only reads the
+    // old s to build the new one; the recipient (my_concat) doesn't
+    // store anything outliving the call. Wrapper SHOULD fire here so
+    // memory stays O(1) across the loop, not O(N).
+    //
+    // We don't have RSS-bound asserts in this harness, so the
+    // verification has to be indirect: the loop has to RUN. Anything
+    // worse than "fits in process RSS" surfaces as a kill-or-OOM.
+    s = ""
+    i = 0
+    while i < 5000 {
+        s = my_concat(s, "x")
+        i = i + 1
+    }
+    if string.length(s) != 5000 {
+        println("FAIL 2: expected length 5000, got ${string.length(s)}")
+        exit(1)
+    }
+    println("  PASS 2: bug_repo loop runs to completion (5000 iters)")
+
+    // --- Case 3: returned string escapes ---
+    //
+    // If a function returns a string, the variable holding that string
+    // should be marked escaped — the caller takes ownership and the
+    // callee must not free at scope exit. Otherwise the returned
+    // pointer dangles before the caller can read it.
+    out = returns_heap_string()
+    if out != "returned heap" {
+        println("FAIL 3: expected 'returned heap', got '${out}'")
+        exit(1)
+    }
+    println("  PASS 3: returned heap-string survives caller dereference")
+
+    println("=== escape analysis regression: all cases passed ===")
+}
+
+// Used by Case 2. `s` on RHS of `s = ...` is the canonical pattern
+// — escape analysis must NOT mark s as escaped here (consumed
+// transiently exception).
+my_concat(a: string, b: string) -> string {
+    return string.concat(a, b)
+}
+
+// Used by Case 3. The local `r` is a heap-string returned to the
+// caller. Escape analysis marks r as escaped because of the return
+// statement — the wrapper at scope exit (if any) must not free.
+returns_heap_string() -> string {
+    r = string.concat("returned ", "heap")
+    return r
+}

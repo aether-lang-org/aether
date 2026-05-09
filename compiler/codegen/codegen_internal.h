@@ -27,6 +27,18 @@ void clear_declared_vars(CodeGenerator* gen);
 int is_heap_string_var(CodeGenerator* gen, const char* var_name);
 void mark_heap_string_var(CodeGenerator* gen, const char* var_name);
 void clear_heap_string_vars(CodeGenerator* gen);
+int is_escaped_string_var(CodeGenerator* gen, const char* var_name);
+void mark_escaped_string_var(CodeGenerator* gen, const char* var_name);
+void clear_escaped_string_vars(CodeGenerator* gen);
+
+/* Normalise a callee name's dots to underscores, writing into `out`
+   and returning `out`. The AST stores source-level callees in dotted
+   form (`"string.concat"`) but stdlib externs, the generated C call
+   sites, and the various callee registries (heap-string allowlist,
+   builder-funcs registry, extern param-type table) all use the
+   underscored form. Use this whenever you're about to look up by
+   callee name. `out` must hold at least 256 bytes. */
+const char* codegen_normalise_callee(const char* raw, char* out, size_t out_size);
 
 /* Defer management (codegen.c) */
 void push_defer(CodeGenerator* gen, ASTNode* stmt);
@@ -85,6 +97,18 @@ int  emit_contract_postconditions(CodeGenerator* gen, ASTNode* func);
    field. All current call sites are inside the function-body
    codegen path which runs after that point. */
 void hoist_heap_string_trackers(CodeGenerator* gen, ASTNode* body);
+
+/* Walk `body` and mark every heap-string variable whose value escapes
+   — i.e. is passed as an argument in a function/method call (in any
+   context other than the RHS of `V = ...` whose LHS is V), or
+   captured by a closure body. The wrapper at codegen_stmt.c:1611
+   skips its `free(_tmp_old)` for escaped vars to avoid dangling
+   pointers stored on the recipient side (map.put values, list.add
+   elements, struct fields, actor message fields, closure captures).
+   Conservative: alias-safe at the cost of leaking the value over
+   the function's lifetime. Run after hoist_heap_string_trackers so
+   the heap-string-var registry is populated. */
+void mark_escaped_heap_string_vars(CodeGenerator* gen, ASTNode* body);
 
 /* Actor generation (codegen_actor.c) */
 void generate_actor_definition(CodeGenerator* gen, ASTNode* actor);
