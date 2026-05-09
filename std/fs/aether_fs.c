@@ -953,6 +953,24 @@ _tuple_int_int_string fs_copy_raw(const char* src, const char* dst) {
     }
     MultiByteToWideChar(CP_UTF8, 0, src, -1, wsrc, wsrc_len);
     MultiByteToWideChar(CP_UTF8, 0, dst, -1, wdst, wdst_len);
+    /* Pre-flight: classify directories explicitly. CopyFileExW returns
+     * ERROR_ACCESS_DENIED when src is a directory or dst is an
+     * existing directory, which would surface as KIND_PERMISSION_DENIED
+     * — wrong: the POSIX path returns KIND_IS_DIR for the same shape
+     * (S_ISDIR check), and callers expect that classification. Use
+     * GetFileAttributesW to discriminate before the syscall. */
+    DWORD src_attr = GetFileAttributesW(wsrc);
+    if (src_attr != INVALID_FILE_ATTRIBUTES &&
+        (src_attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        free(wsrc); free(wdst);
+        return aether_fs_iks_err(AETHER_FS_KIND_IS_DIR, "src is a directory");
+    }
+    DWORD dst_attr = GetFileAttributesW(wdst);
+    if (dst_attr != INVALID_FILE_ATTRIBUTES &&
+        (dst_attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        free(wsrc); free(wdst);
+        return aether_fs_iks_err(AETHER_FS_KIND_IS_DIR, "dst is a directory");
+    }
     /* bFailIfExists=FALSE → match POSIX cp: overwrite. */
     BOOL ok = CopyFileExW(wsrc, wdst, NULL, NULL, NULL, 0);
     DWORD win_err = GetLastError();
