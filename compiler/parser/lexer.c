@@ -217,10 +217,7 @@ Token* read_number() {
                 buffer[i++] = advance();
             }
             buffer[i] = '\0';
-            long val = strtol(buffer, NULL, 16);
-            char decimal[32];
-            snprintf(decimal, sizeof(decimal), "%ld", val);
-            Token* token = create_token(TOKEN_NUMBER, decimal, current_line, current_column);
+            Token* token = create_token(TOKEN_NUMBER, buffer, current_line, current_column);
             free(buffer);
             return token;
         } else if (next == 'o' || next == 'O') {
@@ -233,10 +230,7 @@ Token* read_number() {
                 buffer[i++] = advance();
             }
             buffer[i] = '\0';
-            long val = strtol(buffer + 2, NULL, 8);
-            char decimal[32];
-            snprintf(decimal, sizeof(decimal), "%ld", val);
-            Token* token = create_token(TOKEN_NUMBER, decimal, current_line, current_column);
+            Token* token = create_token(TOKEN_NUMBER, buffer, current_line, current_column);
             free(buffer);
             return token;
         } else if (next == 'b' || next == 'B') {
@@ -249,10 +243,7 @@ Token* read_number() {
                 buffer[i++] = advance();
             }
             buffer[i] = '\0';
-            long val = strtol(buffer + 2, NULL, 2);
-            char decimal[32];
-            snprintf(decimal, sizeof(decimal), "%ld", val);
-            Token* token = create_token(TOKEN_NUMBER, decimal, current_line, current_column);
+            Token* token = create_token(TOKEN_NUMBER, buffer, current_line, current_column);
             free(buffer);
             return token;
         }
@@ -346,6 +337,7 @@ Token* read_identifier() {
     else if (strcmp(buffer, "ptr") == 0) token = create_token(TOKEN_PTR, buffer, current_line, current_column);
     else if (strcmp(buffer, "int") == 0) token = create_token(TOKEN_INT, buffer, current_line, current_column);
     else if (strcmp(buffer, "long") == 0) token = create_token(TOKEN_INT64, buffer, current_line, current_column);
+    else if (strcmp(buffer, "uint64") == 0) token = create_token(TOKEN_UINT64, buffer, current_line, current_column);
     else if (strcmp(buffer, "float") == 0) token = create_token(TOKEN_FLOAT, buffer, current_line, current_column);
     else if (strcmp(buffer, "bool") == 0) token = create_token(TOKEN_BOOL, buffer, current_line, current_column);
     else if (strcmp(buffer, "byte") == 0) token = create_token(TOKEN_BYTE, buffer, current_line, current_column);

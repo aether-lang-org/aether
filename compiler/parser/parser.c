@@ -257,6 +257,10 @@ Type* parse_type(Parser* parser) {
             advance_token(parser);
             type = create_type(TYPE_INT64);
             break;
+        case TOKEN_UINT64:
+            advance_token(parser);
+            type = create_type(TYPE_UINT64);
+            break;
         case TOKEN_FLOAT:
             advance_token(parser);
             type = create_type(TYPE_FLOAT);
@@ -1295,6 +1299,7 @@ ASTNode* parse_statement(Parser* parser) {
             
         case TOKEN_INT:
         case TOKEN_INT64:
+        case TOKEN_UINT64:
         case TOKEN_STRING:
         case TOKEN_FLOAT:
         case TOKEN_BOOL:
@@ -2084,6 +2089,7 @@ ASTNode* parse_export_statement(Parser* parser) {
             break;
         case TOKEN_INT:
         case TOKEN_INT64:
+        case TOKEN_UINT64:
         case TOKEN_FLOAT:
         case TOKEN_BOOL:
         case TOKEN_BYTE:
@@ -2553,6 +2559,7 @@ ASTNode* parse_actor_definition(Parser* parser) {
             ASTNode* state_decl = NULL;
             
             if (next_tok && (next_tok->type == TOKEN_INT || next_tok->type == TOKEN_INT64 ||
+                            next_tok->type == TOKEN_UINT64 ||
                             next_tok->type == TOKEN_FLOAT ||
                             next_tok->type == TOKEN_STRING || next_tok->type == TOKEN_BOOL ||
                             next_tok->type == TOKEN_BYTE)) {
@@ -2982,6 +2989,7 @@ ASTNode* parse_function_definition(Parser* parser) {
             switch (peek->type) {
                 case TOKEN_INT:
                 case TOKEN_INT64:
+                case TOKEN_UINT64:
                 case TOKEN_FLOAT:
                 case TOKEN_BOOL:
                 case TOKEN_BYTE:
@@ -3033,6 +3041,7 @@ ASTNode* parse_function_definition(Parser* parser) {
                         switch (inner->type) {
                             case TOKEN_INT:
                             case TOKEN_INT64:
+                            case TOKEN_UINT64:
                             case TOKEN_FLOAT:
                             case TOKEN_BOOL:
                             case TOKEN_BYTE:
@@ -3230,6 +3239,7 @@ ASTNode* parse_pattern(Parser* parser) {
         // C-style typed parameters: int a, float b, string s, etc.
         case TOKEN_INT:
         case TOKEN_INT64:
+        case TOKEN_UINT64:
         case TOKEN_FLOAT:
         case TOKEN_BOOL:
         case TOKEN_BYTE:
@@ -3392,6 +3402,7 @@ ASTNode* parse_struct_definition(Parser* parser) {
         Token* peek = peek_token(parser);
         Type* c_type = NULL;
         if (peek && (peek->type == TOKEN_INT  || peek->type == TOKEN_INT64 ||
+                     peek->type == TOKEN_UINT64 ||
                      peek->type == TOKEN_FLOAT || peek->type == TOKEN_BOOL  ||
                      peek->type == TOKEN_BYTE  ||
                      peek->type == TOKEN_STRING || peek->type == TOKEN_PTR)) {
@@ -3730,6 +3741,7 @@ ASTNode* parse_program(Parser* parser) {
             // C-style return type prefix: int func_name(...) { ... }
             case TOKEN_INT:
             case TOKEN_INT64:
+            case TOKEN_UINT64:
             case TOKEN_FLOAT:
             case TOKEN_BOOL:
             case TOKEN_BYTE:

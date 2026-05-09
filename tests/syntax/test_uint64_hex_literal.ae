@@ -1,0 +1,8 @@
+main() {
+    uint64 x = 0xB5026F5AA96619E9
+    if x != 0xB5026F5AA96619E9 {
+        println("FAIL")
+        exit(1)
+    }
+    println(x)
+}
