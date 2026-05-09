@@ -52,7 +52,27 @@ Erlang's actor syntax, compiling via C.**
   C functions with no VM behind them, so there's no run-time hook
   for the block to reach back through. `hide` / `seal except` are
   compile-time, and the grant list is the closure's only handle to
-  privileged operations.
+  privileged operations. The trailing-block + `builder` shape is
+  Aether's lever for **pseudo-declarative nirvana**: the call site
+  reads like a config file (bare setters, no constructor noise, no
+  parameter threading) while the body is full Aether underneath —
+  control flow, env lookups, library calls, the lot. Levels 1-2
+  (YAML, HCL) are readable but powerless; Level 3 (Pulumi/CDK) is
+  powerful but reads like glue code; Aether's closure-DSL is the
+  one step beyond that gives both. This is what makes the next
+  bullet possible.
+- **NOT a YAML/HCL/Helm host** (related) — and won't be. Building on
+  the closure-DSL above, Aether's pitch for server-shaped libraries
+  is **config IS code**: don't ship a YAML loader, expose your
+  start-surface as a closure-DSL block and let the operator's
+  "config" be a `.ae` file they run with `ae run`. Same file is
+  config + validation + conditionals + entry point; no second
+  parser, no template language, no embedded scripting hack.
+  Sandboxing (`--emit=lib --with=...`, `hide`, `seal except`)
+  keeps untrusted configs safe — the same machinery that makes the
+  embedded-DSL case work. If a downstream user asks "should we add
+  a YAML config loader?", point them at `docs/config-is-code.md`
+  and the trailing-block DSL pattern.
 
 Sandbox more info: Full comparison (who brings what — Pony's per-reference
   granularity, Java SecManager's policy-file ancestry, gVisor's
@@ -71,6 +91,12 @@ plays that role), no interfaces.
   top 40 lines at session start to know what just landed.
 - `docs/emit-lib.md` — the capability-opt-in doc. Canonical reference
   for why `std.fs` is banned under `--emit=lib` by default.
+- `docs/config-is-code.md` — the "don't ship a YAML loader" pitch.
+  Library authors with a "start the thing" surface should expose
+  it as a trailing-block DSL, not a config-file format. Pair with
+  `docs/closures-and-builder-dsl.md` for the mechanism. `docs/cic-help.md`
+  is the (proposed, unimplemented) `ae help <script>` companion that
+  catches operator-side mistakes in those scripts.
 - `docs/next-steps.md` — roadmap. P1/P2/P3/P4 are ordered; `fs.copy` /
   `fs.move` / `fs.chmod` / `fs.symlink` / `fs.realpath` are P4. Check
   here before speccing a new stdlib addition.

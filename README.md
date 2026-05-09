@@ -361,6 +361,26 @@ The compiler distinguishes them at parse time, which is what makes the sandboxin
 
 Inspired by Smalltalk blocks, Ruby's blocks/procs, Groovy closures, and Kotlin/SwiftUI's trailing-block DSLs. See [Closures and Builder DSL](docs/closures-and-builder-dsl.md) for the builder-context mechanism, ref cells, and full DSL pattern.
 
+## Config IS Code
+
+**Don't ship a YAML loader.** If your Aether library has a "start the thing" surface — HTTP server, daemon, agent, scheduler, test rig — expose it as a closure-DSL block and let the operator's "config" be a `.ae` file they run with `ae run`. The pattern collapses YAML → templating → second-language-DSL (HCL, Helm) → embedded-scripting all into one thing: real Aether, type-checked, sandboxable, with the full stdlib available when the operator needs it.
+
+```aether
+import avnserver
+
+main() {
+    avnserver.serve {
+        host("127.0.0.1")
+        port(9990)
+        superuser_token(env("SUPER_TOKEN"))   // computed at config time
+        repo("alpha", "/srv/alpha")
+        repo("beta",  "/srv/beta")
+    }
+}
+```
+
+Same file is config, validation, conditional logic, and the entry point. No second parser, no second type system, no template language. Sandboxing (`--emit=lib --with=...`, `hide`, `seal except`) keeps it safe to accept untrusted configs as the embedded-DSL case demands. See [Config IS Code](docs/config-is-code.md) for the full progression (YAML → HCL → Pulumi → here) and library-author recipe.
+
 ## Runtime Configuration
 
 When embedding the Aether runtime in a C application, configure optimizations at startup:
