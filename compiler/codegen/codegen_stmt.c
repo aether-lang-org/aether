@@ -716,6 +716,141 @@ static int function_def_returns_heap_string(CodeGenerator* gen, ASTNode* fn_def)
     return result;
 }
 
+// Per-position structural escape analysis for tuple-returning user
+// functions (issue #420). Returns 1 iff every `return e1, e2, ...`
+// in `fn_def`'s body has the `position`-th return expression
+// classified as heap-string by `is_heap_string_expr`. Returns 0
+// for: any non-heap position, mixed heap/non-heap across return
+// sites, missing position, non-tuple return, or no returns at all
+// (conservative — a `void`-falling-off function can't leak via
+// tuple destructure since there's no value to destructure).
+//
+// Memoisation: a comma-separated bit string in `fn_def->annotation`
+// of the form `"heap_positions:1,0,1"` where the integer count
+// matches the function's tuple_count. Mirrors the single-value
+// `"heap_yes"` / `"heap_no"` sentinels used by
+// function_def_returns_heap_string. Set to `"heap_pending"`
+// during analysis to break cycles in mutually-recursive tuple-
+// returning functions; the cycle case conservatively returns 0
+// (no allocation classification → no auto-free → leak, but no
+// crash).
+//
+// The cache is consulted by the AST_TUPLE_DESTRUCTURE codegen
+// path (added in a follow-up commit) to decide whether to emit
+// `_heap_<lhs> = 1;` at the destructure site.
+static void walk_returns_for_heap_at(CodeGenerator* gen, ASTNode* node,
+                                     int position, int* found, int* all_heap) {
+    if (!node || !*all_heap) return;
+    if (node->type == AST_RETURN_STATEMENT) {
+        *found = 1;
+        // A tuple `return a, b, c` is represented as a return statement
+        // with `child_count` matching the tuple arity (children are the
+        // per-position expressions). Out-of-range = "this return doesn't
+        // even produce a value at `position`" → conservative non-heap.
+        if (position < 0 || position >= node->child_count ||
+            !is_heap_string_expr(gen, node->children[position])) {
+            *all_heap = 0;
+        }
+        return;
+    }
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_CLOSURE) {
+        return;
+    }
+    for (int i = 0; i < node->child_count && *all_heap; i++) {
+        walk_returns_for_heap_at(gen, node->children[i], position, found, all_heap);
+    }
+}
+
+static int parse_heap_positions_annotation(const char* ann, int position) {
+    /* Parses `"heap_positions:1,0,1"`. Returns the integer at
+     * `position`, or -1 if the string is malformed or position is
+     * out of range. */
+    if (!ann) return -1;
+    const char* prefix = "heap_positions:";
+    size_t plen = strlen(prefix);
+    if (strncmp(ann, prefix, plen) != 0) return -1;
+    const char* p = ann + plen;
+    int idx = 0;
+    while (*p) {
+        int digit;
+        if (*p == '0') digit = 0;
+        else if (*p == '1') digit = 1;
+        else return -1;
+        if (idx == position) return digit;
+        p++;
+        idx++;
+        if (*p == ',') p++;
+        else if (*p == '\0') break;
+        else return -1;
+    }
+    return -1;  /* position out of range */
+}
+
+static int function_def_returns_heap_at(CodeGenerator* gen, ASTNode* fn_def,
+                                         int position) {
+    if (!fn_def ||
+        (fn_def->type != AST_FUNCTION_DEFINITION &&
+         fn_def->type != AST_BUILDER_FUNCTION)) {
+        return 0;
+    }
+    if (position < 0) return 0;
+    /* Refuse to analyse non-tuple returns at non-zero position. */
+    if (!fn_def->node_type ||
+        fn_def->node_type->kind != TYPE_TUPLE ||
+        position >= fn_def->node_type->tuple_count) {
+        return 0;
+    }
+    /* Memo hit on a pre-parsed positions string. */
+    int cached = parse_heap_positions_annotation(fn_def->annotation, position);
+    if (cached >= 0) return cached;
+    /* Currently analysing (cycle break) — conservative no-heap. Same
+     * shape as the single-value analyzer's "heap_pending" sentinel. */
+    if (fn_def->annotation &&
+        strcmp(fn_def->annotation, "heap_pending") == 0) {
+        return 0;
+    }
+    /* Some unrelated annotation (e.g. "c_callback:...", "heap_yes"
+     * for a single-value function that's somehow being asked at
+     * position 0) — analyse without clobbering. */
+    int memoise = (fn_def->annotation == NULL);
+    if (memoise) fn_def->annotation = strdup("heap_pending");
+
+    int tuple_count = fn_def->node_type->tuple_count;
+    int* per_pos = (int*)calloc((size_t)tuple_count, sizeof(int));
+
+    ASTNode* body = NULL;
+    for (int i = 0; i < fn_def->child_count; i++) {
+        ASTNode* c = fn_def->children[i];
+        if (c && c->type == AST_BLOCK) { body = c; break; }
+    }
+    if (body) {
+        for (int p = 0; p < tuple_count; p++) {
+            int found = 0, all_heap = 1;
+            walk_returns_for_heap_at(gen, body, p, &found, &all_heap);
+            per_pos[p] = (found && all_heap) ? 1 : 0;
+        }
+    }
+
+    int result = per_pos[position];
+
+    if (memoise) {
+        /* Build "heap_positions:1,0,1\0" — at most 2*tuple_count + 16. */
+        size_t cap = (size_t)tuple_count * 2u + 32u;
+        char* buf = (char*)malloc(cap);
+        size_t off = (size_t)snprintf(buf, cap, "heap_positions:");
+        for (int p = 0; p < tuple_count; p++) {
+            off += (size_t)snprintf(buf + off, cap - off, "%s%d",
+                                    p ? "," : "", per_pos[p]);
+        }
+        free(fn_def->annotation);
+        fn_def->annotation = buf;
+    }
+    free(per_pos);
+    return result;
+}
+
 // Recursive: collect every variable name that may need a heap-string
 // tracker — i.e. every variable that appears as the LHS of an
 // AST_VARIABLE_DECLARATION (in Aether, "decl" covers both first-
@@ -1692,10 +1827,64 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             generate_expression(gen, rhs);
             fprintf(gen->output, ";\n");
 
+            /* Per-position heap-ness lookup for the destructure
+             * (issue #420). For each tuple position `j`, decide
+             * whether the source value at that position is a fresh
+             * heap allocation that the destructured LHS now owns.
+             * Computed once up-front so the per-LHS loop can route
+             * correctly:
+             *
+             *   - User-defined tuple-returning fn: walk return-sites
+             *     via `function_def_returns_heap_at`, AND-fold per
+             *     position. Memoised on the fn's annotation slot.
+             *   - Extern or any other RHS: read the per-position
+             *     `tuple_heap_flags[j]` populated by the parser
+             *     when an `@heap` annotation is in scope. NULL
+             *     flags ⇒ all 0 (borrow) — preserves the silent
+             *     pre-#420 behaviour for unannotated externs.
+             *
+             * Heap classification is only meaningful for TYPE_STRING
+             * positions; non-string positions keep their plain
+             * assignment shape regardless of the flag. */
+            ASTNode* callee_def = NULL;
+            if (rhs && rhs->type == AST_FUNCTION_CALL && rhs->value) {
+                callee_def = find_function_definition_by_name(gen->program,
+                                                              rhs->value);
+            }
+
             // Generate: type a = _tmp._0; type b = _tmp._1; ...
             for (int j = 0; j < var_count; j++) {
                 ASTNode* var = stmt->children[j];
-                if (var->value && strcmp(var->value, "_") == 0) continue;  // Skip discard
+
+                /* Per-position heap classification. Defaults to 0
+                 * for any case the analyzer can't classify. */
+                int pos_is_string = (rhs_type && rhs_type->kind == TYPE_TUPLE &&
+                                     j < rhs_type->tuple_count &&
+                                     rhs_type->tuple_types[j] &&
+                                     rhs_type->tuple_types[j]->kind == TYPE_STRING);
+                int pos_is_heap = 0;
+                if (pos_is_string) {
+                    if (callee_def) {
+                        pos_is_heap = function_def_returns_heap_at(gen, callee_def, j);
+                    } else if (rhs_type && rhs_type->tuple_heap_flags) {
+                        pos_is_heap = rhs_type->tuple_heap_flags[j];
+                    }
+                }
+
+                /* `_` discard slot. If the position is a heap value,
+                 * the destructure target has no name to free against
+                 * — emit an immediate `free` so the heap allocation
+                 * doesn't leak across the destructure. Non-heap
+                 * positions stay no-ops. */
+                if (var->value && strcmp(var->value, "_") == 0) {
+                    if (pos_is_heap) {
+                        print_indent(gen);
+                        fprintf(gen->output,
+                                "if (_tup%d._%d) free((void*)_tup%d._%d);\n",
+                                tmp_id, j, tmp_id, j);
+                    }
+                    continue;
+                }
 
                 // Prefer tuple element type over var's node_type (may be UNKNOWN)
                 const char* var_type;
@@ -1753,10 +1942,62 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "_env->%s = _tup%d._%d;\n", var->value, tmp_id, j);
                         continue;
                     }
+                    /* String-typed LHS with a hoisted heap tracker —
+                     * route through the wrapper so heap-allocated
+                     * values from the destructure don't leak on
+                     * later reassignments. Mirrors the AST_VARIABLE_
+                     * DECLARATION reassignment shape at lines
+                     * 2087-2094. Issue #420.
+                     *
+                     * Escape gate: if the LHS has been passed to
+                     * something that may have stored its pointer
+                     * (map.put value, list.add, struct field write,
+                     * actor message field, closure capture), the
+                     * `free(_tmp_old)` would dangle the stored
+                     * copy — emit a plain assignment instead.
+                     * Strictly leaks the previous value; strictly
+                     * better than UAF.
+                     *
+                     * The wrapper fires for BOTH first-destructure
+                     * and re-destructure of a hoisted var, because
+                     * the hoist initialised `<lhs> = NULL` and
+                     * `_heap_<lhs> = 0`, so on first use the free
+                     * is a no-op and the tracker simply moves to
+                     * its true value. */
+                    int lhs_is_tracked = (var->value &&
+                                          is_heap_string_var(gen, var->value));
+                    if (pos_is_string && lhs_is_tracked) {
+                        int escaped = is_escaped_string_var(gen, var->value);
+                        if (escaped) {
+                            fprintf(gen->output, "%s = _tup%d._%d;\n",
+                                    var->value, tmp_id, j);
+                        } else {
+                            fprintf(gen->output,
+                                "{ const char* _tmp_old = %s; "
+                                "%s = _tup%d._%d; "
+                                "if (_heap_%s) free((void*)_tmp_old); "
+                                "_heap_%s = %d; }\n",
+                                var->value,
+                                var->value, tmp_id, j,
+                                var->value,
+                                var->value, pos_is_heap);
+                        }
+                        continue;
+                    }
                     fprintf(gen->output, "%s = _tup%d._%d;\n", var->value, tmp_id, j);
                 } else {
                     mark_var_declared(gen, var->value);
                     fprintf(gen->output, "%s %s = _tup%d._%d;\n", var_type, var->value, tmp_id, j);
+                    /* If the LHS is a hoisted heap-string tracker
+                     * (rare for first-decl since the hoist also
+                     * marks the var declared, but kept defensively
+                     * for the lazy-promote case) and the source
+                     * position is heap, set the tracker. */
+                    if (pos_is_string && var->value &&
+                        is_heap_string_var(gen, var->value) && pos_is_heap) {
+                        print_indent(gen);
+                        fprintf(gen->output, "_heap_%s = 1;\n", var->value);
+                    }
                 }
             }
             break;

@@ -282,9 +282,53 @@ if cond1 {
 
 Pre-fix, the second branch couldn't see the first branch's tracker (it was C-scoped to the first `if` body) and the build failed with `'_heap_result' undeclared`. The function-entry hoist closes that scope mismatch.
 
+### Tuple destructures (issue #420)
+
+The same wrapper fires when a heap string is unpacked from a tuple. For user-defined tuple-returning functions the compiler runs a **per-position structural escape analysis** that mirrors the single-value case: it walks every `return e1, e2, e3` statement and AND-folds the heap-classification of each expression, per position. Position 0 is heap iff every return-site's first expression is heap; position 1 iff every return-site's second; and so on.
+
+```aether
+build_pair(prefix: string, name: string) -> (string, string) {
+    return string.concat(prefix, name), string.concat(name, prefix)
+    //     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //     position 0 = heap            position 1 = heap
+}
+
+a = ""                              // hoisted; _heap_a = 0
+b = ""                              // hoisted; _heap_b = 0
+i = 0
+while i < 1000 {
+    a, b = build_pair("p_", "n_")   // wrapper fires per position:
+    //                              // free(prev a) if heap; _heap_a = 1
+    //                              // free(prev b) if heap; _heap_b = 1
+    i = i + 1
+}
+```
+
+Without the tuple-destructure wrapper the loop would leak 1000×2 heap allocations; with it, steady-state retention is two strings.
+
+### `@heap` / `@borrow` annotations on tuple-returning externs
+
+For C externs there is no body to walk, so the compiler exposes per-position annotations:
+
+```aether
+extern decode_b64(b64: string) -> (string @heap, int, string)
+//                                 ^^^^^^^^^^^^       ^^^^^^
+//                                 fresh malloc       borrow / static literal
+//                                 (auto-free)        (no auto-free)
+```
+
+Default for unannotated string positions is `@borrow` — preserves the silent pre-#420 behaviour for existing tuple-returning externs. Adding `@heap` to a position is a behaviour change: the wrapper starts auto-freeing previous values on reassignment, so any caller currently doing manual `string.release` against the returned pointer must drop that call when adopting the annotation.
+
+Mix-and-match is allowed; trailing positions default to borrow:
+
+```aether
+extern realpath_raw(path: string) -> (string @heap, int, string)
+extern get_pair(s: string)        -> (string @heap, string @borrow)
+```
+
 ### When you DO need explicit cleanup
 
-Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*`) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments only.
+Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*` without an `@heap` annotation) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments and annotated extern returns only.
 
 ---
 

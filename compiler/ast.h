@@ -142,6 +142,18 @@ typedef struct Type {
     // Tuple support (multiple return values)
     struct Type** tuple_types;  // Array of element types (NULL if not tuple)
     int tuple_count;            // Number of tuple elements (0 if not tuple)
+    // Per-element heap-ownership tags for the tuple-destructure
+    // heap-tracker emit (issue #420). Parallel array, length ==
+    // tuple_count. Element value: 1 = the source-position is a
+    // fresh heap allocation the destructured LHS now owns
+    // (caller must `free` to avoid leak); 0 = borrow / non-heap /
+    // unknown. Default 0 so unannotated tuple-returning externs
+    // preserve the pre-#420 silent behaviour. Populated by the
+    // parser's `@heap` / `@borrow` annotation handler at the
+    // tuple-element position; consumed by the
+    // `AST_TUPLE_DESTRUCTURE` codegen path. NULL when tuple_count
+    // is 0 OR no annotation was supplied.
+    int* tuple_heap_flags;
     // Function/closure type support
     struct Type** param_types;  // Parameter types (NULL if not function type)
     int param_count;            // Number of parameters (0 if not function type)

@@ -13,6 +13,7 @@ Type* create_type(TypeKind kind) {
     type->struct_name = NULL;
     type->tuple_types = NULL;
     type->tuple_count = 0;
+    type->tuple_heap_flags = NULL;
     type->param_types = NULL;
     type->param_count = 0;
     type->return_type = NULL;
@@ -71,6 +72,12 @@ void free_type(Type* type) {
                 free_type(type->tuple_types[i]);
             }
             free(type->tuple_types);
+        }
+        /* Per-tuple-element heap-ownership flags (issue #420). NULL
+         * unless the parser saw at least one `@heap` / `@borrow`
+         * marker on the tuple type. */
+        if (type->tuple_heap_flags) {
+            free(type->tuple_heap_flags);
         }
         if (type->param_types) {
             for (int i = 0; i < type->param_count; i++) {
@@ -185,6 +192,16 @@ Type* clone_type(Type* type) {
         new_type->tuple_types = malloc(type->tuple_count * sizeof(Type*));
         for (int i = 0; i < type->tuple_count; i++) {
             new_type->tuple_types[i] = clone_type(type->tuple_types[i]);
+        }
+        /* Clone per-position heap flags (issue #420). The flags
+         * array is parallel to tuple_types; allocated lazily, so
+         * NULL on the source means "all unannotated, default to
+         * borrow" — clone preserves that NULL. */
+        if (type->tuple_heap_flags) {
+            new_type->tuple_heap_flags = malloc(type->tuple_count * sizeof(int));
+            for (int i = 0; i < type->tuple_count; i++) {
+                new_type->tuple_heap_flags[i] = type->tuple_heap_flags[i];
+            }
         }
     }
 
