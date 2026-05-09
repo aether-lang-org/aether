@@ -182,6 +182,59 @@ Type* parse_type(Parser* parser) {
             tup->tuple_types = realloc(tup->tuple_types,
                                        (size_t)tup->tuple_count * sizeof(Type*));
             tup->tuple_types[tup->tuple_count - 1] = elem;
+
+            /* Per-position heap-ownership annotation (issue #420):
+             *
+             *   (string @heap, int, string @borrow)
+             *
+             * Marks the position-0 result as a fresh heap allocation
+             * the destructured LHS now owns; the position-2 result
+             * as a borrow / non-heap value. Default for unannotated
+             * positions is @borrow — preserves the pre-#420 silent
+             * behaviour for every existing tuple-returning extern
+             * and user function. The flag is later consumed by the
+             * AST_TUPLE_DESTRUCTURE codegen path to decide whether
+             * to emit `_heap_<lhs> = 1;` after the destructure. */
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
+                advance_token(parser);  /* consume '@' */
+                Token* tag = peek_token(parser);
+                int heap = 0;
+                if (tag && tag->type == TOKEN_IDENTIFIER && tag->value) {
+                    if (strcmp(tag->value, "heap") == 0) {
+                        heap = 1; advance_token(parser);
+                    } else if (strcmp(tag->value, "borrow") == 0) {
+                        heap = 0; advance_token(parser);
+                    } else {
+                        parser_error(parser,
+                            "unknown tuple-position attribute "
+                            "(expected @heap or @borrow)");
+                    }
+                } else {
+                    parser_error(parser,
+                        "expected @heap or @borrow after '@' on tuple element");
+                }
+                /* Lazy-allocate the parallel flags array on first
+                 * annotation. Trailing positions default to 0 (borrow). */
+                if (!tup->tuple_heap_flags) {
+                    tup->tuple_heap_flags =
+                        (int*)calloc((size_t)tup->tuple_count, sizeof(int));
+                } else {
+                    /* Grow if a later position is annotated after we'd
+                     * already lazy-allocated for an earlier one. */
+                    tup->tuple_heap_flags =
+                        (int*)realloc(tup->tuple_heap_flags,
+                                      (size_t)tup->tuple_count * sizeof(int));
+                    /* Newly-grown slot defaults to 0 if not just set. */
+                }
+                tup->tuple_heap_flags[tup->tuple_count - 1] = heap;
+            } else if (tup->tuple_heap_flags) {
+                /* Earlier positions were annotated; this one isn't.
+                 * Grow the flags array and default to 0 (borrow). */
+                tup->tuple_heap_flags =
+                    (int*)realloc(tup->tuple_heap_flags,
+                                  (size_t)tup->tuple_count * sizeof(int));
+                tup->tuple_heap_flags[tup->tuple_count - 1] = 0;
+            }
         } while (match_token(parser, TOKEN_COMMA));
         if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
             free_type(tup);
