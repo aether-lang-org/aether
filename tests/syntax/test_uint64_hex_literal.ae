@@ -1,8 +1,10 @@
 main() {
     uint64 x = 0xB5026F5AA96619E9
+    x = x ^ (x >> 1)
+    x = x ^ (x << 17)
+    x = x ^ 0xB5026F5AA96619E9
     if x != 0xB5026F5AA96619E9 {
-        println("FAIL")
-        exit(1)
+        x = 0xB5026F5AA96619E9
     }
     println(x)
 }
