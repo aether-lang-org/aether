@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Removed
+
+- **Self-hosted source snapshot release** (`.github/workflows/release.yml`). Dropped the `Update snapshot (main HEAD)` job that published `aether-source.tar.gz` / `aether-source.zip` to a `snapshot` GitHub Release on every merge. The workflow had been failing in CI — GitHub Releases became immutable, and the delete-then-recreate workaround is brittle. Downstream users tracking HEAD should use GitHub's built-in archive URL: `https://github.com/aether-lang-org/aether/archive/refs/heads/main.tar.gz` (always-fresh, no maintenance, extracts to `aether-main/`).
+
 ## [0.135.0]
 
 ### Added
