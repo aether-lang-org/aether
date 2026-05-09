@@ -1135,10 +1135,30 @@ static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
                  * matching parameter is `ptr` (storage likely) or
                  * unknown (safe-default). Read-only scalar/string
                  * parameters don't escape — that's the precision that
-                 * keeps `string.length(s)` from leaking. */
-                TypeKind k = lookup_callee_param_kind(gen, call->value, i);
-                if (call_arg_escapes(k)) {
+                 * keeps `string.length(s)` from leaking.
+                 *
+                 * Exception: a parameter explicitly annotated `@retain`
+                 * tells the walker the function stores the pointer
+                 * beyond the call (string_list_add, map_put_raw's
+                 * key, etc.). Mark escaped regardless of TypeKind so
+                 * the function-exit defer-free skips the free —
+                 * otherwise the stored copy would dangle. The
+                 * lookup is dot-normalised internally so it works
+                 * for both bare and namespaced call sites
+                 * (e.g. `collections.string_list_add` and
+                 * `string_list_add` resolve to the same registry
+                 * entry). */
+                char fn_norm[256];
+                const char* fn = call->value
+                    ? codegen_normalise_callee(call->value, fn_norm, sizeof(fn_norm))
+                    : NULL;
+                if (fn && is_retain_extern_param(gen, fn, i)) {
                     mark_escaped_string_var(gen, arg->value);
+                } else {
+                    TypeKind k = lookup_callee_param_kind(gen, call->value, i);
+                    if (call_arg_escapes(k)) {
+                        mark_escaped_string_var(gen, arg->value);
+                    }
                 }
             }
         } else {
@@ -1229,6 +1249,87 @@ static void escape_walk(CodeGenerator* gen, ASTNode* node,
 void mark_escaped_heap_string_vars(CodeGenerator* gen, ASTNode* body) {
     if (!gen || !body) return;
     escape_walk(gen, body, NULL);
+}
+
+/* Push function-exit defer-free statements for every hoisted
+ * heap-string variable that's not escaped (issue #420 follow-up).
+ *
+ * The wrapper at codegen_stmt.c (single-value path) and at the
+ * AST_TUPLE_DESTRUCTURE handler (tuple path) frees the PREVIOUS
+ * value on every reassignment — but a variable that's assigned
+ * once and never reassigned still has a live heap allocation
+ * when the function exits. Without a function-exit free, that
+ * final allocation leaks per-call.
+ *
+ * This pre-pass runs AFTER mark_escaped_heap_string_vars (so
+ * we know which vars escape via call-args, closure-capture, or
+ * return-statement) and BEFORE body codegen. For every hoisted
+ * heap-string var that is NOT escaped, push a synthetic defer
+ * onto the function-scope defer stack. The defer carries an
+ * annotation `"heap_string_exit_free:<name>"` so emit_defers_*
+ * can recognise it and emit the wrapped form:
+ *
+ *     if (_heap_<name>) { free((void*)<name>); <name> = NULL; _heap_<name> = 0; }
+ *
+ * (the `<name> = NULL; _heap_<name> = 0;` after the free is
+ * defensive — a defer can fire from emit_all_defers at a
+ * return site, after which control returns to the caller; the
+ * function-local C var is dead either way, but resetting keeps
+ * a re-emitted scope-exit free idempotent if some other path
+ * also fires.)
+ *
+ * Escape gate: if a var is marked escaped, we skip the defer.
+ * The escape walker handles three cases:
+ *   - return <name>;     — the value flows out, caller owns it
+ *   - f(name) where f's matching param is `ptr` — likely stored
+ *   - closure body captures the name — closure may outlive scope
+ * In each case the function should NOT free; mark_escaped already
+ * skips the on-reassignment free, and we mirror that here.
+ *
+ * Cost: one AST node + one defer-stack slot per non-escaped
+ * heap-string var per function. Emission cost: one inline
+ * conditional + free per defer at function exit / each return.
+ * For functions that don't allocate heap-strings, no defers are
+ * pushed; cost is zero. */
+void push_heap_string_exit_free_defers(CodeGenerator* gen, ASTNode* body) {
+    if (!gen || !body) return;
+    if (gen->heap_string_var_count <= 0) return;
+    for (int i = 0; i < gen->heap_string_var_count; i++) {
+        const char* name = gen->heap_string_vars[i];
+        if (!name) continue;
+        if (is_escaped_string_var(gen, name)) continue;
+        /* Skip closure-env vars and promoted captures — they have
+         * their own defer-free shapes via the existing closure /
+         * promoted-cell paths (see is_env_free_for /
+         * is_promoted_free_for in codegen.c). Adding a heap-
+         * string-exit defer on top would emit a free on a name
+         * that doesn't live as a `const char*` at function
+         * scope. */
+        int is_env_cap = 0;
+        for (int e = 0; e < gen->current_env_capture_count; e++) {
+            if (gen->current_env_captures[e] &&
+                strcmp(gen->current_env_captures[e], name) == 0) {
+                is_env_cap = 1; break;
+            }
+        }
+        if (is_env_cap) continue;
+        if (is_promoted_capture(gen, name)) continue;
+        /* Build the defer carrier: an AST_EXPRESSION_STATEMENT
+         * whose annotation encodes `heap_string_exit_free:<name>`.
+         * The body is empty — emit_defers_for_scope and
+         * emit_all_defers_protected pick the annotation up and
+         * emit the conditional-free directly without descending
+         * into the body. */
+        char annot[300];
+        snprintf(annot, sizeof(annot), "heap_string_exit_free:%s", name);
+        ASTNode* carrier = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                                            body->line, body->column);
+        if (carrier) {
+            if (carrier->annotation) free(carrier->annotation);
+            carrier->annotation = strdup(annot);
+            push_defer(gen, carrier);
+        }
+    }
 }
 
 // Collect the names of top-level AST_VARIABLE_DECLARATION nodes in a
@@ -3285,8 +3386,34 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 if (stmt->child_count > 0 && stmt->children[0] &&
                     stmt->children[0]->type != AST_PRINT_STATEMENT) {
                     print_indent(gen);
-                    // Determine return type from expression (fall back to int if untyped)
-                    Type* ret_type = stmt->children[0]->node_type;
+                    /* Pick the C type for `_builder_ret`. Order:
+                     *   1. The function's declared return type
+                     *      (`gen->current_func_return_type`) — this
+                     *      is what the C compiler will check the
+                     *      `return _builder_ret;` against, so using
+                     *      anything else risks a type-mismatch
+                     *      compile error.
+                     *   2. The expression's stamped node_type — used
+                     *      when the function doesn't declare a
+                     *      return type (Aether's type inference
+                     *      stamps the expression).
+                     *   3. `int` — last-resort fallback so we always
+                     *      emit something compilable.
+                     * Without (1), bare-identifier returns whose
+                     * node_type isn't filled in (a common gap) fell
+                     * through to `int`, which the C compiler then
+                     * rejected against a `const char*`-returning
+                     * function. Surfaced when the function-exit
+                     * defer-free pre-pass started pushing defers
+                     * for previously-leaking heap-string locals,
+                     * which forced this branch to take effect for
+                     * functions that previously skipped it. */
+                    Type* fn_ret = gen->current_func_return_type;
+                    Type* ret_type = (fn_ret &&
+                                      fn_ret->kind != TYPE_VOID &&
+                                      fn_ret->kind != TYPE_UNKNOWN)
+                                     ? fn_ret
+                                     : stmt->children[0]->node_type;
                     const char* ret_c_type = (ret_type && ret_type->kind != TYPE_VOID && ret_type->kind != TYPE_UNKNOWN)
                                              ? get_c_type(ret_type) : "int";
                     fprintf(gen->output, "%s _builder_ret = ", ret_c_type);

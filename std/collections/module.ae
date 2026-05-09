@@ -35,7 +35,12 @@ extern list_free(list: ptr)
 
 // ---- HashMap raw externs ----
 extern map_new() -> ptr
-extern map_put_raw(map: ptr, key: string, value: ptr) -> int
+// `key` retains: the map stores its own copy / reference of the key
+// across the call. Tells the heap-string-tracker escape walker to
+// treat a heap-string `key` argument here as escaped — without the
+// annotation, the function-exit defer-free would free the bytes
+// while the map still holds a reference. See #420 follow-up.
+extern map_put_raw(map: ptr, key: @retain string, value: ptr) -> int
 extern map_get_raw(map: ptr, key: string) -> ptr
 extern map_has(map: ptr, key: string) -> int
 extern map_remove(map: ptr, key: string)
@@ -76,9 +81,16 @@ extern intarr_free(arr: ptr)
 // is a no-op on values that don't bear the AetherString magic
 // header. Issue #274.
 extern string_list_new() -> ptr
-extern string_list_add(list: ptr, s: string) -> int
+// `s` retains: the list stores the AetherString reference so the
+// caller's heap allocation must outlive the call. Without `@retain`
+// the heap-string-tracker's escape walker treats a string-typed
+// param as read-only (correct for string.length etc.) and the
+// function-exit defer-free would free the bytes while the list
+// still holds the pointer — UAF. See #420 follow-up.
+extern string_list_add(list: ptr, s: @retain string) -> int
 extern string_list_get(list: ptr, index: int) -> string
-extern string_list_set(list: ptr, index: int, s: string)
+// `s` retains: same shape as string_list_add.
+extern string_list_set(list: ptr, index: int, s: @retain string)
 extern string_list_size(list: ptr) -> int
 extern string_list_remove(list: ptr, index: int)
 extern string_list_clear(list: ptr)

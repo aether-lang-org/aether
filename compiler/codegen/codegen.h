@@ -93,6 +93,18 @@ typedef struct {
                              //   embedded NULs round-trips intact. See #351. NULL
                              //   when no param carries the annotation (saves the
                              //   per-extern allocation in the common case).
+        int* params_retain;  // 1 per index when the param was declared
+                             //   `name: @retain string` — function stores /
+                             //   retains the pointer beyond the call. Tells the
+                             //   escape walker to mark a heap-string arg at
+                             //   this slot as escaped, so the heap-string-
+                             //   tracker wrapper and function-exit defer-free
+                             //   both skip freeing it. Without this, default
+                             //   string-param treatment is "read-only" — correct
+                             //   for string.length / equals / println but a UAF
+                             //   for retainers like string_list_add or
+                             //   map_put_raw's key. See #420 follow-up. NULL
+                             //   when no param carries the annotation.
         int param_count;
     }* extern_registry;
     int extern_registry_count;

@@ -75,23 +75,29 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
     gen->extern_registry[idx].param_count = ext->child_count;
     gen->extern_registry[idx].params = NULL;
     gen->extern_registry[idx].params_aether = NULL;
+    gen->extern_registry[idx].params_retain = NULL;
 
     if (ext->child_count > 0) {
         gen->extern_registry[idx].params = malloc(ext->child_count * sizeof(TypeKind));
-        // First pass: detect whether any param is `@aether`-annotated.
-        // Allocate the parallel int array only if so — avoids a small
-        // per-extern allocation in the common (no-annotation) case.
-        int any_aether = 0;
+        /* Param annotations are stored as a comma-separated set on
+         * `param->annotation` so multiple stack on one slot
+         * (`@aether @retain string`). Test for an individual tag
+         * via substring match. The lazy-allocation pattern below
+         * keeps the per-extern parallel arrays NULL in the common
+         * (no-annotation) case. */
+        int any_aether = 0, any_retain = 0;
         for (int i = 0; i < ext->child_count; i++) {
             ASTNode* param = ext->children[i];
-            if (param && param->annotation &&
-                strcmp(param->annotation, "aether_param") == 0) {
-                any_aether = 1;
-                break;
-            }
+            if (!param || !param->annotation) continue;
+            if (strstr(param->annotation, "aether_param")) any_aether = 1;
+            if (strstr(param->annotation, "retain_param")) any_retain = 1;
         }
         if (any_aether) {
             gen->extern_registry[idx].params_aether =
+                calloc(ext->child_count, sizeof(int));
+        }
+        if (any_retain) {
+            gen->extern_registry[idx].params_retain =
                 calloc(ext->child_count, sizeof(int));
         }
         for (int i = 0; i < ext->child_count; i++) {
@@ -101,10 +107,15 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
             } else {
                 gen->extern_registry[idx].params[i] = TYPE_UNKNOWN;
             }
-            if (gen->extern_registry[idx].params_aether &&
-                param && param->annotation &&
-                strcmp(param->annotation, "aether_param") == 0) {
-                gen->extern_registry[idx].params_aether[i] = 1;
+            if (param && param->annotation) {
+                if (gen->extern_registry[idx].params_aether &&
+                    strstr(param->annotation, "aether_param")) {
+                    gen->extern_registry[idx].params_aether[i] = 1;
+                }
+                if (gen->extern_registry[idx].params_retain &&
+                    strstr(param->annotation, "retain_param")) {
+                    gen->extern_registry[idx].params_retain[i] = 1;
+                }
             }
         }
     }
@@ -229,6 +240,23 @@ int is_aether_extern_param(CodeGenerator* gen, const char* func_name, int param_
     if (!gen->extern_registry[idx].params_aether) return 0;
     if (param_idx < 0 || param_idx >= gen->extern_registry[idx].param_count) return 0;
     return gen->extern_registry[idx].params_aether[param_idx];
+}
+
+/* Returns 1 if extern `func_name`'s parameter at `param_idx` was
+ * declared with `@retain` — meaning the function stores or
+ * retains the pointer beyond the call. The escape walker uses
+ * this to mark a heap-string arg as escaped so the function-
+ * exit defer-free skips the free (would otherwise UAF the
+ * stored copy). See codegen_func.c::register_extern_func and
+ * the parser's @retain handling. Returns 0 if the function
+ * isn't a registered extern, has no annotation, or the index
+ * is out of range. */
+int is_retain_extern_param(CodeGenerator* gen, const char* func_name, int param_idx) {
+    int idx = find_extern_registry_index(gen, func_name);
+    if (idx < 0) return 0;
+    if (!gen->extern_registry[idx].params_retain) return 0;
+    if (param_idx < 0 || param_idx >= gen->extern_registry[idx].param_count) return 0;
+    return gen->extern_registry[idx].params_retain[param_idx];
 }
 
 // Check if an AST subtree contains a return statement with a value.
@@ -814,6 +842,15 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             // message fields/etc. Conservative — alias-safe at the
             // cost of leaking the value over the function's lifetime.
             mark_escaped_heap_string_vars(gen, body);
+            // Push a function-exit defer-free for every non-escaped
+            // hoisted heap-string var (#420 follow-up). The
+            // wrapper-on-reassignment frees the previous value on
+            // every assignment; this defer closes the single-call
+            // leak shape (variable assigned once, never reassigned,
+            // function exits with a live heap allocation). Drained
+            // by exit_scope at function end and emit_all_defers at
+            // every explicit return.
+            push_heap_string_exit_free_defers(gen, body);
         }
         // If body is a block, it handles its own scope
         // If not a block, we still need to generate the statements

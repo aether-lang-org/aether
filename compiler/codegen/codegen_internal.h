@@ -110,6 +110,16 @@ void hoist_heap_string_trackers(CodeGenerator* gen, ASTNode* body);
    the heap-string-var registry is populated. */
 void mark_escaped_heap_string_vars(CodeGenerator* gen, ASTNode* body);
 
+/* Push function-exit defer-free statements for every hoisted
+ * heap-string var that's NOT escaped. Closes the single-call
+ * leak shape: a heap-string variable assigned once and never
+ * reassigned still has a live allocation when the function
+ * exits; without this defer it leaks per-call. Run after
+ * mark_escaped_heap_string_vars (so escape state is final)
+ * and before body codegen. See codegen_stmt.c for the
+ * implementation rationale (issue #420 follow-up). */
+void push_heap_string_exit_free_defers(CodeGenerator* gen, ASTNode* body);
+
 /* Actor generation (codegen_actor.c) */
 void generate_actor_definition(CodeGenerator* gen, ASTNode* actor);
 
@@ -118,6 +128,12 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext);
 int is_extern_func(CodeGenerator* gen, const char* func_name);
 TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int param_idx);
 int is_aether_extern_param(CodeGenerator* gen, const char* func_name, int param_idx);
+/* Returns 1 if extern `func_name`'s parameter at `param_idx` was
+   declared `@retain`. Tells the escape walker to mark a heap-string
+   arg passed at this slot as escaped (function stores / retains the
+   pointer beyond the call). 0 for non-extern callees, missing
+   annotations, or out-of-range index. See codegen_func.c. */
+int is_retain_extern_param(CodeGenerator* gen, const char* func_name, int param_idx);
 const char* lookup_extern_c_name(CodeGenerator* gen, const char* func_name);
 
 /* Builder function registry — functions where block configures first, then function executes */
