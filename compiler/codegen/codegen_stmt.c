@@ -1233,6 +1233,40 @@ static void escape_walk(CodeGenerator* gen, ASTNode* node,
         return;
     }
 
+    /* Non-trivial assignment — `s.field = expr` (LHS is an
+     * AST_MEMBER_ACCESS) or `arr[i] = expr` (LHS is an
+     * AST_ARRAY_ACCESS). The parser uses AST_BINARY_EXPRESSION with
+     * value "=" for these; bare-local reassignment uses
+     * AST_VARIABLE_DECLARATION instead, which is handled above. The
+     * write target outlives the current activation record (a struct
+     * instance, an array element passed in by ptr, an actor's state,
+     * etc.), so any heap-tracked variable assigned in the RHS must
+     * be marked escaped — otherwise the function-exit defer-free
+     * reclaims the buffer while the struct field is still pointing
+     * at it (cross-function setter/getter dangle). Closes the
+     * field-write half of the escape-edge gap that landed in the
+     * #420 follow-up alongside call-arg, return, and closure
+     * capture. */
+    if (node->type == AST_BINARY_EXPRESSION && node->value &&
+        strcmp(node->value, "=") == 0 && node->child_count == 2) {
+        ASTNode* lhs = node->children[0];
+        ASTNode* rhs = node->children[1];
+        if (lhs && lhs->type != AST_IDENTIFIER) {
+            if (rhs && rhs->type == AST_IDENTIFIER && rhs->value &&
+                is_heap_string_var(gen, rhs->value)) {
+                mark_escaped_string_var(gen, rhs->value);
+            }
+            /* Walk both sides for any nested calls / closures whose
+             * inner identifiers also need the regular escape
+             * treatment. consumed_lhs cleared because the bare-LHS
+             * exception (`V = f(V, …)`) doesn't apply once the LHS
+             * is a non-trivial location. */
+            escape_walk(gen, lhs, NULL);
+            escape_walk(gen, rhs, NULL);
+            return;
+        }
+    }
+
     /* Don't descend into nested function definitions — their own pass
      * handles them. */
     if (node->type == AST_FUNCTION_DEFINITION ||
