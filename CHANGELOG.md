@@ -21,6 +21,12 @@ next version number before tagging the release.
 
   Verified: standalone `ae check` of a 200-function helper module + cross-`import` consumer round-trip prints the expected arithmetic; `make ci` and `HARDEN=1 make ci` green; new regression tests `tests/integration/import_selective_propagation/` (innerlib + middlemod + consumer) and `tests/integration/import_large_module/` (200-function chain + recursion across the boundary) lock both shapes in.
 
+### Changed
+
+- **Install layout consolidated to a single `<prefix>/lib/aether/` subdir** (`install.sh`, `tools/ae.c`, `Makefile`, `docs/install-layout.md`, `docs/c-interop.md`, `docs/c-embedding.md`). Pre-fix the two installers disagreed: `install.sh /usr/local` placed the static archive at `/usr/local/lib/libaether.a` (flat, FHS-canonical), while `make install PREFIX=/usr/local` placed it at `/usr/local/lib/aether/libaether.a` (subdir, co-located with `libaether_<contrib>.a`). Downstream embedders (especially LLM-generated build scripts) routinely guessed the FHS-flat path and missed the file under one of the two installers. Subdir wins because it co-locates contrib archives and gives a single `-L<prefix>/lib/aether` line that resolves both core and contrib libs uniformly. `install.sh`'s `LIB_DIR` now points at `<prefix>/lib/aether`; `tools/ae.c` drops the flat-path probe fallbacks and looks only at the subdir; `Makefile`'s `test-release-archive` produces a subdir-shaped tarball matching what `release.yml` ships. Doc surface (`install-layout.md`, `c-interop.md`, `c-embedding.md`) now points consumers at `$(ae cflags)` rather than hand-crafted `-I` / `-L` / `-l` lines — the canonical recipe is a single `ae cflags` invocation that emits the correct flags for in-tree dev builds, `~/.aether` user installs, and `/usr/local` system installs uniformly.
+
+- **`make install` and `make install-contrib` self-restore `build/` ownership after `sudo` invocations** (`Makefile`). `sudo make install` re-runs the `release ae stdlib` build deps as root, leaving every object/archive/binary in `build/` root-owned. The next plain `make` then failed with "Permission denied" until the user manually `chown`ed back. Both targets now end with `if [ -n "$$SUDO_USER" ] && [ -d build ]; then chown -R "$$SUDO_USER:..." build 2>/dev/null || true; fi` — silent no-op outside sudo, silent no-op on `chown` failure, transparent self-heal under sudo.
+
 ## [0.141.0]
 
 ### Fixed

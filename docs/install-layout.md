@@ -37,12 +37,25 @@ Two consumption shapes, in priority order:
 
 1. **Link against `libaether.a`** (recommended). Every Aether
    runtime + stdlib `.c` file that ships compiles into this single
-   archive. Your build is `gcc your.c -laether -o your-program` plus
-   the OS-level deps (`-lm`, `-lpthread`, `-ldl`, plus `-lssl
-   -lcrypto` and `-lz` if the build picked them up at install time,
-   plus `-lnghttp2` for HTTP/2 server-side support). `tools/ae.c`
-   itself uses this path — see lines 1500-1620 for the canonical
-   command.
+   archive. The canonical recipe for the include + link flags is:
+
+   ```sh
+   gcc your.c $(ae cflags) -o your-program
+   ```
+
+   `ae cflags` resolves to the right `-I<prefix>/include/aether/...`
+   plus `-L<prefix>/lib/aether -laether` plus the OS-level deps
+   (`-lm`, `-lpthread`, plus `-lssl -lcrypto -lz -lnghttp2 -ldl` if
+   the build picked them up at install time). It works identically
+   for in-tree dev builds, `~/.aether` user installs, and `/usr/local`
+   system installs.
+
+   **Do not hand-craft `-L` / `-l`:** `libaether.a` lives at
+   `<prefix>/lib/aether/libaether.a` (under the `aether/` subdir, not
+   flat under `<prefix>/lib/`), so a bare `-laether` will fail to
+   resolve without the explicit `-L<prefix>/lib/aether`. `tools/ae.c`
+   itself uses this same path — see `print_cflags` for the
+   construction.
 
 2. **Compile from source**, falling through to the `.c` files in
    `share/aether/`. This is what `ae build` does when

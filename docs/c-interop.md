@@ -106,9 +106,11 @@ gcc -c my_math.c -o my_math.o -lm
 # Compile Aether code to C
 aetherc main.ae main.c
 
-# Link everything together
-gcc -I$HOME/.aether/include/aether/runtime main.c my_math.o \
-    -L$HOME/.aether/lib -laether -lm -o myapp
+# Link everything together. `ae cflags` emits the right -I / -L / -l
+# flags for the install in effect — never hand-craft them: the install
+# layout (and the linker search path it requires) is unstable across
+# releases.
+gcc main.c my_math.o $(ae cflags) -o myapp
 
 ./myapp
 ```

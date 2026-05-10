@@ -109,11 +109,11 @@ int main(int argc, char** argv) {
 # Compile Aether code
 aetherc counter.ae counter.c
 
-# Build with runtime
-gcc -O2 main.c counter.c \
-    -I$HOME/.aether/include/aether \
-    -L$HOME/.aether/lib -laether \
-    -lpthread -o myapp
+# Build with runtime — `ae cflags` emits the right -I / -L / -l for
+# the install in effect. Don't hand-craft the linker flags: the
+# install layout (`<prefix>/lib/aether/libaether.a`) requires an
+# explicit `-L<prefix>/lib/aether` that bare `-laether` won't find.
+gcc -O2 main.c counter.c $(ae cflags) -o myapp
 ```
 
 ## Approach 2: Direct Runtime API
@@ -322,18 +322,23 @@ void my_actor_step(void* self) {
 
 ### Makefile Example
 
+`ae cflags` is the canonical way to obtain the include and link flags
+— it covers in-tree dev builds, `~/.aether` user installs, and
+`/usr/local` system installs uniformly. Do not hand-craft `-I` / `-L`
+/ `-l`: the install layout puts the archive at `<prefix>/lib/aether/`
+(not flat under `<prefix>/lib/`), so `-laether` alone wouldn't find
+it without an explicit `-L`.
+
 ```makefile
-AETHER_HOME ?= $(HOME)/.aether
 CC = gcc
-CFLAGS = -O2 -I$(AETHER_HOME)/include/aether
-LDFLAGS = -L$(AETHER_HOME)/lib -laether -lpthread
+AE_CFLAGS := $(shell ae cflags)
 
 # For Aether source files
 %.c: %.ae
 	aetherc $< $@
 
 myapp: main.c counter.c
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CC) -O2 -o $@ $^ $(AE_CFLAGS)
 ```
 
 ### CMake Example
