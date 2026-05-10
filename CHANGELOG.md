@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Struct definitions in imported modules are now visible to that module's own merged function bodies** (`compiler/aether_module.c`, `tests/integration/import_struct/`). `module_merge_into_program` only cloned `AST_FUNCTION_DEFINITION` / `AST_BUILDER_FUNCTION` / `AST_CONST_DECLARATION` from imported modules into the consumer's program AST — never `AST_STRUCT_DEFINITION`. A module that exposed a `*ptr`-returning constructor whose body internally cast to its own struct (`raw as *Slot`) typechecked standalone but failed once a consumer did `import handle`, because the cloned function body's cast site resolved against an empty struct table and errored as `'Slot' is not a struct type`. Fix clones struct decls into the consumer's program AST under their bare name (no `<ns>_` prefix), with a `program_has_struct` dedup helper. Selective-import filter is bypassed for structs because a function body that casts to `*T` cannot type-check without `T` in scope. Both the main merge loop and the cross-module BFS pass (transitive deps) are extended. Unblocks the opaque-handle pattern (struct stays an internal implementation detail; only `ptr` crosses the API boundary). New integration test `tests/integration/import_struct/` exercises constructor + getter + setter round-trip across the import boundary.
+
 ## [0.139.0]
 
 ### Added

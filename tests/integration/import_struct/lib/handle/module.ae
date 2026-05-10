@@ -1,0 +1,38 @@
+// Module exposing an opaque-handle API. The struct `Slot` is an
+// implementation detail — only `*ptr` crosses the API boundary.
+// Pre-fix this module typechecked standalone but failed under
+// `import handle` from a consumer because the struct definition
+// wasn't merged into the consumer's program AST.
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct Slot {
+    value: int
+}
+
+new_slot(initial: int) -> ptr {
+    raw = malloc(16)
+    if raw == null { return null }
+    s = raw as *Slot
+    s.value = initial
+    return raw
+}
+
+slot_get(p: ptr) -> int {
+    if p == null { return 0 }
+    s = p as *Slot
+    return s.value
+}
+
+slot_set(p: ptr, v: int) -> int {
+    if p == null { return 0 }
+    s = p as *Slot
+    s.value = v
+    return 0
+}
+
+free_slot(p: ptr) -> int {
+    if p != null { free(p) }
+    return 0
+}

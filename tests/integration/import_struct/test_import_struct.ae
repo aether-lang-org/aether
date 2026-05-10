@@ -1,0 +1,50 @@
+// Regression: cross-`import` struct visibility for the opaque-handle
+// shape. A module exposing a `*ptr`-returning constructor whose body
+// internally casts to its own struct (`raw as *Slot`) typechecks
+// standalone but pre-fix failed once a consumer did `import handle`,
+// because `module_merge_into_program` only cloned function and
+// constant decls — never struct decls — into the consumer's program
+// AST. The cast site then resolved against an empty struct table and
+// errored as "'Slot' is not a struct type". Filed by sibling project
+// avn (Subversion port) where five in-flight modules used this shape.
+//
+// What this test exercises: an imported module's struct must be
+// visible inside that module's own merged function bodies (so casts
+// resolve), and the C output must include the struct definition (so
+// field accesses on the casted ptr compile).
+
+import handle
+
+extern exit(code: int)
+
+main() {
+    println("=== test_import_struct ===")
+
+    // Test 1: constructor + getter round-trip
+    p = handle.new_slot(42)
+    if p == null {
+        println("FAIL 1: new_slot returned null")
+        exit(1)
+    }
+    got = handle.slot_get(p)
+    if got != 42 {
+        println("FAIL 1: expected 42, got ${got}")
+        exit(1)
+    }
+    println("  PASS 1: constructor + getter")
+
+    // Test 2: setter mutates through the opaque handle
+    _ = handle.slot_set(p, 100)
+    got2 = handle.slot_get(p)
+    if got2 != 100 {
+        println("FAIL 2: expected 100, got ${got2}")
+        exit(1)
+    }
+    println("  PASS 2: setter mutates")
+
+    // Test 3: clean release
+    _ = handle.free_slot(p)
+    println("  PASS 3: free_slot")
+
+    println("=== all import-struct tests passed ===")
+}
