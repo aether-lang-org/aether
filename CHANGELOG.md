@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Tuple-destructure heap classification now resolves cross-module callees + json wrappers refactored to uniform-heap return shapes** (`compiler/codegen/codegen_stmt.c`, `std/json/module.ae`, `tests/regression/test_json_get_string_loop_leak.ae`). Two coupled fixes that together close the residual heap-tracker gap surfaced in `further-bug-fix4.md`'s 2026-05-10 update — avn's 5000-commit bench retained ~666 MB just from `b64, _ = json.get_string(jcontent)` because that destructure's wrapper emitted `_heap_b64 = 0` and the function-exit defer-free skipped it.
+
+  - **Cross-module callee dot-normalisation at the destructure-time analyzer lookup.** `function_def_returns_heap_at` runs against the callee's function definition fetched by `find_function_definition_by_name(gen->program, rhs->value)`. Source-level callees land in the AST in dotted form (`"json.get_string"`) but the merged user-fn lives in the program AST under the underscored namespace-prefixed name (`"json_get_string"`). Pre-fix the lookup missed every cross-module call, the per-position analyzer never ran, and `pos_is_heap` fell back to 0 even when the callee was uniformly heap-classifiable. Routed `rhs->value` through `codegen_normalise_callee` first — same dot-normalisation pattern `is_heap_string_expr` already uses on its hardcoded fast-path lookups. The fix also unlocks classifier-correctness for every other `module.fn`-style cross-module destructure in user code.
+
+  - **Stdlib json wrappers refactored to uniform-heap return shapes.** `json.parse`, `json.parse_strict`, `json.stringify`, `json.get_string`, `json.object_entry` previously returned a bare literal `""` on one side of the if-else (failure path) and `string_concat(raw, "")` on the other (success path). `function_def_returns_heap_at`'s AND-fold then yielded non-heap at the affected position (conservative correctness — a mixed-shape position can't be eager-freed at compile time without a runtime header dispatch we don't have), so the destructure wrapper never fired in the success path's hot loop. Refactored each return to inline `string_concat(...)` at every string position — `string_concat("", "")` on the cheap failure side, `string_concat(raw, "")` on the success side — so the AND-fold yields heap uniformly. Tiny extra allocation on the failure side (a one-byte heap empty string) in exchange for the success-side leak going away. Also surfaced as a side-effect: where the success path used to write through an intermediate `owned = string_concat(...)` local before returning `owned, ""`, `is_heap_string_expr` couldn't follow the bare-identifier-at-return shape back to its assignment — so the rewrite also inlines the `string_concat` call directly at the return position. Same shape for every wrapper this touched.
+
+  ### Upgrade notes
+
+  This release tightens the per-position tuple-destructure heap classifier: cross-module user-fn callees now resolve correctly, and `json.parse` / `json.parse_strict` / `json.stringify` / `json.get_string` / `json.object_entry` now classify their string return positions uniformly as heap. The previous version's destructure wrapper at every `_, _ = json.<fn>(...)` call site emitted `_heap_<lhs> = 0` and the function-exit defer-free skipped the var, so the owned-string copy leaked across loop iterations and to process exit.
+
+  If your project loops over `json.get_string` / `json.parse` / `json.parse_strict` / `json.stringify` / `json.object_entry` and stores the destructured string result somewhere outside the destructure scope (struct field, list, map, actor message field, closure capture) without the escape-analyzer recognising it — the previous compiler tolerated this as a slow leak; this release will now `free()` that string at function exit, dangling whatever pointer the recipient stored. This shape is a use-after-free.
+
+  **Recommended pre-upgrade play:**
+
+  1. Run `aetherc --diagnose=ownership` over your project to surface every `_heap_<lhs> = 1`-flipped variable that touches a `json.*` destructure.
+  2. For each, check whether the value is handed to a `ptr`-parameter (already escape-marked), returned (already escape-marked), captured by a closure (already escape-marked), assigned to a struct field (escape-marked as of #0.144 — fix landed last release), or stored some other way the analyzer doesn't yet catch (e.g. raw stuffing into an opaque arena). The last case is the dangerous one; rewrite to take a copy.
+  3. Re-run your sanitiser builds (ASan or Valgrind) on the destructure-heavy hot paths after rebuilding.
+
+  Conservative migration: if any of your code does `_, payload = json.get_string(v); some_extern_that_keeps_payload(payload)` without an `@retain` annotation on the recipient's parameter, the recipient will now read freed memory. Annotate the recipient `@retain` (so the escape walker marks `payload` escaped) or take an explicit copy.
+
 ## [0.144.0]
 
 ### Fixed

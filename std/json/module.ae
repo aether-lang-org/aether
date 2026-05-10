@@ -92,14 +92,25 @@ extern string_concat(a: string, b: string) -> string
 // failure. The error is a position-qualified message like
 // "expected ':' at 3:17". Caller owns the returned value and must free
 // with json.free.
-parse(json_str: string) -> {
+//
+// Heap-classification shape: position 1 (the error message) is heap on
+// both return paths so the destructure wrapper at the call site fires
+// uniformly. The failure path uses string_concat(json_last_error(), "")
+// for an owned copy; the success path uses string_concat("", "") for
+// a (tiny) empty heap string. Without both paths returning heap,
+// function_def_returns_heap_at's AND-fold would mark position 1
+// non-heap and every destructure of `_, err = json.parse(...)` would
+// leak the success-path "" allocation — except the success "" was
+// already a literal so there'd be nothing TO leak, only an over-free
+// risk on the failure path. The uniform-heap shape sidesteps the
+// classifier's mixed-path conservatism. See # further-bug-fix4 for
+// the wider context.
+parse(json_str: string) -> (ptr, string) {
     value = json_parse_raw(json_str)
     if value == null {
-        err = json_last_error()
-        err_owned = string_concat(err, "")
-        return null, err_owned
+        return null, string_concat(json_last_error(), "")
     }
-    return value, ""
+    return value, string_concat("", "")
 }
 
 // Issue #392 — structured-error variant of `parse`. Returns the
@@ -116,12 +127,10 @@ parse(json_str: string) -> {
 parse_strict(json_str: string) -> (ptr, int, string) {
     value = json_parse_raw(json_str)
     if value == null {
-        kind = json_last_error_kind()
-        msg = json_last_error()
-        msg_owned = string_concat(msg, "")
-        return null, kind, msg_owned
+        return null, json_last_error_kind(),
+               string_concat(json_last_error(), "")
     }
-    return value, KIND_OK, ""
+    return value, KIND_OK, string_concat("", "")
 }
 
 // Programmatic accessors for the most recent parse failure on this
@@ -136,25 +145,34 @@ last_error_col()  -> int { return json_last_error_col()  }
 // Serialize a JSON value to a compact string. Returns (string, "") on
 // success, ("", error) on failure. The returned string is a refcounted
 // Aether string — no manual free required.
-stringify(value: ptr) -> {
+//
+// Uniform-heap shape on both positions: see `parse` for the rationale.
+stringify(value: ptr) -> (string, string) {
     raw = json_stringify_raw(value)
     if raw == null {
-        return "", "stringify failed"
+        return string_concat("", ""), string_concat("stringify failed", "")
     }
-    owned = string_concat(raw, "")
-    return owned, ""
+    return string_concat(raw, ""), string_concat("", "")
 }
 
 // Read the string payload out of a JSON value. Returns (string, "") on
 // success, ("", error) if `value` is not a JSON_STRING. The returned
 // string is an owned copy — safe to hold past a json.free of the value.
-get_string(value: ptr) -> {
+//
+// Uniform-heap shape on both positions. This is the high-volume avn
+// hot-path identified in `further-bug-fix4.md`: every `b64, _ =
+// json.get_string(jcontent)` in a commit loop is a ~133 KB
+// allocation per call. Pre-refactor the failure-path literal `""`
+// at position 0 made `function_def_returns_heap_at` AND-fold to
+// non-heap, so the destructure wrapper at the call site never set
+// `_heap_b64 = 1` and the function-exit defer-free never ran. avn's
+// 5000-commit bench retained ~666 MB just from this site.
+get_string(value: ptr) -> (string, string) {
     raw = json_get_string_raw(value)
     if raw == null {
-        return "", "not a string"
+        return string_concat("", ""), string_concat("not a string", "")
     }
-    owned = string_concat(raw, "")
-    return owned, ""
+    return string_concat(raw, ""), string_concat("", "")
 }
 
 // Look up `key` in a JSON object.
@@ -200,21 +218,26 @@ object_size(obj: ptr) -> int {
 // must not be json.free'd separately, nor used after `obj` is freed.
 // Mutating `obj` during iteration is not supported: order becomes
 // unpredictable and entries may be skipped or revisited.
-object_entry(obj: ptr, i: int) -> {
+// Uniform-heap shape on positions 0 (key) and 2 (error message): all
+// return paths use string_concat so the per-position structural
+// analyzer marks both as heap. The success path's `owned_key` is the
+// big one — iterating a large object via object_entry without this
+// would leak a key allocation per iteration. See `parse` for the
+// wider rationale.
+object_entry(obj: ptr, i: int) -> (string, ptr, string) {
     if json_type(obj) != 5 {
-        return "", null, "not an object"
+        return string_concat("", ""), null, string_concat("not an object", "")
     }
     n = json_object_size_raw(obj)
     if i < 0 {
-        return "", null, "index out of range"
+        return string_concat("", ""), null, string_concat("index out of range", "")
     }
     if i >= n {
-        return "", null, "index out of range"
+        return string_concat("", ""), null, string_concat("index out of range", "")
     }
-    raw_key = json_object_key_at(obj, i)
-    owned_key = string_concat(raw_key, "")
-    v = json_object_value_at(obj, i)
-    return owned_key, v, ""
+    return string_concat(json_object_key_at(obj, i), ""),
+           json_object_value_at(obj, i),
+           string_concat("", "")
 }
 
 // Index into a JSON array.

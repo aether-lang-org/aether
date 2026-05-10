@@ -1,0 +1,86 @@
+// Regression: a tight loop destructuring json.get_string in 0.143.0
+// retained the per-iteration owned-string allocation forever, even
+// when the destructured LHS went out of scope at the loop bottom.
+//
+// Two bugs in one site:
+//
+// 1. json.get_string was declared `-> {` (inferred return type), so
+//    the function's `node_type` was UNKNOWN/non-tuple. The per-
+//    position structural-escape analyzer at codegen_stmt.c bailed
+//    out at the `node_type->kind != TYPE_TUPLE` guard, fell back to
+//    pos_is_heap=0, and the destructure wrapper emitted
+//    `_heap_s = 0` — so the wrapper free was dead and the function-
+//    exit defer-free skipped the var.
+//
+// 2. Even with explicit `-> (string, string)`, the failure-path
+//    return was `return "", "not a string"` (bare literals at every
+//    position), so `function_def_returns_heap_at`'s AND-fold across
+//    both return paths yielded non-heap at position 0 — conservative
+//    correctness, but a leak in practice. Mixed (heap, literal)
+//    return-paths cannot be classified at compile time without a
+//    runtime header dispatch we don't have yet.
+//
+// Fix (in `std/json/module.ae`): refactor json.parse, parse_strict,
+// stringify, get_string, object_entry to use `string_concat(..., "")`
+// on *every* string return position. This makes the AND-fold yield
+// heap uniformly, the destructure wrapper fires, and the per-iteration
+// allocation gets freed on the next iteration. Tiny extra alloc on
+// the failure path (an empty heap string ~1 byte) in exchange.
+//
+// A third coordinated bug was in the destructure-site callee lookup
+// itself: `find_function_definition_by_name(gen->program, rhs->value)`
+// didn't dot-normalise, so cross-module callees (`json.get_string`)
+// never resolved to their merged-in `json_get_string` definition;
+// the per-position analyzer never ran for any cross-module call.
+// Fixed by routing `rhs->value` through `codegen_normalise_callee`
+// first, mirroring the pattern is_heap_string_expr already uses.
+//
+// What this test exercises: 5000-iteration loop of json.get_string
+// destructure. Pre-fix would retain ~5000 × 12-byte owned-string
+// allocations indefinitely. Post-fix the wrapper free fires every
+// iteration and RSS stays bounded.
+
+import std.json
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== test_json_get_string_loop_leak ===")
+
+    val, kind, msg = json.parse_strict("{\"x\":\"hello world\"}")
+    if kind != 0 {
+        println("FAIL: parse_strict failed: ${msg}")
+        exit(1)
+    }
+    xv, _ = json.object_get(val, "x")
+
+    // 5000 destructure iterations. The wrapper, if firing correctly,
+    // frees the previous `s` allocation on each reassignment.
+    // Without the fix this loop retains 5000 owned-string allocations
+    // (~5000 × ~12 bytes ≈ 60 KB) until process exit; small but the
+    // shape scales linearly with payload size in the real avn caller.
+    i = 0
+    last_first_byte = 0
+    while i < 5000 {
+        s, err = json.get_string(xv)
+        if string.length(err) != 0 {
+            println("FAIL iter ${i}: get_string returned err: ${err}")
+            exit(1)
+        }
+        if string.length(s) != 11 {
+            println("FAIL iter ${i}: expected len 11, got ${string.length(s)}")
+            exit(1)
+        }
+        last_first_byte = string.char_at(s, 0)
+        i = i + 1
+    }
+    if last_first_byte != 104 {  // 'h'
+        println("FAIL: last_first_byte expected 104, got ${last_first_byte}")
+        exit(1)
+    }
+    println("  PASS: 5000 json.get_string destructures, content preserved")
+
+    json.free(val)
+    println("=== test passed ===")
+}
