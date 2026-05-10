@@ -1236,8 +1236,10 @@ install: release ae stdlib
 #   - sqlite                    (-lsqlite3)
 #   - host/{python,lua,perl,ruby,js,tcl}
 # Out of scope for v1: host/{java,go,tinygo} (separate-process or
-# JNI-style bridges, different build shape), aether_ui, tinyweb,
-# aeocha, climate_http_tests.
+# JNI-style bridges, different build shape), tinyweb, aeocha,
+# climate_http_tests. The widget toolkit (formerly contrib/aether_ui)
+# spun out to https://github.com/aether-lang-org/aether-ui and is no
+# longer in this repo.
 # -----------------------------------------------------------------
 contrib:
 	@bash tests/scripts/contrib_build.sh
@@ -1273,12 +1275,11 @@ install-contrib: contrib
 	@# Mirror the contrib source tree for module.ae + headers.
 	@# Trim noise: tests, benchmarks, example .ae, build scripts,
 	@# CI scripts, and the modules we don't ship in v1
-	@# (aether_ui, climate_http_tests, host/{java,go,tinygo},
-	@# tinyweb — see contrib: target comment). aeocha is pure Aether
-	@# (no .c bridge, no .a archive) so it ships as-is — downstream
-	@# does `import contrib.aeocha` against the installed module.ae.
+	@# (climate_http_tests, host/{java,go,tinygo}, tinyweb — see
+	@# contrib: target comment). aeocha is pure Aether (no .c bridge,
+	@# no .a archive) so it ships as-is — downstream does
+	@# `import contrib.aeocha` against the installed module.ae.
 	@cp -R contrib $(PREFIX)/share/aether/
-	@rm -rf $(PREFIX)/share/aether/contrib/aether_ui
 	@rm -rf $(PREFIX)/share/aether/contrib/climate_http_tests
 	@rm -rf $(PREFIX)/share/aether/contrib/tinyweb
 	@rm -rf $(PREFIX)/share/aether/contrib/host/java
@@ -1611,36 +1612,33 @@ ci: clean
 	@echo "  Aether CI — Full Test Suite"
 	@echo "==================================="
 	@echo ""
-	@echo "[1/10] Building compiler (-Werror)..."
+	@echo "[1/9] Building compiler (-Werror)..."
 	@$(MAKE) compiler EXTRA_CFLAGS=-Werror
 	@echo ""
-	@echo "[2/10] Building ae CLI..."
+	@echo "[2/9] Building ae CLI..."
 	@$(MAKE) ae
 	@echo ""
-	@echo "[3/10] Building stdlib..."
+	@echo "[3/9] Building stdlib..."
 	@$(MAKE) stdlib
 	@echo ""
-	@echo "[4/10] Running C unit tests..."
+	@echo "[4/9] Running C unit tests..."
 	@$(MAKE) test
 	@echo ""
-	@echo "[5/10] Running .ae integration tests..."
+	@echo "[5/9] Running .ae integration tests..."
 	@$(MAKE) test-ae
 	@echo ""
-	@echo "[6/10] Building examples..."
+	@echo "[6/9] Building examples..."
 	@$(MAKE) examples
 	@echo ""
-	@echo "[7/10] Install smoke test..."
+	@echo "[7/9] Install smoke test..."
 	@$(MAKE) test-install
 	@echo ""
-	@echo "[8/10] ae test smoke check..."
+	@echo "[8/9] ae test smoke check..."
 	@AETHER_HOME="" ./build/ae test examples/basics/hello.ae 2>&1 | tail -1
 	@echo "  [PASS] ae test runs correctly"
 	@echo ""
-	@echo "[9/10] Release archive smoke test..."
+	@echo "[9/9] Release archive smoke test..."
 	@$(MAKE) test-release-archive
-	@echo ""
-	@echo "[10/10] contrib/aether_ui backend check..."
-	@$(MAKE) contrib-aether-ui-check
 	@echo ""
 	@echo "==================================="
 	@echo "  CI PASSED — all checks green"
@@ -1707,119 +1705,13 @@ contrib-host-check: compiler ae stdlib
 	@echo "  contrib/host check PASSED"
 	@echo "==================================="
 
-# -----------------------------------------------------------------
-# contrib/aether_ui backend check
-#
-# Builds the native UI backend for the current platform (GTK4 / AppKit /
-# Win32) and runs the cross-platform widget test suite. On Windows it
-# additionally runs the AetherUIDriver HTTP integration test (the Aether-
-# level example build flow works on Linux/macOS and is covered by
-# contrib/aether_ui/ci.sh).
-#
-# Goals:
-#   - Verify each backend's core ABI on every supported platform.
-#   - Catch widget-creation regressions early (DPI, unicode, stress).
-#   - Exercise the HTTP test server on Windows without the Aether DSL
-#     compilation path (which has separate module-resolution bugs).
-# -----------------------------------------------------------------
-
-contrib-aether-ui-check:
-	@echo "==================================="
-	@echo "  contrib/aether_ui backend check"
-	@echo "==================================="
-	@OS=$$(uname -s); \
-	BACKEND=""; LINKS=""; COMPILER=""; EXE_SUFFIX=""; \
-	case "$$OS" in \
-		Darwin) \
-			BACKEND="contrib/aether_ui/aether_ui_macos.m"; \
-			LINKS="-framework AppKit -framework Foundation -framework QuartzCore -pthread -lm"; \
-			COMPILER="clang -O0 -g -fobjc-arc"; \
-			;; \
-		Linux) \
-			if ! pkg-config --exists gtk4 2>/dev/null; then \
-				echo "SKIP: gtk4 dev libraries not installed"; \
-				echo "      install with: sudo apt install libgtk-4-dev"; \
-				exit 0; \
-			fi; \
-			if ! pkg-config --atleast-version=4.10 gtk4 2>/dev/null; then \
-				echo "SKIP: gtk4 >= 4.10 required (installed: $$(pkg-config --modversion gtk4))"; \
-				echo "      The aether_ui backend uses GtkAlertDialog, GtkFileDialog,"; \
-				echo "      GtkUriLauncher, and G_APPLICATION_DEFAULT_FLAGS which require"; \
-				echo "      GTK 4.10+ (Ubuntu 24.04 or Fedora 39+)."; \
-				exit 0; \
-			fi; \
-			BACKEND="contrib/aether_ui/aether_ui_gtk4.c"; \
-			LINKS="$$(pkg-config --libs gtk4) -pthread -lm"; \
-			COMPILER="gcc -O0 -g $$(pkg-config --cflags gtk4)"; \
-			;; \
-		MINGW*|MSYS*|CYGWIN*) \
-			BACKEND="contrib/aether_ui/aether_ui_win32.c contrib/aether_ui/aether_ui_test_server.c"; \
-			LINKS="-luser32 -lgdi32 -lgdiplus -lcomctl32 -lcomdlg32 \
-			       -lshell32 -lole32 -luuid -ldwmapi -luxtheme \
-			       -lws2_32 -pthread -lm"; \
-			COMPILER="gcc -O0 -g"; \
-			EXE_SUFFIX=".exe"; \
-			;; \
-		*) \
-			echo "Unsupported platform: $$OS"; exit 1 ;; \
-	esac; \
-	mkdir -p build; \
-	echo "Platform: $$OS  (backend: $$BACKEND)"; \
-	echo ""; \
-	echo "[1/2] C-level widget smoke tests..."; \
-	$$COMPILER -Icontrib/aether_ui \
-		contrib/aether_ui/tests/test_widgets.c $$BACKEND \
-		-o "build/test_aether_ui_widgets$$EXE_SUFFIX" $$LINKS \
-		|| { echo "FAIL: widget test did not build"; exit 1; }; \
-	"./build/test_aether_ui_widgets$$EXE_SUFFIX" || \
-		{ echo "FAIL: widget tests reported failures"; exit 1; }; \
-	echo ""; \
-	case "$$OS" in \
-		MINGW*|MSYS*|CYGWIN*) \
-			echo "[2/2] AetherUIDriver HTTP integration..."; \
-			bash contrib/aether_ui/tests/test_driver.sh 9255 || \
-				{ echo "FAIL: driver test reported failures"; exit 1; } ;; \
-		*) \
-			echo "[2/2] Aether-level pipeline via contrib/aether_ui/ci.sh..."; \
-			bash contrib/aether_ui/ci.sh || \
-				{ echo "FAIL: ci.sh reported failures"; exit 1; } ;; \
-	esac
-	@echo ""
-	@echo "==================================="
-	@echo "  contrib/aether_ui check PASSED"
-	@echo "==================================="
-
-# Runs the aether_ui backend microbenchmarks for the current platform and
-# emits CSV to stdout. Typical usage: `make benchmark-aether-ui > bench.csv`.
-benchmark-aether-ui:
-	@OS=$$(uname -s); \
-	BACKEND=""; LINKS=""; COMPILER=""; EXE_SUFFIX=""; \
-	case "$$OS" in \
-		Darwin) \
-			BACKEND="contrib/aether_ui/aether_ui_macos.m"; \
-			LINKS="-framework AppKit -framework Foundation -framework QuartzCore -pthread -lm"; \
-			COMPILER="clang -O2 -fobjc-arc" ;; \
-		Linux) \
-			if ! pkg-config --atleast-version=4.10 gtk4 2>/dev/null; then \
-				echo "SKIP: gtk4 >= 4.10 required" >&2; exit 0; \
-			fi; \
-			BACKEND="contrib/aether_ui/aether_ui_gtk4.c"; \
-			LINKS="$$(pkg-config --libs gtk4) -pthread -lm"; \
-			COMPILER="gcc -O2 $$(pkg-config --cflags gtk4)" ;; \
-		MINGW*|MSYS*|CYGWIN*) \
-			BACKEND="contrib/aether_ui/aether_ui_win32.c contrib/aether_ui/aether_ui_test_server.c"; \
-			LINKS="-luser32 -lgdi32 -lgdiplus -lcomctl32 -lcomdlg32 \
-			       -lshell32 -lole32 -luuid -ldwmapi -luxtheme \
-			       -lws2_32 -pthread -lm"; \
-			COMPILER="gcc -O2"; EXE_SUFFIX=".exe" ;; \
-		*) echo "Unsupported platform: $$OS"; exit 1 ;; \
-	esac; \
-	mkdir -p build; \
-	$$COMPILER -Icontrib/aether_ui \
-		contrib/aether_ui/benchmarks/bench_widgets.c $$BACKEND \
-		-o "build/bench_aether_ui$$EXE_SUFFIX" $$LINKS 1>&2 \
-		|| { echo "bench build failed" >&2; exit 1; }; \
-	"./build/bench_aether_ui$$EXE_SUFFIX"
+# aether_ui has been spun out into its own repo. The widget toolkit
+# now lives at https://github.com/aether-lang-org/aether-ui and is
+# consumed as a downstream package, not built from this repo. The
+# previous `contrib-aether-ui-check` and `benchmark-aether-ui` targets
+# (along with their CI step) were removed when the spin-out happened.
+# Anyone bisecting old failures: see the repo's git history pre-
+# spin-out for the GTK4 / AppKit / Win32 backend build recipes.
 
 valgrind-check: clean
 	@echo "==================================="
@@ -1851,7 +1743,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
 
 # Cross-language benchmark UI (alias for benchmark)
 benchmark-ui: benchmark

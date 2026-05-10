@@ -200,19 +200,42 @@ plays that role), no interfaces.
 
 ## Working with downstream users
 
-- **svn-aether port** (`~/scm/subversion/subversion/`) is the biggest
-  real-world user. Port is methodical C → Aether,
-  one-leaf-per-commit. Downstream finds the gaps before anyone else.
+- **svn-aether port (avn)** (`~/scm/subversion/subversion/` locally;
+  GitHub: anthropic/avn — sibling claude works there) is the biggest
+  real-world consumer. Port is methodical C → Aether, one-leaf-per-
+  commit. Downstream finds the gaps before anyone else — every
+  cross-`import` typer issue (struct visibility, selective-import
+  propagation, 128-decl cap) was filed by avn before showing up
+  anywhere else.
+- **aether-ui** (`https://github.com/aether-lang-org/aether-ui`) —
+  cross-platform widget toolkit (GTK4 / AppKit / Win32) with an
+  AetherUIDriver HTTP test server. Was `contrib/aether_ui/` in this
+  repo until the spin-out; now consumes Aether the same way external
+  users do (install + `$(ae cflags)`). Useful reference for the
+  embedded-DSL pattern: the toolkit's surface IS a closure-DSL.
+- **aeb** (`https://github.com/aether-lang-org/aeb`) — multi-package
+  build system. Reads `share/aether/MANIFEST` to discover link-suitable
+  runtime/stdlib `.c` files and orchestrates per-package compile +
+  cache + incremental relink. The MANIFEST contract (`docs/install-
+  layout.md`) was carved out specifically to support aeb without
+  forcing it to guess via `find -name '*.c'`. If you're touching
+  install-layout / shipped source / link contract, ping aeb side.
 - **Feature request flow that works**: downstream writes a spec
-  (`stdlib_wish.md` is the current example), Aether implements,
-  downstream adopts within the same day. The specs are extremely
-  concrete: API names, signatures, rationale, call-site census.
-  Match that level when responding.
+  (e.g. `import_typer_at_scale.md`, `exprt_structs.md`,
+  `stdlib_wish.md`), Aether implements, downstream adopts within the
+  same day. The specs are extremely concrete: API names, signatures,
+  rationale, call-site census. Match that level when responding.
 - **Don't gate on things that aren't real threats.** `--emit=lib`
   capability-empty is right for the embedded-DSL case (host accepts
-  untrusted Aether). The svn-aether port is the opposite case —
-  they are the host. The `--with=fs` opt-in covers both cleanly.
+  untrusted Aether). avn / aether-ui / aeb are the opposite case —
+  they are hosts. The `--with=fs` opt-in covers both cleanly.
   Similar dualities will come up; watch for them.
+- **Downstream embedding link line: ALWAYS `$(ae cflags)`.** Don't
+  hand-craft `-I` / `-L` / `-laether`. The install layout
+  (`<prefix>/lib/aether/libaether.a`) requires an explicit
+  `-L<prefix>/lib/aether` that bare `-laether` won't find, and the
+  include path varies between dev/user/system installs. `ae cflags`
+  emits the right flags for whichever install is in effect.
 
 ## Build / test commands
 

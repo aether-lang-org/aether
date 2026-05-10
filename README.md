@@ -272,7 +272,6 @@ aether/
 ├── contrib/            # Optional / opinionated modules outside std/
 │   ├── sqlite/         # SQLite bindings (open, prepare, bind, step, column, ...)
 │   ├── tinyweb/        # Server-side request/response DSL
-│   ├── aether_ui/      # GTK4 / AppKit / Win32 widget toolkit
 │   ├── aeocha/         # Test framework
 │   ├── host/<lang>/    # Embed Lua, Python, Perl, Ruby, Tcl, JS in-process
 │   └── climate_http_tests/ # Servirtium climate-API record/replay fixtures
@@ -531,6 +530,28 @@ make benchmark
 ```
 
 The benchmark runner is written in Aether (`run_benchmarks.ae`), dogfooding the stdlib. It compiles and runs all 11 languages, parses output, and writes JSON results.
+
+## Sibling Projects
+
+The Aether ecosystem includes downstream consumers that live in their
+own repos and release independently:
+
+- **[aether-ui](https://github.com/aether-lang-org/aether-ui)** —
+  Cross-platform widget toolkit (GTK4 on Linux, AppKit on macOS, Win32
+  on Windows) with an AetherUIDriver HTTP test server for headless
+  integration testing. Previously shipped as `contrib/aether_ui/` in
+  this repo; spun out so it can iterate on its own cadence.
+- **[aeb](https://github.com/aether-lang-org/aeb)** — Build system for
+  multi-package Aether projects. Reads `share/aether/MANIFEST` (the
+  authoritative list of link-suitable runtime/stdlib `.c` files) and
+  dispatches per-package builds with cache reuse and incremental
+  relinking.
+
+If you're adding to Aether and the change isn't a runtime / compiler /
+stdlib concern, the right home may be one of the siblings above. Both
+repos consume Aether the same way external users do — `import` against
+the installed `share/aether/` tree plus `$(ae cflags)` for the link
+line — so they're useful references for downstream integration shapes.
 
 ## Status
 
