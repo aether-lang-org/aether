@@ -27,6 +27,10 @@ next version number before tagging the release.
 
 - **`make install` and `make install-contrib` self-restore `build/` ownership after `sudo` invocations** (`Makefile`). `sudo make install` re-runs the `release ae stdlib` build deps as root, leaving every object/archive/binary in `build/` root-owned. The next plain `make` then failed with "Permission denied" until the user manually `chown`ed back. Both targets now end with `if [ -n "$$SUDO_USER" ] && [ -d build ]; then chown -R "$$SUDO_USER:..." build 2>/dev/null || true; fi` — silent no-op outside sudo, silent no-op on `chown` failure, transparent self-heal under sudo.
 
+### Removed
+
+- **`contrib/aether_ui/` spun out into [aether-lang-org/aether-ui](https://github.com/aether-lang-org/aether-ui)** (`contrib/aether_ui/`, `Makefile`, `docs/aether-ui-windows.md`, `docs/aether-ui-testing.md`, `docs/stdlib-vs-contrib.md`, `README.md`, `LLM.md`). The widget toolkit (GTK4 / AppKit / Win32 backends + AetherUIDriver HTTP test server) is now a sibling repo, consumed downstream the same way external users consume Aether (`import` against the installed `share/aether/` tree + `$(ae cflags)` for the link line). Removed: the directory itself; `contrib-aether-ui-check` and `benchmark-aether-ui` Makefile targets and their `make ci` step (now [9/9] not [10/10]); the UI-specific docs `docs/aether-ui-windows.md` and `docs/aether-ui-testing.md` (those move to the spin-out repo). README and `LLM.md` get a "Sibling Projects" / "Working with downstream users" section pointing at both `aether-ui` and [aeb](https://github.com/aether-lang-org/aeb) (the build system, also a downstream consumer of `share/aether/MANIFEST`). `docs/stdlib-vs-contrib.md` gets a "Spun out to sibling repos" subsection capturing the graduation path: `contrib/` → standalone repo when a module's release cadence and audience diverge from the core compiler's.
+
 ## [0.141.0]
 
 ### Fixed
