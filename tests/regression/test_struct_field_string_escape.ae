@@ -1,0 +1,141 @@
+// Regression: a heap-tracked string assigned to a struct field
+// inside a setter function must survive past the setter's return.
+//
+// Pre-fix, escape_walk in compiler/codegen/codegen_stmt.c only
+// recognised four escape edges: function call args (ptr / @retain
+// param), return statements, closure captures, and the implicit
+// AST_VARIABLE_DECLARATION RHS shape. It had no case for
+// AST_BINARY_EXPRESSION with value "=" — the AST shape the parser
+// uses for non-trivial assignment LHS (`s.field = ...`,
+// `arr[i] = ...`). The function-exit defer-free for hoisted heap-
+// string vars then reclaimed the buffer when the setter returned,
+// leaving the struct holding a dangling pointer.
+//
+// Same-function write+read masked the bug because the temp lived
+// the full activation record. The cross-function setter/getter
+// shape — common in opaque-handle / state-bearing module APIs —
+// hit it every time.
+//
+// avn impact: every commit went out as `"edits":[{}]` because
+// RaCommit.edits_packed was clobbered between
+// remote_commit_add_file (writer) and remote_commit_build_body
+// (reader); 5000-commit bench couldn't make any progress.
+//
+// What this test exercises: write a 21-byte heap-built string to
+// a struct field via slot_set, read it back through slot_get,
+// assert length and contents match. Plus a same-function write+read
+// case to confirm the existing path still works.
+
+import std.string
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+struct Slot {
+    n: int
+    packed: string
+}
+
+slot_new() -> ptr {
+    raw = malloc(32)
+    s = raw as *Slot
+    s.n = 0
+    s.packed = string.copy("")
+    return raw
+}
+
+slot_set(p: ptr, str: string) {
+    s = p as *Slot
+    cp = string.copy(str)
+    s.packed = cp
+    s.n = 1
+}
+
+slot_get(p: ptr) -> string {
+    s = p as *Slot
+    return s.packed
+}
+
+main() {
+    println("=== test_struct_field_string_escape ===")
+
+    // Case 1: cross-function setter/getter round-trip — the
+    // originally-broken shape.
+    p = slot_new()
+
+    rec = "1\x01"
+    rec = string.concat(rec, "f/1.txt")
+    rec = string.concat(rec, "\x01")
+    rec = string.concat(rec, "aGVsbG8=")
+    out = "1\x02"
+    out = string.concat(out, rec)
+    out = string.concat(out, "\x02")
+
+    if string.length(out) != 21 {
+        println("FAIL 1 setup: out.len expected 21, got ${string.length(out)}")
+        exit(1)
+    }
+
+    slot_set(p, out)
+
+    got = slot_get(p)
+    if string.length(got) != 21 {
+        println("FAIL 1: got.len expected 21, got ${string.length(got)}")
+        exit(1)
+    }
+
+    // Spot-check a few bytes — the envelope tag at index 0, the
+    // record-tag byte at index 1, the payload tag at index 2, and
+    // the trailing terminator.
+    if string.char_at(got, 0) != 49 {
+        println("FAIL 1: byte0 expected 49 ('1'), got ${string.char_at(got, 0)}")
+        exit(1)
+    }
+    if string.char_at(got, 1) != 2 {
+        println("FAIL 1: byte1 expected 2, got ${string.char_at(got, 1)}")
+        exit(1)
+    }
+    if string.char_at(got, 2) != 49 {
+        println("FAIL 1: byte2 expected 49 ('1'), got ${string.char_at(got, 2)}")
+        exit(1)
+    }
+    if string.char_at(got, 20) != 2 {
+        println("FAIL 1: byte20 expected 2 (terminator), got ${string.char_at(got, 20)}")
+        exit(1)
+    }
+    println("  PASS 1: 21-byte cross-function setter/getter survives")
+
+    free(p)
+
+    // Case 2: contents-match check — every byte in `got` should
+    // equal the corresponding byte in `expected`. Confirms the
+    // setter doesn't just preserve length but the actual buffer
+    // bytes through to the getter. Uses non-NUL control bytes so
+    // the source-level literal isn't strlen-truncated.
+    p2 = slot_new()
+    payload = "hello world\x01\x02\x03"
+    expected = string.concat("AB", payload)
+    if string.length(expected) != 16 {
+        println("FAIL 2 setup: expected.len was ${string.length(expected)}")
+        exit(1)
+    }
+    slot_set(p2, expected)
+    back = slot_get(p2)
+    if string.length(back) != 16 {
+        println("FAIL 2: back.len expected 16, got ${string.length(back)}")
+        exit(1)
+    }
+    i = 0
+    while i < 16 {
+        if string.char_at(back, i) != string.char_at(expected, i) {
+            println("FAIL 2: byte ${i} mismatch (expected ${string.char_at(expected, i)}, got ${string.char_at(back, i)})")
+            exit(1)
+        }
+        i = i + 1
+    }
+    println("  PASS 2: 16-byte payload byte-for-byte preserved")
+    free(p2)
+
+    println("=== all cases passed ===")
+}

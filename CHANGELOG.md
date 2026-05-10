@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Struct-field assignment now counted as an escape edge for heap-string vars** (`compiler/codegen/codegen_stmt.c`, `tests/regression/test_struct_field_string_escape.ae`). The escape-analysis pre-pass behind the function-exit defer-free (`mark_escaped_heap_string_vars`, the #420 follow-up) recognised four escape edges: function-call arg through a `ptr` / `@retain` param, return statement, closure capture, and the AST_VARIABLE_DECLARATION RHS shape. It had no case for AST_BINARY_EXPRESSION with `value="="` — which is the AST shape the parser uses for non-trivial assignment LHS (`s.field = ...`, `arr[i] = ...`). Bare local re-assignment goes through AST_VARIABLE_DECLARATION instead, so it was already covered. The gap meant a heap-tracked local assigned to a struct field inside a setter got reclaimed by the function-exit defer-free when the setter returned, leaving the struct holding a dangling pointer. Same-function write+read masked the bug because the temp lived the full activation record; cross-function setter/getter — the canonical opaque-handle / state-bearing module API shape — hit it every time. avn impact: every commit went out as `"edits":[{}]` because RaCommit.edits_packed was clobbered between `remote_commit_add_file` (writer) and `remote_commit_build_body` (reader); 5000-commit bench couldn't make any progress. Fix: extend `escape_walk` to detect AST_BINARY_EXPRESSION with `value="="` whose LHS is non-bare-identifier (AST_MEMBER_ACCESS for field writes, AST_ARRAY_ACCESS for element writes); mark a bare-identifier RHS as escaped if it names a heap-tracked var. New regression test exercises both shapes (21-byte heap-built string round-tripped through a setter, plus a byte-for-byte 16-byte verification).
+
+  ### Upgrade notes
+
+  This release widens what the escape analyzer treats as a "store outside the current activation record": `s.field = cp` and `arr[i] = cp` now keep `cp`'s buffer alive past function exit, instead of letting the function-exit defer-free reclaim it. The previous version reclaimed the buffer eagerly, which manifested as silent dangling-pointer reads from the struct field anywhere outside the writing function.
+
+  If your project stores a heap-string into a struct field and the writing function expected the buffer to be freed at scope exit (very unlikely — that pattern was always broken under the old behaviour, just symptomatically silent until you read the field cross-function), the field will now retain ownership for the struct's lifetime instead. This shape leaks the buffer on the writer side IF the receiver never frees it explicitly — strictly better than the dangling-read it replaces.
+
+  **Recommended pre-upgrade play:**
+
+  1. Build under the new compiler and re-run any test that exercises a setter/getter pair across a function boundary; previously-corrupted struct fields will start returning correct content.
+  2. If your project tracks heap-string lifetimes across struct ownership, audit any `string.release` calls on a struct field after the field's owner has been freed — these may now over-free if the owner's destructor already releases.
+
 ## [0.143.0]
 
 ### Fixed
