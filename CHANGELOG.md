@@ -5,9 +5,15 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.130.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Removed
+
+- **`contrib/aeocha/` spun out into [aether-lang-org/aeocha](https://github.com/aether-lang-org/aeocha)** (`contrib/aeocha/`, `Makefile`, `tests/integration/aeocha_aeb_ipc_reporting/`, `tests/integration/aeocha_expect_matchers/`, `tests/regression/test_closure_extern_ordering.ae`, `tests/regression/test_closure_shadow_tuple_destructure.ae`, `.buildkite/pipeline.yml`, `README.md`, `LLM.md`). The BDD-style test framework is now a standalone sibling repo. It graduates to a top-level `aeocha` namespace (dropping the `contrib.` prefix) and is consumed downstream as a standard Aether package. Removed: the framework itself; related integration and regression tests; the Buildkite self-test step; and references in the main repository's canary installer checks. README and `LLM.md` updated to reflect Aeocha's graduation to a sibling project.
 
 ## [0.142.0]
 
