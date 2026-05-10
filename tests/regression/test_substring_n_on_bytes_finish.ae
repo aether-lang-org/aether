@@ -1,0 +1,110 @@
+// Regression: string.substring_n returned garbage when its source
+// was an AetherString built via bytes.finish (or any other path
+// that produces a wrapped AetherString*: string_concat_wrapped,
+// string_new_with_length, fs.read_binary, etc.).
+//
+// Pre-fix: string_substring_n cast its first arg straight to
+// `(const char*)` instead of routing through str_data(). Inputs
+// with an AetherString header had the header struct's leading
+// bytes copied to the result instead of the payload — silent
+// data corruption that broke avn's rep-store: every blob landed
+// on disk as `57 ae 01 …` (header bytes) instead of `52 …`
+// ('R' + body) or `5A …` ('Z' + zlib).
+//
+// The literal and bare-`string_concat` paths happened to work
+// because both produce a plain `char*` where the cast was a
+// no-op. The bug was specifically the AetherString*-input shape.
+//
+// Fix: string_substring_n now goes through str_data() to get
+// the payload pointer regardless of header shape. The user-
+// supplied length parameter remains authoritative for slice
+// bounds (don't strlen-truncate at embedded NULs).
+
+import std.string
+import std.bytes
+
+extern exit(code: int)
+
+main() {
+    println("=== test_substring_n_on_bytes_finish ===")
+
+    // Case 1: bytes.finish source — the originally-broken shape.
+    // Build "0\x01Rhello" (8 bytes) via bytes.new + copy_from_string + finish,
+    // then slice [2:8] to get "Rhello" (6 bytes).
+    buf = bytes.new(9)
+    bytes.copy_from_string(buf, 0, "0\x01Rhello", 8)
+    s = bytes.finish(buf, 8)
+    a = string.substring_n(s, 8, 2, 8)
+    if string.length(a) != 6 {
+        println("FAIL 1: length expected 6, got ${string.length(a)}")
+        exit(1)
+    }
+    if string.char_at(a, 0) != 82 {
+        println("FAIL 1: byte0 expected 82 ('R'), got ${string.char_at(a, 0)}")
+        exit(1)
+    }
+    if string.char_at(a, 5) != 111 {
+        println("FAIL 1: byte5 expected 111 ('o'), got ${string.char_at(a, 5)}")
+        exit(1)
+    }
+    println("  PASS 1: bytes.finish → substring_n round-trips correctly")
+
+    // Case 2: string.concat source — used to work, must keep working.
+    s2 = string.concat("0\x01", "Rhello")
+    b = string.substring_n(s2, 8, 2, 8)
+    if string.length(b) != 6 {
+        println("FAIL 2: length expected 6, got ${string.length(b)}")
+        exit(1)
+    }
+    if string.char_at(b, 0) != 82 {
+        println("FAIL 2: byte0 expected 82, got ${string.char_at(b, 0)}")
+        exit(1)
+    }
+    println("  PASS 2: string.concat → substring_n still correct")
+
+    // Case 3: full-payload slice from bytes.finish (no header to drop).
+    // Slice [0:8] should reproduce the entire input verbatim.
+    buf2 = bytes.new(8)
+    bytes.copy_from_string(buf2, 0, "abcdefgh", 8)
+    s4 = bytes.finish(buf2, 8)
+    d = string.substring_n(s4, 8, 0, 8)
+    if string.length(d) != 8 {
+        println("FAIL 3: length expected 8, got ${string.length(d)}")
+        exit(1)
+    }
+    if string.char_at(d, 0) != 97 {
+        println("FAIL 3: byte0 expected 97 ('a'), got ${string.char_at(d, 0)}")
+        exit(1)
+    }
+    if string.char_at(d, 7) != 104 {
+        println("FAIL 3: byte7 expected 104 ('h'), got ${string.char_at(d, 7)}")
+        exit(1)
+    }
+    println("  PASS 3: bytes.finish → full-range substring_n correct")
+
+    // Case 4: avn's exact rep_encode_blob shape — 2-byte header +
+    // payload via the bytes API, then the on-disk slice drops the
+    // header. The rep-store envelope tag (first byte after the
+    // header drop) must be 'R' (0x52) or 'Z' (0x5A); pre-fix it
+    // showed up as 0x57 (the AetherString header's leading byte)
+    // and every commit failed the read-side tag check.
+    buf3 = bytes.new(11)
+    bytes.copy_from_string(buf3, 0, "0\x01R012345", 9)
+    s5 = bytes.finish(buf3, 9)
+    blob_payload = string.substring_n(s5, 9, 2, 9)
+    if string.length(blob_payload) != 7 {
+        println("FAIL 4: payload length expected 7, got ${string.length(blob_payload)}")
+        exit(1)
+    }
+    if string.char_at(blob_payload, 0) != 82 {
+        println("FAIL 4: tag byte expected 82 ('R'), got ${string.char_at(blob_payload, 0)}")
+        exit(1)
+    }
+    if string.char_at(blob_payload, 6) != 53 {
+        println("FAIL 4: byte6 expected 53 ('5'), got ${string.char_at(blob_payload, 6)}")
+        exit(1)
+    }
+    println("  PASS 4: avn rep_encode_blob shape — header dropped, tag preserved")
+
+    println("=== all cases passed ===")
+}
