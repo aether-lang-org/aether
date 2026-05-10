@@ -641,7 +641,7 @@ static void discover_toolchain(void) {
             // the version was installed with a buggy ae that only extracted bin/.
             char share_probe[1024], lib_probe[1024];
             snprintf(share_probe, sizeof(share_probe), "%s/current/share/aether", home);
-            snprintf(lib_probe, sizeof(lib_probe), "%s/current/lib/libaether.a", home);
+            snprintf(lib_probe, sizeof(lib_probe), "%s/current/lib/aether/libaether.a", home);
             if (dir_exists(share_probe) || path_exists(lib_probe)) {
                 snprintf(tc.root, sizeof(tc.root), "%s/current", home);
                 strncpy(tc.compiler, current_compiler, sizeof(tc.compiler) - 1);
@@ -652,7 +652,7 @@ static void discover_toolchain(void) {
             // install.sh puts files directly in AETHER_HOME, not under current/.
             char direct_share[1024], direct_lib[1024];
             snprintf(direct_share, sizeof(direct_share), "%s/share/aether", home);
-            snprintf(direct_lib, sizeof(direct_lib), "%s/lib/libaether.a", home);
+            snprintf(direct_lib, sizeof(direct_lib), "%s/lib/aether/libaether.a", home);
             if (!dir_exists(direct_share) && !path_exists(direct_lib)) {
                 fprintf(stderr, "Warning: %s/current has bin/aetherc but no lib/ or share/ — installation is incomplete.\n", home);
                 fprintf(stderr, "Fix with: ae version install <version> or ./install.sh\n");
@@ -675,7 +675,7 @@ static void discover_toolchain(void) {
             }
             // Also check for lib
             char lib_check[1024];
-            snprintf(lib_check, sizeof(lib_check), "%s/current/lib/libaether.a", home);
+            snprintf(lib_check, sizeof(lib_check), "%s/current/lib/aether/libaether.a", home);
             if (path_exists(lib_check)) {
                 snprintf(tc.root, sizeof(tc.root), "%s/current", home);
                 strncpy(tc.compiler, current_compiler, sizeof(tc.compiler) - 1);
@@ -684,7 +684,7 @@ static void discover_toolchain(void) {
             // Check if the direct ~/.aether/ layout will work before warning
             char direct_share2[1024], direct_lib2[1024];
             snprintf(direct_share2, sizeof(direct_share2), "%s/share/aether", home);
-            snprintf(direct_lib2, sizeof(direct_lib2), "%s/lib/libaether.a", home);
+            snprintf(direct_lib2, sizeof(direct_lib2), "%s/lib/aether/libaether.a", home);
             if (!dir_exists(direct_share2) && !path_exists(direct_lib2)) {
                 fprintf(stderr, "Warning: %s/current has aetherc but no lib/ or share/ — installation is incomplete.\n", home);
                 fprintf(stderr, "Fix with: ae version install <version> or ./install.sh\n");
@@ -698,7 +698,7 @@ static void discover_toolchain(void) {
             // Verify AETHER_HOME has sources or lib — otherwise build will fail
             char share_check[1024], lib_check[1024];
             snprintf(share_check, sizeof(share_check), "%s/share/aether", home);
-            snprintf(lib_check, sizeof(lib_check), "%s/lib/libaether.a", home);
+            snprintf(lib_check, sizeof(lib_check), "%s/lib/aether/libaether.a", home);
             if (dir_exists(share_check) || path_exists(lib_check)) {
                 goto found_root;
             }
@@ -707,8 +707,8 @@ static void discover_toolchain(void) {
     }
 
     // Strategy 3: Relative to ae binary — installed layout ($PREFIX/bin/ae)
-    // Detect installed layout by checking for lib/aether/ (make install),
-    // share/aether/ (release ZIP), or lib/libaether.a (either).
+    // Detect installed layout by checking for lib/aether/ (canonical install
+    // path) or share/aether/ (release ZIP).
     if (found_exe_dir) {
         char candidate[1024];
         bool is_installed = false;
@@ -717,10 +717,6 @@ static void discover_toolchain(void) {
         if (!is_installed) {
             snprintf(candidate, sizeof(candidate), "%s/../share/aether", exe_dir);
             if (dir_exists(candidate)) is_installed = true;
-        }
-        if (!is_installed) {
-            snprintf(candidate, sizeof(candidate), "%s/../lib/libaether.a", exe_dir);
-            if (path_exists(candidate)) is_installed = true;
         }
         if (is_installed) {
             // If a 'current' symlink exists (from ae version use), prefer it
@@ -731,7 +727,7 @@ static void discover_toolchain(void) {
             if (dir_exists(current_root)) {
                 char cs[1024], cl[1024];
                 snprintf(cs, sizeof(cs), "%s/../current/share/aether", exe_dir);
-                snprintf(cl, sizeof(cl), "%s/../current/lib/libaether.a", exe_dir);
+                snprintf(cl, sizeof(cl), "%s/../current/lib/aether/libaether.a", exe_dir);
                 if (dir_exists(cs) || path_exists(cl)) {
                     snprintf(tc.root, sizeof(tc.root), "%s/../current", exe_dir);
                     snprintf(tc.compiler, sizeof(tc.compiler), "%s/aetherc" EXE_EXT, exe_dir);
@@ -812,16 +808,15 @@ found_root:
         fprintf(stderr, "[toolchain] dev_mode: %s\n", tc.dev_mode ? "yes" : "no");
     }
 
-    // Check for precompiled library
+    // Check for precompiled library. Canonical install layout (both
+    // `make install` and `install.sh`) places it under lib/aether/, so
+    // contrib archives (libaether_<x>.a) live alongside it; downstream
+    // consumers must pass `-L<prefix>/lib/aether` on the link line, or
+    // use `ae cflags` which emits the right -L automatically.
     if (tc.dev_mode) {
         snprintf(tc.lib, sizeof(tc.lib), "%s/build/libaether.a", tc.root);
     } else {
-        // install.sh puts lib at $root/lib/libaether.a
-        // make install puts lib at $root/lib/aether/libaether.a
-        snprintf(tc.lib, sizeof(tc.lib), "%s/lib/libaether.a", tc.root);
-        if (!path_exists(tc.lib)) {
-            snprintf(tc.lib, sizeof(tc.lib), "%s/lib/aether/libaether.a", tc.root);
-        }
+        snprintf(tc.lib, sizeof(tc.lib), "%s/lib/aether/libaether.a", tc.root);
     }
     tc.has_lib = path_exists(tc.lib);
 
@@ -5086,7 +5081,7 @@ static int cmd_version_install(const char* version) {
             // old ae versions had an extraction bug that only copied bin/
             char lib_probe[1024], share_probe[1024];
             int has_sources = 0;
-            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/libaether.a", ver_dir);
+            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/aether/libaether.a", ver_dir);
             if (path_exists(lib_probe)) has_sources = 1;
             snprintf(share_probe, sizeof(share_probe), "%s/share/aether/runtime", ver_dir);
             if (dir_exists(share_probe)) has_sources = 1;

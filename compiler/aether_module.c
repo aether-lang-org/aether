@@ -890,6 +890,30 @@ int module_orchestrate(ASTNode* program) {
 
 // --- Pure Aether Module Merging ---
 
+// Soft ceiling for the per-module decl-name tables that
+// module_merge_into_program builds while cloning a module's bodies into
+// the consumer's program AST.
+//
+// Every clone-and-rename pass collects a snapshot of the source module's
+// function and constant names so that intra-module calls (`square(...)`
+// referencing a sibling) can be rewritten to the prefixed form
+// (`mathy_square(...)`) before the body lands in the consumer.
+//
+// Pre-fix this was hardcoded to 128 at every collection site. Modules
+// merged from large per-file shims (avn's working_copy/module.ae,
+// ~150 funcs in 4300 lines) silently truncated at the 129th decl —
+// every call to a beyond-128 sibling stayed bare and the consumer's
+// typer fired E0301 even though the symbol existed in the registry
+// under its prefixed name. The cap below leaves headroom for very
+// large merged modules without forcing dynamic allocation.
+//
+// Stack-frame budget: each merge pass allocates up to ~6 arrays of
+// (const char*) at this cap → 4096 × 8 bytes × 6 ≈ 192 KB peak. Well
+// within Linux/macOS 8 MB defaults and Windows 1 MB default. If a
+// future module pushes past 4096 we should switch to dynamic
+// allocation rather than another bump.
+#define AETHER_MODULE_MAX_DECLS 4096
+
 // Extract namespace from module path: "mypackage.utils" -> "utils"
 static const char* module_get_namespace(const char* module_path) {
     const char* last_dot = strrchr(module_path, '.');
@@ -1095,6 +1119,93 @@ static int program_has_struct(ASTNode* program, const char* name) {
     return 0;
 }
 
+// Apply M's own `import X (a, b, c)` selective-import rewrites to a body
+// that's about to be cloned out of M into the consumer's program AST.
+//
+// Without this, a module that does `import std.http.client (set_header,
+// send_request)` and exposes `do_get()` calling `set_header(req, ...)`
+// type-checks fine standalone — M's symbol table aliases `set_header` to
+// `client_set_header`. But once M is imported into a consumer, the
+// consumer clones `do_get`'s AST verbatim. The bare `set_header(...)`
+// call in the cloned body has no binding in the consumer's symbol
+// table (the consumer never wrote `import std.http.client`) and the
+// typer fires E0301: Undefined function 'set_header'.
+//
+// Fix: walk M's AST for AST_IMPORT_STATEMENTs that carry a selection
+// list, and for each selected name rewrite bare references in the
+// cloned body to the prefixed form (`set_header` → `client_set_header`).
+// The transitive cross-module BFS in module_merge_into_program already
+// pulls those prefixed definitions into the consumer's program AST, so
+// the consumer's typer can now resolve them.
+//
+// Bypassed names: nodes annotated `module_alias` (the parser uses the
+// same AST_IDENTIFIER child shape for `import X as Y`).
+//
+// Glob (`*`) imports stamped `glob_import` aren't handled here because
+// the selection list is computed at typecheck time from the source
+// module's exports, not stored on the AST. Most ports use the explicit
+// selective form, so deferring glob to a follow-up PR.
+static void apply_inherited_selective_imports(ASTNode* clone, ASTNode* mod_ast) {
+    if (!clone || !mod_ast) return;
+
+    for (int i = 0; i < mod_ast->child_count; i++) {
+        ASTNode* imp = mod_ast->children[i];
+        if (!imp || imp->type != AST_IMPORT_STATEMENT || !imp->value) continue;
+        if (imp->child_count == 0) continue;
+        if (imp->children[0]->type != AST_IDENTIFIER) continue;
+        // Skip glob imports — selection list isn't on the AST.
+        if (imp->annotation && strcmp(imp->annotation, "glob_import") == 0) continue;
+
+        // Resolve the import path to the merged-name prefix the
+        // transitive pass will / has used (`std.http.client` →
+        // `client`, `mymath` → `mymath`, etc.). Same rule used at
+        // every other merge site in this file.
+        const char* sub_ns = module_get_namespace(imp->value);
+
+        // Resolve the source module's func/const tables so we can
+        // classify each selector. If the source isn't loaded yet
+        // (orchestrator hasn't visited it), skip — the cloned body
+        // would fail to link anyway and the user's direct error
+        // points at the missing module, not this rename.
+        AetherModule* sub_mod = module_find(imp->value);
+        if (!sub_mod || !sub_mod->ast) continue;
+
+        const char* sub_func_names[AETHER_MODULE_MAX_DECLS];
+        int sub_func_count = collect_module_func_names(sub_mod->ast,
+                                                       sub_func_names,
+                                                       AETHER_MODULE_MAX_DECLS);
+        const char* sub_const_names[AETHER_MODULE_MAX_DECLS];
+        int sub_const_count = collect_module_const_names(sub_mod->ast,
+                                                         sub_const_names,
+                                                         AETHER_MODULE_MAX_DECLS);
+
+        const char* sel_func_names[AETHER_MODULE_MAX_DECLS];
+        int sel_func_count = 0;
+        const char* sel_const_names[AETHER_MODULE_MAX_DECLS];
+        int sel_const_count = 0;
+
+        for (int k = 0; k < imp->child_count; k++) {
+            ASTNode* sel = imp->children[k];
+            if (!sel || sel->type != AST_IDENTIFIER || !sel->value) continue;
+            if (sel->annotation && strcmp(sel->annotation, "module_alias") == 0) continue;
+            if (name_in_list(sel->value, sub_func_names, sub_func_count) &&
+                sel_func_count < AETHER_MODULE_MAX_DECLS) {
+                sel_func_names[sel_func_count++] = sel->value;
+            } else if (name_in_list(sel->value, sub_const_names, sub_const_count) &&
+                       sel_const_count < AETHER_MODULE_MAX_DECLS) {
+                sel_const_names[sel_const_count++] = sel->value;
+            }
+        }
+
+        if (sel_func_count == 0 && sel_const_count == 0) continue;
+
+        rename_intra_module_refs(clone, sub_ns,
+                                 sel_func_names, sel_func_count,
+                                 sel_const_names, sel_const_count,
+                                 NULL, 0);
+    }
+}
+
 // Walk a node looking for AST_FUNCTION_CALL targets that match a
 // "<ns>_<name>" prefix where <name> is one of the module's own function
 // names. Append unique matches into `out` (storing the bare name).
@@ -1179,10 +1290,12 @@ void module_merge_into_program(ASTNode* program) {
         const char* ns = module_get_namespace(module_path);
 
         // Collect function and constant names for intra-module renaming
-        const char* func_names[128];
-        int func_count = collect_module_func_names(mod_ast, func_names, 128);
-        const char* const_names[128];
-        int const_count = collect_module_const_names(mod_ast, const_names, 128);
+        const char* func_names[AETHER_MODULE_MAX_DECLS];
+        int func_count = collect_module_func_names(mod_ast, func_names,
+                                                   AETHER_MODULE_MAX_DECLS);
+        const char* const_names[AETHER_MODULE_MAX_DECLS];
+        int const_count = collect_module_const_names(mod_ast, const_names,
+                                                     AETHER_MODULE_MAX_DECLS);
 
         // Check for selective import: if import has AST_IDENTIFIER children,
         // only merge functions/constants that appear in the selection list
@@ -1237,6 +1350,10 @@ void module_merge_into_program(ASTNode* program) {
                 // Rename intra-module function calls and constant refs within the cloned body
                 rename_intra_module_refs(clone, ns, func_names, func_count,
                                          const_names, const_count, NULL, 0);
+                // Also rewrite bare-name calls to selectively-imported
+                // names from M's own `import X (a, b)` statements — see
+                // apply_inherited_selective_imports comment for why.
+                apply_inherited_selective_imports(clone, mod_ast);
 
                 insert_child_at(program, clone, insert_idx++);
             } else if (decl->type == AST_CONST_DECLARATION && decl->value) {
@@ -1327,14 +1444,16 @@ void module_merge_into_program(ASTNode* program) {
             ASTNode* mod_ast = mod->ast;
             const char* ns = module_get_namespace(child->value);
 
-            const char* mod_func_names[128];
-            int mod_func_count = collect_module_func_names(mod_ast, mod_func_names, 128);
-            const char* mod_const_names[128];
-            int mod_const_count = collect_module_const_names(mod_ast, mod_const_names, 128);
+            const char* mod_func_names[AETHER_MODULE_MAX_DECLS];
+            int mod_func_count = collect_module_func_names(mod_ast, mod_func_names,
+                                                           AETHER_MODULE_MAX_DECLS);
+            const char* mod_const_names[AETHER_MODULE_MAX_DECLS];
+            int mod_const_count = collect_module_const_names(mod_ast, mod_const_names,
+                                                             AETHER_MODULE_MAX_DECLS);
 
             // Collect bare names of intra-module callees referenced from
             // any function already merged from this module.
-            const char* needed[128];
+            const char* needed[AETHER_MODULE_MAX_DECLS];
             int needed_count = 0;
             for (int m = 0; m < program->child_count; m++) {
                 ASTNode* top = program->children[m];
@@ -1345,7 +1464,8 @@ void module_merge_into_program(ASTNode* program) {
                 size_t ns_len = strlen(ns);
                 if (strncmp(top->value, ns, ns_len) != 0 || top->value[ns_len] != '_') continue;
                 collect_intra_module_callees(top, ns, mod_func_names, mod_func_count,
-                                             needed, &needed_count, 128);
+                                             needed, &needed_count,
+                                             AETHER_MODULE_MAX_DECLS);
             }
 
             for (int n = 0; n < needed_count; n++) {
@@ -1369,6 +1489,7 @@ void module_merge_into_program(ASTNode* program) {
                     clone->is_imported = 1;
                     rename_intra_module_refs(clone, ns, mod_func_names, mod_func_count,
                                              mod_const_names, mod_const_count, NULL, 0);
+                    apply_inherited_selective_imports(clone, mod_ast);
                     insert_child_at(program, clone, insert_idx++);
                     progressed = 1;
                     break;
@@ -1460,10 +1581,12 @@ void module_merge_into_program(ASTNode* program) {
             ASTNode* mod_ast = dep_mod->ast;
             const char* ns = module_get_namespace(dep_path);
 
-            const char* func_names[128];
-            int func_count = collect_module_func_names(mod_ast, func_names, 128);
-            const char* const_names[128];
-            int const_count = collect_module_const_names(mod_ast, const_names, 128);
+            const char* func_names[AETHER_MODULE_MAX_DECLS];
+            int func_count = collect_module_func_names(mod_ast, func_names,
+                                                       AETHER_MODULE_MAX_DECLS);
+            const char* const_names[AETHER_MODULE_MAX_DECLS];
+            int const_count = collect_module_const_names(mod_ast, const_names,
+                                                         AETHER_MODULE_MAX_DECLS);
 
             // Add a synthetic AST_IMPORT_STATEMENT for this transitive
             // dep so the typechecker's namespace-registration pass
@@ -1507,6 +1630,7 @@ void module_merge_into_program(ASTNode* program) {
 
                     rename_intra_module_refs(clone, ns, func_names, func_count,
                                              const_names, const_count, NULL, 0);
+                    apply_inherited_selective_imports(clone, mod_ast);
 
                     insert_child_at(program, clone, insert_idx++);
                 } else if (decl->type == AST_CONST_DECLARATION) {
@@ -1557,15 +1681,17 @@ void module_merge_into_program(ASTNode* program) {
         if (!mod || !mod->ast) continue;
         const char* ns = module_get_namespace(module_path);
 
-        const char* sel_func_names[128];
+        const char* sel_func_names[AETHER_MODULE_MAX_DECLS];
         int sel_func_count = 0;
-        const char* sel_const_names[128];
+        const char* sel_const_names[AETHER_MODULE_MAX_DECLS];
         int sel_const_count = 0;
 
-        const char* mod_func_names[128];
-        int mod_func_count = collect_module_func_names(mod->ast, mod_func_names, 128);
-        const char* mod_const_names[128];
-        int mod_const_count = collect_module_const_names(mod->ast, mod_const_names, 128);
+        const char* mod_func_names[AETHER_MODULE_MAX_DECLS];
+        int mod_func_count = collect_module_func_names(mod->ast, mod_func_names,
+                                                       AETHER_MODULE_MAX_DECLS);
+        const char* mod_const_names[AETHER_MODULE_MAX_DECLS];
+        int mod_const_count = collect_module_const_names(mod->ast, mod_const_names,
+                                                         AETHER_MODULE_MAX_DECLS);
 
         for (int k = 0; k < import_node->child_count; k++) {
             ASTNode* sel = import_node->children[k];
@@ -1573,10 +1699,10 @@ void module_merge_into_program(ASTNode* program) {
             // Skip alias nodes — the parser marks them with annotation="module_alias".
             if (sel->annotation && strcmp(sel->annotation, "module_alias") == 0) continue;
             if (name_in_list(sel->value, mod_func_names, mod_func_count) &&
-                sel_func_count < 128) {
+                sel_func_count < AETHER_MODULE_MAX_DECLS) {
                 sel_func_names[sel_func_count++] = sel->value;
             } else if (name_in_list(sel->value, mod_const_names, mod_const_count) &&
-                       sel_const_count < 128) {
+                       sel_const_count < AETHER_MODULE_MAX_DECLS) {
                 sel_const_names[sel_const_count++] = sel->value;
             }
         }

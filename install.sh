@@ -17,7 +17,7 @@ else
     INSTALL_DIR="${1:-$HOME/.aether}"
 fi
 BIN_DIR="$INSTALL_DIR/bin"
-LIB_DIR="$INSTALL_DIR/lib"
+LIB_DIR="$INSTALL_DIR/lib/aether"
 INCLUDE_DIR="$INSTALL_DIR/include/aether"
 SRC_DIR="$INSTALL_DIR/share/aether"
 

@@ -558,11 +558,11 @@ test-release-archive: compiler ae stdlib
 	@echo "==================================="
 	@tmpdir=$$(mktemp -d) && \
 	reldir="$$tmpdir/release" && \
-	mkdir -p "$$reldir/bin" "$$reldir/lib" "$$reldir/share/aether" "$$reldir/include/aether" && \
+	mkdir -p "$$reldir/bin" "$$reldir/lib/aether" "$$reldir/share/aether" "$$reldir/include/aether" && \
 	cp build/aetherc$(EXE_EXT) "$$reldir/bin/" && \
 	cp build/ae$(EXE_EXT)      "$$reldir/bin/" && \
 	chmod 755 "$$reldir/bin/"* && \
-	if [ -f build/libaether.a ]; then cp build/libaether.a "$$reldir/lib/"; fi && \
+	if [ -f build/libaether.a ]; then cp build/libaether.a "$$reldir/lib/aether/"; fi && \
 	for dir in runtime runtime/actors runtime/scheduler runtime/utils \
 	           runtime/memory runtime/config std std/string std/io std/math \
 	           std/net std/collections std/json std/fs std/log std/http \
@@ -585,7 +585,7 @@ test-release-archive: compiler ae stdlib
 	echo "  Checking extracted layout..." && \
 	test -f "$$verdir/bin/aetherc$(EXE_EXT)" || (echo "  FAIL: bin/aetherc missing"; exit 1) && \
 	test -f "$$verdir/bin/ae$(EXE_EXT)"      || (echo "  FAIL: bin/ae missing"; exit 1) && \
-	test -f "$$verdir/lib/libaether.a"       || (echo "  FAIL: lib/libaether.a missing"; exit 1) && \
+	test -f "$$verdir/lib/aether/libaether.a" || (echo "  FAIL: lib/aether/libaether.a missing"; exit 1) && \
 	test -d "$$verdir/share/aether/runtime"  || (echo "  FAIL: share/aether/runtime missing"; exit 1) && \
 	test -d "$$verdir/share/aether/std"      || (echo "  FAIL: share/aether/std missing"; exit 1) && \
 	echo "  Testing ae init + ae run from extracted archive..." && \
@@ -1202,6 +1202,17 @@ install: release ae stdlib
 	@# instead of guessing via `find runtime -name '*.c'` — the find
 	@# would naively pull in benchmarks / orphan poller hubs / etc.
 	@install -m 644 build/MANIFEST $(PREFIX)/share/aether/MANIFEST
+	@# Restore ownership of build/ to the invoking user when running
+	@# under sudo. Otherwise `sudo make install` re-runs the `release ae
+	@# stdlib` build deps as root, leaving every object/archive/binary in
+	@# build/ root-owned — which then makes the next plain `make` fail
+	@# with "Permission denied" until the user manually chowns. SUDO_USER
+	@# is set by sudo on every platform we build on; absent (no sudo) →
+	@# this is a silent no-op. Failure (no chown perms, weird FS) → also
+	@# a no-op so we never break the install summary.
+	@if [ -n "$$SUDO_USER" ] && [ -d build ]; then \
+		chown -R "$$SUDO_USER:$$(id -gn $$SUDO_USER 2>/dev/null || echo $$SUDO_USER)" build 2>/dev/null || true; \
+	fi
 	@echo "✓ Installed successfully"
 	@echo ""
 	@echo "Run: ae version"
@@ -1285,6 +1296,10 @@ install-contrib: contrib
 	@# downstream callers that #include the bridge header can.
 	@find $(PREFIX)/share/aether/contrib -type f -name '*.c' -delete 2>/dev/null || true
 	@find $(PREFIX)/share/aether/contrib -type f -name '*.m' -delete 2>/dev/null || true
+	@# See the same SUDO_USER chown rationale on the `install:` target.
+	@if [ -n "$$SUDO_USER" ] && [ -d build ]; then \
+		chown -R "$$SUDO_USER:$$(id -gn $$SUDO_USER 2>/dev/null || echo $$SUDO_USER)" build 2>/dev/null || true; \
+	fi
 	@echo "✓ Contrib installed"
 
 # Run an Aether program (compile + execute)

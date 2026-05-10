@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Imported modules at scale: selectively-imported names now propagate, and the 128-decl truncation cap is lifted** (`compiler/aether_module.c`, `tests/integration/import_selective_propagation/`, `tests/integration/import_large_module/`). Two coupled holes in the cross-`import` merge codepath that the 0.141.0 struct-merge fix surfaced once large per-file shims started being merged into single `<dir>/module.ae` modules.
+
+  - **Selective-import propagation across the `import` boundary.** A module M that does `import X (a, b, c)` and uses `a(...)`, `b(...)` as bare names inside its function bodies type-checked fine standalone — M's symbol table aliased `a` to `X_a`. But once a consumer imported M, the cloned function bodies still said `a(...)` verbatim, and the consumer's typer had no `a` in its symbol table (the consumer never wrote `import X`), so it fired E0301 on every call site. New `apply_inherited_selective_imports` walks M's own `AST_IMPORT_STATEMENT`s at clone time and rewrites bare-name references in the cloned body to the prefixed form (`a` → `X_a`), so the consumer's transitive cross-module merge can resolve them through the existing prefixed-symbol path. Wired into all three clone sites: main merge loop, transitive helpers pull-in, and the cross-module BFS for transitive deps.
+
+  - **Decl-table cap lifted from 128 to 4096.** Every clone-and-rename pass collects a snapshot of the source module's function and constant names so intra-module calls (`square(...)` referencing a sibling) get rewritten to the prefixed form (`mathy_square(...)`) before the body lands in the consumer. Pre-fix this snapshot was hardcoded to 128 entries at every collection site. Modules merged from large per-file shims (avn's `working_copy/module.ae`, ~150 functions in 4300 lines) silently truncated at the 129th decl — every call to a beyond-128 sibling stayed bare and the consumer's typer fired E0301 even though the prefixed symbol existed in the registry. Centralised as `AETHER_MODULE_MAX_DECLS = 4096` (with a stack-frame budget rationale in the macro's docstring) and applied to every collection / selection / aggregation site in the file. Headroom for ~32× the current largest known shim before we'd need dynamic allocation.
+
+  Verified: standalone `ae check` of a 200-function helper module + cross-`import` consumer round-trip prints the expected arithmetic; `make ci` and `HARDEN=1 make ci` green; new regression tests `tests/integration/import_selective_propagation/` (innerlib + middlemod + consumer) and `tests/integration/import_large_module/` (200-function chain + recursion across the boundary) lock both shapes in.
+
+### Changed
+
+- **Install layout consolidated to a single `<prefix>/lib/aether/` subdir** (`install.sh`, `tools/ae.c`, `Makefile`, `docs/install-layout.md`, `docs/c-interop.md`, `docs/c-embedding.md`). Pre-fix the two installers disagreed: `install.sh /usr/local` placed the static archive at `/usr/local/lib/libaether.a` (flat, FHS-canonical), while `make install PREFIX=/usr/local` placed it at `/usr/local/lib/aether/libaether.a` (subdir, co-located with `libaether_<contrib>.a`). Downstream embedders (especially LLM-generated build scripts) routinely guessed the FHS-flat path and missed the file under one of the two installers. Subdir wins because it co-locates contrib archives and gives a single `-L<prefix>/lib/aether` line that resolves both core and contrib libs uniformly. `install.sh`'s `LIB_DIR` now points at `<prefix>/lib/aether`; `tools/ae.c` drops the flat-path probe fallbacks and looks only at the subdir; `Makefile`'s `test-release-archive` produces a subdir-shaped tarball matching what `release.yml` ships. Doc surface (`install-layout.md`, `c-interop.md`, `c-embedding.md`) now points consumers at `$(ae cflags)` rather than hand-crafted `-I` / `-L` / `-l` lines — the canonical recipe is a single `ae cflags` invocation that emits the correct flags for in-tree dev builds, `~/.aether` user installs, and `/usr/local` system installs uniformly.
+
+- **`make install` and `make install-contrib` self-restore `build/` ownership after `sudo` invocations** (`Makefile`). `sudo make install` re-runs the `release ae stdlib` build deps as root, leaving every object/archive/binary in `build/` root-owned. The next plain `make` then failed with "Permission denied" until the user manually `chown`ed back. Both targets now end with `if [ -n "$$SUDO_USER" ] && [ -d build ]; then chown -R "$$SUDO_USER:..." build 2>/dev/null || true; fi` — silent no-op outside sudo, silent no-op on `chown` failure, transparent self-heal under sudo.
+
 ## [0.141.0]
 
 ### Fixed

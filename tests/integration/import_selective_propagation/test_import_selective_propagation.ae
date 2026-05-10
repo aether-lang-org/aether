@@ -1,0 +1,38 @@
+// Regression: selectively-imported names inside an imported module
+// must still resolve when the module is cloned into a consumer's
+// program AST. apply_inherited_selective_imports in
+// compiler/aether_module.c walks the source module's own
+// AST_IMPORT_STATEMENTs at clone time and rewrites bare-name
+// references to the prefixed form, so the consumer's typer can
+// resolve them through the existing transitive cross-module merge.
+//
+// What this test guards: import middlemod's surface and confirm that
+// do_thing → helper → innerlib_helper round-trips correctly. The
+// consumer file (this file) NEVER directly imports innerlib; the
+// middlemod-owned selective import is the only handle to innerlib.
+
+import middlemod
+
+extern exit(code: int)
+
+main() {
+    println("=== test_import_selective_propagation ===")
+
+    // Test 1: do_thing exercises the selective-import rewrite of `helper`.
+    got1 = middlemod.do_thing(5)
+    if got1 != 6 {
+        println("FAIL 1: expected 6, got ${got1}")
+        exit(1)
+    }
+    println("  PASS 1: do_thing → helper resolves to innerlib_helper")
+
+    // Test 2: do_other exercises the rewrite of `other_helper`.
+    got2 = middlemod.do_other(7)
+    if got2 != 14 {
+        println("FAIL 2: expected 14, got ${got2}")
+        exit(1)
+    }
+    println("  PASS 2: do_other → other_helper resolves to innerlib_other_helper")
+
+    println("=== all tests passed ===")
+}
