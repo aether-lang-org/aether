@@ -272,7 +272,6 @@ aether/
 ├── contrib/            # Optional / opinionated modules outside std/
 │   ├── sqlite/         # SQLite bindings (open, prepare, bind, step, column, ...)
 │   ├── tinyweb/        # Server-side request/response DSL
-│   ├── aeocha/         # Test framework
 │   ├── host/<lang>/    # Embed Lua, Python, Perl, Ruby, Tcl, JS in-process
 │   └── climate_http_tests/ # Servirtium climate-API record/replay fixtures
 ├── tools/              # Developer tools

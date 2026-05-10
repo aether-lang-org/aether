@@ -88,7 +88,7 @@ if [ "$unwanted_count" -ne 0 ]; then
 fi
 
 # Spot-check a flagship module the issue called out by name.
-for canary in aeocha sqlite tinyweb host/python; do
+for canary in sqlite tinyweb host/python; do
     if [ ! -f "$CONTRIB_INSTALL/$canary/module.ae" ]; then
         echo "  [FAIL] canary contrib module $canary not installed"
         exit 1

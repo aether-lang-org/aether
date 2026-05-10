@@ -56,8 +56,7 @@
             limit: 1
 
     # ---- contrib/ per-package steps ----
-    # contrib/host is already covered above. contrib/aether_ui,
-    # contrib/aeocha, contrib/tinyweb, contrib/sqlite each get their
+    # contrib/tinyweb, contrib/sqlite each get their
     # own broken-out step below. They're also exercised inside
     # `make ci` (contrib-aether-ui-check, the test-ae sweep, etc.)
     # but a per-contrib label means a regression in one shows up in
@@ -101,19 +100,6 @@
           - exit_status: -1
             limit: 1
 
-    - label: ":test_tube: contrib/aeocha self-test"
-      command: |
-        make compiler ae stdlib && \
-        ./build/ae run contrib/aeocha/example_self_test.ae
-      agents:
-        queue: "default-queue"
-        aether: "1"
-      timeout_in_minutes: 10
-      retry:
-        automatic:
-          - exit_status: -1
-            limit: 1
-
     - label: ":spider_web: contrib/tinyweb compile + test"
       # All three test files bind port 8080. Buildkite serializes
       # jobs sharing a `concurrency_group` to `concurrency: 1`, so
@@ -124,8 +110,7 @@
       #
       # Whitelist of files (the others — example_app/auth/
       # composition/sse/static/websocket.ae — reference `tinyweb.*`
-      # symbols that module.ae does not currently export; tracked in
-      # contrib/aeocha/TODO.md). example_inventory.ae is a DSL
+      # symbols that module.ae does not currently export). example_inventory.ae is a DSL
       # structure demo that exits cleanly without binding.
       command: |
         make compiler ae stdlib && \
