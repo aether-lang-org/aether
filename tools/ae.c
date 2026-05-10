@@ -55,6 +55,13 @@ extern char** environ;
 #include <mach-o/dyld.h>
 #endif
 
+/* Shared header — AETHER_LIB_DIRS_MAX + AETHER_LIB_PATH_SEP_CHAR.
+ * Pulled in early so the Toolchain struct can size its lib_dirs
+ * array with the same cap the compiler enforces. Lives in
+ * `compiler/aether_lib_path.h` (a tiny no-AST-deps header) so this
+ * include is light. Issue #413. */
+#include "../compiler/aether_lib_path.h"
+
 #include "apkg/toml_parser.h"
 
 // Version is set by Makefile from VERSION file
@@ -96,43 +103,84 @@ typedef struct {
     bool has_lib;              // Whether precompiled lib exists
     bool dev_mode;             // Running from source tree
     bool verbose;              // Verbose output
-    /* PATH-style lib-search path forwarded to aetherc via --lib.
-     * Each `--lib X` flag appends to this buffer with the platform
-     * separator (':' POSIX, ';' Windows). aetherc splits on the
-     * separator into ModuleRegistry::lib_dirs[]. Issue #413.
-     * Sized for 8 typical entries × 256 bytes + separators. */
-    char lib_dir[2048];
+    /* Lib-search path forwarded to aetherc as one `--lib <dir>` flag
+     * per entry. Stored as an array (rather than a separator-string
+     * buffer) so we never re-construct a `dir1:dir2:dir3` string that
+     * has to survive shell quoting through system() — cmd.exe and
+     * MSYS2 between them mangle `;`-separated quoted strings unevenly,
+     * and one-flag-per-entry sidesteps the entire surface. Each
+     * `--lib X` from the user is parsed: if `X` is itself a separator-
+     * string, each piece is appended; if it's a single directory, it's
+     * appended verbatim. Issue #413. */
+    char lib_dirs[AETHER_LIB_DIRS_MAX][256];
+    int  lib_dir_count;
 } Toolchain;
 
 static Toolchain tc = {0};
 
-/* Append a single directory to `tc.lib_dir` with the platform path
- * separator. Used by every `--lib <dir>` flag site so that repeated
- * flags COMPOSE (`--lib a --lib b` → `a:b`) the same way a
- * separator-string `--lib a:b` does — both forms feed the same
- * underlying lib search path on the aetherc side. The separator
- * macro lives in `compiler/aether_lib_path.h` (a tiny dedicated
- * header) so the compiler-side parser and the tools-side appender
- * share a single source of truth without pulling AST headers into
- * the CLI build. Issue #413. */
-#include "../compiler/aether_lib_path.h"
-static void tc_lib_dir_append(const char* dir) {
+/* Append a directory (or a separator-string of directories) to
+ * `tc.lib_dirs`. Used by every `--lib <X>` flag site so that
+ * repeated flags AND separator-strings both end up as discrete
+ * entries in the list:
+ *
+ *    `--lib a --lib b`        → [a, b]
+ *    `--lib a:b`              → [a, b]   (POSIX separator)
+ *    `--lib "a;b"`            → [a, b]   (Windows separator)
+ *    `--lib a:b --lib c`      → [a, b, c]
+ *
+ * Storing as a list (rather than a separator-string buffer) means
+ * the aetherc command we build later emits one `--lib X` per entry
+ * — no separator-string has to survive shell quoting through
+ * system(). cmd.exe + MSYS2's joint handling of `;` inside double
+ * quotes is uneven; one-flag-per-entry sidesteps the entire
+ * surface. Dedup is O(N) over the cap-of-8 list. Issue #413. */
+static void tc_lib_dir_append_one(const char* dir) {
     if (!dir || !dir[0]) return;
-    size_t cap = sizeof(tc.lib_dir);
-    size_t cur = strlen(tc.lib_dir);
-    size_t add = strlen(dir);
-    size_t need = cur + (cur ? 1 : 0) + add + 1;
-    if (need > cap) {
+    /* Normalise trailing slash — matches the compiler-side
+     * `module_add_lib_dir` normalisation so dedup catches
+     * `./lib` vs `./lib/` cleanly. */
+    char norm[256];
+    strncpy(norm, dir, sizeof(norm) - 1);
+    norm[sizeof(norm) - 1] = '\0';
+    size_t nlen = strlen(norm);
+    while (nlen > 1 &&
+           (norm[nlen - 1] == '/' || norm[nlen - 1] == '\\') &&
+           norm[nlen - 2] != ':') {
+        norm[--nlen] = '\0';
+    }
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        if (strcmp(tc.lib_dirs[i], norm) == 0) return;
+    }
+    if (tc.lib_dir_count >= AETHER_LIB_DIRS_MAX) {
         fprintf(stderr,
-            "warning: --lib path buffer overflow (max %zu chars); "
-            "dropping '%s'\n", cap - 1, dir);
+            "warning: --lib search path is full (max %d entries); "
+            "ignoring '%s'\n", AETHER_LIB_DIRS_MAX, norm);
         return;
     }
-    if (cur > 0) {
-        tc.lib_dir[cur] = AETHER_LIB_PATH_SEP_CHAR;
-        tc.lib_dir[cur + 1] = '\0';
+    int idx = tc.lib_dir_count;
+    strncpy(tc.lib_dirs[idx], norm, sizeof(tc.lib_dirs[idx]) - 1);
+    tc.lib_dirs[idx][sizeof(tc.lib_dirs[idx]) - 1] = '\0';
+    tc.lib_dir_count++;
+}
+static void tc_lib_dir_append(const char* spec) {
+    if (!spec || !spec[0]) return;
+    /* Split on the platform separator and append each piece. Empty
+     * segments (trailing/leading/double separators) are silently
+     * skipped — matches Java -cp and PATH semantics. */
+    const char* cur = spec;
+    char buf[256];
+    while (*cur) {
+        const char* next = strchr(cur, AETHER_LIB_PATH_SEP_CHAR);
+        size_t len = next ? (size_t)(next - cur) : strlen(cur);
+        if (len > 0) {
+            if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+            memcpy(buf, cur, len);
+            buf[len] = '\0';
+            tc_lib_dir_append_one(buf);
+        }
+        if (!next) break;
+        cur = next + 1;
     }
-    strncat(tc.lib_dir, dir, cap - strlen(tc.lib_dir) - 1);
 }
 
 // --with=<caps> forwarded verbatim to aetherc. Empty by default; set
@@ -170,13 +218,21 @@ static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, con
         snprintf(with_flag, sizeof(with_flag), " --with=%s", g_with_caps);
     }
 
-    if (tc.lib_dir[0]) {
-        snprintf(cmd, cmd_size, "\"%s\"%s%s --lib \"%s\" \"%s\" \"%s\"",
-                 tc.compiler, emit_flag, with_flag, tc.lib_dir, input, output);
-    } else {
-        snprintf(cmd, cmd_size, "\"%s\"%s%s \"%s\" \"%s\"",
-                 tc.compiler, emit_flag, with_flag, input, output);
+    /* Emit one `--lib <dir>` per entry rather than a single
+     * `--lib "a:b:c"` separator-string. Each arg is therefore a
+     * plain directory path — survives cmd.exe, MSYS2, and any
+     * other shell quoting without depending on `;` or `:`
+     * preservation inside double quotes. Issue #413. */
+    char lib_flags[2304] = "";
+    size_t lf_off = 0;
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        int w = snprintf(lib_flags + lf_off, sizeof(lib_flags) - lf_off,
+                         " --lib \"%s\"", tc.lib_dirs[i]);
+        if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
+        lf_off += (size_t)w;
     }
+    snprintf(cmd, cmd_size, "\"%s\"%s%s%s \"%s\" \"%s\"",
+             tc.compiler, emit_flag, with_flag, lib_flags, input, output);
 }
 
 // --------------------------------------------------------------------------
@@ -266,34 +322,21 @@ static unsigned long long compute_cache_key(const char* ae_file,
     /* Issue #413: include the --lib search path in the cache key.
      * Two builds of the same source with different lib paths must
      * resolve different imports — they're materially different
-     * outputs and need distinct cache slots. Without this, a
-     * `--lib dirA:dirB` run followed by `--lib dirB:dirA` on the
-     * same source returns the first build's binary, hiding the
-     * precedence flip. Also mtime each individual entry so a
-     * change to a vendored module under the path invalidates the
-     * cache the way a stdlib edit already does. */
-    pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=%s",
-                    tc.lib_dir[0] ? tc.lib_dir : "(default)");
-    if (tc.lib_dir[0]) {
-        /* Reentrant tokeniser — `strtok` carries hidden static
-         * state, so even though the toolchain is single-threaded
-         * today, `strtok_r` is the safer default and costs
-         * nothing. Microsoft's MSVC names it `strtok_s`; the
-         * MinGW64 builds Aether ships on have `strtok_r` as a
-         * normal libc symbol, so this stays portable without
-         * conditional compilation. */
-        char tmp[2048];
-        strncpy(tmp, tc.lib_dir, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-        char sep[2] = { AETHER_LIB_PATH_SEP_CHAR, '\0' };
-        char* save = NULL;
-        for (char* tok = strtok_r(tmp, sep, &save);
-             tok; tok = strtok_r(NULL, sep, &save)) {
-            struct stat lst;
-            if (stat(tok, &lst) == 0) {
-                pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
-                                ":lmt=%lld", (long long)lst.st_mtime);
-            }
+     * outputs and need distinct cache slots. Walk the array
+     * directly (no separator-string round-trip) so order and
+     * dedup are reflected in the key. mtime each entry so a change
+     * to a vendored module under the path invalidates the cache
+     * the way a stdlib edit already does. */
+    if (tc.lib_dir_count == 0) {
+        pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=(default)");
+    }
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
+                        ":lib[%d]=%s", i, tc.lib_dirs[i]);
+        struct stat lst;
+        if (stat(tc.lib_dirs[i], &lst) == 0) {
+            pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
+                            ":lmt=%lld", (long long)lst.st_mtime);
         }
     }
 
@@ -2003,12 +2046,20 @@ static int cmd_check(int argc, char** argv) {
         return 1;
     }
 
-    char cmd[4096];
-    if (tc.lib_dir[0]) {
-        snprintf(cmd, sizeof(cmd), "\"%s\" --lib \"%s\" --check \"%s\"", tc.compiler, tc.lib_dir, file);
-    } else {
-        snprintf(cmd, sizeof(cmd), "\"%s\" --check \"%s\"", tc.compiler, file);
+    /* Build the same `--lib X --lib Y …` flag sequence the compile
+     * path uses (cc_command_build); one flag per entry sidesteps
+     * shell quoting on cmd.exe + MSYS2. Issue #413. */
+    char lib_flags[2304] = "";
+    size_t lf_off = 0;
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        int w = snprintf(lib_flags + lf_off, sizeof(lib_flags) - lf_off,
+                         " --lib \"%s\"", tc.lib_dirs[i]);
+        if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
+        lf_off += (size_t)w;
     }
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "\"%s\"%s --check \"%s\"",
+             tc.compiler, lib_flags, file);
     return run_cmd(cmd);
 }
 
@@ -5920,26 +5971,22 @@ static int cmd_lib_path(int argc, char** argv) {
         }
     }
     /* CLI --lib flags win; env var seeds the chain if no flags set it.
-     * Default = `lib` if neither. */
-    const char* chain = tc.lib_dir[0] ? tc.lib_dir : getenv("AETHER_LIB_DIR");
-    if (!chain || !*chain) chain = "lib";
-    /* Walk the chain, printing one entry per line. Same parser as
-     * compiler/aether_module.c's module_set_lib_dir so the output
-     * matches what the real toolchain would see byte-for-byte. */
-    char buf[2048];
-    strncpy(buf, chain, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-    char sep[2] = { AETHER_LIB_PATH_SEP_CHAR, '\0' };
-    char* save = NULL;
-    int printed = 0;
-    for (char* tok = strtok_r(buf, sep, &save);
-         tok; tok = strtok_r(NULL, sep, &save)) {
-        if (*tok) {
-            puts(tok);
-            printed++;
+     * Default = `lib` if neither. Walk the resolved array directly so
+     * the output matches what the real toolchain would see byte-for-
+     * byte (same normalisation, same dedup, same trailing-slash rule). */
+    if (tc.lib_dir_count == 0) {
+        const char* env = getenv("AETHER_LIB_DIR");
+        if (env && *env) {
+            tc_lib_dir_append(env);
         }
     }
-    if (!printed) puts("lib");
+    if (tc.lib_dir_count == 0) {
+        puts("lib");
+        return 0;
+    }
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        puts(tc.lib_dirs[i]);
+    }
     return 0;
 }
 

@@ -1261,7 +1261,35 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "--lib requires an argument\n");
                 return 1;
             }
-            module_set_lib_dir(argv[arg_offset + 1]);
+            /* First --lib resets the chain (overriding any AETHER_LIB_DIR
+             * env-var seed); subsequent --lib flags append. This lets the
+             * `ae` CLI emit one `--lib <X>` per resolved entry without
+             * needing platform-fragile separator-string quoting at the
+             * shell layer (cmd.exe + MSYS2 mangle `;` inside quoted args).
+             * Issue #413. */
+            static int seen_lib_flag = 0;
+            if (!seen_lib_flag) {
+                module_set_lib_dir(argv[arg_offset + 1]);
+                seen_lib_flag = 1;
+            } else {
+                /* Separator-string still honoured per entry so a single
+                 * `--lib "a:b"` from a human shell user keeps working. */
+                const char* spec = argv[arg_offset + 1];
+                const char* cur = spec;
+                char buf[256];
+                while (*cur) {
+                    const char* next = strchr(cur, AETHER_LIB_PATH_SEP_CHAR);
+                    size_t len = next ? (size_t)(next - cur) : strlen(cur);
+                    if (len > 0) {
+                        if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+                        memcpy(buf, cur, len);
+                        buf[len] = '\0';
+                        module_add_lib_dir(buf);
+                    }
+                    if (!next) break;
+                    cur = next + 1;
+                }
+            }
             arg_offset += 2;
         } else if (strncmp(argv[arg_offset], "--emit=", 7) == 0) {
             const char* val = argv[arg_offset] + 7;
