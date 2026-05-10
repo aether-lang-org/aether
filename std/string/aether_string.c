@@ -303,12 +303,19 @@ char* string_substring(const void* str, int start, int end) {
 char* string_substring_n(const void* str, int str_len_bytes, int start, int end) {
     if (!str) return NULL;
     if (str_len_bytes < 0) str_len_bytes = 0;
-    /* Skip str_data dispatch — we trust the caller's length and
-     * treat `str` as a raw byte pointer regardless of whether it
-     * carries an AetherString header. The auto-unwrap at the call
-     * site has already given us the payload pointer in the common
-     * case; honouring the header here would be inconsistent. */
-    const char* sdata = (const char*)str;
+    /* Resolve to the payload through str_data so we work uniformly
+     * for both AetherString* inputs (bytes.finish, string_concat_wrapped,
+     * string_new_with_length, fs.read_binary, etc.) and bare char*
+     * inputs (literals, the unwrapped-return string_concat). The
+     * codegen's auto-unwrap pass at the call site is SKIPPED for
+     * `string_*`-prefixed externs (is_stdlib_string_aware_extern), so
+     * this function must do its own header dispatch.
+     *
+     * `str_len_bytes` stays authoritative for slice bounds — we do
+     * NOT replace it with str_len(str). Callers may have tracked the
+     * length themselves through binary content with embedded NULs,
+     * which is the whole reason the `_n` variant exists. */
+    const char* sdata = str_data(str);
     if (start < 0) start = 0;
     if (end > str_len_bytes) end = str_len_bytes;
     if (start >= end) {
