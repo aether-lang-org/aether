@@ -90,6 +90,30 @@ run_case "left-most wins on collision" \
     "foo=B bar=bar-from-B" \
     "$AE" run "$SCRIPT_DIR/main.ae" --lib "$SCRIPT_DIR/dirB${SEP}$SCRIPT_DIR/dirA"
 
+# Case 6: trailing-slash normalisation — `--lib ./lib/` and
+# `--lib ./lib` resolve to the same entry, lookup paths stay
+# clean (`<entry>/<module>.ae` not `./lib//<module>.ae`).
+run_case "trailing-slash normalised" \
+    "foo=A bar=bar-from-B" \
+    "$AE" run "$SCRIPT_DIR/main.ae" --lib "$SCRIPT_DIR/dirA/${SEP}$SCRIPT_DIR/dirB/"
+
+# Case 7: `ae lib-path` introspection. Print the resolved chain and
+# assert each entry appears on its own line, in order.
+out=$("$AE" lib-path --lib "$SCRIPT_DIR/dirA${SEP}$SCRIPT_DIR/dirB" 2>&1)
+expected="$SCRIPT_DIR/dirA
+$SCRIPT_DIR/dirB"
+if [ "$out" = "$expected" ]; then
+    echo "  [PASS] ae lib-path introspection"
+    pass=$((pass + 1))
+else
+    echo "  [FAIL] ae lib-path introspection"
+    echo "    expected:"
+    printf '      %s\n' "$expected"
+    echo "    got:"
+    printf '      %s\n' "$out"
+    fail=$((fail + 1))
+fi
+
 echo
 echo "run_lib_path: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

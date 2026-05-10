@@ -110,12 +110,12 @@ static Toolchain tc = {0};
  * separator. Used by every `--lib <dir>` flag site so that repeated
  * flags COMPOSE (`--lib a --lib b` → `a:b`) the same way a
  * separator-string `--lib a:b` does — both forms feed the same
- * underlying lib search path on the aetherc side. Issue #413. */
-#ifdef _WIN32
-#define AETHER_LIB_PATH_SEP_CHAR ';'
-#else
-#define AETHER_LIB_PATH_SEP_CHAR ':'
-#endif
+ * underlying lib search path on the aetherc side. The separator
+ * macro lives in `compiler/aether_lib_path.h` (a tiny dedicated
+ * header) so the compiler-side parser and the tools-side appender
+ * share a single source of truth without pulling AST headers into
+ * the CLI build. Issue #413. */
+#include "../compiler/aether_lib_path.h"
 static void tc_lib_dir_append(const char* dir) {
     if (!dir || !dir[0]) return;
     size_t cap = sizeof(tc.lib_dir);
@@ -275,11 +275,20 @@ static unsigned long long compute_cache_key(const char* ae_file,
     pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=%s",
                     tc.lib_dir[0] ? tc.lib_dir : "(default)");
     if (tc.lib_dir[0]) {
+        /* Reentrant tokeniser — `strtok` carries hidden static
+         * state, so even though the toolchain is single-threaded
+         * today, `strtok_r` is the safer default and costs
+         * nothing. Microsoft's MSVC names it `strtok_s`; the
+         * MinGW64 builds Aether ships on have `strtok_r` as a
+         * normal libc symbol, so this stays portable without
+         * conditional compilation. */
         char tmp[2048];
         strncpy(tmp, tc.lib_dir, sizeof(tmp) - 1);
         tmp[sizeof(tmp) - 1] = '\0';
         char sep[2] = { AETHER_LIB_PATH_SEP_CHAR, '\0' };
-        for (char* tok = strtok(tmp, sep); tok; tok = strtok(NULL, sep)) {
+        char* save = NULL;
+        for (char* tok = strtok_r(tmp, sep, &save);
+             tok; tok = strtok_r(NULL, sep, &save)) {
             struct stat lst;
             if (stat(tok, &lst) == 0) {
                 pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
@@ -5822,6 +5831,7 @@ static void print_usage(void) {
     printf("  add <package>        Add a dependency\n");
     printf("  cache [clear]        Show or clear build cache\n");
     printf("  cflags               Print -I/-L/-laether for embedding in external builds\n");
+    printf("  lib-path             Print the resolved module-search chain\n");
     printf("  examples             List and run example programs\n");
     printf("  repl                 Start interactive REPL\n");
     printf("  version              Show version / manage installed versions\n");
@@ -5873,6 +5883,65 @@ typedef struct {
     int         closure_count;
     const void* closures;
 } _AeLibInfoMeta;
+
+/* `ae lib-path` — introspect the resolved module-search chain.
+ *
+ * Prints the directories `ae run` / `ae build` would search for
+ * `import foo` resolution, one per line, in order. Same shape as
+ * `python -c "import sys; print(*sys.path,sep='\n')"`. Resolves
+ * from the same inputs the real build path uses — repeated
+ * `--lib` flags, separator-string `--lib a:b`, AETHER_LIB_DIR env
+ * var — so the output answers "what would the toolchain see right
+ * now?" without having to read the user's shell config.
+ *
+ * Usage:
+ *     ae lib-path                      # default chain (just `lib`)
+ *     ae lib-path --lib a --lib b      # show what these flags resolve to
+ *     AETHER_LIB_DIR=a:b ae lib-path   # show what the env var resolves to
+ *
+ * Issue #413. */
+static int cmd_lib_path(int argc, char** argv) {
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
+            tc_lib_dir_append(argv[++i]);
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("Usage: ae lib-path [--lib <dir>%c<dir>...]...\n",
+                   AETHER_LIB_PATH_SEP_CHAR);
+            printf("  Print the resolved module-search chain in order.\n");
+            printf("  Useful for debugging \"why isn't my import resolving?\"\n");
+            printf("  Inputs (in priority order, highest first):\n");
+            printf("    1. --lib flags on this command line\n");
+            printf("    2. AETHER_LIB_DIR env var\n");
+            printf("    3. default: `lib`\n");
+            return 0;
+        } else {
+            fprintf(stderr, "ae lib-path: unknown option '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+    /* CLI --lib flags win; env var seeds the chain if no flags set it.
+     * Default = `lib` if neither. */
+    const char* chain = tc.lib_dir[0] ? tc.lib_dir : getenv("AETHER_LIB_DIR");
+    if (!chain || !*chain) chain = "lib";
+    /* Walk the chain, printing one entry per line. Same parser as
+     * compiler/aether_module.c's module_set_lib_dir so the output
+     * matches what the real toolchain would see byte-for-byte. */
+    char buf[2048];
+    strncpy(buf, chain, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char sep[2] = { AETHER_LIB_PATH_SEP_CHAR, '\0' };
+    char* save = NULL;
+    int printed = 0;
+    for (char* tok = strtok_r(buf, sep, &save);
+         tok; tok = strtok_r(NULL, sep, &save)) {
+        if (*tok) {
+            puts(tok);
+            printed++;
+        }
+    }
+    if (!printed) puts("lib");
+    return 0;
+}
 
 static int cmd_lib_info(int argc, char** argv) {
 #ifdef _WIN32
@@ -6028,6 +6097,7 @@ int main(int argc, char** argv) {
     if (strcmp(cmd, "cflags") == 0)   return cmd_cflags(sub_argc, sub_argv);
     if (strcmp(cmd, "repl") == 0)     return cmd_repl();
     if (strcmp(cmd, "lib-info") == 0) return cmd_lib_info(sub_argc, sub_argv);
+    if (strcmp(cmd, "lib-path") == 0) return cmd_lib_path(sub_argc, sub_argv);
 
     fprintf(stderr, "Unknown command '%s'. Run 'ae help' for usage.\n", cmd);
     return 1;

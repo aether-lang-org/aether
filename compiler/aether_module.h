@@ -2,6 +2,7 @@
 #define AETHER_MODULE_H
 
 #include "ast.h"
+#include "aether_lib_path.h"  /* AETHER_LIB_DIRS_MAX, AETHER_LIB_PATH_SEP_CHAR */
 
 // Module system for Aether
 // Supports: import/export, package management
@@ -16,14 +17,6 @@ typedef struct {
     char** imports;       // Imported modules
     int import_count;
 } AetherModule;
-
-// Maximum number of entries in the lib-search path. PATH-style chains
-// of length > 8 are unheard-of in practice; a fixed array keeps the
-// hot lookup path malloc-free. Overflow is treated as "list full —
-// later entries silently dropped with a one-line stderr warning"
-// rather than a hard error, so a misconfigured shell `AETHER_LIB_DIR`
-// can't crash the toolchain. Issue #413.
-#define AETHER_LIB_DIRS_MAX 8
 
 // Module registry
 typedef struct {

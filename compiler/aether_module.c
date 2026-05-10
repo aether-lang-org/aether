@@ -37,34 +37,37 @@ void module_set_source_dir(const char* source_path) {
     }
 }
 
-/* PATH-style separator: `:` on POSIX, `;` on Windows. Same convention
- * as Java -cp / Python PYTHONPATH / Ruby RUBYLIB. Choosing the
- * platform-native separator keeps `AETHER_LIB_DIR=/a:/b` unambiguous
- * on POSIX (where `:` cannot occur in a directory name) and
- * `AETHER_LIB_DIR=C:\a;C:\b` unambiguous on Windows (where `:` is
- * part of every drive-letter path). Issue #413. */
-#ifdef _WIN32
-#define AETHER_LIB_PATH_SEP ';'
-#else
-#define AETHER_LIB_PATH_SEP ':'
-#endif
-
 void module_add_lib_dir(const char* dir) {
     module_registry_init();
     if (!dir || !dir[0]) return;
+    /* Normalise: strip trailing slash so `--lib ./lib/` and
+     * `--lib ./lib` resolve to the same entry (dedup catches them)
+     * AND the joined lookup path stays clean (`<entry>/<mod>.ae`
+     * rather than `./lib//<mod>.ae`). Root paths ("/" on POSIX,
+     * "C:\" on Windows) are preserved — stripping their slash
+     * would change semantics. */
+    char norm[256];
+    strncpy(norm, dir, sizeof(norm) - 1);
+    norm[sizeof(norm) - 1] = '\0';
+    size_t nlen = strlen(norm);
+    while (nlen > 1 &&
+           (norm[nlen - 1] == '/' || norm[nlen - 1] == '\\') &&
+           norm[nlen - 2] != ':') {
+        norm[--nlen] = '\0';
+    }
     /* Skip duplicates so repeated `--lib /same/dir` doesn't waste
      * search slots. O(N) check over a fixed cap-of-8 list — trivial. */
     for (int i = 0; i < global_module_registry->lib_dir_count; i++) {
-        if (strcmp(global_module_registry->lib_dirs[i], dir) == 0) return;
+        if (strcmp(global_module_registry->lib_dirs[i], norm) == 0) return;
     }
     if (global_module_registry->lib_dir_count >= AETHER_LIB_DIRS_MAX) {
         fprintf(stderr,
             "warning: --lib search path is full (max %d entries); "
-            "ignoring '%s'\n", AETHER_LIB_DIRS_MAX, dir);
+            "ignoring '%s'\n", AETHER_LIB_DIRS_MAX, norm);
         return;
     }
     int idx = global_module_registry->lib_dir_count;
-    strncpy(global_module_registry->lib_dirs[idx], dir,
+    strncpy(global_module_registry->lib_dirs[idx], norm,
             sizeof(global_module_registry->lib_dirs[idx]) - 1);
     global_module_registry->lib_dirs[idx][sizeof(global_module_registry->lib_dirs[idx]) - 1] = '\0';
     global_module_registry->lib_dir_count++;
@@ -83,7 +86,7 @@ void module_set_lib_dir(const char* lib_dir) {
     const char* cur = lib_dir;
     char buf[256];
     while (*cur) {
-        const char* next = strchr(cur, AETHER_LIB_PATH_SEP);
+        const char* next = strchr(cur, AETHER_LIB_PATH_SEP_CHAR);
         size_t len = next ? (size_t)(next - cur) : strlen(cur);
         if (len > 0) {
             if (len >= sizeof(buf)) len = sizeof(buf) - 1;

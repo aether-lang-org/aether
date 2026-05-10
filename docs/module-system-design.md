@@ -320,6 +320,27 @@ Both forms can be mixed (`--lib a:b --lib c` → `[a, b, c]`). The default is th
 
 The shape matches Java `-cp`, Python `PYTHONPATH`, Ruby `-I` / `RUBYLIB`. Useful for layering project-local modules over a vendored stdlib, sharing a common lib root across two projects, or pinning a stdlib snapshot alongside HEAD-tracking deps.
 
+Trailing slashes are normalised: `--lib ./lib/` and `--lib ./lib` register the same entry (the dedup catches them), and lookup paths stay clean — `<entry>/<module>.ae` rather than `./lib//<module>.ae`. Root paths (`/` on POSIX, `C:\` on Windows) are preserved as-is.
+
+#### Introspecting the resolved chain
+
+`ae lib-path` prints the resolved search order, one entry per line, in the same order the toolchain walks them. Useful when debugging "why isn't my import resolving?" without re-reading the user's shell config:
+
+```sh
+$ ae lib-path --lib ./lib:./vendor/stdlib
+./lib
+./vendor/stdlib
+
+$ AETHER_LIB_DIR=/usr/share/aether:./local ae lib-path
+/usr/share/aether
+./local
+
+$ ae lib-path                          # defaults — single entry
+lib
+```
+
+Inputs are merged in the same priority order the build path uses: explicit `--lib` flags first, then `AETHER_LIB_DIR`, then the default `lib`.
+
 ### Namespace Convention
 
 Function names must be prefixed with the namespace:
