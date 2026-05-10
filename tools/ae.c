@@ -138,11 +138,17 @@ static void tc_lib_dir_append_one(const char* dir) {
     if (!dir || !dir[0]) return;
     /* Normalise trailing slash — matches the compiler-side
      * `module_add_lib_dir` normalisation so dedup catches
-     * `./lib` vs `./lib/` cleanly. */
+     * `./lib` vs `./lib/` cleanly.
+     *
+     * memcpy with an explicit length (not `strncpy(dst, src,
+     * sizeof(dst)-1)`) keeps GCC's `-Wstringop-truncation` happy
+     * AND is the faster shape — single bulk copy of a known-good
+     * byte count, no per-byte NUL scan inside libc. */
     char norm[256];
-    strncpy(norm, dir, sizeof(norm) - 1);
-    norm[sizeof(norm) - 1] = '\0';
-    size_t nlen = strlen(norm);
+    size_t nlen = strlen(dir);
+    if (nlen >= sizeof(norm)) nlen = sizeof(norm) - 1;
+    memcpy(norm, dir, nlen);
+    norm[nlen] = '\0';
     while (nlen > 1 &&
            (norm[nlen - 1] == '/' || norm[nlen - 1] == '\\') &&
            norm[nlen - 2] != ':') {
@@ -158,8 +164,10 @@ static void tc_lib_dir_append_one(const char* dir) {
         return;
     }
     int idx = tc.lib_dir_count;
-    strncpy(tc.lib_dirs[idx], norm, sizeof(tc.lib_dirs[idx]) - 1);
-    tc.lib_dirs[idx][sizeof(tc.lib_dirs[idx]) - 1] = '\0';
+    /* +1 carries the NUL. nlen is post-normalisation length,
+     * always < sizeof(lib_dirs[idx]). Same warning + perf
+     * rationale as above. */
+    memcpy(tc.lib_dirs[idx], norm, nlen + 1);
     tc.lib_dir_count++;
 }
 static void tc_lib_dir_append(const char* spec) {

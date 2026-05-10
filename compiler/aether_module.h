@@ -106,6 +106,14 @@ void module_set_lib_dir(const char* lib_dir);
 // AETHER_LIB_DIRS_MAX. Issue #413.
 void module_add_lib_dir(const char* dir);
 
+// Append a separator-string of directories ("a:b:c" POSIX,
+// "a;b;c" Windows) to the lib search path. Each segment is routed
+// through `module_add_lib_dir` so normalisation, dedup, and the
+// cap behave identically to repeated flags. Single source of truth
+// for separator parsing — both `module_set_lib_dir` and aetherc's
+// `--lib` handler call this. Issue #413.
+void module_add_lib_dirs(const char* spec);
+
 // Orchestrate all module loading: scan imports, resolve, parse, cache, detect cycles.
 // Returns 1 on success, 0 on circular dependency error.
 int module_orchestrate(ASTNode* program);

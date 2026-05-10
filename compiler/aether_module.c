@@ -45,11 +45,17 @@ void module_add_lib_dir(const char* dir) {
      * AND the joined lookup path stays clean (`<entry>/<mod>.ae`
      * rather than `./lib//<mod>.ae`). Root paths ("/" on POSIX,
      * "C:\" on Windows) are preserved — stripping their slash
-     * would change semantics. */
+     * would change semantics.
+     *
+     * memcpy with an explicit length (rather than strncpy with
+     * `sizeof(dst)-1`) keeps GCC's `-Wstringop-truncation` happy
+     * AND is the faster shape — one bulk copy of a known-good
+     * byte count, no per-byte NUL scan. */
     char norm[256];
-    strncpy(norm, dir, sizeof(norm) - 1);
-    norm[sizeof(norm) - 1] = '\0';
-    size_t nlen = strlen(norm);
+    size_t nlen = strlen(dir);
+    if (nlen >= sizeof(norm)) nlen = sizeof(norm) - 1;
+    memcpy(norm, dir, nlen);
+    norm[nlen] = '\0';
     while (nlen > 1 &&
            (norm[nlen - 1] == '/' || norm[nlen - 1] == '\\') &&
            norm[nlen - 2] != ':') {
@@ -67,23 +73,24 @@ void module_add_lib_dir(const char* dir) {
         return;
     }
     int idx = global_module_registry->lib_dir_count;
-    strncpy(global_module_registry->lib_dirs[idx], norm,
-            sizeof(global_module_registry->lib_dirs[idx]) - 1);
-    global_module_registry->lib_dirs[idx][sizeof(global_module_registry->lib_dirs[idx]) - 1] = '\0';
+    /* +1 includes the NUL — `nlen` is post-normalisation length,
+     * always < sizeof(lib_dirs[idx]). memcpy here too: same warning
+     * + perf rationale. */
+    memcpy(global_module_registry->lib_dirs[idx], norm, nlen + 1);
     global_module_registry->lib_dir_count++;
 }
 
-void module_set_lib_dir(const char* lib_dir) {
+void module_add_lib_dirs(const char* spec) {
+    if (!spec || !spec[0]) return;
     module_registry_init();
-    if (!lib_dir || !lib_dir[0]) return;
-    /* RESET the list — a fresh `--lib <path>` (or
-     * `AETHER_LIB_DIR=<path>`) replaces, doesn't append. */
-    global_module_registry->lib_dir_count = 0;
-    /* Split on the platform path separator. Each segment is then
-     * appended via module_add_lib_dir, which dedupes and enforces
-     * the cap. Empty segments (e.g. trailing `:`, double `::`) are
-     * silently skipped — matches Java -cp and PATH semantics. */
-    const char* cur = lib_dir;
+    /* Split on the platform path separator. Each segment is
+     * appended via module_add_lib_dir, which normalises, dedupes,
+     * and enforces the cap. Empty segments (e.g. trailing `:`,
+     * double `::`) are silently skipped — matches Java -cp and
+     * PATH semantics. Single source of truth for separator
+     * parsing — both `module_set_lib_dir` and aetherc's repeated
+     * `--lib` handler route through here. */
+    const char* cur = spec;
     char buf[256];
     while (*cur) {
         const char* next = strchr(cur, AETHER_LIB_PATH_SEP_CHAR);
@@ -97,8 +104,19 @@ void module_set_lib_dir(const char* lib_dir) {
         if (!next) break;
         cur = next + 1;
     }
-    /* Defensive: an entirely-empty path should fall back to the
-     * default so the toolchain still finds stdlib modules. */
+}
+
+void module_set_lib_dir(const char* lib_dir) {
+    module_registry_init();
+    if (!lib_dir || !lib_dir[0]) return;
+    /* RESET — a fresh `--lib <path>` (or `AETHER_LIB_DIR=<path>`)
+     * replaces, doesn't append. The append-form is
+     * `module_add_lib_dirs`. */
+    global_module_registry->lib_dir_count = 0;
+    module_add_lib_dirs(lib_dir);
+    /* Defensive: an entirely-empty path (all separators, no
+     * segments) should fall back to the default so the toolchain
+     * still finds stdlib modules. */
     if (global_module_registry->lib_dir_count == 0) {
         module_add_lib_dir("lib");
     }
