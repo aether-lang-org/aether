@@ -17,13 +17,27 @@ typedef struct {
     int import_count;
 } AetherModule;
 
+// Maximum number of entries in the lib-search path. PATH-style chains
+// of length > 8 are unheard-of in practice; a fixed array keeps the
+// hot lookup path malloc-free. Overflow is treated as "list full —
+// later entries silently dropped with a one-line stderr warning"
+// rather than a hard error, so a misconfigured shell `AETHER_LIB_DIR`
+// can't crash the toolchain. Issue #413.
+#define AETHER_LIB_DIRS_MAX 8
+
 // Module registry
 typedef struct {
     AetherModule** modules;
     int module_count;
     int module_capacity;
     char source_dir[2048];  // Source file directory for relative resolution
-    char lib_dir[256];      // Custom lib folder name (default: "lib")
+    // Lib-search path: an ordered list of directories (PATH-style),
+    // searched left-to-right; first hit wins. Issue #413. Default is
+    // a single entry, `"lib"`, populated at registry init. Each entry
+    // is a fixed 256-byte buffer; the count tracks how many slots
+    // are live.
+    char lib_dirs[AETHER_LIB_DIRS_MAX][256];
+    int  lib_dir_count;
 } ModuleRegistry;
 
 // Global module registry
@@ -84,9 +98,20 @@ void package_manifest_free(PackageManifest* manifest);
 // Set the source file directory so module resolution can search lib/ relative to it.
 void module_set_source_dir(const char* source_path);
 
-// Set the lib folder name for module resolution (default: "lib").
-// Use --lib flag to change, e.g. --lib .aeb
+// Set the lib search path for module resolution. The argument may be
+// a single directory (`"lib"`, `".aeb"`) or a PATH-style list (e.g.
+// `"./lib:~/aether-libs"` on POSIX, `"./lib;C:/aether-libs"` on
+// Windows). Each entry is appended to the search list in order; the
+// list is RESET on every call so passing a single path overrides any
+// existing entries. Use `module_add_lib_dir` to append without
+// clearing. Default is the single entry `"lib"`. Issue #413.
 void module_set_lib_dir(const char* lib_dir);
+
+// Append a single directory to the lib search path. Used by `ae run
+// --lib a --lib b` to compose paths from repeated flags. Silently
+// no-ops on NULL or empty input and on overflow past
+// AETHER_LIB_DIRS_MAX. Issue #413.
+void module_add_lib_dir(const char* dir);
 
 // Orchestrate all module loading: scan imports, resolve, parse, cache, detect cycles.
 // Returns 1 on success, 0 on circular dependency error.

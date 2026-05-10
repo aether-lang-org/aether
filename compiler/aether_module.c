@@ -37,11 +37,68 @@ void module_set_source_dir(const char* source_path) {
     }
 }
 
+/* PATH-style separator: `:` on POSIX, `;` on Windows. Same convention
+ * as Java -cp / Python PYTHONPATH / Ruby RUBYLIB. Choosing the
+ * platform-native separator keeps `AETHER_LIB_DIR=/a:/b` unambiguous
+ * on POSIX (where `:` cannot occur in a directory name) and
+ * `AETHER_LIB_DIR=C:\a;C:\b` unambiguous on Windows (where `:` is
+ * part of every drive-letter path). Issue #413. */
+#ifdef _WIN32
+#define AETHER_LIB_PATH_SEP ';'
+#else
+#define AETHER_LIB_PATH_SEP ':'
+#endif
+
+void module_add_lib_dir(const char* dir) {
+    module_registry_init();
+    if (!dir || !dir[0]) return;
+    /* Skip duplicates so repeated `--lib /same/dir` doesn't waste
+     * search slots. O(N) check over a fixed cap-of-8 list — trivial. */
+    for (int i = 0; i < global_module_registry->lib_dir_count; i++) {
+        if (strcmp(global_module_registry->lib_dirs[i], dir) == 0) return;
+    }
+    if (global_module_registry->lib_dir_count >= AETHER_LIB_DIRS_MAX) {
+        fprintf(stderr,
+            "warning: --lib search path is full (max %d entries); "
+            "ignoring '%s'\n", AETHER_LIB_DIRS_MAX, dir);
+        return;
+    }
+    int idx = global_module_registry->lib_dir_count;
+    strncpy(global_module_registry->lib_dirs[idx], dir,
+            sizeof(global_module_registry->lib_dirs[idx]) - 1);
+    global_module_registry->lib_dirs[idx][sizeof(global_module_registry->lib_dirs[idx]) - 1] = '\0';
+    global_module_registry->lib_dir_count++;
+}
+
 void module_set_lib_dir(const char* lib_dir) {
     module_registry_init();
     if (!lib_dir || !lib_dir[0]) return;
-    strncpy(global_module_registry->lib_dir, lib_dir, sizeof(global_module_registry->lib_dir) - 1);
-    global_module_registry->lib_dir[sizeof(global_module_registry->lib_dir) - 1] = '\0';
+    /* RESET the list — a fresh `--lib <path>` (or
+     * `AETHER_LIB_DIR=<path>`) replaces, doesn't append. */
+    global_module_registry->lib_dir_count = 0;
+    /* Split on the platform path separator. Each segment is then
+     * appended via module_add_lib_dir, which dedupes and enforces
+     * the cap. Empty segments (e.g. trailing `:`, double `::`) are
+     * silently skipped — matches Java -cp and PATH semantics. */
+    const char* cur = lib_dir;
+    char buf[256];
+    while (*cur) {
+        const char* next = strchr(cur, AETHER_LIB_PATH_SEP);
+        size_t len = next ? (size_t)(next - cur) : strlen(cur);
+        if (len > 0) {
+            if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+            memcpy(buf, cur, len);
+            buf[len] = '\0';
+            module_add_lib_dir(buf);
+        }
+        if (!next) break;
+        cur = next + 1;
+    }
+    /* Defensive: an entirely-empty path should fall back to the
+     * default so the toolchain still finds stdlib modules. */
+    if (global_module_registry->lib_dir_count == 0) {
+        module_add_lib_dir("lib");
+    }
 }
 
 // Module management
@@ -52,10 +109,16 @@ void module_registry_init() {
         global_module_registry->module_count = 0;
         global_module_registry->module_capacity = 0;
         global_module_registry->source_dir[0] = '\0';
+        global_module_registry->lib_dir_count = 0;
         const char* env_lib = getenv("AETHER_LIB_DIR");
-        const char* lib_default = (env_lib && env_lib[0]) ? env_lib : "lib";
-        strncpy(global_module_registry->lib_dir, lib_default, sizeof(global_module_registry->lib_dir) - 1);
-        global_module_registry->lib_dir[sizeof(global_module_registry->lib_dir) - 1] = '\0';
+        if (env_lib && env_lib[0]) {
+            /* Reuse module_set_lib_dir's parser so the env var
+             * accepts the same separator-string form as --lib.
+             * Issue #413. */
+            module_set_lib_dir(env_lib);
+        } else {
+            module_add_lib_dir("lib");
+        }
     }
 }
 
@@ -530,13 +593,19 @@ char* module_resolve_local_path(const char* module_path) {
         if (*p == '.') *p = '/';
     }
 
-    // Try 1: {lib_dir}/module_path/module.ae (CWD-relative)
-    snprintf(path, sizeof(path), "%s/%s/module.ae", global_module_registry->lib_dir, converted);
-    if (access(path, F_OK) == 0) return strdup(path);
-
-    // Try 2: {lib_dir}/module_path.ae
-    snprintf(path, sizeof(path), "%s/%s.ae", global_module_registry->lib_dir, converted);
-    if (access(path, F_OK) == 0) return strdup(path);
+    /* Try 1/2: search every CWD-relative lib_dirs[] entry in order,
+     * first hit wins. Each entry probes both shapes (`<entry>/
+     * <module>/module.ae` then `<entry>/<module>.ae`) so the
+     * historical resolution semantics for any single entry are
+     * preserved — what's new is the loop over multiple roots.
+     * Issue #413. */
+    for (int li = 0; li < global_module_registry->lib_dir_count; li++) {
+        const char* lib = global_module_registry->lib_dirs[li];
+        snprintf(path, sizeof(path), "%s/%s/module.ae", lib, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s/%s.ae", lib, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+    }
 
     // Try 3: src/module_path/module.ae
     snprintf(path, sizeof(path), "src/%s/module.ae", converted);
@@ -556,10 +625,16 @@ char* module_resolve_local_path(const char* module_path) {
 
     // Try 6b: Search relative to source file directory
     if (global_module_registry->source_dir[0]) {
-        snprintf(path, sizeof(path), "%s%s/%s/module.ae", global_module_registry->source_dir, global_module_registry->lib_dir, converted);
-        if (access(path, F_OK) == 0) return strdup(path);
-        snprintf(path, sizeof(path), "%s%s/%s.ae", global_module_registry->source_dir, global_module_registry->lib_dir, converted);
-        if (access(path, F_OK) == 0) return strdup(path);
+        /* Mirror the CWD-relative loop above, but anchored at the
+         * source file's directory. Same left-to-right semantics
+         * across the multi-entry lib path. Issue #413. */
+        for (int li = 0; li < global_module_registry->lib_dir_count; li++) {
+            const char* lib = global_module_registry->lib_dirs[li];
+            snprintf(path, sizeof(path), "%s%s/%s/module.ae", global_module_registry->source_dir, lib, converted);
+            if (access(path, F_OK) == 0) return strdup(path);
+            snprintf(path, sizeof(path), "%s%s/%s.ae", global_module_registry->source_dir, lib, converted);
+            if (access(path, F_OK) == 0) return strdup(path);
+        }
         snprintf(path, sizeof(path), "%ssrc/%s/module.ae", global_module_registry->source_dir, converted);
         if (access(path, F_OK) == 0) return strdup(path);
         snprintf(path, sizeof(path), "%ssrc/%s.ae", global_module_registry->source_dir, converted);
@@ -736,6 +811,88 @@ static char* resolve_import_path(ASTNode* import_node) {
     return file_path;
 }
 
+/* Walk `ast`'s top-level for the (selective-import, local-def-with-
+ * same-name) shadow pattern. Emit a diagnostic on the first hit and
+ * return 0; return 1 if no collision. Issue #436 facet A. Used by
+ * orchestrate_module (per-module check) and module_orchestrate
+ * (main program check) — same shape, same diagnostic.
+ *
+ * `ctx_label` is what to call the source in the error message —
+ * the module's name for orchestrate_module, "main program" for
+ * the entry-point AST. `ctx_path` is the .ae path (or NULL).
+ */
+static int check_selective_import_shadow(ASTNode* ast,
+                                          const char* ctx_label,
+                                          const char* ctx_path) {
+    if (!ast) return 1;
+    const char* selected_names[256];
+    const char* selected_from[256];
+    int selected_count = 0;
+    for (int i = 0; i < ast->child_count && selected_count < 256; i++) {
+        ASTNode* child = ast->children[i];
+        if (!child || child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+        for (int sk = 0; sk < child->child_count && selected_count < 256; sk++) {
+            ASTNode* sel = child->children[sk];
+            if (!sel || sel->type != AST_IDENTIFIER || !sel->value) continue;
+            if (sel->annotation &&
+                strcmp(sel->annotation, "module_alias") == 0) continue;
+            selected_names[selected_count] = sel->value;
+            selected_from[selected_count] = child->value;
+            selected_count++;
+        }
+    }
+    if (selected_count == 0) return 1;  /* Fast path. */
+    for (int i = 0; i < ast->child_count; i++) {
+        ASTNode* child = ast->children[i];
+        if (!child) continue;
+        const char* fn_name = NULL;
+        int fn_line = 0, fn_col = 0;
+        if ((child->type == AST_FUNCTION_DEFINITION ||
+             child->type == AST_BUILDER_FUNCTION) && child->value) {
+            fn_name = child->value;
+            fn_line = child->line; fn_col = child->column;
+        } else if (child->type == AST_EXPORT_STATEMENT &&
+                   child->child_count > 0 && child->children[0]) {
+            ASTNode* inner = child->children[0];
+            if ((inner->type == AST_FUNCTION_DEFINITION ||
+                 inner->type == AST_BUILDER_FUNCTION) && inner->value) {
+                fn_name = inner->value;
+                fn_line = inner->line; fn_col = inner->column;
+            }
+        }
+        if (!fn_name) continue;
+        for (int s = 0; s < selected_count; s++) {
+            if (strcmp(fn_name, selected_names[s]) == 0) {
+                fprintf(stderr,
+                    "error[E1000]: %s%s%s%s defines local function '%s' "
+                    "(%d:%d) but also selectively imports '%s' from '%s'\n",
+                    ctx_label,
+                    ctx_path ? " (" : "",
+                    ctx_path ? ctx_path : "",
+                    ctx_path ? ")" : "",
+                    fn_name, fn_line, fn_col,
+                    selected_names[s], selected_from[s]);
+                fprintf(stderr,
+                    "  the local def silently shadows the import, so a "
+                    "bare call to '%s(...)' inside the local body would\n"
+                    "  recurse into the local rather than forward to the "
+                    "imported symbol — at runtime this is a stack\n"
+                    "  overflow with no compile-time signal.\n", fn_name);
+                fprintf(stderr,
+                    "  fix one of:\n"
+                    "    - rename the local function\n"
+                    "    - drop the selective import: `import %s` (then "
+                    "call via the qualified form)\n"
+                    "    - keep both but call the imported version "
+                    "qualified inside the local body\n",
+                    selected_from[s]);
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 // Recursive helper: load a single module and its transitive imports
 static int orchestrate_module(const char* module_name, const char* file_path,
                               DependencyGraph* graph) {
@@ -823,6 +980,22 @@ static int orchestrate_module(const char* module_name, const char* file_path,
         }
     }
 
+    /* Issue #436 (facet A): silent infinite-recursion guard.
+     *
+     * Detect the pattern
+     *   import std.X (length)        // selective import
+     *   length(s: string) -> int {   // local def with same name
+     *       return length(s)          // intent: std.X.length; reality: self
+     *   }
+     *
+     * The merger renames the intra-module call to `mod_length`, the
+     * body becomes self-recursive, runtime stack overflows. Caught
+     * here BEFORE the merger runs. Helper extracted so the same
+     * check applies to the main program AST in module_orchestrate. */
+    char ctx[300];
+    snprintf(ctx, sizeof(ctx), "module '%s'", module_name);
+    if (!check_selective_import_shadow(ast, ctx, file_path)) return 0;
+
     // Add node to dependency graph
     dependency_graph_add_node(graph, module_name);
 
@@ -853,6 +1026,12 @@ static int orchestrate_module(const char* module_name, const char* file_path,
 // parse modules, build dependency graph, detect cycles.
 int module_orchestrate(ASTNode* program) {
     module_registry_init();
+
+    /* Issue #436 facet A: the same selective-import shadow check
+     * orchestrate_module applies per-module also runs against the
+     * entry-point AST, so `import std.X (foo)` + local `foo(...)`
+     * in main.ae itself is caught with the same diagnostic. */
+    if (!check_selective_import_shadow(program, "main program", NULL)) return 0;
 
     DependencyGraph* graph = dependency_graph_create();
     dependency_graph_add_node(graph, "__main__");

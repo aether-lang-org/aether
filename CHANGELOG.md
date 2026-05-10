@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Multi-entry `--lib` search path** (`compiler/aether_module.{c,h}`, `tools/ae.c`, `tests/integration/run_lib_path/`, `docs/module-system-design.md`). Closes #413. `ae run` / `ae build` / `aetherc` and the `AETHER_LIB_DIR` env var all accept PATH-style lists (`./lib:~/aether-libs` on POSIX, `./lib;C:/aether-libs` on Windows) AND compose with repeated `--lib` flags (`--lib a --lib b` ≡ `--lib a:b`). Left-to-right resolution with first-hit-wins; up to 8 entries (overflow warns and drops; tweakable via `AETHER_LIB_DIRS_MAX` if anyone hits it). Cache key now incorporates the lib path AND each entry's mtime, so a precedence flip (`--lib dirA:dirB` vs `--lib dirB:dirA`) and a `touch` inside a vendored module both invalidate the right cache slot. Default unchanged: when neither `--lib` nor `AETHER_LIB_DIR` is set, behaviour is identical to today (a single `lib/` root). Five-case integration test exercises the four documented surfaces (single, multi-explicit, multi-repeated, env-var) plus a precedence-flip case. `ae help` and `aetherc --help` both grow a one-liner documenting the syntax.
+
+### Fixed
+
+- **Selective-import + local-def shadow no longer silently recurses** (`compiler/aether_module.c`, `tests/integration/selective_import_shadow/`, `docs/module-system-design.md`). Closes #436 facet A. A module (or main program) that selectively imports a name AND defines a local function with the same name used to compile successfully and then stack-overflow at runtime — the merger renamed the body's bare call to point at the local def, turning a thin import-forwarding wrapper into self-recursion with no compile-time signal. New orchestrator-level check (`check_selective_import_shadow` in aether_module.c, applied both per-module in `orchestrate_module` and to the entry-point AST in `module_orchestrate`) detects the pattern before merging and rejects with `error[E1000]` — a precise diagnostic naming the colliding local def's source location, the import line it shadows, and three concrete fixes (rename local, drop selective import, use qualified call). Hard error: the alternative (silent runtime stack overflow) is the bug being closed. Covers both `AST_FUNCTION_DEFINITION` and `export <fn>` shapes. (Facet B of #436 — flat C-symbol namespace causing libc collisions like `bind`/`read`/`write` — is a separate codegen change with `@c_callback` interactions that deserves its own PR; explicitly out of scope here.)
+
 ## [0.146.0]
 
 ### Added

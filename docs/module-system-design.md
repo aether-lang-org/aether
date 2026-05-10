@@ -139,6 +139,38 @@ collecting every `export`-tagged name into one `exports (…)` line at
 the top, then removing the per-function keywords. Mixing both forms in
 one module is a hard error.
 
+## Selective-import shadow rejection (#436 facet A)
+
+A module (or main program) that selectively imports a name AND defines a local function with the same name silently shadowed the import:
+
+```aether
+import std.string (length)
+
+length(s: string) -> int {
+    return length(s)        // intent: std.string.length
+                            // reality: self → infinite recursion
+}
+```
+
+Pre-fix, the merger renamed the body's bare `length(s)` to `mod_length(s)` (matching the local def's namespaced name post-merge), turning the wrapper into self-recursion — a runtime stack overflow with no compile-time signal. As of #436 facet A, the orchestrator rejects this pattern with `error[E1000]` before merging:
+
+```
+error[E1000]: module 'mod' (mod/module.ae) defines local function
+'length' (3:1) but also selectively imports 'length' from 'std.string'
+  the local def silently shadows the import, so a bare call to
+  'length(...)' inside the local body would recurse into the local
+  rather than forward to the imported symbol — at runtime this is a
+  stack overflow with no compile-time signal.
+  fix one of:
+    - rename the local function
+    - drop the selective import: `import std.string` (then call via
+      the qualified form)
+    - keep both but call the imported version qualified inside the
+      local body
+```
+
+The same check applies to entry-point `main.ae` files when the shadow lives there directly (not inside a module). Both `AST_FUNCTION_DEFINITION` and `export <fn>` shapes are caught.
+
 ## Future
 
 Work planned on top of the current module system:
@@ -258,8 +290,8 @@ main() {
 
 The compiler searches for local modules in this order:
 
-1. `lib/<module>/module.ae` - Library directory with module file
-2. `lib/<module>.ae` - Single-file module in lib
+1. `<lib-path-entry>/<module>/module.ae` - Library directory with module file
+2. `<lib-path-entry>/<module>.ae` - Single-file module in lib
 3. `src/<module>/module.ae` - Source directory with module file
 4. `src/<module>.ae` - Single-file module in src
 5. `<module>/module.ae` - Project root
@@ -273,6 +305,20 @@ For nested modules like `import mypackage.utils`:
 8. `~/.aether/packages/<name>/module.ae` - Installed package (flat layout)
 
 Packages installed with `ae add` are searched after local paths. The package name is the first component of the import path.
+
+#### Lib search path (#413)
+
+`<lib-path-entry>` in steps 1 and 2 is a list of directories — PATH-style, `:` on POSIX and `;` on Windows. The list is searched left-to-right; the first hit wins. Three forms compose:
+
+```sh
+ae run main.ae --lib ./lib:./vendor/stdlib    # separator-string
+ae run main.ae --lib ./lib --lib ./vendor     # repeated flag
+AETHER_LIB_DIR=./lib:./vendor ae run main.ae  # env var
+```
+
+Both forms can be mixed (`--lib a:b --lib c` → `[a, b, c]`). The default is the single entry `lib` (the legacy behaviour); supplying any explicit `--lib` or `AETHER_LIB_DIR` replaces the default with the given list. Up to 8 entries. Caching invalidates on lib-path changes — two builds of the same source with different `--lib` chains get distinct cache slots, and every entry's mtime feeds into the cache key so a `touch` in a vendored module reuses the right cache bucket.
+
+The shape matches Java `-cp`, Python `PYTHONPATH`, Ruby `-I` / `RUBYLIB`. Useful for layering project-local modules over a vendored stdlib, sharing a common lib root across two projects, or pinning a stdlib snapshot alongside HEAD-tracking deps.
 
 ### Namespace Convention
 

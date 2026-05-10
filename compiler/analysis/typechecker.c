@@ -466,6 +466,14 @@ static int is_selective_import_blocked(const char* ns, const char* func_name) {
     return 1;
 }
 
+/* Note: the (selective-import + local-def-with-same-name) shadow
+ * check that issue #436 facet A targeted lives at the orchestration
+ * layer instead — see check_selective_import_shadow in
+ * compiler/aether_module.c. That position catches the collision
+ * BEFORE the merger renames the local def, so the diagnostic can
+ * cite the original source location and the original import path
+ * without reconstructing them post-merge. */
+
 // Check if a symbol is blocked by export visibility.
 // Returns 1 if blocked (module has exports and symbol isn't one), 0 if allowed.
 static int is_export_blocked(const char* namespace, const char* symbol) {
@@ -1591,7 +1599,7 @@ int typecheck_program(ASTNode* program) {
     // First pass: collect all declarations
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
-        
+
         switch (child->type) {
             case AST_ACTOR_DEFINITION: {
                 // Create actor struct type

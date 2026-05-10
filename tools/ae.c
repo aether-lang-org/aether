@@ -96,10 +96,44 @@ typedef struct {
     bool has_lib;              // Whether precompiled lib exists
     bool dev_mode;             // Running from source tree
     bool verbose;              // Verbose output
-    char lib_dir[256];         // Custom lib folder for module resolution (--lib flag)
+    /* PATH-style lib-search path forwarded to aetherc via --lib.
+     * Each `--lib X` flag appends to this buffer with the platform
+     * separator (':' POSIX, ';' Windows). aetherc splits on the
+     * separator into ModuleRegistry::lib_dirs[]. Issue #413.
+     * Sized for 8 typical entries × 256 bytes + separators. */
+    char lib_dir[2048];
 } Toolchain;
 
 static Toolchain tc = {0};
+
+/* Append a single directory to `tc.lib_dir` with the platform path
+ * separator. Used by every `--lib <dir>` flag site so that repeated
+ * flags COMPOSE (`--lib a --lib b` → `a:b`) the same way a
+ * separator-string `--lib a:b` does — both forms feed the same
+ * underlying lib search path on the aetherc side. Issue #413. */
+#ifdef _WIN32
+#define AETHER_LIB_PATH_SEP_CHAR ';'
+#else
+#define AETHER_LIB_PATH_SEP_CHAR ':'
+#endif
+static void tc_lib_dir_append(const char* dir) {
+    if (!dir || !dir[0]) return;
+    size_t cap = sizeof(tc.lib_dir);
+    size_t cur = strlen(tc.lib_dir);
+    size_t add = strlen(dir);
+    size_t need = cur + (cur ? 1 : 0) + add + 1;
+    if (need > cap) {
+        fprintf(stderr,
+            "warning: --lib path buffer overflow (max %zu chars); "
+            "dropping '%s'\n", cap - 1, dir);
+        return;
+    }
+    if (cur > 0) {
+        tc.lib_dir[cur] = AETHER_LIB_PATH_SEP_CHAR;
+        tc.lib_dir[cur + 1] = '\0';
+    }
+    strncat(tc.lib_dir, dir, cap - strlen(tc.lib_dir) - 1);
+}
 
 // --with=<caps> forwarded verbatim to aetherc. Empty by default; set
 // by cmd_build's arg loop when the user passes `--with=fs` etc. Just
@@ -226,6 +260,31 @@ static unsigned long long compute_cache_key(const char* ae_file,
         for (char* tok = strtok(tmp, " \t"); tok; tok = strtok(NULL, " \t")) {
             unsigned long long fh = fnv64_file(tok);
             pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%016llx", fh);
+        }
+    }
+
+    /* Issue #413: include the --lib search path in the cache key.
+     * Two builds of the same source with different lib paths must
+     * resolve different imports — they're materially different
+     * outputs and need distinct cache slots. Without this, a
+     * `--lib dirA:dirB` run followed by `--lib dirB:dirA` on the
+     * same source returns the first build's binary, hiding the
+     * precedence flip. Also mtime each individual entry so a
+     * change to a vendored module under the path invalidates the
+     * cache the way a stdlib edit already does. */
+    pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=%s",
+                    tc.lib_dir[0] ? tc.lib_dir : "(default)");
+    if (tc.lib_dir[0]) {
+        char tmp[2048];
+        strncpy(tmp, tc.lib_dir, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+        char sep[2] = { AETHER_LIB_PATH_SEP_CHAR, '\0' };
+        for (char* tok = strtok(tmp, sep); tok; tok = strtok(NULL, sep)) {
+            struct stat lst;
+            if (stat(tok, &lst) == 0) {
+                pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
+                                ":lmt=%lld", (long long)lst.st_mtime);
+            }
         }
     }
 
@@ -1741,8 +1800,12 @@ static int cmd_run(int argc, char** argv) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
-            strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
-            tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
+            /* Issue #413: each `--lib X` appends to the lib search
+             * path with the platform separator. A single value may
+             * itself be a separator-string (`a:b` POSIX / `a;b`
+             * Win); the aetherc side splits before resolving.
+             * Repeated flags and separator strings compose. */
+            tc_lib_dir_append(argv[++i]);
         } else if (argv[i][0] != '-' && !file) {
             file = argv[i];
         }
@@ -3600,8 +3663,11 @@ static int cmd_build(int argc, char** argv) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
-            strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
-            tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
+            /* Issue #413: same append semantics as `ae run` — see
+             * cmd_run's --lib handler for the full rationale.
+             * Repeated flags + separator-strings both feed the
+             * aetherc-side multi-entry search path. */
+            tc_lib_dir_append(argv[++i]);
         } else if (strncmp(argv[i], "--with=", 7) == 0) {
             // Capability opt-ins for --emit=lib. Forwarded verbatim to
             // aetherc; parsing, validation, and the reject messages all
@@ -5772,8 +5838,12 @@ static void print_usage(void) {
     printf("  ae add github.com/u/pkg    Add a dependency\n");
     printf("\nOptions:\n");
     printf("  -v, --verbose        Show detailed output\n");
+    printf("  --lib <dir>[%c<dir>...]  Module search path (PATH-style, left-to-right;\n",
+           AETHER_LIB_PATH_SEP_CHAR);
+    printf("                       repeated flag also accepted: --lib a --lib b)\n");
     printf("\nEnvironment:\n");
     printf("  AETHER_HOME          Aether installation directory\n");
+    printf("  AETHER_LIB_DIR       Same shape as --lib; PATH-style list of module search dirs\n");
 }
 
 // `ae lib-info <path>` — dump the symbol catalog embedded in a

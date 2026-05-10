@@ -1,0 +1,14 @@
+// Driver for the multi-entry --lib path tests (#413). Imports `foo`
+// (provided by either dirA or dirB depending on chain) and `bar`
+// (only in dirB). Both modules are looked up through the lib
+// search path the test driver wires via --lib / --lib --lib /
+// AETHER_LIB_DIR.
+//
+// The script prints `foo=<origin> bar=<origin>` so the shell-side
+// test can assert which directory each module was resolved from.
+import foo
+import bar
+
+main() {
+    println("foo=${foo.foo_origin()} bar=${bar.bar_origin()}")
+}
