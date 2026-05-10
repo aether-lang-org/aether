@@ -1,0 +1,9 @@
+// Module providing helpers under selective-import-friendly bare names.
+
+helper(x: int) -> int {
+    return x + 1
+}
+
+other_helper(x: int) -> int {
+    return x * 2
+}

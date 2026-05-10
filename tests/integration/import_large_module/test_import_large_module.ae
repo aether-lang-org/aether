@@ -1,0 +1,39 @@
+// Regression: an imported module with more than 128 top-level functions
+// must have all of its intra-module call sites rewritten to the prefixed
+// form during clone, not just the first 128.
+//
+// Pre-fix, compiler/aether_module.c capped collect_module_func_names
+// (and the parallel const-name table) at 128 entries. Real-world
+// modules merged from large per-file shims (avn's working_copy
+// module, ~150 functions in 4300 lines) silently overflowed: every
+// call to a sibling function beyond the 128th stayed bare in the
+// cloned body, and the consumer's typer fired E0301 even though the
+// prefixed symbol existed in the registry. The cap is now
+// AETHER_MODULE_MAX_DECLS (4096), with the budget rationale captured
+// in the macro's docstring.
+//
+// What this test guards: import a 200-function module, drive a chain
+// through the entire table (f1 → f2 → ... → f200), and confirm the
+// arithmetic. The chain forces every fK's body to call f(K+1), so any
+// truncation in the prefixed-name rewrite shows up as a typecheck
+// error long before runtime.
+
+import big
+
+extern exit(code: int)
+
+main() {
+    println("=== test_import_large_module ===")
+
+    // entry() runs rec(0, 5), which is f1(0) + 5.
+    // f1(0) walks f2..f200 each adding 1 → 199.
+    // Total: 199 + 5 = 204.
+    got = big.entry(0)
+    if got != 204 {
+        println("FAIL: expected 204, got ${got}")
+        exit(1)
+    }
+    println("  PASS: 200-function module merges cleanly across import boundary")
+
+    println("=== test passed ===")
+}

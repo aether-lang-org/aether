@@ -1,0 +1,21 @@
+// Middle module that selectively imports `helper` and `other_helper`
+// from `innerlib` to use them as bare names inside its function bodies.
+// Standalone this typechecks fine — the selective import binds `helper`
+// to `innerlib_helper` in middlemod's symbol table.
+//
+// Pre-fix, when a consumer imported `middlemod`, the cloned function
+// bodies of `do_thing` / `do_other` still said `helper(x)` and
+// `other_helper(x)`. The consumer's typer had no `helper` /
+// `other_helper` in its symbol table (the consumer didn't write
+// `import innerlib`), so it fired E0301 on every call site inside
+// the imported bodies.
+
+import innerlib (helper, other_helper)
+
+do_thing(x: int) -> int {
+    return helper(x)
+}
+
+do_other(x: int) -> int {
+    return other_helper(x)
+}
