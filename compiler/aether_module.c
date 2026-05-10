@@ -1076,6 +1076,25 @@ static int program_has_function(ASTNode* program, const char* prefixed_name) {
     return 0;
 }
 
+// Is a struct with the given name already a top-level child of `program`?
+// Used by module_merge_into_program to dedup struct definitions when the
+// consumer imports a module that exposes one. Imported structs share the
+// consumer's struct namespace (no `<ns>_` prefix) — see the design rationale
+// at the merge site.
+static int program_has_struct(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (!existing) continue;
+        ASTNode* unwrapped = unwrap_export(existing);
+        if (unwrapped && unwrapped->type == AST_STRUCT_DEFINITION &&
+            unwrapped->value && strcmp(unwrapped->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Walk a node looking for AST_FUNCTION_CALL targets that match a
 // "<ns>_<name>" prefix where <name> is one of the module's own function
 // names. Append unique matches into `out` (storing the bare name).
@@ -1246,6 +1265,30 @@ void module_merge_into_program(ASTNode* program) {
                 rename_intra_module_refs(clone, ns, func_names, func_count,
                                          const_names, const_count, NULL, 0);
 
+                insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_STRUCT_DEFINITION && decl->value) {
+                // Struct definitions from imported modules enter the
+                // consumer's program AST under their bare name (no
+                // `<ns>_` prefix). Closes the cross-`import` struct
+                // visibility gap that blocked the opaque-handle
+                // pattern: a module exposing `new_slot() -> ptr` whose
+                // body does `s = raw as *Slot` failed to typecheck once
+                // imported, because the consumer's symbol table lacked
+                // `Slot`.
+                //
+                // Bypasses the selective-import filter on purpose: a
+                // function body that casts to `*Slot` cannot type-check
+                // without the struct in scope, so even
+                // `import handle (new_slot)` must pull in `Slot`.
+                //
+                // Dedup by name. If the consumer already has a struct
+                // with the same name (its own, or an earlier merge),
+                // we skip — name clashes between modules are out of
+                // scope here; the C compiler will surface them downstream.
+                if (program_has_struct(program, decl->value)) continue;
+
+                ASTNode* clone = clone_ast_node(decl);
+                clone->is_imported = 1;
                 insert_child_at(program, clone, insert_idx++);
             }
             // Skip AST_MAIN_FUNCTION, AST_IMPORT_STATEMENT, etc.
@@ -1479,6 +1522,17 @@ void module_merge_into_program(ASTNode* program) {
                     rename_intra_module_refs(clone, ns, func_names, func_count,
                                              const_names, const_count, NULL, 0);
 
+                    insert_child_at(program, clone, insert_idx++);
+                } else if (decl->type == AST_STRUCT_DEFINITION) {
+                    // Same shape as the direct-import struct merge above,
+                    // for transitively-reachable modules pulled in via the
+                    // BFS. A merged function body that casts to `*T` needs
+                    // T in scope regardless of which import edge brought
+                    // the function in.
+                    if (program_has_struct(program, decl->value)) continue;
+
+                    ASTNode* clone = clone_ast_node(decl);
+                    clone->is_imported = 1;
                     insert_child_at(program, clone, insert_idx++);
                 }
             }
