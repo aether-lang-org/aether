@@ -1365,6 +1365,73 @@ void mark_escaped_heap_string_vars(CodeGenerator* gen, ASTNode* body) {
     escape_walk(gen, body, NULL);
 }
 
+/* Subtree-contains predicate: returns 1 iff `node` (recursively)
+ * contains an AST_IDENTIFIER whose value equals `name`. Used by the
+ * return-escape discriminator below. Skips nested function / closure
+ * scopes so a captured-by-closure reference doesn't false-positive. */
+static int ast_subtree_references_name(ASTNode* node, const char* name) {
+    if (!node || !name) return 0;
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_CLOSURE) {
+        return 0;
+    }
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, name) == 0) {
+        return 1;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        if (ast_subtree_references_name(node->children[i], name)) return 1;
+    }
+    return 0;
+}
+
+/* Walk helper used by var_referenced_in_return_stmt: recursively
+ * descend through statements, treat AST_RETURN_STATEMENT as a leaf
+ * that we probe for the target name, and stop at nested function /
+ * closure scopes. */
+static int walk_for_return_stmt_reference(ASTNode* node, const char* name) {
+    if (!node) return 0;
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_CLOSURE) {
+        return 0;
+    }
+    if (node->type == AST_RETURN_STATEMENT) {
+        for (int i = 0; i < node->child_count; i++) {
+            if (ast_subtree_references_name(node->children[i], name)) return 1;
+        }
+        return 0;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        if (walk_for_return_stmt_reference(node->children[i], name)) return 1;
+    }
+    return 0;
+}
+
+/* Is `var_name` referenced inside any AST_RETURN_STATEMENT in this
+ * function's body? Used to discriminate return-escape from container-
+ * escape in the escaped-LHS-alias emission gate — when an escape-
+ * marked LHS is also the function's return value, the 0.149 source-
+ * flag-clear leaks the buffer because no container takes ownership.
+ * See perf_regression_quadratic_commit_path filing.
+ *
+ * `func_node` is the AST_FUNCTION_DEFINITION / AST_BUILDER_FUNCTION
+ * the wrapper-emission is currently inside; we locate its body block
+ * (an AST_BLOCK child) and recurse. Cost is O(body-size) per call,
+ * triggered only for the escaped-LHS-alias-RHS shape (rare). */
+static int var_referenced_in_return_stmt(ASTNode* func_node,
+                                          const char* var_name) {
+    if (!func_node || !var_name) return 0;
+    for (int i = 0; i < func_node->child_count; i++) {
+        ASTNode* c = func_node->children[i];
+        if (c && c->type == AST_BLOCK) {
+            if (walk_for_return_stmt_reference(c, var_name)) return 1;
+        }
+    }
+    return 0;
+}
+
 /* Push function-exit defer-free statements for every hoisted
  * heap-string variable that's not escaped (issue #420 follow-up).
  *
@@ -2461,7 +2528,43 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                              rhs_for_escape->value &&
                              is_heap_string_var(gen, rhs_for_escape->value) &&
                              strcmp(rhs_for_escape->value, stmt->value) != 0);
-                        if (rhs_is_alias_to_heap_var) {
+                        /* Discriminate return-escape from container-escape
+                         * (perf_regression_quadratic_commit_path filing).
+                         * The 0.149 source-flag-clear is correct only when
+                         * the escape is "container takes ownership" — list_
+                         * add, map_put, struct field write. When the escape
+                         * is the LHS being returned from the function, no
+                         * container takes ownership; clearing the source's
+                         * flag would leave the buffer unowned forever — a
+                         * leak that scales with call frequency (avn's
+                         * rebuild_dir / sort_packed_by_first_field hot
+                         * paths, ~N bytes leaked per call, O(N²) total).
+                         *
+                         * Pragmatic resolution: when the LHS is referenced
+                         * in any AST_RETURN_STATEMENT in this function's
+                         * body, fall back to the pre-0.149 bare-assign
+                         * emission. The source's defer-free at function
+                         * exit will then fire and reclaim the buffer
+                         * (matching the 0.148 lucky-UAF window the avn
+                         * bench passed under) — same UAF latency, but no
+                         * leak.
+                         *
+                         * The "proper" fix here is to extend
+                         * walk_returns_for_heap_check to recognise
+                         * `return <bare-tracked-local>` so the caller can
+                         * take ownership via a heap-classified return,
+                         * combined with a runtime-uniform-heap return
+                         * shim for the literal-path case. That ladder is
+                         * intentionally deferred to a separate change
+                         * because it expands escape-analysis surface and
+                         * adds per-return-statement codegen — out of scope
+                         * for closing the perf regression. */
+                        int lhs_in_return_stmt =
+                            (rhs_is_alias_to_heap_var &&
+                             gen->current_function &&
+                             var_referenced_in_return_stmt(
+                                 gen->current_function, stmt->value));
+                        if (rhs_is_alias_to_heap_var && !lhs_in_return_stmt) {
                             fprintf(gen->output, "{ %s = ", stmt->value);
                             generate_expression(gen, stmt->children[0]);
                             fprintf(gen->output, "; _heap_%s = 0; }\n",
