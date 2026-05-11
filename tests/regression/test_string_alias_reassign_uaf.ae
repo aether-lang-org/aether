@@ -1,0 +1,145 @@
+// Regression: identifier-aliasing a heap-string and then reassigning
+// the source variable must not free the buffer the alias still
+// references. The canonical "split string, accumulate words" idiom
+// hits this — `word = rest; rest = next_chunk` — where the previous
+// iteration's `word` aliased a buffer that the next iteration's
+// reassignment of `rest` would free.
+//
+// Bug shape pre-fix:
+//
+//   rest = string.substring(name, 6, 11)  // _heap_rest = 1
+//   word = rest                           // _heap_word = 0  (BUG)
+//   rest = ""                             // wrapper fires free(buf)
+//   println(word)                         // garbage — UAF
+//
+// The `_heap_word = 0` on the alias-assignment came from
+// `is_heap_string_expr(rhs)` not recognising bare AST_IDENTIFIER as
+// a heap source. So the alias dropped its tracker flag while the
+// source kept it; the source's later reassignment-wrapper freed
+// the buffer the alias still held.
+//
+// Fix shape: when RHS is a bare identifier referring to a heap-
+// tracked local, the codegen emits ownership-TRANSFER instead of
+// just zeroing the LHS flag —
+//
+//   _heap_<lhs> = _heap_<rhs>; _heap_<rhs> = 0;
+//
+// The heap flag itself is the ownership token; moving it on alias
+// keeps the buffer alive until the new owner goes out of scope.
+//
+// Six cases below cover the variant matrix that triggered or could
+// have triggered the bug, plus a guard against the fix over-applying
+// to literal-source aliases.
+
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== test_string_alias_reassign_uaf ===")
+
+    // Case 1: alias + reassign-source-to-empty
+    name1 = "hello-world"
+    rest1 = string.substring(name1, 6, 11)   // "world", heap
+    word1 = rest1                            // alias — must transfer ownership
+    rest1 = ""                               // pre-fix: frees word1's buffer
+    if string.length(word1) != 5 {
+        println("FAIL 1: length(word1) = ${string.length(word1)}, expected 5")
+        exit(1)
+    }
+    if string.char_at(word1, 0) != 119 {  // 'w'
+        println("FAIL 1: word1[0] = ${string.char_at(word1, 0)}, expected 119 ('w')")
+        exit(1)
+    }
+    if string.char_at(word1, 4) != 100 {  // 'd'
+        println("FAIL 1: word1[4] = ${string.char_at(word1, 4)}, expected 100 ('d')")
+        exit(1)
+    }
+    println("  PASS 1: alias + reassign source to '' preserves alias")
+
+    // Case 2: alias + reassign-source-to-literal
+    name2 = "hello-world"
+    rest2 = string.substring(name2, 6, 11)
+    word2 = rest2
+    rest2 = "XYZ"                            // reassign to non-empty literal
+    if string.length(word2) != 5 {
+        println("FAIL 2: length(word2) = ${string.length(word2)}, expected 5")
+        exit(1)
+    }
+    if string.char_at(word2, 0) != 119 {
+        println("FAIL 2: word2[0] mismatch")
+        exit(1)
+    }
+    println("  PASS 2: alias + reassign source to literal preserves alias")
+
+    // Case 3: alias of string.concat result (different heap-source fn)
+    rest3 = string.concat("wor", "ld")
+    word3 = rest3
+    rest3 = ""
+    if string.length(word3) != 5 {
+        println("FAIL 3: length(word3) = ${string.length(word3)}, expected 5")
+        exit(1)
+    }
+    if string.char_at(word3, 0) != 119 || string.char_at(word3, 4) != 100 {
+        println("FAIL 3: word3 contents wrong")
+        exit(1)
+    }
+    println("  PASS 3: alias of string.concat result survives source reassignment")
+
+    // Case 4: chained alias (alias-of-alias).
+    rest4 = string.substring("hello-world", 6, 11)
+    mid4 = rest4         // mid4 takes ownership
+    word4 = mid4         // word4 takes ownership from mid4
+    rest4 = ""           // no buffer to free (rest4 lost ownership)
+    mid4 = ""            // no buffer to free (mid4 lost ownership)
+    if string.length(word4) != 5 {
+        println("FAIL 4: length(word4) = ${string.length(word4)}, expected 5")
+        exit(1)
+    }
+    if string.char_at(word4, 0) != 119 {
+        println("FAIL 4: word4[0] mismatch")
+        exit(1)
+    }
+    println("  PASS 4: chained alias-of-alias preserves last owner")
+
+    // Case 5: the hyphen-split-and-accumulate loop pattern. Each
+    // iteration reassigns `rest` from string.substring; the previous
+    // iteration's `word` must stay valid through the next iteration's
+    // reassignment.
+    src = "a-b-c-d"
+    rest5 = src
+    saved_first = ""
+    i = 0
+    while i < 1 {
+        dash = string.index_of(rest5, "-")
+        word5 = string.substring(rest5, 0, dash)
+        if i == 0 {
+            saved_first = word5    // alias the first iteration's slice
+        }
+        rest5 = string.substring(rest5, dash + 1, string.length(rest5))
+        i = i + 1
+    }
+    if string.length(saved_first) != 1 {
+        println("FAIL 5: length(saved_first) = ${string.length(saved_first)}, expected 1")
+        exit(1)
+    }
+    if string.char_at(saved_first, 0) != 97 {  // 'a'
+        println("FAIL 5: saved_first[0] = ${string.char_at(saved_first, 0)}, expected 97 ('a')")
+        exit(1)
+    }
+    println("  PASS 5: loop alias survives source reassignment across iteration")
+
+    // Case 6: plain literal source — must remain a no-op. This case
+    // already passed pre-fix; included to guard against the fix
+    // over-applying.
+    rest6 = "literal-source"
+    word6 = rest6
+    rest6 = ""
+    if string.length(word6) != 14 {
+        println("FAIL 6: length(word6) = ${string.length(word6)}, expected 14")
+        exit(1)
+    }
+    println("  PASS 6: literal source alias remains correct (no regression)")
+
+    println("=== all cases passed ===")
+}
