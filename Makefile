@@ -484,7 +484,12 @@ test-ae: compiler ae stdlib
 	printf 'for sh_test in $$(find "$$dir" -maxdepth 1 -name "test_*.sh" 2>/dev/null | sort); do\n'              >> "$$sh_script"; \
 	printf '  name=$$(echo "$$sh_test" | sed "s|tests/||;s|/|_|g;s|\\.sh$$||")\n'                              >> "$$sh_script"; \
 	printf '  if bash "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then\n'                 >> "$$sh_script"; \
-	printf '    echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                                           >> "$$sh_script"; \
+	printf '    if grep -q "\\[SKIP-WIN\\]" "$$tmpdir/run_$$name.out" 2>/dev/null; then\n'                        >> "$$sh_script"; \
+	printf '      reason=$$(grep "\\[SKIP-WIN\\]" "$$tmpdir/run_$$name.out" | head -1 | sed "s/^[[:space:]]*\\[SKIP-WIN\\][[:space:]]*//"); \n' >> "$$sh_script"; \
+	printf '      echo "  [SKIP] $$name — $$reason"; touch "$$tmpdir/PASS_$$name"\n'                              >> "$$sh_script"; \
+	printf '    else\n'                                                                                           >> "$$sh_script"; \
+	printf '      echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                                         >> "$$sh_script"; \
+	printf '    fi\n'                                                                                             >> "$$sh_script"; \
 	printf '  else\n'                                                                                             >> "$$sh_script"; \
 	printf '    echo "  [FAIL] $$name (shell test)"\n'                                                            >> "$$sh_script"; \
 	printf '    printf shell > "$$tmpdir/phase_$$name.txt"\n'                                                     >> "$$sh_script"; \
