@@ -1319,8 +1319,19 @@ endif
 # Compile an Aether program to executable
 compile: compiler
 ifndef FILE
-	@echo "Error: FILE not specified"
-	@echo "Usage: make compile FILE=myprogram.ae [OUTPUT=myprogram]"
+	@echo "make compile: missing required FILE argument."
+	@echo ""
+	@echo "Usage:"
+	@echo "  make compile FILE=path/to/script.ae [OUTPUT=name]"
+	@echo ""
+	@echo "Example:"
+	@echo "  make compile FILE=examples/basics/hello.ae"
+	@echo "  make compile FILE=examples/ae-help-demo/fixed_dsl.ae OUTPUT=fixed_dsl"
+	@echo ""
+	@echo "If you wanted to build the toolchain instead, run:"
+	@echo "  make ae         # just the CLI"
+	@echo "  make compiler   # just the compiler"
+	@echo "  make            # everything"
 	@exit 1
 endif
 ifndef OUTPUT

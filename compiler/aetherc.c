@@ -142,11 +142,25 @@ static char* derive_header_path(const char* output_path) {
     return header_path;
 }
 
-// Print a summary line if any errors were recorded
-static void report_compilation_failure(void) {
+// Print a summary line if any errors were recorded.
+//
+// Also surface the `ae help <script>` hint — the typer's per-error
+// messages are precise but terse, the operator-friendly companion
+// is one shell command away, and the user shouldn't have to read
+// the docs to learn it exists. Suppressed when AETHER_NO_HELP_HINT
+// is set so build pipelines that machine-parse stderr aren't
+// surprised by the extra line.
+static void report_compilation_failure(const char* input_path) {
     int n = aether_error_count();
-    if (n > 0) {
-        fprintf(stderr, "aborting: %d error(s) found\n", n);
+    if (n <= 0) return;
+    fprintf(stderr, "aborting: %d error(s) found\n", n);
+    if (getenv("AETHER_NO_HELP_HINT")) return;
+    if (input_path && input_path[0]) {
+        fprintf(stderr,
+                "hint: run `ae help %s` for actionable suggestions "
+                "(Levenshtein matches, YAML/HCL→call-form, missing imports). "
+                "Suppress with AETHER_NO_HELP_HINT=1.\n",
+                input_path);
     }
 }
 
@@ -531,7 +545,7 @@ int compile_source(const char* input_path, const char* output_path) {
     if (program) ast_stamp_source_file(program, input_path);
 
     if (!program) {
-        report_compilation_failure();
+        report_compilation_failure(input_path);
         // Cleanup
         for (int i = 0; i < token_count; i++) {
             free_token(tokens[i]);
@@ -548,7 +562,7 @@ int compile_source(const char* input_path, const char* output_path) {
      * the offending decl and downstream compilation produces a
      * binary that calls a nonexistent C function. */
     if (aether_error_count() > 0) {
-        report_compilation_failure();
+        report_compilation_failure(input_path);
         free_ast_node(program);
         for (int i = 0; i < token_count; i++) free_token(tokens[i]);
         free_parser(parser);
@@ -609,7 +623,7 @@ int compile_source(const char* input_path, const char* output_path) {
     if (verbose_mode) printf("[Phase 2.5/5] Module resolution...\n");
     module_set_source_dir(input_path);
     if (!module_orchestrate(program)) {
-        report_compilation_failure();
+        report_compilation_failure(input_path);
         free_ast_node(program);
         for (int i = 0; i < token_count; i++) {
             free_token(tokens[i]);
@@ -703,7 +717,7 @@ int compile_source(const char* input_path, const char* output_path) {
     // Step 3: Type Checking
     if (verbose_mode) printf("Step 3: Type checking...\n");
     if (!typecheck_program(program)) {
-        report_compilation_failure();
+        report_compilation_failure(input_path);
         // Cleanup
         module_registry_shutdown();
         free_ast_node(program);
@@ -824,7 +838,7 @@ int compile_source(const char* input_path, const char* output_path) {
     // codegen itself — parse-phase errors are handled separately to avoid
     // regressing legacy tests that silently tolerate parser noise.
     if (aether_error_count() > errors_before_codegen) {
-        report_compilation_failure();
+        report_compilation_failure(input_path);
         // Remove the partial output to avoid downstream build steps
         // picking up an incomplete file.
         remove(output_path);
