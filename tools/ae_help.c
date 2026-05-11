@@ -47,9 +47,15 @@
 #ifdef _WIN32
 #  include <io.h>
 #  include <windows.h>          /* GetModuleFileNameA — self-locate ae.exe */
+#  include <process.h>          /* getpid()/_getpid() */
 #  define popen  _popen
 #  define pclose _pclose
 #  define PATH_SEP '\\'
+   /* MinGW provides getpid() in <process.h>; MSVC only ships _getpid().
+    * One #ifndef guards both compilers without per-toolchain branches. */
+#  ifndef getpid
+#    define getpid _getpid
+#  endif
 #else
 #  include <unistd.h>
 #  define PATH_SEP '/'
