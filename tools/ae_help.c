@@ -757,24 +757,44 @@ static int run_aetherc_capture(const char* script_path, char* stderr_buf, size_t
      * stderr directly to a file we then fread, no cmd.exe in the
      * loop. POSIX behaviour byte-identical.
      *
-     * Cross-platform temp dir: $TMPDIR on POSIX (or /tmp), %TEMP%
-     * on Windows. Both reachable via `tmpnam` but that's marked
-     * deprecated; build a path manually with getenv. */
+     * Cross-platform temp dir. On Windows, MSYS2's bash exports
+     * `TEMP`/`TMP` as a POSIX-flavoured path (`/d/a/_temp/msys64/
+     * tmp`) but `ae.exe` is a native Win32 process — cmd.exe can't
+     * parse that shape, and the redirect target then dies with
+     * "The filename, directory name, or volume label syntax is
+     * incorrect" before aetherc starts. `GetTempPathA` always
+     * returns the native Windows form (`D:\...\Temp\`) regardless
+     * of how the env was set, so we sidestep the MSYS2 ↔ native-
+     * Win32 mismatch entirely. On POSIX `$TMPDIR` is the canonical
+     * interface; fall back to `/tmp` to match what mktemp(3) does
+     * when neither is set. */
     char err_file[AE_HELP_PATH_LEN];
-    const char* tmp_dir =
 #ifdef _WIN32
-        getenv("TEMP");
-    if (!tmp_dir || !*tmp_dir) tmp_dir = getenv("TMP");
-    if (!tmp_dir || !*tmp_dir) tmp_dir = ".";
+    char tmp_buf[AE_HELP_PATH_LEN];
+    DWORD tlen = GetTempPathA((DWORD)sizeof(tmp_buf), tmp_buf);
+    if (tlen == 0 || tlen >= sizeof(tmp_buf)) {
+        safe_strncpy(tmp_buf, ".", sizeof(tmp_buf));
+    } else {
+        /* GetTempPathA appends a trailing backslash — strip it so
+         * our `path_format("%s%c...")` doesn't produce `...\\file`. */
+        size_t bl = strlen(tmp_buf);
+        while (bl > 1 && (tmp_buf[bl - 1] == '\\' || tmp_buf[bl - 1] == '/')) {
+            tmp_buf[--bl] = '\0';
+        }
+    }
+    const char* tmp_dir = tmp_buf;
 #else
-        getenv("TMPDIR");
+    const char* tmp_dir = getenv("TMPDIR");
     if (!tmp_dir || !*tmp_dir) tmp_dir = "/tmp";
 #endif
     {
         long pid = (long)getpid();
-        path_format(err_file, sizeof(err_file),
-                    "%s%cae_help_aetherc_err_%ld.log",
-                    tmp_dir, PATH_SEP, pid);
+        if (path_format(err_file, sizeof(err_file),
+                        "%s%cae_help_aetherc_err_%ld.log",
+                        tmp_dir, PATH_SEP, pid) != 0) {
+            stderr_buf[0] = '\0';
+            return -1;
+        }
     }
 
     char cmd[AE_HELP_PATH_LEN * 3];
