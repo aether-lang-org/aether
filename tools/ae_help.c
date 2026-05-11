@@ -46,12 +46,16 @@
 
 #ifdef _WIN32
 #  include <io.h>
+#  include <windows.h>          /* GetModuleFileNameA — self-locate ae.exe */
 #  define popen  _popen
 #  define pclose _pclose
 #  define PATH_SEP '\\'
 #else
 #  include <unistd.h>
 #  define PATH_SEP '/'
+#  ifdef __APPLE__
+#    include <mach-o/dyld.h>    /* _NSGetExecutablePath — self-locate ae */
+#  endif
 #endif
 
 /* === Constants =====================================================
@@ -551,7 +555,40 @@ static int load_stdlib_export_catalog(ExportEntry* out, int max) {
 
 /* Find aetherc binary. Prefer the same-directory sibling (this binary
  * is `ae`; aetherc lives next to it in `build/`); fall back to PATH. */
+/* Resolve an absolute path to `aetherc`. The script's working
+ * directory is whatever the caller chose, NOT necessarily the repo
+ * root, so probing relative paths like `./build/aetherc` is
+ * inherently fragile. Strategy, ordered from highest-confidence to
+ * lowest:
+ *
+ *   1. $AETHERC env var (caller-explicit; respects any local layout).
+ *   2. $AETHER_HOME/bin/aetherc[.exe] (installed layout, what the
+ *      installer documents and the editor extension expects).
+ *   3. Directory containing THIS binary (`ae`) — if we're at
+ *      `<dir>/ae[.exe]`, aetherc almost always lives next door in
+ *      dev mode (`build/`) AND in install mode (`bin/`). Self-locating
+ *      via the executable path means cwd doesn't matter, which is
+ *      critical for Windows MSYS2 CI where tests cd into tmp dirs
+ *      before invoking ae.
+ *   4. Repo-relative `./build/aetherc[.exe]` for the unusual case
+ *      where ae was invoked directly from a checkout root via a
+ *      relative path (rare in tests, kept for the dev-loop case
+ *      where someone runs `./build/ae help foo.ae` from the root).
+ *   5. POSIX install dirs (/usr/local/bin, /usr/bin).
+ *   6. Bare `aetherc` for $PATH resolution as a final fallback.
+ *
+ * On Windows the `.exe` variant is checked BEFORE the no-suffix one
+ * for every candidate. Some MSYS2 stat() implementations accept
+ * either form, but popen() invokes the literal name and Windows
+ * requires `.exe`; checking `.exe` first is the only reliable shape. */
 static int find_aetherc(char* out, size_t out_size) {
+#ifdef _WIN32
+    const char* exts[] = { ".exe", "", NULL };
+#else
+    const char* exts[] = { "", NULL };
+#endif
+
+    /* 1. Caller-explicit override. */
     const char* env_aetherc = getenv("AETHERC");
     if (env_aetherc && *env_aetherc) {
         struct stat st;
@@ -560,22 +597,94 @@ static int find_aetherc(char* out, size_t out_size) {
             return 0;
         }
     }
-    /* Conventional repo / install paths. */
-    const char* candidates[] = {
-        "./build/aetherc",
-        "./build/aetherc.exe",
-        "/usr/local/bin/aetherc",
-        "/usr/bin/aetherc",
-        NULL
-    };
-    for (int i = 0; candidates[i]; i++) {
+
+    /* 2. $AETHER_HOME/bin/aetherc[.exe]. */
+    const char* aether_home = getenv("AETHER_HOME");
+    if (aether_home && *aether_home) {
+        for (int e = 0; exts[e]; e++) {
+            char probe[AE_HELP_PATH_LEN];
+            int w = snprintf(probe, sizeof(probe), "%s/bin/aetherc%s", aether_home, exts[e]);
+            if (w < 0 || (size_t)w >= sizeof(probe)) continue;
+            struct stat st;
+            if (stat(probe, &st) == 0) {
+                safe_strncpy(out, probe, out_size);
+                return 0;
+            }
+        }
+    }
+
+    /* 3. Sibling of THIS binary — self-locating, cwd-independent. */
+    char ae_dir[AE_HELP_PATH_LEN] = {0};
+#ifdef _WIN32
+    DWORD len = GetModuleFileNameA(NULL, ae_dir, (DWORD)sizeof(ae_dir));
+    if (len > 0 && len < (DWORD)sizeof(ae_dir)) {
+        ae_dir[len] = '\0';
+        char* slash = strrchr(ae_dir, '\\');
+        if (!slash) slash = strrchr(ae_dir, '/');
+        if (slash) *slash = '\0';
+    } else {
+        ae_dir[0] = '\0';
+    }
+#elif defined(__APPLE__)
+    uint32_t sz = (uint32_t)sizeof(ae_dir);
+    if (_NSGetExecutablePath(ae_dir, &sz) == 0) {
+        char resolved[1024];
+        if (realpath(ae_dir, resolved)) {
+            char* slash = strrchr(resolved, '/');
+            if (slash) {
+                *slash = '\0';
+                safe_strncpy(ae_dir, resolved, sizeof(ae_dir));
+            } else {
+                ae_dir[0] = '\0';
+            }
+        }
+    }
+#else
+    ssize_t rl = readlink("/proc/self/exe", ae_dir, sizeof(ae_dir) - 1);
+    if (rl > 0) {
+        ae_dir[rl] = '\0';
+        char* slash = strrchr(ae_dir, '/');
+        if (slash) *slash = '\0';
+    } else {
+        ae_dir[0] = '\0';
+    }
+#endif
+    if (ae_dir[0]) {
+        for (int e = 0; exts[e]; e++) {
+            char probe[AE_HELP_PATH_LEN];
+            int w = snprintf(probe, sizeof(probe), "%s/aetherc%s", ae_dir, exts[e]);
+            if (w < 0 || (size_t)w >= sizeof(probe)) continue;
+            struct stat st;
+            if (stat(probe, &st) == 0) {
+                safe_strncpy(out, probe, out_size);
+                return 0;
+            }
+        }
+    }
+
+    /* 4. Repo-relative `./build/aetherc[.exe]` for dev-loop convenience. */
+    for (int e = 0; exts[e]; e++) {
+        char probe[AE_HELP_PATH_LEN];
+        int w = snprintf(probe, sizeof(probe), "./build/aetherc%s", exts[e]);
+        if (w < 0 || (size_t)w >= sizeof(probe)) continue;
         struct stat st;
-        if (stat(candidates[i], &st) == 0) {
-            safe_strncpy(out, candidates[i], out_size);
+        if (stat(probe, &st) == 0) {
+            safe_strncpy(out, probe, out_size);
             return 0;
         }
     }
-    /* Last resort: rely on PATH. */
+
+    /* 5. POSIX install dirs. */
+    const char* posix_dirs[] = { "/usr/local/bin/aetherc", "/usr/bin/aetherc", NULL };
+    for (int i = 0; posix_dirs[i]; i++) {
+        struct stat st;
+        if (stat(posix_dirs[i], &st) == 0) {
+            safe_strncpy(out, posix_dirs[i], out_size);
+            return 0;
+        }
+    }
+
+    /* 6. Bare name — let $PATH (and on Windows, PATHEXT) resolve. */
     safe_strncpy(out, "aetherc", out_size);
     return 0;
 }

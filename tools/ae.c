@@ -733,20 +733,37 @@ static void discover_toolchain(void) {
     char exe_dir[1024] = {0};
     bool found_exe_dir = get_exe_dir(exe_dir, sizeof(exe_dir));
 
-    // Strategy 1: Dev mode — ae sitting next to aetherc in build/
+    // Strategy 1: Dev mode — ae sitting next to aetherc in build/.
     // Checked first so that ./build/ae always uses ./build/aetherc,
     // even when $AETHER_HOME points to an older installed version.
     // GUARD: The installed layout also has aetherc next to ae (in bin/),
     // so we verify that the parent directory contains runtime/ (repo root)
     // rather than lib/ or share/ (installed prefix).
+    //
+    // Path-construction note: we compose the runtime probe as
+    // `<parent_dir>/runtime` (where parent_dir = exe_dir with the last
+    // component stripped), NOT `<exe_dir>/../runtime`. Windows native
+    // stat() does NOT canonicalise mid-path `..` reliably on MSYS2's
+    // mingw-w64 build — `D:\a\aether\aether\build\..\runtime` was
+    // failing stat() in CI even though the directory exists, because
+    // the kernel was being handed a literal path with `..` in the
+    // middle and mixed slashes. Same fix for `tc.root`. POSIX
+    // tolerates mid-path `..` in stat(), so this is a no-op there.
     if (found_exe_dir) {
         char candidate[1024];
         snprintf(candidate, sizeof(candidate), "%s/aetherc" EXE_EXT, exe_dir);
         if (path_exists(candidate)) {
-            char parent_runtime[1024];
-            snprintf(parent_runtime, sizeof(parent_runtime), "%s/../runtime", exe_dir);
-            if (dir_exists(parent_runtime)) {
-                snprintf(tc.root, sizeof(tc.root), "%s/..", exe_dir);
+            char parent_dir[1024];
+            strncpy(parent_dir, exe_dir, sizeof(parent_dir) - 1);
+            parent_dir[sizeof(parent_dir) - 1] = '\0';
+            char* tail_sep = strrchr(parent_dir, '/');
+            if (!tail_sep) tail_sep = strrchr(parent_dir, '\\');
+            if (tail_sep) *tail_sep = '\0';
+            char runtime_dir[1024];
+            snprintf(runtime_dir, sizeof(runtime_dir), "%s/runtime", parent_dir);
+            if (dir_exists(runtime_dir)) {
+                strncpy(tc.root, parent_dir, sizeof(tc.root) - 1);
+                tc.root[sizeof(tc.root) - 1] = '\0';
                 strncpy(tc.compiler, candidate, sizeof(tc.compiler) - 1);
                 tc.dev_mode = true;
                 goto found_root;
