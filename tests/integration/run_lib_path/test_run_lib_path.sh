@@ -98,8 +98,12 @@ run_case "trailing-slash normalised" \
     "$AE" run "$SCRIPT_DIR/main.ae" --lib "$SCRIPT_DIR/dirA/${SEP}$SCRIPT_DIR/dirB/"
 
 # Case 7: `ae lib-path` introspection. Print the resolved chain and
-# assert each entry appears on its own line, in order.
-out=$("$AE" lib-path --lib "$SCRIPT_DIR/dirA${SEP}$SCRIPT_DIR/dirB" 2>&1)
+# assert each entry appears on its own line, in order. Strip any
+# stray `\r` from `out` defensively — ae forces LF-only output via
+# binary-mode stdout on Windows now, but a shell or terminal layer
+# could still inject a CR; we don't want this assertion to fail on
+# something that looks identical to a human eye.
+out=$("$AE" lib-path --lib "$SCRIPT_DIR/dirA${SEP}$SCRIPT_DIR/dirB" 2>&1 | tr -d '\r')
 expected="$SCRIPT_DIR/dirA
 $SCRIPT_DIR/dirB"
 if [ "$out" = "$expected" ]; then

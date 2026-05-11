@@ -45,17 +45,18 @@ void module_add_lib_dir(const char* dir) {
      * AND the joined lookup path stays clean (`<entry>/<mod>.ae`
      * rather than `./lib//<mod>.ae`). Root paths ("/" on POSIX,
      * "C:\" on Windows) are preserved — stripping their slash
-     * would change semantics.
+     * would change semantics. ALSO translate MSYS2 POSIX-form
+     * (`/d/foo`) to native Windows (`D:/foo`) so a `;`-joined
+     * path-list reaches us in the same shape as a sequence of
+     * separate `--lib` flags. `aether_lib_path_normalize` is a
+     * no-op on POSIX.
      *
      * memcpy with an explicit length (rather than strncpy with
      * `sizeof(dst)-1`) keeps GCC's `-Wstringop-truncation` happy
-     * AND is the faster shape — one bulk copy of a known-good
-     * byte count, no per-byte NUL scan. */
+     * AND is the faster shape. */
     char norm[256];
-    size_t nlen = strlen(dir);
-    if (nlen >= sizeof(norm)) nlen = sizeof(norm) - 1;
-    memcpy(norm, dir, nlen);
-    norm[nlen] = '\0';
+    aether_lib_path_normalize(dir, norm, sizeof(norm));
+    size_t nlen = strlen(norm);
     while (nlen > 1 &&
            (norm[nlen - 1] == '/' || norm[nlen - 1] == '\\') &&
            norm[nlen - 2] != ':') {

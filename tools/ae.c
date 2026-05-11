@@ -139,17 +139,19 @@ static void tc_lib_dir_append_one(const char* dir) {
     if (!dir || !dir[0]) return;
     /* Normalise trailing slash — matches the compiler-side
      * `module_add_lib_dir` normalisation so dedup catches
-     * `./lib` vs `./lib/` cleanly.
+     * `./lib` vs `./lib/` cleanly. ALSO translate MSYS2 POSIX-form
+     * paths (`/d/foo`) to native Windows form (`D:/foo`) so a
+     * `;`-joined path-list and a sequence of flags end up
+     * byte-identical regardless of how MSYS2 handled the argv.
+     * `aether_lib_path_normalize` is a no-op on POSIX.
      *
      * memcpy with an explicit length (not `strncpy(dst, src,
      * sizeof(dst)-1)`) keeps GCC's `-Wstringop-truncation` happy
      * AND is the faster shape — single bulk copy of a known-good
      * byte count, no per-byte NUL scan inside libc. */
     char norm[256];
-    size_t nlen = strlen(dir);
-    if (nlen >= sizeof(norm)) nlen = sizeof(norm) - 1;
-    memcpy(norm, dir, nlen);
-    norm[nlen] = '\0';
+    aether_lib_path_normalize(dir, norm, sizeof(norm));
+    size_t nlen = strlen(norm);
     while (nlen > 1 &&
            (norm[nlen - 1] == '/' || norm[nlen - 1] == '\\') &&
            norm[nlen - 2] != ':') {
@@ -5989,12 +5991,24 @@ static int cmd_lib_path(int argc, char** argv) {
             tc_lib_dir_append(env);
         }
     }
+    /* Force LF-only output. On Windows, the C runtime opens stdout
+     * in text mode by default, converting every `\n` to `\r\n`.
+     * That breaks string-equality comparisons in shell tests
+     * (LF vs CRLF) AND breaks Unix tools that consume the output.
+     * Writing the bytes directly via `fwrite` to stdout in text mode
+     * still triggers the conversion; the right call is
+     * `_setmode(_fileno(stdout), _O_BINARY)` so subsequent writes
+     * pass through unchanged. On POSIX the call is a no-op. */
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (tc.lib_dir_count == 0) {
-        puts("lib");
+        fputs("lib\n", stdout);
         return 0;
     }
     for (int i = 0; i < tc.lib_dir_count; i++) {
-        puts(tc.lib_dirs[i]);
+        fputs(tc.lib_dirs[i], stdout);
+        fputc('\n', stdout);
     }
     return 0;
 }

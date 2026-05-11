@@ -142,6 +142,9 @@ static void apply_levenshtein(Finding* f, const ExportEntry* exports, int n_expo
 static void apply_yaml_shape_detection(SourceFile* sf, Finding* findings, int* count, int max);
 static void apply_top_level_dsl(SourceFile* sf, Finding* findings, int* count, int max);
 static void apply_missing_import(Finding* f, const ExportEntry* exports, int n_exports);
+static void apply_type_mismatch_english(Finding* f);
+static void apply_canonical_template(Finding* findings, int count,
+                                      char (*imports)[AE_HELP_NAME_LEN], int n_imports);
 static int  load_help_md_for_import(const char* import_name, SourceFile* sf,
                                     Finding* findings, int* count, int max);
 static void apply_doc_cross_links(Finding* findings, int count);
@@ -282,7 +285,21 @@ int ae_help_main(int argc, char** argv) {
     Finding findings[AE_HELP_MAX_FINDINGS];
     int n_findings = parse_aetherc_findings(stderr_buf, findings, AE_HELP_MAX_FINDINGS);
 
-    /* Phase 5 — heuristic post-processing. */
+    /* Phase 5 — heuristic post-processing. Order matters:
+     *   1. Levenshtein + missing-import (per-finding enrichment for
+     *      undefined-name kinds).
+     *   2. Type-mismatch English (per-finding enrichment for type
+     *      mismatches; #414 capability 3).
+     *   3. Synthetic findings from line-by-line source scan:
+     *      YAML/HCL, top-level DSL.
+     *   4. *.help.md library-author hints — synthetic findings driven
+     *      by library docstrings, not the typer.
+     *   5. Canonical-example surfacing — attaches a `<libroot>/_examples`
+     *      path to any finding referencing an imported library
+     *      (#414 capability 8). Runs LAST so it can extend
+     *      already-rendered suggestions cleanly.
+     *   6. Doc cross-links — every finding kind maps to its canonical
+     *      doc page. */
     for (int i = 0; i < n_findings; i++) {
         if (findings[i].kind == FK_UNDEFINED_FUNC ||
             findings[i].kind == FK_UNDEFINED_VAR ||
@@ -290,6 +307,7 @@ int ae_help_main(int argc, char** argv) {
             apply_levenshtein(&findings[i], exports, n_exports, imports, n_imports);
             apply_missing_import(&findings[i], exports, n_exports);
         }
+        apply_type_mismatch_english(&findings[i]);
     }
     apply_yaml_shape_detection(&sf, findings, &n_findings, AE_HELP_MAX_FINDINGS);
     apply_top_level_dsl(&sf, findings, &n_findings, AE_HELP_MAX_FINDINGS);
@@ -299,6 +317,7 @@ int ae_help_main(int argc, char** argv) {
         load_help_md_for_import(imports[i], &sf, findings, &n_findings, AE_HELP_MAX_FINDINGS);
     }
 
+    apply_canonical_template(findings, n_findings, imports, n_imports);
     apply_doc_cross_links(findings, n_findings);
 
     /* Phase 6 — render or act. */
@@ -807,6 +826,128 @@ static void apply_levenshtein(Finding* f, const ExportEntry* exports, int n_expo
         }
     }
     safe_strncpy(f->suggestion, buf, sizeof(f->suggestion));
+}
+
+/* === Type-mismatch English ==========================================
+ * The typer emits messages of the shape:
+ *   "Argument %d of '%s': expected %s, got %s"
+ *   "Type mismatch in assignment to '%s': expected %s, got %s"
+ *   "Type mismatch in field '%s' of message '%s': expected %s, got %s"
+ *
+ * Extract the {expected, got} pair and produce a high-precision
+ * English suggestion for the common pairs. Anything we can't pattern-
+ * match against is left unsuggested — the original typer message is
+ * still shown verbatim. Issue #414 capability 3. */
+static void apply_type_mismatch_english(Finding* f) {
+    if (f->kind != FK_TYPE_MISMATCH || !f->message[0]) return;
+    /* Find "expected " and "got " in the message. */
+    const char* exp = strstr(f->message, "expected ");
+    const char* got = strstr(f->message, "got ");
+    if (!exp || !got) return;
+    exp += 9; /* past "expected " */
+    got += 4; /* past "got " */
+    /* Copy the bare type names (stopping at comma / space / end). */
+    char expected_type[32];
+    char actual_type[32];
+    size_t ei = 0, gi = 0;
+    while (ei + 1 < sizeof(expected_type) && exp[ei] && exp[ei] != ',' &&
+           exp[ei] != ' ' && exp[ei] != '\n' && exp[ei] != '\r') {
+        expected_type[ei] = exp[ei]; ei++;
+    }
+    expected_type[ei] = '\0';
+    while (gi + 1 < sizeof(actual_type) && got[gi] && got[gi] != ',' &&
+           got[gi] != ' ' && got[gi] != '\n' && got[gi] != '\r' &&
+           got[gi] != '.' && got[gi] != ';') {
+        actual_type[gi] = got[gi]; gi++;
+    }
+    actual_type[gi] = '\0';
+    if (!expected_type[0] || !actual_type[0]) return;
+
+    /* High-precision pairs first. Anything not recognised falls
+     * through to the generic "use <expected> instead of <got>"
+     * shape — still more readable than the bare typer message. */
+    char buf[AE_HELP_MSG_LEN];
+    if (strcmp(expected_type, "int") == 0 &&
+        (strcmp(actual_type, "string") == 0 || strcmp(actual_type, "AetherString") == 0)) {
+        snprintf(buf, sizeof(buf),
+                 "Drop the quotes — pass an integer literal (e.g. `9990`), not a string `\"9990\"`.");
+    } else if (strcmp(expected_type, "string") == 0 && strcmp(actual_type, "int") == 0) {
+        snprintf(buf, sizeof(buf),
+                 "Quote the value — pass `\"%s\"`-shaped string literal, not an integer.", actual_type);
+    } else if (strcmp(expected_type, "bool") == 0 && strcmp(actual_type, "int") == 0) {
+        snprintf(buf, sizeof(buf),
+                 "Use `true` / `false` literals here, not `0`/`1`.");
+    } else if (strcmp(expected_type, "int") == 0 && strcmp(actual_type, "bool") == 0) {
+        snprintf(buf, sizeof(buf),
+                 "Use an integer literal here (1 / 0), not `true` / `false`.");
+    } else if (strcmp(expected_type, "float") == 0 && strcmp(actual_type, "int") == 0) {
+        snprintf(buf, sizeof(buf),
+                 "Use a decimal literal — `9.0` rather than `9` — to force the float type.");
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "Use a `%s` value here, not a `%s`.", expected_type, actual_type);
+    }
+    safe_strncpy(f->suggestion, buf, sizeof(f->suggestion));
+}
+
+/* === Canonical-template surfacing (#414 capability 8) ===============
+ * If an imported library ships an `_examples/` directory next to its
+ * `module.ae`, list those file paths under findings that reference
+ * the library. Convention only — stdlib doesn't ship examples today;
+ * library authors can opt in by dropping `.ae` files into
+ * `<libroot>/_examples/`. No-op when the directory is absent.
+ *
+ * For brevity we attach the FIRST example path found per finding —
+ * `ae help` is already verbose; users can `ls <libroot>/_examples/`
+ * for the full list. Path printed verbatim so it's clickable in any
+ * editor that linkifies paths. */
+static void apply_canonical_template(Finding* findings, int count,
+                                      char (*imports)[AE_HELP_NAME_LEN], int n_imports) {
+    char root[AE_HELP_PATH_LEN];
+    if (resolve_std_root(root, sizeof(root)) != 0) return;
+    for (int i = 0; i < count; i++) {
+        Finding* f = &findings[i];
+        if (!f->name[0]) continue;
+        /* Walk imports; check each for `_examples/`. First match wins. */
+        for (int k = 0; k < n_imports; k++) {
+            char dir[AE_HELP_PATH_LEN];
+            safe_strncpy(dir, imports[k], sizeof(dir));
+            for (char* p = dir; *p; p++) {
+                if (*p == '.') *p = PATH_SEP;
+            }
+            char ex_dir[AE_HELP_PATH_LEN];
+            snprintf(ex_dir, sizeof(ex_dir), "%s%c%s%c_examples",
+                     root, PATH_SEP, dir, PATH_SEP);
+            DIR* d = opendir(ex_dir);
+            if (!d) continue;
+            /* Find the first .ae file. */
+            struct dirent* e;
+            char chosen[AE_HELP_PATH_LEN] = {0};
+            while ((e = readdir(d)) != NULL) {
+                if (e->d_name[0] == '.') continue;
+                size_t en = strlen(e->d_name);
+                if (en < 4 || strcmp(e->d_name + en - 3, ".ae") != 0) continue;
+                snprintf(chosen, sizeof(chosen), "%s%c%s", ex_dir, PATH_SEP, e->d_name);
+                break;
+            }
+            closedir(d);
+            if (chosen[0]) {
+                /* Append to suggestion so the canonical path appears
+                 * with the existing help text — no extra render path
+                 * to keep in sync. */
+                char merged[AE_HELP_MSG_LEN];
+                if (f->suggestion[0]) {
+                    snprintf(merged, sizeof(merged),
+                             "%s\n          canonical example: %s", f->suggestion, chosen);
+                } else {
+                    snprintf(merged, sizeof(merged),
+                             "Canonical example for %s: %s", imports[k], chosen);
+                }
+                safe_strncpy(f->suggestion, merged, sizeof(f->suggestion));
+                break;
+            }
+        }
+    }
 }
 
 /* === Missing-import detection ====================================== */
