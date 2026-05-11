@@ -492,9 +492,7 @@ test-ae: compiler ae stdlib
 	printf '  fi\n'                                                                                               >> "$$sh_script"; \
 	printf 'done\n'                                                                                               >> "$$sh_script"; \
 	chmod +x "$$sh_script"; \
-	sh_nproc=$(NPROC); \
-	if [ "$$sh_nproc" -gt 3 ]; then sh_nproc=3; fi; \
-	[ -n "$$SH_NPROC" ] && sh_nproc=$$SH_NPROC; \
+	sh_nproc=$${SH_NPROC:-1}; \
 	find tests/integration -name 'test_*.sh' 2>/dev/null | xargs -n1 dirname | sort -u \
 	    | xargs -P $$sh_nproc -I{} "$$sh_script" "{}" "$$tmpdir"; \
 	passed=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
@@ -1629,7 +1627,7 @@ docker-ci-windows: docker-build-ci
 ci: clean
 	@echo "==================================="
 	@echo "  Aether CI — Full Test Suite"
-	@echo "  Parallel: $(NPROC) jobs (build), $(NPROC) (.ae tests), min($(NPROC),4) (shell tests)"
+	@echo "  Parallel: $(NPROC) jobs (build) / $(NPROC) (.ae tests) / $${SH_NPROC:-1} (shell tests)"
 	@echo "==================================="
 	@echo ""
 	@echo "[1/9] Building compiler (-Werror)..."
