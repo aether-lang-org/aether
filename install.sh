@@ -400,11 +400,28 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
                 if [ "$IS_FISH" -eq 1 ]; then
                     sed -i.bak "s|set -gx AETHER_HOME .*|set -gx AETHER_HOME \"$INSTALL_DIR\"|" "$SHELL_RC"
                     sed -i.bak "s|fish_add_path .*aether.*|fish_add_path \"$BIN_DIR\"|" "$SHELL_RC"
+                    # Append the PATH line if the previous run never wrote it
+                    # (rare: rc file edited by hand between installs, or an
+                    # earlier installer release that only wrote AETHER_HOME).
+                    if ! grep -qE 'fish_add_path[^#]*aether' "$SHELL_RC" 2>/dev/null; then
+                        echo "fish_add_path \"$BIN_DIR\"" >> "$SHELL_RC"
+                    fi
                 else
                     sed -i.bak "s|export AETHER_HOME=.*|$AETHER_HOME_LINE|" "$SHELL_RC"
                     # Match only PATH lines that start with the aether bin dir (not lines
                     # that happen to contain "aether" alongside other unrelated entries)
                     sed -i.bak "s|export PATH=\".*aether.*/bin:\\\$PATH\"|$EXPORT_LINE|" "$SHELL_RC"
+                    # Self-heal: if the rc file has AETHER_HOME but no aether
+                    # PATH entry (early-installer bug, hand-edited rc, or the
+                    # user deleted the PATH line by accident), APPEND it. Without
+                    # this, the post-install verification succeeds (the script
+                    # invokes "$BIN_DIR/ae" by absolute path) but the user's
+                    # next shell still can't find `ae` and the install looks
+                    # broken from the operator's seat.
+                    if ! grep -qE 'export PATH=.*\.?aether.*/bin' "$SHELL_RC" 2>/dev/null; then
+                        echo "$EXPORT_LINE" >> "$SHELL_RC"
+                        ok "  Backfilled missing PATH entry in $SHELL_RC"
+                    fi
                 fi
                 rm -f "$SHELL_RC.bak"
                 ok "  Updated AETHER_HOME in $SHELL_RC"
