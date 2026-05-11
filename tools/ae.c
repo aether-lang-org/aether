@@ -4744,7 +4744,25 @@ static int repl_eval(const char* ae_file, const char* c_file,
         return 0;
     }
     snprintf(cmd, sizeof(cmd), "\"%s\"", exe_file);
+    /* Force any pending parent-side stdio to drain BEFORE the child
+     * inherits the fd. Without this, prompts that the parent printed
+     * but hadn't yet flushed sit in the userspace FILE* buffer; the
+     * child writes its output directly to the kernel-side fd; then
+     * when the parent eventually flushes, its delayed prompt
+     * overwrites or interleaves with the child's output in the pipe
+     * stream. Under parallel CI load on Linux, this race becomes
+     * deterministic and the child's output appears lost.
+     *
+     * The fflush-before pattern is well-established stdio hygiene
+     * around any fork/exec/posix_spawn that shares stdout with the
+     * parent's libc-buffered stream. Same hygiene applied after the
+     * child runs so subsequent parent prompts arrive in the right
+     * order without a second eval. */
+    fflush(stdout);
+    fflush(stderr);
     run_cmd(cmd);
+    fflush(stdout);
+    fflush(stderr);
     remove(c_file);
     remove(exe_file);
     return 1;
@@ -4794,6 +4812,21 @@ static int repl_is_complete_line(const char* line) {
 }
 
 static int cmd_repl(void) {
+    /* When the REPL's stdin is a pipe (CI tests, scripted invocations),
+     * glibc defaults stdout to FULLY-buffered. Prompts that the user
+     * needs to see immediately get held in the userspace buffer until
+     * the next fflush or program exit — and any child process the
+     * REPL spawns (`repl_eval` invokes aetherc + gcc + the compiled
+     * binary) writes DIRECTLY to the kernel fd, bypassing the
+     * parent's buffer. The result is interleaved or lost output in
+     * the pipe stream. Switching to line buffering makes every
+     * newline-terminated write go straight to the fd, which is what
+     * an interactive shell user gets on a TTY anyway. Same fix for
+     * stderr in case error messages arrive while the parent has
+     * pending stdout. No-op on a real TTY (already line-buffered). */
+    setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+    setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+
     printf("\n");
     // Dynamic box: "   Aether X.Y.Z REPL   "
     int ver_len = (int)strlen(AE_VERSION);
