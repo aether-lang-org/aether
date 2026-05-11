@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Heap-string ownership: two follow-up regressions from 0.147.0's alias-transfer fix** (`compiler/codegen/codegen_stmt.c`, `tests/regression/test_list_add_heap_alias_escape.ae`, `tests/regression/test_destructure_reassign_over_heap_lhs.ae`). The 0.147 fix closed the bare-`B = A` alias UAF by transferring `_heap_<rhs>` to `_heap_<lhs>` in the reassignment wrapper. Two adjacent shapes the wrapper didn't reach in 0.147 surfaced afterwards.
+
+  **Regression A — alias into escape-marked LHS doesn't clear source's flag.** When LHS is marked escaped (e.g. about to be passed to `list.add` whose `ptr` parameter triggers escape-marking, or to `map.put`, or written to a struct field via #0.144's binary-expression-LHS edge), the codegen suppresses the reassignment wrapper entirely and emits a bare assignment — so the 0.147 ownership-transfer never fires. Subsequent reassignment of the source then runs `free()` against the buffer the escape recipient still references. Trigger pattern (typical "split-string, accumulate words into a list"):
+
+  ```aether
+  while string.length(rest) > 0 {
+      nl = string.index_of(rest, "\n")
+      line = ""
+      if nl < 0 {
+          line = rest                // bare-assign (line is escaped) — flag stays on rest
+          rest = ""                  // wrapper sees _heap_rest=1, frees buf
+      } else {
+          line = string.substring(rest, 0, nl)
+          rest = string.substring(rest, nl + 1, string.length(rest))
+      }
+      list.add(out, line)            // list keeps pointer to now-freed buf
+  }
+  ```
+
+  Fix: in the escaped-LHS bare-assign path, when RHS is a bare identifier referring to a heap-tracked local (and not self-assignment), also emit `_heap_<rhs> = 0` to clear the source's ownership flag. The heap flag IS the ownership token; with the source's flag cleared, its later reassignment can't fire a wrapper-free against the buffer the escape recipient still holds. Net effect: the buffer stays alive (held by the recipient), and no wrapper-free fires against it. Strictly better than the pre-fix UAF.
+
+  **Regression B — destructure-reassign-over-heap-LHS with non-string position type.** The tuple-destructure wrapper-emission gate at the AST_TUPLE_DESTRUCTURE codegen path required the destructure POSITION's type to be `TYPE_STRING`. `map.get` returns `(value: ptr, err: string)` — position 0 is `TYPE_PTR` (an opaque pointer from the map's internal storage, irrespective of the value's actual type). With `pos_is_string = false`, codegen fell through to bare assignment and the previous heap-string value's tracker flag never got cleared. The function-exit defer-free then ran `free()` against the map's borrowed storage. Trigger pattern:
+
+  ```aether
+  pkg_include = "${pkg_name}*"             // _heap_pkg_include = 1 (interp)
+  pkg_include, _ = map.get(opts, "k")      // bare assign — flag stays at 1
+  // ... fn returns ...
+  // defer-free: free(pkg_include) against map's borrowed storage → SIGABRT
+  ```
+
+  Fix: widen the wrapper-emission gate to fire whenever the LHS is heap-string-tracked, regardless of the destructure position's type. The wrapper frees the previous heap-string value (correct — the LHS owns it) and sets the new heap flag to 0 for non-string positions (borrow assumption — the destructured value is an opaque pointer from the heap-string-tracker's perspective, never a fresh-malloc'd char* the source's wrapper should claim).
+
+  Both fixes are surgical: A is one new branch in the escaped-LHS bare-assign emission; B is one widened gate condition in the tuple-destructure path. No changes to escape analysis, classifier, or function-exit defer-free machinery.
+
+  ### Upgrade notes
+
+  Both fixes close UAFs that previously surfaced as silent corruption (Regression A) or crash-on-function-exit (Regression B). No code change required in user code — the fixed compiler produces correct output for the canonical patterns that previously broke.
+
+  **What flips behaviourally:**
+
+  1. Code matching Regression A's pattern (heap-tracked local → escape-marked recipient → source reassigned) now keeps the buffer alive for the recipient's lifetime instead of freeing it mid-loop. Net result: items stored in lists / maps / struct fields via the split-loop pattern are now intact at read time.
+  2. Code matching Regression B's pattern (heap-tracked LHS reassigned via destructure with non-string position 0 — typically `var, _ = map.get(...)` after `var = "${interp}"` or `var = string.concat(...)`) no longer aborts at function exit. The previous heap value is correctly freed at the destructure site.
+  3. `aetherc --diagnose=ownership` now reports the correct `_heap_<lhs>` verdict for these two assignment shapes (was silently emitting stale flags pre-fix).
+
+  Memory-pressure footprint: Regression A's fix shifts a freed-too-early buffer to a "stays alive until recipient frees it" shape. If your recipient never frees its members (e.g. a list you keep around for the program's lifetime), this is a leak — but strictly better than the silent UAF it replaces. The escape-analysis pass's job is to surface this trade-off; the wrapper-free skip is conservative-correct by design.
+
+  No recommended pre-upgrade ladder. Sanitiser builds (ASan / Valgrind) over hot paths using the list-accumulate-strings and destructure-over-heap-var patterns will show fewer heap-use-after-free / invalid-free reports post-upgrade.
+
+### Changed
+
+- **`docs/c-interop.md` Best Practices**: added explicit note (point 3) against the "mirror stdlib symbols via `extern` declarations" anti-pattern. Older Aether had link-time issues with shared modules importing stdlib (Issue #309-era) that made the manual-extern shape look attractive as a workaround; those bugs are closed and the import-then-namespace shape (`import std.list` + `list.add(x)`) is the only supported path. Closes a doc-gap surfaced when a downstream porter (Aeocha) discovered its 68-line manual-extern block was technical debt rather than a feature.
+
 ## [0.147.0]
 
 ### Fixed
