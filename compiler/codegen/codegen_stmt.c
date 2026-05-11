@@ -578,6 +578,62 @@ static ASTNode* find_function_definition_by_name(ASTNode* program,
     return NULL;
 }
 
+// Sibling of find_function_definition_by_name for AST_EXTERN_FUNCTION
+// nodes. Used by is_heap_string_expr to consult the `@heap` annotation
+// on extern returns. Two-step scan because externs don't get cloned
+// into the program AST by module_merge_into_program — they stay in
+// their owning module's AST (see compiler/aether_module.c:1283-1284).
+// Same traversal pattern as codegen_diagnose_ownership at line 4142.
+static ASTNode* find_extern_declaration_by_name(ASTNode* program,
+                                                const char* name) {
+    if (!program || !name) return NULL;
+    /* Pass 1 — direct extern declarations in the program AST (the
+     * shape user code uses for non-module C bindings). */
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_EXTERN_FUNCTION &&
+            c->value && strcmp(c->value, name) == 0) {
+            return c;
+        }
+    }
+    /* Pass 2 — externs reachable through `import` statements. The
+     * stdlib's `extern http_request_body(...)` lives in std.http's
+     * module AST; without this pass, call sites in the consuming
+     * program never resolve to the annotated declaration. */
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (!c || c->type != AST_IMPORT_STATEMENT || !c->value) continue;
+        AetherModule* mod_entry = module_find(c->value);
+        ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
+        if (!mod_ast) continue;
+        for (int j = 0; j < mod_ast->child_count; j++) {
+            ASTNode* decl = mod_ast->children[j];
+            if (decl && decl->type == AST_EXTERN_FUNCTION &&
+                decl->value && strcmp(decl->value, name) == 0) {
+                return decl;
+            }
+        }
+    }
+    return NULL;
+}
+
+// Does an extern declaration carry a `@heap` return annotation, parsed
+// in parse_extern_declaration as the string token "heap_return"
+// appended to (or set as) the extern's annotation slot? Used by
+// is_heap_string_expr's extern branch.
+//
+// substring-match rather than exact equality so the annotation can
+// coexist with other extern-level annotations (`c_symbol:...` from the
+// `@extern("name")` form, or any future tags) — the same combine-
+// dedupe pattern the per-param annotation handler uses at
+// parser.c:2800-2813.
+static int extern_returns_heap_string(ASTNode* ext) {
+    if (!ext || ext->type != AST_EXTERN_FUNCTION || !ext->annotation) {
+        return 0;
+    }
+    return strstr(ext->annotation, "heap_return") != NULL ? 1 : 0;
+}
+
 // Heap-allocated string sources. Used by the reassignment / scope-
 // exit machinery to decide whether to free the previous value.
 //
@@ -640,6 +696,30 @@ static int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
                 gen->program, fn);
             if (fn_def) {
                 return function_def_returns_heap_string(gen, fn_def);
+            }
+            /* Extern declaration with `@heap` annotation on its
+             * `-> string` return. The parser stored "heap_return" in
+             * the extern's annotation slot at
+             * parser.c:parse_extern_declaration; here we honour it so
+             * call sites like `s = http.request_body(req)` get
+             * `_heap_s = 1` and the reassignment-wrapper free fires
+             * on the next assignment to `s`.
+             *
+             * Tuple-returning externs use the parallel
+             * `Type.tuple_heap_flags` channel consumed at the
+             * destructure site in codegen_stmt.c:2018-2019; this
+             * extern_returns_heap_string branch is the single-value
+             * complement, the only path that closes leaks on externs
+             * like http_request_body, fs.read_to_string, … whose
+             * return shape has no tuple to hang per-position flags
+             * on. There is no user-side workaround:
+             * `string_concat(extern_call(), "")` copies but never
+             * frees the underlying buffer. See the further-bug-fix5
+             * filing for the rationale. */
+            ASTNode* ext_def = find_extern_declaration_by_name(
+                gen->program, fn);
+            if (ext_def && extern_returns_heap_string(ext_def)) {
+                return 1;
             }
         }
     }
