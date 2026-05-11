@@ -63,6 +63,7 @@ extern char** environ;
 #include "../compiler/aether_lib_path.h"
 
 #include "apkg/toml_parser.h"
+#include "ae_help.h"
 
 // Version is set by Makefile from VERSION file
 #ifndef AETHER_VERSION
@@ -6126,6 +6127,13 @@ int main(int argc, char** argv) {
 
     // Commands that don't need toolchain
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
+        /* `ae help <script.ae>` — heuristic diagnostics for closure-DSL
+         * config scripts (issue #414). The disambiguator checks whether
+         * the next argv is a path ending in `.ae` that actually exists;
+         * bare `ae help` falls through to the usage banner. */
+        if (sub_argc > 0 && ae_help_is_script_target(sub_argv[0])) {
+            return ae_help_main(sub_argc, sub_argv);
+        }
         print_usage();
         return 0;
     }
