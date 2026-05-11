@@ -2420,13 +2420,54 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                     stmt->value, stmt->value);
                             mark_heap_string_var(gen, stmt->value);
                         }
+                        /* Identifier-alias ownership transfer. When
+                         * the RHS is a bare identifier referring to a
+                         * heap-tracked local, this assignment aliases
+                         * the source's buffer. The classifier returns
+                         * `_heap_lhs = 0` for this shape because
+                         * is_heap_string_expr only recognises function
+                         * calls and string interpolation — it can't
+                         * tell whether a bare identifier currently
+                         * holds a heap value. Pre-fix consequence: the
+                         * alias dropped its tracker, the source kept
+                         * its tracker, and the source's next
+                         * reassignment-wrapper freed the buffer the
+                         * alias still pointed at (silent UAF).
+                         *
+                         * Fix: move the heap flag from source to dest.
+                         * The flag IS the ownership token — there is
+                         * only one buffer; only one slot should hold
+                         * the freeing duty. After transfer, the alias
+                         * is responsible for the buffer's lifetime and
+                         * the source's later reassignment frees nothing
+                         * because its flag is now 0.
+                         *
+                         * Self-assignment guard: `a = a` would free
+                         * its own buffer and then keep the flag set —
+                         * a pre-existing bug the fix doesn't make
+                         * worse; we just don't go through the transfer
+                         * path so it falls back to the same buggy
+                         * shape as before. (Real-world code doesn't
+                         * write `a = a`; a separate audit would close
+                         * that as a no-op skip.) */
+                        ASTNode* rhs = stmt->children[0];
+                        int rhs_is_alias_to_heap_var =
+                            (rhs && rhs->type == AST_IDENTIFIER && rhs->value &&
+                             is_heap_string_var(gen, rhs->value) &&
+                             strcmp(rhs->value, stmt->value) != 0);
                         fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
                         fprintf(gen->output, "%s = ", stmt->value);
                         generate_expression(gen, stmt->children[0]);
                         fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
                                 stmt->value);
-                        fprintf(gen->output, " _heap_%s = %d; }\n",
-                                stmt->value, rhs_is_heap ? 1 : 0);
+                        if (rhs_is_alias_to_heap_var) {
+                            fprintf(gen->output,
+                                    " _heap_%s = _heap_%s; _heap_%s = 0; }\n",
+                                    stmt->value, rhs->value, rhs->value);
+                        } else {
+                            fprintf(gen->output, " _heap_%s = %d; }\n",
+                                    stmt->value, rhs_is_heap ? 1 : 0);
+                        }
                     } else if (rhs_is_heap && var_escaped) {
                         /* Non-string-typed escaped var reassigned to
                          * a heap string. Same gate — skip the free. */

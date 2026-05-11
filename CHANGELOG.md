@@ -20,6 +20,60 @@ next version number before tagging the release.
 
 - **User functions named after libc symbols no longer collide at link time** (`compiler/codegen/codegen.c`, `tests/integration/c_symbol_namespace/`). Closes #436 facet B. The codegen's `is_c_reserved_word` list grew from ~50 entries (C keywords + a handful of libc names) to the full POSIX.1-2017 + glibc/musl extension surface: every name in the libc network sockets API (`bind`, `listen`, `accept`, `connect`, `socket`, `select`, `poll`, `epoll_*`, `kqueue`, `kevent`, `recv*`, `send*`, `getsock*`, `setsock*`, `shutdown`, `inet_pton`, `inet_ntop`, `getaddrinfo`, `gethostbyname`), POSIX I/O (`open*`, `read`, `write`, `pread`, `pwrite`, `readv`, `writev`, `lseek`, `fcntl`, `ioctl`, `pipe*`, `dup*`, `f?sync`, `mkdir*`, `rmdir`, `unlink*`, `rename*`, `link*`, `symlink*`, `readlink*`, `chmod`, `fchmod`, `chown`, `fchown`, `lchown`, `stat`, `fstat`, `lstat`, `fstatat`, `access`, `faccessat`, `truncate`, `ftruncate`, `umask`, `fopen`, `fclose`, `freopen`, `fread`, `fwrite`, `fseek`, `ftell`, `rewind`, `fflush`, `fileno`, `feof`, `ferror`, `fprintf`, `fscanf`, `vfprintf`, `vfscanf`, `fgets`, `fputs`, `fgetc`, `fputc`, `ungetc`, `getc`, `putc`, `getchar`, `putchar`), process control (`fork`, `vfork`, `exec*`, `wait*`, `kill*`, `raise`, `signal`, `sigaction`, `sigprocmask`, `alarm`, `pause`, `sleep`, `usleep`, `nanosleep`, `getpid`, `getppid`, `gettid`, `getsid`, `getpgrp`, `getpgid`, `setpgid`, `setsid`, `setpgrp`, `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `seteuid`, `setgid`, `setegid`, `abort`, `exit`, `_exit`, `_Exit`, `atexit`), memory + dynamic linking (`malloc`, `calloc`, `realloc`, `reallocarray`, `free`, `mmap`, `munmap`, `mremap`, `mprotect`, `madvise`, `msync`, `brk`, `sbrk`, `posix_memalign`, `aligned_alloc`, `valloc`, `dlopen`, `dlsym`, `dlclose`, `dlerror`, `dladdr`), string + stdio + memory ops (`strlen`, `strnlen`, `strcpy`, `strncpy`, `stpcpy`, `stpncpy`, `strcat`, `strncat`, `strcmp*`, `strchr`, `strrchr`, `strstr`, `strdup`, `strndup`, `strtok*`, `strtol*`, `strtoul*`, `strtod`, `strtof`, `strerror`, `sprintf*`, `vsprintf*`, `sscanf*`, `vsscanf*`, `printf`, `puts`, `gets`, `perror`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr`, `memrchr`), time + env + misc (`time`, `clock`, `gettimeofday`, `clock_gettime`, `clock_settime`, `gmtime`, `localtime`, `mktime`, `asctime`, `ctime`, `strftime`, `getenv`, `setenv`, `unsetenv`, `putenv`, `clearenv`, `getcwd`, `chdir`, `fchdir`, `system`). Every hit gets transparently prefixed with `ae_` by the pre-existing `safe_c_name` helper — the Aether-side identifier keeps its natural spelling (`bind`, `read`), the emitted C symbol becomes `ae_bind` / `ae_read` and stays out of libc's way. Mechanism identical to the legacy handling of `read` / `write` / `malloc` / `free` (which were already in the list); the change is consistency — the rest of the POSIX surface gets the same treatment as the handful of names that were caught before. Aether-keyword collisions (e.g. `send` is reserved as an actor-messaging keyword) are caught one layer earlier at the parser, so they're not in this list; the codegen mitigation covers the names that ARE valid Aether identifiers but would clash with libc. The full architectural goal — module-qualified codegen for every Aether function (`my_module_bind` not `ae_bind`) — would break `--emit=lib` consumers who `dlsym()` for unprefixed symbol names; the list-based mitigation here is the safer middle path that closes the link-time collision class without changing the ABI shape. 14-case regression test (`bind`, `listen`, `accept`, `connect`, `recv`, `select`, `pipe`, `fork`, `kill`, `stat`, `chmod`, multi-collision coexistence, emitted-C-symbol verification, negative `bare-bind-not-defined`) — every case asserts the user's function runs (not libc's) AND for `bind` specifically that the emitted C is `ae_bind`.
 - **Selective-import + local-def shadow no longer silently recurses** (`compiler/aether_module.c`, `tests/integration/selective_import_shadow/`, `docs/module-system-design.md`). Closes #436 facet A. A module (or main program) that selectively imports a name AND defines a local function with the same name used to compile successfully and then stack-overflow at runtime — the merger renamed the body's bare call to point at the local def, turning a thin import-forwarding wrapper into self-recursion with no compile-time signal. New orchestrator-level check (`check_selective_import_shadow` in aether_module.c, applied both per-module in `orchestrate_module` and to the entry-point AST in `module_orchestrate`) detects the pattern before merging and rejects with `error[E1000]` — a precise diagnostic naming the colliding local def's source location, the import line it shadows, and three concrete fixes (rename local, drop selective import, use qualified call). Hard error: the alternative (silent runtime stack overflow) is the bug being closed. Covers both `AST_FUNCTION_DEFINITION` and `export <fn>` shapes. Facet B (libc-symbol collisions) is now ALSO closed in the same PR — see the entry above.
+## [0.147.0]
+
+### Fixed
+
+- **Identifier-alias of a heap-string + reassign-source no longer dangles** (`compiler/codegen/codegen_stmt.c`, `tests/regression/test_string_alias_reassign_uaf.ae`). The reassignment-wrapper at codegen_stmt.c:1611-1631 used `is_heap_string_expr(rhs)` to decide whether to set the LHS heap flag, and that predicate only recognises function-call and string-interpolation RHS shapes — bare `AST_IDENTIFIER` RHS always returned 0. Consequence on the canonical "alias then reassign source" pattern:
+
+  ```aether
+  rest = string.substring(name, 6, 11)   // _heap_rest = 1
+  word = rest                            // _heap_word = 0  (BUG)
+  rest = ""                              // wrapper sees _heap_rest=1, frees buf
+  println(word)                          // garbage — UAF
+  ```
+
+  Pre-fix, the alias `word` dropped its tracker on assignment while `rest` kept it; the source's next reassignment-wrapper then freed the buffer the alias still pointed at. This was a silent UAF that surfaced as garbage payload bytes (the AetherString header was intact, so `string.length(word)` still returned 5, but the bytes were recycled). The previous version's behaviour was the same shape with the opposite failure mode: pre-defer-free (≤ ~0.132) it was a leak (both pointers stayed valid but the source's allocation accumulated); the defer-free machinery added in 0.139 / 0.143 / 0.144 / 0.145 tightened reclamation for every classifier-recognised shape, leaving the bare-identifier-alias edge as a pure UAF.
+
+  The canonical idiom that hits this is "split a string, accumulate words":
+
+  ```aether
+  while string.length(rest) > 0 {
+      dash = string.index_of(rest, "-")
+      word = string.substring(rest, 0, dash)        // alias-then-keep
+      rest = string.substring(rest, dash + 1, ...)  // reassign source
+      // word now reads freed memory
+  }
+  ```
+
+  Fix: at the reassignment wrapper, when the RHS is a bare identifier referring to a heap-tracked local (and not self-assignment), emit ownership-TRANSFER instead of zeroing the LHS flag:
+
+  ```c
+  // Pre-fix:
+  { _tmp_old = word; word = rest; if (_heap_word) free(_tmp_old); _heap_word = 0; }
+
+  // Post-fix:
+  { _tmp_old = word; word = rest; if (_heap_word) free(_tmp_old);
+    _heap_word = _heap_rest; _heap_rest = 0; }
+  ```
+
+  The heap flag IS the ownership token — there is exactly one buffer; exactly one slot should hold the freeing duty. Moving the flag on alias keeps the buffer alive until the alias goes out of scope; the source's later reassignment frees nothing because its flag is now 0. No per-function alias map needed (a simpler resolution than the bug-filing's proposed Option A). Self-assignment guard: `a = a` falls through to the pre-existing emission shape — a separate concern (it was already incorrect; this fix doesn't worsen or improve it).
+
+  Six-case regression test exercises: alias + reassign-to-empty, alias + reassign-to-literal, alias of string.concat result, chained alias-of-alias (`word = mid; mid = rest; rest = source`), the hyphen-split-loop pattern, and a literal-source no-regression guard.
+
+  ### Upgrade notes
+
+  This release closes a use-after-free that previously corrupted the alias's payload silently. Code that was working around it (manual `string.concat(rest, "")` after alias to take an explicit copy) is still correct under the new behaviour — the explicit copy is just no longer required.
+
+  **What flips behaviourally:**
+
+  1. Code that aliased a heap-string AND reassigned the source got freed-memory reads pre-fix. Post-fix the alias keeps the buffer alive until it goes out of scope. The reader will now get correct payload bytes where previously it got garbage.
+
+  2. Memory-pressure footprint at the alias point shifts: pre-fix, the alias's apparent zero-tracker-flag meant the function-exit defer-free skipped it (leak avoidance via wrong direction). Post-fix the alias's transferred flag means the defer-free fires at function exit (correct reclamation). Net result: same allocation count, freed at the right time instead of leaked or double-touched.
+
+  3. `aetherc --diagnose=ownership` now prints `_heap_<alias> = transferred-from <source>` for alias-assignment sites where the source was heap-tracked (was previously `_heap_<alias> = 0`). Tooling that parses the diagnose output by exact-equality on `= 0` / `= 1` should re-parse for the transfer shape if it cares to distinguish.
+
+  No recommended pre-upgrade ladder: the change closes a UAF without introducing one. Sanitiser builds (ASan / Valgrind) over hot paths that touch the alias-then-reassign pattern will show fewer heap-use-after-free reports post-upgrade.
 
 ## [0.146.0]
 
