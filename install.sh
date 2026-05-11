@@ -18,6 +18,28 @@ else
 fi
 BIN_DIR="$INSTALL_DIR/bin"
 LIB_DIR="$INSTALL_DIR/lib/aether"
+
+# Touching the user's shell rc files (`~/.zshrc`, `~/.bashrc`, etc.)
+# is appropriate ONLY when installing to the canonical user prefix
+# (`$HOME/.aether`). When a caller passes an explicit override path —
+# `make test-install` does this with a `mktemp -d` tmpdir, package
+# managers may pass `/usr/local/aether`, CI may pass an isolated
+# build root — we MUST NOT rewrite the user's PATH/AETHER_HOME to
+# point at the override. The tmpdir gets deleted; the package
+# manager owns its own PATH-setup story; the user's daily-driver
+# environment shouldn't be a side-effect of someone else's test or
+# build. Set explicitly here so every downstream branch can short-
+# circuit on the same flag.
+UPDATE_SHELL_RC=0
+if [ "$INSTALL_DIR" = "$HOME/.aether" ]; then
+    UPDATE_SHELL_RC=1
+fi
+# Caller can force-suppress the rc touch even at the default prefix
+# (e.g. CI imaging a base layout into a fresh user's $HOME without
+# their consent). Mirrors AETHER_NO_HELP_HINT's opt-out shape.
+if [ -n "$AETHER_INSTALL_NO_RC" ]; then
+    UPDATE_SHELL_RC=0
+fi
 INCLUDE_DIR="$INSTALL_DIR/include/aether"
 SRC_DIR="$INSTALL_DIR/share/aether"
 
@@ -168,6 +190,19 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     info "Building standard library..."
     $MAKE_CMD stdlib 2>&1 | tail -1
 
+    # Build the language server too so the editor extension's LSP
+    # client can wire up out of the box (go-to-def, hover,
+    # diagnostics). `make lsp` is fast — it links the already-built
+    # libaether_compiler.a archive — so building it unconditionally
+    # is cheap. If it fails (older toolchain, sandbox without libgcc
+    # on a stripped Linux container, etc.) we don't abort the
+    # install: the editor extension falls back to syntax-only mode
+    # and the user still has a working `ae` / `aetherc`.
+    info "Building language server..."
+    if ! $MAKE_CMD lsp 2>&1 | tail -1; then
+        warn "  lsp build failed — editor extension will fall back to syntax-only mode."
+    fi
+
     # Install
     info "Installing to $INSTALL_DIR..."
 
@@ -184,9 +219,25 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     cp "build/aetherc${EXE}" "$BIN_DIR/aetherc${EXE}"
     chmod 755 "$BIN_DIR/ae${EXE}" "$BIN_DIR/aetherc${EXE}"
 
+    # Language server, if it has been built. The editor extension
+    # auto-wires the LSP by looking for `aether-lsp` on PATH (or via
+    # the `aether.lsp.path` setting) and falls back to syntax-only
+    # mode when it's not found. Shipping it alongside ae/aetherc
+    # means the editor's "go to definition" / hover / diagnostics
+    # work out of the box without the user having to know about it.
+    # Optional: if `make lsp` wasn't run before `make install`, the
+    # file is absent and we skip silently — that's the documented
+    # syntax-only fallback, not a broken install.
+    if [ -f "build/aether-lsp${EXE}" ]; then
+        cp "build/aether-lsp${EXE}" "$BIN_DIR/aether-lsp${EXE}"
+        chmod 755 "$BIN_DIR/aether-lsp${EXE}"
+    fi
+
     # macOS: remove quarantine attribute so Gatekeeper doesn't block unsigned binaries
     if [ "$(uname -s)" = "Darwin" ]; then
         xattr -cr "$BIN_DIR/ae${EXE}" "$BIN_DIR/aetherc${EXE}" 2>/dev/null || true
+        [ -f "$BIN_DIR/aether-lsp${EXE}" ] && \
+            xattr -cr "$BIN_DIR/aether-lsp${EXE}" 2>/dev/null || true
     fi
 
     # Precompiled library
@@ -304,7 +355,30 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     ok "  Installed successfully"
     echo ""
 
-    # PATH setup
+    # PATH setup — only when installing to the canonical user prefix.
+    # See the `UPDATE_SHELL_RC` discussion at the top of this file for
+    # why test-install / package-manager invocations must NOT rewrite
+    # the operator's shell rc.
+    if [ "$UPDATE_SHELL_RC" -eq 0 ]; then
+        info "Skipping shell rc update (install prefix is not the default \$HOME/.aether — or AETHER_INSTALL_NO_RC was set)."
+        echo "  Set PATH manually to use this install: export PATH=\"$BIN_DIR:\$PATH\""
+        echo ""
+        # Skip verification too — without rc update we can't promise the
+        # operator's next shell sees the new binary, and that's the
+        # contract `info "Verifying installation..."` implies. Do a
+        # quiet probe instead.
+        if "$BIN_DIR/ae" version >/dev/null 2>&1; then
+            ok "  binary verified at $BIN_DIR/ae"
+        else
+            error "  binary at $BIN_DIR/ae did not respond to 'version'"
+            exit 1
+        fi
+        echo ""
+        echo "========================================="
+        ok "  Aether installed successfully (no shell rc touched)!"
+        echo "========================================="
+        exit 0
+    fi
     SHELL_NAME="$(basename "$SHELL")"
     EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
     AETHER_HOME_LINE="export AETHER_HOME=\"$INSTALL_DIR\""
@@ -400,11 +474,28 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
                 if [ "$IS_FISH" -eq 1 ]; then
                     sed -i.bak "s|set -gx AETHER_HOME .*|set -gx AETHER_HOME \"$INSTALL_DIR\"|" "$SHELL_RC"
                     sed -i.bak "s|fish_add_path .*aether.*|fish_add_path \"$BIN_DIR\"|" "$SHELL_RC"
+                    # Append the PATH line if the previous run never wrote it
+                    # (rare: rc file edited by hand between installs, or an
+                    # earlier installer release that only wrote AETHER_HOME).
+                    if ! grep -qE 'fish_add_path[^#]*aether' "$SHELL_RC" 2>/dev/null; then
+                        echo "fish_add_path \"$BIN_DIR\"" >> "$SHELL_RC"
+                    fi
                 else
                     sed -i.bak "s|export AETHER_HOME=.*|$AETHER_HOME_LINE|" "$SHELL_RC"
                     # Match only PATH lines that start with the aether bin dir (not lines
                     # that happen to contain "aether" alongside other unrelated entries)
                     sed -i.bak "s|export PATH=\".*aether.*/bin:\\\$PATH\"|$EXPORT_LINE|" "$SHELL_RC"
+                    # Self-heal: if the rc file has AETHER_HOME but no aether
+                    # PATH entry (early-installer bug, hand-edited rc, or the
+                    # user deleted the PATH line by accident), APPEND it. Without
+                    # this, the post-install verification succeeds (the script
+                    # invokes "$BIN_DIR/ae" by absolute path) but the user's
+                    # next shell still can't find `ae` and the install looks
+                    # broken from the operator's seat.
+                    if ! grep -qE 'export PATH=.*\.?aether.*/bin' "$SHELL_RC" 2>/dev/null; then
+                        echo "$EXPORT_LINE" >> "$SHELL_RC"
+                        ok "  Backfilled missing PATH entry in $SHELL_RC"
+                    fi
                 fi
                 rm -f "$SHELL_RC.bak"
                 ok "  Updated AETHER_HOME in $SHELL_RC"

@@ -655,6 +655,54 @@ If you want to embed Aether actors in your existing C application (the reverse d
 - Using the Aether runtime API directly from C
 - The `--emit-header` compiler flag for generating C headers
 
+## C symbol namespace (libc collision avoidance)
+
+Aether is free with its identifier space — you can define an Aether
+function called `bind`, `listen`, `accept`, or `connect` without
+upsetting the parser. At the C-codegen layer, however, those names
+collide with libc's own `bind(2)`, `listen(2)`, etc., and the linker
+silently picks the wrong symbol — your `bind` either never runs, or
+runs when libc's was expected.
+
+Mitigation (issue #436 facet B): the codegen keeps a curated list of
+libc / POSIX symbol names (see `compiler/codegen/codegen.c`'s
+`is_c_reserved_word` for the full set — it covers C keywords, the
+entire BSD/POSIX network sockets API, POSIX I/O, process control,
+memory + dynamic linking, string + stdio, and time + env). Any
+Aether function whose name appears in the list gets transparently
+emitted with an `ae_` prefix in the C output:
+
+| Aether-side spelling | Emitted C symbol |
+|----------------------|------------------|
+| `bind`               | `ae_bind`        |
+| `listen`             | `ae_listen`      |
+| `read`               | `ae_read`        |
+| `write`              | `ae_write`       |
+| `connect`            | `ae_connect`     |
+| `socket`             | `ae_socket`      |
+| `fork`               | `ae_fork`        |
+| `malloc`             | `ae_malloc`      |
+
+The renaming is **invisible to Aether source** — you call your
+function `bind(...)` and the compiler does the right thing. The only
+place you see the prefix is in the emitted C (useful if you're
+debugging with `nm`, `objdump`, or a stack trace).
+
+### When to use `@c_callback` instead
+
+If your Aether function specifically needs a **stable, unprefixed C
+symbol** — e.g. it's going to be looked up via `dlsym()` from a host
+program, or passed as a function pointer to a C library — annotate
+it with `@c_callback("desired_c_name")`. That bypasses the prefix
+logic and emits exactly the symbol you ask for.
+
+### Aether-keyword collisions
+
+A handful of libc names also happen to be Aether keywords (`send` is
+reserved for actor messaging). Those are caught one layer earlier by
+the parser with `error[E0100]` — the codegen mitigation never sees
+them.
+
 ## See Also
 
 - [Getting Started](getting-started.md)

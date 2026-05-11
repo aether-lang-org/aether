@@ -9,11 +9,35 @@ Visual Studio Code (and Cursor) support for the
   definitions, message types, struct types, pattern arrows (`->`),
   cons-cell patterns (`[h | t]`), and the actor send / ask operators
   (`!`, `?`).
-- **Color theme** tuned for Aether's dispatch-heavy style. Message
-  names render warm amber so they read as the compile-time tags they
-  are, actor names cyan, control keywords magenta-italic, and pattern
-  arrows / cons pipes coral-bold so the shape of a `receive` block
-  pops at a distance.
+- **Fixed palette** applied to `.ae` files regardless of your active
+  VS Code colour theme. Designed for dark-theme readability and
+  semantic legibility — each token type gets a colour that reflects
+  its role in the language:
+
+  | Token | Colour | Style |
+  |---|---|---|
+  | Comments (`//`, `/* */`) | `#6A9955` (forest green) | italic |
+  | Strings | `#CE9178` (warm rose) | — |
+  | Numbers | `#B5CEA8` (sage) | — |
+  | `true` / `false` / `null` | `#4EC9B0` (teal) | italic |
+  | Primitive types (`int`, `string`, …) | `#4EC9B0` (teal) | — |
+  | Actor / message names | `#4EC9B0` (teal) | **bold** |
+  | Struct / type names | `#4EC9B0` (teal) | — |
+  | Keywords (`if`, `else`, `match`, …) | `#C586C0` (violet) | italic |
+  | Storage (`struct`, `actor`, `fn`) | `#C586C0` (violet) | italic |
+  | Function definitions | `#DCDCAA` (warm yellow) | **bold** |
+  | `main()` | `#DCDCAA` | **bold italic** |
+  | Built-in / stdlib calls | `#DCDCAA` | — |
+  | Variables | `#9CDCFE` (sky blue) | — |
+  | Arrows / actor ops (`->`, `<-`, `!`, `::`) | `#D19A66` (pumpkin) | **bold** |
+  | Other operators | `#D4D4D4` (light gray) | — |
+  | Brackets, accessors (`.`, `[]`) | `#808080` (mid gray) | — |
+  | String interpolation `${…}` | `#C586C0` (violet) | — |
+  | String escapes (`\n`, `\\`, …) | `#D7BA7D` (mustard) | — |
+
+  The override is bounded to `.aether`-suffixed scopes only —
+  anything else in your workspace (Markdown, JSON, JS, …) keeps
+  your active theme's colours.
 - **File icon** — a yellow-on-dark "ae" badge for `.ae` files.
 - **Language configuration** — auto-closing brackets, comment toggle,
   smart indent.
@@ -25,16 +49,19 @@ Visual Studio Code (and Cursor) support for the
   `/usr/local/bin`, `/opt/homebrew/bin`). Set
   `aether.lsp.enable: false` for syntax-only mode.
 
-## Activating the theme
+## Activating the palette
 
-Themes are global in VS Code, not per-language, so you have to opt in:
+The palette applies automatically the moment a `.ae` file opens —
+no theme switch needed. The extension ships its colours via
+`editor.tokenColorCustomizations.textMateRules` scoped to
+`*.aether`, which VS Code applies on top of whatever theme is
+already active.
 
-1. Open a `.ae` file (loads the extension).
-2. Command palette → **`Preferences: Color Theme`** → **Aether**.
-
-The syntax grammar runs regardless of the active theme — every theme
-gets at least the standard scope colors. The Aether theme adds the
-finer-grained palette described above.
+To verify it's working: open any `.ae` file and check that comments
+are green-italic, keywords (`fn`, `if`, `match`) are violet-italic,
+and function names are warm yellow bold. If you see your theme's
+default colours instead, restart VS Code (extensions are loaded once
+per session).
 
 ## Installation
 

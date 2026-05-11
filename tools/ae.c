@@ -55,7 +55,15 @@ extern char** environ;
 #include <mach-o/dyld.h>
 #endif
 
+/* Shared header — AETHER_LIB_DIRS_MAX + AETHER_LIB_PATH_SEP_CHAR.
+ * Pulled in early so the Toolchain struct can size its lib_dirs
+ * array with the same cap the compiler enforces. Lives in
+ * `compiler/aether_lib_path.h` (a tiny no-AST-deps header) so this
+ * include is light. Issue #413. */
+#include "../compiler/aether_lib_path.h"
+
 #include "apkg/toml_parser.h"
+#include "ae_help.h"
 
 // Version is set by Makefile from VERSION file
 #ifndef AETHER_VERSION
@@ -96,10 +104,95 @@ typedef struct {
     bool has_lib;              // Whether precompiled lib exists
     bool dev_mode;             // Running from source tree
     bool verbose;              // Verbose output
-    char lib_dir[256];         // Custom lib folder for module resolution (--lib flag)
+    /* Lib-search path forwarded to aetherc as one `--lib <dir>` flag
+     * per entry. Stored as an array (rather than a separator-string
+     * buffer) so we never re-construct a `dir1:dir2:dir3` string that
+     * has to survive shell quoting through system() — cmd.exe and
+     * MSYS2 between them mangle `;`-separated quoted strings unevenly,
+     * and one-flag-per-entry sidesteps the entire surface. Each
+     * `--lib X` from the user is parsed: if `X` is itself a separator-
+     * string, each piece is appended; if it's a single directory, it's
+     * appended verbatim. Issue #413. */
+    char lib_dirs[AETHER_LIB_DIRS_MAX][256];
+    int  lib_dir_count;
 } Toolchain;
 
 static Toolchain tc = {0};
+
+/* Append a directory (or a separator-string of directories) to
+ * `tc.lib_dirs`. Used by every `--lib <X>` flag site so that
+ * repeated flags AND separator-strings both end up as discrete
+ * entries in the list:
+ *
+ *    `--lib a --lib b`        → [a, b]
+ *    `--lib a:b`              → [a, b]   (POSIX separator)
+ *    `--lib "a;b"`            → [a, b]   (Windows separator)
+ *    `--lib a:b --lib c`      → [a, b, c]
+ *
+ * Storing as a list (rather than a separator-string buffer) means
+ * the aetherc command we build later emits one `--lib X` per entry
+ * — no separator-string has to survive shell quoting through
+ * system(). cmd.exe + MSYS2's joint handling of `;` inside double
+ * quotes is uneven; one-flag-per-entry sidesteps the entire
+ * surface. Dedup is O(N) over the cap-of-8 list. Issue #413. */
+static void tc_lib_dir_append_one(const char* dir) {
+    if (!dir || !dir[0]) return;
+    /* Normalise trailing slash — matches the compiler-side
+     * `module_add_lib_dir` normalisation so dedup catches
+     * `./lib` vs `./lib/` cleanly. ALSO translate MSYS2 POSIX-form
+     * paths (`/d/foo`) to native Windows form (`D:/foo`) so a
+     * `;`-joined path-list and a sequence of flags end up
+     * byte-identical regardless of how MSYS2 handled the argv.
+     * `aether_lib_path_normalize` is a no-op on POSIX.
+     *
+     * memcpy with an explicit length (not `strncpy(dst, src,
+     * sizeof(dst)-1)`) keeps GCC's `-Wstringop-truncation` happy
+     * AND is the faster shape — single bulk copy of a known-good
+     * byte count, no per-byte NUL scan inside libc. */
+    char norm[256];
+    aether_lib_path_normalize(dir, norm, sizeof(norm));
+    size_t nlen = strlen(norm);
+    while (nlen > 1 &&
+           (norm[nlen - 1] == '/' || norm[nlen - 1] == '\\') &&
+           norm[nlen - 2] != ':') {
+        norm[--nlen] = '\0';
+    }
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        if (strcmp(tc.lib_dirs[i], norm) == 0) return;
+    }
+    if (tc.lib_dir_count >= AETHER_LIB_DIRS_MAX) {
+        fprintf(stderr,
+            "warning: --lib search path is full (max %d entries); "
+            "ignoring '%s'\n", AETHER_LIB_DIRS_MAX, norm);
+        return;
+    }
+    int idx = tc.lib_dir_count;
+    /* +1 carries the NUL. nlen is post-normalisation length,
+     * always < sizeof(lib_dirs[idx]). Same warning + perf
+     * rationale as above. */
+    memcpy(tc.lib_dirs[idx], norm, nlen + 1);
+    tc.lib_dir_count++;
+}
+static void tc_lib_dir_append(const char* spec) {
+    if (!spec || !spec[0]) return;
+    /* Split on the platform separator and append each piece. Empty
+     * segments (trailing/leading/double separators) are silently
+     * skipped — matches Java -cp and PATH semantics. */
+    const char* cur = spec;
+    char buf[256];
+    while (*cur) {
+        const char* next = strchr(cur, AETHER_LIB_PATH_SEP_CHAR);
+        size_t len = next ? (size_t)(next - cur) : strlen(cur);
+        if (len > 0) {
+            if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+            memcpy(buf, cur, len);
+            buf[len] = '\0';
+            tc_lib_dir_append_one(buf);
+        }
+        if (!next) break;
+        cur = next + 1;
+    }
+}
 
 // --with=<caps> forwarded verbatim to aetherc. Empty by default; set
 // by cmd_build's arg loop when the user passes `--with=fs` etc. Just
@@ -136,13 +229,21 @@ static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, con
         snprintf(with_flag, sizeof(with_flag), " --with=%s", g_with_caps);
     }
 
-    if (tc.lib_dir[0]) {
-        snprintf(cmd, cmd_size, "\"%s\"%s%s --lib \"%s\" \"%s\" \"%s\"",
-                 tc.compiler, emit_flag, with_flag, tc.lib_dir, input, output);
-    } else {
-        snprintf(cmd, cmd_size, "\"%s\"%s%s \"%s\" \"%s\"",
-                 tc.compiler, emit_flag, with_flag, input, output);
+    /* Emit one `--lib <dir>` per entry rather than a single
+     * `--lib "a:b:c"` separator-string. Each arg is therefore a
+     * plain directory path — survives cmd.exe, MSYS2, and any
+     * other shell quoting without depending on `;` or `:`
+     * preservation inside double quotes. Issue #413. */
+    char lib_flags[2304] = "";
+    size_t lf_off = 0;
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        int w = snprintf(lib_flags + lf_off, sizeof(lib_flags) - lf_off,
+                         " --lib \"%s\"", tc.lib_dirs[i]);
+        if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
+        lf_off += (size_t)w;
     }
+    snprintf(cmd, cmd_size, "\"%s\"%s%s%s \"%s\" \"%s\"",
+             tc.compiler, emit_flag, with_flag, lib_flags, input, output);
 }
 
 // --------------------------------------------------------------------------
@@ -229,6 +330,27 @@ static unsigned long long compute_cache_key(const char* ae_file,
         }
     }
 
+    /* Issue #413: include the --lib search path in the cache key.
+     * Two builds of the same source with different lib paths must
+     * resolve different imports — they're materially different
+     * outputs and need distinct cache slots. Walk the array
+     * directly (no separator-string round-trip) so order and
+     * dedup are reflected in the key. mtime each entry so a change
+     * to a vendored module under the path invalidates the cache
+     * the way a stdlib edit already does. */
+    if (tc.lib_dir_count == 0) {
+        pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=(default)");
+    }
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
+                        ":lib[%d]=%s", i, tc.lib_dirs[i]);
+        struct stat lst;
+        if (stat(tc.lib_dirs[i], &lst) == 0) {
+            pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
+                            ":lmt=%lld", (long long)lst.st_mtime);
+        }
+    }
+
     snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%s:%s",
              opt_level ? opt_level : "O0",
              extra_salt ? extra_salt : "");
@@ -302,6 +424,17 @@ static int posix_run(const char* cmd_str, int quiet) {
 #include <io.h>
 #ifndef _O_WRONLY
 #define _O_WRONLY 1
+#endif
+/* `_O_BINARY` is in MinGW's <fcntl.h> but some compile-flag combos
+ * (-D__STRICT_ANSI__, `-std=c11` without `_DEFAULT_SOURCE`, certain
+ * MSYS2 mingw-w64 builds) gate it behind underscore-prefix macros
+ * that aren't defined. Fall back to the literal MSVCRT value so the
+ * `_setmode(_fileno(stdout), _O_BINARY)` LF-only output dance for
+ * `ae lib-path` (#413 Windows follow-up) is portable across the
+ * matrix. Same workaround pattern this section already uses for
+ * `_O_WRONLY` above. */
+#ifndef _O_BINARY
+#define _O_BINARY 0x8000
 #endif
 static int win_run(const char* cmd_str, int quiet) {
     if (tc.verbose) fprintf(stderr, "[cmd] %s\n", cmd_str);
@@ -600,20 +733,37 @@ static void discover_toolchain(void) {
     char exe_dir[1024] = {0};
     bool found_exe_dir = get_exe_dir(exe_dir, sizeof(exe_dir));
 
-    // Strategy 1: Dev mode — ae sitting next to aetherc in build/
+    // Strategy 1: Dev mode — ae sitting next to aetherc in build/.
     // Checked first so that ./build/ae always uses ./build/aetherc,
     // even when $AETHER_HOME points to an older installed version.
     // GUARD: The installed layout also has aetherc next to ae (in bin/),
     // so we verify that the parent directory contains runtime/ (repo root)
     // rather than lib/ or share/ (installed prefix).
+    //
+    // Path-construction note: we compose the runtime probe as
+    // `<parent_dir>/runtime` (where parent_dir = exe_dir with the last
+    // component stripped), NOT `<exe_dir>/../runtime`. Windows native
+    // stat() does NOT canonicalise mid-path `..` reliably on MSYS2's
+    // mingw-w64 build — `D:\a\aether\aether\build\..\runtime` was
+    // failing stat() in CI even though the directory exists, because
+    // the kernel was being handed a literal path with `..` in the
+    // middle and mixed slashes. Same fix for `tc.root`. POSIX
+    // tolerates mid-path `..` in stat(), so this is a no-op there.
     if (found_exe_dir) {
         char candidate[1024];
         snprintf(candidate, sizeof(candidate), "%s/aetherc" EXE_EXT, exe_dir);
         if (path_exists(candidate)) {
-            char parent_runtime[1024];
-            snprintf(parent_runtime, sizeof(parent_runtime), "%s/../runtime", exe_dir);
-            if (dir_exists(parent_runtime)) {
-                snprintf(tc.root, sizeof(tc.root), "%s/..", exe_dir);
+            char parent_dir[1024];
+            strncpy(parent_dir, exe_dir, sizeof(parent_dir) - 1);
+            parent_dir[sizeof(parent_dir) - 1] = '\0';
+            char* tail_sep = strrchr(parent_dir, '/');
+            if (!tail_sep) tail_sep = strrchr(parent_dir, '\\');
+            if (tail_sep) *tail_sep = '\0';
+            char runtime_dir[1024];
+            snprintf(runtime_dir, sizeof(runtime_dir), "%s/runtime", parent_dir);
+            if (dir_exists(runtime_dir)) {
+                strncpy(tc.root, parent_dir, sizeof(tc.root) - 1);
+                tc.root[sizeof(tc.root) - 1] = '\0';
                 strncpy(tc.compiler, candidate, sizeof(tc.compiler) - 1);
                 tc.dev_mode = true;
                 goto found_root;
@@ -1741,8 +1891,12 @@ static int cmd_run(int argc, char** argv) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
-            strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
-            tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
+            /* Issue #413: each `--lib X` appends to the lib search
+             * path with the platform separator. A single value may
+             * itself be a separator-string (`a:b` POSIX / `a;b`
+             * Win); the aetherc side splits before resolving.
+             * Repeated flags and separator strings compose. */
+            tc_lib_dir_append(argv[++i]);
         } else if (argv[i][0] != '-' && !file) {
             file = argv[i];
         }
@@ -1931,12 +2085,20 @@ static int cmd_check(int argc, char** argv) {
         return 1;
     }
 
-    char cmd[4096];
-    if (tc.lib_dir[0]) {
-        snprintf(cmd, sizeof(cmd), "\"%s\" --lib \"%s\" --check \"%s\"", tc.compiler, tc.lib_dir, file);
-    } else {
-        snprintf(cmd, sizeof(cmd), "\"%s\" --check \"%s\"", tc.compiler, file);
+    /* Build the same `--lib X --lib Y …` flag sequence the compile
+     * path uses (cc_command_build); one flag per entry sidesteps
+     * shell quoting on cmd.exe + MSYS2. Issue #413. */
+    char lib_flags[2304] = "";
+    size_t lf_off = 0;
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        int w = snprintf(lib_flags + lf_off, sizeof(lib_flags) - lf_off,
+                         " --lib \"%s\"", tc.lib_dirs[i]);
+        if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
+        lf_off += (size_t)w;
     }
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "\"%s\"%s --check \"%s\"",
+             tc.compiler, lib_flags, file);
     return run_cmd(cmd);
 }
 
@@ -3600,8 +3762,11 @@ static int cmd_build(int argc, char** argv) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
-            strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
-            tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
+            /* Issue #413: same append semantics as `ae run` — see
+             * cmd_run's --lib handler for the full rationale.
+             * Repeated flags + separator-strings both feed the
+             * aetherc-side multi-entry search path. */
+            tc_lib_dir_append(argv[++i]);
         } else if (strncmp(argv[i], "--with=", 7) == 0) {
             // Capability opt-ins for --emit=lib. Forwarded verbatim to
             // aetherc; parsing, validation, and the reject messages all
@@ -4579,7 +4744,25 @@ static int repl_eval(const char* ae_file, const char* c_file,
         return 0;
     }
     snprintf(cmd, sizeof(cmd), "\"%s\"", exe_file);
+    /* Force any pending parent-side stdio to drain BEFORE the child
+     * inherits the fd. Without this, prompts that the parent printed
+     * but hadn't yet flushed sit in the userspace FILE* buffer; the
+     * child writes its output directly to the kernel-side fd; then
+     * when the parent eventually flushes, its delayed prompt
+     * overwrites or interleaves with the child's output in the pipe
+     * stream. Under parallel CI load on Linux, this race becomes
+     * deterministic and the child's output appears lost.
+     *
+     * The fflush-before pattern is well-established stdio hygiene
+     * around any fork/exec/posix_spawn that shares stdout with the
+     * parent's libc-buffered stream. Same hygiene applied after the
+     * child runs so subsequent parent prompts arrive in the right
+     * order without a second eval. */
+    fflush(stdout);
+    fflush(stderr);
     run_cmd(cmd);
+    fflush(stdout);
+    fflush(stderr);
     remove(c_file);
     remove(exe_file);
     return 1;
@@ -4629,6 +4812,21 @@ static int repl_is_complete_line(const char* line) {
 }
 
 static int cmd_repl(void) {
+    /* When the REPL's stdin is a pipe (CI tests, scripted invocations),
+     * glibc defaults stdout to FULLY-buffered. Prompts that the user
+     * needs to see immediately get held in the userspace buffer until
+     * the next fflush or program exit — and any child process the
+     * REPL spawns (`repl_eval` invokes aetherc + gcc + the compiled
+     * binary) writes DIRECTLY to the kernel fd, bypassing the
+     * parent's buffer. The result is interleaved or lost output in
+     * the pipe stream. Switching to line buffering makes every
+     * newline-terminated write go straight to the fd, which is what
+     * an interactive shell user gets on a TTY anyway. Same fix for
+     * stderr in case error messages arrive while the parent has
+     * pending stdout. No-op on a real TTY (already line-buffered). */
+    setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+    setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+
     printf("\n");
     // Dynamic box: "   Aether X.Y.Z REPL   "
     int ver_len = (int)strlen(AE_VERSION);
@@ -5756,6 +5954,7 @@ static void print_usage(void) {
     printf("  add <package>        Add a dependency\n");
     printf("  cache [clear]        Show or clear build cache\n");
     printf("  cflags               Print -I/-L/-laether for embedding in external builds\n");
+    printf("  lib-path             Print the resolved module-search chain\n");
     printf("  examples             List and run example programs\n");
     printf("  repl                 Start interactive REPL\n");
     printf("  version              Show version / manage installed versions\n");
@@ -5772,8 +5971,12 @@ static void print_usage(void) {
     printf("  ae add github.com/u/pkg    Add a dependency\n");
     printf("\nOptions:\n");
     printf("  -v, --verbose        Show detailed output\n");
+    printf("  --lib <dir>[%c<dir>...]  Module search path (PATH-style, left-to-right;\n",
+           AETHER_LIB_PATH_SEP_CHAR);
+    printf("                       repeated flag also accepted: --lib a --lib b)\n");
     printf("\nEnvironment:\n");
     printf("  AETHER_HOME          Aether installation directory\n");
+    printf("  AETHER_LIB_DIR       Same shape as --lib; PATH-style list of module search dirs\n");
 }
 
 // `ae lib-info <path>` — dump the symbol catalog embedded in a
@@ -5803,6 +6006,73 @@ typedef struct {
     int         closure_count;
     const void* closures;
 } _AeLibInfoMeta;
+
+/* `ae lib-path` — introspect the resolved module-search chain.
+ *
+ * Prints the directories `ae run` / `ae build` would search for
+ * `import foo` resolution, one per line, in order. Same shape as
+ * `python -c "import sys; print(*sys.path,sep='\n')"`. Resolves
+ * from the same inputs the real build path uses — repeated
+ * `--lib` flags, separator-string `--lib a:b`, AETHER_LIB_DIR env
+ * var — so the output answers "what would the toolchain see right
+ * now?" without having to read the user's shell config.
+ *
+ * Usage:
+ *     ae lib-path                      # default chain (just `lib`)
+ *     ae lib-path --lib a --lib b      # show what these flags resolve to
+ *     AETHER_LIB_DIR=a:b ae lib-path   # show what the env var resolves to
+ *
+ * Issue #413. */
+static int cmd_lib_path(int argc, char** argv) {
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
+            tc_lib_dir_append(argv[++i]);
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("Usage: ae lib-path [--lib <dir>%c<dir>...]...\n",
+                   AETHER_LIB_PATH_SEP_CHAR);
+            printf("  Print the resolved module-search chain in order.\n");
+            printf("  Useful for debugging \"why isn't my import resolving?\"\n");
+            printf("  Inputs (in priority order, highest first):\n");
+            printf("    1. --lib flags on this command line\n");
+            printf("    2. AETHER_LIB_DIR env var\n");
+            printf("    3. default: `lib`\n");
+            return 0;
+        } else {
+            fprintf(stderr, "ae lib-path: unknown option '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+    /* CLI --lib flags win; env var seeds the chain if no flags set it.
+     * Default = `lib` if neither. Walk the resolved array directly so
+     * the output matches what the real toolchain would see byte-for-
+     * byte (same normalisation, same dedup, same trailing-slash rule). */
+    if (tc.lib_dir_count == 0) {
+        const char* env = getenv("AETHER_LIB_DIR");
+        if (env && *env) {
+            tc_lib_dir_append(env);
+        }
+    }
+    /* Force LF-only output. On Windows, the C runtime opens stdout
+     * in text mode by default, converting every `\n` to `\r\n`.
+     * That breaks string-equality comparisons in shell tests
+     * (LF vs CRLF) AND breaks Unix tools that consume the output.
+     * Writing the bytes directly via `fwrite` to stdout in text mode
+     * still triggers the conversion; the right call is
+     * `_setmode(_fileno(stdout), _O_BINARY)` so subsequent writes
+     * pass through unchanged. On POSIX the call is a no-op. */
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    if (tc.lib_dir_count == 0) {
+        fputs("lib\n", stdout);
+        return 0;
+    }
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        fputs(tc.lib_dirs[i], stdout);
+        fputc('\n', stdout);
+    }
+    return 0;
+}
 
 static int cmd_lib_info(int argc, char** argv) {
 #ifdef _WIN32
@@ -5932,6 +6202,13 @@ int main(int argc, char** argv) {
 
     // Commands that don't need toolchain
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
+        /* `ae help <script.ae>` — heuristic diagnostics for closure-DSL
+         * config scripts (issue #414). The disambiguator checks whether
+         * the next argv is a path ending in `.ae` that actually exists;
+         * bare `ae help` falls through to the usage banner. */
+        if (sub_argc > 0 && ae_help_is_script_target(sub_argv[0])) {
+            return ae_help_main(sub_argc, sub_argv);
+        }
         print_usage();
         return 0;
     }
@@ -5958,6 +6235,7 @@ int main(int argc, char** argv) {
     if (strcmp(cmd, "cflags") == 0)   return cmd_cflags(sub_argc, sub_argv);
     if (strcmp(cmd, "repl") == 0)     return cmd_repl();
     if (strcmp(cmd, "lib-info") == 0) return cmd_lib_info(sub_argc, sub_argv);
+    if (strcmp(cmd, "lib-path") == 0) return cmd_lib_path(sub_argc, sub_argv);
 
     fprintf(stderr, "Unknown command '%s'. Run 'ae help' for usage.\n", cmd);
     return 1;

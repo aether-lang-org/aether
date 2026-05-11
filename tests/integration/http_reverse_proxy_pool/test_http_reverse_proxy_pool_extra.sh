@@ -199,34 +199,56 @@ parallel_echo() {
     curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
 }
 
+# Windows-reduced mode — see test_http_reverse_proxy_pool.sh for the
+# rationale (MSYS2's bash fork-emulation + Defender + slower
+# localhost = 10-100x per-curl overhead). Each curl-heavy subtest
+# either gets a smaller iteration count or is skipped outright when
+# its code path is already covered by another kept subtest. All
+# reductions print a visible line in CI.
+IS_WIN=0
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) IS_WIN=1 ;;
+esac
+
 # ----- spawn the warm upstreams ONCE ---------------------------
 start_three_upstreams
 
 # ---- Test 9: circuit breaker half-open recovery ------------
-start_proxy proxy_breaker
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
-parallel_echo 8
-wait_for_breaker_state "http://localhost:19102" 1 || exit 1
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200" 2>/dev/null || true
-wait_for_breaker_recovery "http://localhost:19102" || exit 1
-B_AFTER_RECOVERY=$(metric_2xx "http://localhost:19102")
-i=0
-while [ $i -lt 9 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo" 2>/dev/null || true
-    i=$((i + 1))
-done
-B_FINAL=$(metric_2xx "http://localhost:19102")
-DELTA=$((B_FINAL - B_AFTER_RECOVERY))
-[ "$DELTA" -ge 2 ] || fail "breaker recovery: B delta=$DELTA expected ≥2"
-clear_upstream_b_503
-stop_proxy
+# Skipped on Windows: this exercises the breaker's open→half-open→
+# closed transition. Test 8 in part 1 (breaker-open) already proves
+# the open transition; recovery is symmetric and runs on POSIX.
+if [ "$IS_WIN" = "1" ]; then
+    echo "  [SKIP-WIN] Test 9 (breaker-recovery) — open path covered by Test 8"
+else
+    start_proxy proxy_breaker
+    curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
+    parallel_echo 8
+    wait_for_breaker_state "http://localhost:19102" 1 || exit 1
+    curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200" 2>/dev/null || true
+    wait_for_breaker_recovery "http://localhost:19102" || exit 1
+    B_AFTER_RECOVERY=$(metric_2xx "http://localhost:19102")
+    i=0
+    while [ $i -lt 9 ]; do
+        curl -s -o /dev/null --max-time 3 "$PROXY/echo" 2>/dev/null || true
+        i=$((i + 1))
+    done
+    B_FINAL=$(metric_2xx "http://localhost:19102")
+    DELTA=$((B_FINAL - B_AFTER_RECOVERY))
+    [ "$DELTA" -ge 2 ] || fail "breaker recovery: B delta=$DELTA expected ≥2"
+    clear_upstream_b_503
+    stop_proxy
+fi
 
 # ---- Test 10: cache hit — counter unchanged on second call --
+# Windows: 2-req inner loop instead of 5. The hit-counter assertion
+# is a strict equality (`delta == 0`), so two consecutive cached
+# hits prove the same thing five do.
 start_proxy proxy_cache
 curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable" 2>/dev/null || true
 COUNT_BEFORE=$(metric_2xx_total)
+if [ "$IS_WIN" = "1" ]; then CACHE_HIT_REQS=2; else CACHE_HIT_REQS=5; fi
 i=0
-while [ $i -lt 5 ]; do
+while [ $i -lt $CACHE_HIT_REQS ]; do
     curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable" 2>/dev/null || true
     i=$((i + 1))
 done
@@ -265,11 +287,16 @@ COUNT_AFTER_BOTH=$(metric_2xx_total)
 stop_proxy
 
 # ---- Test 13: idempotent retry on 5xx ----------------------
+# Windows: 3 requests instead of 9. The retry assertion is binary
+# (each request must return a tagged success); three trials are
+# enough to surface a regression where the retry logic falls back
+# to surfacing the 5xx.
 start_proxy proxy_retry
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
+if [ "$IS_WIN" = "1" ]; then RETRY_REQS=3; else RETRY_REQS=9; fi
 i=0
 ALL_OK=1
-while [ $i -lt 9 ]; do
+while [ $i -lt $RETRY_REQS ]; do
     body=$(curl -s --max-time 5 "$PROXY/echo" 2>/dev/null)
     tag=$(echo "$body" | head -1 | cut -d: -f1)
     case "$tag" in
@@ -278,7 +305,7 @@ while [ $i -lt 9 ]; do
     esac
     i=$((i + 1))
 done
-[ "$ALL_OK" = "1" ] || fail "retry: not all 9 requests returned a tag= response"
+[ "$ALL_OK" = "1" ] || fail "retry: not all $RETRY_REQS requests returned a tag= response"
 clear_upstream_b_503
 stop_proxy
 
@@ -305,8 +332,11 @@ echo "$RESP" | head -1 | grep -qE '^tag=[ABC]' || fail "trace passthrough: no ta
 stop_proxy
 
 # ---- Test 16: Prometheus metrics endpoint ----------------
+# Windows: 3-req warm-up instead of 6 — the assertion is "all five
+# metric families are exposed", not a counter-value check.
 start_proxy proxy_rr
-parallel_echo 6
+if [ "$IS_WIN" = "1" ]; then METRICS_BATCH=3; else METRICS_BATCH=6; fi
+parallel_echo $METRICS_BATCH
 METRICS=$(curl -s --max-time 3 "$PROXY/proxy-metrics" 2>/dev/null)
 echo "$METRICS" | grep -q 'aether_proxy_upstream_requests_total' || fail "metrics: requests_total absent"
 echo "$METRICS" | grep -q 'aether_proxy_upstream_inflight'        || fail "metrics: inflight absent"
@@ -316,4 +346,8 @@ echo "$METRICS" | grep -q 'aether_proxy_cache_hits_total'         || fail "metri
 echo "$METRICS" | grep -q '# TYPE'                                || fail "metrics: TYPE block absent"
 stop_proxy
 
-echo "  [PASS] http_reverse_proxy_pool_extra: 8/8 — breaker-recovery/cache(3)/retry/rate-limit/trace/metrics"
+if [ "$IS_WIN" = "1" ]; then
+    echo "  [PASS] http_reverse_proxy_pool_extra: 7/8 win-reduced — cache(3)/retry/rate-limit/trace/metrics"
+else
+    echo "  [PASS] http_reverse_proxy_pool_extra: 8/8 — breaker-recovery/cache(3)/retry/rate-limit/trace/metrics"
+fi

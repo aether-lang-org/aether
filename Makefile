@@ -476,18 +476,30 @@ test-ae: compiler ae stdlib
 	printf 'fi\n'                                                                                   >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
-	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/bin_name_lookup_and_walkup/*' -prune -o -path 'tests/integration/string_plus_reject/*' -prune -o -path 'tests/integration/aether_string_to_c_extern/*' -prune -o -path 'tests/integration/module_extern_auto_unwrap/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/cryptography_v2/*' -prune -o -path 'tests/integration/extern_annotation/*' -prune -o -path 'tests/integration/c_callback/*' -prune -o -path 'tests/integration/extern_single_value_heap/*' -prune -o -path 'tests/integration/extern_tuple_return/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/sqlite_prepared/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -path 'tests/integration/aether_string_ffi_unwrap/*' -prune -o -path 'tests/integration/ptr_return_int_zero_inference/*' -prune -o -path 'tests/integration/string_interp_loop_alias/*' -prune -o -path 'tests/integration/transitive_module_import/*' -prune -o -path 'tests/integration/dsl_receiver_scoping/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_edge/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_nested/*' -prune -o -path 'tests/integration/http_sendfile/*' -prune -o -path 'tests/integration/emit_lib_deadline/*' -prune -o -path 'tests/integration/derive_eq/*' -prune -o -path 'tests/integration/http_client_redirects/*' -prune -o -path 'tests/integration/source_location/*' -prune -o -path 'tests/integration/std_dl/*' -prune -o -path 'tests/integration/host_tinygo/*' -prune -o -path 'tests/integration/sealed_namespaces/*' -prune -o -path 'tests/integration/default_arguments/*' -prune -o -path 'tests/integration/source_location_default_capture/*' -prune -o -path 'tests/integration/fn_typed_local_call/*' -prune -o -path 'tests/integration/http_server_tls/*' -prune -o -path 'tests/integration/http_server_keepalive/*' -prune -o -path 'tests/integration/http_server_actor_dispatch/*' -prune -o -path 'tests/integration/http_middleware_d1/*' -prune -o -path 'tests/integration/http_middleware_d2/*' -prune -o -path 'tests/integration/http_server_ops/*' -prune -o -path 'tests/integration/http_server_observability/*' -prune -o -path 'tests/integration/http_server_sse/*' -prune -o -path 'tests/integration/http_server_websocket/*' -prune -o -path 'tests/integration/http_server_h2_tls/*' -prune -o -path 'tests/integration/http_server_h2_middleware/*' -prune -o -path 'tests/integration/http_real_ip/*' -prune -o -path 'tests/integration/http_auth/*' -prune -o -path 'tests/integration/http_h2_concurrent_dispatch/*' -prune -o -path 'tests/integration/http_reverse_proxy/*' -prune -o -path 'tests/integration/http_reverse_proxy_pool/*' -prune -o -path 'tests/integration/panic_stack_trace/*' -prune -o -path 'tests/integration/cas_roundtrip/*' -prune -o -path 'tests/integration/caller_info/*' -prune -o -path 'tests/integration/svn_checkout_via_vcr/*' -prune -o -path 'tests/integration/svn_vcr_strict_match/*' -prune -o -path 'tests/integration/std_ipc_roundtrip/*' -prune -o -path 'tests/integration/std_ipc_bash_chain/*' -prune -o -path 'tests/integration/http_script_gateway/*' -prune -o -path 'tests/integration/lib_meta/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
+	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/bin_name_lookup_and_walkup/*' -prune -o -path 'tests/integration/string_plus_reject/*' -prune -o -path 'tests/integration/aether_string_to_c_extern/*' -prune -o -path 'tests/integration/module_extern_auto_unwrap/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/cryptography_v2/*' -prune -o -path 'tests/integration/extern_annotation/*' -prune -o -path 'tests/integration/c_callback/*' -prune -o -path 'tests/integration/extern_single_value_heap/*' -prune -o -path 'tests/integration/extern_tuple_return/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/sqlite_prepared/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -path 'tests/integration/aether_string_ffi_unwrap/*' -prune -o -path 'tests/integration/ptr_return_int_zero_inference/*' -prune -o -path 'tests/integration/string_interp_loop_alias/*' -prune -o -path 'tests/integration/transitive_module_import/*' -prune -o -path 'tests/integration/dsl_receiver_scoping/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_edge/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_nested/*' -prune -o -path 'tests/integration/http_sendfile/*' -prune -o -path 'tests/integration/emit_lib_deadline/*' -prune -o -path 'tests/integration/derive_eq/*' -prune -o -path 'tests/integration/http_client_redirects/*' -prune -o -path 'tests/integration/source_location/*' -prune -o -path 'tests/integration/std_dl/*' -prune -o -path 'tests/integration/host_tinygo/*' -prune -o -path 'tests/integration/sealed_namespaces/*' -prune -o -path 'tests/integration/default_arguments/*' -prune -o -path 'tests/integration/source_location_default_capture/*' -prune -o -path 'tests/integration/fn_typed_local_call/*' -prune -o -path 'tests/integration/http_server_tls/*' -prune -o -path 'tests/integration/http_server_keepalive/*' -prune -o -path 'tests/integration/http_server_actor_dispatch/*' -prune -o -path 'tests/integration/http_middleware_d1/*' -prune -o -path 'tests/integration/http_middleware_d2/*' -prune -o -path 'tests/integration/http_server_ops/*' -prune -o -path 'tests/integration/http_server_observability/*' -prune -o -path 'tests/integration/http_server_sse/*' -prune -o -path 'tests/integration/http_server_websocket/*' -prune -o -path 'tests/integration/http_server_h2_tls/*' -prune -o -path 'tests/integration/http_server_h2_middleware/*' -prune -o -path 'tests/integration/http_real_ip/*' -prune -o -path 'tests/integration/http_auth/*' -prune -o -path 'tests/integration/http_h2_concurrent_dispatch/*' -prune -o -path 'tests/integration/http_reverse_proxy/*' -prune -o -path 'tests/integration/http_reverse_proxy_pool/*' -prune -o -path 'tests/integration/panic_stack_trace/*' -prune -o -path 'tests/integration/cas_roundtrip/*' -prune -o -path 'tests/integration/caller_info/*' -prune -o -path 'tests/integration/svn_checkout_via_vcr/*' -prune -o -path 'tests/integration/svn_vcr_strict_match/*' -prune -o -path 'tests/integration/std_ipc_roundtrip/*' -prune -o -path 'tests/integration/std_ipc_bash_chain/*' -prune -o -path 'tests/integration/http_script_gateway/*' -prune -o -path 'tests/integration/lib_meta/*' -prune -o -path 'tests/integration/run_lib_path/*' -prune -o -path 'tests/integration/selective_import_shadow/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
-	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
-		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
-		if bash "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then \
-			echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"; \
-		else \
-			echo "  [FAIL] $$name (shell test)"; \
-			printf 'shell' > "$$tmpdir/phase_$$name.txt"; \
-			touch "$$tmpdir/FAIL_$$name"; \
-		fi; \
-	done; \
+	sh_script="$$tmpdir/run_sh_dir.sh"; \
+	printf '#!/bin/sh\n'                                                                                          > "$$sh_script"; \
+	printf 'dir="$$1"; tmpdir="$$2"\n'                                                                            >> "$$sh_script"; \
+	printf 'for sh_test in $$(find "$$dir" -maxdepth 1 -name "test_*.sh" 2>/dev/null | sort); do\n'              >> "$$sh_script"; \
+	printf '  name=$$(echo "$$sh_test" | sed "s|tests/||;s|/|_|g;s|\\.sh$$||")\n'                              >> "$$sh_script"; \
+	printf '  if bash "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then\n'                 >> "$$sh_script"; \
+	printf '    if grep -q "\\[SKIP-WIN\\]" "$$tmpdir/run_$$name.out" 2>/dev/null; then\n'                        >> "$$sh_script"; \
+	printf '      reason=$$(grep "\\[SKIP-WIN\\]" "$$tmpdir/run_$$name.out" | head -1 | sed "s/^[[:space:]]*\\[SKIP-WIN\\][[:space:]]*//"); \n' >> "$$sh_script"; \
+	printf '      echo "  [SKIP] $$name — $$reason"; touch "$$tmpdir/PASS_$$name"\n'                              >> "$$sh_script"; \
+	printf '    else\n'                                                                                           >> "$$sh_script"; \
+	printf '      echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                                         >> "$$sh_script"; \
+	printf '    fi\n'                                                                                             >> "$$sh_script"; \
+	printf '  else\n'                                                                                             >> "$$sh_script"; \
+	printf '    echo "  [FAIL] $$name (shell test)"\n'                                                            >> "$$sh_script"; \
+	printf '    printf shell > "$$tmpdir/phase_$$name.txt"\n'                                                     >> "$$sh_script"; \
+	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                                                   >> "$$sh_script"; \
+	printf '  fi\n'                                                                                               >> "$$sh_script"; \
+	printf 'done\n'                                                                                               >> "$$sh_script"; \
+	chmod +x "$$sh_script"; \
+	sh_nproc=$${SH_NPROC:-1}; \
+	find tests/integration -name 'test_*.sh' 2>/dev/null | xargs -n1 dirname | sort -u \
+	    | xargs -P $$sh_nproc -I{} "$$sh_script" "{}" "$$tmpdir"; \
 	passed=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
 	failed=$$(ls "$$tmpdir"/FAIL_* 2>/dev/null | wc -l | tr -d ' '); \
 	total=$$((passed + failed)); \
@@ -809,6 +821,7 @@ examples: compiler ae stdlib
 	root=$$(pwd); \
 	find examples -name '*.ae' \
 	    | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | grep -v '/host-.*-demo\.ae$$' \
+	    | grep -v '/ae-help-demo/' \
 	    | sort \
 	    | xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	pass=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
@@ -858,7 +871,7 @@ ae: compiler
 	@echo "==================================="
 	@echo "Building ae command-line tool ($(DETECTED_OS)) v$(VERSION)"
 	@echo "==================================="
-	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_OPENSSL_LIBS='"$(OPENSSL_LDFLAGS)"' -DAETHER_ZLIB_LIBS='"$(ZLIB_LDFLAGS)"' -DAETHER_NGHTTP2_LIBS='"$(NGHTTP2_LDFLAGS)"' -Itools tools/ae.c tools/apkg/toml_parser.c -o build/ae$(EXE_EXT) $(LDFLAGS)
+	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_OPENSSL_LIBS='"$(OPENSSL_LDFLAGS)"' -DAETHER_ZLIB_LIBS='"$(ZLIB_LDFLAGS)"' -DAETHER_NGHTTP2_LIBS='"$(NGHTTP2_LDFLAGS)"' $(if $(AETHER_ENABLE_LLM),-DAETHER_ENABLE_LLM=1) -Itools tools/ae.c tools/ae_help.c tools/apkg/toml_parser.c $(if $(AETHER_ENABLE_LLM),tools/llm_shim.c $(LLM_LDFLAGS)) -o build/ae$(EXE_EXT) $(LDFLAGS)
 	@echo "✓ Built successfully: build/ae$(EXE_EXT)"
 	@echo ""
 	@echo "Usage:"
@@ -1318,8 +1331,19 @@ endif
 # Compile an Aether program to executable
 compile: compiler
 ifndef FILE
-	@echo "Error: FILE not specified"
-	@echo "Usage: make compile FILE=myprogram.ae [OUTPUT=myprogram]"
+	@echo "make compile: missing required FILE argument."
+	@echo ""
+	@echo "Usage:"
+	@echo "  make compile FILE=path/to/script.ae [OUTPUT=name]"
+	@echo ""
+	@echo "Example:"
+	@echo "  make compile FILE=examples/basics/hello.ae"
+	@echo "  make compile FILE=examples/ae-help-demo/fixed_dsl.ae OUTPUT=fixed_dsl"
+	@echo ""
+	@echo "If you wanted to build the toolchain instead, run:"
+	@echo "  make ae         # just the CLI"
+	@echo "  make compiler   # just the compiler"
+	@echo "  make            # everything"
 	@exit 1
 endif
 ifndef OUTPUT
@@ -1608,19 +1632,20 @@ docker-ci-windows: docker-build-ci
 ci: clean
 	@echo "==================================="
 	@echo "  Aether CI — Full Test Suite"
+	@echo "  Parallel: $(NPROC) jobs (build) / $(NPROC) (.ae tests) / $${SH_NPROC:-1} (shell tests)"
 	@echo "==================================="
 	@echo ""
 	@echo "[1/9] Building compiler (-Werror)..."
-	@$(MAKE) compiler EXTRA_CFLAGS=-Werror
+	@$(MAKE) -j$(NPROC) compiler EXTRA_CFLAGS=-Werror
 	@echo ""
 	@echo "[2/9] Building ae CLI..."
-	@$(MAKE) ae
+	@$(MAKE) -j$(NPROC) ae
 	@echo ""
 	@echo "[3/9] Building stdlib..."
-	@$(MAKE) stdlib
+	@$(MAKE) -j$(NPROC) stdlib
 	@echo ""
 	@echo "[4/9] Running C unit tests..."
-	@$(MAKE) test
+	@$(MAKE) -j$(NPROC) test
 	@echo ""
 	@echo "[5/9] Running .ae integration tests..."
 	@$(MAKE) test-ae

@@ -89,6 +89,68 @@ install_extension() {
 
     copy_extension_assets "${extensions_root}/${EXT_DIR_NAME}"
 
+    # Heal the editor's own extension-manifest state. VS Code and
+    # Cursor maintain TWO JSON files alongside the per-extension
+    # directories:
+    #
+    #   extensions.json   — array of registered extensions, each
+    #                       entry naming its on-disk directory.
+    #                       The editor reads this on startup AND
+    #                       trusts it; if it points at a folder
+    #                       that no longer exists, the editor
+    #                       throws "Unable to read file
+    #                       <ext>/package.json" on every .ae open.
+    #   .obsolete         — JSON object whose keys are
+    #                       `<publisher>.<name>-<version>` strings
+    #                       the editor was told are obsolete and
+    #                       should be SKIPPED at load time. If our
+    #                       new version appears here (e.g. because
+    #                       a prior install was uninstalled via
+    #                       the editor's UI), the freshly-copied
+    #                       extension is invisible.
+    #
+    # Stripping every `aether*` entry from BOTH files forces the
+    # editor to re-scan the directory on next startup and re-register
+    # what it actually finds. Targeted to our publisher prefix; never
+    # touches unrelated entries. Python (which both editors ship in
+    # MSYS2 / macOS / typical Linux installs) is the safest cross-
+    # platform JSON editor — `jq` isn't universal, sed-on-JSON is
+    # fragile. Falls back silently if Python isn't present (the
+    # filesystem cleanup above still runs).
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$extensions_root" <<'PYEOF'
+import json, sys, pathlib
+root = pathlib.Path(sys.argv[1])
+
+# extensions.json — drop entries whose id or location mentions
+# 'aether'. Cursor re-discovers the live folder on next startup.
+mpath = root / 'extensions.json'
+if mpath.exists():
+    try:
+        data = json.loads(mpath.read_text())
+        if isinstance(data, list):
+            cleaned = [e for e in data
+                       if 'aether' not in e.get('identifier', {}).get('id', '').lower()
+                       and 'aether' not in e.get('location', {}).get('path', '').lower()]
+            if len(cleaned) != len(data):
+                mpath.write_text(json.dumps(cleaned) + '\n')
+    except (json.JSONDecodeError, OSError):
+        pass  # Editor will regenerate it; not our concern.
+
+# .obsolete — drop aether keys so our fresh install isn't skipped.
+opath = root / '.obsolete'
+if opath.exists():
+    try:
+        data = json.loads(opath.read_text())
+        if isinstance(data, dict):
+            cleaned = {k: v for k, v in data.items() if 'aether' not in k.lower()}
+            if len(cleaned) != len(data):
+                opath.write_text(json.dumps(cleaned))
+    except (json.JSONDecodeError, OSError):
+        pass
+PYEOF
+    fi
+
     echo "✓ Extension installed successfully."
     echo "  Restart ${editor_name} for the language to register."
     echo "  .ae files use a fixed palette regardless of your theme;"

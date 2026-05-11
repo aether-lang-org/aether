@@ -2,6 +2,7 @@
 #define AETHER_MODULE_H
 
 #include "ast.h"
+#include "aether_lib_path.h"  /* AETHER_LIB_DIRS_MAX, AETHER_LIB_PATH_SEP_CHAR */
 
 // Module system for Aether
 // Supports: import/export, package management
@@ -23,7 +24,13 @@ typedef struct {
     int module_count;
     int module_capacity;
     char source_dir[2048];  // Source file directory for relative resolution
-    char lib_dir[256];      // Custom lib folder name (default: "lib")
+    // Lib-search path: an ordered list of directories (PATH-style),
+    // searched left-to-right; first hit wins. Issue #413. Default is
+    // a single entry, `"lib"`, populated at registry init. Each entry
+    // is a fixed 256-byte buffer; the count tracks how many slots
+    // are live.
+    char lib_dirs[AETHER_LIB_DIRS_MAX][256];
+    int  lib_dir_count;
 } ModuleRegistry;
 
 // Global module registry
@@ -84,9 +91,28 @@ void package_manifest_free(PackageManifest* manifest);
 // Set the source file directory so module resolution can search lib/ relative to it.
 void module_set_source_dir(const char* source_path);
 
-// Set the lib folder name for module resolution (default: "lib").
-// Use --lib flag to change, e.g. --lib .aeb
+// Set the lib search path for module resolution. The argument may be
+// a single directory (`"lib"`, `".aeb"`) or a PATH-style list (e.g.
+// `"./lib:~/aether-libs"` on POSIX, `"./lib;C:/aether-libs"` on
+// Windows). Each entry is appended to the search list in order; the
+// list is RESET on every call so passing a single path overrides any
+// existing entries. Use `module_add_lib_dir` to append without
+// clearing. Default is the single entry `"lib"`. Issue #413.
 void module_set_lib_dir(const char* lib_dir);
+
+// Append a single directory to the lib search path. Used by `ae run
+// --lib a --lib b` to compose paths from repeated flags. Silently
+// no-ops on NULL or empty input and on overflow past
+// AETHER_LIB_DIRS_MAX. Issue #413.
+void module_add_lib_dir(const char* dir);
+
+// Append a separator-string of directories ("a:b:c" POSIX,
+// "a;b;c" Windows) to the lib search path. Each segment is routed
+// through `module_add_lib_dir` so normalisation, dedup, and the
+// cap behave identically to repeated flags. Single source of truth
+// for separator parsing — both `module_set_lib_dir` and aetherc's
+// `--lib` handler call this. Issue #413.
+void module_add_lib_dirs(const char* spec);
 
 // Orchestrate all module loading: scan imports, resolve, parse, cache, detect cycles.
 // Returns 1 on success, 0 on circular dependency error.

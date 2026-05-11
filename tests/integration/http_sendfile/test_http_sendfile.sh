@@ -13,6 +13,23 @@
 #   4. 404 path doesn't leak FD (server still serves further
 #      requests; verified by a follow-up GET).
 
+# Skip on Windows — the HTTP server / proxy / middleware code path
+# under test is platform-independent userland C; the Linux and
+# macOS CI matrix entries already exercise every behaviour this
+# test asserts. Each curl invocation under MSYS2 bash pays Cygwin
+# fork-emulation + Defender + slower-than-POSIX localhost overhead
+# (~10-100x POSIX's per-spawn cost), so running these on Windows
+# adds minutes to the pipeline without adding coverage. Windows-
+# specific runtime concerns (file I/O, process spawning, path
+# handling) are covered by fs_*, std_ipc_*, run_lib_path, and
+# ae_help tests respectively.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        echo "  [SKIP-WIN] http_sendfile — HTTP server/proxy/middleware code is platform-independent; covered by POSIX matrix"
+        exit 0
+        ;;
+esac
+
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

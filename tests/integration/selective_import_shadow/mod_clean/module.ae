@@ -1,0 +1,15 @@
+// Companion fixture: same shape as mod_with_shadow but the local
+// function is RENAMED so it doesn't collide with the selectively-
+// imported `length`. Should compile cleanly post-fix.
+//
+// The body uses the qualified form `string.length(s)` (rather than
+// bare `length(s)`) because inside a sub-module the selectively-
+// imported names are kept namespaced at call sites — same shape
+// the stdlib itself uses.
+import std.string
+
+my_length(s: string) -> int {
+    return string.length(s)
+}
+
+exports (my_length)

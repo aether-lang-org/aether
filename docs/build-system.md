@@ -273,7 +273,46 @@ Flags enabled (issue #396):
 
 The flags are added to `CFLAGS` only when `HARDEN=1` is set; the default build path is byte-identical to the unhardened release. The Linux/Hardened (gcc) CI matrix entry pins this so a regression that introduces an unchecked `memcpy`-over-fixed-buffer trips a red check before merge.
 
+## LLM diagnostics (`AETHER_ENABLE_LLM=1`)
+
+`ae help <script> --llm <weights.gguf>` is an opt-in offline local-LLM escalation
+path for the [config-IS-code diagnostic flow](cic-help.md) (issue #415). Default
+builds omit the LLM module entirely so the binary stays small and the link line
+stays dependency-light; embedders enable it explicitly at build time.
+
+```bash
+# Default build — `ae help --llm <path>` returns a clear "rebuild with
+# AETHER_ENABLE_LLM=1" message; no llama.cpp dependency.
+make ae
+
+# LLM-enabled build — requires llama.cpp built and linkable. The shim
+# in `tools/llm_shim.c` targets the stable `llama.h` C API.
+make ae AETHER_ENABLE_LLM=1 \
+    LLM_LDFLAGS="-L/path/to/llama.cpp/build -lllama -lggml -lstdc++ -lm" \
+    LLM_CFLAGS="-I/path/to/llama.cpp"
+```
+
+Hard privacy invariants (enforced by code structure + a Linux CI `strace -e network` guard):
+
+- **No network calls.** The shim opens exactly the weights file the user names.
+  No download, no fetch, no telemetry, no "anonymised usage stats." Same offline
+  as online.
+- **No bundled weights.** We ship no `.gguf`. You bring your own (3-7B range
+  works on a laptop CPU; larger models also fine but slower).
+- **No model marketplace integration.** No `ae help --download-model`. Path
+  argument only; a missing path is a clean error, not a "would you like to fetch
+  it?" prompt.
+- **Stripped builds (default) omit the entire module.** A binary built without
+  `AETHER_ENABLE_LLM=1` cannot run inference even if someone passes `--llm
+  <path>` — they get the documented "rebuild with the flag" message instead.
+
+The shim's surface is a single C function (`int ae_llm_run(const char* weights_path,
+const char* prompt, FILE* out)`); upstream API rotations in llama.cpp need
+touching only that one TU. See [`docs/cic-help.md`](cic-help.md) for the full
+design.
+
 ## References
 
 - GCC Optimization Options: https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
 - LLVM PGO Guide: https://llvm.org/docs/HowToBuildWithPGO.html
+- llama.cpp (C API used by the LLM shim): https://github.com/ggerganov/llama.cpp
