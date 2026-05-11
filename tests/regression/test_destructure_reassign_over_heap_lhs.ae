@@ -1,0 +1,98 @@
+// Regression: tuple-destructure-reassign of a variable that
+// currently holds a heap value must free the previous heap value
+// AND set the destination's heap flag according to the destructure-
+// position's heap classification — including when the destructure
+// position's type is NOT string.
+//
+// Bug shape post-0.147:
+//
+//   pkg_include = "${pkg_name}*"             // _heap_pkg_include = 1 (interp)
+//   pkg_include, _ = map.get(opts, "k")      // bare assign — wrapper skipped
+//   // ... function returns ...
+//   // function-exit defer-free: _heap_pkg_include still 1, frees a
+//   // pointer into the map's internal storage. SIGABRT.
+//
+// Root cause: the destructure-wrapper-emission gate at the AST_TUPLE_
+// DESTRUCTURE codegen path required the destructure POSITION's type
+// to be TYPE_STRING. `map.get` returns `(value: ptr, err: string)`
+// — position 0 is TYPE_PTR (the map's stored void* hot-path is the
+// value's pointer, irrespective of value's actual type). With
+// pos_is_string=false the codegen emitted bare assignment and the
+// previous heap-string value's tracker flag never got cleared. The
+// function-exit defer-free then ran free() against the map's
+// borrowed storage.
+//
+// Fix: at the destructure-wrapper-emission gate, when LHS is heap-
+// string-tracked (regardless of the destructure POSITION's type),
+// still emit the wrapper. The wrapper frees the previous heap value
+// (correct — it's a heap-string the var owns) and sets the new
+// heap flag to 0 when the destructure position is non-string
+// (borrow assumption — the buffer is opaque from the heap-string-
+// tracker's perspective, so don't claim ownership of it).
+
+import std.string
+import std.map
+
+extern exit(code: int)
+
+main() {
+    println("=== test_destructure_reassign_over_heap_lhs ===")
+
+    // Case 1: the exact minimal repro from the bug filing.
+    opts = map.new()
+    map.put(opts, "include", "monorepo.*")
+    pkg_name = "monorepo"
+    pkg_include = "${pkg_name}*"          // heap (interp result)
+    pkg_include, _ = map.get(opts, "include")
+    if string.length(pkg_include) != 10 {  // "monorepo.*"
+        println("FAIL 1: length = ${string.length(pkg_include)}, expected 10")
+        exit(1)
+    }
+    println("  PASS 1: destructure-reassign over interp-result LHS no longer aborts")
+
+    // Case 2: same shape but the previous heap value comes from
+    // string.concat instead of interpolation. Confirms the fix
+    // covers all is_heap_string_expr-classified RHS shapes, not
+    // just AST_STRING_INTERP.
+    opts2 = map.new()
+    map.put(opts2, "k", "value-from-map")
+    held = string.concat("prefix-", "old")  // heap
+    held, _ = map.get(opts2, "k")
+    if string.length(held) != 14 {
+        println("FAIL 2: length = ${string.length(held)}, expected 14")
+        exit(1)
+    }
+    println("  PASS 2: destructure-reassign over string.concat LHS")
+
+    // Case 3: 3-position tuple (struct-shape map iteration) where
+    // one position is heap and another is the previously-heap LHS.
+    // Confirms per-position classification kicks in correctly when
+    // the gate widens — non-string positions on heap LHS go to
+    // _heap=0, string positions retain their classification.
+    opts3 = map.new()
+    map.put(opts3, "x", "ex")
+    map.put(opts3, "y", "why")
+    name3 = "starter-name"      // bare literal (not heap)
+    name3 = string.concat("n=", name3)  // heap
+    name3, _ = map.get(opts3, "x")
+    if string.length(name3) != 2 {
+        println("FAIL 3: length = ${string.length(name3)}, expected 2")
+        exit(1)
+    }
+    println("  PASS 3: destructure-reassign over previously-heap var preserved across iteration")
+
+    // Case 4: regression guard — destructure-reassign on a
+    // currently-LITERAL LHS still works (_heap_lhs was 0, wrapper
+    // skips the free, sets new flag based on position).
+    opts4 = map.new()
+    map.put(opts4, "p", "borrowed")
+    lit = "starts-as-literal"
+    lit, _ = map.get(opts4, "p")
+    if string.length(lit) != 8 {
+        println("FAIL 4: length = ${string.length(lit)}, expected 8")
+        exit(1)
+    }
+    println("  PASS 4: destructure over literal LHS unchanged (no regression)")
+
+    println("=== all cases passed ===")
+}

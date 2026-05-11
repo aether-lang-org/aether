@@ -2195,8 +2195,29 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                      * its true value. */
                     int lhs_is_tracked = (var->value &&
                                           is_heap_string_var(gen, var->value));
-                    if (pos_is_string && lhs_is_tracked) {
+                    /* Wrapper-emission gate. Fire whenever the LHS is
+                     * heap-string-tracked, regardless of whether the
+                     * destructure POSITION's type is string. The
+                     * tracker carries the LHS's previous-value-heapness
+                     * across the destructure; if the previous value was
+                     * a heap string (e.g. `pkg_include = "${name}*"`)
+                     * and the destructure now reassigns it to a non-
+                     * string position (e.g. `pkg_include, _ = map.get(...)`
+                     * where map.get returns `(ptr, string)` and
+                     * position 0 is TYPE_PTR), the wrapper must still
+                     * free the previous heap-string value and clear
+                     * the flag — otherwise the function-exit defer-
+                     * free reads the now-stale flag (=1) and runs
+                     * free() against the new non-owned pointer.
+                     *
+                     * For non-string positions the new heap flag is
+                     * always 0 (borrow assumption — the destructured
+                     * value is an opaque pointer from the heap-string-
+                     * tracker's perspective, never the source's
+                     * fresh-malloc'd char*). */
+                    if (lhs_is_tracked) {
                         int escaped = is_escaped_string_var(gen, var->value);
+                        int new_heap = pos_is_string ? pos_is_heap : 0;
                         if (escaped) {
                             fprintf(gen->output, "%s = _tup%d._%d;\n",
                                     var->value, tmp_id, j);
@@ -2209,7 +2230,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                 var->value,
                                 var->value, tmp_id, j,
                                 var->value,
-                                var->value, pos_is_heap);
+                                var->value, new_heap);
                         }
                         continue;
                     }
@@ -2406,9 +2427,50 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                      * the analysis. */
                     int var_escaped = is_escaped_string_var(gen, stmt->value);
                     if (var_is_string && stmt->child_count > 0 && var_escaped) {
-                        fprintf(gen->output, "%s = ", stmt->value);
-                        generate_expression(gen, stmt->children[0]);
-                        fprintf(gen->output, ";\n");
+                        /* Escaped-LHS bare assignment. Wrapper-free is
+                         * suppressed because the var's old value is
+                         * potentially stored by a recipient (list_add,
+                         * map_put, struct field, etc.) — freeing now
+                         * would dangle the stored copy.
+                         *
+                         * Companion to the 0.147 alias-ownership-
+                         * transfer fix in the non-escaped branch: when
+                         * RHS is a bare identifier referring to a heap-
+                         * tracked local, we must ALSO clear the source's
+                         * heap flag here. Otherwise, in the canonical
+                         * "alias then reassign source" pattern —
+                         *
+                         *   line = rest                   // line escaped
+                         *   rest = ""                     // wrapper frees buf
+                         *   list_add(out, line)           // line dangles
+                         *
+                         * — the source's wrapper would free the buffer
+                         * the escape recipient (list, map, struct, …)
+                         * still references. The non-escaped path
+                         * transfers the flag from source to dest; the
+                         * escaped path can't (dest's flag is meaningless
+                         * because its defer-free is suppressed) but it
+                         * still needs to clear the source's flag for
+                         * the same reason. Net effect: the buffer stays
+                         * alive in the recipient and no wrapper-free
+                         * fires against it. */
+                        ASTNode* rhs_for_escape = stmt->children[0];
+                        int rhs_is_alias_to_heap_var =
+                            (rhs_for_escape &&
+                             rhs_for_escape->type == AST_IDENTIFIER &&
+                             rhs_for_escape->value &&
+                             is_heap_string_var(gen, rhs_for_escape->value) &&
+                             strcmp(rhs_for_escape->value, stmt->value) != 0);
+                        if (rhs_is_alias_to_heap_var) {
+                            fprintf(gen->output, "{ %s = ", stmt->value);
+                            generate_expression(gen, stmt->children[0]);
+                            fprintf(gen->output, "; _heap_%s = 0; }\n",
+                                    rhs_for_escape->value);
+                        } else {
+                            fprintf(gen->output, "%s = ", stmt->value);
+                            generate_expression(gen, stmt->children[0]);
+                            fprintf(gen->output, ";\n");
+                        }
                     } else if (var_is_string && stmt->child_count > 0) {
                         // Defensive: if the hoist somehow missed this
                         // name (e.g. promoted via a path the pre-pass
