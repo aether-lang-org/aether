@@ -26,6 +26,30 @@ case "$(uname -s 2>/dev/null)" in
     *)                                 SEP=":";;
 esac
 
+# On Windows / MSYS2, ae normalises MSYS2 POSIX-form paths (`/d/foo`)
+# to native Windows form (`D:/foo`) at the lib-dir entry point — see
+# `aether_lib_path_normalize` in compiler/aether_lib_path.h. That
+# means `ae lib-path` will print `D:/a/...` even when invoked with
+# `/d/a/...` argv. To compare ae's output byte-for-byte against the
+# values we built in shell, we need to apply the SAME normalisation
+# here. No-op on POSIX. Single source of truth — if the C-side
+# function changes, this helper has to track it. uname-gated so the
+# sed call is skipped entirely on Linux / macOS.
+normalize_path() {
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            # `/d/foo` → `D:/foo`. The character class is portable
+            # across BSD sed (macOS) and GNU sed (Linux/MSYS2); the
+            # `\u\1` upper-case substitution is GNU-only but only
+            # this branch runs on MSYS2 where sed is GNU.
+            printf '%s' "$1" | sed -E 's|^/([a-zA-Z])/|\U\1:/|'
+            ;;
+        *)
+            printf '%s' "$1"
+            ;;
+    esac
+}
+
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -102,10 +126,12 @@ run_case "trailing-slash normalised" \
 # stray `\r` from `out` defensively — ae forces LF-only output via
 # binary-mode stdout on Windows now, but a shell or terminal layer
 # could still inject a CR; we don't want this assertion to fail on
-# something that looks identical to a human eye.
+# something that looks identical to a human eye. Apply the same
+# POSIX→Windows path normalisation ae uses when building `expected`
+# (no-op on POSIX) so the byte-comparison succeeds on every host.
 out=$("$AE" lib-path --lib "$SCRIPT_DIR/dirA${SEP}$SCRIPT_DIR/dirB" 2>&1 | tr -d '\r')
-expected="$SCRIPT_DIR/dirA
-$SCRIPT_DIR/dirB"
+expected="$(normalize_path "$SCRIPT_DIR/dirA")
+$(normalize_path "$SCRIPT_DIR/dirB")"
 if [ "$out" = "$expected" ]; then
     echo "  [PASS] ae lib-path introspection"
     pass=$((pass + 1))

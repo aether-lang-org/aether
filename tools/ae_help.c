@@ -700,17 +700,31 @@ static int parse_aetherc_findings(const char* stderr_buf, Finding* findings, int
         safe_strncpy(f->message, raw_msg, sizeof(f->message));
         extract_quoted_name(raw_msg, f->name, sizeof(f->name));
 
-        /* Look for the "  --> file:line:col" location on a nearby line.
-         * Search ahead but stop at the next blank line. */
+        /* Look for the "  --> file:line:col" location on a nearby line
+         * and extract `line` and `col`. Windows MSYS2 paths have
+         * three colons (`D:/a/foo.ae:12:5`) — the first belongs to
+         * the drive letter, not the line-number separator. POSIX
+         * paths have two colons (`/foo/bar.ae:12:5`). The robust
+         * shape is "parse from the end, ignore the path": find the
+         * line ending, walk back through `\\d+:\\d+`, take those
+         * two numbers. Strip trailing CR if present (Windows line
+         * endings reach us as `\r\n` in popen output). */
         const char* loc = strstr(p, "-->");
         if (loc) {
-            const char* colon1 = strchr(loc, ':');
-            if (colon1) {
-                colon1++;
-                f->line = parse_int(&colon1);
-                if (*colon1 == ':') {
-                    colon1++;
-                    f->col = parse_int(&colon1);
+            const char* line_end = loc;
+            while (*line_end && *line_end != '\n') line_end++;
+            const char* tail = line_end;
+            while (tail > loc && (tail[-1] == '\r' || tail[-1] == ' ' || tail[-1] == '\t')) tail--;
+            const char* digit_run_end = tail;
+            while (digit_run_end > loc && digit_run_end[-1] >= '0' && digit_run_end[-1] <= '9') digit_run_end--;
+            /* digit_run_end now points at first digit of col. */
+            if (digit_run_end < tail && digit_run_end > loc && digit_run_end[-1] == ':') {
+                const char* line_digit_end = digit_run_end - 1; /* on the `:` */
+                const char* line_digit_start = line_digit_end;
+                while (line_digit_start > loc && line_digit_start[-1] >= '0' && line_digit_start[-1] <= '9') line_digit_start--;
+                if (line_digit_start < line_digit_end && line_digit_start > loc && line_digit_start[-1] == ':') {
+                    f->line = parse_int(&line_digit_start);
+                    f->col  = parse_int(&digit_run_end);
                 }
             }
             p = loc;
@@ -1545,13 +1559,19 @@ static int apply_fix(Finding* findings, int count, SourceFile* sf) {
         printf("+++ %s:%d (after)\n", sf->path, f->line);
         printf("+%s\n\n", f->fix_replace);
     }
-    /* Confirm. */
-#ifndef _WIN32
+    /* Confirm. Reject non-TTY stdin so CI / piped-input invocations
+     * can't accidentally rewrite files without explicit operator
+     * consent. Both POSIX `isatty` and Windows `_isatty` return 0
+     * when stdin is a pipe / redirected file — same semantics, the
+     * function name differs only in the underscore prefix. */
+#ifdef _WIN32
+    if (!_isatty(_fileno(stdin))) {
+#else
     if (!isatty(fileno(stdin))) {
+#endif
         fprintf(stderr, "ae help --fix: stdin is not a TTY; refusing to auto-apply non-interactively.\n");
         return 1;
     }
-#endif
     printf("Apply these rewrites? [y/N]: ");
     fflush(stdout);
     int ans = getchar();
