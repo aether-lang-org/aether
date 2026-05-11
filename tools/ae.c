@@ -425,6 +425,17 @@ static int posix_run(const char* cmd_str, int quiet) {
 #ifndef _O_WRONLY
 #define _O_WRONLY 1
 #endif
+/* `_O_BINARY` is in MinGW's <fcntl.h> but some compile-flag combos
+ * (-D__STRICT_ANSI__, `-std=c11` without `_DEFAULT_SOURCE`, certain
+ * MSYS2 mingw-w64 builds) gate it behind underscore-prefix macros
+ * that aren't defined. Fall back to the literal MSVCRT value so the
+ * `_setmode(_fileno(stdout), _O_BINARY)` LF-only output dance for
+ * `ae lib-path` (#413 Windows follow-up) is portable across the
+ * matrix. Same workaround pattern this section already uses for
+ * `_O_WRONLY` above. */
+#ifndef _O_BINARY
+#define _O_BINARY 0x8000
+#endif
 static int win_run(const char* cmd_str, int quiet) {
     if (tc.verbose) fprintf(stderr, "[cmd] %s\n", cmd_str);
     char buf[16384];
