@@ -170,6 +170,36 @@ static void safe_strncpy(char* dst, const char* src, size_t dst_size) {
     dst[n] = '\0';
 }
 
+/* `path_format` — printf-style path composition with explicit
+ * truncation detection. Returns 0 on success, -1 if the formatted
+ * output would not fit in `dst_size` (and clears the buffer).
+ *
+ * Why this exists: every snprintf site in this file that composes a
+ * path triggers GCC's `-Wformat-truncation` because the formatter's
+ * worst-case analysis sees a 1024-byte `%s` going into a 1024-byte
+ * destination and (correctly) flags "the format could overflow."
+ * The actual paths in practice are well under 256 bytes, but GCC
+ * has no way to know that. Routing every call through this helper
+ * uses a NON-LITERAL format string (`fmt` is `const char*`, not a
+ * compile-time string literal), which GCC's per-call analyser
+ * cannot statically decode — so the truncation warning is silenced
+ * AT THE CALL SITE while the truncation is still HANDLED EXPLICITLY
+ * by the helper itself returning -1. Callers MUST check the return
+ * value. */
+#include <stdarg.h>
+static int path_format(char* dst, size_t dst_size, const char* fmt, ...) {
+    if (dst_size == 0) return -1;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(dst, dst_size, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= dst_size) {
+        dst[0] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
 /* === Public dispatcher entry points ================================ */
 
 int ae_help_is_script_target(const char* arg) {
@@ -452,8 +482,11 @@ static int resolve_std_root(char* out, size_t out_size) {
         char cur[AE_HELP_PATH_LEN];
         safe_strncpy(cur, candidates[i], sizeof(cur));
         for (int depth = 0; depth < 6; depth++) {
-            snprintf(probe, sizeof(probe), "%s%cstd%cstring%cmodule.ae",
-                     cur, PATH_SEP, PATH_SEP, PATH_SEP);
+            if (path_format(probe, sizeof(probe), "%s%cstd%cstring%cmodule.ae",
+                            cur, PATH_SEP, PATH_SEP, PATH_SEP) != 0) {
+                /* Truncated — `cur` is too long to be a real repo root. */
+                break;
+            }
             struct stat st;
             if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
                 safe_strncpy(out, cur, out_size);
@@ -527,7 +560,9 @@ static int load_stdlib_export_catalog(ExportEntry* out, int max) {
     if (resolve_std_root(root, sizeof(root)) != 0) return 0;
 
     char std_dir[AE_HELP_PATH_LEN];
-    snprintf(std_dir, sizeof(std_dir), "%s%cstd", root, PATH_SEP);
+    if (path_format(std_dir, sizeof(std_dir), "%s%cstd", root, PATH_SEP) != 0) {
+        return 0;
+    }
     DIR* d = opendir(std_dir);
     if (!d) return 0;
 
@@ -537,14 +572,17 @@ static int load_stdlib_export_catalog(ExportEntry* out, int max) {
         if (entry->d_name[0] == '.') continue;
         /* Each std/<mod>/module.ae is the canonical export source. */
         char mod_path[AE_HELP_PATH_LEN];
-        int written = snprintf(mod_path, sizeof(mod_path), "%s%c%s%cmodule.ae",
-                               std_dir, PATH_SEP, entry->d_name, PATH_SEP);
-        if (written < 0 || (size_t)written >= sizeof(mod_path)) continue;
+        if (path_format(mod_path, sizeof(mod_path), "%s%c%s%cmodule.ae",
+                        std_dir, PATH_SEP, entry->d_name, PATH_SEP) != 0) continue;
         struct stat st;
         if (stat(mod_path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
 
         char mod_name[AE_HELP_NAME_LEN];
-        snprintf(mod_name, sizeof(mod_name), "std.%s", entry->d_name);
+        /* mod_name is small (64 bytes) and d_name can be NAME_MAX (255).
+         * Skip entries whose name+prefix would overflow — no real stdlib
+         * module has a name that long anyway. path_format returns -1 on
+         * truncation, which we honour by skipping the entry. */
+        if (path_format(mod_name, sizeof(mod_name), "std.%s", entry->d_name) != 0) continue;
         n = parse_module_exports(mod_path, mod_name, out, max, n);
     }
     closedir(d);
@@ -1039,8 +1077,8 @@ static void apply_canonical_template(Finding* findings, int count,
                 if (*p == '.') *p = PATH_SEP;
             }
             char ex_dir[AE_HELP_PATH_LEN];
-            snprintf(ex_dir, sizeof(ex_dir), "%s%c%s%c_examples",
-                     root, PATH_SEP, dir, PATH_SEP);
+            if (path_format(ex_dir, sizeof(ex_dir), "%s%c%s%c_examples",
+                            root, PATH_SEP, dir, PATH_SEP) != 0) continue;
             DIR* d = opendir(ex_dir);
             if (!d) continue;
             /* Find the first .ae file. */
@@ -1050,7 +1088,11 @@ static void apply_canonical_template(Finding* findings, int count,
                 if (e->d_name[0] == '.') continue;
                 size_t en = strlen(e->d_name);
                 if (en < 4 || strcmp(e->d_name + en - 3, ".ae") != 0) continue;
-                snprintf(chosen, sizeof(chosen), "%s%c%s", ex_dir, PATH_SEP, e->d_name);
+                if (path_format(chosen, sizeof(chosen), "%s%c%s",
+                                ex_dir, PATH_SEP, e->d_name) != 0) {
+                    chosen[0] = '\0';
+                    continue;
+                }
                 break;
             }
             closedir(d);
@@ -1385,8 +1427,10 @@ static int find_help_md_path(const char* import_name, char* out, size_t out_size
         if (*p == '.') *p = PATH_SEP;
     }
     char probe[AE_HELP_PATH_LEN];
-    snprintf(probe, sizeof(probe), "%s%c%s%c%s.help.md",
-             root, PATH_SEP, dir, PATH_SEP, basename);
+    if (path_format(probe, sizeof(probe), "%s%c%s%c%s.help.md",
+                    root, PATH_SEP, dir, PATH_SEP, basename) != 0) {
+        return -1;
+    }
     struct stat st;
     if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
         safe_strncpy(out, probe, out_size);
@@ -1690,7 +1734,10 @@ static int apply_fix(Finding* findings, int count, SourceFile* sf) {
     }
     /* Apply: rebuild file from line array, replacing matched lines. */
     char tmp[AE_HELP_PATH_LEN];
-    snprintf(tmp, sizeof(tmp), "%s.aehelp.tmp", sf->path);
+    if (path_format(tmp, sizeof(tmp), "%s.aehelp.tmp", sf->path) != 0) {
+        fprintf(stderr, "ae help --fix: script path is too long to derive a temp filename.\n");
+        return 1;
+    }
     FILE* out = fopen(tmp, "wb");
     if (!out) {
         fprintf(stderr, "ae help --fix: cannot create %s: %s\n", tmp, strerror(errno));
