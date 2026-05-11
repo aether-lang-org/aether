@@ -94,6 +94,19 @@ stop_servers() {
 
 PROXY="http://127.0.0.1:19000"
 
+# Windows-reduced mode. Same rationale as the http_reverse_proxy_pool
+# tests: each curl under MSYS2 bash pays Cygwin-fork-emulation +
+# Defender + slower-localhost overhead (10-100x POSIX's per-spawn
+# cost). The proxy/header-rewrite code path under test is identical
+# across platforms — the POSIX matrix already covers every assertion
+# below — so on Windows we keep only the most distinct happy/error
+# paths and skip the rest. Reduction is visible in CI via
+# `[SKIP-WIN]` log lines.
+IS_WIN=0
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) IS_WIN=1 ;;
+esac
+
 # ----------------------------------------------------------------
 # Mode: proxy (30s timeout)
 # ----------------------------------------------------------------
@@ -110,54 +123,64 @@ echo "$BODY" | grep -q '^upstream-ok$' || {
     echo "  [FAIL] T1 body: missing 'upstream-ok' marker"; echo "$BODY"; exit 1;
 }
 
-# Test 2 — Hop-by-Hop stripped. Send headers the proxy must NOT
-# forward; the upstream's echo confirms with `hopby=<none>`.
-RESP=$(curl --silent --show-error --max-time 5 \
-            -H 'Connection: x-secret' \
-            -H 'TE: trailers' \
-            -H 'Upgrade-Insecure-Requests: 1' \
-            -H 'X-Hopby-Custom: leaked' \
-            "$PROXY/echo" 2>"$TMPDIR/c2.err")
-# Connection-listed custom headers ARE in our hop-by-hop strip
-# semantics per RFC 7230 §6.1, but X-Hopby-Custom isn't mentioned
-# in Connection: x-secret here so it's NOT actually hop-by-hop —
-# we expect it to PASS through. Reframe: the literal Connection,
-# TE, Upgrade-Insecure-Requests headers are the ones that should
-# be absent upstream. The echo tags only Connection-/Via-/Host-
-# style fields, so the assertion focuses on those.
-echo "$RESP" | grep -q '^xff=' || {
-    echo "  [FAIL] T2: hop-by-hop strip output missing"; echo "$RESP"; exit 1;
-}
+# Tests 2-6: header forwarding details (Hop-by-Hop strip, XFF/XFP/
+# XFH/Via injection, Host rewrite). Skipped on Windows — all share
+# the same request-rewriting code path, fully exercised by POSIX
+# matrix entries. Tests 3-6 already reuse a single curl response on
+# POSIX (RESP from test 3 satisfies 4/5/6), so the dropped curl
+# count on Windows is just 2 (the unique curls in tests 2 and 3).
+if [ "$IS_WIN" = "1" ]; then
+    echo "  [SKIP-WIN] T2-T6 header-forwarding details — POSIX matrix covers"
+else
+    # Test 2 — Hop-by-Hop stripped. Send headers the proxy must NOT
+    # forward; the upstream's echo confirms with `hopby=<none>`.
+    RESP=$(curl --silent --show-error --max-time 5 \
+                -H 'Connection: x-secret' \
+                -H 'TE: trailers' \
+                -H 'Upgrade-Insecure-Requests: 1' \
+                -H 'X-Hopby-Custom: leaked' \
+                "$PROXY/echo" 2>"$TMPDIR/c2.err")
+    # Connection-listed custom headers ARE in our hop-by-hop strip
+    # semantics per RFC 7230 §6.1, but X-Hopby-Custom isn't mentioned
+    # in Connection: x-secret here so it's NOT actually hop-by-hop —
+    # we expect it to PASS through. Reframe: the literal Connection,
+    # TE, Upgrade-Insecure-Requests headers are the ones that should
+    # be absent upstream. The echo tags only Connection-/Via-/Host-
+    # style fields, so the assertion focuses on those.
+    echo "$RESP" | grep -q '^xff=' || {
+        echo "  [FAIL] T2: hop-by-hop strip output missing"; echo "$RESP"; exit 1;
+    }
 
-# Test 3 — X-Forwarded-For appended to existing value.
-RESP=$(curl --silent --show-error --max-time 5 \
-            -H 'X-Forwarded-For: 1.2.3.4' \
-            "$PROXY/echo" 2>"$TMPDIR/c3.err")
-echo "$RESP" | grep -q '^xff=1.2.3.4' || {
-    echo "  [FAIL] T3 XFF: expected '1.2.3.4' prefix"; echo "$RESP"; exit 1;
-}
+    # Test 3 — X-Forwarded-For appended to existing value.
+    RESP=$(curl --silent --show-error --max-time 5 \
+                -H 'X-Forwarded-For: 1.2.3.4' \
+                "$PROXY/echo" 2>"$TMPDIR/c3.err")
+    echo "$RESP" | grep -q '^xff=1.2.3.4' || {
+        echo "  [FAIL] T3 XFF: expected '1.2.3.4' prefix"; echo "$RESP"; exit 1;
+    }
 
-# Test 4 — X-Forwarded-Proto and X-Forwarded-Host present.
-echo "$RESP" | grep -q '^xfp=http$' || {
-    echo "  [FAIL] T4 XFP: expected 'http'"; echo "$RESP"; exit 1;
-}
-echo "$RESP" | grep -q '^xfh=' || {
-    echo "  [FAIL] T4 XFH: missing"; echo "$RESP"; exit 1;
-}
+    # Test 4 — X-Forwarded-Proto and X-Forwarded-Host present.
+    echo "$RESP" | grep -q '^xfp=http$' || {
+        echo "  [FAIL] T4 XFP: expected 'http'"; echo "$RESP"; exit 1;
+    }
+    echo "$RESP" | grep -q '^xfh=' || {
+        echo "  [FAIL] T4 XFH: missing"; echo "$RESP"; exit 1;
+    }
 
-# Test 5 — Via header injected.
-echo "$RESP" | grep -q '^via=' || {
-    echo "  [FAIL] T5 Via: missing"; echo "$RESP"; exit 1;
-}
-echo "$RESP" | grep -q 'aether-proxy' || {
-    echo "  [FAIL] T5 Via: missing aether-proxy token"; echo "$RESP"; exit 1;
-}
+    # Test 5 — Via header injected.
+    echo "$RESP" | grep -q '^via=' || {
+        echo "  [FAIL] T5 Via: missing"; echo "$RESP"; exit 1;
+    }
+    echo "$RESP" | grep -q 'aether-proxy' || {
+        echo "  [FAIL] T5 Via: missing aether-proxy token"; echo "$RESP"; exit 1;
+    }
 
-# Test 6 — Host: rewritten to upstream (default preserve_host=0).
-# Upstream is on localhost:19001 so it should see "localhost:19001".
-echo "$RESP" | grep -q '^host=localhost:19001$' || {
-    echo "  [FAIL] T6 Host rewrite: expected 'localhost:19001'"; echo "$RESP"; exit 1;
-}
+    # Test 6 — Host: rewritten to upstream (default preserve_host=0).
+    # Upstream is on localhost:19001 so it should see "localhost:19001".
+    echo "$RESP" | grep -q '^host=localhost:19001$' || {
+        echo "  [FAIL] T6 Host rewrite: expected 'localhost:19001'"; echo "$RESP"; exit 1;
+    }
+fi
 
 # Test 7 — POST body round-trip.
 BODY_IN="$TMPDIR/post.in"
@@ -201,15 +224,21 @@ grep -qi '^X-Aether-Proxy-Error: upgrade_unsupported' "$TMPDIR/up.hdr" || {
     cat "$TMPDIR/up.hdr"; exit 1;
 }
 
-# Test 9 — custom request header passes through.
-RESP=$(curl --silent --show-error --max-time 5 \
-            -H 'X-Custom-Pass: hello-upstream' \
-            "$PROXY/echo" 2>"$TMPDIR/c9.err")
-# Upstream's /echo doesn't surface X-Custom-Pass directly, but the
-# request reached the upstream (we got the upstream-ok marker).
-echo "$RESP" | grep -q '^upstream-ok$' || {
-    echo "  [FAIL] T9: custom header request didn't reach upstream"; exit 1;
-}
+# Test 9 — custom request header passes through. Skipped on Windows
+# (same as T2-T6): the request-header-forwarding code path is the
+# same one Test 1 already exercises; T9 just adds one custom header.
+if [ "$IS_WIN" = "1" ]; then
+    echo "  [SKIP-WIN] T9 custom header pass-through — covered by T1 basic round-trip"
+else
+    RESP=$(curl --silent --show-error --max-time 5 \
+                -H 'X-Custom-Pass: hello-upstream' \
+                "$PROXY/echo" 2>"$TMPDIR/c9.err")
+    # Upstream's /echo doesn't surface X-Custom-Pass directly, but the
+    # request reached the upstream (we got the upstream-ok marker).
+    echo "$RESP" | grep -q '^upstream-ok$' || {
+        echo "  [FAIL] T9: custom header request didn't reach upstream"; exit 1;
+    }
+fi
 
 stop_servers
 
@@ -232,4 +261,8 @@ ELAPSED=$((T1 - T0))
 
 stop_servers
 
-echo "  [PASS] http_reverse_proxy: 10/10 — basic round-trip, headers, body, timeout"
+if [ "$IS_WIN" = "1" ]; then
+    echo "  [PASS] http_reverse_proxy: 4/10 win-reduced — basic, POST body, Upgrade refusal, timeout"
+else
+    echo "  [PASS] http_reverse_proxy: 10/10 — basic round-trip, headers, body, timeout"
+fi
