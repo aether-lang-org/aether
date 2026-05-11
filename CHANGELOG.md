@@ -9,6 +9,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Identifier-alias of a heap-string + reassign-source no longer dangles** (`compiler/codegen/codegen_stmt.c`, `tests/regression/test_string_alias_reassign_uaf.ae`). The reassignment-wrapper at codegen_stmt.c:1611-1631 used `is_heap_string_expr(rhs)` to decide whether to set the LHS heap flag, and that predicate only recognises function-call and string-interpolation RHS shapes — bare `AST_IDENTIFIER` RHS always returned 0. Consequence on the canonical "alias then reassign source" pattern:
+
+  ```aether
+  rest = string.substring(name, 6, 11)   // _heap_rest = 1
+  word = rest                            // _heap_word = 0  (BUG)
+  rest = ""                              // wrapper sees _heap_rest=1, frees buf
+  println(word)                          // garbage — UAF
+  ```
+
+  Pre-fix, the alias `word` dropped its tracker on assignment while `rest` kept it; the source's next reassignment-wrapper then freed the buffer the alias still pointed at. This was a silent UAF that surfaced as garbage payload bytes (the AetherString header was intact, so `string.length(word)` still returned 5, but the bytes were recycled). The previous version's behaviour was the same shape with the opposite failure mode: pre-defer-free (≤ ~0.132) it was a leak (both pointers stayed valid but the source's allocation accumulated); the defer-free machinery added in 0.139 / 0.143 / 0.144 / 0.145 tightened reclamation for every classifier-recognised shape, leaving the bare-identifier-alias edge as a pure UAF.
+
+  The canonical idiom that hits this is "split a string, accumulate words":
+
+  ```aether
+  while string.length(rest) > 0 {
+      dash = string.index_of(rest, "-")
+      word = string.substring(rest, 0, dash)        // alias-then-keep
+      rest = string.substring(rest, dash + 1, ...)  // reassign source
+      // word now reads freed memory
+  }
+  ```
+
+  Fix: at the reassignment wrapper, when the RHS is a bare identifier referring to a heap-tracked local (and not self-assignment), emit ownership-TRANSFER instead of zeroing the LHS flag:
+
+  ```c
+  // Pre-fix:
+  { _tmp_old = word; word = rest; if (_heap_word) free(_tmp_old); _heap_word = 0; }
+
+  // Post-fix:
+  { _tmp_old = word; word = rest; if (_heap_word) free(_tmp_old);
+    _heap_word = _heap_rest; _heap_rest = 0; }
+  ```
+
+  The heap flag IS the ownership token — there is exactly one buffer; exactly one slot should hold the freeing duty. Moving the flag on alias keeps the buffer alive until the alias goes out of scope; the source's later reassignment frees nothing because its flag is now 0. No per-function alias map needed (a simpler resolution than the bug-filing's proposed Option A). Self-assignment guard: `a = a` falls through to the pre-existing emission shape — a separate concern (it was already incorrect; this fix doesn't worsen or improve it).
+
+  Six-case regression test exercises: alias + reassign-to-empty, alias + reassign-to-literal, alias of string.concat result, chained alias-of-alias (`word = mid; mid = rest; rest = source`), the hyphen-split-loop pattern, and a literal-source no-regression guard.
+
+  ### Upgrade notes
+
+  This release closes a use-after-free that previously corrupted the alias's payload silently. Code that was working around it (manual `string.concat(rest, "")` after alias to take an explicit copy) is still correct under the new behaviour — the explicit copy is just no longer required.
+
+  **What flips behaviourally:**
+
+  1. Code that aliased a heap-string AND reassigned the source got freed-memory reads pre-fix. Post-fix the alias keeps the buffer alive until it goes out of scope. The reader will now get correct payload bytes where previously it got garbage.
+
+  2. Memory-pressure footprint at the alias point shifts: pre-fix, the alias's apparent zero-tracker-flag meant the function-exit defer-free skipped it (leak avoidance via wrong direction). Post-fix the alias's transferred flag means the defer-free fires at function exit (correct reclamation). Net result: same allocation count, freed at the right time instead of leaked or double-touched.
+
+  3. `aetherc --diagnose=ownership` now prints `_heap_<alias> = transferred-from <source>` for alias-assignment sites where the source was heap-tracked (was previously `_heap_<alias> = 0`). Tooling that parses the diagnose output by exact-equality on `= 0` / `= 1` should re-parse for the transfer shape if it cares to distinguish.
+
+  No recommended pre-upgrade ladder: the change closes a UAF without introducing one. Sanitiser builds (ASan / Valgrind) over hot paths that touch the alias-then-reassign pattern will show fewer heap-use-after-free reports post-upgrade.
+
 ## [0.146.0]
 
 ### Added
