@@ -311,9 +311,10 @@ link_flags = ["-lsqlite3"]
 
 1. **Prefer Aether's standard library** for common operations when available (e.g. `import std.list` rather than hand-rolling a linked list in C)
 2. **Use `extern` for any C function** you want to call — including standard library functions like `abs`, `atoi`, `puts`, etc.
-3. **Document your C dependencies** in your project's README
-4. **Handle errors** - C functions often return error codes
-5. **Memory management** - Be careful with C memory; use Aether's memory management where possible
+3. **Do not redeclare stdlib symbols via `extern`** as a workaround. If you find yourself writing `extern list_add_raw(list: ptr, item: ptr) -> int` (or similar mirrors of `std.list` / `std.map` / `std.string` raw functions) in your own code, stop and use `import std.list` (etc.) instead. Older Aether had link-time issues with shared modules importing stdlib (Issue #309-era) which made the manual-extern shape look attractive as a workaround; those bugs are closed. The import-then-namespace shape (`list.add(out, x)`) is the only supported path today — it gives compile-time type checking against the stdlib's declared signatures, automatic API tracking when stdlib evolves, and consistency with every other Aether codebase. Manual externs of stdlib symbols are fragile (signature drift bites at runtime), bypass type-safety, and grow into per-feature maintenance debt.
+4. **Document your C dependencies** in your project's README
+5. **Handle errors** - C functions often return error codes
+6. **Memory management** - Be careful with C memory; use Aether's memory management where possible
 
 ## Built-in primitives and the `aether_` C-symbol convention
 

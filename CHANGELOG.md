@@ -20,6 +20,62 @@ next version number before tagging the release.
 
 - **User functions named after libc symbols no longer collide at link time** (`compiler/codegen/codegen.c`, `tests/integration/c_symbol_namespace/`). Closes #436 facet B. The codegen's `is_c_reserved_word` list grew from ~50 entries (C keywords + a handful of libc names) to the full POSIX.1-2017 + glibc/musl extension surface: every name in the libc network sockets API (`bind`, `listen`, `accept`, `connect`, `socket`, `select`, `poll`, `epoll_*`, `kqueue`, `kevent`, `recv*`, `send*`, `getsock*`, `setsock*`, `shutdown`, `inet_pton`, `inet_ntop`, `getaddrinfo`, `gethostbyname`), POSIX I/O (`open*`, `read`, `write`, `pread`, `pwrite`, `readv`, `writev`, `lseek`, `fcntl`, `ioctl`, `pipe*`, `dup*`, `f?sync`, `mkdir*`, `rmdir`, `unlink*`, `rename*`, `link*`, `symlink*`, `readlink*`, `chmod`, `fchmod`, `chown`, `fchown`, `lchown`, `stat`, `fstat`, `lstat`, `fstatat`, `access`, `faccessat`, `truncate`, `ftruncate`, `umask`, `fopen`, `fclose`, `freopen`, `fread`, `fwrite`, `fseek`, `ftell`, `rewind`, `fflush`, `fileno`, `feof`, `ferror`, `fprintf`, `fscanf`, `vfprintf`, `vfscanf`, `fgets`, `fputs`, `fgetc`, `fputc`, `ungetc`, `getc`, `putc`, `getchar`, `putchar`), process control (`fork`, `vfork`, `exec*`, `wait*`, `kill*`, `raise`, `signal`, `sigaction`, `sigprocmask`, `alarm`, `pause`, `sleep`, `usleep`, `nanosleep`, `getpid`, `getppid`, `gettid`, `getsid`, `getpgrp`, `getpgid`, `setpgid`, `setsid`, `setpgrp`, `getuid`, `geteuid`, `getgid`, `getegid`, `setuid`, `seteuid`, `setgid`, `setegid`, `abort`, `exit`, `_exit`, `_Exit`, `atexit`), memory + dynamic linking (`malloc`, `calloc`, `realloc`, `reallocarray`, `free`, `mmap`, `munmap`, `mremap`, `mprotect`, `madvise`, `msync`, `brk`, `sbrk`, `posix_memalign`, `aligned_alloc`, `valloc`, `dlopen`, `dlsym`, `dlclose`, `dlerror`, `dladdr`), string + stdio + memory ops (`strlen`, `strnlen`, `strcpy`, `strncpy`, `stpcpy`, `stpncpy`, `strcat`, `strncat`, `strcmp*`, `strchr`, `strrchr`, `strstr`, `strdup`, `strndup`, `strtok*`, `strtol*`, `strtoul*`, `strtod`, `strtof`, `strerror`, `sprintf*`, `vsprintf*`, `sscanf*`, `vsscanf*`, `printf`, `puts`, `gets`, `perror`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr`, `memrchr`), time + env + misc (`time`, `clock`, `gettimeofday`, `clock_gettime`, `clock_settime`, `gmtime`, `localtime`, `mktime`, `asctime`, `ctime`, `strftime`, `getenv`, `setenv`, `unsetenv`, `putenv`, `clearenv`, `getcwd`, `chdir`, `fchdir`, `system`). Every hit gets transparently prefixed with `ae_` by the pre-existing `safe_c_name` helper — the Aether-side identifier keeps its natural spelling (`bind`, `read`), the emitted C symbol becomes `ae_bind` / `ae_read` and stays out of libc's way. Mechanism identical to the legacy handling of `read` / `write` / `malloc` / `free` (which were already in the list); the change is consistency — the rest of the POSIX surface gets the same treatment as the handful of names that were caught before. Aether-keyword collisions (e.g. `send` is reserved as an actor-messaging keyword) are caught one layer earlier at the parser, so they're not in this list; the codegen mitigation covers the names that ARE valid Aether identifiers but would clash with libc. The full architectural goal — module-qualified codegen for every Aether function (`my_module_bind` not `ae_bind`) — would break `--emit=lib` consumers who `dlsym()` for unprefixed symbol names; the list-based mitigation here is the safer middle path that closes the link-time collision class without changing the ABI shape. 14-case regression test (`bind`, `listen`, `accept`, `connect`, `recv`, `select`, `pipe`, `fork`, `kill`, `stat`, `chmod`, multi-collision coexistence, emitted-C-symbol verification, negative `bare-bind-not-defined`) — every case asserts the user's function runs (not libc's) AND for `bind` specifically that the emitted C is `ae_bind`.
 - **Selective-import + local-def shadow no longer silently recurses** (`compiler/aether_module.c`, `tests/integration/selective_import_shadow/`, `docs/module-system-design.md`). Closes #436 facet A. A module (or main program) that selectively imports a name AND defines a local function with the same name used to compile successfully and then stack-overflow at runtime — the merger renamed the body's bare call to point at the local def, turning a thin import-forwarding wrapper into self-recursion with no compile-time signal. New orchestrator-level check (`check_selective_import_shadow` in aether_module.c, applied both per-module in `orchestrate_module` and to the entry-point AST in `module_orchestrate`) detects the pattern before merging and rejects with `error[E1000]` — a precise diagnostic naming the colliding local def's source location, the import line it shadows, and three concrete fixes (rename local, drop selective import, use qualified call). Hard error: the alternative (silent runtime stack overflow) is the bug being closed. Covers both `AST_FUNCTION_DEFINITION` and `export <fn>` shapes. Facet B (libc-symbol collisions) is now ALSO closed in the same PR — see the entry above.
+## [0.149.0]
+
+### Fixed
+
+- **Heap-string ownership: two follow-up regressions from 0.147.0's alias-transfer fix** (`compiler/codegen/codegen_stmt.c`, `tests/regression/test_list_add_heap_alias_escape.ae`, `tests/regression/test_destructure_reassign_over_heap_lhs.ae`). The 0.147 fix closed the bare-`B = A` alias UAF by transferring `_heap_<rhs>` to `_heap_<lhs>` in the reassignment wrapper. Two adjacent shapes the wrapper didn't reach in 0.147 surfaced afterwards.
+
+  **Regression A — alias into escape-marked LHS doesn't clear source's flag.** When LHS is marked escaped (e.g. about to be passed to `list.add` whose `ptr` parameter triggers escape-marking, or to `map.put`, or written to a struct field via #0.144's binary-expression-LHS edge), the codegen suppresses the reassignment wrapper entirely and emits a bare assignment — so the 0.147 ownership-transfer never fires. Subsequent reassignment of the source then runs `free()` against the buffer the escape recipient still references. Trigger pattern (typical "split-string, accumulate words into a list"):
+
+  ```aether
+  while string.length(rest) > 0 {
+      nl = string.index_of(rest, "\n")
+      line = ""
+      if nl < 0 {
+          line = rest                // bare-assign (line is escaped) — flag stays on rest
+          rest = ""                  // wrapper sees _heap_rest=1, frees buf
+      } else {
+          line = string.substring(rest, 0, nl)
+          rest = string.substring(rest, nl + 1, string.length(rest))
+      }
+      list.add(out, line)            // list keeps pointer to now-freed buf
+  }
+  ```
+
+  Fix: in the escaped-LHS bare-assign path, when RHS is a bare identifier referring to a heap-tracked local (and not self-assignment), also emit `_heap_<rhs> = 0` to clear the source's ownership flag. The heap flag IS the ownership token; with the source's flag cleared, its later reassignment can't fire a wrapper-free against the buffer the escape recipient still holds. Net effect: the buffer stays alive (held by the recipient), and no wrapper-free fires against it. Strictly better than the pre-fix UAF.
+
+  **Regression B — destructure-reassign-over-heap-LHS with non-string position type.** The tuple-destructure wrapper-emission gate at the AST_TUPLE_DESTRUCTURE codegen path required the destructure POSITION's type to be `TYPE_STRING`. `map.get` returns `(value: ptr, err: string)` — position 0 is `TYPE_PTR` (an opaque pointer from the map's internal storage, irrespective of the value's actual type). With `pos_is_string = false`, codegen fell through to bare assignment and the previous heap-string value's tracker flag never got cleared. The function-exit defer-free then ran `free()` against the map's borrowed storage. Trigger pattern:
+
+  ```aether
+  pkg_include = "${pkg_name}*"             // _heap_pkg_include = 1 (interp)
+  pkg_include, _ = map.get(opts, "k")      // bare assign — flag stays at 1
+  // ... fn returns ...
+  // defer-free: free(pkg_include) against map's borrowed storage → SIGABRT
+  ```
+
+  Fix: widen the wrapper-emission gate to fire whenever the LHS is heap-string-tracked, regardless of the destructure position's type. The wrapper frees the previous heap-string value (correct — the LHS owns it) and sets the new heap flag to 0 for non-string positions (borrow assumption — the destructured value is an opaque pointer from the heap-string-tracker's perspective, never a fresh-malloc'd char* the source's wrapper should claim).
+
+  Both fixes are surgical: A is one new branch in the escaped-LHS bare-assign emission; B is one widened gate condition in the tuple-destructure path. No changes to escape analysis, classifier, or function-exit defer-free machinery.
+
+  ### Upgrade notes
+
+  Both fixes close UAFs that previously surfaced as silent corruption (Regression A) or crash-on-function-exit (Regression B). No code change required in user code — the fixed compiler produces correct output for the canonical patterns that previously broke.
+
+  **What flips behaviourally:**
+
+  1. Code matching Regression A's pattern (heap-tracked local → escape-marked recipient → source reassigned) now keeps the buffer alive for the recipient's lifetime instead of freeing it mid-loop. Net result: items stored in lists / maps / struct fields via the split-loop pattern are now intact at read time.
+  2. Code matching Regression B's pattern (heap-tracked LHS reassigned via destructure with non-string position 0 — typically `var, _ = map.get(...)` after `var = "${interp}"` or `var = string.concat(...)`) no longer aborts at function exit. The previous heap value is correctly freed at the destructure site.
+  3. `aetherc --diagnose=ownership` now reports the correct `_heap_<lhs>` verdict for these two assignment shapes (was silently emitting stale flags pre-fix).
+
+  Memory-pressure footprint: Regression A's fix shifts a freed-too-early buffer to a "stays alive until recipient frees it" shape. If your recipient never frees its members (e.g. a list you keep around for the program's lifetime), this is a leak — but strictly better than the silent UAF it replaces. The escape-analysis pass's job is to surface this trade-off; the wrapper-free skip is conservative-correct by design.
+
+  No recommended pre-upgrade ladder. Sanitiser builds (ASan / Valgrind) over hot paths using the list-accumulate-strings and destructure-over-heap-var patterns will show fewer heap-use-after-free / invalid-free reports post-upgrade.
+
+### Changed
+
+- **`docs/c-interop.md` Best Practices**: added explicit note (point 3) against the "mirror stdlib symbols via `extern` declarations" anti-pattern. Older Aether had link-time issues with shared modules importing stdlib (Issue #309-era) that made the manual-extern shape look attractive as a workaround; those bugs are closed and the import-then-namespace shape (`import std.list` + `list.add(x)`) is the only supported path. Closes a doc-gap surfaced when a downstream porter (Aeocha) discovered its 68-line manual-extern block was technical debt rather than a feature.
+
 ## [0.147.0]
 
 ### Fixed
