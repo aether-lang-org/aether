@@ -1,0 +1,29 @@
+// examples/packages/lib-path-layering/main.ae
+//
+// Demonstrates PATH-style `--lib` layering (#413). Imports two
+// modules: `foo` (provided by both lib/ and vendor/, layered) and
+// `bar` (only in vendor/). Run with different --lib chains to see
+// which directory each module resolves from.
+//
+//     # Project-local lib/ overrides vendor/ for `foo`:
+//     ae run main.ae --lib lib --lib vendor
+//
+//     # Reversed — vendor wins:
+//     ae run main.ae --lib vendor --lib lib
+//
+//     # Or as a single separator-string (POSIX ':' / Windows ';'):
+//     ae run main.ae --lib "lib:vendor"
+//
+//     # Or via env var (same separator-string shape):
+//     AETHER_LIB_DIR="lib:vendor" ae run main.ae
+//
+//     # See exactly what gets searched, in order, without running:
+//     ae lib-path --lib "lib:vendor"
+
+import foo
+import bar
+
+main() {
+    println("foo says: ${foo.foo_origin()}")
+    println("bar says: ${bar.bar_origin()}")
+}

@@ -1,0 +1,46 @@
+// examples/ae-help-demo/broken_dsl.ae
+//
+// A deliberately-broken closure-DSL script. The Aether typer would
+// complain about each of these mistakes with terse error[Eabcd]
+// messages. `ae help` translates those into actionable suggestions
+// an operator can act on without diving into the language reference.
+//
+// Try it:
+//
+//     ae help broken_dsl.ae
+//
+// You should see:
+//   - A Levenshtein "Did you mean" for the `superuser_tokn` typo
+//   - YAML-style suggestion for `port: 9990` → `port(9990)`
+//   - HCL-style suggestion for `host = "127.0.0.1"` → `host(...)`
+//
+// To apply the safe rewrites (the YAML/HCL ones; Levenshtein-1
+// single-candidate also qualifies):
+//
+//     ae help broken_dsl.ae --fix
+//
+// For machine-readable output (CI integration):
+//
+//     ae help broken_dsl.ae --json
+
+import my_lib
+
+main() {
+    my_lib.serve {
+        // YAML-style — Aether setters use call form. ae help will
+        // suggest: `port(9990)`. With --fix the rewrite applies
+        // mechanically after diff confirmation.
+        port: 9990
+
+        // HCL-style — same problem, same auto-fix.
+        host = "127.0.0.1"
+
+        // Typo on an imported setter name. ae help loads my_lib's
+        // export set and runs Levenshtein-matched suggestions:
+        // `Did you mean: superuser_token (in my_lib)?`
+        superuser_tokn("admin-1234")
+
+        // Valid setter — left alone by every heuristic.
+        repo("alpha", "/data/alpha")
+    }
+}

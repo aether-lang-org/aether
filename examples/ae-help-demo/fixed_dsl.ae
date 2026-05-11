@@ -1,0 +1,29 @@
+// examples/ae-help-demo/fixed_dsl.ae
+//
+// What `broken_dsl.ae` looks like after applying every suggestion
+// `ae help` made. Compare side-by-side; the diff is the lesson.
+//
+//     diff -u broken_dsl.ae fixed_dsl.ae
+//
+// Or check this version against the typer:
+//
+//     ae build fixed_dsl.ae
+
+import my_lib
+
+main() {
+    my_lib.serve {
+        // Setter call form — the only form Aether's closure-DSL
+        // accepts. `port: 9990` (YAML) and `port = 9990` (HCL) are
+        // both rejected by the parser.
+        port(9990)
+        host("127.0.0.1")
+
+        // Spelling matched against my_lib's export catalog by the
+        // Levenshtein pass.
+        superuser_token("admin-1234")
+
+        // Unchanged — was already valid.
+        repo("alpha", "/data/alpha")
+    }
+}

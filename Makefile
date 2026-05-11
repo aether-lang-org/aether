@@ -809,6 +809,7 @@ examples: compiler ae stdlib
 	root=$$(pwd); \
 	find examples -name '*.ae' \
 	    | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | grep -v '/host-.*-demo\.ae$$' \
+	    | grep -v '/ae-help-demo/' \
 	    | sort \
 	    | xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	pass=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \

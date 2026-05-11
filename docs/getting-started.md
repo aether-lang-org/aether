@@ -559,6 +559,38 @@ main() {
 
 The builtin `getenv()` also works without an import for quick scripts (returns a malloc'd string — use `defer free()`).
 
+## When something doesn't compile
+
+Aether's typer is precise — `error[E0301]: Undefined function 'super_token'` is the right output for a build pipeline but not always for an operator authoring a config script. `ae help <script.ae>` translates the typer's terse output into actionable, on-machine suggestions:
+
+```bash
+ae help my_script.ae              # Human-readable findings
+ae help my_script.ae --json       # Machine-readable (CI integration)
+ae help my_script.ae --fix        # Apply safe rewrites after diff confirmation
+```
+
+Heuristics cover Levenshtein-matched name suggestions, YAML/HCL-shape detection inside closure-DSL blocks (`port: 9990` → `port(9990)`), missing-import detection against the stdlib catalog, type-mismatch English ("Drop the quotes"), and library-author-shipped `*.help.md` hints. Hard privacy contract: no network calls, no file reads outside the script + its imports + co-located hints, no execution of the script. See [Config-IS-Code Diagnostics](cic-help.md) and [`examples/ae-help-demo/`](../examples/ae-help-demo/) for a worked example.
+
+## Layering modules across multiple directories
+
+PATH-style `--lib` chains let you layer project-local module overrides on top of vendored or shared roots:
+
+```bash
+# Try a local patch in lib/foo/ first, fall back to vendor/foo/:
+ae run main.ae --lib lib --lib vendor
+
+# Same as a separator-string (':' POSIX, ';' Windows):
+ae run main.ae --lib "lib:vendor"
+
+# Or via env var:
+AETHER_LIB_DIR="lib:vendor" ae run main.ae
+
+# See what the toolchain will actually search, in order:
+ae lib-path --lib "lib:vendor"
+```
+
+Left-most entry wins on a name collision; each `import` walks the chain independently. See [`examples/packages/lib-path-layering/`](../examples/packages/lib-path-layering/) for a runnable demo and [Module System](module-system-design.md#lib-search-path-413) for the design.
+
 ## Next Steps
 
 - Read the [Tutorial](tutorial.md) for a guided introduction

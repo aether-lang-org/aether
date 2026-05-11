@@ -12,7 +12,8 @@ runs; `make examples` exercises all of them as part of CI.
 | [`stdlib/`](stdlib/) | Stdlib feature demos: HTTP client + server, file I/O, JSON, processes, OS environment. The HTTP server demos cover plain HTTP/1.1, HTTP/2 (h2 + h2c via libnghttp2), TLS, and concurrent dispatch. |
 | [`c-interop/`](c-interop/) | `extern` + `@c_callback` patterns — calling libc, calling user C, exporting Aether functions to C. |
 | [`embedded-java/`](embedded-java/) | Hosting a JVM in-process via `contrib.host.java`. |
-| [`packages/`](packages/) | `ae add host/user/repo` package consumption demos. |
+| [`packages/`](packages/) | `ae add host/user/repo` package consumption demos AND PATH-style `--lib` layering ([`lib-path-layering/`](packages/lib-path-layering/)). |
+| [`ae-help-demo/`](ae-help-demo/) | `ae help <script>` offline diagnostics — a deliberately-broken closure-DSL paired with its `--fix`-corrected version. Demonstrates Levenshtein, YAML/HCL pattern detection, and the `--fix` / `--json` modes. |
 | [`applications/`](applications/) | Larger end-to-end programs that combine several stdlib areas. |
 
 ## Running an example
