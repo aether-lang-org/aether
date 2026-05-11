@@ -46,8 +46,9 @@
 
 #ifdef _WIN32
 #  include <io.h>
+#  include <fcntl.h>            /* _O_WRONLY, _O_CREAT, _O_TRUNC, _O_BINARY */
 #  include <windows.h>          /* GetModuleFileNameA — self-locate ae.exe */
-#  include <process.h>          /* getpid()/_getpid() */
+#  include <process.h>          /* getpid()/_getpid(), _spawnv(_P_WAIT, ...) */
 #  define popen  _popen
 #  define pclose _pclose
 #  define PATH_SEP '\\'
@@ -58,6 +59,9 @@
 #  endif
 #else
 #  include <unistd.h>
+#  include <fcntl.h>            /* O_WRONLY / O_CREAT / O_TRUNC for posix_spawn */
+#  include <spawn.h>            /* posix_spawn, posix_spawn_file_actions_t */
+#  include <sys/wait.h>         /* waitpid, WIFEXITED, WEXITSTATUS */
 #  define PATH_SEP '/'
 #  ifdef __APPLE__
 #    include <mach-o/dyld.h>    /* _NSGetExecutablePath — self-locate ae */
@@ -733,7 +737,39 @@ static int find_aetherc(char* out, size_t out_size) {
     return 0;
 }
 
+/* Build an err-file path inside the platform-native temp directory.
+ * Caller-side note: `out` must hold at least AE_HELP_PATH_LEN bytes. */
+static int build_err_file(char* out, size_t out_size) {
+    const char* tmp_dir;
+#ifdef _WIN32
+    /* GetTempPathA queries the OS layer directly, returning a native
+     * Windows path (`D:\...\Temp\`) regardless of how TEMP was set
+     * by the parent shell. Necessary on MSYS2 where bash exports
+     * `TEMP` in POSIX form (`/d/...`) that cmd.exe can't parse. */
+    static char tmp_buf[AE_HELP_PATH_LEN];
+    DWORD tlen = GetTempPathA((DWORD)sizeof(tmp_buf), tmp_buf);
+    if (tlen == 0 || tlen >= sizeof(tmp_buf)) {
+        safe_strncpy(tmp_buf, ".", sizeof(tmp_buf));
+    } else {
+        size_t bl = strlen(tmp_buf);
+        while (bl > 1 && (tmp_buf[bl - 1] == '\\' || tmp_buf[bl - 1] == '/')) {
+            tmp_buf[--bl] = '\0';
+        }
+    }
+    tmp_dir = tmp_buf;
+#else
+    tmp_dir = getenv("TMPDIR");
+    if (!tmp_dir || !*tmp_dir) tmp_dir = "/tmp";
+#endif
+    long pid = (long)getpid();
+    return path_format(out, out_size,
+                       "%s%cae_help_aetherc_err_%ld.log",
+                       tmp_dir, PATH_SEP, pid);
+}
+
 static int run_aetherc_capture(const char* script_path, char* stderr_buf, size_t buf_size) {
+    stderr_buf[0] = '\0';
+
     char aetherc[AE_HELP_PATH_LEN];
     find_aetherc(aetherc, sizeof(aetherc));
 
@@ -745,67 +781,59 @@ static int run_aetherc_capture(const char* script_path, char* stderr_buf, size_t
     const char* sink = "/dev/null";
 #endif
 
-    /* Capture aetherc's stderr by redirecting it to a temp file at
-     * the shell level, then reading the file back. Previous shape
-     * was `cmd 2>&1 | popen("r")` — that works on POSIX but is
-     * unreliable on Windows MSYS2 where `_popen` invokes cmd.exe
-     * and the `2>&1` merge can be silently dropped when the
-     * command's argv contains forward-slash paths (MSYS2-translated
-     * `/d/...` paths plus our `<exe_dir>/aetherc.exe` form together
-     * trip cmd.exe's quote+path parsing). Using a temp file
-     * sidesteps the shell-redirect entirely: the child writes
-     * stderr directly to a file we then fread, no cmd.exe in the
-     * loop. POSIX behaviour byte-identical.
-     *
-     * Cross-platform temp dir. On Windows, MSYS2's bash exports
-     * `TEMP`/`TMP` as a POSIX-flavoured path (`/d/a/_temp/msys64/
-     * tmp`) but `ae.exe` is a native Win32 process — cmd.exe can't
-     * parse that shape, and the redirect target then dies with
-     * "The filename, directory name, or volume label syntax is
-     * incorrect" before aetherc starts. `GetTempPathA` always
-     * returns the native Windows form (`D:\...\Temp\`) regardless
-     * of how the env was set, so we sidestep the MSYS2 ↔ native-
-     * Win32 mismatch entirely. On POSIX `$TMPDIR` is the canonical
-     * interface; fall back to `/tmp` to match what mktemp(3) does
-     * when neither is set. */
     char err_file[AE_HELP_PATH_LEN];
+    if (build_err_file(err_file, sizeof(err_file)) != 0) return -1;
+
+    /* Invoke aetherc with stderr redirected to `err_file` WITHOUT
+     * going through a shell. Two different paths because POSIX and
+     * Windows expose different child-spawn APIs:
+     *
+     *   POSIX: posix_spawn with file actions opening err_file as
+     *          stderr. No fork/exec by hand, no shell, no quoting.
+     *   Windows: _spawnv (the MSVCRT helper that `tools/ae.c`'s
+     *            `win_run` already uses) with stderr redirected via
+     *            _dup2 around the spawn. cmd.exe never enters the
+     *            picture, so MSYS2's POSIX-flavoured paths and our
+     *            mixed-slash aetherc path can't break the redirect.
+     *
+     * This is the same architectural fix `tools/ae.c` adopted
+     * earlier (POSIX issue + Windows path collision); we now mirror
+     * it here. The previous `system(cmd)` shape was the only
+     * shell-dependent invocation left in the ae_help binary. */
+    int rc;
 #ifdef _WIN32
-    char tmp_buf[AE_HELP_PATH_LEN];
-    DWORD tlen = GetTempPathA((DWORD)sizeof(tmp_buf), tmp_buf);
-    if (tlen == 0 || tlen >= sizeof(tmp_buf)) {
-        safe_strncpy(tmp_buf, ".", sizeof(tmp_buf));
-    } else {
-        /* GetTempPathA appends a trailing backslash — strip it so
-         * our `path_format("%s%c...")` doesn't produce `...\\file`. */
-        size_t bl = strlen(tmp_buf);
-        while (bl > 1 && (tmp_buf[bl - 1] == '\\' || tmp_buf[bl - 1] == '/')) {
-            tmp_buf[--bl] = '\0';
-        }
-    }
-    const char* tmp_dir = tmp_buf;
-#else
-    const char* tmp_dir = getenv("TMPDIR");
-    if (!tmp_dir || !*tmp_dir) tmp_dir = "/tmp";
-#endif
     {
-        long pid = (long)getpid();
-        if (path_format(err_file, sizeof(err_file),
-                        "%s%cae_help_aetherc_err_%ld.log",
-                        tmp_dir, PATH_SEP, pid) != 0) {
-            stderr_buf[0] = '\0';
+        const char* argv[5] = { aetherc, script_path, "-o", sink, NULL };
+        fflush(stderr);
+        int saved = _dup(2);
+        int fd = _open(err_file, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, 0644);
+        if (fd < 0) { if (saved >= 0) _close(saved); return -1; }
+        _dup2(fd, 2);
+        _close(fd);
+        rc = (int)_spawnv(_P_WAIT, argv[0], (const char* const*)argv);
+        if (saved >= 0) { _dup2(saved, 2); _close(saved); }
+    }
+#else
+    {
+        const char* argv[5] = { aetherc, script_path, "-o", sink, NULL };
+        posix_spawn_file_actions_t fa;
+        posix_spawn_file_actions_init(&fa);
+        posix_spawn_file_actions_addopen(&fa, 2, err_file,
+                                         O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        extern char** environ;
+        pid_t pid;
+        if (posix_spawnp(&pid, argv[0], &fa, NULL,
+                         (char* const*)argv, environ) != 0) {
+            posix_spawn_file_actions_destroy(&fa);
+            remove(err_file);
             return -1;
         }
+        posix_spawn_file_actions_destroy(&fa);
+        int status = 0;
+        waitpid(pid, &status, 0);
+        rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     }
-
-    char cmd[AE_HELP_PATH_LEN * 3];
-    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" -o %s 2>\"%s\"",
-             aetherc, script_path, sink, err_file);
-
-    /* We don't need the child's stdout — aetherc emits diagnostics
-     * to stderr (which we've routed to the file) and the compiled
-     * C to `-o <sink>`. Use `system()` so we don't have to manage
-     * a pipe we never read from. */
-    int rc = system(cmd);
+#endif
 
     /* Read the captured stderr back into the caller's buffer. */
     FILE* fp = fopen(err_file, "rb");
@@ -818,8 +846,6 @@ static int run_aetherc_capture(const char* script_path, char* stderr_buf, size_t
         }
         stderr_buf[total] = '\0';
         fclose(fp);
-    } else {
-        stderr_buf[0] = '\0';
     }
     remove(err_file);
     return rc;
