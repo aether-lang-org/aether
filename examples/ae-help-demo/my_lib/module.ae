@@ -1,0 +1,63 @@
+// examples/ae-help-demo/my_lib/module.ae
+//
+// Tiny standalone closure-DSL library used by `fixed_dsl.ae` so the
+// demo runs end-to-end (no real server, no network, no side effects
+// beyond stdout). Every setter prints what got configured, so when
+// you `ae run fixed_dsl.ae --lib .` you see:
+//
+//     port           = 9990
+//     host           = 127.0.0.1
+//     superuser_token= admin-1234
+//     repo           = alpha -> /data/alpha
+//     === my_lib starting up ===
+//
+// The setters and `serve` together exist to satisfy three goals:
+//   1. fixed_dsl.ae compiles and runs (so the demo isn't aspirational)
+//   2. broken_dsl.ae triggers the typer's `Undefined function 'foo'`
+//      error class for `ae help` to enrich — that requires real
+//      exported names to Levenshtein against
+//   3. Stays small so the focus stays on the help-tool demo, not on
+//      what `my_lib` does
+//
+// Implementation note — the `builder` keyword on `serve` is what
+// lets it accept a trailing closure-DSL block (`my_lib.serve { ... }`).
+// Setters use the `_ctx: ptr` builder-context convention documented
+// in `docs/closures-and-builder-dsl.md` so they auto-receive the
+// builder context when called inside the trailing block.
+
+exports (serve, port, host, superuser_token, repo)
+
+// Required by the `builder` keyword's codegen — emits a `map_new()`
+// behind the scenes to hold the builder context that setters
+// implicitly write to. The example doesn't actually read the
+// context (printing inline is enough for a demo), but the import is
+// load-bearing for the generated C to link.
+import std.map
+
+// Builder entry point. `builder` keyword tells the parser this
+// function accepts a trailing closure block. The body runs AFTER
+// the block, so the banner prints last (which is also the order
+// you want for "config -> start up").
+builder serve() {
+    println("=== my_lib starting up ===")
+}
+
+// Setters — each takes `_ctx: ptr` as a hidden first parameter
+// (auto-injected by the compiler when called inside a trailing
+// block). Body just prints what got set; a real implementation
+// would map_put into the builder context.
+port(_ctx: ptr, p: int) {
+    println("  port           = ${p}")
+}
+
+host(_ctx: ptr, h: string) {
+    println("  host           = ${h}")
+}
+
+superuser_token(_ctx: ptr, t: string) {
+    println("  superuser_token= ${t}")
+}
+
+repo(_ctx: ptr, name: string, path: string) {
+    println("  repo           = ${name} -> ${path}")
+}

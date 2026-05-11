@@ -12,7 +12,7 @@
 import my_lib
 
 main() {
-    my_lib.serve {
+    my_lib.serve() {
         // Setter call form — the only form Aether's closure-DSL
         // accepts. `port: 9990` (YAML) and `port = 9990` (HCL) are
         // both rejected by the parser.
