@@ -1983,8 +1983,22 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
              * assignment shape regardless of the flag. */
             ASTNode* callee_def = NULL;
             if (rhs && rhs->type == AST_FUNCTION_CALL && rhs->value) {
-                callee_def = find_function_definition_by_name(gen->program,
-                                                              rhs->value);
+                /* Source-level callees land in the AST in dotted form
+                 * (`"json.get_string"`) but the merged user-fn lives in
+                 * the program AST under the underscored namespace-
+                 * prefixed name (`"json_get_string"`). Without
+                 * normalisation the lookup misses every cross-module
+                 * callee, the per-position structural analyzer never
+                 * runs, and the destructure wrapper falls back to
+                 * `_heap_<lhs> = 0` even when the callee was uniform-
+                 * heap-classifiable. Same dot-normalisation pattern
+                 * `is_heap_string_expr` already uses on its hardcoded
+                 * fast-path lookups. */
+                char fn_norm[256];
+                const char* fn = codegen_normalise_callee(rhs->value,
+                                                          fn_norm,
+                                                          sizeof(fn_norm));
+                callee_def = find_function_definition_by_name(gen->program, fn);
             }
 
             // Generate: type a = _tmp._0; type b = _tmp._1; ...
