@@ -742,21 +742,99 @@ void codegen_maybe_emit_line(CodeGenerator* gen, const ASTNode* node) {
     gen->last_line_num = node->line;
 }
 
-// Check if a name is a C/C++ reserved keyword that would cause compilation errors
+// Check if a name is a C/C++ reserved keyword OR a libc / POSIX symbol
+// that would cause a link-time collision when emitted as a bare C
+// function. Hits get prefixed with `ae_` by `safe_c_name` so the
+// Aether-side identifier (e.g. `bind`) keeps its natural spelling
+// while the C symbol becomes `ae_bind` and stays out of libc's way.
+//
+// Closes #436 facet B (flat C symbol namespace). The architectural
+// goal — module-qualified codegen for every Aether function — is a
+// larger refactor that breaks `--emit=lib` consumers who dlsym() for
+// unprefixed names. The list-based mitigation here covers the
+// concrete collision class (libc / POSIX symbols, the ones that
+// actually cause linker breaks in practice) while preserving the
+// existing C ABI surface. The Aether-side name resolution is
+// unchanged; only the EMITTED C symbol is renamed when a collision
+// is in flight.
+//
+// The list is curated from POSIX.1-2017 + common glibc/musl
+// extensions. Categories:
+//   - C/C++ reserved keywords (cannot be C identifiers at all)
+//   - libc network sockets API (the class the issue called out)
+//   - libc POSIX I/O (open / read / write / pipe / fcntl / ioctl)
+//   - libc process control (fork / exec / wait / kill / signal)
+//   - libc memory + dynamic linking
+//   - libc string + stdio
+//   - libc time + env
+// Each category is delimited by a comment so future additions land
+// in the right block.
 int is_c_reserved_word(const char* name) {
     static const char* reserved[] = {
+        // ── C keywords ─────────────────────────────────────────
         "auto", "break", "case", "char", "const", "continue", "default", "do",
         "double", "else", "enum", "extern", "float", "for", "goto", "if",
         "inline", "int", "long", "register", "restrict", "return", "short",
         "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
         "unsigned", "void", "volatile", "while",
-        // C99/C11
+        // ── C99 / C11 keywords ─────────────────────────────────
         "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic",
         "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local",
-        // Common standard library names that conflict
-        "malloc", "free", "printf", "sprintf", "strlen", "strcmp",
-        "puts", "gets", "abort", "exit", "time", "read", "write",
-        "open", "close", "signal", "sleep",
+        // ── libc network sockets API (POSIX.1 + BSD) ───────────
+        // This is the original #436 facet B trigger: an Aether
+        // function literally named `bind` collides with libc's
+        // `bind(2)` and the linker silently picks the wrong one.
+        "socket", "bind", "listen", "accept", "connect", "shutdown",
+        "send", "recv", "sendto", "recvfrom", "sendmsg", "recvmsg",
+        "getsockname", "getpeername", "getsockopt", "setsockopt",
+        "select", "poll", "epoll_create", "epoll_ctl", "epoll_wait",
+        "kqueue", "kevent", "inet_pton", "inet_ntop",
+        "gethostbyname", "getaddrinfo", "freeaddrinfo",
+        // ── libc POSIX I/O ─────────────────────────────────────
+        "open", "openat", "close", "read", "write", "pread", "pwrite",
+        "readv", "writev", "lseek", "fcntl", "ioctl", "pipe", "pipe2",
+        "dup", "dup2", "dup3", "fsync", "fdatasync", "sync",
+        "mkdir", "mkdirat", "rmdir", "unlink", "unlinkat", "rename", "renameat",
+        "link", "linkat", "symlink", "symlinkat", "readlink", "readlinkat",
+        "chmod", "fchmod", "chown", "fchown", "lchown",
+        "stat", "fstat", "lstat", "fstatat", "access", "faccessat",
+        "truncate", "ftruncate", "umask",
+        "fopen", "fclose", "freopen", "fread", "fwrite", "fseek", "ftell",
+        "rewind", "fflush", "fileno", "feof", "ferror",
+        "fprintf", "fscanf", "vfprintf", "vfscanf",
+        "fgets", "fputs", "fgetc", "fputc", "ungetc",
+        "getc", "putc", "getchar", "putchar",
+        // ── libc process control ───────────────────────────────
+        "fork", "vfork", "execl", "execlp", "execle",
+        "execv", "execvp", "execve", "execveat",
+        "wait", "waitpid", "waitid", "wait3", "wait4",
+        "kill", "killpg", "raise", "signal", "sigaction", "sigprocmask",
+        "alarm", "pause", "sleep", "usleep", "nanosleep",
+        "getpid", "getppid", "gettid", "getsid", "getpgrp", "getpgid",
+        "setpgid", "setsid", "setpgrp",
+        "getuid", "geteuid", "getgid", "getegid",
+        "setuid", "seteuid", "setgid", "setegid",
+        "abort", "exit", "_exit", "_Exit", "atexit",
+        // ── libc memory + dynamic linking ──────────────────────
+        "malloc", "calloc", "realloc", "reallocarray", "free",
+        "mmap", "munmap", "mremap", "mprotect", "madvise", "msync",
+        "brk", "sbrk", "posix_memalign", "aligned_alloc", "valloc",
+        "dlopen", "dlsym", "dlclose", "dlerror", "dladdr",
+        // ── libc string + stdio + memory ops ───────────────────
+        "strlen", "strnlen", "strcpy", "strncpy", "stpcpy", "stpncpy",
+        "strcat", "strncat", "strcmp", "strncmp", "strcasecmp", "strncasecmp",
+        "strchr", "strrchr", "strstr", "strdup", "strndup",
+        "strtok", "strtok_r", "strtol", "strtoll", "strtoul", "strtoull",
+        "strtod", "strtof", "strerror",
+        "sprintf", "snprintf", "vsprintf", "vsnprintf",
+        "sscanf", "vsscanf",
+        "printf", "puts", "gets", "perror",
+        "memcpy", "memmove", "memset", "memcmp", "memchr", "memrchr",
+        // ── libc time + env + misc ─────────────────────────────
+        "time", "clock", "gettimeofday", "clock_gettime", "clock_settime",
+        "gmtime", "localtime", "mktime", "asctime", "ctime", "strftime",
+        "getenv", "setenv", "unsetenv", "putenv", "clearenv",
+        "getcwd", "chdir", "fchdir", "system",
         NULL
     };
     for (int i = 0; reserved[i]; i++) {
