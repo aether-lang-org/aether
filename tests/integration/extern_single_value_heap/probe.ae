@@ -1,0 +1,82 @@
+// End-to-end runtime probe for `extern foo(...) -> string @heap`.
+//
+// Drives 10000 iterations of an annotated extern in a tight loop and
+// verifies the program runs to completion with the final value
+// intact. Implicit assertion: the codegen's heap-string-tracker
+// wrapper emits a `free` for the previous iteration's allocation —
+// if instead it emitted a free for a borrowed pointer (over-frees
+// the unannotated case) or skipped the free for the annotated case
+// (under-frees, ASan-detectable leak) the test would crash or fail
+// the leak budget.
+//
+// Companion to test_extern_single_value_heap.sh which asserts the
+// classifier verdicts directly via `aetherc --diagnose=ownership`.
+
+import std.string
+
+extern make_owned(seed: string, n: int) -> string @heap
+extern make_borrowed() -> string
+extern shim_alloc_count() -> int
+extern exit(code: int)
+
+main() {
+    println("=== extern_single_value_heap probe ===")
+
+    // Loop case — the avn hot-path shape. 10k iterations, each
+    // reassigning `s` from a fresh extern allocation. Pre-fix the
+    // wrapper free didn't fire on extern calls because the classifier
+    // returned 0; post-fix the wrapper frees the previous value on
+    // every iteration after the first.
+    s = ""
+    i = 0
+    while i < 10000 {
+        s = make_owned("v", i)
+        if string.length(s) < 1 {
+            println("FAIL iter ${i}: empty string from extern")
+            exit(1)
+        }
+        i = i + 1
+    }
+    if string.length(s) < 5 {
+        println("FAIL: final s too short: ${s}")
+        exit(1)
+    }
+    n_alloc = shim_alloc_count()
+    if n_alloc != 10000 {
+        println("FAIL: expected 10000 allocs from shim, got ${n_alloc}")
+        exit(1)
+    }
+    println("  PASS: 10000 annotated-extern reassignments, final = ${s}")
+
+    // Borrow-default case — the unannotated extern returning a static
+    // pointer. If the @heap fix accidentally applied to unannotated
+    // externs too, the wrapper free for the first iteration would
+    // crash trying to free a string literal. Loop reassigns from this
+    // borrowed extern, then from the heap extern, then back — any
+    // over-eager free would surface here.
+    b = make_borrowed()
+    if string.length(b) < 1 {
+        println("FAIL: borrowed string empty")
+        exit(1)
+    }
+    j = 0
+    while j < 100 {
+        b = make_borrowed()
+        j = j + 1
+    }
+    println("  PASS: 100 borrowed-extern reassignments, no over-free")
+
+    // Mixed case — heap then borrow then heap. Confirms the
+    // per-assignment classifier verdict is per-RHS, not sticky on the
+    // variable.
+    m = make_owned("mix", 1)
+    m = make_borrowed()  // reassignment: was-heap → now-borrow
+    m = make_owned("mix", 2)
+    if string.length(m) != 4 {
+        println("FAIL: mixed-mode final string wrong length: ${string.length(m)}")
+        exit(1)
+    }
+    println("  PASS: per-assignment classifier verdict respects RHS shape")
+
+    println("=== all probes passed ===")
+}

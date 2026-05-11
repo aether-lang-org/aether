@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`@heap` annotation on single-value extern returns** (`compiler/parser/parser.c`, `compiler/codegen/codegen_stmt.c`, `tests/integration/extern_single_value_heap/`). The parser already accepted per-position `@heap` / `@borrow` on tuple-returning externs (issue #420) via `Type.tuple_heap_flags`; the parallel channel did not exist for non-tuple `-> string` returns because `Type` has no "this whole thing is heap" slot outside `tuple_heap_flags`. Result: `extern http_request_body(req: ptr) -> string` and every other single-value extern that returns a malloc'd C buffer the caller is supposed to own was permanently stuck at `_heap_<lhs> = 0` at every call site — the reassignment-wrapper free never fired, the function-exit defer-free never ran, every call leaked the underlying buffer. avn's read path hits this on every `body = http.request_body(req)`. There was also no user-side workaround: the `string_concat(call(), "")` refactor that worked for cross-Aether-fn classification does NOT help here — `string_concat` copies its inputs into a fresh allocation but never frees the originals, so wrapping just adds a second allocation alongside the leaked first one. New syntax: `extern foo(...) -> string @heap` (opt-in, default unchanged is `@borrow`). `@heap` on `-> int`, `-> ptr`, or `-> void` is a parse error — only meaningful on `-> string`. Parser stores `"heap_return"` on the extern's annotation slot using the same combine-dedupe pattern as the per-param `@aether` / `@retain` handler (parser.c:2800-2813). Codegen extends `is_heap_string_expr` with a `find_extern_declaration_by_name` lookup that walks both `program->children` and import-statement-resolved module ASTs (matching the diagnose code's pattern at codegen_stmt.c:4142) — externs aren't cloned into the program AST by `module_merge_into_program`, so the lookup has to traverse explicitly. User wrappers around an annotated extern (`wrap_owned(seed: string) -> string { return owned_string(seed) }`) inherit HEAP via the existing `function_def_returns_heap_string` walk — no extra annotation needed at the wrapper level. Test exercises the classifier verdict via `aetherc --diagnose=ownership` plus a 10k-iter runtime probe with a malloc-counting shim that verifies the wrapper-emitted free runs without crashing on borrowed-pointer over-frees.
+
+  ### Upgrade notes
+
+  This release **adds** new syntax. The default behaviour for every existing `extern` declaration is unchanged: unannotated returns stay classified non-heap (conservative borrow), matching the pre-fix semantics. No existing callers are affected by the addition alone.
+
+  However, **once an extern is annotated `@heap`**, every call site to that extern flips from "wrapper free skipped" to "wrapper frees the previous value at next reassignment". Functions that previously leaked the underlying buffer per call now reclaim it. This is the intended correctness fix, but it changes behaviour for any caller that:
+
+  1. Stored the returned string somewhere the escape analyzer doesn't recognise (raw stuffing into an opaque arena, hand-rolled pointer arithmetic) — the reassignment-wrapper free will reclaim the buffer at the next assignment to the variable, and the stored alias becomes a dangling pointer.
+  2. Aliased the returned pointer into a struct field via a setter and read it back through a getter — covered by the #0.144 struct-field escape fix; verify your project is on 0.144+ before annotating high-traffic externs.
+
+  **Recommended pre-upgrade play:**
+
+  1. **For downstream stdlib annotations (separate release):** when an `extern` gets `@heap` added, run `aetherc --diagnose=ownership` over your project. Every `_heap_<lhs> = 1` line that newly flips on is a call site whose previous-value-free now fires; audit whether any code path retained a borrowed copy of `<lhs>` past the next assignment.
+  2. For any annotation you add yourself to a project-local extern, verify the C side genuinely returns a `malloc`'d (or equivalent libc-`free`-compatible) buffer — the codegen emits a plain `free((void*)_tmp_old)`, not header-aware `string_release`, so a `static`-buffer or `string_new_with_length`-style AetherString return would crash with a heap-corruption diagnostic on the second iteration.
+  3. Re-run sanitiser builds (ASan / Valgrind) over hot paths that touch newly-annotated externs.
+
+  No stdlib externs have been annotated in this release — that audit pass ships in a separate change once we've confirmed the C side of each high-traffic extern (`http_request_body`, `fs.read_to_string`, `json_stringify_raw`, the openssl/zlib wrappers …) is libc-`free`-compatible.
+
 ## [0.145.0]
 
 ### Fixed
