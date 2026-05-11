@@ -140,7 +140,7 @@ char* aether_strdup(const char* str) {
     size_t len = strlen(str) + 1;
     char* copy = aether_alloc(len);
     if (copy) {
-        strcpy(copy, str);
+        memcpy(copy, str, len);
     }
     return copy;
 }
