@@ -731,28 +731,71 @@ static int run_aetherc_capture(const char* script_path, char* stderr_buf, size_t
     char aetherc[AE_HELP_PATH_LEN];
     find_aetherc(aetherc, sizeof(aetherc));
 
-    /* Compose: `"<aetherc>" "<script>" -o /dev/null 2>&1`
-     * /dev/null on POSIX, NUL on Windows. We compile to a sink so
-     * we get full typecheck output without polluting the workspace. */
+    /* `/dev/null` on POSIX, `NUL` on Windows — aetherc's `-o <sink>`
+     * tells it not to write the compiled C anywhere. */
 #ifdef _WIN32
     const char* sink = "NUL";
 #else
     const char* sink = "/dev/null";
 #endif
-    char cmd[AE_HELP_PATH_LEN + AE_HELP_PATH_LEN + 64];
-    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" -o %s 2>&1",
-             aetherc, script_path, sink);
 
-    FILE* p = popen(cmd, "r");
-    if (!p) return -1;
-    size_t total = 0;
-    while (total + 1 < buf_size) {
-        size_t r = fread(stderr_buf + total, 1, buf_size - 1 - total, p);
-        if (r == 0) break;
-        total += r;
+    /* Capture aetherc's stderr by redirecting it to a temp file at
+     * the shell level, then reading the file back. Previous shape
+     * was `cmd 2>&1 | popen("r")` — that works on POSIX but is
+     * unreliable on Windows MSYS2 where `_popen` invokes cmd.exe
+     * and the `2>&1` merge can be silently dropped when the
+     * command's argv contains forward-slash paths (MSYS2-translated
+     * `/d/...` paths plus our `<exe_dir>/aetherc.exe` form together
+     * trip cmd.exe's quote+path parsing). Using a temp file
+     * sidesteps the shell-redirect entirely: the child writes
+     * stderr directly to a file we then fread, no cmd.exe in the
+     * loop. POSIX behaviour byte-identical.
+     *
+     * Cross-platform temp dir: $TMPDIR on POSIX (or /tmp), %TEMP%
+     * on Windows. Both reachable via `tmpnam` but that's marked
+     * deprecated; build a path manually with getenv. */
+    char err_file[AE_HELP_PATH_LEN];
+    const char* tmp_dir =
+#ifdef _WIN32
+        getenv("TEMP");
+    if (!tmp_dir || !*tmp_dir) tmp_dir = getenv("TMP");
+    if (!tmp_dir || !*tmp_dir) tmp_dir = ".";
+#else
+        getenv("TMPDIR");
+    if (!tmp_dir || !*tmp_dir) tmp_dir = "/tmp";
+#endif
+    {
+        long pid = (long)getpid();
+        path_format(err_file, sizeof(err_file),
+                    "%s%cae_help_aetherc_err_%ld.log",
+                    tmp_dir, PATH_SEP, pid);
     }
-    stderr_buf[total] = '\0';
-    int rc = pclose(p);
+
+    char cmd[AE_HELP_PATH_LEN * 3];
+    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" -o %s 2>\"%s\"",
+             aetherc, script_path, sink, err_file);
+
+    /* We don't need the child's stdout — aetherc emits diagnostics
+     * to stderr (which we've routed to the file) and the compiled
+     * C to `-o <sink>`. Use `system()` so we don't have to manage
+     * a pipe we never read from. */
+    int rc = system(cmd);
+
+    /* Read the captured stderr back into the caller's buffer. */
+    FILE* fp = fopen(err_file, "rb");
+    if (fp) {
+        size_t total = 0;
+        while (total + 1 < buf_size) {
+            size_t r = fread(stderr_buf + total, 1, buf_size - 1 - total, fp);
+            if (r == 0) break;
+            total += r;
+        }
+        stderr_buf[total] = '\0';
+        fclose(fp);
+    } else {
+        stderr_buf[0] = '\0';
+    }
+    remove(err_file);
     return rc;
 }
 
