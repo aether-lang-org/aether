@@ -902,6 +902,78 @@ static void emit_return_escape_drains_for_unreturned(CodeGenerator* gen,
     }
 }
 
+/* Struct-field heap-string assignment helper (#465).
+ *
+ * For an assignment `<var>.<field> = <rhs>` where `<var>` is a
+ * struct local whose definition has `<field>: string`, emit:
+ *
+ *     { const char* _tmp_old = <var>.<field>;
+ *       <var>.<field> = <rhs>;
+ *       if (<var>._heap_<field>) free((void*)_tmp_old);
+ *       <var>._heap_<field> = <rhs_is_heap>; }
+ *
+ * Returns 1 if the wrap was emitted (caller skips the bare
+ * assignment), 0 if the LHS shape isn't one of the recognised
+ * struct-field patterns (caller falls through to the existing
+ * bare-assignment emission). */
+static int emit_struct_field_heap_assign(CodeGenerator* gen, ASTNode* lhs, ASTNode* rhs) {
+    if (!gen || !lhs || !rhs) return 0;
+    if (lhs->type != AST_MEMBER_ACCESS || !lhs->value) return 0;
+    if (lhs->child_count != 1 || !lhs->children[0]) return 0;
+    if (lhs->children[0]->type != AST_IDENTIFIER || !lhs->children[0]->value) return 0;
+    ASTNode* obj = lhs->children[0];
+    Type* obj_type = obj->node_type;
+    if (!obj_type || obj_type->kind != TYPE_STRUCT || !obj_type->struct_name) return 0;
+    if (!gen->program) return 0;
+    ASTNode* sdef = find_struct_definition_by_name(gen->program, obj_type->struct_name);
+    if (!sdef) return 0;
+    ASTNode* matching_field = NULL;
+    for (int fi = 0; fi < sdef->child_count; fi++) {
+        ASTNode* f = sdef->children[fi];
+        if (f && f->type == AST_STRUCT_FIELD &&
+            f->value && strcmp(f->value, lhs->value) == 0) {
+            matching_field = f;
+            break;
+        }
+    }
+    if (!matching_field || !matching_field->node_type ||
+        matching_field->node_type->kind != TYPE_STRING) return 0;
+
+    int rhs_is_heap = is_heap_string_expr(gen, rhs);
+    print_indent(gen);
+    fprintf(gen->output,
+            "{ const char* _tmp_old = %s.%s; %s.%s = ",
+            obj->value, lhs->value,
+            obj->value, lhs->value);
+    generate_expression(gen, rhs);
+    fprintf(gen->output,
+            "; if (%s._heap_%s) free((void*)_tmp_old); "
+            "%s._heap_%s = %d; }\n",
+            obj->value, lhs->value,
+            obj->value, lhs->value,
+            rhs_is_heap ? 1 : 0);
+    return 1;
+}
+
+/* Struct-reassignment helper (#465). For `<var> = <struct_literal>`
+ * where `<var>` is a struct local with heap-string fields, emit
+ * `<Struct>_destroy(&<var>)` BEFORE the bare assignment so the
+ * previous struct's heap fields are reclaimed. Returns 1 if a
+ * destroy call was emitted; the caller still proceeds with the
+ * bare assignment emission afterward. */
+static int emit_struct_destroy_before_reassign(CodeGenerator* gen,
+                                                const char* var_name,
+                                                Type* var_type) {
+    if (!gen || !var_name || !var_type) return 0;
+    if (var_type->kind != TYPE_STRUCT || !var_type->struct_name) return 0;
+    if (!gen->program) return 0;
+    ASTNode* sdef = find_struct_definition_by_name(gen->program, var_type->struct_name);
+    if (!sdef || !struct_has_heap_string_field(sdef)) return 0;
+    print_indent(gen);
+    fprintf(gen->output, "%s_destroy(&%s);\n", var_type->struct_name, var_name);
+    return 1;
+}
+
 /* Should the return statement at this site route its value through
  * the uniform-heap shim? True when: the enclosing function is not
  * main, the return is single-value, the function is classifier-
@@ -1768,7 +1840,44 @@ static void hoist_loop_vars(CodeGenerator* gen, ASTNode* body) {
                 }
                 const char* c_type = get_c_type(var_type);
                 print_indent(gen);
-                fprintf(gen->output, "%s %s;\n", c_type, child->value);
+                /* Zero-initialize struct hoists so the first-iteration
+                 * struct-destroy call (#465) sees zero `_heap_<field>`
+                 * trackers instead of stack-uninitialised garbage.
+                 * Without this, the first `b = Box { ... }` inside the
+                 * loop body runs `Box_destroy(&b)` on uninit memory
+                 * and may free a garbage pointer. The {0} initialiser
+                 * is C99-portable and a no-op for non-struct types
+                 * either (the C compiler does the right thing). */
+                if (var_type && var_type->kind == TYPE_STRUCT) {
+                    fprintf(gen->output, "%s %s = {0};\n", c_type, child->value);
+                    /* Push the function-exit struct-destroy defer
+                     * here too — the in-loop reassignment path
+                     * doesn't run the first-declaration codegen
+                     * that normally pushes the defer (the var is
+                     * already-declared via this hoist). Without
+                     * this, the final loop-iteration's heap fields
+                     * never get reclaimed at function exit. */
+                    if (var_type->struct_name && gen->program) {
+                        ASTNode* sdef = find_struct_definition_by_name(
+                            gen->program, var_type->struct_name);
+                        if (sdef && struct_has_heap_string_field(sdef)) {
+                            char annot[300];
+                            snprintf(annot, sizeof(annot),
+                                     "struct_destroy:%s:%s",
+                                     child->value, var_type->struct_name);
+                            ASTNode* carrier = create_ast_node(
+                                AST_EXPRESSION_STATEMENT, NULL,
+                                child->line, child->column);
+                            if (carrier) {
+                                if (carrier->annotation) free(carrier->annotation);
+                                carrier->annotation = strdup(annot);
+                                push_defer(gen, carrier);
+                            }
+                        }
+                    }
+                } else {
+                    fprintf(gen->output, "%s %s;\n", c_type, child->value);
+                }
             }
         }
         // Recurse into nested blocks (e.g., if inside while)
@@ -2784,6 +2893,23 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
                     } else {
                         // Plain non-string assignment.
+                        /* Struct-reassignment heap cleanup (#465).
+                         * `b = Box { ... }` overwrites the struct
+                         * wholesale; without an explicit destroy of
+                         * the previous instance, every heap-string
+                         * field's old buffer leaks. Emit
+                         * `<Struct>_destroy(&<var>)` before the bare
+                         * assignment so any prior heap fields are
+                         * reclaimed. The struct's literal initializer
+                         * (codegen_expr.c AST_STRUCT_LITERAL) sets
+                         * the new `_heap_<field>` bits so the next
+                         * destroy at function exit fires correctly. */
+                        Type* vtype = stmt->node_type;
+                        if ((!vtype || vtype->kind != TYPE_STRUCT) &&
+                            stmt->child_count > 0 && stmt->children[0]) {
+                            vtype = stmt->children[0]->node_type;
+                        }
+                        emit_struct_destroy_before_reassign(gen, stmt->value, vtype);
                         fprintf(gen->output, "%s", stmt->value);
                         if (stmt->child_count > 0) {
                             fprintf(gen->output, " = ");
@@ -2927,6 +3053,32 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                stmt->children[0]->value) {
                         // Message/struct constructor — use the constructor name as type
                         fprintf(gen->output, "%s %s", stmt->children[0]->value, stmt->value);
+                        /* Struct-field heap-string ownership (#465).
+                         * Push a function-exit defer that calls the
+                         * auto-emitted <Struct>_destroy(&<var>) to
+                         * free any heap-owned string fields. The
+                         * destroy function is no-op for structs
+                         * without heap-string fields, but we only
+                         * push the defer when the field set actually
+                         * needs cleanup (skips the no-op call). */
+                        if (stmt->children[0]->type == AST_STRUCT_LITERAL && gen->program) {
+                            ASTNode* sdef = find_struct_definition_by_name(
+                                gen->program, stmt->children[0]->value);
+                            if (sdef && struct_has_heap_string_field(sdef)) {
+                                char annot[300];
+                                snprintf(annot, sizeof(annot),
+                                         "struct_destroy:%s:%s",
+                                         stmt->value, stmt->children[0]->value);
+                                ASTNode* carrier = create_ast_node(
+                                    AST_EXPRESSION_STATEMENT, NULL,
+                                    stmt->line, stmt->column);
+                                if (carrier) {
+                                    if (carrier->annotation) free(carrier->annotation);
+                                    carrier->annotation = strdup(annot);
+                                    push_defer(gen, carrier);
+                                }
+                            }
+                        }
                     } else {
                         // Determine the best type for this variable
                         Type* var_type = stmt->node_type;
@@ -3266,6 +3418,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         }
                     }
                 }
+
+                /* Struct-field heap-string ownership (#465). Helper
+                 * handles both AST_ASSIGNMENT and AST_EXPRESSION_
+                 * STATEMENT-wrapping-BINARY-`=` shapes (the parser
+                 * lands at different node types depending on whether
+                 * the LHS is a struct field vs. an array element vs.
+                 * a bare local — keep both paths routed through the
+                 * same wrapper). */
+                if (emit_struct_field_heap_assign(gen, lhs, rhs)) break;
 
                 // Generate the assignment itself
                 gen->generating_lvalue = 1;
@@ -4166,6 +4327,21 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         case AST_EXPRESSION_STATEMENT:
             if (stmt->child_count > 0) {
                 ASTNode* inner = stmt->children[0];
+
+                /* Struct-field heap-string ownership (#465). Many
+                 * parsers land `<var>.<field> = <rhs>` as
+                 * AST_EXPRESSION_STATEMENT > AST_BINARY_EXPRESSION
+                 * (op="=") rather than AST_ASSIGNMENT. Same wrapper
+                 * applies — route through the helper before any
+                 * other expression handling. */
+                if (inner && inner->type == AST_BINARY_EXPRESSION &&
+                    inner->value && strcmp(inner->value, "=") == 0 &&
+                    inner->child_count == 2) {
+                    if (emit_struct_field_heap_assign(gen, inner->children[0],
+                                                       inner->children[1])) {
+                        break;
+                    }
+                }
 
                 // Check if this function call has a trailing block
                 int has_trailing = 0;

@@ -1,0 +1,33 @@
+// #465 follow-up — struct with multiple heap-string fields.
+// Verifies the auto-destructor walks every tracked field.
+
+import std.string
+
+extern exit(code: int)
+
+struct Pair {
+    first: string
+    second: string
+}
+
+main() {
+    println("=== test_struct_field_heap_multi ===")
+
+    p = Pair { first: "", second: "" }
+    j = 0
+    while j < 5000 {
+        p.first = string.concat("a", "b")
+        p.second = string.concat("x", "y")
+        if string.length(p.first) != 2 {
+            println("FAIL iter ${j}: first len=${string.length(p.first)}")
+            exit(1)
+        }
+        if string.length(p.second) != 2 {
+            println("FAIL iter ${j}: second len=${string.length(p.second)}")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 5000 iters with two heap fields stable")
+    println("=== all cases passed ===")
+}

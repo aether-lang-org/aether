@@ -164,6 +164,17 @@ const char* get_builder_factory(CodeGenerator* gen, const char* func_name);
 
 /* Function/struct generation (codegen_func.c) */
 int has_return_value(ASTNode* node);
+
+/* Struct-field heap-string ownership (#465). The struct typedef
+ * emitter (generate_struct_definition) appends a hidden
+ * `int _heap_<field>` tracker per `string`-typed field, and a
+ * `<Name>_destroy()` function. The statement-codegen consumes
+ * these helpers at struct-local declaration sites (push the
+ * scope-exit destroy defer) and at field-write sites (emit the
+ * reassign-wrapper free). */
+int struct_has_heap_string_field(ASTNode* struct_def);
+ASTNode* find_struct_definition_by_name(ASTNode* program, const char* name);
+
 /* @c_callback annotation helpers (#235). A function declared with
    `@c_callback aether_name(...)` (or `@c_callback("c_sym") aether_name(...)`)
    gets a stable, externally-visible C symbol so it can be passed across

@@ -1302,13 +1302,32 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
     // Generate C struct
     print_line(gen, "typedef struct %s {", struct_def->value);
     indent(gen);
-    
-    // Generate fields
+
+    /* Heap-string ownership tracking for struct fields (#465).
+     *
+     * For each `string`-typed field, we emit a sibling
+     * `int _heap_<fieldname>` companion tracker so the matching
+     * reassign-wrapper at field-write sites can `free` the
+     * previous value when (and only when) it was heap-allocated.
+     * The struct's auto-emitted `<Name>_destroy()` (below) reads
+     * the same trackers to free heap fields at scope exit.
+     *
+     * The hidden trackers grow the struct by 4 bytes per string
+     * field. For pure-Aether structs this is acceptable; for
+     * structs that cross an FFI boundary, callers that
+     * hand-declare the struct in C won't have the trackers — they
+     * get the same field-only layout they already had (the trackers
+     * sit after the declared fields, so up-to-and-including the
+     * last user-declared field the offsets match). Strict-ABI
+     * structs that need binary stability can opt out by declaring
+     * fields as `ptr` instead of `string` (no tracker emitted). */
+    int has_string_field = 0;
+    int first_string_idx = -1;
     for (int i = 0; i < struct_def->child_count; i++) {
         ASTNode* field = struct_def->children[i];
         if (field->type == AST_STRUCT_FIELD) {
             print_indent(gen);
-            
+
             // Handle array types specially
             if (field->node_type && field->node_type->kind == TYPE_ARRAY) {
                 // For arrays: type fieldname[size];
@@ -1323,10 +1342,84 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
                 generate_type(gen, field->node_type);
                 fprintf(gen->output, " %s;\n", field->value);
             }
+
+            if (field->node_type && field->node_type->kind == TYPE_STRING) {
+                has_string_field = 1;
+                if (first_string_idx < 0) first_string_idx = i;
+            }
         }
     }
-    
+
+    /* Append the heap-tracker fields AFTER all user-declared fields
+     * so the struct's user-visible layout (offsets of the named
+     * fields) stays stable. */
+    if (has_string_field) {
+        for (int i = 0; i < struct_def->child_count; i++) {
+            ASTNode* field = struct_def->children[i];
+            if (field->type == AST_STRUCT_FIELD &&
+                field->node_type && field->node_type->kind == TYPE_STRING) {
+                print_indent(gen);
+                fprintf(gen->output, "int _heap_%s;\n", field->value);
+            }
+        }
+    }
+
     unindent(gen);
     print_line(gen, "} %s;", struct_def->value);
+
+    /* Auto-emit a destructor `<Name>_destroy(<Name>* s)` that
+     * walks every heap-string field and frees the buffer when the
+     * matching tracker is set. Called from the scope-exit defer
+     * for local struct variables (codegen_stmt.c pushes the
+     * defer at struct-literal initialization sites). Idempotent —
+     * each free zeroes the tracker so a second call no-ops. */
+    if (has_string_field) {
+        print_line(gen, "static inline void %s_destroy(%s* s) {",
+                   struct_def->value, struct_def->value);
+        indent(gen);
+        print_line(gen, "if (!s) return;");
+        for (int i = 0; i < struct_def->child_count; i++) {
+            ASTNode* field = struct_def->children[i];
+            if (field->type == AST_STRUCT_FIELD &&
+                field->node_type && field->node_type->kind == TYPE_STRING) {
+                print_line(gen, "if (s->_heap_%s) { free((void*)s->%s); s->%s = (const char*)0; s->_heap_%s = 0; }",
+                           field->value, field->value, field->value, field->value);
+            }
+        }
+        unindent(gen);
+        print_line(gen, "}");
+    }
     print_line(gen, "");
+}
+
+/* Predicate: does `struct_def` have any string-typed field that
+ * needs heap-ownership tracking? Used by the codegen_stmt.c
+ * struct-local-declaration site to decide whether to push the
+ * function-exit destructor defer. */
+int struct_has_heap_string_field(ASTNode* struct_def) {
+    if (!struct_def || struct_def->type != AST_STRUCT_DEFINITION) return 0;
+    for (int i = 0; i < struct_def->child_count; i++) {
+        ASTNode* field = struct_def->children[i];
+        if (field && field->type == AST_STRUCT_FIELD &&
+            field->node_type && field->node_type->kind == TYPE_STRING) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Lookup helper: find an AST_STRUCT_DEFINITION by struct name in
+ * the program AST. Returns NULL if not found. Used by the codegen
+ * site to decide whether a local-struct declaration needs the
+ * destructor-defer push. */
+ASTNode* find_struct_definition_by_name(ASTNode* program, const char* name) {
+    if (!program || !name) return NULL;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_STRUCT_DEFINITION &&
+            c->value && strcmp(c->value, name) == 0) {
+            return c;
+        }
+    }
+    return NULL;
 }

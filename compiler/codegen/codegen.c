@@ -485,6 +485,37 @@ static int try_emit_heap_string_exit_free(CodeGenerator* gen, ASTNode* deferred)
     return 1;
 }
 
+/* Struct-destructor defer carrier (#465). Annotation:
+ *   "struct_destroy:<varname>:<StructName>"
+ * Pushed by the struct-local-declaration site in codegen_stmt.c
+ * for every local struct variable whose definition has at least
+ * one heap-string field. The emitted defer calls the auto-
+ * generated <StructName>_destroy(&<varname>) function, which
+ * walks every `_heap_<field>` tracker and frees the matching
+ * field's buffer if set. */
+static int try_emit_struct_destroy(CodeGenerator* gen, ASTNode* deferred) {
+    if (!deferred || !deferred->annotation) return 0;
+    const char* prefix = "struct_destroy:";
+    size_t plen = strlen(prefix);
+    if (strncmp(deferred->annotation, prefix, plen) != 0) return 0;
+    const char* rest = deferred->annotation + plen;
+    /* Split "<varname>:<StructName>" on the last colon — struct
+     * names don't contain colons, var names shouldn't either. */
+    const char* sep = strchr(rest, ':');
+    if (!sep || !sep[1]) return 0;
+    size_t var_len = (size_t)(sep - rest);
+    if (var_len == 0 || var_len > 200) return 0;
+    char var_buf[256];
+    memcpy(var_buf, rest, var_len);
+    var_buf[var_len] = '\0';
+    const char* struct_name = sep + 1;
+    print_indent(gen);
+    fprintf(gen->output,
+            "/* deferred */ %s_destroy(&%s);\n",
+            struct_name, var_buf);
+    return 1;
+}
+
 // Emit deferred statements for current scope only (in reverse order)
 void emit_defers_for_scope(CodeGenerator* gen) {
     if (gen->scope_depth <= 0) return;
@@ -496,6 +527,7 @@ void emit_defers_for_scope(CodeGenerator* gen) {
         ASTNode* deferred = gen->defer_stack[i];
         if (deferred) {
             if (try_emit_heap_string_exit_free(gen, deferred)) continue;
+            if (try_emit_struct_destroy(gen, deferred)) continue;
             print_indent(gen);
             fprintf(gen->output, "/* deferred */ ");
             generate_statement(gen, deferred);
@@ -575,6 +607,7 @@ void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int p
             continue;
         }
         if (try_emit_heap_string_exit_free(gen, deferred)) continue;
+        if (try_emit_struct_destroy(gen, deferred)) continue;
         print_indent(gen);
         fprintf(gen->output, "/* deferred */ ");
         generate_statement(gen, deferred);

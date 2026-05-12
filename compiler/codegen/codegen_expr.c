@@ -3030,20 +3030,37 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             fprintf(gen->output, "}");
             break;
         
-        case AST_STRUCT_LITERAL:
+        case AST_STRUCT_LITERAL: {
+            /* Struct-field heap-string ownership (#465): for each
+             * field-init whose expression is heap-classified, also
+             * emit `._heap_<field> = 1` so the auto-emitted
+             * <Struct>_destroy() reclaims the buffer at scope exit.
+             * Plain initializers (literal strings, scalars) default
+             * to _heap_<field> = 0 via C99 designated-init's zero-
+             * fill of unmentioned fields. */
             fprintf(gen->output, "(%s){", expr->value);
+            int emitted = 0;
             for (int i = 0; i < expr->child_count; i++) {
                 ASTNode* field_init = expr->children[i];
                 if (field_init && field_init->type == AST_ASSIGNMENT) {
-                    if (i > 0) fprintf(gen->output, ", ");
+                    if (emitted > 0) fprintf(gen->output, ", ");
                     fprintf(gen->output, ".%s = ", field_init->value);
                     if (field_init->child_count > 0) {
                         generate_expression(gen, field_init->children[0]);
+                    }
+                    emitted++;
+                    /* If the init is heap-classified, also set the
+                     * hidden tracker. */
+                    if (field_init->child_count > 0 &&
+                        is_heap_string_expr(gen, field_init->children[0])) {
+                        fprintf(gen->output, ", ._heap_%s = 1", field_init->value);
+                        emitted++;
                     }
                 }
             }
             fprintf(gen->output, "}");
             break;
+        }
         
         case AST_ARRAY_ACCESS:
             if (expr->child_count >= 2) {
