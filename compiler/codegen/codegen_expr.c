@@ -1787,6 +1787,23 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "))");
             }
             break;
+
+        case AST_PTR_AS_FN_CAST:
+            /* `expr as fn(T1, T2, ...) -> R` — at this node we emit
+             * just `((void*)(expr))`.  The signature is carried on
+             * expr->node_type (TYPE_FUNCTION with is_fnptr=1) and is
+             * consulted at the CALL site (AST_FUNCTION_CALL) to emit
+             * the typed C function-pointer cast around the invocation.
+             * This split keeps storage of fn-pointer locals uniform
+             * (`void*`) regardless of signature, so locals/params can
+             * be reassigned across compatible signatures without
+             * C-side typedef churn. */
+            if (expr->child_count > 0) {
+                fprintf(gen->output, "((void*)(");
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, "))");
+            }
+            break;
             
         case AST_BINARY_EXPRESSION:
             if (expr->child_count >= 2) {
@@ -2527,6 +2544,36 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     }
                 }
                 else {
+                    /* Typed fn-pointer local call: `fp(a, b)` where
+                     * `fp` was declared as `fn(T1, T2, ...) -> R` (or
+                     * initialised from an `expr as fn(...)` cast).
+                     * Emit a typed C function-pointer cast around the
+                     * stored void* so the C compiler sees the correct
+                     * signature.  The cast and call are inlined here;
+                     * no per-signature shim is needed. */
+                    Type* fnptr_sig = lookup_fnptr_local(gen, func_name);
+                    if (fnptr_sig && fnptr_sig->kind == TYPE_FUNCTION &&
+                        fnptr_sig->is_fnptr) {
+                        const char* ret_c = fnptr_sig->return_type
+                            ? get_c_type(fnptr_sig->return_type) : "void";
+                        fprintf(gen->output, "((%s(*)(", ret_c);
+                        for (int pi = 0; pi < fnptr_sig->param_count; pi++) {
+                            if (pi > 0) fprintf(gen->output, ", ");
+                            fprintf(gen->output, "%s",
+                                get_c_type(fnptr_sig->param_types[pi]));
+                        }
+                        if (fnptr_sig->param_count == 0) {
+                            fprintf(gen->output, "void");
+                        }
+                        fprintf(gen->output, "))(%s))(", safe_c_name(func_name));
+                        for (int i = 0; i < expr->child_count; i++) {
+                            if (i > 0) fprintf(gen->output, ", ");
+                            generate_expression(gen, expr->children[i]);
+                        }
+                        fprintf(gen->output, ")");
+                        break;
+                    }
+
                     char c_func_name[256];
                     // Don't mangle extern functions — they refer to real C symbols.
                     // For @extern("c_symbol") aether_name(...), translate the

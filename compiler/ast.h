@@ -93,6 +93,18 @@ typedef enum {
                             // Result type is TYPE_PTR with element_type
                             // = TYPE_STRUCT{name}; member-access codegen
                             // emits `->field` not `.field`.
+    AST_PTR_AS_FN_CAST,     // `expr as fn(T1, T2, ...) -> R` — view a
+                            // raw ptr as a typed C function pointer.
+                            // children[0] = expr (must be ptr-typed);
+                            // node_type carries the TYPE_FUNCTION with
+                            // signature populated.  Codegen at the
+                            // value-use site (call-expression) emits
+                            // the matching C function-pointer cast
+                            // before invocation.  Storage of the
+                            // resulting value stays `void*`; the
+                            // signature is only consulted to synthesise
+                            // the cast at call sites and to typecheck
+                            // arity/types of the call's arguments.
     AST_IF_EXPRESSION,      // if cond { expr } else { expr } — value-producing
 
     // Closures
@@ -158,6 +170,13 @@ typedef struct Type {
     struct Type** param_types;  // Parameter types (NULL if not function type)
     int param_count;            // Number of parameters (0 if not function type)
     struct Type* return_type;   // Return type (NULL if not function type)
+    // 1 = this TYPE_FUNCTION represents a raw C function pointer
+    // (storage = void*, call site emits typed cast).  Default 0 =
+    // an _AeClosure-shaped Aether closure value (storage = _AeClosure
+    // struct with .fn + .env, call site emits closure dispatch).
+    // Set on cast results from `expr as fn(T1, T2, ...) -> R` and on
+    // any local/param annotated with `: fn(T1, T2, ...) -> R`.
+    int is_fnptr;
 } Type;
 
 typedef struct ASTNode {

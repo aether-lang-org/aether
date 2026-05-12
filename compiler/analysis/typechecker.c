@@ -960,6 +960,60 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             return result;
         }
 
+        case AST_PTR_AS_FN_CAST: {
+            /* `expr as fn(T1, T2, ...) -> R` — view the operand as a
+             * typed C function pointer. Operand must be ptr-typed
+             * (or int/int64, since Aether already coerces those to
+             * ptr in places). Result type is the TYPE_FUNCTION that
+             * the parser populated on expr->node_type. */
+            if (expr->child_count == 0 || !expr->children[0])
+                return create_type(TYPE_UNKNOWN);
+            Type* operand = infer_type(expr->children[0], table);
+            if (operand) {
+                int operand_ok = operand->kind == TYPE_PTR ||
+                                 operand->kind == TYPE_INT ||
+                                 operand->kind == TYPE_INT64 ||
+                                 operand->kind == TYPE_UINT64 ||
+                                 operand->kind == TYPE_UNKNOWN;
+                free_type(operand);
+                if (!operand_ok) {
+                    type_error("`as fn(...)` cast operand must be a `ptr` value",
+                               expr->line, expr->column);
+                    return create_type(TYPE_UNKNOWN);
+                }
+            }
+            /* The parser stashed the TYPE_FUNCTION (with signature)
+             * on the node — return it (copy preserved). */
+            if (expr->node_type) {
+                /* Don't free — caller may inspect; return a borrow
+                 * via a shallow clone to keep ownership clean. */
+                Type* dup = create_type(TYPE_FUNCTION);
+                dup->is_fnptr = 1;  /* cast → raw fn-pointer */
+                dup->param_count = expr->node_type->param_count;
+                if (dup->param_count > 0) {
+                    dup->param_types = malloc((size_t)dup->param_count * sizeof(Type*));
+                    for (int i = 0; i < dup->param_count; i++) {
+                        Type* src = expr->node_type->param_types[i];
+                        Type* d = create_type(src->kind);
+                        d->struct_name = src->struct_name ? strdup(src->struct_name) : NULL;
+                        d->element_type = src->element_type;  /* shallow */
+                        dup->param_types[i] = d;
+                    }
+                }
+                if (expr->node_type->return_type) {
+                    Type* src = expr->node_type->return_type;
+                    Type* d = create_type(src->kind);
+                    d->struct_name = src->struct_name ? strdup(src->struct_name) : NULL;
+                    d->element_type = src->element_type;
+                    dup->return_type = d;
+                }
+                return dup;
+            }
+            Type* fb = create_type(TYPE_FUNCTION);
+            fb->is_fnptr = 1;
+            return fb;
+        }
+
         case AST_IF_EXPRESSION:
             // Type is the type of the then-branch expression
             if (expr->child_count >= 2) {
@@ -1006,6 +1060,14 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
                 && symbol->type->kind != TYPE_VOID
                 && symbol->type->kind != TYPE_UNKNOWN) {
                 return clone_type(symbol->type);
+            }
+            /* Calling an fn-typed local: `fp(a, b)` where `fp` is a
+             * variable typed `fn(T1, T2, ...) -> R` (typically from
+             * `... as fn(...) -> R`).  Return R as the call's type. */
+            if (symbol && !symbol->is_function && symbol->type &&
+                symbol->type->kind == TYPE_FUNCTION &&
+                symbol->type->return_type) {
+                return clone_type(symbol->type->return_type);
             }
             return create_type(TYPE_UNKNOWN);
         }
@@ -3008,6 +3070,18 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             expr->node_type = infer_type(expr, table);
             return 1;
 
+        case AST_PTR_AS_FN_CAST:
+            /* Walk the operand; keep the parser-populated node_type
+             * (TYPE_FUNCTION with signature) so the call-site codegen
+             * can read the param/return types off it. */
+            if (expr->child_count > 0) {
+                typecheck_expression(expr->children[0], table);
+            }
+            /* Don't replace expr->node_type — the parser set it from
+             * the `fn(...)` source spelling and it carries the exact
+             * Type* tree we need for codegen. */
+            return 1;
+
         case AST_ARRAY_LITERAL:
             // Type check all array elements
             for (int i = 0; i < expr->child_count; i++) {
@@ -3454,6 +3528,26 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         }
     }
 
+    // Typed C function-pointer local call: `fp(a, b)` where `fp` is
+    // a local of type `fn(T1, T2, ...) -> R` (is_fnptr=1).  Validate
+    // each argument and stamp the call's return type, but DON'T
+    // rewrite to `call(fp, a, b)` — the codegen has a dedicated
+    // fnptr-call branch that wants the original AST shape so it can
+    // emit `((R (*)(T1, T2))(fp))(a, b)` inline.
+    if (symbol && !symbol->is_function && symbol->type &&
+        symbol->type->kind == TYPE_FUNCTION && symbol->type->is_fnptr &&
+        call->value) {
+        for (int i = 0; i < call->child_count; i++) {
+            typecheck_expression(call->children[i], table);
+        }
+        if (symbol->type->return_type) {
+            call->node_type = clone_type(symbol->type->return_type);
+        } else {
+            call->node_type = create_type(TYPE_VOID);
+        }
+        return 1;
+    }
+
     // Phase A3 (foundation for #260 D pure-Aether middleware): if the
     // call's target name resolves to a local variable whose type is
     // TYPE_FUNCTION (a closure / function-typed value), this is a
@@ -3462,8 +3556,12 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     // AST to flow through the existing `call(fn, args...)` codegen
     // path (codegen_expr.c:~2155). This lets users write the natural
     // form rather than the workaround `call(handler, req, res)`.
+    //
+    // (The is_fnptr=1 case was handled above; this block is reached
+    // only for closure-shaped fn-typed values.)
     if (symbol && !symbol->is_function && symbol->type &&
-        symbol->type->kind == TYPE_FUNCTION && call->value) {
+        symbol->type->kind == TYPE_FUNCTION && !symbol->type->is_fnptr &&
+        call->value) {
         // Build a new child list: [fn_ref, original_args...]
         ASTNode* fn_ref = create_ast_node(AST_IDENTIFIER, call->value,
                                           call->line, call->column);

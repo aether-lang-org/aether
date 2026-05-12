@@ -2631,6 +2631,31 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         }
 
         case AST_VARIABLE_DECLARATION: {
+            // Register fn-pointer locals so call-site codegen can emit
+            // the matching C function-pointer cast.  Two sources:
+            //   - explicit annotation:  `fp: fn(int, int) -> int = ...`
+            //   - inferred-from-cast:   `fp = expr as fn(int, int) -> int`
+            // In both cases, the AST node carries TYPE_FUNCTION with
+            // is_fnptr=1 by typecheck time (parser sets it on `as fn`
+            // casts; the var-decl node inherits from the initializer
+            // via the typechecker's RHS inference pass).
+            if (stmt->value) {
+                Type* fnptr_sig = NULL;
+                if (stmt->node_type && stmt->node_type->kind == TYPE_FUNCTION &&
+                    stmt->node_type->is_fnptr) {
+                    fnptr_sig = stmt->node_type;
+                } else if (stmt->child_count > 0 && stmt->children[0] &&
+                           stmt->children[0]->type == AST_PTR_AS_FN_CAST &&
+                           stmt->children[0]->node_type &&
+                           stmt->children[0]->node_type->kind == TYPE_FUNCTION &&
+                           stmt->children[0]->node_type->is_fnptr) {
+                    fnptr_sig = stmt->children[0]->node_type;
+                }
+                if (fnptr_sig) {
+                    register_fnptr_local(gen, stmt->value, fnptr_sig);
+                }
+            }
+
             // Check if this is a state variable assignment in an actor
             int is_state_var = 0;
             if (gen->current_actor && stmt->value) {

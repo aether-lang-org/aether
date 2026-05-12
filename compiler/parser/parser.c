@@ -287,9 +287,63 @@ Type* parse_type(Parser* parser) {
             break;
         case TOKEN_IDENTIFIER: {
             advance_token(parser);
-            // "fn" is the closure/function type
+            // "fn" is the closure/function type.  Two forms:
+            //   bare `fn`              — closure, no concrete signature
+            //   `fn(T1, T2, ...) -> R` — typed C function pointer:
+            //     emits as `void*` storage with a typed C cast injected
+            //     at the call site.  Used to declare local variables /
+            //     parameters holding a raw `ptr` returned from a C
+            //     extern (vtable lookup, signal handler table, qsort
+            //     callback handoff) so Aether can `fp(a, b)` directly
+            //     instead of routing through bespoke per-signature
+            //     `mem.call_fn3_int` shims.
             if (strcmp(token->value, "fn") == 0) {
                 type = create_type(TYPE_FUNCTION);
+                // Optional signature: `(T1, T2, ...) -> R`.  The
+                // signature is OPTIONAL so bare `fn` keeps working
+                // for closures whose param types come from inference.
+                // When the signature IS provided we treat this as a
+                // raw C function pointer (is_fnptr = 1) — storage
+                // `void*`, call site emits the matching typed cast.
+                // Bare `fn` keeps the closure semantics.
+                if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_PAREN) {
+                    type->is_fnptr = 1;
+                    advance_token(parser);  // consume '('
+                    type->param_count = 0;
+                    type->param_types = NULL;
+                    if (!(peek_token(parser) && peek_token(parser)->type == TOKEN_RIGHT_PAREN)) {
+                        do {
+                            Type* p = parse_type(parser);
+                            if (!p) {
+                                parser_error(parser, "Expected type in fn() signature");
+                                free_type(type);
+                                return NULL;
+                            }
+                            type->param_count++;
+                            type->param_types = realloc(type->param_types,
+                                (size_t)type->param_count * sizeof(Type*));
+                            type->param_types[type->param_count - 1] = p;
+                        } while (match_token(parser, TOKEN_COMMA));
+                    }
+                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                        free_type(type);
+                        return NULL;
+                    }
+                    // Return type after `->`.  Omitting `-> R` means
+                    // void return (consistent with extern/function
+                    // syntax elsewhere).
+                    if (peek_token(parser) && peek_token(parser)->type == TOKEN_ARROW) {
+                        advance_token(parser);  // consume `->`
+                        type->return_type = parse_type(parser);
+                        if (!type->return_type) {
+                            parser_error(parser, "Expected return type after `->` in fn() signature");
+                            free_type(type);
+                            return NULL;
+                        }
+                    } else {
+                        type->return_type = create_type(TYPE_VOID);
+                    }
+                }
             } else {
                 // Could be a struct type
                 type = create_type(TYPE_STRUCT);
@@ -957,21 +1011,57 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
         }
 
         if (op->type == TOKEN_AS) {
-            // Pointer-overlay struct cast: `expr as *StructName`
-            // Views a raw `ptr`-typed value as a pointer-to-struct so
-            // member access (`view.field`) can reach struct fields. The
-            // `ptr` operand's lifetime is the caller's problem — the
-            // cast does NOT allocate, refcount, or auto-free. This is
-            // the systems-programming escape hatch for FFI shapes that
-            // overlay struct headers on raw memory (e.g. QuickJS-style
-            // tagged-pointer ports). The leading `*` makes the
-            // pointer-ness visible in source; the result type is
-            // spelled `*StructName` and matches type annotations on
-            // function parameters, struct fields, etc. The keyword
-            // token TOKEN_AS is shared with `import x as y` aliasing;
-            // that's parsed only inside import statements so there's
-            // no collision.
+            // Pointer-overlay cast.  Two destination shapes:
+            //   `expr as *StructName`           — struct overlay
+            //   `expr as fn(T1, T2, ...) -> R`  — typed function-ptr
+            //
+            // Struct form: views a raw `ptr`-typed value as a
+            // pointer-to-struct so member access (`view.field`) can
+            // reach struct fields. The `ptr` operand's lifetime is the
+            // caller's problem — the cast does NOT allocate, refcount,
+            // or auto-free. This is the systems-programming escape
+            // hatch for FFI shapes that overlay struct headers on raw
+            // memory (e.g. QuickJS-style tagged-pointer ports). The
+            // leading `*` makes the pointer-ness visible in source;
+            // the result type is spelled `*StructName` and matches
+            // type annotations on function parameters, struct fields,
+            // etc.
+            //
+            // Fn form: views a raw `ptr`-typed value (typically a
+            // function pointer returned by a C extern) as a typed
+            // callable.  The signature is carried on the AST node's
+            // node_type and consumed at the call site to emit the
+            // matching `((R (*)(T1, T2))(p))(a, b)` C cast.  No
+            // typedef synthesis, no storage change — locals of fn-type
+            // stay `void*`-shaped in the emitted C.  Use case: storing
+            // a vtable lookup result then invoking it directly with
+            // type checking instead of routing through bespoke
+            // per-signature `mem.call_fn3_*` shims.
+            //
+            // The keyword token TOKEN_AS is shared with `import x as y`
+            // aliasing; that's parsed only inside import statements so
+            // there's no collision.
             advance_token(parser);  /* consume `as` */
+            Token* next = peek_token(parser);
+            if (next && next->type == TOKEN_IDENTIFIER && next->value &&
+                strcmp(next->value, "fn") == 0) {
+                /* `as fn(...) -> R` — reuse parse_type's `fn(...) -> R`
+                 * branch so the signature parsing lives in one place. */
+                Type* fn_type = parse_type(parser);
+                if (!fn_type) return NULL;
+                if (fn_type->kind != TYPE_FUNCTION || fn_type->param_count < 0) {
+                    parser_error(parser, "Expected fn(T1, T2, ...) -> R after `as`");
+                    free_type(fn_type);
+                    return NULL;
+                }
+                ASTNode* cast = create_ast_node(AST_PTR_AS_FN_CAST,
+                                                NULL,
+                                                op->line, op->column);
+                cast->node_type = fn_type;
+                add_child(cast, expr);
+                expr = cast;
+                continue;
+            }
             if (!expect_token(parser, TOKEN_MULTIPLY)) return NULL;
             Token* struct_name_tok = expect_token(parser, TOKEN_IDENTIFIER);
             if (!struct_name_tok) return NULL;

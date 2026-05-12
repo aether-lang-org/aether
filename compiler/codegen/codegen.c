@@ -144,7 +144,48 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
     gen->reply_type_capacity = 0;
+    // Typed fn-pointer locals (issue: TODO #5)
+    gen->fnptr_locals = NULL;
+    gen->fnptr_local_count = 0;
+    gen->fnptr_local_capacity = 0;
     return gen;
+}
+
+/* Register an fn-pointer-typed local so call-site codegen can emit
+ * the matching C function-pointer cast.  `sig` must be a TYPE_FUNCTION
+ * with is_fnptr=1; ownership stays with the AST (we keep a borrow,
+ * which is safe since the AST outlives codegen). */
+void register_fnptr_local(CodeGenerator* gen, const char* name, Type* sig) {
+    if (!gen || !name || !sig) return;
+    /* Replace existing entry on shadow/reassign — most recent type
+     * wins, matching scoping behaviour for local shadowing. */
+    for (int i = 0; i < gen->fnptr_local_count; i++) {
+        if (gen->fnptr_locals[i].name && strcmp(gen->fnptr_locals[i].name, name) == 0) {
+            gen->fnptr_locals[i].signature = sig;
+            return;
+        }
+    }
+    if (gen->fnptr_local_count >= gen->fnptr_local_capacity) {
+        int new_cap = gen->fnptr_local_capacity ? gen->fnptr_local_capacity * 2 : 8;
+        gen->fnptr_locals = realloc(gen->fnptr_locals,
+            (size_t)new_cap * sizeof(*gen->fnptr_locals));
+        gen->fnptr_local_capacity = new_cap;
+    }
+    gen->fnptr_locals[gen->fnptr_local_count].name = strdup(name);
+    gen->fnptr_locals[gen->fnptr_local_count].signature = sig;
+    gen->fnptr_local_count++;
+}
+
+/* Look up an fn-pointer local by name.  Returns the TYPE_FUNCTION
+ * signature (with is_fnptr=1) or NULL if not registered. */
+Type* lookup_fnptr_local(CodeGenerator* gen, const char* name) {
+    if (!gen || !name) return NULL;
+    for (int i = 0; i < gen->fnptr_local_count; i++) {
+        if (gen->fnptr_locals[i].name && strcmp(gen->fnptr_locals[i].name, name) == 0) {
+            return gen->fnptr_locals[i].signature;
+        }
+    }
+    return NULL;
 }
 
 CodeGenerator* create_code_generator_with_header(FILE* output, FILE* header, const char* header_path) {
@@ -1020,6 +1061,11 @@ const char* get_c_type(Type* type) {
             return buffer;
         }
         case TYPE_FUNCTION:
+            /* Typed C function pointer (storage = void*).  The call
+             * site injects a `((R (*)(T1, T2))(v))` cast — keeping the
+             * storage as void* avoids C-side typedef synthesis and
+             * keeps the FFI path uniform across all signatures. */
+            if (type->is_fnptr) return "void*";
             return "_AeClosure";
         case TYPE_UNKNOWN: {
             AetherError w = {NULL, NULL, 0, 0,

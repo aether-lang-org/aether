@@ -215,6 +215,7 @@ Type* clone_type(Type* type) {
     if (type->return_type) {
         new_type->return_type = clone_type(type->return_type);
     }
+    new_type->is_fnptr = type->is_fnptr;
 
     return new_type;
 }

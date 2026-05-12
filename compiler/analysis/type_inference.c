@@ -377,14 +377,26 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
             for (int i = 0; i < node->child_count; i++) {
                 collect_constraints(node->children[i], ctx);
             }
-            
+
             // Look up function definition to get return type
             if (node->value) {
                 Symbol* func_sym = lookup_qualified_symbol(ctx->symbols, node->value);
                 if (func_sym && func_sym->type) {
-                    // Function call inherits the function's return type
                     if (!node->node_type || node->node_type->kind == TYPE_UNKNOWN) {
-                        node->node_type = clone_type(func_sym->type);
+                        /* Calling an fn-typed local (is_fnptr=1): the
+                         * call's result type is the function-type's
+                         * return slot, NOT the full function type.
+                         * Without this carve-out, `result = fp(...)`
+                         * would stamp `result` as having type
+                         * `fn(int, int) -> int` instead of `int`. */
+                        if (func_sym->type->kind == TYPE_FUNCTION &&
+                            func_sym->type->is_fnptr &&
+                            func_sym->type->return_type) {
+                            node->node_type = clone_type(func_sym->type->return_type);
+                        } else {
+                            // Function call inherits the function's return type
+                            node->node_type = clone_type(func_sym->type);
+                        }
                     }
                 }
             }
