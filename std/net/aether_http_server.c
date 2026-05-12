@@ -1,5 +1,6 @@
 #include "aether_http_server.h"
 #include "../../runtime/config/aether_optimization_config.h"
+#include "../../runtime/aether_resource_caps.h"
 
 /* HTTP/2 (#260 Tier 2). Pull in the wrapper header up front so
  * handle_one_request's h2c-upgrade dispatch (RFC 7540 §3.2) can
@@ -384,7 +385,12 @@ static int send_response_with_optional_sendfile(HttpConn* conn,
          * (sendfile) has no such limit. */
         long long size = res->sendfile_size;
         if (size >= 0 && size <= (long long)0x7FFFFFFF) {
-            char* buf = (char*)malloc((size_t)size + 1);
+            /* Cap-aware (#343): file size is OS-supplied and
+             * unbounded from the plugin host's perspective; gate via
+             * the caps allocator. The matching free in
+             * http_server_response_free passes res->body_cap. */
+            size_t buf_cap = (size_t)size + 1;
+            char* buf = (char*)aether_caps_malloc(buf_cap);
             if (buf) {
                 size_t total = 0;
 #ifndef _WIN32
@@ -398,11 +404,12 @@ static int send_response_with_optional_sendfile(HttpConn* conn,
 #endif
                 if (total == (size_t)size) {
                     buf[size] = '\0';
-                    free(res->body);
+                    aether_caps_free(res->body, res->body_cap);
                     res->body = buf;
                     res->body_length = (size_t)size;
+                    res->body_cap = buf_cap;
                 } else {
-                    free(buf);
+                    aether_caps_free(buf, buf_cap);
                 }
             }
         }
@@ -1522,23 +1529,32 @@ void http_response_set_body_n(HttpServerResponse* res, const char* body, int len
     if (length < 0) return;
     if (length > 0 && !body) return;
 
-    free(res->body);
+    /* Cap-aware (#343): res->body's allocation size is stored in
+     * res->body_length (we always alloc length+1 but the +1 NUL
+     * terminator is included in cap accounting too — track the
+     * full allocation in res->body_cap so caps_free recovers the
+     * exact byte count regardless of how the body was set). */
+    aether_caps_free(res->body, res->body_cap);
     if (length == 0) {
         res->body = NULL;
         res->body_length = 0;
+        res->body_cap = 0;
     } else {
         const char* src = body;
         if (is_aether_string(body)) {
             src = ((const AetherString*)body)->data;
         }
-        res->body = (char*)malloc((size_t)length + 1);
+        size_t alloc_cap = (size_t)length + 1;
+        res->body = (char*)aether_caps_malloc(alloc_cap);
         if (!res->body) {
             res->body_length = 0;
+            res->body_cap = 0;
             return;
         }
         memcpy(res->body, src, (size_t)length);
         res->body[length] = '\0';
         res->body_length = (size_t)length;
+        res->body_cap = alloc_cap;
     }
 
     char len_str[32];
@@ -1594,7 +1610,9 @@ void http_server_response_free(HttpServerResponse* res) {
     if (!res) return;
 
     free(res->status_text);
-    free(res->body);
+    /* Cap-aware (#343): body was alloc'd via aether_caps_malloc
+     * (see http_response_set_body_n / sendfile-fallback read). */
+    aether_caps_free(res->body, res->body_cap);
 
     for (int i = 0; i < res->header_count; i++) {
         free(res->header_keys[i]);
@@ -1994,13 +2012,20 @@ int http_ws_recv(HttpWsConn* ws) {
         /* Sanity bound — refuse 1GB+ frames. */
         if (pl < 0 || pl > (1LL << 30)) { ws->closed = 1; return -1; }
 
-        /* Read payload into a scratch buffer, unmasking on the fly. */
+        /* Read payload into a scratch buffer, unmasking on the fly.
+         * Cap-aware (#343): `pl` is the WebSocket payload length
+         * field from the wire — untrusted by definition. The 1 GiB
+         * sanity bound above stops the obvious DoS shape; the caps
+         * allocator threads this through to the host's
+         * aether_set_memory_cap budget. */
         char* frame_buf = NULL;
+        size_t frame_cap = 0;
         if (pl > 0) {
-            frame_buf = (char*)malloc((size_t)pl);
+            frame_cap = (size_t)pl;
+            frame_buf = (char*)aether_caps_malloc(frame_cap);
             if (!frame_buf) { ws->closed = 1; return -1; }
             if (ws_recv_exact(ws->conn, frame_buf, (int)pl) != 0) {
-                free(frame_buf); ws->closed = 1; return -1;
+                aether_caps_free(frame_buf, frame_cap); ws->closed = 1; return -1;
             }
             if (masked) {
                 for (long long i = 0; i < pl; i++) {
@@ -2014,18 +2039,18 @@ int http_ws_recv(HttpWsConn* ws) {
              * §5.5.3). Free our buffer afterwards; caller doesn't see
              * control frames. */
             ws_send_frame(ws->conn, WS_OP_PONG, frame_buf, (int)pl);
-            free(frame_buf);
+            aether_caps_free(frame_buf, frame_cap);
             continue;
         }
         if (opcode == WS_OP_PONG) {
-            free(frame_buf);
+            aether_caps_free(frame_buf, frame_cap);
             continue;  /* unsolicited pong — discard */
         }
         if (opcode == WS_OP_CLOSE) {
             /* Echo close frame back (RFC 6455 §5.5.1) and report
              * to caller. */
             ws_send_frame(ws->conn, WS_OP_CLOSE, frame_buf, (int)pl);
-            free(frame_buf);
+            aether_caps_free(frame_buf, frame_cap);
             ws->closed = 1;
             return -1;
         }
@@ -2038,12 +2063,12 @@ int http_ws_recv(HttpWsConn* ws) {
         }
         if (pl > 0) {
             if (ws_msg_grow(ws, ws->msg_len + (int)pl + 1) != 0) {
-                free(frame_buf); ws->closed = 1; return -1;
+                aether_caps_free(frame_buf, frame_cap); ws->closed = 1; return -1;
             }
             memcpy(ws->msg_buf + ws->msg_len, frame_buf, (size_t)pl);
             ws->msg_len += (int)pl;
         }
-        free(frame_buf);
+        aether_caps_free(frame_buf, frame_cap);
 
         if (fin) break;
     }
@@ -3590,9 +3615,10 @@ void http_serve_file(HttpServerResponse* res, const char* filepath) {
      * the fast path doesn't emit stale content alongside the
      * sendfile-emitted body. */
     if (res->body) {
-        free(res->body);
+        aether_caps_free(res->body, res->body_cap);
         res->body = NULL;
         res->body_length = 0;
+        res->body_cap = 0;
     }
     res->sendfile_fd = fd;
     res->sendfile_size = (long long)st.st_size;
@@ -3607,7 +3633,9 @@ void http_serve_file(HttpServerResponse* res, const char* filepath) {
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    char* content = (char*)malloc((size_t)size + 1);
+    /* Cap-aware (#343): file size is OS-supplied, unbounded. */
+    size_t content_cap = (size_t)size + 1;
+    char* content = (char*)aether_caps_malloc(content_cap);
     if (!content) {
         fclose(f);
         http_response_set_status(res, 500);
@@ -3617,7 +3645,7 @@ void http_serve_file(HttpServerResponse* res, const char* filepath) {
     size_t bytes_read = fread(content, 1, (size_t)size, f);
     fclose(f);
     if (bytes_read == 0 && size > 0) {
-        free(content);
+        aether_caps_free(content, content_cap);
         http_response_set_status(res, 500);
         http_response_set_body(res, "500 - Server Error");
         return;
@@ -3632,7 +3660,7 @@ void http_serve_file(HttpServerResponse* res, const char* filepath) {
      * the body — which the cross-platform sendfile test surfaced
      * on Windows when serving a 1 MiB urandom file. */
     http_response_set_body_n(res, content, (int)bytes_read);
-    free(content);
+    aether_caps_free(content, content_cap);
 #endif
 }
 

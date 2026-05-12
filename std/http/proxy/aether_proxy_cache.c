@@ -26,6 +26,7 @@
  */
 
 #include "aether_proxy_internal.h"
+#include "../../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -84,7 +85,9 @@ static void entry_free_one(AetherProxyCacheEntry* e) {
         for (int i = 0; i < e->header_count; i++) free(e->header_values[i]);
         free(e->header_values);
     }
-    free(e->body);
+    /* Cap-aware (#343): body was alloc'd via aether_caps_malloc;
+     * the recorded length is the byte count for caps accounting. */
+    aether_caps_free(e->body, (size_t)e->body_length);
     free(e->etag);
     free(e->last_modified);
     free(e->vary_header);
@@ -465,7 +468,12 @@ void aether_proxy_cache_store(AetherProxyCache* cache,
     e->last_modified = extract_header(response_headers, "Last-Modified");
 
     if (body && body_length > 0) {
-        e->body = (char*)malloc((size_t)body_length);
+        /* Cap-aware (#343): cached upstream response body. The
+         * body_length is the upstream's Content-Length — untrusted.
+         * Cache entry's e->body_length is the byte count
+         * aether_caps_free needs at the matching free site (see
+         * the cache-entry destructor a few lines above). */
+        e->body = (char*)aether_caps_malloc((size_t)body_length);
         if (e->body) {
             memcpy(e->body, body, (size_t)body_length);
             e->body_length = body_length;

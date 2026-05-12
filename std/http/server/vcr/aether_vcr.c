@@ -53,6 +53,7 @@
 #include <string.h>
 
 #include "../../../string/aether_string.h"
+#include "../../../../runtime/aether_resource_caps.h"
 
 /* --- These come from std.http.server's request/response surface. --- */
 extern const char* http_request_method(void* req);
@@ -314,8 +315,13 @@ static int decode_base64_body(const char* src, unsigned char** out, int* out_len
     *out = NULL;
     *out_len = 0;
 
+    /* Cap-aware (#343): src is tape content (untrusted in plugin-host
+     * scenarios). Both the cleanup buffer and the decoded-output
+     * buffer are gated; out-buffer is handed back to the caller who
+     * releases via plain libc free (caller-owned-return drift). */
     size_t src_len = strlen(src);
-    unsigned char* clean = (unsigned char*)malloc(src_len + 4);
+    size_t clean_cap = src_len + 4;
+    unsigned char* clean = (unsigned char*)aether_caps_malloc(clean_cap);
     if (!clean) return 0;
 
     size_t clen = 0;
@@ -326,9 +332,10 @@ static int decode_base64_body(const char* src, unsigned char** out, int* out_len
     }
     while (clen % 4 != 0) clean[clen++] = '=';
 
-    unsigned char* buf = (unsigned char*)malloc((clen / 4) * 3 + 1);
+    size_t buf_cap = (clen / 4) * 3 + 1;
+    unsigned char* buf = (unsigned char*)aether_caps_malloc(buf_cap);
     if (!buf) {
-        free(clean);
+        aether_caps_free(clean, clean_cap);
         return 0;
     }
 
@@ -339,13 +346,13 @@ static int decode_base64_body(const char* src, unsigned char** out, int* out_len
         int v2 = b64_value(clean[i + 2]);
         int v3 = b64_value(clean[i + 3]);
         if (v0 < 0 || v1 < 0 || v2 == -1 || v3 == -1) {
-            free(clean);
-            free(buf);
+            aether_caps_free(clean, clean_cap);
+            aether_caps_free(buf, buf_cap);
             return 0;
         }
         if (v2 == -2 && v3 != -2) {
-            free(clean);
-            free(buf);
+            aether_caps_free(clean, clean_cap);
+            aether_caps_free(buf, buf_cap);
             return 0;
         }
 
@@ -358,7 +365,7 @@ static int decode_base64_body(const char* src, unsigned char** out, int* out_len
         }
     }
 
-    free(clean);
+    aether_caps_free(clean, clean_cap);
     buf[off] = '\0';
     *out = buf;
     *out_len = (int)off;
@@ -370,6 +377,10 @@ AetherString* vcr_decode_base64_body_raw(const char* src) {
     int decoded_len = 0;
     if (!decode_base64_body(src, &decoded, &decoded_len)) return NULL;
     AetherString* result = string_new_with_length((const char*)decoded, (size_t)decoded_len);
+    /* decoded was allocated by decode_base64_body via aether_caps_malloc
+     * but its capacity isn't threaded back here; the libc-compatible-
+     * pointer contract (aether_resource_caps.h:89-94) keeps the free
+     * heap-safe at the cost of cap-counter drift on this path. */
     free(decoded);
     return result;
 }
@@ -1377,6 +1388,7 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
 
     const char* body_for_tape = body;
     char* decoded_body = NULL;
+    size_t decoded_body_cap = 0;
     if (upstream_gzip) {
         if (zlib_backend_available() == 0) {
             free(caller_headers); free(resp_headers); free(content_type); free(req_headers);
@@ -1393,7 +1405,11 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
             return;
         }
         int body_for_tape_len = zlib_get_inflate_length();
-        decoded_body = (char*)malloc((size_t)body_for_tape_len + 1);
+        /* Cap-aware (#343): VCR record-mode decodes the upstream's
+         * gzip response into a local copy. Untrusted upstream length
+         * drives the allocation; gate via the caps allocator. */
+        decoded_body_cap = (size_t)body_for_tape_len + 1;
+        decoded_body = (char*)aether_caps_malloc(decoded_body_cap);
         if (!decoded_body) {
             zlib_release_inflate();
             free(caller_headers); free(resp_headers); free(content_type); free(req_headers);
@@ -1410,7 +1426,7 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
 
     char* recorded_path = build_recorded_path(live_req);
     if (!recorded_path) {
-        free(decoded_body);
+        aether_caps_free(decoded_body, decoded_body_cap);
         free(caller_headers); free(resp_headers); free(content_type); free(req_headers);
         http_response_free(cresp);
         free(url);
@@ -1426,7 +1442,7 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
                                          req_headers,
                                          live_req->body ? live_req->body : "");
     if (!ok) {
-        free(decoded_body);
+        aether_caps_free(decoded_body, decoded_body_cap);
         free(caller_headers);
         free(resp_headers);
         free(content_type);
@@ -1447,7 +1463,7 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
     g_last_kind = VCR_KIND_OK;
     g_last_index = g_tape_n - 1;
 
-    free(decoded_body);
+    aether_caps_free(decoded_body, decoded_body_cap);
     free(caller_headers);
     free(resp_headers);
     free(content_type);

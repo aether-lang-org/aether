@@ -2,6 +2,7 @@
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/utils/aether_compiler.h"
 #include "../../runtime/aether_sandbox.h"
+#include "../../runtime/aether_resource_caps.h"
 #include "../string/aether_string.h"
 
 #if !AETHER_HAS_FILESYSTEM
@@ -183,9 +184,13 @@ char* file_read_all_raw(File* file) {
     if (size < 0) return NULL;
     fseek(fp, 0, SEEK_SET);
 
-    char* buffer = (char*)malloc(size + 1);
+    /* Cap-aware (#343): file size is OS-supplied and unbounded.
+     * Caller frees with plain libc free per the caller-owned-return
+     * contract — counter drifts up on this path, same as
+     * string_concat. */
+    char* buffer = (char*)aether_caps_malloc((size_t)size + 1);
     if (!buffer) return NULL;
-    size_t read = fread(buffer, 1, size, fp);
+    size_t read = fread(buffer, 1, (size_t)size, fp);
     buffer[read] = '\0';
 
     return buffer;
@@ -677,12 +682,15 @@ char* fs_read_binary_raw(const char* path, int* out_len) {
     // Allocate size+1 so we can append a NUL past the end — handy for
     // callers who know the content is text and want to treat it as a
     // C string. The `out_len` byte count does NOT include this NUL.
-    char* buf = (char*)malloc((size_t)size + 1);
+    // Cap-aware (#343): same rationale as file_read_all_raw above —
+    // unbounded file size, caller-owned return.
+    size_t alloc_cap = (size_t)size + 1;
+    char* buf = (char*)aether_caps_malloc(alloc_cap);
     if (!buf) { fclose(fp); return NULL; }
 
     size_t read = (size > 0) ? fread(buf, 1, (size_t)size, fp) : 0;
     fclose(fp);
-    if (read != (size_t)size) { free(buf); return NULL; }
+    if (read != (size_t)size) { aether_caps_free(buf, alloc_cap); return NULL; }
 
     buf[size] = '\0';
     if (out_len) *out_len = (int)size;

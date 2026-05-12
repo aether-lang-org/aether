@@ -1,5 +1,6 @@
 #include "aether_zlib.h"
 #include "../string/aether_string.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -26,18 +27,38 @@ static inline const unsigned char* zlib_unwrap_bytes(const char* data, int lengt
 
 /* Thread-local buffers for the split-accessor pattern. One pair per
  * direction so a caller can interleave deflate + inflate without the
- * two fighting over a single slot. */
+ * two fighting over a single slot.
+ *
+ * Resource-caps tracking (#343): both directions remember the
+ * allocation capacity alongside the payload length so the matching
+ * free goes through `aether_caps_free` with the right byte count.
+ * The cap counter stays at current-usage rather than high-water-mark
+ * — important for plugin-host sandboxes that re-arm the cap between
+ * compressor invocations. Length and capacity differ when the chosen
+ * `compressBound` over-allocated relative to the actual compressed
+ * size; `_cap` holds the allocator's view (the count that must
+ * round-trip to free), `_len` holds the payload's view. */
 static _Thread_local unsigned char* tls_deflate_buf = NULL;
+static _Thread_local size_t         tls_deflate_cap = 0;
 static _Thread_local int            tls_deflate_len = 0;
 static _Thread_local unsigned char* tls_inflate_buf = NULL;
+static _Thread_local size_t         tls_inflate_cap = 0;
 static _Thread_local int            tls_inflate_len = 0;
 
 static void free_deflate_tls(void) {
-    if (tls_deflate_buf) { free(tls_deflate_buf); tls_deflate_buf = NULL; }
+    if (tls_deflate_buf) {
+        aether_caps_free(tls_deflate_buf, tls_deflate_cap);
+        tls_deflate_buf = NULL;
+    }
+    tls_deflate_cap = 0;
     tls_deflate_len = 0;
 }
 static void free_inflate_tls(void) {
-    if (tls_inflate_buf) { free(tls_inflate_buf); tls_inflate_buf = NULL; }
+    if (tls_inflate_buf) {
+        aether_caps_free(tls_inflate_buf, tls_inflate_cap);
+        tls_inflate_buf = NULL;
+    }
+    tls_inflate_cap = 0;
     tls_inflate_len = 0;
 }
 
@@ -60,15 +81,17 @@ int zlib_try_deflate(const char* data, int length, int level) {
     if (in_len > 0 && !in) return 0;
 
     uLongf bound = compressBound((uLong)in_len);
-    unsigned char* out = (unsigned char*)malloc(bound > 0 ? bound : 1);
+    size_t alloc_cap = bound > 0 ? (size_t)bound : 1;
+    unsigned char* out = (unsigned char*)aether_caps_malloc(alloc_cap);
     if (!out) return 0;
 
     uLongf out_size = bound;
     int lvl = (level < -1 || level > 9) ? Z_DEFAULT_COMPRESSION : level;
     int rc = compress2(out, &out_size, in, (uLong)in_len, lvl);
-    if (rc != Z_OK) { free(out); return 0; }
+    if (rc != Z_OK) { aether_caps_free(out, alloc_cap); return 0; }
 
     tls_deflate_buf = out;
+    tls_deflate_cap = alloc_cap;
     tls_deflate_len = (int)out_size;
     return 1;
 }
@@ -90,7 +113,8 @@ int zlib_try_gzip_deflate(const char* data, int length, int level) {
     }
 
     uLong bound = deflateBound(&strm, (uLong)in_len);
-    unsigned char* out = (unsigned char*)malloc(bound > 0 ? bound : 1);
+    size_t alloc_cap = bound > 0 ? (size_t)bound : 1;
+    unsigned char* out = (unsigned char*)aether_caps_malloc(alloc_cap);
     if (!out) { deflateEnd(&strm); return 0; }
 
     strm.next_in = (Bytef*)in;
@@ -101,11 +125,12 @@ int zlib_try_gzip_deflate(const char* data, int length, int level) {
     int rc = deflate(&strm, Z_FINISH);
     if (rc != Z_STREAM_END) {
         deflateEnd(&strm);
-        free(out);
+        aether_caps_free(out, alloc_cap);
         return 0;
     }
 
     tls_deflate_buf = out;
+    tls_deflate_cap = alloc_cap;
     tls_deflate_len = (int)strm.total_out;
     deflateEnd(&strm);
     return 1;
@@ -131,7 +156,7 @@ int zlib_try_inflate(const char* data, int length) {
      * fit in 2-8x their compressed size; grow geometrically if not. */
     size_t cap = in_len * 4;
     if (cap < 64) cap = 64;
-    unsigned char* out = (unsigned char*)malloc(cap);
+    unsigned char* out = (unsigned char*)aether_caps_malloc(cap);
     if (!out) { inflateEnd(&strm); return 0; }
 
     size_t produced = 0;
@@ -143,12 +168,12 @@ int zlib_try_inflate(const char* data, int length) {
         produced = cap - strm.avail_out;
 
         if (rc == Z_STREAM_END) break;
-        if (rc != Z_OK) { free(out); inflateEnd(&strm); return 0; }
+        if (rc != Z_OK) { aether_caps_free(out, cap); inflateEnd(&strm); return 0; }
         if (strm.avail_out == 0) {
             size_t new_cap = cap * 2;
-            if (new_cap < cap) { free(out); inflateEnd(&strm); return 0; }
-            unsigned char* bigger = (unsigned char*)realloc(out, new_cap);
-            if (!bigger) { free(out); inflateEnd(&strm); return 0; }
+            if (new_cap < cap) { aether_caps_free(out, cap); inflateEnd(&strm); return 0; }
+            unsigned char* bigger = (unsigned char*)aether_caps_realloc(out, cap, new_cap);
+            if (!bigger) { aether_caps_free(out, cap); inflateEnd(&strm); return 0; }
             out = bigger;
             cap = new_cap;
         }
@@ -156,6 +181,7 @@ int zlib_try_inflate(const char* data, int length) {
     inflateEnd(&strm);
 
     tls_inflate_buf = out;
+    tls_inflate_cap = cap;
     tls_inflate_len = (int)produced;
     return 1;
 }
@@ -178,7 +204,7 @@ static int inflate_with_window_bits(const char* data, int length, int window_bit
 
     size_t cap = in_len * 4;
     if (cap < 64) cap = 64;
-    unsigned char* out = (unsigned char*)malloc(cap);
+    unsigned char* out = (unsigned char*)aether_caps_malloc(cap);
     if (!out) { inflateEnd(&strm); return 0; }
 
     size_t produced = 0;
@@ -190,12 +216,12 @@ static int inflate_with_window_bits(const char* data, int length, int window_bit
         produced = cap - strm.avail_out;
 
         if (rc == Z_STREAM_END) break;
-        if (rc != Z_OK) { free(out); inflateEnd(&strm); return 0; }
+        if (rc != Z_OK) { aether_caps_free(out, cap); inflateEnd(&strm); return 0; }
         if (strm.avail_out == 0) {
             size_t new_cap = cap * 2;
-            if (new_cap < cap) { free(out); inflateEnd(&strm); return 0; }
-            unsigned char* bigger = (unsigned char*)realloc(out, new_cap);
-            if (!bigger) { free(out); inflateEnd(&strm); return 0; }
+            if (new_cap < cap) { aether_caps_free(out, cap); inflateEnd(&strm); return 0; }
+            unsigned char* bigger = (unsigned char*)aether_caps_realloc(out, cap, new_cap);
+            if (!bigger) { aether_caps_free(out, cap); inflateEnd(&strm); return 0; }
             out = bigger;
             cap = new_cap;
         }
@@ -203,6 +229,7 @@ static int inflate_with_window_bits(const char* data, int length, int window_bit
     inflateEnd(&strm);
 
     tls_inflate_buf = out;
+    tls_inflate_cap = cap;
     tls_inflate_len = (int)produced;
     return 1;
 }

@@ -39,6 +39,7 @@
 // tests, regression tests, and callers continue to work unchanged.
 
 #include "aether_json.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -195,7 +196,12 @@ static size_t arena_align_up(size_t n) {
 
 static ArenaChunk* arena_new_chunk(size_t cap) {
     // Allocate the header + payload in one malloc. cap is payload bytes.
-    ArenaChunk* c = (ArenaChunk*)malloc(sizeof(ArenaChunk) + cap);
+    // Cap-aware (#343): JSON parser arena chunks scale with input
+    // size; an untrusted document drives cumulative arena size. The
+    // chunk's c->cap field stores the payload bytes so the matching
+    // free recovers `sizeof(ArenaChunk) + c->cap` for the counter
+    // decrement.
+    ArenaChunk* c = (ArenaChunk*)aether_caps_malloc(sizeof(ArenaChunk) + cap);
     if (!c) return NULL;
     c->next = NULL;
     c->cap = cap;
@@ -204,10 +210,10 @@ static ArenaChunk* arena_new_chunk(size_t cap) {
 }
 
 static Arena* arena_create(void) {
-    Arena* a = (Arena*)malloc(sizeof(Arena));
+    Arena* a = (Arena*)aether_caps_malloc(sizeof(Arena));
     if (!a) return NULL;
     a->head = arena_new_chunk(ARENA_INITIAL_CHUNK);
-    if (!a->head) { free(a); return NULL; }
+    if (!a->head) { aether_caps_free(a, sizeof(Arena)); return NULL; }
     a->tail = a->head;
     return a;
 }
@@ -217,10 +223,10 @@ static void arena_destroy(Arena* a) {
     ArenaChunk* c = a->head;
     while (c) {
         ArenaChunk* next = c->next;
-        free(c);
+        aether_caps_free(c, sizeof(ArenaChunk) + c->cap);
         c = next;
     }
-    free(a);
+    aether_caps_free(a, sizeof(Arena));
 }
 
 static void* arena_alloc(Arena* a, size_t n) {
@@ -1516,12 +1522,14 @@ static void heap_free_tree(JsonValue* v) {
         // arena_destroy so we don't read freed bytes.
         int heap_struct = (v->flags & JV_FLAG_HEAP_STRUCT) != 0;
         arena_destroy(v->arena);
-        if (heap_struct) free(v);
+        if (heap_struct) aether_caps_free(v, sizeof(JsonValue));
         return;
     }
     switch (v->type) {
         case JSON_STRING:
-            free((void*)v->data.str.data);
+            /* Pair with json_create_string's aether_caps_malloc. */
+            aether_caps_free((void*)v->data.str.data,
+                             (size_t)v->data.str.length + 1);
             break;
         case JSON_ARRAY:
             for (uint32_t i = 0; i < v->data.arr.count; i++) {
@@ -1546,7 +1554,8 @@ static void heap_free_tree(JsonValue* v) {
         default:
             break;
     }
-    free(v);
+    /* Pair with heap_new's aether_caps_malloc. */
+    aether_caps_free(v, sizeof(JsonValue));
 }
 
 int json_array_add_raw(JsonValue* arr, JsonValue* value) {
@@ -1614,7 +1623,10 @@ int json_object_set_raw(JsonValue* obj, const char* key, JsonValue* value) {
 // ---------------------------------------------------------------------------
 
 static JsonValue* heap_new(uint8_t type) {
-    JsonValue* v = (JsonValue*)malloc(sizeof(JsonValue));
+    /* Cap-aware (#343): heap-tree JsonValue used by the json.create_*
+     * builder API. Fixed-size struct so the matching free in
+     * heap_free_tree passes sizeof(JsonValue). */
+    JsonValue* v = (JsonValue*)aether_caps_malloc(sizeof(JsonValue));
     if (!v) return NULL;
     memset(v, 0, sizeof(JsonValue));
     v->type = type;
@@ -1641,9 +1653,12 @@ JsonValue* json_create_number(double n) {
 JsonValue* json_create_string(const char* s) {
     JsonValue* v = heap_new(JSON_STRING);
     if (!v) return NULL;
+    /* Cap-aware (#343): input string is caller-controlled, plugin-
+     * host-reachable. heap_free_tree's JSON_STRING branch passes
+     * v->data.str.length + 1 back to the caps allocator. */
     size_t len = s ? strlen(s) : 0;
-    char* copy = (char*)malloc(len + 1);
-    if (!copy) { free(v); return NULL; }
+    char* copy = (char*)aether_caps_malloc(len + 1);
+    if (!copy) { aether_caps_free(v, sizeof(JsonValue)); return NULL; }
     if (len && s) memcpy(copy, s, len);
     copy[len] = '\0';
     v->data.str.data = copy;
@@ -1675,7 +1690,7 @@ void json_free(JsonValue* v) {
         int heap_struct = (v->flags & JV_FLAG_HEAP_STRUCT) != 0;
         Arena* a = v->arena;
         arena_destroy(a);
-        if (heap_struct) free(v);
+        if (heap_struct) aether_caps_free(v, sizeof(JsonValue));
         return;
     }
     // Heap path — no arena ever attached.
