@@ -1,0 +1,81 @@
+// Regression: `extern struct Name { ... }` declarations propagate
+// across `import` boundaries, so consuming files can `expr as *Name`
+// against the shared layout without redeclaring it.
+//
+// Pre-feature, three Aether files in the mquickjs port each had to
+// redeclare `extern struct JSCFunctionDef` locally because Aether
+// didn't share the layout via import.  The triple-decl overhead
+// dominated the line economics for low-accessor-count structs.  This
+// test locks in the cross-file flow so that pattern collapses.
+//
+// What's exercised:
+//   1. main imports the type-defining module and uses the layout directly
+//   2. a second consumer module also imports the layout and operates on
+//      pointers to the same struct
+//   3. round-trip: main writes via field access, consumer reads via
+//      field access, layouts agree across separate TUs
+//   4. bitfields propagate across import the same as plain fields
+//
+// All assertions pass means the parser, module-merge, and codegen paths
+// all see the imported extern-struct decls correctly.
+
+import mqshape
+import mqshape_consumer
+
+extern malloc(n: int) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+main() {
+    println("=== test_aether_extern_struct_import ===")
+
+    // Test 1 — direct field access against imported `ABRecord`.
+    raw = malloc(16)
+    rec = raw as *ABRecord
+    rec.a = 11
+    rec.b = 22
+    if rec.a != 11 || rec.b != 22 {
+        println("FAIL 1: direct access — a=${rec.a} b=${rec.b}")
+        exit(1)
+    }
+    println("  PASS 1: main writes/reads imported ABRecord directly")
+
+    // Test 2 — main writes via field access; second consumer module
+    // reads via field access against its own import.  Verifies the
+    // two TUs agree on the layout.
+    if mqshape_consumer.read_b(raw) != 22 {
+        println("FAIL 2: cross-TU read returned ${mqshape_consumer.read_b(raw)}")
+        exit(1)
+    }
+    println("  PASS 2: consumer module reads main's writes")
+
+    // Test 3 — consumer writes; main reads.
+    mqshape_consumer.set_ab(raw, 99, 100)
+    if rec.a != 99 || rec.b != 100 {
+        println("FAIL 3: cross-TU write — a=${rec.a} b=${rec.b}")
+        exit(1)
+    }
+    println("  PASS 3: main reads consumer's writes")
+
+    free(raw)
+
+    // Test 4 — bitfields propagate the same way.
+    raw2 = malloc(4)
+    f = raw2 as *Flags
+    f.on = 0
+    f.off = 0
+    mqshape_consumer.set_on_flag(raw2, 1)
+    if f.on != 1 {
+        println("FAIL 4: bitfield cross-TU — on=${f.on}")
+        exit(1)
+    }
+    if mqshape_consumer.read_on_flag(raw2) != 1 {
+        println("FAIL 4b: bitfield cross-TU read = ${mqshape_consumer.read_on_flag(raw2)}")
+        exit(1)
+    }
+    println("  PASS 4: bitfields round-trip across imports")
+
+    free(raw2)
+
+    println("=== all extern-struct-import tests passed ===")
+}

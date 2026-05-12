@@ -1,0 +1,14 @@
+// A "types" module — exposes extern-struct layouts that other modules
+// import and use.  Mimics the shape needed for the mquickjs port where
+// JSCFunctionDef is referenced from three separate Aether files.
+
+extern struct ABRecord {
+    a: int
+    b: int
+}
+
+extern struct Flags {
+    on:  byte : 1
+    off: byte : 1
+    pad: byte : 6
+}

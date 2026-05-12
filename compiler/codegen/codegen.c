@@ -2386,6 +2386,23 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
     }
 
+    // Hoist FULL struct body emission to the top of the file (right
+    // after forward typedefs), before any function bodies that might
+    // do `view->field` member access against an imported or locally-
+    // defined struct.  Without this hoist, an imported `extern struct`
+    // whose AST_STRUCT_DEFINITION node is appended AFTER the function
+    // definitions in the merged program tree would only have a
+    // forward decl visible at the function-body emit site, producing
+    // C errors like "invalid use of incomplete typedef".  Hoisting
+    // here matches what a user would write in a hand-rolled .c file:
+    // typedef + full body up top, function bodies below.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* sd = program->children[i];
+        if (sd && sd->type == AST_STRUCT_DEFINITION) {
+            generate_struct_definition(gen, sd);
+        }
+    }
+
     // Generate forward declarations for all functions FIRST so that
     // hoisted closure functions can call them without implicit declarations.
     print_line(gen, "// Forward declarations");
@@ -2844,7 +2861,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 }
                 break;
             case AST_STRUCT_DEFINITION:
-                generate_struct_definition(gen, child);
+                // Already emitted in the hoisted struct-body pass above
+                // (before function forward decls), so function bodies
+                // that do `view->field` member access see the full
+                // struct layout regardless of where the struct decl
+                // appeared in the merged program tree.
                 break;
             case AST_MAIN_FUNCTION:
                 generate_main_function(gen, child);
