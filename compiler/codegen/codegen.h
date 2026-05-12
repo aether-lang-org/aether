@@ -235,6 +235,29 @@ typedef struct {
     char** escaped_string_vars;
     int escaped_string_var_count;
 
+    // Subset of `heap_string_vars`: names whose ONLY escape is via a
+    // `return <name>;` statement — no container, struct-field, or
+    // closure-capture site stores the pointer. The two-set split is
+    // load-bearing for the uniform-heap return-escape contract:
+    //
+    //   - Container-escaped vars (the `escaped_string_vars` set above):
+    //     wrapper-free at reassignment is suppressed because a recipient
+    //     may have stored the pointer. Pre-existing PR #450 behaviour.
+    //
+    //   - Return-only-escaped vars: NO recipient stashes the pointer.
+    //     The wrapper-free at reassignment MUST fire so intermediate
+    //     accumulator buffers (e.g. avn-bench `sorted = string.concat(
+    //     sorted, ...)` inside a loop) are reclaimed each iteration.
+    //     The function-exit defer-free is still suppressed for these
+    //     names (otherwise it would dangle the return value).
+    //
+    // mark_return_escaped_string_var populates this; the reassign-
+    // wrapper at codegen_stmt.c:2533 consults `is_escaped_string_var`
+    // alone (container-only) for the free decision, and the function-
+    // exit defer pre-pass consults both for the defer-suppression.
+    char** return_escaped_string_vars;
+    int return_escaped_string_var_count;
+
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.
     struct ReplyTypeEntry {

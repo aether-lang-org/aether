@@ -667,6 +667,17 @@ static int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
         return 1;
     }
 
+    /* Bare identifier of a heap-tracked local: by construction, the
+     * tracker's invariant is "this slot owns a heap allocation when
+     * `_heap_<name> == 1`". Treating it as heap here makes the
+     * classifier consistent with the walker's special case in
+     * walk_returns_for_heap_check and lets the uniform-heap return
+     * shim see runtime ownership through `_heap_<name>`. */
+    if (expr->type == AST_IDENTIFIER && expr->value &&
+        gen && is_heap_string_var(gen, expr->value)) {
+        return 1;
+    }
+
     if (expr->type == AST_FUNCTION_CALL && expr->value) {
         // Source-level `string.concat(...)` lands in the AST as the
         // dotted string `"string.concat"`, but stdlib externs and the
@@ -727,9 +738,15 @@ static int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
     return 0;
 }
 
-// Walk a function body; return 1 iff every AST_RETURN_STATEMENT
-// inside yields a heap-string-expr. Returns 0 for functions with
-// no return statements (void/implicit return — cannot be heap).
+// Walk a function body; OR-fold each return statement's heap
+// classification. After the walk:
+//   *any_heap     — at least one return yields a heap-string-expr
+//   *any_non_heap — at least one return yields a non-heap value
+// A function is classified heap-returning when *any_heap is set.
+// `*any_heap && *any_non_heap` flags a mixed-return function that
+// needs the per-return uniform-heap shim wrap (Part 4): the caller
+// will free unconditionally, so the literal branch must hand back
+// a freshly malloc'd buffer to match.
 //
 // Cycle protection: the AST node uses its `annotation` slot to
 // memoise the result via the strings "heap_yes" / "heap_no" /
@@ -737,32 +754,18 @@ static int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
 // mutually-recursive `-> string` user functions); we conservatively
 // return 0 in that case.
 static void walk_returns_for_heap_check(CodeGenerator* gen, ASTNode* node,
-                                         int* found, int* all_heap) {
-    if (!node || !*all_heap) return;
+                                         int* any_heap, int* any_non_heap) {
+    if (!node) return;
     if (node->type == AST_RETURN_STATEMENT) {
-        *found = 1;
         int is_heap = 0;
         if (node->child_count > 0 && node->children[0]) {
             ASTNode* ret = node->children[0];
             if (is_heap_string_expr(gen, ret)) {
                 is_heap = 1;
-            } else if (ret->type == AST_IDENTIFIER && ret->value &&
-                       is_heap_string_var(gen, ret->value)) {
-                /* Bare-identifier return of a heap-tracked local. The
-                 * function's value flows out; combined with the
-                 * runtime-uniform-heap shim emitted at the return
-                 * statement, the caller's wrapper can claim
-                 * ownership and free correctly. Without this, the
-                 * heap-accumulator-return pattern (avn's rebuild_dir
-                 * shape) leaks the buffer per call because callee's
-                 * defer-free is skipped (escape-marked LHS) and
-                 * caller's free is skipped (function classified
-                 * non-heap). See perf_regression_quadratic_commit_
-                 * path filing for the full diagnosis. */
-                is_heap = 1;
             }
         }
-        if (!is_heap) *all_heap = 0;
+        if (is_heap) *any_heap = 1;
+        else         *any_non_heap = 1;
         return;
     }
     // Don't descend into nested function/lambda definitions.
@@ -771,8 +774,8 @@ static void walk_returns_for_heap_check(CodeGenerator* gen, ASTNode* node,
         node->type == AST_CLOSURE) {
         return;
     }
-    for (int i = 0; i < node->child_count && *all_heap; i++) {
-        walk_returns_for_heap_check(gen, node->children[i], found, all_heap);
+    for (int i = 0; i < node->child_count; i++) {
+        walk_returns_for_heap_check(gen, node->children[i], any_heap, any_non_heap);
     }
 }
 
@@ -783,9 +786,13 @@ static int function_def_returns_heap_string(CodeGenerator* gen, ASTNode* fn_def)
         return 0;
     }
     // Memoised result on the annotation field. Three values:
-    //   "heap_yes"     — all returns yield heap strings
-    //   "heap_no"      — at least one return yields a non-heap value
-    //   "heap_pending" — currently being analysed (cycle break)
+    //   "heap_yes"     — at least one return yields a heap string;
+    //                    caller owns the result (uniform-heap shim
+    //                    guarantees the literal branch, if any, is
+    //                    freshly malloc'd at the return site).
+    //   "heap_no"      — every return yields a non-heap value;
+    //                    caller does not free.
+    //   "heap_pending" — currently being analysed (cycle break).
     if (fn_def->annotation) {
         if (strcmp(fn_def->annotation, "heap_yes") == 0)     return 1;
         if (strcmp(fn_def->annotation, "heap_no") == 0)      return 0;
@@ -802,16 +809,95 @@ static int function_def_returns_heap_string(CodeGenerator* gen, ASTNode* fn_def)
         ASTNode* c = fn_def->children[i];
         if (c && c->type == AST_BLOCK) { body = c; break; }
     }
-    int found = 0;
-    int all_heap = 1;
-    if (body) walk_returns_for_heap_check(gen, body, &found, &all_heap);
-    int result = (found && all_heap) ? 1 : 0;
+    int any_heap = 0;
+    int any_non_heap = 0;
+    if (body) walk_returns_for_heap_check(gen, body, &any_heap, &any_non_heap);
+    int result = any_heap ? 1 : 0;
 
     if (memoise) {
         free(fn_def->annotation);
         fn_def->annotation = strdup(result ? "heap_yes" : "heap_no");
     }
     return result;
+}
+
+/* Should the return statement at this site route its value through
+ * the uniform-heap shim? True when: the enclosing function is not
+ * main, the return is single-value, the function is classifier-
+ * classified heap-returning, and the return expression's static type
+ * is `string` (TYPE_STRING) or implied to be so by the function's
+ * declared return type. The shim only makes sense for string returns
+ * — wrapping a non-string would emit a type-mismatched call. */
+static int should_uniform_heap_return(CodeGenerator* gen, ASTNode* stmt) {
+    if (!gen || !stmt) return 0;
+    if (gen->in_main_function) return 0;
+    if (stmt->child_count != 1) return 0;
+    ASTNode* ret = stmt->children[0];
+    if (!ret) return 0;
+    /* Skip the wrap for AST_PRINT_STATEMENT-as-return — that path
+     * never propagates a value to the caller, only side-effects. */
+    if (ret->type == AST_PRINT_STATEMENT) return 0;
+    if (!gen->current_function) return 0;
+    if (!function_def_returns_heap_string(gen, gen->current_function)) return 0;
+    /* Static type gate. Prefer the function's declared return type
+     * (the C compiler's actual constraint). Fall back to the
+     * expression's stamped type if the function lacks a typed
+     * return slot. */
+    Type* ret_type = gen->current_func_return_type
+        ? gen->current_func_return_type
+        : ret->node_type;
+    if (!ret_type || ret_type->kind != TYPE_STRING) return 0;
+    return 1;
+}
+
+/* Emit a return expression wrapped in `aether_uniform_heap_str`. The
+ * helper (emitted once in the codegen prologue) guarantees the caller
+ * receives a malloc-owned pointer regardless of which branch produced
+ * the value: heap inputs are returned as-is (fast path), literal /
+ * static inputs are malloc-duplicated.
+ *
+ * The static flag is resolved at compile time wherever possible:
+ *   - 1  when the expression is provably heap (string.concat, string
+ *        interpolation, heap-returning user fn / extern, …)
+ *   - `_heap_<name>` when the expression is a bare identifier of a
+ *        heap-tracked local (the only runtime case)
+ *   - 0  otherwise (literals, fields, plain identifiers)
+ *
+ * Returns 1 if the wrap was emitted, 0 if the expression should be
+ * emitted raw (the caller is responsible for raw emission when this
+ * helper declines, e.g. for tuple / void returns).
+ *
+ * Invariant: only call when the enclosing function is classifier-
+ * classified heap-returning. For non-heap functions, the raw return
+ * still works because the caller doesn't free. */
+static int emit_uniform_heap_return_expr(CodeGenerator* gen, ASTNode* expr) {
+    if (!expr) return 0;
+    /* Tuple returns flow through their own per-position channel
+     * (Type.tuple_heap_flags + the AST_TUPLE_DESTRUCTURE handler).
+     * Multi-value returns reach the caller's RHS site element by
+     * element, not as a single pointer, so the uniform-heap shim
+     * is the wrong shape there — the caller is responsible. */
+    fprintf(gen->output, "aether_uniform_heap_str(");
+    /* Cast to `const char*` so the helper's signature matches even
+     * when the expression's static type is something C considers
+     * incompatible (e.g. `void*` from `_aether_interp`). The shim
+     * returns `const char*`; the C compiler accepts the assignment
+     * back into the function's declared return type via implicit
+     * pointer-conversion rules. */
+    fprintf(gen->output, "(const char*)(");
+    generate_expression(gen, expr);
+    fprintf(gen->output, "), ");
+    /* Static-flag resolution. */
+    if (expr->type == AST_IDENTIFIER && expr->value &&
+        is_heap_string_var(gen, expr->value)) {
+        fprintf(gen->output, "_heap_%s", expr->value);
+    } else if (is_heap_string_expr(gen, expr)) {
+        fprintf(gen->output, "1");
+    } else {
+        fprintf(gen->output, "0");
+    }
+    fprintf(gen->output, ")");
+    return 1;
 }
 
 // Per-position structural escape analysis for tuple-returning user
@@ -1317,13 +1403,20 @@ static void escape_walk(CodeGenerator* gen, ASTNode* node,
     }
 
     /* Return statement — the returned value escapes. If it's a bare
-     * identifier naming a heap-tracked var, mark escaped. */
+     * identifier naming a heap-tracked var, mark it return-escaped.
+     * This is a SEPARATE channel from container-escape (call-arg,
+     * struct-field, closure-capture): the reassign-wrapper-free
+     * fires for return-only-escaped vars (no recipient stash means
+     * the wrapper can safely reclaim the old buffer at each loop
+     * iteration), while the function-exit defer-free is still
+     * suppressed (otherwise the return value would dangle). See
+     * `return_escaped_string_vars` in codegen.h for the contract. */
     if (node->type == AST_RETURN_STATEMENT) {
         for (int i = 0; i < node->child_count; i++) {
             ASTNode* c = node->children[i];
             if (c && c->type == AST_IDENTIFIER && c->value &&
                 is_heap_string_var(gen, c->value)) {
-                mark_escaped_string_var(gen, c->value);
+                mark_return_escaped_string_var(gen, c->value);
             } else {
                 escape_walk(gen, c, consumed_lhs);
             }
@@ -1429,7 +1522,17 @@ void push_heap_string_exit_free_defers(CodeGenerator* gen, ASTNode* body) {
     for (int i = 0; i < gen->heap_string_var_count; i++) {
         const char* name = gen->heap_string_vars[i];
         if (!name) continue;
+        /* Suppress defer-free for BOTH escape channels. Container-
+         * escape (call-arg, struct-field, closure capture): recipient
+         * may have stashed the pointer — freeing would dangle their
+         * copy. Return-escape: the function's return value is the
+         * variable's buffer — freeing here would dangle the caller's
+         * pointer. The reassign-wrapper-free is still active for
+         * return-escape vars (the in-loop accumulator pattern), so
+         * intermediate buffers ARE reclaimed; only the final one
+         * survives to the return. */
         if (is_escaped_string_var(gen, name)) continue;
+        if (is_return_escaped_string_var(gen, name)) continue;
         /* Skip closure-env vars and promoted captures — they have
          * their own defer-free shapes via the existing closure /
          * promoted-cell paths (see is_env_free_for /
@@ -2835,6 +2938,23 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         if (is_string_var) {
                             int init_heap = (stmt->child_count > 0 &&
                                              is_heap_string_expr(gen, stmt->children[0]));
+                            /* Alias-ownership transfer at first declaration.
+                             * `sorted = new_sorted` (bare-id RHS to a heap-
+                             * tracked local) MUST move the ownership flag,
+                             * not duplicate it. Otherwise both slots claim
+                             * the same buffer and one of them double-frees
+                             * (function-exit defer for the source, caller's
+                             * reassign-wrapper for the destination). The
+                             * reassignment branch at codegen_stmt.c:2647
+                             * has the same logic; this is the mirror for
+                             * the first-declaration shape. */
+                            ASTNode* alias_init = (stmt->child_count > 0) ? stmt->children[0] : NULL;
+                            int init_is_alias_to_heap_var =
+                                (alias_init &&
+                                 alias_init->type == AST_IDENTIFIER &&
+                                 alias_init->value &&
+                                 is_heap_string_var(gen, alias_init->value) &&
+                                 strcmp(alias_init->value, stmt->value) != 0);
                             print_indent(gen);
                             // Issue #405: the function-entry hoist
                             // (hoist_heap_string_trackers, called from
@@ -2845,11 +2965,24 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             // error. Detect via is_heap_string_var and
                             // emit assignment-only when already hoisted.
                             if (is_heap_string_var(gen, stmt->value)) {
-                                fprintf(gen->output, "_heap_%s = %d;\n",
-                                        stmt->value, init_heap ? 1 : 0);
+                                if (init_is_alias_to_heap_var) {
+                                    fprintf(gen->output,
+                                            "_heap_%s = _heap_%s; _heap_%s = 0;\n",
+                                            stmt->value, alias_init->value, alias_init->value);
+                                } else {
+                                    fprintf(gen->output, "_heap_%s = %d;\n",
+                                            stmt->value, init_heap ? 1 : 0);
+                                }
                             } else {
-                                fprintf(gen->output, "int _heap_%s = %d; (void)_heap_%s;\n",
-                                        stmt->value, init_heap ? 1 : 0, stmt->value);
+                                if (init_is_alias_to_heap_var) {
+                                    fprintf(gen->output,
+                                            "int _heap_%s = _heap_%s; (void)_heap_%s; _heap_%s = 0;\n",
+                                            stmt->value, alias_init->value,
+                                            stmt->value, alias_init->value);
+                                } else {
+                                    fprintf(gen->output, "int _heap_%s = %d; (void)_heap_%s;\n",
+                                            stmt->value, init_heap ? 1 : 0, stmt->value);
+                                }
                                 mark_heap_string_var(gen, stmt->value);
                             }
                         }
@@ -3574,7 +3707,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 gen->indent_level++;
                 print_indent(gen);
                 fprintf(gen->output, "%s result = ", ret_c_type);
-                generate_expression(gen, stmt->children[0]);
+                if (should_uniform_heap_return(gen, stmt)) {
+                    emit_uniform_heap_return_expr(gen, stmt->children[0]);
+                } else {
+                    generate_expression(gen, stmt->children[0]);
+                }
                 fprintf(gen->output, ";\n");
                 emit_contract_postconditions(gen, gen->current_function);
                 /* Drain function-level defers BEFORE returning so
@@ -3694,49 +3831,19 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     const char* ret_c_type = (ret_type && ret_type->kind != TYPE_VOID && ret_type->kind != TYPE_UNKNOWN)
                                              ? get_c_type(ret_type) : "int";
                     fprintf(gen->output, "%s _builder_ret = ", ret_c_type);
-                    generate_expression(gen, stmt->children[0]);
-                    fprintf(gen->output, ";\n");
-                    /* Runtime-uniform-heap shim for bare-identifier
-                     * returns of heap-tracked locals (companion to the
-                     * walk_returns_for_heap_check classifier extension).
-                     * When the callee returns a bare-identifier heap-
-                     * tracked local AND the function is classifier-
-                     * classified as heap-returning, the caller's
-                     * wrapper sets _heap_<result> = 1 statically; the
-                     * runtime value at this return site might still be
-                     * a literal (e.g. an `if cond { s = string.concat(...) }`
-                     * branch was never taken) and the caller's
-                     * free() of a literal would crash.
-                     *
-                     * Fix: at the return site, if the runtime heap flag
-                     * is 0, strdup the literal so the caller always
-                     * receives a heap-allocated buffer matching the
-                     * static classification. Costs one branch +
-                     * occasional strdup per bare-identifier return of
-                     * a heap-tracked local.
-                     *
-                     * Closes the perf-regression-quadratic-commit-path
-                     * fully: avn's rebuild_dir bench stays flat on
-                     * both Linux (no leak) and Windows (no UAF on
-                     * post-free read — the buffer is genuinely heap
-                     * and survives until the caller frees it). */
-                    if (stmt->children[0] &&
-                        stmt->children[0]->type == AST_IDENTIFIER &&
-                        stmt->children[0]->value &&
-                        is_heap_string_var(gen, stmt->children[0]->value) &&
-                        gen->current_function &&
-                        function_def_returns_heap_string(gen, gen->current_function)) {
-                        const char* rv = stmt->children[0]->value;
-                        print_indent(gen);
-                        fprintf(gen->output,
-                            "if (!_heap_%s) { "
-                            "size_t _l = strlen((const char*)_builder_ret); "
-                            "char* _h = (char*)malloc(_l + 1); "
-                            "if (_h) { memcpy(_h, _builder_ret, _l + 1); "
-                            "_builder_ret = _h; _heap_%s = 1; } "
-                            "}\n",
-                            rv, rv);
+                    /* Uniform-heap return-escape contract: heap-returning
+                     * functions route every return through
+                     * aether_uniform_heap_str so the caller can free the
+                     * result regardless of which branch produced it.
+                     * Heap inputs pass through (fast path); literal
+                     * inputs are malloc-duplicated. See codegen.c
+                     * prologue and emit_uniform_heap_return_expr. */
+                    if (should_uniform_heap_return(gen, stmt)) {
+                        emit_uniform_heap_return_expr(gen, stmt->children[0]);
+                    } else {
+                        generate_expression(gen, stmt->children[0]);
                     }
+                    fprintf(gen->output, ";\n");
                     // Bug B suppression: any closure whose env is still live
                     // through the returned value (directly or transitively via
                     // another closure capturing it) must not have its env-free
@@ -3838,14 +3945,24 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     fprintf(gen->output, "return");
                     if (stmt->child_count > 0) {
                         fprintf(gen->output, " ");
-                        generate_expression(gen, stmt->children[0]);
+                        /* Uniform-heap return-escape contract on the
+                         * no-defer single-value path. Mirrors the
+                         * defer-aware path's wrap so the contract
+                         * holds even for functions with no defers
+                         * (the avn-bench shape with a single
+                         * escape-marked heap-string local). */
+                        if (should_uniform_heap_return(gen, stmt)) {
+                            emit_uniform_heap_return_expr(gen, stmt->children[0]);
+                        } else {
+                            generate_expression(gen, stmt->children[0]);
+                        }
                     }
                     fprintf(gen->output, ";\n");
                 }
             }
             break;
         }
-            
+
         case AST_BREAK_STATEMENT:
             // Emit defers for current scope before break
             emit_defers_for_scope(gen);

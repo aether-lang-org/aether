@@ -1,0 +1,55 @@
+// Uniform-heap return-escape contract — length-1 heap return.
+// Exercises the shim's smallest-non-zero malloc path (malloc(2)) on
+// the cold-path branch. Important on ASan because the inline
+// `is_aether_string` magic-byte probe reads four bytes byte-by-byte,
+// which is the precondition for ASan-safety on tiny allocations.
+
+import std.string
+
+extern exit(code: int)
+
+one_byte(cond: int) -> string {
+    if cond == 1 {
+        return string.concat("a", "")  // 1-byte heap result
+    }
+    return "b"                          // 1-byte literal
+}
+
+main() {
+    println("=== test_return_escape_short_string ===")
+
+    a = one_byte(1)
+    if string.length(a) != 1 {
+        println("FAIL heap: length=${string.length(a)}, expected 1")
+        exit(1)
+    }
+    if string.char_at(a, 0) != 97 {  // 'a'
+        println("FAIL heap: byte 0 = ${string.char_at(a, 0)}, expected 97")
+        exit(1)
+    }
+    println("  PASS heap 1-byte: 'a'")
+
+    b = one_byte(0)
+    if string.length(b) != 1 {
+        println("FAIL literal: length=${string.length(b)}, expected 1")
+        exit(1)
+    }
+    if string.char_at(b, 0) != 98 {  // 'b'
+        println("FAIL literal: byte 0 = ${string.char_at(b, 0)}, expected 98")
+        exit(1)
+    }
+    println("  PASS literal 1-byte: 'b'")
+
+    j = 0
+    while j < 10000 {
+        sa = one_byte(1)
+        sb = one_byte(0)
+        if string.length(sa) != 1 || string.length(sb) != 1 {
+            println("FAIL iter ${j}: lengths wrong")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 10000 iterations stable on 1-byte strings")
+    println("=== all cases passed ===")
+}

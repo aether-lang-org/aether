@@ -1,0 +1,67 @@
+// Uniform-heap return-escape contract — the avn-bench hot-loop shape.
+// A function that accumulates a heap string in a loop and returns it
+// at the end, called repeatedly. This is the specific case that PR
+// #453's "lucky-UAF" trade-off relied on the allocator-reuse-grace
+// to mask: pre-contract the callee freed and the caller read freed
+// memory.
+//
+// Post-contract the heap-flag transfers cleanly: every iteration's
+// 200-byte accumulator survives the return, lives until the caller's
+// scope-end free, and stays bit-identical end to end.
+//
+// 100k iterations × 200-byte buffers — under a leak this would
+// allocate ~20 MB. ASan and Valgrind close the loop on real leaks;
+// here we assert the bytes are correct.
+
+import std.string
+
+extern exit(code: int)
+
+rebuild_dir(n: int) -> string {
+    sorted = ""
+    i = 0
+    while i < n {
+        sorted = string.concat(sorted, "0123456789")
+        i = i + 1
+    }
+    return sorted
+}
+
+main() {
+    println("=== test_return_escape_loop ===")
+
+    // Single-call shape proof
+    a = rebuild_dir(20)
+    if string.length(a) != 200 {
+        println("FAIL: length=${string.length(a)}, expected 200")
+        exit(1)
+    }
+    if string.char_at(a, 0) != 48 {  // '0'
+        println("FAIL: byte 0 = ${string.char_at(a, 0)}, expected 48")
+        exit(1)
+    }
+    if string.char_at(a, 199) != 57 {  // '9'
+        println("FAIL: byte 199 = ${string.char_at(a, 199)}, expected 57")
+        exit(1)
+    }
+    println("  PASS single: rebuild_dir(20) → 200 bytes, ends with '9'")
+
+    // The hot loop. 100k iterations × 200-byte accumulator. Under
+    // the old lucky-UAF this would either crash on macOS xnu allocator
+    // reuse or report a 20 MB leak under Valgrind.
+    j = 0
+    while j < 100000 {
+        s = rebuild_dir(20)
+        if string.length(s) != 200 {
+            println("FAIL iter ${j}: length=${string.length(s)}, expected 200")
+            exit(1)
+        }
+        if string.char_at(s, 199) != 57 {
+            println("FAIL iter ${j}: last byte mismatch")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 100000 iterations of rebuild_dir(20) stable")
+    println("=== all cases passed ===")
+}

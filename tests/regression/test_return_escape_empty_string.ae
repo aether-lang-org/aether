@@ -1,0 +1,46 @@
+// Uniform-heap return-escape contract — empty heap-string return.
+// Exercises the shim's malloc(1) + memcpy(0)+'\0' path. The probe
+// here proves the shim does not crash on length-0 inputs and the
+// caller's free() reclaims the 1-byte allocation cleanly.
+
+import std.string
+
+extern exit(code: int)
+
+empty_or_x(cond: int) -> string {
+    if cond == 1 {
+        return string.concat("", "")    // length-0 heap result
+    }
+    return ""                            // length-0 literal
+}
+
+main() {
+    println("=== test_return_escape_empty_string ===")
+
+    a = empty_or_x(1)
+    if string.length(a) != 0 {
+        println("FAIL heap: length=${string.length(a)}, expected 0")
+        exit(1)
+    }
+    println("  PASS heap empty")
+
+    b = empty_or_x(0)
+    if string.length(b) != 0 {
+        println("FAIL literal: length=${string.length(b)}, expected 0")
+        exit(1)
+    }
+    println("  PASS literal empty")
+
+    j = 0
+    while j < 10000 {
+        sa = empty_or_x(1)
+        sb = empty_or_x(0)
+        if string.length(sa) != 0 || string.length(sb) != 0 {
+            println("FAIL iter ${j}: lengths wrong")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 10000 iterations stable on empty strings")
+    println("=== all cases passed ===")
+}

@@ -1,0 +1,66 @@
+// Uniform-heap return-escape contract — heap-returning recursive
+// function. The classifier's `heap_pending` cycle break must not
+// misclassify the recursive call site; the contract must hold on
+// every stack level.
+//
+// `chain(n)` builds a heap string by recursive self-calls. Each
+// frame's return statement goes through the uniform-heap shim. The
+// caller (the next frame up) frees the inner result once it's
+// consumed in the next concat. ASan and Valgrind ensure no use-
+// after-free across recursion.
+
+import std.string
+
+extern exit(code: int)
+
+chain(n: int) -> string {
+    if n <= 0 {
+        return "x"
+    }
+    inner = chain(n - 1)
+    return string.concat(inner, "y")
+}
+
+main() {
+    println("=== test_return_escape_recursive ===")
+
+    a = chain(0)
+    if string.length(a) != 1 {
+        println("FAIL chain(0): length=${string.length(a)}")
+        exit(1)
+    }
+    if string.char_at(a, 0) != 120 {
+        println("FAIL chain(0): byte 0 = ${string.char_at(a, 0)}, expected 120")
+        exit(1)
+    }
+    println("  PASS chain(0) = 'x'")
+
+    b = chain(5)
+    if string.length(b) != 6 {
+        println("FAIL chain(5): length=${string.length(b)}, expected 6")
+        exit(1)
+    }
+    if string.char_at(b, 0) != 120 {
+        println("FAIL chain(5): byte 0 mismatch")
+        exit(1)
+    }
+    if string.char_at(b, 5) != 121 {
+        println("FAIL chain(5): byte 5 mismatch")
+        exit(1)
+    }
+    println("  PASS chain(5) = 'xyyyyy'")
+
+    // Hot loop on depth-20 recursion — exercises the recursive
+    // return-and-free path heavily.
+    j = 0
+    while j < 1000 {
+        s = chain(20)
+        if string.length(s) != 21 {
+            println("FAIL iter ${j}: length=${string.length(s)}, expected 21")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 1000 iterations of chain(20) stable")
+    println("=== all cases passed ===")
+}

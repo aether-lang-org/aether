@@ -1,0 +1,67 @@
+// Uniform-heap return-escape contract — mixed return branches
+// (one heap, one literal) within a single function. The walker
+// OR-folds, classifying the function heap-returning; the literal
+// branch routes through the uniform-heap shim's malloc-duplication
+// path so the caller's unconditional free() works correctly.
+//
+// Pre-contract: the AND-fold classified this function non-heap → the
+// heap branch leaked. Post-contract: the function is heap-returning,
+// caller frees uniformly, the shim's cold-path malloc-dup means the
+// literal branch is now also free()-able.
+
+import std.string
+
+extern exit(code: int)
+
+choose(cond: int) -> string {
+    if cond == 1 {
+        return string.concat("hello-", "world")
+    }
+    return "fallback"
+}
+
+main() {
+    println("=== test_return_escape_mixed ===")
+
+    // Heap branch
+    a = choose(1)
+    if string.length(a) != 11 {
+        println("FAIL heap: length(a) = ${string.length(a)}, expected 11")
+        exit(1)
+    }
+    if string.char_at(a, 0) != 104 {
+        println("FAIL heap: byte 0 = ${string.char_at(a, 0)}, expected 104")
+        exit(1)
+    }
+    if string.char_at(a, 10) != 100 {
+        println("FAIL heap: byte 10 = ${string.char_at(a, 10)}, expected 100")
+        exit(1)
+    }
+    println("  PASS heap branch: 'hello-world'")
+
+    // Literal branch
+    b = choose(0)
+    if string.length(b) != 8 {
+        println("FAIL literal: length(b) = ${string.length(b)}, expected 8")
+        exit(1)
+    }
+    if string.char_at(b, 0) != 102 {  // 'f'
+        println("FAIL literal: byte 0 = ${string.char_at(b, 0)}, expected 102")
+        exit(1)
+    }
+    println("  PASS literal branch: 'fallback'")
+
+    // Hot loop: alternate branches.
+    j = 0
+    while j < 5000 {
+        sa = choose(1)
+        sb = choose(0)
+        if string.length(sa) != 11 || string.length(sb) != 8 {
+            println("FAIL iter ${j}: lengths wrong")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 5000 iterations, both branches free-clean")
+    println("=== all cases passed ===")
+}

@@ -30,6 +30,8 @@ void clear_heap_string_vars(CodeGenerator* gen);
 int is_escaped_string_var(CodeGenerator* gen, const char* var_name);
 void mark_escaped_string_var(CodeGenerator* gen, const char* var_name);
 void clear_escaped_string_vars(CodeGenerator* gen);
+int is_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
+void mark_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
 
 /* Normalise a callee name's dots to underscores, writing into `out`
    and returning `out`. The AST stores source-level callees in dotted

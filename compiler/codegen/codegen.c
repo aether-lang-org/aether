@@ -138,6 +138,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->heap_string_var_count = 0;
     gen->escaped_string_vars = NULL;
     gen->escaped_string_var_count = 0;
+    gen->return_escaped_string_vars = NULL;
+    gen->return_escaped_string_var_count = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -304,6 +306,37 @@ void clear_escaped_string_vars(CodeGenerator* gen) {
     }
     gen->escaped_string_vars = NULL;
     gen->escaped_string_var_count = 0;
+    if (gen->return_escaped_string_vars) {
+        for (int i = 0; i < gen->return_escaped_string_var_count; i++) {
+            free(gen->return_escaped_string_vars[i]);
+        }
+        free(gen->return_escaped_string_vars);
+    }
+    gen->return_escaped_string_vars = NULL;
+    gen->return_escaped_string_var_count = 0;
+}
+
+/* Return-escape sibling. See the header comment on
+ * `return_escaped_string_vars` for the two-set rationale. */
+int is_return_escaped_string_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->return_escaped_string_var_count; i++) {
+        if (strcmp(gen->return_escaped_string_vars[i], var_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void mark_return_escaped_string_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_return_escaped_string_var(gen, var_name)) return;
+    char** new_vars = realloc(gen->return_escaped_string_vars,
+                              sizeof(char*) * (gen->return_escaped_string_var_count + 1));
+    if (!new_vars) return;
+    gen->return_escaped_string_vars = new_vars;
+    gen->return_escaped_string_vars[gen->return_escaped_string_var_count] = strdup(var_name);
+    gen->return_escaped_string_var_count++;
 }
 
 // Normalise a callee name's dots to underscores. Used by every
@@ -1828,6 +1861,64 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    return (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec;");
     print_line(gen, "}");
     print_line(gen, "#endif");
+    /* Uniform-heap return-escape helper. For every function classified
+     * heap-returning by walk_returns_for_heap_check, every return site
+     * routes its value through this helper:
+     *
+     *     return aether_uniform_heap_str(<expr>, <static-or-runtime-flag>);
+     *
+     * When the flag is true, the value is already heap-owned (e.g.
+     * string.concat result, _aether_interp result, or a heap-tracked
+     * local with `_heap_<name> == 1`) and ownership transfers to the
+     * caller as-is — fast path is one branch + one return. When the
+     * flag is false, the value is a literal / static pointer and the
+     * caller's unconditional `free()` would crash on it; the helper
+     * duplicates so the caller's free reclaims the dup uniformly.
+     *
+     * Binary-safety: Aether's `string` carries either plain `char*` or
+     * a length-bearing `AetherString*` (magic-header struct). The cold-
+     * path duplication must respect the source shape — a naive
+     * `strlen` on an AetherString reads struct-header bytes and
+     * truncates the payload at the first NUL inside the header. The
+     * helper detects the magic header byte-by-byte (matching
+     * `is_aether_string`'s ASan-clean shape) and uses the stored
+     * `length` field. The duplicate is always a plain malloc-owned
+     * buffer so the caller's plain `free()` reclaims it — the
+     * helper's contract is "pointer the caller may free", not
+     * "preserve AetherString shape".
+     *
+     * `malloc` (not string_new) deliberately matches the codegen's
+     * existing reassign-wrapper and function-exit defer-free, both of
+     * which call plain `free((void*)p)`. */
+    print_line(gen, "#include <string.h>");
+    print_line(gen, "#include <stdlib.h>");
+    print_line(gen, "#include <stddef.h>");
+    print_line(gen, "static inline const char* aether_uniform_heap_str(const char* s, int is_heap) {");
+    print_line(gen, "    if (!s) return (const char*)0;");
+    print_line(gen, "    if (is_heap) return s;");
+    print_line(gen, "    /* AetherString-aware length probe — see is_aether_string in");
+    print_line(gen, "     * std/string/aether_string.h. Byte-by-byte to stay ASan-clean");
+    print_line(gen, "     * on short literal allocations (e.g. \"x\"). */");
+    print_line(gen, "    const unsigned char* _p = (const unsigned char*)s;");
+    print_line(gen, "    const char* _data = s;");
+    print_line(gen, "    size_t _n;");
+    print_line(gen, "    if (_p[0] == 0xDE && _p[1] == 0xC0 && _p[2] == 0x57 && _p[3] == 0xAE) {");
+    print_line(gen, "        /* Struct layout: magic(u32), ref_count(i32), length(size_t),");
+    print_line(gen, "         * capacity(size_t), data(char*). Read length and data via");
+    print_line(gen, "         * a typed view — the struct's data pointer is what we copy. */");
+    print_line(gen, "        struct _AeStrHdr { unsigned int magic; int ref_count; size_t length; size_t capacity; char* data; };");
+    print_line(gen, "        const struct _AeStrHdr* _h = (const struct _AeStrHdr*)s;");
+    print_line(gen, "        _n = _h->length;");
+    print_line(gen, "        _data = _h->data ? _h->data : s;");
+    print_line(gen, "    } else {");
+    print_line(gen, "        _n = strlen(s);");
+    print_line(gen, "    }");
+    print_line(gen, "    char* _d = (char*)malloc(_n + 1);");
+    print_line(gen, "    if (!_d) return (const char*)0;");
+    print_line(gen, "    if (_n) memcpy(_d, _data, _n);");
+    print_line(gen, "    _d[_n] = '\\0';");
+    print_line(gen, "    return (const char*)_d;");
+    print_line(gen, "}");
     /* String interpolation helper — portable, always available */
     print_line(gen, "#include <stdarg.h>");
     print_line(gen, "static void* _aether_interp(const char* fmt, ...) {");
