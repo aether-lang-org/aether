@@ -2552,6 +2552,58 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         break;
                     }
 
+                    /* List owned-string element auto-routing (#467).
+                     * `list.add(l, heap_string_expr)` (a.k.a.
+                     * `list_add_raw` after the Aether wrapper's
+                     * `list_add(list_add_raw(...))` dispatch
+                     * collapses) lands here. When the second arg is
+                     * a heap-classified string expression, route to
+                     * `list_add_string_owned` so the list retains
+                     * the value and releases it at `list.free`
+                     * time. Pre-fix, the heap-string lived forever
+                     * in the list (escape walker suppressed the
+                     * source's free; list_free didn't walk
+                     * elements) — leak. */
+                    if ((strcmp(c_func_name, "list_add_raw") == 0 ||
+                         strcmp(c_func_name, "list_add") == 0) &&
+                        expr->child_count == 2) {
+                        ASTNode* val = expr->children[1];
+                        if (val && is_heap_string_expr(gen, val)) {
+                            /* Cast through void* to silence the
+                             * `const char* → void*` qualifier-
+                             * discard warning the extern prototype
+                             * triggers. */
+                            fprintf(gen->output, "list_add_string_owned(");
+                            generate_expression(gen, expr->children[0]);
+                            fprintf(gen->output, ", (void*)");
+                            generate_expression(gen, val);
+                            fprintf(gen->output, ")");
+                            break;
+                        }
+                    }
+
+                    /* Map heap-string-value auto-routing (#467).
+                     * `map.put(m, k, heap_string_expr)` lands here
+                     * (after the Aether wrapper). When the value
+                     * arg is a heap-classified string, route to
+                     * map_put_string_owned so the map retains the
+                     * value and releases it at map.free. */
+                    if ((strcmp(c_func_name, "map_put_raw") == 0 ||
+                         strcmp(c_func_name, "map_put") == 0) &&
+                        expr->child_count == 3) {
+                        ASTNode* val = expr->children[2];
+                        if (val && is_heap_string_expr(gen, val)) {
+                            fprintf(gen->output, "map_put_string_owned(");
+                            generate_expression(gen, expr->children[0]);
+                            fprintf(gen->output, ", (const char*)");
+                            generate_expression(gen, expr->children[1]);
+                            fprintf(gen->output, ", (void*)");
+                            generate_expression(gen, val);
+                            fprintf(gen->output, ")");
+                            break;
+                        }
+                    }
+
                     /* Argument-temp lifetime wrap. Any heap-returning
                      * AST_FUNCTION_CALL appearing in argument position
                      * is an anonymous heap allocation with no consumer
@@ -3152,9 +3204,11 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 if (f->type_kind == TYPE_STRING) { has_str = 1; break; }
                             }
                             if (has_str) {
-                                fprintf(gen->output, "extern void* string_new_with_length(const char*, int); "
-                                                     "extern const char* aether_string_data(const void*); "
-                                                     "extern size_t aether_string_length(const void*); ");
+                                /* Prototypes (string_new_with_length,
+                                 * aether_string_data, aether_string_
+                                 * length) are emitted once in the
+                                 * codegen prologue (codegen.c) — no
+                                 * per-call-site re-declaration. */
                                 for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
                                     if (f->type_kind == TYPE_STRING) {
                                         fprintf(gen->output,
@@ -3229,7 +3283,28 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             }
                         }
 
-                        fprintf(gen->output, " }; void* _ask_r = scheduler_ask_message(");
+                        fprintf(gen->output, " }; ");
+
+                        /* Deep-copy heap-string request-message fields
+                         * (#466). Same shape as the AST_SEND_FIRE_
+                         * FORGET path — the request message carries
+                         * the sender's local heap-string pointers
+                         * into the receiver's mailbox; without deep-
+                         * copy the sender's defer-free dangles the
+                         * receiver's references. */
+                        for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                            if (f->type_kind == TYPE_STRING) {
+                                fprintf(gen->output,
+                                        "if (_msg.%s) { "
+                                        "size_t _ml = aether_string_length(_msg.%s); "
+                                        "_msg.%s = (const char*)string_new_with_length("
+                                        "aether_string_data(_msg.%s), (int)_ml); "
+                                        "} ",
+                                        f->name, f->name, f->name, f->name);
+                            }
+                        }
+
+                        fprintf(gen->output, "void* _ask_r = scheduler_ask_message(");
                         emit_send_target(gen, target, "ActorBase*");
                         fprintf(gen->output, ", &_msg, sizeof(%s), %d); ", message->value, timeout_ms);
 

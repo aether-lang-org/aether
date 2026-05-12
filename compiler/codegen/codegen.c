@@ -1980,6 +1980,18 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
      * fs.read_binary, …) print their payload bytes rather than the
      * struct header. Plain char* values pass through unchanged. */
     print_line(gen, "extern const char* aether_string_data(const void* s);");
+    print_line(gen, "extern size_t aether_string_length(const void* s);");
+    /* Issue #466: actor message heap-string deep-copy at send time.
+     * `string_new_with_length` clones the source bytes into a fresh
+     * refcounted AetherString. Exposed here so the message-send
+     * codegen doesn't re-emit the prototype at every call site.
+     * `string_release` is NOT declared here — it's already declared
+     * later by the extern-registry pass (parameter type `const char*`,
+     * not `const void*`). Adding our own would create a conflicting-
+     * types error at the registry's re-declaration. The
+     * <Msg>_release_fields function uses string_release after the
+     * registry's declaration is visible. */
+    print_line(gen, "extern void* string_new_with_length(const char* data, int length);");
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
     print_line(gen, "    if (!s) return \"(null)\";");
     print_line(gen, "    return aether_string_data(s);");
@@ -2695,15 +2707,8 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                         }
                     }
                     if (msg_has_string_field) {
-                        /* Forward-declared via the Aether-side
-                         * `string_release` extern (matches the
-                         * std/string/aether_string.c signature:
-                         * `void string_release(const void*)`).
-                         * The duplicate `extern void string_release`
-                         * here would conflict with that earlier
-                         * decl, so we just reference the symbol —
-                         * the C compiler picks up the earlier
-                         * prototype.  */
+                        /* `string_release` prototype is emitted in
+                         * the codegen prologue (codegen.c). */
                         print_line(gen, "static inline void %s_release_fields(%s* m) {",
                                    child->value, child->value);
                         indent(gen);

@@ -1,0 +1,37 @@
+// #467 — list element heap-string ownership.
+//
+// Pre-fix: `list.add(l, string.concat(...))` stored the heap pointer
+// opaquely. The sender's escape walker marked the value escaped (so
+// sender's defer-free skipped), and `list.free(l)` only freed the
+// backing array — not the elements. Net: every added heap string
+// leaked forever.
+//
+// Post-fix: codegen routes `list.add(l, heap_string_expr)` to
+// `list_add_string_owned` (retain + tag the list as owning string
+// elements). `list_free` walks owned-string lists and releases each
+// element before freeing the array.
+
+import std.list
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== test_list_heap_string_ownership ===")
+
+    j = 0
+    while j < 5000 {
+        l = list.new()
+        list.add(l, string.concat("item-", "value"))
+        list.add(l, string.concat("two-", "value"))
+        list.add(l, string.concat("three-", "value"))
+        if list.size(l) != 3 {
+            println("FAIL iter ${j}: size=${list.size(l)}")
+            exit(1)
+        }
+        list.free(l)
+        j = j + 1
+    }
+    println("  PASS: 5000 list.add + list.free iterations stable")
+    println("=== all cases passed ===")
+}

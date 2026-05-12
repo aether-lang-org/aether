@@ -10,6 +10,18 @@ typedef struct IntArray IntArray;
 
 ArrayList* list_new();
 int list_add_raw(ArrayList* list, void* item);
+
+/* Heap-string-aware add (#467). Retains the value (AetherString
+ * refcount bump), tags the list as owning string elements, then
+ * stores the pointer. list_free walks owned-string lists and
+ * releases each element before freeing the backing array.
+ *
+ * Codegen routes `list.add(list, expr)` here when `expr` is a
+ * heap-classified string expression (string.concat, string
+ * interp, heap-returning user-fn, heap-tracked local). Plain
+ * literals stay on `list_add_raw` (no retain, list won't release
+ * at free). */
+int list_add_string_owned(ArrayList* list, const void* item);
 // Return element at `index`, or NULL for out-of-bounds / null list. The
 // Aether wrapper `list.get` in std/collections/module.ae turns these into
 // Go-style `(value, err)` returns.
@@ -22,6 +34,14 @@ void list_free(ArrayList* list);
 
 HashMap* map_new();
 int map_put_raw(HashMap* map, const char* key, void* value);
+
+/* Heap-string-aware put (#467). Retains the value and tags the
+ * map so map_free / map_clear release each string value before
+ * freeing the bucket entries. Codegen routes
+ * `map.put(m, k, heap_string_expr)` here when the value is heap-
+ * classified. Plain literals stay on map_put_raw (no retain, map
+ * won't release at free). */
+int map_put_string_owned(HashMap* map, const char* key, const void* value);
 // Return value for `key`, or NULL for absent / null-input. The Aether
 // wrapper `map.get` distinguishes "absent" (null, "") from wrong-input
 // (null, "null map").

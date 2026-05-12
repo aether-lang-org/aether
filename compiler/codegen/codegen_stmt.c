@@ -4719,9 +4719,28 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                 }
                             }
                         }
+                        fprintf(gen->output, " }; ");
+
+                        /* Deep-copy heap-string reply-message fields
+                         * (#466). The reply message crosses an actor
+                         * boundary back to the asker; without deep-
+                         * copy the asker's reply-extraction reads
+                         * the handler's heap-string after the
+                         * handler's defer-free has run. */
+                        for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                            if (f->type_kind == TYPE_STRING) {
+                                fprintf(gen->output,
+                                        "if (_reply.%s) { "
+                                        "size_t _ml = aether_string_length(_reply.%s); "
+                                        "_reply.%s = (const char*)string_new_with_length("
+                                        "aether_string_data(_reply.%s), (int)_ml); "
+                                        "} ",
+                                        f->name, f->name, f->name, f->name);
+                            }
+                        }
 
                         // Send reply back to the waiting asker via the scheduler reply slot.
-                        fprintf(gen->output, " }; scheduler_reply((ActorBase*)self, &_reply, sizeof(%s)); }\n",
+                        fprintf(gen->output, "scheduler_reply((ActorBase*)self, &_reply, sizeof(%s)); }\n",
                                 reply_expr->value);
                     } else {
                         print_line(gen, "/* ERROR: unknown reply message type %s */", reply_expr->value);

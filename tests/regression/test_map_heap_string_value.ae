@@ -1,0 +1,41 @@
+// #467 — map element heap-string-value ownership.
+//
+// Pre-fix: `map.put(m, k, string.concat(...))` stored the heap
+// pointer opaquely. map_free released the keys but not the values,
+// leaking every heap-string value forever.
+//
+// Post-fix: codegen routes `map.put(m, k, heap_string_expr)` to
+// `map_put_string_owned` (retain + tag the map). map_clear/map_free
+// walks owned-string maps and releases each value before freeing
+// the bucket entries.
+
+import std.map
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== test_map_heap_string_value ===")
+
+    j = 0
+    while j < 5000 {
+        m = map.new()
+        map.put(m, "first", string.concat("v1-", "concat"))
+        map.put(m, "second", string.concat("v2-", "concat"))
+        map.put(m, "third", string.concat("v3-", "concat"))
+        if map.size(m) != 3 {
+            println("FAIL iter ${j}: size=${map.size(m)}")
+            exit(1)
+        }
+        // Replace one value to exercise the put-replaces-old path.
+        map.put(m, "second", string.concat("v2-", "updated"))
+        if map.size(m) != 3 {
+            println("FAIL iter ${j}: size after replace=${map.size(m)}")
+            exit(1)
+        }
+        map.free(m)
+        j = j + 1
+    }
+    println("  PASS: 5000 map.put + map.free iterations stable")
+    println("=== all cases passed ===")
+}
