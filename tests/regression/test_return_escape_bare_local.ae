@@ -1,0 +1,61 @@
+// Uniform-heap return-escape contract — bare-identifier return of a
+// heap-tracked local must transfer ownership cleanly.
+//
+//   make_payload(n) -> string {
+//       acc = ""
+//       i = 0
+//       while i < n {
+//           acc = string.concat(acc, "x")  // _heap_acc = 1
+//           i = i + 1
+//       }
+//       return acc                         // bare-id return; heap flag travels
+//   }
+//
+// Caller's wrapper sets _heap_<result> = 1, calls free() on scope exit.
+// Pre-contract: the callee's defer-free raced the caller's free, the
+// "happened-to-still-be-valid bytes" was the entire correctness story
+// (PR #453's lucky-UAF trade-off). Post-contract: the shim sees the
+// already-heap flag at runtime, passes the pointer through, and the
+// caller owns it cleanly.
+//
+// 10k iterations exercise the hot path; the test passes as long as
+// every iteration's returned bytes are correct AND nothing aborts /
+// crashes. Combined with ASan and Valgrind, this is the proof of
+// correctness against the lucky-UAF.
+
+import std.string
+
+extern exit(code: int)
+
+make_payload(n: int) -> string {
+    acc = ""
+    i = 0
+    while i < n {
+        acc = string.concat(acc, "x")
+        i = i + 1
+    }
+    return acc
+}
+
+main() {
+    println("=== test_return_escape_bare_local ===")
+    j = 0
+    while j < 10000 {
+        s = make_payload(31)
+        if string.length(s) != 31 {
+            println("FAIL iter ${j}: length=${string.length(s)}, expected 31")
+            exit(1)
+        }
+        if string.char_at(s, 0) != 120 {
+            println("FAIL iter ${j}: byte 0 = ${string.char_at(s, 0)}, expected 120")
+            exit(1)
+        }
+        if string.char_at(s, 30) != 120 {
+            println("FAIL iter ${j}: byte 30 = ${string.char_at(s, 30)}, expected 120")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 10000 iterations of make_payload(31), all bytes correct")
+    println("=== all cases passed ===")
+}

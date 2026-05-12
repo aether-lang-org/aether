@@ -1,0 +1,44 @@
+// Uniform-heap return-escape contract — `x = f(x)` self-reassign
+// (CWE-415 / CWE-416 surface area: same value flowing in as arg
+// AND out as return). The classifier must not classify the arg-side
+// `x` as a different ownership than the return-side `x`. The
+// reassign-wrapper at codegen_stmt.c:2647-2664 must transfer
+// ownership correctly when `f` returns its argument unchanged
+// (alias-into-self) versus when `f` produces a fresh heap value
+// (free old, set new).
+
+import std.string
+
+extern exit(code: int)
+
+// Returns a freshly heap-allocated string regardless of input.
+double_it(s: string) -> string {
+    return string.concat(s, s)
+}
+
+main() {
+    println("=== test_return_escape_self_reassign ===")
+
+    x = "ab"
+    j = 0
+    while j < 1000 {
+        // x = f(x) — the canonical CWE-415 trigger.
+        // Pre-fix shape: x evaluated as RHS, fed to f, result heap'd,
+        // x reassigned. Reassign-wrapper frees the OLD x. If wrapper
+        // mis-frees the fresh return, caller reads dangling.
+        x = double_it(x)
+        // Cap growth so the test doesn't OOM — 1000 doublings of
+        // 2 bytes would explode to 2^1000 bytes.
+        if string.length(x) > 1024 {
+            x = "ab"
+        }
+        j = j + 1
+    }
+    // Final correctness check
+    if string.length(x) < 2 {
+        println("FAIL: final length=${string.length(x)}")
+        exit(1)
+    }
+    println("  PASS: 1000 x = double_it(x) self-reassign iterations stable")
+    println("=== all cases passed ===")
+}

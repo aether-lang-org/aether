@@ -30,6 +30,28 @@ void clear_heap_string_vars(CodeGenerator* gen);
 int is_escaped_string_var(CodeGenerator* gen, const char* var_name);
 void mark_escaped_string_var(CodeGenerator* gen, const char* var_name);
 void clear_escaped_string_vars(CodeGenerator* gen);
+int is_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
+void mark_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
+
+/* Classifier: does the expression produce a heap-allocated string?
+ * Defined in codegen_stmt.c. Used by the codegen_expr.c argument-
+ * temp lifetime wrap (ArgDrainSub) to detect heap-returning
+ * function calls in argument position. */
+int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr);
+
+/* Escape gate for heap-string arguments: returns 1 if a callee's
+ * parameter slot of the given type-kind is treated as storage (the
+ * recipient may stash the pointer beyond the call). Used by the
+ * escape walker (codegen_stmt.c) AND by the codegen_expr.c
+ * argument-temp lifetime wrap to decide whether freeing a hoisted
+ * heap argument is safe. Defined in codegen_stmt.c. */
+int call_arg_escapes(TypeKind param_kind);
+
+/* Resolve a callee's parameter kind by name + index. Consults the
+ * extern registry first, then the user-fn definitions in
+ * gen->program. Returns TYPE_UNKNOWN when the callee can't be
+ * resolved or the index is out of range. Defined in codegen_stmt.c. */
+TypeKind lookup_callee_param_kind(CodeGenerator* gen, const char* func_name, int param_idx);
 
 /* Normalise a callee name's dots to underscores, writing into `out`
    and returning `out`. The AST stores source-level callees in dotted

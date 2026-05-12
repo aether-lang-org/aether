@@ -1,0 +1,45 @@
+// Uniform-heap return-escape contract — interpolation-only return.
+// String interpolation `"prefix=${x}"` lowers to `_aether_interp(...)`,
+// classified heap-string by is_heap_string_expr's AST_STRING_INTERP
+// arm. The contract: every return of an interp result transfers
+// ownership cleanly to the caller via the shim's fast path
+// (static flag = 1).
+
+import std.string
+
+extern exit(code: int)
+
+label(n: int) -> string {
+    return "value=${n}"
+}
+
+main() {
+    println("=== test_return_escape_interp ===")
+
+    a = label(42)
+    if string.length(a) != 8 {
+        println("FAIL: length=${string.length(a)}, expected 8")
+        exit(1)
+    }
+    if string.char_at(a, 0) != 118 {  // 'v'
+        println("FAIL: byte 0 = ${string.char_at(a, 0)}, expected 118")
+        exit(1)
+    }
+    if string.char_at(a, 6) != 52 {   // '4'
+        println("FAIL: byte 6 = ${string.char_at(a, 6)}, expected 52")
+        exit(1)
+    }
+    println("  PASS label(42) = 'value=42'")
+
+    j = 0
+    while j < 10000 {
+        s = label(j)
+        if string.length(s) < 7 {
+            println("FAIL iter ${j}: length too small")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 10000 iterations of interp-return stable")
+    println("=== all cases passed ===")
+}

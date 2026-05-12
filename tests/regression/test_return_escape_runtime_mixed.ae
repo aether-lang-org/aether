@@ -1,0 +1,72 @@
+// Uniform-heap return-escape contract — runtime-determined branch
+// where a single tracked local takes EITHER a literal OR a heap
+// value depending on input. The bare-id return passes `_heap_<var>`
+// as the runtime flag; the shim's fast/slow path is chosen at
+// runtime, not compile time.
+//
+//   maybe_decorate(prefix, kind) -> string {
+//       out = prefix
+//       if kind == 1 {
+//           out = string.concat(prefix, "_decorated")
+//       }
+//       return out
+//   }
+//
+// kind==0 → `out` aliases parameter (no _heap flag set → flag is 0).
+// kind==1 → `out = concat(...)` sets `_heap_out = 1`.
+// The shim's runtime flag check picks the right path at each call.
+
+import std.string
+
+extern exit(code: int)
+
+maybe_decorate(prefix: string, kind: int) -> string {
+    out = prefix
+    if kind == 1 {
+        out = string.concat(prefix, "_decorated")
+    }
+    return out
+}
+
+main() {
+    println("=== test_return_escape_runtime_mixed ===")
+
+    base = "hi"
+
+    // kind==0 — returns parameter shape (no decoration)
+    a = maybe_decorate(base, 0)
+    if string.length(a) != 2 {
+        println("FAIL kind=0: length=${string.length(a)}, expected 2")
+        exit(1)
+    }
+    println("  PASS kind=0: passthrough length 2")
+
+    // kind==1 — returns heap-decorated value
+    b = maybe_decorate(base, 1)
+    if string.length(b) != 12 {
+        println("FAIL kind=1: length=${string.length(b)}, expected 12")
+        exit(1)
+    }
+    if string.char_at(b, 0) != 104 {  // 'h'
+        println("FAIL kind=1: byte 0 = ${string.char_at(b, 0)}, expected 104")
+        exit(1)
+    }
+    if string.char_at(b, 11) != 100 {  // 'd' (last char of "_decorated")
+        println("FAIL kind=1: byte 11 = ${string.char_at(b, 11)}, expected 100")
+        exit(1)
+    }
+    println("  PASS kind=1: decorated 'hi_decorated'")
+
+    // Mixed-call loop — alternates runtime path through the shim.
+    j = 0
+    while j < 5000 {
+        x = maybe_decorate(base, j % 2)
+        if string.length(x) < 2 {
+            println("FAIL iter ${j}: length too small")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 5000 mixed iterations stable")
+    println("=== all cases passed ===")
+}

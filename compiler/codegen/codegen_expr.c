@@ -1,6 +1,89 @@
 #include "codegen_internal.h"
 #include "../aether_error.h"
 
+/* Argument-temp lifetime management for nested heap-returning calls.
+ *
+ * A call like `combine(heap_value(), heap_value())` produces two
+ * anonymous heap temporaries (the two `heap_value()` results) that
+ * flow into `combine` and have nowhere to be reclaimed — pre-fix
+ * this is a leak per call. The mechanism here hoists each heap-
+ * returning function-call appearing in argument position into a
+ * named temporary, calls the parent with the temporaries, and
+ * frees them after the parent call returns. Wrapped in a GCC
+ * statement-expression `({ ... })` so the call still composes in
+ * any expression context.
+ *
+ * Generated shape (parent returns non-void):
+ *
+ *     ({ const char* _ad_0 = heap_value();
+ *        const char* _ad_1 = heap_value();
+ *        <ret_type> _ad_r = combine(_ad_0, _ad_1);
+ *        free((void*)_ad_0);
+ *        free((void*)_ad_1);
+ *        _ad_r; })
+ *
+ * The substitution registry below is consulted at the very top of
+ * generate_expression: when an AST_FUNCTION_CALL node has been
+ * hoisted, its emission becomes the bare temp name instead of a
+ * fresh call. Stack-disciplined — nested wraps push new entries and
+ * pop them when their parent-call emission completes.
+ *
+ * Module-local static state: the codegen runs single-threaded per
+ * process and `generate_expression` is the sole entry point. */
+typedef struct ArgDrainSub {
+    ASTNode* node;
+    char*    name;
+} ArgDrainSub;
+
+static ArgDrainSub* g_arg_drain_subs = NULL;
+static int g_arg_drain_count = 0;
+static int g_arg_drain_cap   = 0;
+static int g_arg_drain_counter = 0;
+
+static const char* arg_drain_lookup(ASTNode* node) {
+    if (!node) return NULL;
+    for (int i = g_arg_drain_count - 1; i >= 0; i--) {
+        if (g_arg_drain_subs[i].node == node) return g_arg_drain_subs[i].name;
+    }
+    return NULL;
+}
+
+/* Mint a unique temp name without registering it. The caller uses
+ * this name for the temp's C declaration, then later registers the
+ * substitution via arg_drain_bind. Splitting these lets the caller
+ * reserve names BEFORE recursing into generate_expression (which
+ * may itself mint inner temps and would otherwise collide). */
+static char* arg_drain_mint_name(void) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "_ad_%d", g_arg_drain_counter++);
+    return strdup(buf);
+}
+
+/* Bind a pre-minted temp name to an AST node. The substitution
+ * lasts until arg_drain_truncate trims the registry back. */
+static void arg_drain_bind(ASTNode* node, char* name) {
+    if (g_arg_drain_count >= g_arg_drain_cap) {
+        int new_cap = g_arg_drain_cap ? g_arg_drain_cap * 2 : 8;
+        ArgDrainSub* bigger = (ArgDrainSub*)realloc(g_arg_drain_subs,
+                                                    sizeof(ArgDrainSub) * (size_t)new_cap);
+        if (!bigger) { free(name); return; }
+        g_arg_drain_subs = bigger;
+        g_arg_drain_cap  = new_cap;
+    }
+    g_arg_drain_subs[g_arg_drain_count].node = node;
+    g_arg_drain_subs[g_arg_drain_count].name = name;
+    g_arg_drain_count++;
+}
+
+static void arg_drain_truncate(int target_count) {
+    while (g_arg_drain_count > target_count) {
+        g_arg_drain_count--;
+        free(g_arg_drain_subs[g_arg_drain_count].name);
+        g_arg_drain_subs[g_arg_drain_count].name = NULL;
+        g_arg_drain_subs[g_arg_drain_count].node = NULL;
+    }
+}
+
 /* Return 1 when `c_func_name` is a stdlib C function that already
  * dispatches on the AetherString magic header internally (via
  * `str_data` / `str_len` in std/string/aether_string.c). Such functions
@@ -1478,7 +1561,21 @@ static void emit_send_target(CodeGenerator* gen, ASTNode* target, const char* ca
 
 void generate_expression(CodeGenerator* gen, ASTNode* expr) {
     if (!expr) return;
-    
+
+    /* Argument-temp lifetime substitution. If this AST_FUNCTION_CALL
+     * node has been hoisted by a parent-call wrap (see
+     * arg_drain_register at the AST_FUNCTION_CALL fallthrough below),
+     * emit the temp name instead of re-evaluating the call. Keeps
+     * the parent's call site syntactically intact while the temp's
+     * lifetime is managed by the wrap. */
+    if (expr->type == AST_FUNCTION_CALL) {
+        const char* sub = arg_drain_lookup(expr);
+        if (sub) {
+            fprintf(gen->output, "%s", sub);
+            return;
+        }
+    }
+
     switch (expr->type) {
         case AST_LITERAL:
             if (expr->node_type && expr->node_type->kind == TYPE_STRING) {
@@ -2455,6 +2552,96 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         break;
                     }
 
+                    /* Argument-temp lifetime wrap. Any heap-returning
+                     * AST_FUNCTION_CALL appearing in argument position
+                     * is an anonymous heap allocation with no consumer
+                     * — pre-fix this is a leak per call. Hoist each
+                     * such arg into a named temporary, run the parent
+                     * call, then free the temps in a GCC statement-
+                     * expression wrapper. See ArgDrainSub at the top
+                     * of this file for the full rationale.
+                     *
+                     * Skip when the parent's return type is void /
+                     * unknown — statement-expressions need a final
+                     * value and a void parent has nothing to yield.
+                     * Skip when the args are themselves substitution-
+                     * registered (we're inside a parent wrap already
+                     * — the registered entry handles the lifetime). */
+                    int ad_saved_count = g_arg_drain_count;
+                    int ad_arg_idx[16];
+                    int ad_arg_count = 0;
+                    Type* ad_ret_type = expr->node_type;
+                    int ad_have_value =
+                        (ad_ret_type &&
+                         ad_ret_type->kind != TYPE_VOID &&
+                         ad_ret_type->kind != TYPE_UNKNOWN);
+                    if (ad_have_value) {
+                        for (int ai = 0; ai < expr->child_count && ad_arg_count < 16; ai++) {
+                            ASTNode* arg = expr->children[ai];
+                            if (!arg) continue;
+                            if (arg->type != AST_FUNCTION_CALL) continue;
+                            if (arg_drain_lookup(arg)) continue;
+                            if (!is_heap_string_expr(gen, arg)) continue;
+                            /* @retain parameter: callee stores the
+                             * pointer (list_add, map_put's key,
+                             * etc.). The heap value's lifetime is
+                             * now the recipient's responsibility —
+                             * freeing here would dangle the stored
+                             * copy. Same gate the escape walker uses
+                             * at codegen_stmt.c:1339-1346. */
+                            if (is_retain_extern_param(gen, func_name, ai)) continue;
+                            /* Storage-shaped callee param (ptr,
+                             * unknown, etc.): conservatively assume
+                             * the callee may stash the pointer
+                             * beyond the call (list_add_raw, struct
+                             * field setters, opaque C externs).
+                             * Same heuristic as the escape walker's
+                             * call_arg_escapes gate — mismatch with
+                             * it would re-create the leak/UAF
+                             * tradeoff that gate exists to manage. */
+                            TypeKind param_kind = lookup_callee_param_kind(gen, func_name, ai);
+                            if (call_arg_escapes(param_kind)) continue;
+                            ad_arg_idx[ad_arg_count++] = ai;
+                        }
+                    }
+                    char* ad_names[16] = {0};
+                    if (ad_arg_count > 0) {
+                        fprintf(gen->output, "({ ");
+                        /* Pre-mint all temp names BEFORE recursing
+                         * into generate_expression — the recursion
+                         * may itself open inner wraps and mint
+                         * their own temps, advancing
+                         * g_arg_drain_counter. Reserving names up
+                         * front keeps the outer and inner names
+                         * distinct. */
+                        for (int h = 0; h < ad_arg_count; h++) {
+                            ad_names[h] = arg_drain_mint_name();
+                        }
+                        /* Emit each temp's decl. The arg's
+                         * generate_expression may register inner
+                         * substitutions on the registry stack —
+                         * those are bound to inner-arg nodes and
+                         * won't collide with our outer names because
+                         * the counter advanced. */
+                        for (int h = 0; h < ad_arg_count; h++) {
+                            ASTNode* arg = expr->children[ad_arg_idx[h]];
+                            fprintf(gen->output, "const char* %s = (const char*)(", ad_names[h]);
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, "); ");
+                        }
+                        /* Now bind the outer-arg → outer-temp
+                         * substitutions. The bind transfers
+                         * ownership of the name string; subsequent
+                         * arg_drain_truncate frees it. */
+                        for (int h = 0; h < ad_arg_count; h++) {
+                            ASTNode* arg = expr->children[ad_arg_idx[h]];
+                            arg_drain_bind(arg, ad_names[h]);
+                            ad_names[h] = NULL;
+                        }
+                        const char* ad_ret_ct = get_c_type(ad_ret_type);
+                        fprintf(gen->output, "%s _ad_r = ", ad_ret_ct);
+                    }
+
                     fprintf(gen->output, "%s(", c_func_name);
                     int arg_printed = 0;
                     // Auto-inject builder context for builder functions
@@ -2646,6 +2833,25 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, "(void*)0");
                     }
                     fprintf(gen->output, ")");
+                    /* Close the argument-temp lifetime wrap, if any
+                     * was opened. Emits the per-temp free, the
+                     * statement-expression's yield value, and the
+                     * closing brace. */
+                    if (ad_arg_count > 0) {
+                        fprintf(gen->output, "; ");
+                        for (int h = 0; h < ad_arg_count; h++) {
+                            /* Look up the temp name we registered.
+                             * Names are stable across the wrap's
+                             * scope. */
+                            ASTNode* arg = expr->children[ad_arg_idx[h]];
+                            const char* nm = arg_drain_lookup(arg);
+                            if (nm) {
+                                fprintf(gen->output, "free((void*)%s); ", nm);
+                            }
+                        }
+                        fprintf(gen->output, "_ad_r; })");
+                        arg_drain_truncate(ad_saved_count);
+                    }
                 }
             }
             break;

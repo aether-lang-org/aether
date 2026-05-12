@@ -1,0 +1,52 @@
+// Uniform-heap return-escape contract — chained heap-returning
+// functions. `outer` returns `inner(x)`; both are classifier-
+// classified heap-returning via the recursive memo. The contract
+// composes: outer's caller frees the result once, the buffer flows
+// through `outer(inner(x))` cleanly.
+//
+// This exercises the recursion + memoisation path through
+// function_def_returns_heap_string + is_heap_string_expr's user-fn
+// arm (codegen_stmt.c:693-699).
+
+import std.string
+
+extern exit(code: int)
+
+inner(prefix: string) -> string {
+    return string.concat(prefix, "-inner")
+}
+
+outer(prefix: string) -> string {
+    return inner(prefix)
+}
+
+main() {
+    println("=== test_return_escape_user_chain ===")
+
+    a = outer("call")
+    if string.length(a) != 10 {
+        println("FAIL: length=${string.length(a)}, expected 10")
+        exit(1)
+    }
+    if string.char_at(a, 0) != 99 {  // 'c'
+        println("FAIL: byte 0 = ${string.char_at(a, 0)}, expected 99")
+        exit(1)
+    }
+    if string.char_at(a, 9) != 114 {  // 'r'
+        println("FAIL: byte 9 = ${string.char_at(a, 9)}, expected 114")
+        exit(1)
+    }
+    println("  PASS: outer(inner) returns 'call-inner'")
+
+    j = 0
+    while j < 10000 {
+        s = outer("call")
+        if string.length(s) != 10 {
+            println("FAIL iter ${j}: length=${string.length(s)}")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 10000 iterations of outer(inner) chain stable")
+    println("=== all cases passed ===")
+}

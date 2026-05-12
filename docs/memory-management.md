@@ -368,6 +368,63 @@ Tells the heap-string-tracker escape walker "this slot stores the pointer; mark 
 
 Audited stdlib retainers carrying `@retain` today: `string_list_add`, `string_list_set`, `map_put_raw`'s key. Other functions are added as their callers are audited.
 
+### Return-ownership contract (uniform-heap return-escape)
+
+Every function whose return type is `string` honours one rule:
+
+> **The caller may always `free()` the returned pointer exactly once, regardless of which return branch produced the value, regardless of whether the value originated as a literal, a heap allocation, or a heap-tracked local.**
+
+The classifier OR-folds the function's return statements: a function is *heap-returning* if **any** return yields a heap expression (`string.concat`, interpolation, a heap-returning user fn, an `@heap` extern, or a bare identifier of a heap-tracked local). For such functions the codegen wraps every return value through a small inline helper:
+
+```c
+static inline const char* aether_uniform_heap_str(const char* s, int is_heap) {
+    if (!s) return NULL;
+    if (is_heap) return s;                  // fast path — already heap-owned
+    /* AetherString-aware length probe (magic-header detect, ASan-clean)... */
+    char* dup = malloc(n + 1);              // cold path — dup the literal
+    memcpy(dup, data, n); dup[n] = '\0';
+    return dup;
+}
+```
+
+The flag is resolved at compile time wherever possible:
+
+- `1` (statically) for `string.concat`, interpolation, heap-returning user fn / extern.
+- `_heap_<name>` (one runtime int load) for bare identifiers of heap-tracked locals.
+- `0` (statically) for literals.
+
+Heap branches pass straight through (~2 ns hot-path cost). Literal branches malloc-duplicate so the caller's unconditional `free()` is always correct. Pure-literal functions (every return is a literal) are not heap-classified and emit no wrap at all — zero overhead.
+
+Internally, the escape walker now distinguishes two channels:
+
+- **Container-escape** (call-arg, struct-field write, closure capture, `@retain` param): a recipient may have stored the pointer. The reassign-wrapper-free is suppressed; the function-exit defer-free is suppressed.
+- **Return-only-escape** (the variable appears in a `return <name>;` and nowhere else): no recipient stashes the pointer. The reassign-wrapper-free **fires** so intermediate accumulator buffers are reclaimed at each loop iteration; the function-exit defer-free is still suppressed (otherwise it would dangle the return value, which the caller now owns).
+
+The two-channel split closes the v0.149 "lucky-UAF return-escape" trade-off — the callee no longer frees the buffer the caller is about to read; ownership transfers cleanly through the uniform-heap helper.
+
+#### Pass-through caveat
+
+A function like `identity(s: string) -> string { return s }` where `s` is a parameter is classified non-heap (parameters are not tracked locals). The caller does not free. If the caller passes a heap value, the result is a borrow — the caller is responsible for the original allocation, not the return value. To force a heap copy across a pass-through boundary, use `return string.concat(s, "")` (or `string.concat("", s)`).
+
+#### Recursive heap-returning functions
+
+A function that calls itself recursively (e.g. a `walk_join`-style accumulator-passing recursion) is classified heap-returning *optimistically* on the recursive return. The cycle-break in `function_def_returns_heap_string` can't resolve "f returns heap iff f returns heap" during f's own analysis, so the walker treats `return f(...)` inside f's body as "heap" — which is the conservative choice for the uniform-heap contract because the shim's cold path malloc-duplicates literal returns. Mis-classifying recursion as non-heap would cause UAF when the base case `return param` returns a buffer that the recursive wrap is about to free.
+
+### Argument-temp lifetime (nested heap-returning calls)
+
+`f(g(), h())` where `g()` and `h()` are themselves heap-returning was a pre-fix anonymous-temp leak: the two heap allocations flowed into `f` and had nowhere to be reclaimed. The codegen now wraps every call site that has heap-returning function-call subexpressions in argument position with a GCC statement-expression that:
+
+```c
+({ const char* _ad_0 = g();
+   const char* _ad_1 = h();
+   <ret_type> _ad_r = f(_ad_0, _ad_1);
+   free((void*)_ad_0);
+   free((void*)_ad_1);
+   _ad_r; })
+```
+
+The wrap is suppressed when the corresponding callee parameter is storage-shaped (`ptr`, `@retain` string, or unknown-typed) — the same `call_arg_escapes` gate the escape walker uses. In those cases the recipient takes ownership and freeing here would dangle the stored copy.
+
 ### When you DO need explicit cleanup
 
 Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*` without an `@heap` annotation) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments, annotated extern returns, and non-escaped function-scope locals.

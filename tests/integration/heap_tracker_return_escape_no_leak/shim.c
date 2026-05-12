@@ -3,10 +3,13 @@
  * its own RSS before and after a tight loop of heap-accumulator
  * calls. Pre-fix the loop leaks ~770 KB; post-fix it stays flat.
  *
- * Note: `ru_maxrss` is in KB on Linux and BYTES on macOS. The probe's
- * threshold is generous enough (256 KB or 256 × 1024 bytes) that
- * either unit lets the test discriminate the post-fix flat-RSS shape
- * from the pre-fix linearly-growing one.
+ * Unit normalisation: `ru_maxrss` is in KB on Linux/BSD but in BYTES
+ * on macOS. The probe and the function name both treat the value as
+ * KB, so we divide by 1024 on Apple platforms to make the cross-
+ * platform `growth > 256` (KB) threshold comparison mean the same
+ * thing everywhere. Without this normalisation, macOS readings of
+ * 32-128 KB of allocator-zone bookkeeping noise compare as 32768-
+ * 131072 "KB" and trip the threshold spuriously.
  *
  * Portability: `<sys/resource.h>` is POSIX-only. On Windows the
  * equivalent is `GetProcessMemoryInfo` via `<psapi.h>` — not wired
@@ -32,7 +35,11 @@ long getrusage_max_rss_kb(void) {
 long getrusage_max_rss_kb(void) {
     struct rusage r;
     if (getrusage(RUSAGE_SELF, &r) != 0) return -1;
+#if defined(__APPLE__) || defined(__MACH__)
+    return r.ru_maxrss / 1024;
+#else
     return r.ru_maxrss;
+#endif
 }
 
 #endif
