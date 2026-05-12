@@ -287,7 +287,20 @@ $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/
 	@echo "Compiling $<..."
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJ_DIR)/std/lzf/lzf_d.o: CFLAGS += -Wno-implicit-fallthrough
+# Upstream liblzf (vendored verbatim under std/lzf/) has a few style
+# choices the modern -Werror set flags:
+#   - lzf_d.c's decoder uses C-style fallthrough in its dispatch loop
+#     (gcc -Wimplicit-fallthrough).
+#   - lzfP.h defines LZF_USE_OFFSETS via `#define X defined(_M_X64)` and
+#     then `#if X`, an expansion-to-defined that's non-portable under
+#     C99 but works on every compiler the upstream targets
+#     (gcc/clang -Wexpansion-to-defined).
+# We silence both on the lzf objects rather than patching the vendored
+# source, so future re-vendoring stays a copy-paste.
+LZF_CFLAGS_RELAX = -Wno-implicit-fallthrough -Wno-expansion-to-defined
+$(OBJ_DIR)/std/lzf/lzf_c.o: CFLAGS += $(LZF_CFLAGS_RELAX)
+$(OBJ_DIR)/std/lzf/lzf_d.o: CFLAGS += $(LZF_CFLAGS_RELAX)
+$(OBJ_DIR)/std/lzf/aether_lzf.o: CFLAGS += $(LZF_CFLAGS_RELAX)
 
 # Compiler target (incremental build with object files)
 compiler: $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(OBJ_DIR)/runtime/aether_resource_caps.o $(IO_POLLER_OBJS)
