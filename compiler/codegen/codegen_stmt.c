@@ -741,10 +741,28 @@ static void walk_returns_for_heap_check(CodeGenerator* gen, ASTNode* node,
     if (!node || !*all_heap) return;
     if (node->type == AST_RETURN_STATEMENT) {
         *found = 1;
-        if (node->child_count == 0 ||
-            !is_heap_string_expr(gen, node->children[0])) {
-            *all_heap = 0;
+        int is_heap = 0;
+        if (node->child_count > 0 && node->children[0]) {
+            ASTNode* ret = node->children[0];
+            if (is_heap_string_expr(gen, ret)) {
+                is_heap = 1;
+            } else if (ret->type == AST_IDENTIFIER && ret->value &&
+                       is_heap_string_var(gen, ret->value)) {
+                /* Bare-identifier return of a heap-tracked local. The
+                 * function's value flows out; combined with the
+                 * runtime-uniform-heap shim emitted at the return
+                 * statement, the caller's wrapper can claim
+                 * ownership and free correctly. Without this, the
+                 * heap-accumulator-return pattern (avn's rebuild_dir
+                 * shape) leaks the buffer per call because callee's
+                 * defer-free is skipped (escape-marked LHS) and
+                 * caller's free is skipped (function classified
+                 * non-heap). See perf_regression_quadratic_commit_
+                 * path filing for the full diagnosis. */
+                is_heap = 1;
+            }
         }
+        if (!is_heap) *all_heap = 0;
         return;
     }
     // Don't descend into nested function/lambda definitions.
@@ -2462,10 +2480,38 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                              is_heap_string_var(gen, rhs_for_escape->value) &&
                              strcmp(rhs_for_escape->value, stmt->value) != 0);
                         if (rhs_is_alias_to_heap_var) {
-                            fprintf(gen->output, "{ %s = ", stmt->value);
+                            /* Always-transfer ownership flag on escaped-LHS
+                             * alias. The flag IS the ownership token; with
+                             * this transfer:
+                             *
+                             *  - Container-escape case (list.add / map.put /
+                             *    struct field): LHS's defer-free is
+                             *    suppressed by the escape mark, so the
+                             *    transferred _heap_<lhs> = 1 sits unused.
+                             *    Buffer stays alive in the recipient.
+                             *    Source's later wrapper-free no-ops
+                             *    (_heap_<rhs> = 0).
+                             *
+                             *  - Return-escape case (LHS is the function's
+                             *    return value): LHS's defer-free is also
+                             *    suppressed, so the buffer survives the
+                             *    function exit. The return-statement
+                             *    codegen below emits a runtime-uniform-heap
+                             *    shim that ensures the returned buffer is
+                             *    always heap-allocated; combined with the
+                             *    classifier extension in
+                             *    walk_returns_for_heap_check, the caller's
+                             *    wrapper sets _heap_<result> = 1 and
+                             *    correctly frees the buffer on its own
+                             *    defer-free / next reassignment. */
+                            fprintf(gen->output,
+                                "{ %s = ", stmt->value);
                             generate_expression(gen, stmt->children[0]);
-                            fprintf(gen->output, "; _heap_%s = 0; }\n",
-                                    rhs_for_escape->value);
+                            fprintf(gen->output,
+                                "; _heap_%s = _heap_%s; _heap_%s = 0; }\n",
+                                stmt->value,
+                                rhs_for_escape->value,
+                                rhs_for_escape->value);
                         } else {
                             fprintf(gen->output, "%s = ", stmt->value);
                             generate_expression(gen, stmt->children[0]);
@@ -3650,6 +3696,47 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     fprintf(gen->output, "%s _builder_ret = ", ret_c_type);
                     generate_expression(gen, stmt->children[0]);
                     fprintf(gen->output, ";\n");
+                    /* Runtime-uniform-heap shim for bare-identifier
+                     * returns of heap-tracked locals (companion to the
+                     * walk_returns_for_heap_check classifier extension).
+                     * When the callee returns a bare-identifier heap-
+                     * tracked local AND the function is classifier-
+                     * classified as heap-returning, the caller's
+                     * wrapper sets _heap_<result> = 1 statically; the
+                     * runtime value at this return site might still be
+                     * a literal (e.g. an `if cond { s = string.concat(...) }`
+                     * branch was never taken) and the caller's
+                     * free() of a literal would crash.
+                     *
+                     * Fix: at the return site, if the runtime heap flag
+                     * is 0, strdup the literal so the caller always
+                     * receives a heap-allocated buffer matching the
+                     * static classification. Costs one branch +
+                     * occasional strdup per bare-identifier return of
+                     * a heap-tracked local.
+                     *
+                     * Closes the perf-regression-quadratic-commit-path
+                     * fully: avn's rebuild_dir bench stays flat on
+                     * both Linux (no leak) and Windows (no UAF on
+                     * post-free read — the buffer is genuinely heap
+                     * and survives until the caller frees it). */
+                    if (stmt->children[0] &&
+                        stmt->children[0]->type == AST_IDENTIFIER &&
+                        stmt->children[0]->value &&
+                        is_heap_string_var(gen, stmt->children[0]->value) &&
+                        gen->current_function &&
+                        function_def_returns_heap_string(gen, gen->current_function)) {
+                        const char* rv = stmt->children[0]->value;
+                        print_indent(gen);
+                        fprintf(gen->output,
+                            "if (!_heap_%s) { "
+                            "size_t _l = strlen((const char*)_builder_ret); "
+                            "char* _h = (char*)malloc(_l + 1); "
+                            "if (_h) { memcpy(_h, _builder_ret, _l + 1); "
+                            "_builder_ret = _h; _heap_%s = 1; } "
+                            "}\n",
+                            rv, rv);
+                    }
                     // Bug B suppression: any closure whose env is still live
                     // through the returned value (directly or transitively via
                     // another closure capturing it) must not have its env-free

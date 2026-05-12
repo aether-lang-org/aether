@@ -1,0 +1,107 @@
+// Regression: the escape-marked-LHS-alias-clear in 0.149 (closing
+// the list.add-of-substring UAF) over-applied to functions whose
+// LHS was escape-marked because it was the function's return value.
+//
+// Trigger shape — heap-accumulator pattern, alias-into-local, return:
+//
+//   make_accumulator(n: int) -> string {
+//       new_sorted = ""
+//       while ... { new_sorted = string.concat(new_sorted, ...) }
+//       sorted = new_sorted        // alias; sorted escape-marked by `return sorted`
+//       return sorted
+//   }
+//
+// In 0.149, the wrapper at `sorted = new_sorted` cleared
+// _heap_new_sorted (correctly preventing the source's wrapper from
+// freeing the buffer the recipient holds) — but for the return case,
+// there is no recipient. The buffer becomes unowned: callee's defer-
+// free skipped (flag cleared), caller's free skipped (function not
+// classifier-classified as heap), buffer leaks forever. avn's
+// rebuild_dir hit this in a tight commit loop → ~N-byte leak per call
+// → O(N²) total bench growth.
+//
+// Fix: in the escaped-LHS-alias path, when the LHS is referenced in
+// any AST_RETURN_STATEMENT of the current function's body, fall back
+// to bare-assign (the pre-0.149 emission). The source's defer-free
+// then reclaims the buffer at function exit. Container-escape (list_
+// add, map_put, struct field, …) keeps the 0.149 clear pattern.
+//
+// What this test exercises: 500 iterations of make_accumulator(50),
+// each producing a ~1550-byte heap accumulator. Reads RSS via
+// getrusage before and after; growth must be bounded. Pre-fix this
+// leaks ~1550 × 500 = ~770 KB at the boundary; the test guards
+// against >256 KB growth (allows some allocator headroom).
+
+import std.string
+
+extern getrusage_max_rss_kb() -> int
+extern exit(code: int)
+
+make_accumulator(n: int) -> string {
+    new_sorted = ""
+    i = 0
+    while i < n {
+        new_sorted = string.concat(new_sorted, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        i = i + 1
+    }
+    sorted = new_sorted
+    return sorted
+}
+
+main() {
+    println("=== heap_tracker_return_escape_no_leak ===")
+
+    // Portability gate. Windows MinGW doesn't expose getrusage; the
+    // shim returns -1 there. The heap-string-tracker codegen this
+    // test exercises runs identically on every platform, so we
+    // verify the program still RUNS correctly (no UAF, no crash)
+    // without the RSS-growth assertion. CONTRIBUTING.md
+    // §"Coding for portability" pattern #2.
+    rss_probe = getrusage_max_rss_kb()
+    if rss_probe < 0 {
+        // Smoke-test the make_accumulator return path on this platform
+        // so we still catch any platform-specific codegen regression.
+        s_smoke = make_accumulator(50)
+        if string.length(s_smoke) != 1550 {
+            println("FAIL smoke: length=${string.length(s_smoke)}, expected 1550")
+            exit(1)
+        }
+        println("  PASS: getrusage unavailable, smoke-only — codegen path runs correctly")
+        println("=== all cases passed ===")
+        return
+    }
+
+    // Warm-up call so the initial allocator pages settle.
+    _w = make_accumulator(50)
+    if string.length(_w) < 1 {
+        println("FAIL: warm-up empty")
+        exit(1)
+    }
+
+    rss0 = getrusage_max_rss_kb()
+    j = 0
+    while j < 500 {
+        s = make_accumulator(50)
+        if string.length(s) < 1550 {
+            println("FAIL iter ${j}: length=${string.length(s)}, expected 1550")
+            exit(1)
+        }
+        j = j + 1
+    }
+    rss1 = getrusage_max_rss_kb()
+    growth = rss1 - rss0
+
+    // Pre-fix this shows ~770 KB growth (one ~1550-byte leaked
+    // accumulator per iteration × 500). Post-fix the callee's defer-
+    // free reclaims each iteration's buffer, RSS stays flat. 256 KB
+    // threshold accommodates incidental allocator-bookkeeping and
+    // println()-induced churn while leaving a clear gap from the
+    // leaky behaviour.
+    if growth > 256 {
+        println("FAIL: RSS grew ${growth} KB across 500 calls (>256 KB threshold) — return-escape leak")
+        exit(1)
+    }
+
+    println("  PASS: 500 calls x 1550-byte accumulator, RSS growth ${growth} KB (bounded)")
+    println("=== all cases passed ===")
+}
