@@ -1075,6 +1075,30 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
         
         if (op->type == TOKEN_LEFT_PAREN) {
             // Function call: expr(arg1, arg2, ...)
+            //
+            // Statement-boundary guard: if the `(` is on a different
+            // source line from the previous token, treat it as the
+            // start of a NEW statement (a leading `(parenthesized
+            // expression)` whose member/cast result the user wants
+            // to assign into) rather than as a call applied to the
+            // expression we've parsed so far.  Aether doesn't require
+            // semicolons; this same "newline acts as statement
+            // separator unless the next token clearly continues"
+            // heuristic is already used for trailing-block braces
+            // (line ~1180 below).  Without this guard,
+            //     println("foo")
+            //     (raw as *T).field = v
+            // parses as `println("foo")(raw as *T).field = v` — one
+            // expression — producing a bogus AST_FUNCTION_CALL with
+            // expr=AST_BINARY_EXPRESSION as the callee, which then
+            // fails typecheck with `Undefined function '?'`.
+            int prev_line = (parser->current_token > 0)
+                ? parser->tokens[parser->current_token - 1]->line
+                : -1;
+            if (op->line != prev_line) {
+                break;  // not a call — let parse_statement see the `(` as a fresh statement
+            }
+
             // Extract function name - handle both simple and namespaced calls
             const char* func_name = NULL;
             if (expr && expr->type == AST_IDENTIFIER && expr->value) {
