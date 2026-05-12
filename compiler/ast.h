@@ -193,6 +193,14 @@ typedef struct ASTNode {
                                // such functions as `static` so each TU gets
                                // a private copy and the linker doesn't see
                                // them as duplicate symbols.
+    int bit_width;             // For AST_STRUCT_FIELD nodes: bit-width
+                               // annotation `name: type : NN`. 0 = plain
+                               // field (no bitfield). >0 = emitted as
+                               // `type name : NN;` so the C compiler
+                               // handles bit-extract on access. Bitfields
+                               // are only meaningful on extern structs
+                               // (AST_STRUCT_DEFINITION with extern flag
+                               // — see annotation slot below).
     char* source_file;         // Originating .ae path (set by ast_stamp_source_file
                                // after parse). Codegen uses this to emit `#line N
                                // "path"` directives so gcc/gdb/gcov see .ae line

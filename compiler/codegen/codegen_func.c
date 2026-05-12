@@ -1350,6 +1350,12 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
                 } else {
                     fprintf(gen->output, "%s* %s;\n", element_type, field->value);
                 }
+            } else if (field->bit_width > 0) {
+                // C bitfield: `type name : NN;`. Only meaningful on
+                // extern structs (the layout has to mirror a C-side
+                // declaration with the same bit widths).
+                generate_type(gen, field->node_type);
+                fprintf(gen->output, " %s : %d;\n", field->value, field->bit_width);
             } else {
                 // For non-arrays: type fieldname;
                 generate_type(gen, field->node_type);

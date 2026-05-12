@@ -2840,6 +2840,94 @@ ASTNode* parse_extern_declaration(Parser* parser) {
     Token* extern_token = expect_token(parser, TOKEN_EXTERN);
     if (!extern_token) return NULL;
 
+    /* `extern struct Name { ... }` — declares a C struct whose
+     * layout the user is asserting matches the C side.  The Aether-
+     * side emit produces the same C struct declaration so codegen
+     * can do `view->field` member access via the standard `*Name`
+     * overlay path.  Field decls accept an optional `: NN` bit-width
+     * suffix for C bitfield support:
+     *
+     *     extern struct JSObject {
+     *         class_id: byte         // plain field
+     *     }
+     *
+     *     extern struct JSString {
+     *         is_unique: int : 1     // bitfield, 1 bit
+     *         is_ascii:  int : 1
+     *         len:       int : 27
+     *     }
+     *
+     * The user is responsible for ensuring the C-side layout matches
+     * — Aether emits the struct definition into its .gen.c file;
+     * if the surrounding C code has a competing definition under the
+     * same name in the SAME translation unit, that's a duplicate-
+     * typedef error.  Typical usage: the C side defines the struct
+     * in a private header that the .gen.c does NOT include, so each
+     * TU sees exactly one definition.  Layouts agree by construction
+     * if the Aether spelling matches the C spelling.
+     */
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_STRUCT) {
+        advance_token(parser);  // consume `struct`
+        Token* sname = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!sname) return NULL;
+        ASTNode* sd = create_ast_node(AST_STRUCT_DEFINITION, sname->value,
+                                      extern_token->line, extern_token->column);
+        sd->annotation = strdup("extern");
+        if (!expect_token(parser, TOKEN_LEFT_BRACE)) {
+            free_ast_node(sd);
+            return NULL;
+        }
+        while (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+            if (is_at_end(parser)) {
+                parser_error(parser, "Unexpected end of extern struct definition");
+                free_ast_node(sd);
+                return NULL;
+            }
+            /* Field: `name: type` (with optional `: NN` bit-width). */
+            Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!fname) { free_ast_node(sd); return NULL; }
+            ASTNode* field = create_ast_node(AST_STRUCT_FIELD, fname->value,
+                                             fname->line, fname->column);
+            if (!expect_token(parser, TOKEN_COLON)) {
+                free_ast_node(field);
+                free_ast_node(sd);
+                return NULL;
+            }
+            Type* ftype = parse_type(parser);
+            if (!ftype) {
+                free_ast_node(field);
+                free_ast_node(sd);
+                return NULL;
+            }
+            field->node_type = ftype;
+            /* Optional bit-width: `: NN` after the type. */
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
+                advance_token(parser);  // consume second ':'
+                Token* width_tok = expect_token(parser, TOKEN_NUMBER);
+                if (!width_tok || !width_tok->value) {
+                    parser_error(parser, "expected bit width after `:`");
+                    free_ast_node(field);
+                    free_ast_node(sd);
+                    return NULL;
+                }
+                int w = atoi(width_tok->value);
+                if (w <= 0 || w > 64) {
+                    parser_error(parser, "bit width out of range (1..64)");
+                    free_ast_node(field);
+                    free_ast_node(sd);
+                    return NULL;
+                }
+                field->bit_width = w;
+            }
+            add_child(sd, field);
+            /* Optional separator. */
+            if (!match_token(parser, TOKEN_COMMA)) {
+                match_token(parser, TOKEN_SEMICOLON);
+            }
+        }
+        return sd;
+    }
+
     Token* name = expect_token(parser, TOKEN_IDENTIFIER);
     if (!name) return NULL;
 
