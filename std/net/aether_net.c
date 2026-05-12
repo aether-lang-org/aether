@@ -1,6 +1,7 @@
 #include "aether_net.h"
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/aether_sandbox.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #if !AETHER_HAS_NETWORKING
 TcpSocket* tcp_connect_raw(const char* h, int p) { (void)h; (void)p; return NULL; }
@@ -114,12 +115,16 @@ int tcp_send_raw(TcpSocket* sock, const char* data) {
 char* tcp_receive_raw(TcpSocket* sock, int max_bytes) {
     if (!sock || !sock->connected || max_bytes <= 0) return NULL;
 
-    char* buffer = (char*)malloc(max_bytes + 1);
+    /* Cap-aware (#343): max_bytes is caller-supplied (program-
+     * controlled, but plugin-host paths surface it as untrusted).
+     * Caller frees with plain libc free per the caller-owned-return
+     * contract (aether_resource_caps.h:89-94). */
+    char* buffer = (char*)aether_caps_malloc((size_t)max_bytes + 1);
     if (!buffer) return NULL;
     int received = recv(sock->fd, buffer, max_bytes, 0);
 
     if (received <= 0) {
-        free(buffer);
+        aether_caps_free(buffer, (size_t)max_bytes + 1);
         sock->connected = 0;
         return NULL;
     }

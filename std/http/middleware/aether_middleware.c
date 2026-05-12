@@ -13,6 +13,7 @@
 // wrappers in std/http/middleware/module.ae allocate the user_data
 // and register the middleware with the server.
 #include "aether_middleware.h"
+#include "../../../runtime/aether_resource_caps.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -626,7 +627,12 @@ static unsigned char* gzip_compress(const unsigned char* in_data, size_t in_len,
         return NULL;
     }
     uLong bound = deflateBound(&strm, (uLong)in_len);
-    unsigned char* out = (unsigned char*)malloc(bound > 0 ? bound : 1);
+    /* Cap-aware (#343): bound is derived from in_len which is the
+     * response body length — caller-controlled but plugin-reachable.
+     * Caller frees with plain libc free per the caller-owned-return
+     * contract (aether_resource_caps.h:89-94). */
+    size_t alloc_cap = bound > 0 ? (size_t)bound : 1;
+    unsigned char* out = (unsigned char*)aether_caps_malloc(alloc_cap);
     if (!out) { deflateEnd(&strm); return NULL; }
     strm.next_in = (Bytef*)in_data;
     strm.avail_in = (uInt)in_len;
@@ -635,7 +641,7 @@ static unsigned char* gzip_compress(const unsigned char* in_data, size_t in_len,
     int rc = deflate(&strm, Z_FINISH);
     if (rc != Z_STREAM_END) {
         deflateEnd(&strm);
-        free(out);
+        aether_caps_free(out, alloc_cap);
         return NULL;
     }
     *out_len = strm.total_out;

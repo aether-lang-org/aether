@@ -1,5 +1,6 @@
 #include "aether_http.h"
 #include "../../runtime/config/aether_optimization_config.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #if !AETHER_HAS_NETWORKING
 HttpResponse* http_get_raw(const char* u) { (void)u; return NULL; }
@@ -349,8 +350,11 @@ int http_request_set_header_raw(HttpRequest* req, const char* name, const char* 
 
 int http_request_set_body_raw(HttpRequest* req, const char* body, int len, const char* content_type) {
     if (!req || len < 0) return -1;
-    /* Replace any prior body. */
-    free(req->body);         req->body = NULL; req->body_len = 0;
+    /* Replace any prior body. Cap-aware (#343): req->body_len holds
+     * the original allocation size and is reset to 0 below before
+     * the next aether_caps_malloc. */
+    aether_caps_free(req->body, (size_t)req->body_len);
+    req->body = NULL; req->body_len = 0;
     free(req->content_type); req->content_type = NULL;
     if (len > 0) {
         if (!body) return -1;
@@ -366,7 +370,10 @@ int http_request_set_body_raw(HttpRequest* req, const char* body, int len, const
         if (is_aether_string(body)) {
             src = ((const AetherString*)body)->data;
         }
-        req->body = (char*)malloc((size_t)len);
+        /* Cap-aware (#343): caller-supplied length, untrusted on
+         * --emit=lib paths. The matching aether_caps_free passes
+         * req->body_len as the size. */
+        req->body = (char*)aether_caps_malloc((size_t)len);
         if (!req->body) return -1;
         memcpy(req->body, src, (size_t)len);
         req->body_len = len;
@@ -394,7 +401,10 @@ void http_request_free_raw(HttpRequest* req) {
     if (!req) return;
     free(req->method);
     free(req->url);
-    free(req->body);
+    /* Body was alloc'd via aether_caps_malloc in
+     * http_request_set_body_raw; pair the free with the recorded
+     * length so cap accounting stays at current-usage. */
+    aether_caps_free(req->body, (size_t)req->body_len);
     free(req->content_type);
     HttpHeader* h = req->headers;
     while (h) {

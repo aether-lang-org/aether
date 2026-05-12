@@ -1,5 +1,6 @@
 #include "aether_cryptography.h"
 #include "../string/aether_string.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,13 +106,18 @@ char* cryptography_base64_encode_raw(const char* data, int length) {
     const unsigned char* bytes = cryptography_unwrap_bytes(data, length, &want);
     if (want > 0 && !bytes) return NULL;
 
-    /* EVP_EncodeBlock writes ((n+2)/3)*4 bytes plus a NUL. */
+    /* EVP_EncodeBlock writes ((n+2)/3)*4 bytes plus a NUL.
+     * Cap-aware (#343): the input length is caller-supplied and can
+     * be plugin-host-controlled in --emit=lib scenarios. Gate the
+     * allocation. The caller frees with plain `free()` per the
+     * caller-owned-return contract (aether_resource_caps.h:89-94);
+     * the counter drifts up on these paths, same as string_concat. */
     size_t out_cap = ((want + 2) / 3) * 4 + 1;
-    char* out = (char*)malloc(out_cap);
+    char* out = (char*)aether_caps_malloc(out_cap);
     if (!out) return NULL;
 
     int written = EVP_EncodeBlock((unsigned char*)out, bytes, (int)want);
-    if (written < 0) { free(out); return NULL; }
+    if (written < 0) { aether_caps_free(out, out_cap); return NULL; }
     out[written] = '\0';
 
     /* Strip trailing '=' padding for the unpadded contract. */
@@ -133,12 +139,14 @@ char* cryptography_base64_encode_padded_raw(const char* data, int length) {
     const unsigned char* bytes = cryptography_unwrap_bytes(data, length, &want);
     if (want > 0 && !bytes) return NULL;
 
+    /* Cap-aware (#343): same gating rationale as the unpadded
+     * sibling above. */
     size_t out_cap = ((want + 2) / 3) * 4 + 1;
-    char* out = (char*)malloc(out_cap);
+    char* out = (char*)aether_caps_malloc(out_cap);
     if (!out) return NULL;
 
     int written = EVP_EncodeBlock((unsigned char*)out, bytes, (int)want);
-    if (written < 0) { free(out); return NULL; }
+    if (written < 0) { aether_caps_free(out, out_cap); return NULL; }
     out[written] = '\0';
     return out;
 }
@@ -148,13 +156,16 @@ char* cryptography_base64_encode_padded_raw(const char* data, int length) {
  * different threads don't clobber each other; lifetime is until the
  * next call on the same thread. Aether-side wrappers are expected to
  * copy the bytes out via string_new_with_length before calling
- * back into the C side. */
+ * back into the C side. Cap tracked alongside (#343) so the release
+ * path correctly decrements the cap counter rather than drifting. */
 static __thread unsigned char* g_b64_buf = NULL;
+static __thread size_t         g_b64_cap = 0;
 static __thread int            g_b64_len = 0;
 
 static void release_b64_locked(void) {
-    if (g_b64_buf) free(g_b64_buf);
+    if (g_b64_buf) aether_caps_free(g_b64_buf, g_b64_cap);
     g_b64_buf = NULL;
+    g_b64_cap = 0;
     g_b64_len = 0;
 }
 
@@ -172,29 +183,34 @@ int cryptography_base64_decode_raw(const char* b64) {
         /* Decoding "" is a valid request — yields zero bytes. Allocate
          * a 1-byte buffer so the caller can distinguish "decoded 0
          * bytes" from "no data" via the length accessor. */
-        g_b64_buf = (unsigned char*)malloc(1);
+        g_b64_buf = (unsigned char*)aether_caps_malloc(1);
         if (!g_b64_buf) return 0;
+        g_b64_cap = 1;
         g_b64_buf[0] = 0;
         g_b64_len = 0;
         return 1;
     }
 
     /* EVP_DecodeBlock requires the input length to be a multiple of
-     * 4. Pad up with '=' if the caller passed an unpadded string. */
+     * 4. Pad up with '=' if the caller passed an unpadded string.
+     * Cap-aware (#343): input length is untrusted in plugin-host
+     * scenarios; both the pad-up buffer and the decode-output buffer
+     * are gated and freed through the caps allocator. */
     size_t padded_len = (in_len + 3) / 4 * 4;
-    unsigned char* padded = (unsigned char*)malloc(padded_len);
+    unsigned char* padded = (unsigned char*)aether_caps_malloc(padded_len);
     if (!padded) return 0;
     memcpy(padded, in, in_len);
     for (size_t i = in_len; i < padded_len; i++) padded[i] = '=';
 
     /* Output is at most 3/4 of input. */
     size_t out_cap = (padded_len / 4) * 3;
-    unsigned char* out = (unsigned char*)malloc(out_cap > 0 ? out_cap : 1);
-    if (!out) { free(padded); return 0; }
+    size_t out_alloc = out_cap > 0 ? out_cap : 1;
+    unsigned char* out = (unsigned char*)aether_caps_malloc(out_alloc);
+    if (!out) { aether_caps_free(padded, padded_len); return 0; }
 
     int written = EVP_DecodeBlock(out, padded, (int)padded_len);
-    free(padded);
-    if (written < 0) { free(out); return 0; }
+    aether_caps_free(padded, padded_len);
+    if (written < 0) { aether_caps_free(out, out_alloc); return 0; }
 
     /* Trim trailing zero bytes that correspond to the padding we
      * added. EVP_DecodeBlock decodes '=' as 0, so the original
@@ -210,6 +226,7 @@ int cryptography_base64_decode_raw(const char* b64) {
     written -= trim;
 
     g_b64_buf = out;
+    g_b64_cap = out_alloc;
     g_b64_len = written;
     return 1;
 }

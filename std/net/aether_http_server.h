@@ -32,6 +32,13 @@ typedef struct {
     int header_count;
     char* body;
     size_t body_length;
+    /* Resource-caps tracker companion (#343): the byte count
+     * aether_caps_free needs at the matching free site. Distinct
+     * from body_length because every alloc is body_length+1 (NUL
+     * terminator) and may be reused/reset across set_body calls;
+     * tracking the cap explicitly keeps the cap counter at
+     * current-usage even when callers replace the body. */
+    size_t body_cap;
     /* Issue #383 zero-copy fast path. When the response body lives
      * on disk (set by http_serve_file), the file is `open(2)`'d
      * here and `fstat(2)`'d into sendfile_size. The connection

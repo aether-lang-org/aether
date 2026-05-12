@@ -1,6 +1,7 @@
 #include "aether_lzf.h"
 #include "lzf.h"
 #include "../string/aether_string.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -17,18 +18,31 @@ static inline const unsigned char* lzf_unwrap_bytes(const char* data, int length
     return (const unsigned char*)data;
 }
 
+/* Resource-caps tracking (#343): like the zlib path, length and
+ * capacity differ when the LZF compressor produces a result smaller
+ * than its safety bound; `_cap` is what aether_caps_free needs.  */
 static _Thread_local unsigned char* tls_compress_buf = NULL;
-static _Thread_local int tls_compress_len = 0;
+static _Thread_local size_t         tls_compress_cap = 0;
+static _Thread_local int            tls_compress_len = 0;
 static _Thread_local unsigned char* tls_decompress_buf = NULL;
-static _Thread_local int tls_decompress_len = 0;
+static _Thread_local size_t         tls_decompress_cap = 0;
+static _Thread_local int            tls_decompress_len = 0;
 
 static void free_compress_tls(void) {
-    if (tls_compress_buf) { free(tls_compress_buf); tls_compress_buf = NULL; }
+    if (tls_compress_buf) {
+        aether_caps_free(tls_compress_buf, tls_compress_cap);
+        tls_compress_buf = NULL;
+    }
+    tls_compress_cap = 0;
     tls_compress_len = 0;
 }
 
 static void free_decompress_tls(void) {
-    if (tls_decompress_buf) { free(tls_decompress_buf); tls_decompress_buf = NULL; }
+    if (tls_decompress_buf) {
+        aether_caps_free(tls_decompress_buf, tls_decompress_cap);
+        tls_decompress_buf = NULL;
+    }
+    tls_decompress_cap = 0;
     tls_decompress_len = 0;
 }
 
@@ -55,18 +69,20 @@ int lzf_try_compress(const char* data, int length) {
     }
 
     unsigned int bound = LZF_MAX_COMPRESSED_SIZE((unsigned int)in_len);
-    unsigned char* out = (unsigned char*)malloc(bound);
+    size_t alloc_cap = (size_t)bound;
+    unsigned char* out = (unsigned char*)aether_caps_malloc(alloc_cap);
     if (!out) return 0;
 
     unsigned int out_len = lzf_compress(in, (unsigned int)in_len, out, bound);
     if (out_len == 0) {
         /* Incompressible payload didn't fit in the bound. Caller must
          * fall back to storing data uncompressed (with their own flag). */
-        free(out);
+        aether_caps_free(out, alloc_cap);
         return 0;
     }
 
     tls_compress_buf = out;
+    tls_compress_cap = alloc_cap;
     tls_compress_len = (int)out_len;
     return 1;
 }
@@ -91,16 +107,18 @@ int lzf_try_decompress(const char* data, int length, int output_length) {
     }
     if (in_len == 0) return 0;
 
-    unsigned char* out = (unsigned char*)malloc((size_t)output_length);
+    size_t alloc_cap = (size_t)output_length;
+    unsigned char* out = (unsigned char*)aether_caps_malloc(alloc_cap);
     if (!out) return 0;
 
     unsigned int out_len = lzf_decompress(in, (unsigned int)in_len, out, (unsigned int)output_length);
     if (out_len != (unsigned int)output_length) {
-        free(out);
+        aether_caps_free(out, alloc_cap);
         return 0;
     }
 
     tls_decompress_buf = out;
+    tls_decompress_cap = alloc_cap;
     tls_decompress_len = (int)out_len;
     return 1;
 }

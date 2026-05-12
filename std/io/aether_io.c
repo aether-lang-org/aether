@@ -1,5 +1,6 @@
 #include "aether_io.h"
 #include "../../runtime/config/aether_optimization_config.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #if !AETHER_HAS_FILESYSTEM
 // Console I/O always works; file ops return errors
@@ -119,8 +120,11 @@ char* io_read_file_raw(const char* path) {
     if (size < 0) { fclose(file); return NULL; }
     fseek(file, 0, SEEK_SET);
 
-    // Read file
-    char* buffer = (char*)malloc(size + 1);
+    // Read file. Cap-aware (#343): file size is OS-supplied and
+    // unbounded; gate the allocation. The caller frees with plain
+    // libc `free()` per the caller-owned-return contract — the
+    // counter drifts up on the cold path, same as string_concat.
+    char* buffer = (char*)aether_caps_malloc((size_t)size + 1);
     if (!buffer) { fclose(file); return NULL; }
     size_t read = fread(buffer, 1, size, file);
     buffer[read] = '\0';
@@ -319,7 +323,12 @@ _tuple_ptrintstr_io io_fd_read_n_tuple(int fd, int n) {
     if (fd < 0) { out._2 = "invalid fd"; return out; }
     if (n <= 0)   return out;  /* empty read is a no-op */
 
-    char* buf = (char*)malloc((size_t)n);
+    /* Cap-aware (#343): `n` is caller-supplied (untrusted in plugin-
+     * host scenarios) — gate the allocation. Buffer is freed inside
+     * this function via the matched aether_caps_free path; the cap
+     * counter stays at current-usage. */
+    size_t buf_cap = (size_t)n;
+    char* buf = (char*)aether_caps_malloc(buf_cap);
     if (!buf) { out._2 = "out of memory"; return out; }
 
     int total = 0;
@@ -334,7 +343,7 @@ _tuple_ptrintstr_io io_fd_read_n_tuple(int fd, int n) {
 #ifndef _WIN32
             if (errno == EINTR) continue;
 #endif
-            free(buf);
+            aether_caps_free(buf, buf_cap);
             out._2 = "read failed";
             return out;
         }
@@ -344,7 +353,7 @@ _tuple_ptrintstr_io io_fd_read_n_tuple(int fd, int n) {
     /* Replace the placeholder empty AetherString with one carrying
      * the actual bytes (binary-safe via explicit length). */
     AetherString* s = string_new_with_length(buf, (size_t)total);
-    free(buf);
+    aether_caps_free(buf, buf_cap);
     if (!s) { out._2 = "out of memory"; return out; }
     /* Drop the placeholder — string_empty() returned a refcount=1
      * object we'd otherwise leak. */
@@ -361,9 +370,12 @@ _tuple_ptrstr_io io_fd_read_line_tuple(int fd) {
     if (fd < 0) { out._1 = "invalid fd"; return out; }
 
     /* Grow-on-demand line buffer. Initial 256 bytes covers the common
-     * case (svn dump record lines are short); we double when full. */
+     * case (svn dump record lines are short); we double when full.
+     * Cap-aware (#343): line length is unbounded from the wire; gate
+     * each grow. Frees go through aether_caps_free with the most-
+     * recent capacity so the counter tracks current-usage. */
     size_t cap = 256;
-    char* buf = (char*)malloc(cap);
+    char* buf = (char*)aether_caps_malloc(cap);
     if (!buf) { out._1 = "out of memory"; return out; }
     size_t len = 0;
 
@@ -381,7 +393,7 @@ _tuple_ptrstr_io io_fd_read_line_tuple(int fd) {
              * partial line — server-side dump streams sometimes end
              * without a trailing '\n' on the last record. */
             if (len == 0) {
-                free(buf);
+                aether_caps_free(buf, cap);
                 return out;  /* both fields already "" */
             }
             break;
@@ -390,15 +402,15 @@ _tuple_ptrstr_io io_fd_read_line_tuple(int fd) {
 #ifndef _WIN32
             if (errno == EINTR) continue;
 #endif
-            free(buf);
+            aether_caps_free(buf, cap);
             out._1 = "read failed";
             return out;
         }
         if (c == '\n') break;
         if (len + 1 >= cap) {
             size_t new_cap = cap * 2;
-            char* nb = (char*)realloc(buf, new_cap);
-            if (!nb) { free(buf); out._1 = "out of memory"; return out; }
+            char* nb = (char*)aether_caps_realloc(buf, cap, new_cap);
+            if (!nb) { aether_caps_free(buf, cap); out._1 = "out of memory"; return out; }
             buf = nb;
             cap = new_cap;
         }
@@ -409,7 +421,7 @@ _tuple_ptrstr_io io_fd_read_line_tuple(int fd) {
     if (len > 0 && buf[len - 1] == '\r') len--;
 
     AetherString* s = string_new_with_length(buf, len);
-    free(buf);
+    aether_caps_free(buf, cap);
     if (!s) { out._1 = "out of memory"; return out; }
     string_release(out._0);
     out._0 = (void*)s;
