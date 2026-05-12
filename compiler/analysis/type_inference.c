@@ -5,6 +5,8 @@
 #include <string.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <limits.h>
+#include <errno.h>
 
 #define MAX_INFERENCE_ITERATIONS 100
 
@@ -63,9 +65,48 @@ int is_type_inferrable(Type* type) {
     return type && type->kind == TYPE_UNKNOWN;
 }
 
+// Pick the narrowest integer kind that can hold a parsed magnitude.
+// signed_input=1 means the source literal was a plain decimal that the
+// caller would interpret as signed; signed_input=0 means hex/oct/bin
+// which Aether treats as bit patterns (a 0xFFFF...FFFF literal is the
+// caller's u64 max, not -1).
+static TypeKind pick_integer_kind(unsigned long long magnitude, int signed_input) {
+    if (signed_input) {
+        if (magnitude <= (unsigned long long)INT_MAX) return TYPE_INT;
+        if (magnitude <= (unsigned long long)LLONG_MAX) return TYPE_INT64;
+        return TYPE_UINT64;
+    }
+    if (magnitude <= (unsigned long long)INT_MAX) return TYPE_INT;
+    if (magnitude <= (unsigned long long)LLONG_MAX) return TYPE_INT64;
+    return TYPE_UINT64;
+}
+
 // Infer type from literal value
 Type* infer_from_literal(const char* value) {
     if (!value) return create_type(TYPE_UNKNOWN);
+
+    // Prefixed forms (0x / 0o / 0b) are pure-integer bit patterns.
+    // Pick the narrowest integer kind that holds the value so that
+    // e.g. 0xB5026F5AA96619E9 doesn't silently truncate to TYPE_INT
+    // and then to int32 in the emitted C.
+    if (value[0] == '0' && value[1] && value[2]) {
+        int base = 0;
+        const char* digits = NULL;
+        if (value[1] == 'x' || value[1] == 'X') { base = 16; digits = value; }
+        else if (value[1] == 'o' || value[1] == 'O') { base = 8;  digits = value + 2; }
+        else if (value[1] == 'b' || value[1] == 'B') { base = 2;  digits = value + 2; }
+        if (base != 0) {
+            errno = 0;
+            unsigned long long mag = strtoull(digits, NULL, base);
+            if (errno != 0) {
+                /* Out-of-range literal — fall through to the digit
+                 * loop, which will classify it as not-a-number and
+                 * leave the typechecker to surface a diagnostic. */
+            } else {
+                return create_type(pick_integer_kind(mag, 0));
+            }
+        }
+    }
 
     // Check if it's a number. Start is_number = 0 so the empty
     // buffer doesn't decay to TYPE_INT — require at least one
@@ -86,7 +127,25 @@ Type* infer_from_literal(const char* value) {
     }
 
     if (is_number) {
-        return create_type(is_float ? TYPE_FLOAT : TYPE_INT);
+        if (is_float) return create_type(TYPE_FLOAT);
+        /* A plain decimal literal that exceeds INT_MAX would otherwise
+         * be stamped TYPE_INT and silently truncate in codegen. Reparse
+         * with strtoull (handles optional leading +/-) and pick the
+         * narrowest integer kind that holds it. */
+        errno = 0;
+        const char* p = value;
+        int negative = 0;
+        if (*p == '-') { negative = 1; p++; }
+        else if (*p == '+') { p++; }
+        unsigned long long mag = strtoull(p, NULL, 10);
+        if (errno != 0) {
+            return create_type(TYPE_INT64);
+        }
+        TypeKind kind = pick_integer_kind(mag, 1);
+        /* A negative value larger in magnitude than INT_MAX still fits
+         * in int64; never widen a negative-decimal to UINT64. */
+        if (negative && kind == TYPE_UINT64) kind = TYPE_INT64;
+        return create_type(kind);
     }
     
     // Check if it's a string literal (starts with quote)
