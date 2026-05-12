@@ -659,7 +659,7 @@ static int extern_returns_heap_string(ASTNode* ext) {
 // hardcoded-stdlib + string-interp fast paths in isolation. When
 // non-NULL, gen->program is consulted for user-defined-fn lookup;
 // when NULL, we fall through to the conservative answer.
-static int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
+int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
     if (!expr) return 0;
 
     // String interpolation (non-printf mode) allocates via _aether_interp.
@@ -754,13 +754,47 @@ static int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
 // mutually-recursive `-> string` user functions); we conservatively
 // return 0 in that case.
 static void walk_returns_for_heap_check(CodeGenerator* gen, ASTNode* node,
+                                         const char* fn_being_analyzed,
                                          int* any_heap, int* any_non_heap) {
     if (!node) return;
     if (node->type == AST_RETURN_STATEMENT) {
         int is_heap = 0;
         if (node->child_count > 0 && node->children[0]) {
             ASTNode* ret = node->children[0];
-            if (is_heap_string_expr(gen, ret)) {
+            /* Self-recursive call: a `return f(...)` inside `f`'s
+             * body. The recursion guard at function_def_returns_
+             * heap_string returns 0 for f-during-f's-own-analysis,
+             * which would falsely flag the function non-heap. The
+             * self-recursive call's heap-ness IS the function's
+             * heap-ness — recording it as non-heap here loses the
+             * information from non-recursive return shapes. Skip
+             * counting self-recursive returns entirely; the
+             * function's overall classification is decided by
+             * non-recursive returns. */
+            int is_self_recursive_call = 0;
+            if (ret && ret->type == AST_FUNCTION_CALL && ret->value &&
+                fn_being_analyzed &&
+                strcmp(ret->value, fn_being_analyzed) == 0) {
+                is_self_recursive_call = 1;
+            }
+            if (is_self_recursive_call) {
+                /* Optimistic heap-classification for self-recursive
+                 * returns. The function's return-ness can't be
+                 * resolved during its own analysis (cycle break),
+                 * but a self-recursive `return f(...)` propagates
+                 * whatever shape `f` returns — which IS the
+                 * function's shape. Marking heap here is sound
+                 * because the uniform-heap shim's cold path
+                 * malloc-duplicates literal returns, so over-
+                 * classifying costs at most one copy per literal-
+                 * return path (avn-bench shape doesn't have one).
+                 * Under-classifying (the alternative) causes UAF
+                 * when the base case `return param` returns a
+                 * buffer that the recursive wrap is about to
+                 * free — see the walk_join trace in the v0.149
+                 * lucky-UAF write-up. */
+                is_heap = 1;
+            } else if (is_heap_string_expr(gen, ret)) {
                 is_heap = 1;
             }
         }
@@ -775,7 +809,8 @@ static void walk_returns_for_heap_check(CodeGenerator* gen, ASTNode* node,
         return;
     }
     for (int i = 0; i < node->child_count; i++) {
-        walk_returns_for_heap_check(gen, node->children[i], any_heap, any_non_heap);
+        walk_returns_for_heap_check(gen, node->children[i],
+                                    fn_being_analyzed, any_heap, any_non_heap);
     }
 }
 
@@ -811,7 +846,8 @@ static int function_def_returns_heap_string(CodeGenerator* gen, ASTNode* fn_def)
     }
     int any_heap = 0;
     int any_non_heap = 0;
-    if (body) walk_returns_for_heap_check(gen, body, &any_heap, &any_non_heap);
+    if (body) walk_returns_for_heap_check(gen, body, fn_def->value,
+                                          &any_heap, &any_non_heap);
     int result = any_heap ? 1 : 0;
 
     if (memoise) {
@@ -819,6 +855,51 @@ static int function_def_returns_heap_string(CodeGenerator* gen, ASTNode* fn_def)
         fn_def->annotation = strdup(result ? "heap_yes" : "heap_no");
     }
     return result;
+}
+
+/* Emit conditional `free()` for every return-escape-marked heap
+ * string var that is NOT the variable this return statement is
+ * about to return. Used at every AST_RETURN_STATEMENT codegen site
+ * (the function-exit defer-free pre-pass is suppressed for these
+ * names — see push_heap_string_exit_free_defers / the OR-fold
+ * walker) so a function that has TWO return paths where only one
+ * returns the tracked local doesn't leak the local on the other
+ * path. The avn-bench `find_decorated(prefix, n)` shape:
+ *
+ *   while i < n {
+ *       candidate = string.concat(prefix, "_match")   // _heap_candidate=1
+ *       if i == 5 { return candidate }                // owned by caller
+ *       i = i + 1
+ *   }
+ *   return string.concat(prefix, "_fallback")        // <- pre-fix leak:
+ *                                                    //    last candidate buffer
+ *
+ * Without this drain, the after-loop return leaves the last loop
+ * iteration's `candidate` buffer unreferenced. The reassign-wrapper
+ * inside the loop frees iter-by-iter; the loop's natural exit
+ * leaves the final buffer with no consumer.
+ *
+ * The return-statement codegen drains EVERY return-escape var
+ * other than the one bound to this return's bare-identifier expr;
+ * if the return expression is a non-identifier (concat result,
+ * interp, user-fn call), every return-escape var is drained
+ * because none of them owns the returned value. */
+static void emit_return_escape_drains_for_unreturned(CodeGenerator* gen,
+                                                     ASTNode* return_expr) {
+    if (!gen) return;
+    const char* preserve = NULL;
+    if (return_expr && return_expr->type == AST_IDENTIFIER && return_expr->value) {
+        preserve = return_expr->value;
+    }
+    for (int i = 0; i < gen->return_escaped_string_var_count; i++) {
+        const char* name = gen->return_escaped_string_vars[i];
+        if (!name) continue;
+        if (preserve && strcmp(name, preserve) == 0) continue;
+        print_indent(gen);
+        fprintf(gen->output,
+                "if (_heap_%s) { free((void*)%s); %s = NULL; _heap_%s = 0; }\n",
+                name, name, name, name);
+    }
 }
 
 /* Should the return statement at this site route its value through
@@ -1244,7 +1325,7 @@ static void escape_walk(CodeGenerator* gen, ASTNode* node,
  * named `func_name` (in either dotted source-form or underscored
  * extern-form). Returns the param's TypeKind, or TYPE_UNKNOWN if the
  * callee can't be resolved. */
-static TypeKind lookup_callee_param_kind(CodeGenerator* gen,
+TypeKind lookup_callee_param_kind(CodeGenerator* gen,
                                           const char* func_name,
                                           int param_idx) {
     if (!gen || !func_name || param_idx < 0) return TYPE_UNKNOWN;
@@ -1283,7 +1364,7 @@ static TypeKind lookup_callee_param_kind(CodeGenerator* gen,
  * costs a UAF (worse than the leak from over-marking). The common
  * case — known stdlib + user fns visible in the program — resolves
  * cleanly. */
-static int call_arg_escapes(TypeKind param_kind) {
+int call_arg_escapes(TypeKind param_kind) {
     switch (param_kind) {
         case TYPE_STRING:
         case TYPE_INT:
@@ -3713,6 +3794,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     generate_expression(gen, stmt->children[0]);
                 }
                 fprintf(gen->output, ";\n");
+                /* Drain return-escape heap-string vars that aren't
+                 * the one being returned. See
+                 * emit_return_escape_drains_for_unreturned. */
+                emit_return_escape_drains_for_unreturned(gen, stmt->children[0]);
                 emit_contract_postconditions(gen, gen->current_function);
                 /* Drain function-level defers BEFORE returning so
                  * cleanup happens between the postcondition check
@@ -3844,6 +3929,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         generate_expression(gen, stmt->children[0]);
                     }
                     fprintf(gen->output, ";\n");
+                    /* Drain unreturned return-escape vars (the
+                     * after-loop-return case where one return path's
+                     * tracked local isn't this path's return value).
+                     * See emit_return_escape_drains_for_unreturned. */
+                    emit_return_escape_drains_for_unreturned(gen, stmt->children[0]);
                     // Bug B suppression: any closure whose env is still live
                     // through the returned value (directly or transitively via
                     // another closure capturing it) must not have its env-free
@@ -3941,23 +4031,49 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     fprintf(gen->output, "};\n");
                     if (owned) free_type(tuple);
                 } else {
-                    print_indent(gen);
-                    fprintf(gen->output, "return");
-                    if (stmt->child_count > 0) {
-                        fprintf(gen->output, " ");
-                        /* Uniform-heap return-escape contract on the
-                         * no-defer single-value path. Mirrors the
-                         * defer-aware path's wrap so the contract
-                         * holds even for functions with no defers
-                         * (the avn-bench shape with a single
-                         * escape-marked heap-string local). */
-                        if (should_uniform_heap_return(gen, stmt)) {
-                            emit_uniform_heap_return_expr(gen, stmt->children[0]);
-                        } else {
-                            generate_expression(gen, stmt->children[0]);
+                    /* No-defer single-value path. To drain unreturned
+                     * return-escape vars BEFORE the return executes
+                     * (the drain must observe `_heap_<name>` before
+                     * the C `return` statement consumes the function
+                     * frame), we route through a `_no_defer_ret` C
+                     * local on the heap-returning + drain-needed
+                     * shape only. Functions without return-escape
+                     * vars keep the bare `return <expr>;` shape so
+                     * the common path is unchanged. */
+                    int route_through_local =
+                        gen->return_escaped_string_var_count > 0 &&
+                        should_uniform_heap_return(gen, stmt);
+                    if (route_through_local) {
+                        Type* fn_ret = gen->current_func_return_type;
+                        const char* ret_c_type = (fn_ret &&
+                                                  fn_ret->kind != TYPE_VOID &&
+                                                  fn_ret->kind != TYPE_UNKNOWN)
+                                                 ? get_c_type(fn_ret) : "const char*";
+                        print_indent(gen);
+                        fprintf(gen->output, "%s _no_defer_ret = ", ret_c_type);
+                        emit_uniform_heap_return_expr(gen, stmt->children[0]);
+                        fprintf(gen->output, ";\n");
+                        emit_return_escape_drains_for_unreturned(gen, stmt->children[0]);
+                        print_line(gen, "return _no_defer_ret;");
+                    } else {
+                        print_indent(gen);
+                        fprintf(gen->output, "return");
+                        if (stmt->child_count > 0) {
+                            fprintf(gen->output, " ");
+                            /* Uniform-heap return-escape contract on
+                             * the no-defer single-value path. Mirrors
+                             * the defer-aware path's wrap so the
+                             * contract holds even for functions with
+                             * no defers (the avn-bench shape with a
+                             * single escape-marked heap-string local). */
+                            if (should_uniform_heap_return(gen, stmt)) {
+                                emit_uniform_heap_return_expr(gen, stmt->children[0]);
+                            } else {
+                                generate_expression(gen, stmt->children[0]);
+                            }
                         }
+                        fprintf(gen->output, ";\n");
                     }
-                    fprintf(gen->output, ";\n");
                 }
             }
             break;

@@ -1875,6 +1875,17 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
      * caller's unconditional `free()` would crash on it; the helper
      * duplicates so the caller's free reclaims the dup uniformly.
      *
+     * Cap-aware allocation: the cold-path dup is gated by the
+     * resource-caps tracker (#343, aether_resource_caps.h). A host
+     * that arms `aether_set_memory_cap(N)` bounds this path; with no
+     * cap armed it's a single branch + libc malloc. The matching
+     * free() at the caller side is plain libc free() — heap-safe
+     * because aether_caps_malloc returns a libc-compatible pointer
+     * (header comment at aether_resource_caps.h:89-94). Cap
+     * accounting drifts upward on the dup path; consistent with the
+     * existing string_concat and stdlib alloc shapes whose frees
+     * also bypass aether_caps_account_free.
+     *
      * Binary-safety: Aether's `string` carries either plain `char*` or
      * a length-bearing `AetherString*` (magic-header struct). The cold-
      * path duplication must respect the source shape — a naive
@@ -1885,14 +1896,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
      * `length` field. The duplicate is always a plain malloc-owned
      * buffer so the caller's plain `free()` reclaims it — the
      * helper's contract is "pointer the caller may free", not
-     * "preserve AetherString shape".
-     *
-     * `malloc` (not string_new) deliberately matches the codegen's
-     * existing reassign-wrapper and function-exit defer-free, both of
-     * which call plain `free((void*)p)`. */
+     * "preserve AetherString shape". */
     print_line(gen, "#include <string.h>");
     print_line(gen, "#include <stdlib.h>");
     print_line(gen, "#include <stddef.h>");
+    print_line(gen, "extern void* aether_caps_malloc(size_t bytes);");
     print_line(gen, "static inline const char* aether_uniform_heap_str(const char* s, int is_heap) {");
     print_line(gen, "    if (!s) return (const char*)0;");
     print_line(gen, "    if (is_heap) return s;");
@@ -1913,7 +1921,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    } else {");
     print_line(gen, "        _n = strlen(s);");
     print_line(gen, "    }");
-    print_line(gen, "    char* _d = (char*)malloc(_n + 1);");
+    print_line(gen, "    char* _d = (char*)aether_caps_malloc(_n + 1);");
     print_line(gen, "    if (!_d) return (const char*)0;");
     print_line(gen, "    if (_n) memcpy(_d, _data, _n);");
     print_line(gen, "    _d[_n] = '\\0';");

@@ -1,0 +1,54 @@
+// Uniform-heap return-escape contract — return inside a loop body
+// (the Nim ARC/ORC bug class — control-flow joins where ownership
+// accounting drifts). The function-exit defer-free must be
+// suppressed for the returned local on the in-loop path, OR the
+// shim must protect against double-free.
+
+import std.string
+
+extern exit(code: int)
+
+find_decorated(prefix: string, n: int) -> string {
+    i = 0
+    while i < n {
+        // Build the candidate inside the loop. When i hits the
+        // target, return early WITHIN the loop body.
+        candidate = string.concat(prefix, "_match")
+        if i == 5 {
+            return candidate           // Mid-loop early return
+        }
+        i = i + 1
+    }
+    return string.concat(prefix, "_fallback")  // After-loop return
+}
+
+main() {
+    println("=== test_return_escape_return_in_loop ===")
+
+    a = find_decorated("hello", 10)
+    if string.length(a) != 11 {
+        println("FAIL early: length=${string.length(a)}, expected 11")
+        exit(1)
+    }
+    println("  PASS early-return-in-loop: 'hello_match'")
+
+    b = find_decorated("hello", 3)
+    if string.length(b) != 14 {
+        println("FAIL after-loop: length=${string.length(b)}, expected 14")
+        exit(1)
+    }
+    println("  PASS after-loop-return: 'hello_fallback'")
+
+    j = 0
+    while j < 5000 {
+        // Alternate paths
+        s = find_decorated("test", j % 7 + 1)
+        if string.length(s) < 10 {
+            println("FAIL iter ${j}: length=${string.length(s)}")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 5000 mixed iterations stable")
+    println("=== all cases passed ===")
+}

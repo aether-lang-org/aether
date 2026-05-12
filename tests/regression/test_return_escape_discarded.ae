@@ -1,0 +1,39 @@
+// Uniform-heap return-escape contract — discarded return value.
+// When a heap-returning function's result is dropped (assigned to
+// `_` or never read), the caller-side wrapper must still free.
+
+import std.string
+
+extern exit(code: int)
+
+produce_heap() -> string {
+    return string.concat("alloc-", "produce")
+}
+
+main() {
+    println("=== test_return_escape_discarded ===")
+
+    // Wildcard discard — caller's wrapper still owns
+    j = 0
+    while j < 10000 {
+        _ = produce_heap()
+        j = j + 1
+    }
+    println("  PASS: 10000 _-discarded heap returns stable")
+
+    // Explicit-named result, then immediate scope-end (overwrite-
+    // by-next-iter pattern from real Aether code)
+    s = ""
+    j = 0
+    while j < 10000 {
+        s = produce_heap()
+        j = j + 1
+    }
+    // Final s holds the latest heap value
+    if string.length(s) != 13 {
+        println("FAIL: final s length=${string.length(s)}, expected 13")
+        exit(1)
+    }
+    println("  PASS: 10000 overwrite-by-next iterations stable")
+    println("=== all cases passed ===")
+}

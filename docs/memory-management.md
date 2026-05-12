@@ -406,6 +406,25 @@ The two-channel split closes the v0.149 "lucky-UAF return-escape" trade-off — 
 
 A function like `identity(s: string) -> string { return s }` where `s` is a parameter is classified non-heap (parameters are not tracked locals). The caller does not free. If the caller passes a heap value, the result is a borrow — the caller is responsible for the original allocation, not the return value. To force a heap copy across a pass-through boundary, use `return string.concat(s, "")` (or `string.concat("", s)`).
 
+#### Recursive heap-returning functions
+
+A function that calls itself recursively (e.g. a `walk_join`-style accumulator-passing recursion) is classified heap-returning *optimistically* on the recursive return. The cycle-break in `function_def_returns_heap_string` can't resolve "f returns heap iff f returns heap" during f's own analysis, so the walker treats `return f(...)` inside f's body as "heap" — which is the conservative choice for the uniform-heap contract because the shim's cold path malloc-duplicates literal returns. Mis-classifying recursion as non-heap would cause UAF when the base case `return param` returns a buffer that the recursive wrap is about to free.
+
+### Argument-temp lifetime (nested heap-returning calls)
+
+`f(g(), h())` where `g()` and `h()` are themselves heap-returning was a pre-fix anonymous-temp leak: the two heap allocations flowed into `f` and had nowhere to be reclaimed. The codegen now wraps every call site that has heap-returning function-call subexpressions in argument position with a GCC statement-expression that:
+
+```c
+({ const char* _ad_0 = g();
+   const char* _ad_1 = h();
+   <ret_type> _ad_r = f(_ad_0, _ad_1);
+   free((void*)_ad_0);
+   free((void*)_ad_1);
+   _ad_r; })
+```
+
+The wrap is suppressed when the corresponding callee parameter is storage-shaped (`ptr`, `@retain` string, or unknown-typed) — the same `call_arg_escapes` gate the escape walker uses. In those cases the recipient takes ownership and freeing here would dangle the stored copy.
+
 ### When you DO need explicit cleanup
 
 Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*` without an `@heap` annotation) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments, annotated extern returns, and non-escaped function-scope locals.

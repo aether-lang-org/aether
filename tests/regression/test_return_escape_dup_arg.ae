@@ -1,0 +1,49 @@
+// Uniform-heap return-escape contract — same heap-call appearing
+// twice in an argument list (CWE-415 surface). Both copies must
+// independently allocate; the caller's argument-cleanup must not
+// double-free.
+
+import std.string
+
+extern exit(code: int)
+
+combine(a: string, b: string) -> string {
+    return string.concat(a, b)
+}
+
+heap_value() -> string {
+    return string.concat("HEAP-", "VAL")
+}
+
+main() {
+    println("=== test_return_escape_dup_arg ===")
+
+    // Same heap-call appearing twice in the same arg list.
+    // Each call produces a fresh allocation; combine consumes both.
+    a = combine(heap_value(), heap_value())
+    if string.length(a) != 16 {
+        println("FAIL: length=${string.length(a)}, expected 16")
+        exit(1)
+    }
+    if string.char_at(a, 0) != 72 {  // 'H'
+        println("FAIL: byte 0 = ${string.char_at(a, 0)}, expected 72")
+        exit(1)
+    }
+    if string.char_at(a, 8) != 72 {  // 'H' (second copy starts here)
+        println("FAIL: byte 8 = ${string.char_at(a, 8)}, expected 72")
+        exit(1)
+    }
+    println("  PASS: dup-arg heap calls combine correctly")
+
+    j = 0
+    while j < 5000 {
+        s = combine(heap_value(), heap_value())
+        if string.length(s) != 16 {
+            println("FAIL iter ${j}: length=${string.length(s)}")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 5000 dup-arg iterations stable")
+    println("=== all cases passed ===")
+}
