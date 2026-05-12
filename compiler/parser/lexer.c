@@ -595,6 +595,10 @@ Token* next_token() {
             advance();
             if (peek() == '.') {
                 advance();
+                if (peek() == '.') {
+                    advance();
+                    return create_token(TOKEN_DOTDOTDOT, "...", current_line, current_column);
+                }
                 return create_token(TOKEN_DOTDOT, "..", current_line, current_column);
             }
             return create_token(TOKEN_DOT, ".", current_line, current_column);
@@ -717,6 +721,7 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_CALLBACK: return "CALLBACK";
         case TOKEN_IN: return "IN";
         case TOKEN_DOTDOT: return "DOTDOT";
+        case TOKEN_DOTDOTDOT: return "DOTDOTDOT";
         case TOKEN_CONST: return "CONST";
         case TOKEN_TRY: return "TRY";
         case TOKEN_CATCH: return "CATCH";

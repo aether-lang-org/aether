@@ -1,0 +1,257 @@
+// std.mem — byte-level access to caller-allocated raw pointers.
+//
+// Companion to std.bytes:
+//   std.bytes  — Aether-allocated mutable buffer with length/capacity
+//                tracking. Use for "I want to build up some bytes."
+//   std.mem    — raw caller-allocated pointer access. Use for "I have
+//                a void* / char* from elsewhere and need to read or
+//                write bytes at offsets."
+//
+// Module name: `std.mem` rather than `std.ptr` because `ptr` is a
+// reserved keyword in Aether (the raw-pointer type). `mem` reads
+// cleanly as "raw memory access."
+//
+// The split exists because Aether parses `p[i]` syntactically but
+// lowers it to `*(void*)p` which the C compiler rejects.
+// mem.get_byte / set_byte route the same intent through a same-
+// effect extern call. No bounds checking — the caller owns the
+// buffer and knows its size. NULL pointer is defended against;
+// out-of-range index is the caller's problem (same as POSIX
+// read/write).
+//
+// First consumer: the in-tree mquickjs port (ports a JS engine
+// from C to Aether; every UTF-8 decoder, bytecode interpreter,
+// packed-format parser fundamentally does `((uint8_t*)p)[i]`).
+//
+// Sized typed-array accessors (int8/uint8/int16/uint16/uint32/
+// float32/float64) shipped after mquickjs's TypedArray load/store
+// paths surfaced the need.  Future additions (pointer arithmetic
+// helpers, little-endian variants) ship when concrete uses surface.
+
+exports (
+    aether_mem_get_byte, aether_mem_set_byte,
+    aether_mem_get_ptr, aether_mem_set_ptr,
+    aether_mem_get_int, aether_mem_set_int,
+    aether_mem_get_long, aether_mem_set_long,
+    aether_mem_get_int8, aether_mem_set_int8,
+    aether_mem_get_uint8, aether_mem_set_uint8,
+    aether_mem_get_int16, aether_mem_set_int16,
+    aether_mem_get_uint16, aether_mem_set_uint16,
+    aether_mem_get_uint32, aether_mem_set_uint32,
+    aether_mem_get_float32, aether_mem_set_float32,
+    aether_mem_get_float64, aether_mem_set_float64,
+    aether_mem_bits_of_float, aether_mem_float_from_bits,
+    aether_mem_clz32, aether_mem_clz64,
+    aether_mem_udiv64_32,
+    aether_mem_call_fn3_int, aether_mem_call_fn3_void,
+    get_byte, set_byte, get_ptr, set_ptr,
+    get_int, set_int,
+    get_long, set_long,
+    get_int8, set_int8, get_uint8, set_uint8,
+    get_int16, set_int16, get_uint16, set_uint16,
+    get_uint32, set_uint32,
+    get_float32, set_float32, get_float64, set_float64,
+    bits_of_float, float_from_bits,
+    clz32, clz64,
+    udiv64_32,
+    call_fn3_int, call_fn3_void
+)
+
+// Read unsigned byte at offset `i` from raw pointer `p`. Returns
+// 0..255 on success, -1 if `p` is null. Negative or out-of-range
+// `i` is undefined behaviour (the caller owns the buffer and
+// knows its size; same contract as POSIX read into a char*).
+extern aether_mem_get_byte(p: ptr, i: int) -> int
+
+// Write the low 8 bits of `value` at offset `i` of `p`. Returns
+// 1 on success, 0 if `p` is null. As with get_byte, out-of-range
+// `i` is undefined behaviour.
+extern aether_mem_set_byte(p: ptr, i: int, value: int) -> int
+
+// Read a pointer-sized value at byte offset `offset` from `p`.
+// Returns null if `p` is null OR the loaded value is null —
+// callers needing to distinguish should null-check `p` themselves.
+// `offset` must be pointer-aligned and the slot must be at least
+// `sizeof(void*)` bytes.
+//
+// Use for the C-side `*(void**)slot` read pattern — e.g. when a
+// C library hands back an out-parameter through a `T**` argument
+// the Aether caller filled with a malloc-d slot.
+extern aether_mem_get_ptr(p: ptr, offset: int) -> ptr
+
+// Write a pointer `value` into the slot at byte offset `offset`
+// of `p`. Returns 1 on success, 0 if `p` is null. Drives the
+// `*(void**)out_pp = value` pattern for out-parameter writes
+// across the FFI boundary.
+extern aether_mem_set_ptr(p: ptr, offset: int, value: ptr) -> int
+
+// Read int32 at byte offset `offset` of `p`. Returns 0 if `p` is
+// null (conflated with stored 0). Slot must be 4-byte aligned.
+// Driver case: C functions with `int *out` out-parameters
+// (mquickjs's get_pc2line et al, write line/col deltas).
+extern aether_mem_get_int(p: ptr, offset: int) -> int
+
+// Write int32 `value` at byte offset `offset` of `p`. Returns 1
+// on success, 0 if `p` is null.
+extern aether_mem_set_int(p: ptr, offset: int, value: int) -> int
+
+// Read int64-sized value at byte offset `offset` of `p`. Returns 0
+// if `p` is null (conflated with "stored value is 0" — null-check
+// `p` first if you need to distinguish). Slot must be 8-byte aligned.
+//
+// Driver case: C functions taking `size_t *out` parameters —
+// mquickjs's __unicode_from_utf8 writes the consumed-byte count
+// to a size_t* slot. On 64-bit Linux/macOS (mquickjs targets)
+// size_t is 8 bytes, matching int64_t.
+extern aether_mem_get_long(p: ptr, offset: int) -> long
+
+// Write int64-sized `value` at byte offset `offset` of `p`. Returns
+// 1 on success, 0 if `p` is null. Slot must be 8-byte aligned and
+// at least 8 bytes.
+extern aether_mem_set_long(p: ptr, offset: int, value: long) -> int
+
+// Sized typed-array accessors. Reads/writes at a byte offset with
+// a known C type. Driver case: porting C codebases (mquickjs's
+// TypedArray load/store paths) that walk packed numeric buffers —
+// every port that didn't have these added bespoke C helpers.
+//
+// `get_byte` already exists for unsigned-byte reads; `get_uint8` is
+// the parallel name for type-driven code (so the caller doesn't have
+// to mentally translate "byte" to "uint8"). `get_int8` is the
+// sign-extending variant returning -128..127.
+//
+// 16- and 32-bit accesses use memcpy internally so the offset doesn't
+// need to be naturally aligned (matters on strict-alignment ARM /
+// MIPS; a no-op on x86/x64). Modern compilers fold the memcpy into a
+// single load/store.
+//
+// Float reads widen to Aether `float` (= C `double`); float writes
+// narrow on store with IEEE-754 round-to-nearest.
+//
+// NULL `p` returns 0 (or 0.0); same conflation caveat as get_int /
+// get_long ("p is null" vs. "stored value is 0"). Out-of-range
+// offset is the caller's problem.
+extern aether_mem_get_int8(p: ptr, offset: int) -> int
+extern aether_mem_set_int8(p: ptr, offset: int, value: int) -> int
+extern aether_mem_get_uint8(p: ptr, offset: int) -> int
+extern aether_mem_set_uint8(p: ptr, offset: int, value: int) -> int
+extern aether_mem_get_int16(p: ptr, offset: int) -> int
+extern aether_mem_set_int16(p: ptr, offset: int, value: int) -> int
+extern aether_mem_get_uint16(p: ptr, offset: int) -> int
+extern aether_mem_set_uint16(p: ptr, offset: int, value: int) -> int
+extern aether_mem_get_uint32(p: ptr, offset: int) -> int
+extern aether_mem_set_uint32(p: ptr, offset: int, value: int) -> int
+extern aether_mem_get_float32(p: ptr, offset: int) -> float
+extern aether_mem_set_float32(p: ptr, offset: int, value: float) -> int
+extern aether_mem_get_float64(p: ptr, offset: int) -> float
+extern aether_mem_set_float64(p: ptr, offset: int, value: float) -> int
+
+// Reinterpret an IEEE-754 double's bit pattern as a 64-bit integer.
+// Bitwise type-pun (no value conversion) — preserves NaN payloads,
+// signed-zero, infinities exactly. Aether `float` lowers to C
+// `double` (binary64), so this is the standard 64-bit reinterpret.
+//
+// Driver case: porting C softfloat / IEEE-754 manipulation code
+// (mquickjs libm.c) which uses `float64_as_uint64(d)` everywhere
+// to access exponent/mantissa/sign bits.
+extern aether_mem_bits_of_float(value: float) -> long
+
+// Inverse of bits_of_float — reconstitute a double from its 64-bit
+// bit pattern. Same byte-level reinterpret. Used for the
+// `uint64_as_float64` direction in libm.c after softfloat ops.
+extern aether_mem_float_from_bits(bits: long) -> float
+
+// Count leading zeros in a 32-bit value. Wraps __builtin_clz.
+// Undefined behavior if `value` is 0 — caller must guard.
+// Driver case: bit-twiddling code in mquickjs's prop hash sizing,
+// dtoa's pow_ui, regexp range count rounding-up to log2.
+extern aether_mem_clz32(value: int) -> int
+
+// Count leading zeros in a 64-bit value. Wraps __builtin_clzll.
+// Same UB-on-zero contract as clz32.
+extern aether_mem_clz64(value: long) -> int
+
+// Unsigned 64-by-32-bit division. Returns the uint32 quotient
+// and writes the uint32 remainder to *premainder.
+//
+// Aether's `long` is signed int64; `long / int` sign-extends
+// the dividend, producing wrong results for values with bit 63
+// set. This primitive does the division as true unsigned at the
+// C boundary.
+//
+// Returns 0 if `premainder` is null or `divisor` is 0 (defensive
+// — caller is expected to provide both). Quotient sign-extends
+// to int return value but the bit pattern matches uint32 since
+// the result fits in 32 bits.
+//
+// Driver: dtoa.c's mp_div1 needs uint64 / uint32 in its inner
+// loop, where the dividend is `(remainder << 32) | next_limb`.
+extern aether_mem_udiv64_32(dividend: long, divisor: int, premainder: ptr) -> int
+
+// Invoke a C bare function pointer with a (size_t, size_t, void*)
+// signature, int return. Aether's `fn` lowers to a closure struct
+// (`{ fn, env }`) — incompatible with C's bare fnptr ABI. This
+// shim bridges: Aether receives the C fnptr as `ptr` (raw address)
+// and calls through this extern, which casts and invokes.
+//
+// Driver: porting C functions like rqsort_idx that take a
+// comparator + swap callback from C.
+extern aether_mem_call_fn3_int(fn: ptr, a: long, b: long, opaque: ptr) -> int
+
+// Same shape, void return (e.g. swap callbacks).
+extern aether_mem_call_fn3_void(fn: ptr, a: long, b: long, opaque: ptr)
+
+// Two-arg fnptr shim, void return. Driver case: GC user-finalizer
+// tables (`void (*)(JSContext*, void*)`) — both args cross the FFI
+// as ptr.
+extern aether_mem_call_fn2_void(fn: ptr, a: ptr, b: ptr)
+
+// Reinterpret a raw pointer as a 64-bit integer address. Returns the
+// machine address of `p`. Driver case: porting C tagged-pointer code
+// that needs to do bit arithmetic on a pointer (e.g. test the low
+// 3 bits to distinguish a JSValue's tag). Aether's `ptr` doesn't
+// support `&` directly, so the tag test routes through `long`.
+extern aether_mem_ptr_to_long(p: ptr) -> long
+
+// Inverse of aether_mem_ptr_to_long. Construct a `ptr` from a 64-bit
+// integer address. Used after stripping the tag bits from a tagged
+// pointer that was loaded as a long; the un-tagged address gets
+// converted back to ptr for indexed reads via mem.get_long /
+// mem.get_ptr. Caller's responsibility to ensure the address is a
+// valid pointer (same contract as POSIX read/write into a buffer).
+extern aether_mem_long_to_ptr(addr: long) -> ptr
+
+// Aether-side wrappers — call shape consistent with the rest of
+// std.* (`mem.get_byte(p, 0)`, `mem.set_byte(p, 0, 0xff)`).
+get_byte(p: ptr, i: int) -> int { return aether_mem_get_byte(p, i) }
+set_byte(p: ptr, i: int, value: int) -> int { return aether_mem_set_byte(p, i, value) }
+get_ptr(p: ptr, offset: int) -> ptr { return aether_mem_get_ptr(p, offset) }
+set_ptr(p: ptr, offset: int, value: ptr) -> int { return aether_mem_set_ptr(p, offset, value) }
+get_int(p: ptr, offset: int) -> int { return aether_mem_get_int(p, offset) }
+set_int(p: ptr, offset: int, value: int) -> int { return aether_mem_set_int(p, offset, value) }
+get_long(p: ptr, offset: int) -> long { return aether_mem_get_long(p, offset) }
+set_long(p: ptr, offset: int, value: long) -> int { return aether_mem_set_long(p, offset, value) }
+get_int8(p: ptr, offset: int) -> int { return aether_mem_get_int8(p, offset) }
+set_int8(p: ptr, offset: int, value: int) -> int { return aether_mem_set_int8(p, offset, value) }
+get_uint8(p: ptr, offset: int) -> int { return aether_mem_get_uint8(p, offset) }
+set_uint8(p: ptr, offset: int, value: int) -> int { return aether_mem_set_uint8(p, offset, value) }
+get_int16(p: ptr, offset: int) -> int { return aether_mem_get_int16(p, offset) }
+set_int16(p: ptr, offset: int, value: int) -> int { return aether_mem_set_int16(p, offset, value) }
+get_uint16(p: ptr, offset: int) -> int { return aether_mem_get_uint16(p, offset) }
+set_uint16(p: ptr, offset: int, value: int) -> int { return aether_mem_set_uint16(p, offset, value) }
+get_uint32(p: ptr, offset: int) -> int { return aether_mem_get_uint32(p, offset) }
+set_uint32(p: ptr, offset: int, value: int) -> int { return aether_mem_set_uint32(p, offset, value) }
+get_float32(p: ptr, offset: int) -> float { return aether_mem_get_float32(p, offset) }
+set_float32(p: ptr, offset: int, value: float) -> int { return aether_mem_set_float32(p, offset, value) }
+get_float64(p: ptr, offset: int) -> float { return aether_mem_get_float64(p, offset) }
+set_float64(p: ptr, offset: int, value: float) -> int { return aether_mem_set_float64(p, offset, value) }
+bits_of_float(value: float) -> long { return aether_mem_bits_of_float(value) }
+float_from_bits(bits: long) -> float { return aether_mem_float_from_bits(bits) }
+clz32(value: int) -> int { return aether_mem_clz32(value) }
+clz64(value: long) -> int { return aether_mem_clz64(value) }
+udiv64_32(dividend: long, divisor: int, premainder: ptr) -> int { return aether_mem_udiv64_32(dividend, divisor, premainder) }
+call_fn3_int(fn: ptr, a: long, b: long, opaque: ptr) -> int { return aether_mem_call_fn3_int(fn, a, b, opaque) }
+call_fn3_void(fn: ptr, a: long, b: long, opaque: ptr) { aether_mem_call_fn3_void(fn, a, b, opaque) }
+call_fn2_void(fn: ptr, a: ptr, b: ptr) { aether_mem_call_fn2_void(fn, a, b) }
+ptr_to_long(p: ptr) -> long { return aether_mem_ptr_to_long(p) }
+long_to_ptr(addr: long) -> ptr { return aether_mem_long_to_ptr(addr) }

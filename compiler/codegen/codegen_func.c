@@ -433,8 +433,21 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
             }
         }
     }
-    if (first_param) {
+    int is_varargs = ext->annotation && strcmp(ext->annotation, "varargs") == 0;
+    if (first_param && !is_varargs) {
         fprintf(gen->output, "void");
+    }
+
+    // Variadic externs: append `, ...` to the C prototype.  The
+    // `annotation = "varargs"` flag is set by the parser when the
+    // user writes `extern foo(fmt: string, ...)`.  Standalone `(...)`
+    // (no named params) emits as `(...)`.
+    if (is_varargs) {
+        if (first_param) {
+            fprintf(gen->output, "...");
+        } else {
+            fprintf(gen->output, ", ...");
+        }
     }
 
     fprintf(gen->output, ");\n\n");

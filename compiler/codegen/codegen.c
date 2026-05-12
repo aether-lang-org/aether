@@ -741,7 +741,8 @@ void emit_actor_to_header(CodeGenerator* gen, ASTNode* actor) {
                             const char* c_type = "int";
                             switch (field->type_kind) {
                                 case TYPE_INT: c_type = "int"; break;
-                                case TYPE_FLOAT: c_type = "float"; break;
+                                /* See get_c_type() — Aether `float` is always C `double`. */
+                                case TYPE_FLOAT: c_type = "double"; break;
                                 case TYPE_STRING: c_type = "const char*"; break;
                                 case TYPE_BOOL: c_type = "int"; break;
                                 case TYPE_BYTE: c_type = "unsigned char"; break;
@@ -931,7 +932,17 @@ const char* get_c_type(Type* type) {
         case TYPE_INT: return "int";
         case TYPE_INT64: return "int64_t";
         case TYPE_UINT64: return "uint64_t";
-        case TYPE_FLOAT: return "float";
+        /* Aether `float` lowers to C `double`. The naming is legacy
+         * (Aether predates having two FP types), but the storage and
+         * ABI have always been 8-byte IEEE-754 — local variables are
+         * stored as C-double via bare `1.0` literals (which are
+         * C-double, not C-float), and extern function signatures
+         * already emit `double` (see codegen_func.c:325). Struct
+         * fields and forward declarations were the holdouts emitting
+         * 4-byte C `float`, which created an ABI mismatch when an
+         * Aether-defined function was called from C with a `double`
+         * argument. Now consistent everywhere. */
+        case TYPE_FLOAT: return "double";
         case TYPE_BOOL: return "int";
         /* `unsigned char` (not `uint8_t`) so the compiler's strict-aliasing
          * exemption applies: code may legally read or write any other
@@ -1055,7 +1066,10 @@ static const char* get_abi_type(Type* type) {
         case TYPE_INT:    return "int32_t";
         case TYPE_INT64:  return "int64_t";
         case TYPE_UINT64: return "uint64_t";
-        case TYPE_FLOAT:  return "float";
+        /* Aether `float` is C `double` (8 bytes, binary64) — see
+         * get_c_type() for rationale. The public ABI (`aether_*`
+         * wrapper symbols emitted with --emit=lib) follows suit. */
+        case TYPE_FLOAT:  return "double";
         case TYPE_BOOL:   return "int32_t";
         case TYPE_BYTE:   return "unsigned char";
         case TYPE_STRING: return "const char*";

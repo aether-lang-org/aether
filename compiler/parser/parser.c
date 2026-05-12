@@ -608,8 +608,17 @@ ASTNode* parse_primary_expression(Parser* parser) {
             // A struct literal has the pattern: TypeName { field: value } or TypeName {}
             // A block-preceding identifier has statements (not field:) after the {.
             // Look 2-3 tokens ahead to check for the struct literal pattern.
+            //
+            // BUT not when we're inside an if/while/for condition — there
+            // the `{` after the identifier is the start of the statement's
+            // body, not a struct literal. Otherwise `if a == b {}` would
+            // greedily parse `b {}` as an empty struct literal and consume
+            // the body's braces, leaving `else` orphaned in the outer
+            // block. Same shape as the trailing-closure suppression above
+            // (parse_call_expression). Caught while writing range_compress
+            // for the mquickjs port.
             bool looks_like_struct = false;
-            if (next && next->type == TOKEN_LEFT_BRACE) {
+            if (next && next->type == TOKEN_LEFT_BRACE && !parser->in_condition) {
                 Token* after_brace = peek_ahead(parser, 2);
                 if (after_brace && after_brace->type == TOKEN_RIGHT_BRACE) {
                     // TypeName {} — empty struct literal
@@ -2750,8 +2759,19 @@ ASTNode* parse_extern_declaration(Parser* parser) {
                                            extern_token->line, extern_token->column);
 
     // Parse parameters with types: param: type, param2: type
+    // Trailing `...` marks the extern as variadic (C-style, v1):
+    //     extern printf(fmt: string, ...) -> int
+    // The `...` may appear as the sole "param" or after a comma
+    // following the last named parameter.
     if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
         do {
+            // Check for trailing `...`
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_DOTDOTDOT) {
+                advance_token(parser);  // consume '...'
+                if (extern_func->annotation) free(extern_func->annotation);
+                extern_func->annotation = strdup("varargs");
+                break;
+            }
             Token* param_name = expect_token(parser, TOKEN_IDENTIFIER);
             if (!param_name) break;
 

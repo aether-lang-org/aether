@@ -1171,7 +1171,23 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
             if (left_type->kind == TYPE_INT && right_type->kind == TYPE_INT) {
                 return create_type(TYPE_INT);
             }
-            // ptr arithmetic: ptr +-*/ int → int (Aether C interop: list.get returns ptr holding int)
+            // ptr arithmetic. For + and -, result is ptr (real
+            // pointer offset arithmetic — used by C interop like the
+            // mquickjs port). For * / %, fall back to int (legacy
+            // "ptr-as-int" use case where ptr boxed an integer
+            // value). ptr - ptr → int64 (ptrdiff_t-style). The old
+            // unconditional `→ int` rule silently truncated 64-bit
+            // pointers when stored in inferred-type locals.
+            if (operator == TOKEN_PLUS || operator == TOKEN_MINUS) {
+                if ((left_type->kind == TYPE_PTR && (right_type->kind == TYPE_INT || right_type->kind == TYPE_INT64)) ||
+                    ((left_type->kind == TYPE_INT || left_type->kind == TYPE_INT64) && right_type->kind == TYPE_PTR)) {
+                    return create_type(TYPE_PTR);
+                }
+                if (left_type->kind == TYPE_PTR && right_type->kind == TYPE_PTR &&
+                    operator == TOKEN_MINUS) {
+                    return create_type(TYPE_INT64);
+                }
+            }
             if ((left_type->kind == TYPE_PTR && right_type->kind == TYPE_INT) ||
                 (left_type->kind == TYPE_INT && right_type->kind == TYPE_PTR) ||
                 (left_type->kind == TYPE_PTR && right_type->kind == TYPE_PTR)) {
