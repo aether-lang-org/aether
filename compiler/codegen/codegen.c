@@ -2403,6 +2403,26 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
     }
 
+    // Hoist top-level constants the same way.  Imported constants
+    // (via `import mod` → cloned into the consumer's AST as
+    // AST_CONST_DECLARATION with `is_imported=1`) land at the end of
+    // the merged program tree, AFTER consumer function bodies that
+    // may reference them.  Without this hoist, a `#define
+    // mqtypes_JSOBJ_U_OFFSET (24)` produced from `const
+    // JSOBJ_U_OFFSET = 24` in an imported module would appear too
+    // late and the consumer's `(p + mqtypes.JSOBJ_U_OFFSET)`
+    // expression would fail with `undeclared identifier`.  Same fix
+    // shape as the struct hoist above.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* cd = program->children[i];
+        if (cd && cd->type == AST_CONST_DECLARATION &&
+            cd->value && cd->child_count > 0) {
+            fprintf(gen->output, "#define %s (", cd->value);
+            generate_expression(gen, cd->children[0]);
+            fprintf(gen->output, ")\n");
+        }
+    }
+
     // Generate forward declarations for all functions FIRST so that
     // hoisted closure functions can call them without implicit declarations.
     print_line(gen, "// Forward declarations");
@@ -2876,12 +2896,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 // bodies, so all extern decls are hoisted there.
                 break;
             case AST_CONST_DECLARATION:
-                // Emit top-level constant as #define
-                if (child->value && child->child_count > 0) {
-                    fprintf(gen->output, "#define %s (", child->value);
-                    generate_expression(gen, child->children[0]);
-                    fprintf(gen->output, ")\n");
-                }
+                // Already emitted in the hoisted const-#define pass above.
+                // Hoist matches the struct-definition hoist so imported
+                // constants are visible to consumer function bodies
+                // regardless of where the AST node appears in the
+                // merged program tree.
                 break;
             default:
                 break;
