@@ -3131,7 +3131,43 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     }
                                 }
                             }
-                            fprintf(gen->output, " }; aether_send_message(");
+                            fprintf(gen->output, " }; ");
+                            /* Deep-copy heap-string fields (#466).
+                             * The shallow `_msg.text = original_ptr`
+                             * assignment leaves the receiver pointing
+                             * at the sender's heap; the sender's
+                             * defer-free / reassign-wrapper would
+                             * dangle the receiver's pointer. Re-stamp
+                             * each string field with a refcounted
+                             * AetherString clone via string_new_with_
+                             * length, sized from the source's
+                             * length-aware header so binary content
+                             * with embedded NULs round-trips intact.
+                             * The receiver's <Msg>_release_fields
+                             * call (emitted at the receive-handler
+                             * dispatch) string_releases the clone
+                             * when the message is consumed. */
+                            int has_str = 0;
+                            for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                                if (f->type_kind == TYPE_STRING) { has_str = 1; break; }
+                            }
+                            if (has_str) {
+                                fprintf(gen->output, "extern void* string_new_with_length(const char*, int); "
+                                                     "extern const char* aether_string_data(const void*); "
+                                                     "extern size_t aether_string_length(const void*); ");
+                                for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                                    if (f->type_kind == TYPE_STRING) {
+                                        fprintf(gen->output,
+                                                "if (_msg.%s) { "
+                                                "size_t _ml = aether_string_length(_msg.%s); "
+                                                "_msg.%s = (const char*)string_new_with_length("
+                                                "aether_string_data(_msg.%s), (int)_ml); "
+                                                "} ",
+                                                f->name, f->name, f->name, f->name);
+                                    }
+                                }
+                            }
+                            fprintf(gen->output, "aether_send_message(");
                             emit_send_target(gen, target, "void*");
                             fprintf(gen->output, ", &_msg, sizeof(%s)); }", message->value);
                         }

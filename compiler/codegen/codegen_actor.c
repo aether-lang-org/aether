@@ -567,6 +567,35 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                             print_line(gen, "if (_msg_data) {");
                             indent(gen);
                             print_line(gen, "%s_handle_%s(self, _msg_data);", actor->value, pattern->value);
+                            /* Release heap-string fields the sender
+                             * deep-copied at send time (#466). The
+                             * <Msg>_release_fields function is
+                             * emitted alongside the message struct
+                             * iff the message has at least one
+                             * string field; we always call it here
+                             * — for messages without string fields
+                             * the function isn't emitted and the C
+                             * compiler will reject this call,
+                             * but for the single-int path we land
+                             * here only when the message struct was
+                             * heap-allocated (non-inline path),
+                             * which by construction means the
+                             * message has at least one non-int
+                             * field. For inline (single-int)
+                             * messages this branch fires only when
+                             * _msg_data is non-NULL — same shape,
+                             * so the release_fields function is
+                             * always available. */
+                            if (msg_def) {
+                                int msg_has_string = 0;
+                                for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                                    if (f->type_kind == TYPE_STRING) { msg_has_string = 1; break; }
+                                }
+                                if (msg_has_string) {
+                                    print_line(gen, "%s_release_fields((%s*)_msg_data);",
+                                               pattern->value, pattern->value);
+                                }
+                            }
                             print_line(gen, "aether_free_message(_msg_data);");
                             unindent(gen);
                             print_line(gen, "} else {");
@@ -579,6 +608,18 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                         } else {
                             // Two-field inline: reconstruct from payload_int + payload_ptr
                             print_line(gen, "%s_handle_%s(self, _msg_data);", actor->value, pattern->value);
+                            /* Same release-fields call as the single-
+                             * int branch above (#466). */
+                            if (msg_def) {
+                                int msg_has_string = 0;
+                                for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                                    if (f->type_kind == TYPE_STRING) { msg_has_string = 1; break; }
+                                }
+                                if (msg_has_string) {
+                                    print_line(gen, "%s_release_fields((%s*)_msg_data);",
+                                               pattern->value, pattern->value);
+                                }
+                            }
                             print_line(gen, "aether_free_message(_msg_data);");
                         }
                         print_line(gen, "return;");

@@ -2674,13 +2674,59 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                     unindent(gen);
                     print_line(gen, "} %s;", child->value);
                     print_line(gen, "");
-                    
+
+                    /* Per-message heap-string-field release function
+                     * (#466). Walked by the receive-handler dispatch
+                     * before `aether_free_message` so the deep-
+                     * copied AetherString allocations the sender
+                     * stamped in (codegen_expr.c send-side) are
+                     * reclaimed when the recipient is done with the
+                     * message. No-op for messages with no string
+                     * fields; the codegen_actor.c dispatch skips
+                     * the call in that case via
+                     * `message_has_string_field`. */
+                    int msg_has_string_field = 0;
+                    for (int fi = 0; fi < child->child_count; fi++) {
+                        ASTNode* f = child->children[fi];
+                        if (f && f->type == AST_MESSAGE_FIELD &&
+                            f->node_type && f->node_type->kind == TYPE_STRING) {
+                            msg_has_string_field = 1;
+                            break;
+                        }
+                    }
+                    if (msg_has_string_field) {
+                        /* Forward-declared via the Aether-side
+                         * `string_release` extern (matches the
+                         * std/string/aether_string.c signature:
+                         * `void string_release(const void*)`).
+                         * The duplicate `extern void string_release`
+                         * here would conflict with that earlier
+                         * decl, so we just reference the symbol —
+                         * the C compiler picks up the earlier
+                         * prototype.  */
+                        print_line(gen, "static inline void %s_release_fields(%s* m) {",
+                                   child->value, child->value);
+                        indent(gen);
+                        print_line(gen, "if (!m) return;");
+                        for (int fi = 0; fi < child->child_count; fi++) {
+                            ASTNode* f = child->children[fi];
+                            if (f && f->type == AST_MESSAGE_FIELD &&
+                                f->node_type && f->node_type->kind == TYPE_STRING) {
+                                print_line(gen, "if (m->%s) { string_release(m->%s); m->%s = (const char*)0; }",
+                                           f->value, f->value, f->value);
+                            }
+                        }
+                        unindent(gen);
+                        print_line(gen, "}");
+                        print_line(gen, "");
+                    }
+
                     // Generate type-specific memory pool for this message type
                     print_line(gen, "// Type-specific memory pool for %s", child->value);
                     print_line(gen, "// DECLARE_TYPE_POOL(%s)", child->value);
                     print_line(gen, "// DECLARE_TLS_POOL(%s)", child->value);
                     print_line(gen, "");
-                    
+
                     register_message_type(gen->message_registry, child->value, first_field);
 
                     // Emit to header if enabled
