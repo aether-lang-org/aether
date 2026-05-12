@@ -1249,6 +1249,18 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
                     operator == TOKEN_MINUS) {
                     return create_type(TYPE_INT64);
                 }
+                /* Array + int → ptr (and the int + array commutative
+                 * form).  Used when an `extern struct` flex-array
+                 * field is treated as a byte buffer with offset
+                 * arithmetic: `(p as *JSString).buf + idx` is the
+                 * idiomatic way to materialise a pointer-to-element
+                 * for handoff to a memcpy-style C extern.  In C the
+                 * array decays to a pointer at expression level, so
+                 * this rule matches the C semantics. */
+                if ((left_type->kind == TYPE_ARRAY && (right_type->kind == TYPE_INT || right_type->kind == TYPE_INT64)) ||
+                    ((left_type->kind == TYPE_INT || left_type->kind == TYPE_INT64) && right_type->kind == TYPE_ARRAY)) {
+                    return create_type(TYPE_PTR);
+                }
             }
             if ((left_type->kind == TYPE_PTR && right_type->kind == TYPE_INT) ||
                 (left_type->kind == TYPE_INT && right_type->kind == TYPE_PTR) ||
