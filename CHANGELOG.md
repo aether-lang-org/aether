@@ -5,9 +5,15 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.143.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`std.lzf` one-shot compression/decompression** (`std/lzf/`, `tests/integration/lzf_roundtrip/`). Vendors Marc Lehmann's BSD-licensed liblzf (`lzf.h`, `lzfP.h`, `lzf_c.c`, `lzf_d.c`) and wraps it with the canonical split-accessor / Go-style-tuple stdlib shape: `lzf_try_compress` / `lzf_get_compress_bytes` / `lzf_get_compress_length` / `lzf_release_compress` (+ inflate siblings) on the C side; `lzf.compress(data, length) -> (bytes, n, err)` and `lzf.decompress(data, length, output_length) -> (bytes, n, err)` on the Aether side. Binary-safe: input may contain embedded NULs (length-aware via `is_aether_string` dispatch in `lzf_unwrap_bytes`), output is materialised through `string_new_with_length` so the returned `AetherString` carries the byte count. Empty input / output is handled at the wrapper without invoking the codec (LZF defines no empty-stream form). `lzf.max_compressed_size(n)` exposes the worst-case bound for caller-side buffer sizing. LZF streams carry no length prefix, so `decompress` requires the caller to supply the expected `output_length` (caller's responsibility to persist alongside the compressed bytes, as Redis RDB does). Integration test covers text round-trip, binary payload with embedded NULs, short-output-length rejection, corrupt-input rejection, and empty round-trip. Use case: enables porting Redis's RDB-string compression path (and other size-vs-speed sensitive systems work where zlib is too heavy).
 
 ## [0.151.0]
 

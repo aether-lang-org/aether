@@ -1,0 +1,69 @@
+// std.lzf - One-shot LZF compression/decompression.
+// Import with: import std.lzf
+//
+// This module wraps Marc Lehmann's liblzf implementation vendored in
+// this directory. The C sources are BSD-style licensed; see
+// std/lzf/LICENSE.
+//
+// LZF streams do not carry the original uncompressed length, so
+// decompress requires the caller to provide `output_length`.
+
+exports (
+    lzf_max_compressed_size,
+    lzf_try_compress, lzf_get_compress_bytes, lzf_get_compress_length,
+    lzf_release_compress,
+    lzf_try_decompress, lzf_get_decompress_bytes, lzf_get_decompress_length,
+    lzf_release_decompress,
+    max_compressed_size, compress, decompress
+)
+
+extern lzf_max_compressed_size(length: int) -> int
+
+extern lzf_try_compress(data: string, length: int) -> int
+extern lzf_get_compress_bytes() -> string
+extern lzf_get_compress_length() -> int
+extern lzf_release_compress()
+
+extern lzf_try_decompress(data: string, length: int, output_length: int) -> int
+extern lzf_get_decompress_bytes() -> string
+extern lzf_get_decompress_length() -> int
+extern lzf_release_decompress()
+
+extern string_new_with_length(data: string, length: int) -> ptr
+
+max_compressed_size(length: int) -> int {
+    return lzf_max_compressed_size(length)
+}
+
+compress(data: string, length: int) -> {
+    if length < 0 {
+        return "", 0, "negative input length"
+    }
+    ok = lzf_try_compress(data, length)
+    if ok == 0 {
+        return "", 0, "lzf compress failed"
+    }
+    raw = lzf_get_compress_bytes()
+    n = lzf_get_compress_length()
+    owned = string_new_with_length(raw, n)
+    lzf_release_compress()
+    return owned, n, ""
+}
+
+decompress(data: string, length: int, output_length: int) -> {
+    if length < 0 {
+        return "", 0, "negative input length"
+    }
+    if output_length < 0 {
+        return "", 0, "negative output length"
+    }
+    ok = lzf_try_decompress(data, length, output_length)
+    if ok == 0 {
+        return "", 0, "lzf decompress failed"
+    }
+    raw = lzf_get_decompress_bytes()
+    n = lzf_get_decompress_length()
+    owned = string_new_with_length(raw, n)
+    lzf_release_decompress()
+    return owned, n, ""
+}
