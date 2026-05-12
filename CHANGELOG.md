@@ -5,9 +5,19 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.152.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`uint64` source type and wide prefixed-integer literals** (`compiler/parser/lexer.c`, `compiler/parser/parser.c`, `compiler/analysis/typechecker.c`, `compiler/analysis/type_inference.c`, `compiler/codegen/codegen_expr.c`, `tests/syntax/test_uint64_hex_literal.ae`). Adds `uint64` as a first-class declared type at every parser site that previously accepted `int` / `int64` (top-level functions, locals, params, struct fields, exports, actor state, patterns). The lexer no longer decimalises `0x` / `0o` / `0b` literals at scan time — the original literal text now flows through to codegen, so a 64-bit hex literal like `0xB5026F5AA96619E9` is no longer silently truncated by an intermediate `strtol`-and-snprintf step. Codegen translates the Aether-only `0o` and `0b` prefixes into C-acceptable forms at emit time (`0o777` → `0777`, `0b1010` → `0xa`; `0x` and decimal pass through unchanged) — this preserves the literal width through to the C compiler regardless of source spelling. `infer_from_literal` recognises prefixed integer literals and picks the narrowest integer kind that holds the value (`int` ≤ INT_MAX, `int64` ≤ INT64_MAX, otherwise `uint64`); plain decimal literals beyond INT_MAX get the same widening so bare large constants don't truncate in the emitted C either. Typechecker bit-op / shift-op inference (`infer_binary_type`) now uses `is_integer_scalar` + `wider_integer_kind` helpers, so mixed `int` / `int64` / `uint64` operands promote to the widest kind on both sides. Caveat: bare `1 << 63` is still `int`-wide UB — write `uint64 one = 1; one << 63` or use a wide-enough literal.
+
+### Fixed
+
+- **`-Wstrict-prototypes`-clean codegen for zero-arg functions** (`compiler/codegen/codegen.c`, `compiler/codegen/codegen_func.c`, `tests/integration/strict_prototypes/`). Forward declarations, extern declarations, and function definitions for no-arg Aether functions now emit `(void)` rather than `()`. Without the fix every Aether `foo()` emits `int foo()` (unprototyped — accepts any args under K&R rules) instead of `int foo(void)`, which is immediately fatal under `-Werror=strict-prototypes` and warns under default modern gcc / clang. Regression test compiles a source containing one extern and one definition through `aetherc` and asserts the emitted C carries `(void)` at all three sites; also recompiles the emitted TU under `-Werror=strict-prototypes` to verify the warning category stays silent.
 
 ## [0.152.0]
 

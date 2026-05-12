@@ -1,0 +1,55 @@
+// Exercises the uint64 type end-to-end: lexer accepts the keyword and
+// the wide prefixed literal, parser accepts uint64 as a declared type,
+// typechecker promotes int/int64/uint64 mixed bit-ops to uint64,
+// codegen emits 64-bit storage and the right printf format.
+//
+// Every check exits 1 with a labelled message on mismatch so a silent
+// regression can't pass.
+
+main() {
+    uint64 x = 0xB5026F5AA96619E9
+
+    if x != 0xB5026F5AA96619E9 {
+        println("FAIL: declared-uint64 assignment lost bits")
+        exit(1)
+    }
+
+    // High bit set; would surface as a negative int32 if codegen
+    // truncated. 13043109905998158313 == 0xB5026F5AA96619E9 decimal.
+    if x < 9223372036854775807 {
+        println("FAIL: uint64 value compares below INT64_MAX (truncation suspected)")
+        exit(1)
+    }
+
+    // Bit ops must round-trip: x ^ y ^ y == x for any y, regardless of
+    // the temporary width.
+    y = x
+    y = y ^ 0xFFFFFFFFFFFFFFFF
+    y = y ^ 0xFFFFFFFFFFFFFFFF
+    if y != x {
+        println("FAIL: uint64 XOR round-trip lost bits")
+        exit(1)
+    }
+
+    // Shift-left of the high bit through a uint64 operand. (Bare `1`
+    // infers to int, so `1 << 63` is UB-truncates as in C; users wanting
+    // a 64-bit result must spell the operand as uint64 or as a wide hex
+    // literal that infers wider.)
+    uint64 one_u64 = 1
+    shifted = one_u64 << 63
+    if shifted == 0 {
+        println("FAIL: (uint64)1 << 63 became 0 (shift width truncated)")
+        exit(1)
+    }
+
+    // Bare hex literal larger than INT64_MAX must infer to uint64
+    // automatically — before the type-inference fix this stamped int
+    // and silently truncated.
+    bare = 0xB5026F5AA96619E9
+    if bare != x {
+        println("FAIL: bare hex literal didn't infer to uint64")
+        exit(1)
+    }
+
+    println("PASS")
+}

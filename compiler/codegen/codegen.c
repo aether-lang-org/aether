@@ -2245,6 +2245,8 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         if (child->type == AST_BUILDER_FUNCTION) {
             if (param_count > 0) fprintf(gen->output, ", ");
             fprintf(gen->output, "void*");
+        } else if (param_count == 0) {
+            fprintf(gen->output, "void");
         }
         fprintf(gen->output, ");\n");
     }

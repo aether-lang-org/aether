@@ -602,6 +602,16 @@ static const char* type_name(Type* t) {
     }
 }
 
+static int is_integer_scalar(TypeKind kind) {
+    return kind == TYPE_INT || kind == TYPE_INT64 || kind == TYPE_UINT64;
+}
+
+static TypeKind wider_integer_kind(TypeKind a, TypeKind b) {
+    if (a == TYPE_UINT64 || b == TYPE_UINT64) return TYPE_UINT64;
+    if (a == TYPE_INT64 || b == TYPE_INT64) return TYPE_INT64;
+    return TYPE_INT;
+}
+
 // Count the number of formal parameters of a function definition node
 // Skips _ctx parameters (auto-injected by builder context)
 static int count_function_params(ASTNode* func) {
@@ -823,9 +833,13 @@ int is_type_compatible(Type* from, Type* to) {
     // Numeric conversions
     if (from->kind == TYPE_INT && to->kind == TYPE_FLOAT) return 1;
     if (from->kind == TYPE_FLOAT && to->kind == TYPE_INT) return 1;
-    // int promotes to long without loss
+    // int promotes to long/uint64 without loss
     if (from->kind == TYPE_INT && to->kind == TYPE_INT64) return 1;
+    if (from->kind == TYPE_INT && to->kind == TYPE_UINT64) return 1;
     if (from->kind == TYPE_INT64 && to->kind == TYPE_INT) return 1;
+    if (from->kind == TYPE_UINT64 && to->kind == TYPE_INT) return 1;
+    if (from->kind == TYPE_UINT64 && to->kind == TYPE_INT64) return 1;
+    if (from->kind == TYPE_INT64 && to->kind == TYPE_UINT64) return 1;
     // long <-> float compatibility
     if (from->kind == TYPE_INT64 && to->kind == TYPE_FLOAT) return 1;
     if (from->kind == TYPE_FLOAT && to->kind == TYPE_INT64) return 1;
@@ -1150,13 +1164,9 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
                 return create_type(TYPE_BYTE);
             }
             if ((left_type->kind == TYPE_BYTE || right_type->kind == TYPE_BYTE) &&
-                (left_type->kind == TYPE_INT || left_type->kind == TYPE_INT64 ||
-                 right_type->kind == TYPE_INT || right_type->kind == TYPE_INT64)) {
+                (is_integer_scalar(left_type->kind) || is_integer_scalar(right_type->kind))) {
                 /* Pick the wider int side */
-                if (left_type->kind == TYPE_INT64 || right_type->kind == TYPE_INT64) {
-                    return create_type(TYPE_INT64);
-                }
-                return create_type(TYPE_INT);
+                return create_type(wider_integer_kind(left_type->kind, right_type->kind));
             }
             if (left_type->kind == TYPE_INT && right_type->kind == TYPE_INT) {
                 return create_type(TYPE_INT);
@@ -1167,10 +1177,9 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
                 (left_type->kind == TYPE_PTR && right_type->kind == TYPE_PTR)) {
                 return create_type(TYPE_INT);
             }
-            // Promote to int64 if either operand is long/int64
-            if ((left_type->kind == TYPE_INT64 || left_type->kind == TYPE_INT) &&
-                (right_type->kind == TYPE_INT64 || right_type->kind == TYPE_INT)) {
-                return create_type(TYPE_INT64);
+            // Promote integer operations to the wider integer type.
+            if (is_integer_scalar(left_type->kind) && is_integer_scalar(right_type->kind)) {
+                return create_type(wider_integer_kind(left_type->kind, right_type->kind));
             }
             if (left_type->kind == TYPE_STRING && right_type->kind == TYPE_STRING) {
                 return create_type(TYPE_STRING);
@@ -1194,19 +1203,14 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
                 return create_type(TYPE_BYTE);
             }
             if ((left_type->kind == TYPE_BYTE || right_type->kind == TYPE_BYTE) &&
-                (left_type->kind == TYPE_INT || left_type->kind == TYPE_INT64 ||
-                 right_type->kind == TYPE_INT || right_type->kind == TYPE_INT64)) {
-                if (left_type->kind == TYPE_INT64 || right_type->kind == TYPE_INT64) {
-                    return create_type(TYPE_INT64);
-                }
-                return create_type(TYPE_INT);
+                (is_integer_scalar(left_type->kind) || is_integer_scalar(right_type->kind))) {
+                return create_type(wider_integer_kind(left_type->kind, right_type->kind));
             }
             if (left_type->kind == TYPE_INT && right_type->kind == TYPE_INT) {
                 return create_type(TYPE_INT);
             }
-            if ((left_type->kind == TYPE_INT64 || left_type->kind == TYPE_INT) &&
-                (right_type->kind == TYPE_INT64 || right_type->kind == TYPE_INT)) {
-                return create_type(TYPE_INT64);
+            if (is_integer_scalar(left_type->kind) && is_integer_scalar(right_type->kind)) {
+                return create_type(wider_integer_kind(left_type->kind, right_type->kind));
             }
             break;
 

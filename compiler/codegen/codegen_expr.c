@@ -34,6 +34,53 @@ static int is_stdlib_string_aware_extern(const char* c_func_name) {
     return 0;
 }
 
+/* Translate an Aether integer-literal text into a form C accepts.
+ *
+ *   0o777   → 0777        (C uses bare leading-zero for octal)
+ *   0O777   → 0777
+ *   0b1010  → 0xA          (C99 has no binary; transcode to hex,
+ *                           ULL suffix when wider than 32 bits so
+ *                           the C compiler picks a wide-enough type
+ *                           for shifts at width 32+)
+ *   0x...   → unchanged    (already valid C)
+ *   123     → unchanged    (decimal — the C compiler widens as needed)
+ *
+ * Writes the translated form into `out` (size `out_size`). Returns
+ * `out` on translation, or the original `value` if no translation
+ * is needed. The previous lexer eagerly decimalised these forms,
+ * so this path is new — pre-cherry-pick code never had to worry
+ * about it because the literal had been collapsed by the time it
+ * reached codegen.
+ */
+static const char* translate_integer_literal(const char* value, char* out, size_t out_size) {
+    if (!value || value[0] != '0' || !value[1]) return value;
+    char p = value[1];
+    if (p == 'x' || p == 'X') return value;
+    if (p == 'o' || p == 'O') {
+        /* 0o777 → 0777. A bare '0' is also valid C octal for zero. */
+        if (snprintf(out, out_size, "0%s", value + 2) >= (int)out_size) return value;
+        return out;
+    }
+    if (p == 'b' || p == 'B') {
+        /* Walk the binary digits and accumulate into uint64_t, then
+         * format as hex. Aether binary literals top out at 64 bits
+         * (the wider-uint inference picks UINT64 above that). */
+        unsigned long long acc = 0;
+        for (const char* q = value + 2; *q; q++) {
+            if (*q == '0' || *q == '1') {
+                acc = (acc << 1) | (unsigned)(*q - '0');
+            } else {
+                /* Unexpected char in a binary literal — fall back. */
+                return value;
+            }
+        }
+        const char* suffix = (acc > 0xFFFFFFFFULL) ? "ULL" : "";
+        if (snprintf(out, out_size, "0x%llx%s", acc, suffix) >= (int)out_size) return value;
+        return out;
+    }
+    return value;
+}
+
 // ---- Closure support ----
 
 // Collect identifiers (reads) referenced in an AST subtree. Does NOT
@@ -1457,7 +1504,11 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 }
                 fprintf(gen->output, "\"");
             } else {
-                fprintf(gen->output, "%s", expr->value);
+                /* Numeric literals: translate 0o / 0b prefixes that C
+                 * doesn't accept. Decimal / 0x pass through unchanged. */
+                char buf[64];
+                fprintf(gen->output, "%s",
+                        translate_integer_literal(expr->value, buf, sizeof(buf)));
             }
             break;
 
