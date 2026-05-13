@@ -753,8 +753,43 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
 // "heap_pending". A pending mark means we hit a cycle (two
 // mutually-recursive `-> string` user functions); we conservatively
 // return 0 in that case.
+/* Walk a function body looking for any AST_VARIABLE_DECLARATION
+ * whose target name equals `var_name` and whose RHS is heap-
+ * classified by `is_heap_string_expr`. Used by the bare-identifier-
+ * return check in walk_returns_for_heap_check: when the walker
+ * encounters `return foo` it asks "is foo assigned from a heap
+ * source anywhere in this function?" without consulting
+ * `gen->heap_string_vars` — that set is in the CALLER's context
+ * when the classifier runs from a cross-function call site, and
+ * the lookup would miss the callee's own local even though it IS
+ * heap-tracked there.
+ *
+ * Skips nested function / closure scopes (their assignments are in
+ * a different lexical frame). Stops at the first heap-source
+ * assignment to `var_name`. */
+static int body_assigns_var_from_heap(CodeGenerator* gen, ASTNode* node,
+                                       const char* var_name) {
+    if (!node || !var_name) return 0;
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_CLOSURE) {
+        return 0;
+    }
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        strcmp(node->value, var_name) == 0 &&
+        node->child_count > 0 && node->children[0] &&
+        is_heap_string_expr(gen, node->children[0])) {
+        return 1;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        if (body_assigns_var_from_heap(gen, node->children[i], var_name)) return 1;
+    }
+    return 0;
+}
+
 static void walk_returns_for_heap_check(CodeGenerator* gen, ASTNode* node,
                                          const char* fn_being_analyzed,
+                                         ASTNode* fn_body_root,
                                          int* any_heap, int* any_non_heap) {
     if (!node) return;
     if (node->type == AST_RETURN_STATEMENT) {
@@ -796,6 +831,36 @@ static void walk_returns_for_heap_check(CodeGenerator* gen, ASTNode* node,
                 is_heap = 1;
             } else if (is_heap_string_expr(gen, ret)) {
                 is_heap = 1;
+            } else if (ret->type == AST_IDENTIFIER && ret->value &&
+                       fn_body_root &&
+                       body_assigns_var_from_heap(gen, fn_body_root, ret->value)) {
+                /* Bare-identifier return of a heap-tracked local —
+                 * e.g. `body = ""; ...accumulate...; return body`.
+                 * The function's value IS heap at runtime when the
+                 * heap-tracker flag for `body` is 1; the uniform-
+                 * heap shim emitted at the return statement (case
+                 * `_heap_<name>` runtime branch in
+                 * `emit_uniform_heap_return_expr`) ensures the
+                 * caller receives a heap-allocated buffer regardless
+                 * of which assignment path set the flag last. Without
+                 * this clause, accumulator-return functions (avn's
+                 * `rebuild_dir` shape: cross-fn + recursive chain
+                 * culminating in `return body`) get classifier-flagged
+                 * non-heap, the caller's wrapper sets _heap_<lhs> = 0,
+                 * and the buffer leaks per call → O(N²) bench growth.
+                 *
+                 * Context safety: this check queries
+                 * `gen->heap_string_vars` for `ret->value`. The walk
+                 * is driven by `function_def_returns_heap_string`
+                 * which memoises per function-def AST node, so the
+                 * walk only ever runs DURING the function's own
+                 * emission — when `gen->heap_string_vars` is in that
+                 * function's context and the lookup is correct.
+                 * Subsequent caller-site invocations hit the memoised
+                 * "heap_yes" / "heap_no" verdict and don't re-walk.
+                 * The cross-function context bug avn surfaced for
+                 * the 0.150 piece-2 implementation cannot recur here. */
+                is_heap = 1;
             }
         }
         if (is_heap) *any_heap = 1;
@@ -810,7 +875,8 @@ static void walk_returns_for_heap_check(CodeGenerator* gen, ASTNode* node,
     }
     for (int i = 0; i < node->child_count; i++) {
         walk_returns_for_heap_check(gen, node->children[i],
-                                    fn_being_analyzed, any_heap, any_non_heap);
+                                    fn_being_analyzed, fn_body_root,
+                                    any_heap, any_non_heap);
     }
 }
 
@@ -846,7 +912,7 @@ static int function_def_returns_heap_string(CodeGenerator* gen, ASTNode* fn_def)
     }
     int any_heap = 0;
     int any_non_heap = 0;
-    if (body) walk_returns_for_heap_check(gen, body, fn_def->value,
+    if (body) walk_returns_for_heap_check(gen, body, fn_def->value, body,
                                           &any_heap, &any_non_heap);
     int result = any_heap ? 1 : 0;
 

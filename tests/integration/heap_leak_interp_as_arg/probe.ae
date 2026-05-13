@@ -1,0 +1,62 @@
+// Regression: AST_STRING_INTERP subexpression in argument position
+// to a function call. Pre-fix, the arg-temp wrapping logic in
+// codegen_expr.c was scoped to AST_FUNCTION_CALL subexpressions
+// only (commit 39446f9). String interpolation results landed in
+// argument position with no temp to capture them, no free after the
+// outer call; ~34 bytes leaked per iteration in the observed shape.
+//
+// Post-fix: arg-temp wrapping extended to AST_STRING_INTERP arg
+// subexpressions, and `arg_drain_lookup` substitution in
+// `generate_expression` extended to match. The interp is hoisted
+// into a `_ad_N` temp, the outer call reads through the temp, and
+// the temp is freed after the outer call returns.
+
+import std.string
+import inner
+
+extern getrusage_max_rss_kb() -> int
+extern exit(code: int)
+
+main() {
+    println("=== heap_leak_interp_as_arg ===")
+
+    rss_probe = getrusage_max_rss_kb()
+    if rss_probe < 0 {
+        // Smoke-test: interp-as-arg returns correct content.
+        smoke = inner.inner("seed-${1}")
+        if string.length(smoke) < 6 {
+            println("FAIL smoke: length=${string.length(smoke)}")
+            exit(1)
+        }
+        println("  PASS: getrusage unavailable, smoke-only")
+        println("=== all cases passed ===")
+        return
+    }
+
+    rss0 = getrusage_max_rss_kb()
+    i = 0
+    while i < 100000 {
+        // The leak shape: `inner.inner(<interp>)`. Outer call's first
+        // (and only) argument is an AST_STRING_INTERP. Pre-fix this
+        // leaked the interp's malloc'd buffer each call.
+        n = string.length(inner.inner("seed-payload-${i}"))
+        if n < 0 {
+            println("FAIL iter ${i}")
+            exit(1)
+        }
+        i = i + 1
+    }
+    rss1 = getrusage_max_rss_kb()
+    growth = rss1 - rss0
+
+    // Pre-fix: ~3300 KB growth (3.3 MB / 100k iter = ~34 bytes/iter).
+    // Post-fix: ~168 KB (allocator bookkeeping + println noise).
+    // 1024 KB threshold leaves a clear gap.
+    if growth > 1024 {
+        println("FAIL: RSS grew ${growth} KB across 100k calls (>1024 KB) — interp-as-arg leak")
+        exit(1)
+    }
+
+    println("  PASS: 100000 interp-as-arg calls, RSS growth ${growth} KB (bounded)")
+    println("=== all cases passed ===")
+}

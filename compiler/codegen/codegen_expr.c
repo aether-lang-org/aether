@@ -1568,7 +1568,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
      * emit the temp name instead of re-evaluating the call. Keeps
      * the parent's call site syntactically intact while the temp's
      * lifetime is managed by the wrap. */
-    if (expr->type == AST_FUNCTION_CALL) {
+    if (expr->type == AST_FUNCTION_CALL ||
+        expr->type == AST_STRING_INTERP) {
         const char* sub = arg_drain_lookup(expr);
         if (sub) {
             fprintf(gen->output, "%s", sub);
@@ -2656,7 +2657,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         for (int ai = 0; ai < expr->child_count && ad_arg_count < 16; ai++) {
                             ASTNode* arg = expr->children[ai];
                             if (!arg) continue;
-                            if (arg->type != AST_FUNCTION_CALL) continue;
+                            /* Arg-temp wrapping fires on heap-classified
+                             * subexpressions. Originally scoped to
+                             * AST_FUNCTION_CALL only (see commit
+                             * 39446f9), extended here to AST_STRING_INTERP
+                             * — `_aether_interp(...)` allocates a heap
+                             * buffer the caller is expected to own.
+                             * Passing one inline as an argument leaked
+                             * the buffer because no temp captured the
+                             * pointer and no free fired after the outer
+                             * call returned. Observed as ~34 byte/call
+                             * leak on `outer(string_returning_call("seed-${i}"))`
+                             * shape; 100k iterations grew RSS by 3.3 MB. */
+                            if (arg->type != AST_FUNCTION_CALL &&
+                                arg->type != AST_STRING_INTERP) continue;
                             if (arg_drain_lookup(arg)) continue;
                             if (!is_heap_string_expr(gen, arg)) continue;
                             /* @retain parameter: callee stores the

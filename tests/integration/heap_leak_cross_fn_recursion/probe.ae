@@ -1,0 +1,59 @@
+// Regression: cross-function + recursion + bare-identifier-return
+// of a heap-tracked-local. avn's commit handler hot path.
+// See lib/dirwalk/module.ae for the trigger-shape rationale.
+
+import std.string
+import dirwalk
+
+extern getrusage_max_rss_kb() -> int
+extern exit(code: int)
+
+main() {
+    println("=== heap_leak_cross_fn_recursion ===")
+
+    // Portability gate (Windows MinGW has no getrusage).
+    rss_probe = getrusage_max_rss_kb()
+    if rss_probe < 0 {
+        // Smoke-test: cross-fn recursion returns correct content.
+        s_smoke = dirwalk.rebuild_dir(3, 5)
+        if string.length(s_smoke) < 100 {
+            println("FAIL smoke: length=${string.length(s_smoke)}, expected > 100")
+            exit(1)
+        }
+        println("  PASS: getrusage unavailable, smoke-only — codegen path runs correctly")
+        println("=== all cases passed ===")
+        return
+    }
+
+    // Warm-up.
+    _w = dirwalk.rebuild_dir(3, 5)
+    if string.length(_w) < 100 {
+        println("FAIL: warm-up too short: ${string.length(_w)}")
+        exit(1)
+    }
+
+    rss0 = getrusage_max_rss_kb()
+    j = 0
+    while j < 1000 {
+        s = dirwalk.rebuild_dir(3, 5)
+        if string.length(s) < 100 {
+            println("FAIL iter ${j}: length=${string.length(s)}")
+            exit(1)
+        }
+        j = j + 1
+    }
+    rss1 = getrusage_max_rss_kb()
+    growth = rss1 - rss0
+
+    // Pre-fix this leaks ~896 KB across 1000 iterations of the
+    // cross-fn + recursion + bare-identifier-return shape. Post-fix
+    // stays flat (~0 KB). 256 KB threshold accommodates incidental
+    // allocator-bookkeeping.
+    if growth > 256 {
+        println("FAIL: RSS grew ${growth} KB across 1000 calls (>256 KB) — cross-fn+recursion leak")
+        exit(1)
+    }
+
+    println("  PASS: 1000 cross-fn+recursion calls, RSS growth ${growth} KB (bounded)")
+    println("=== all cases passed ===")
+}
