@@ -1,0 +1,44 @@
+import std.string
+
+exports (rebuild_dir, dir_entry_line, reclist_append_unique_)
+
+// Mimics avn's dir_entry_line — produces a small heap string per call.
+dir_entry_line(kind: int, sha: string, name: string) -> string {
+    return string.concat(string.concat(name, "@"), sha)
+}
+
+// Mimics avn's reclist_append_unique_ — call-result-as-arg to
+// string.concat (the shape commit 39446f9 already wraps via arg-temp).
+reclist_append_unique_(body: string, name: string, kind: int, sha: string) -> string {
+    return string.concat(body, dir_entry_line(kind, sha, name))
+}
+
+// Mimics avn's rebuild_dir — recursive (rebuild_dir → rebuild_dir),
+// returns a bare-identifier-tracked-local that's accumulated through
+// the function body.
+//
+// This is the shape the prior classifier (pre-this-fix) misclassified
+// non-heap because:
+//   - `return body` is AST_IDENTIFIER, which `is_heap_string_expr`
+//     doesn't recognise.
+//   - The walker's bare-identifier-return check (when it existed)
+//     queried `gen->heap_string_vars` — but the walker is invoked
+//     from cross-function call sites where `gen` is in the CALLER's
+//     context. The lookup missed and the function was AND-folded
+//     non-heap.
+// Caller's `_heap_<lhs> = 0` followed → buffer leaked per call →
+// O(N²) bench growth on avn's commit handler. Filing:
+// perf_regression_quadratic_commit_path_followup.md and successors.
+rebuild_dir(depth: int, fanout: int) -> string {
+    body = ""
+    i = 0
+    while i < fanout {
+        body = reclist_append_unique_(body, "file", 1, "abcdef0123")
+        i = i + 1
+    }
+    if depth > 0 {
+        sub = rebuild_dir(depth - 1, fanout)
+        body = reclist_append_unique_(body, sub, 2, "deeper")
+    }
+    return body
+}

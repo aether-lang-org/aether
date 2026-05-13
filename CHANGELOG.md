@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Two follow-up heap-string leak classes the post-0.156.0 codegen didn't catch** (`compiler/codegen/codegen_stmt.c`, `compiler/codegen/codegen_expr.c`, `tests/integration/heap_leak_cross_fn_recursion/`, `tests/integration/heap_leak_interp_as_arg/`). Filed by avn during downstream rebuild against 0.156.0; their 5000-commit bench stayed at O(N²) shape despite the heap-ownership-critical-fixes from #471. Two distinct gaps:
+
+  **1. Cross-function + recursion + bare-identifier-return-of-tracked-local.** The classifier walker (`walk_returns_for_heap_check`) checked bare-identifier-return shapes against `is_heap_string_expr` only — which doesn't recognise AST_IDENTIFIER. A function whose body accumulates via heap-string calls and returns the accumulator via `return body` was AND-folded non-heap; the caller's reassignment wrapper set `_heap_<lhs> = 0`; the buffer leaked per call. avn's `rebuild_dir` hot-path shape:
+
+  ```aether
+  rebuild_dir(depth: int, fanout: int) -> string {
+      body = ""
+      while ... { body = reclist_append_unique_(body, ...) }   // heap calls accumulate
+      if depth > 0 {
+          sub = rebuild_dir(depth - 1, fanout)                  // recursive
+          body = reclist_append_unique_(body, sub, ...)
+      }
+      return body                                               // bare-identifier return
+  }
+  ```
+
+  The 0.156.0 design relied on `gen->heap_string_vars` to identify heap-tracked locals, but that set is in the CALLER's context when the classifier runs from a cross-function call site (e.g. `main` invoking `is_heap_string_expr` on `rebuild_dir`'s return analysis). The lookup missed the callee's local. Structurally the same bug shape avn reported against the 0.150 piece-2 implementation (perf_regression_quadratic_commit_path_followup.md) — same context-sensitivity, different mechanism.
+
+  Fix: new `body_assigns_var_from_heap` helper walks the callee's function body directly to identify whether `<var_name>` has any heap-classified assignment, without consulting `gen->heap_string_vars`. The walker's bare-identifier-return clause uses this self-sufficient check, so the classification works regardless of which context invoked the classifier. Memoization on the function-def annotation still applies; the walk runs once per function. Combined with the existing `aether_uniform_heap_str` wrap at return statements, the caller now receives a heap-allocated buffer that gets reclaimed via the reassignment-wrapper free.
+
+  **2. AST_STRING_INTERP subexpression in argument position leaks the interp's heap buffer.** Commit 39446f9 (in #471) added arg-temp wrapping for AST_FUNCTION_CALL subexpressions — `outer(call(...))` hoists the inner call into `_ad_N`, runs the outer, and frees `_ad_N` after. The wrapping was scoped to `AST_FUNCTION_CALL` only; AST_STRING_INTERP subexpressions in argument position got no temp, no free. `outer("seed-${i}")` shapes leaked the interp's malloc'd buffer per call — ~34 bytes/iter observed, 100k iter → 3.3 MB.
+
+  Fix: two-spot extension to AST_STRING_INTERP:
+  - `codegen_expr.c` substitution-in-generate_expression — `arg_drain_lookup` substitution now matches both AST_FUNCTION_CALL AND AST_STRING_INTERP, so the temp name replaces the inline interp in the outer call's emission.
+  - `codegen_expr.c` arg-loop type filter — accepts AST_STRING_INTERP as well as AST_FUNCTION_CALL. The `is_heap_string_expr` and escape-marking gates downstream are unchanged (interp results are already classified heap there).
+
+  Result: same statement-expression + free pattern that 39446f9 applied to nested-call args now covers interp args too. Test reduction: 3.3 MB → 168 KB across 100k iterations (the residual is allocator bookkeeping).
+
+  Two new integration tests (`heap_leak_cross_fn_recursion`, `heap_leak_interp_as_arg`) cover both shapes with the standard RSS-bounded pattern, gated on POSIX `getrusage` with a Windows-MinGW fallback to smoke-only mode (same shape as the existing `heap_tracker_return_escape_no_leak`).
+
+  ### Upgrade notes
+
+  No user code change required. Both fixes are codegen-side; the language contract is unchanged.
+
+  **What flips behaviourally:**
+
+  1. Functions with the cross-fn + recursion + bare-identifier-return shape (avn's `rebuild_dir` and any code matching that pattern) now have their accumulator buffer correctly classified heap; the caller's reassignment wrapper sets `_heap_<lhs> = 1` and the buffer is reclaimed at the next reassignment / function-exit defer-free. Bench-time growth that was O(N²) under 0.156.0 returns to O(N) per call.
+  2. `outer(<interp>)`-shape call sites now hoist the interp result into a temp and free after the outer call. Previously-leaked ~34 byte/call buffers are reclaimed. Aether code that captured a reference to the interp result via a `ptr`-typed parameter or other escape edge is unaffected (the escape walker's `call_arg_escapes` gate is preserved — escape-marked args skip the temp wrapping).
+  3. `aetherc --diagnose=ownership` now reports `HEAP` for functions matching shape (1); previously it reported `NOT HEAP — ≥ 1 return literal/borrowed/unclassified`. Tooling expecting the pre-fix verdict for these shapes should treat the new HEAP verdict as the correct classification.
+
 ## [0.153.0]
 
 ### Added
