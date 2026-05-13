@@ -2564,43 +2564,66 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                      * in the list (escape walker suppressed the
                      * source's free; list_free didn't walk
                      * elements) — leak. */
-                    if ((strcmp(c_func_name, "list_add_raw") == 0 ||
-                         strcmp(c_func_name, "list_add") == 0) &&
-                        expr->child_count == 2) {
-                        ASTNode* val = expr->children[1];
-                        if (val && is_heap_string_expr(gen, val)) {
-                            /* Cast through void* to silence the
-                             * `const char* → void*` qualifier-
-                             * discard warning the extern prototype
-                             * triggers. */
-                            fprintf(gen->output, "list_add_string_owned(");
-                            generate_expression(gen, expr->children[0]);
-                            fprintf(gen->output, ", (void*)");
-                            generate_expression(gen, val);
-                            fprintf(gen->output, ")");
-                            break;
-                        }
-                    }
+                    /* List & map heap-string-value auto-routing (#467).
+                     *
+                     * `list.add(l, heap)` / `map.put(m, k, heap)`
+                     * lands here. When the value arg is a heap-
+                     * classified string, route to the `_string_owned`
+                     * variant so the container retains + releases at
+                     * free time. Two callee shapes to handle:
+                     *
+                     *   - `_raw` externs (`list_add_raw`, `map_put_raw`)
+                     *     return `int`. The owned variant also returns
+                     *     `int` — direct rewrite.
+                     *   - Wrapper functions (`list_add`, `map_put`)
+                     *     return `string` (the Go-style `"" | error`
+                     *     shape). The owned variant returns `int`, so
+                     *     a direct rewrite would change the return
+                     *     type and break the caller's
+                     *     `err = list.add(...)` assignment. Wrap in
+                     *     a ternary that preserves the string-return
+                     *     contract: `(owned(...) ? "" : "<err>")`. */
+                    int route_to_owned = 0;
+                    int is_list_add = 0, is_list_add_raw = 0;
+                    int is_map_put  = 0, is_map_put_raw  = 0;
+                    if (strcmp(c_func_name, "list_add_raw") == 0)    { is_list_add_raw = 1; route_to_owned = 1; }
+                    else if (strcmp(c_func_name, "list_add") == 0)   { is_list_add     = 1; route_to_owned = 1; }
+                    else if (strcmp(c_func_name, "map_put_raw") == 0){ is_map_put_raw  = 1; route_to_owned = 1; }
+                    else if (strcmp(c_func_name, "map_put") == 0)    { is_map_put      = 1; route_to_owned = 1; }
 
-                    /* Map heap-string-value auto-routing (#467).
-                     * `map.put(m, k, heap_string_expr)` lands here
-                     * (after the Aether wrapper). When the value
-                     * arg is a heap-classified string, route to
-                     * map_put_string_owned so the map retains the
-                     * value and releases it at map.free. */
-                    if ((strcmp(c_func_name, "map_put_raw") == 0 ||
-                         strcmp(c_func_name, "map_put") == 0) &&
-                        expr->child_count == 3) {
-                        ASTNode* val = expr->children[2];
-                        if (val && is_heap_string_expr(gen, val)) {
-                            fprintf(gen->output, "map_put_string_owned(");
-                            generate_expression(gen, expr->children[0]);
-                            fprintf(gen->output, ", (const char*)");
-                            generate_expression(gen, expr->children[1]);
-                            fprintf(gen->output, ", (void*)");
-                            generate_expression(gen, val);
-                            fprintf(gen->output, ")");
-                            break;
+                    if (route_to_owned) {
+                        int val_idx = (is_list_add || is_list_add_raw) ? 1 : 2;
+                        int expected_arg_count = (is_list_add || is_list_add_raw) ? 2 : 3;
+                        if (expr->child_count == expected_arg_count) {
+                            ASTNode* val = expr->children[val_idx];
+                            if (val && is_heap_string_expr(gen, val)) {
+                                int wrapper = (is_list_add || is_map_put);
+                                if (wrapper) {
+                                    fprintf(gen->output, "(");
+                                }
+                                if (is_list_add || is_list_add_raw) {
+                                    fprintf(gen->output, "list_add_string_owned(");
+                                    generate_expression(gen, expr->children[0]);
+                                    fprintf(gen->output, ", (void*)");
+                                    generate_expression(gen, val);
+                                    fprintf(gen->output, ")");
+                                    if (wrapper) {
+                                        fprintf(gen->output, " ? \"\" : \"list.add failed\")");
+                                    }
+                                } else {
+                                    fprintf(gen->output, "map_put_string_owned(");
+                                    generate_expression(gen, expr->children[0]);
+                                    fprintf(gen->output, ", (const char*)");
+                                    generate_expression(gen, expr->children[1]);
+                                    fprintf(gen->output, ", (void*)");
+                                    generate_expression(gen, val);
+                                    fprintf(gen->output, ")");
+                                    if (wrapper) {
+                                        fprintf(gen->output, " ? \"\" : \"map.put failed\")");
+                                    }
+                                }
+                                break;
+                            }
                         }
                     }
 

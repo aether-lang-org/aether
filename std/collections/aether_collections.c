@@ -26,7 +26,16 @@ struct ArrayList {
     void** items;
     int size;
     int capacity;
-    int owns_string_elements;
+    /* #467: per-element heap-string-ownership tracking. Parallel
+     * array to `items` (allocated lazily alongside the items
+     * array's first grow). `owned_flags[i] == 1` means
+     * `items[i]` was added via list_add_string_owned and should
+     * be released by list_free; `owned_flags[i] == 0` means the
+     * caller retains ownership (literals, int-cast-to-ptr, etc.).
+     * The two paths can coexist in a single list — mixing is
+     * safe by construction. NULL on a fresh list that has never
+     * had an owned-put; first owned-put allocates it. */
+    int* owned_flags;
 };
 
 ArrayList* list_new() {
@@ -38,13 +47,26 @@ ArrayList* list_new() {
     list->items = NULL;
     list->size = 0;
     list->capacity = 0;
-    list->owns_string_elements = 0;
+    list->owned_flags = NULL;
     return list;
 }
 
 // list_add_raw returns 1 on success, 0 on failure (realloc error or
 // null list). The Aether wrapper `list.add` in std.list/std.collections
 // turns the 0 into an error string.
+/* Grow `list->owned_flags` to match `list->capacity`. Idempotent.
+ * Returns 1 on success, 0 on alloc failure. Called lazily — the
+ * flags array is only allocated when the first owned-put happens
+ * on a list. Plain-only-element lists (literals, ints) never
+ * allocate the flags array. */
+static int list_grow_owned_flags(ArrayList* list) {
+    if (!list || list->capacity == 0) return 1;
+    if (list->owned_flags) return 1;
+    list->owned_flags = (int*)aether_caps_calloc(
+        (size_t)list->capacity, sizeof(int));
+    return list->owned_flags ? 1 : 0;
+}
+
 int list_add_raw(ArrayList* list, void* item) {
     if (!list) return 0;
 
@@ -56,37 +78,67 @@ int list_add_raw(ArrayList* list, void* item) {
                                                        old_bytes, new_bytes);
         if (!new_items) return 0;
         list->items = new_items;
+        /* Mirror the grow in owned_flags when present. New slots
+         * get value 0 (caller-owned default). */
+        if (list->owned_flags) {
+            size_t old_fbytes = (size_t)list->capacity * sizeof(int);
+            size_t new_fbytes = (size_t)new_capacity * sizeof(int);
+            int* new_flags = (int*)aether_caps_realloc(list->owned_flags,
+                                                       old_fbytes, new_fbytes);
+            if (!new_flags) return 0;
+            /* Zero the new tail explicitly — aether_caps_realloc
+             * doesn't zero-fill the extension. */
+            memset((char*)new_flags + old_fbytes, 0, new_fbytes - old_fbytes);
+            list->owned_flags = new_flags;
+        }
         list->capacity = new_capacity;
     }
 
-    list->items[list->size++] = item;
+    list->items[list->size] = item;
+    if (list->owned_flags) list->owned_flags[list->size] = 0;
+    list->size++;
     return 1;
 }
 
 /* Heap-string-aware add (#467). Retains the AetherString so the
  * sender's reassign-wrapper / function-exit defer doesn't dangle
- * the list's reference, and tags the list as owning its string
- * elements so `list_free` releases them. Codegen routes
- * `list.add(l, <heap_string_expr>)` here when the static type of
- * the value is `string` and the expression is heap-classified
- * (string.concat, _aether_interp, heap-returning user fn, etc.).
+ * the list's reference, and tags this specific element as owned
+ * so `list_free` releases it. Codegen routes `list.add(l, <heap_
+ * string_expr>)` here when the static type of the value is
+ * `string` and the expression is heap-classified.
  *
- * For literal-string adds (`list.add(l, "literal")`), codegen
- * stays on the plain `list_add_raw` path — literals don't need
- * retain and the list shouldn't release them at free time.
- *
- * Mixed lists (one heap-string add followed by a literal add or a
- * plain int add) aren't covered by this flag — Aether's type
- * system pins each list to a single element type at the call site,
- * so codegen can pick the right path consistently. */
+ * Per-element ownership lets a single list mix owned heap strings
+ * with literals / ints. Each element's `owned_flags[i]` tracks
+ * its own ownership independently. */
 int list_add_string_owned(ArrayList* list, const void* item) {
     if (!list) return 0;
-    /* Retain on add — if the source local is later reassigned or
-     * goes out of scope, the list's reference keeps the buffer
-     * alive. No-op on plain (non-AetherString) char* pointers. */
     if (item) string_retain(item);
-    list->owns_string_elements = 1;
-    return list_add_raw(list, (void*)item);
+    /* Lazy-allocate the flags array on first owned-put. */
+    if (!list->owned_flags) {
+        if (list->capacity > 0) {
+            list->owned_flags = (int*)aether_caps_calloc(
+                (size_t)list->capacity, sizeof(int));
+            if (!list->owned_flags) {
+                /* Best-effort: still store the item even if flag
+                 * tracking failed; the buffer will leak on free
+                 * rather than crash. */
+            }
+        }
+    }
+    int slot = list->size;  /* the index list_add_raw will use */
+    int ok = list_add_raw(list, (void*)item);
+    if (!ok) return 0;
+    /* The first owned-put may have triggered the lazy alloc above
+     * AFTER the items array existed but BEFORE list_add_raw's
+     * grow path — flags array may still be NULL if list->capacity
+     * was 0 at lazy-alloc time. Retry now that list_add_raw has
+     * grown capacity. */
+    if (!list->owned_flags && list->capacity > 0) {
+        list->owned_flags = (int*)aether_caps_calloc(
+            (size_t)list->capacity, sizeof(int));
+    }
+    if (list->owned_flags) list->owned_flags[slot] = 1;
+    return 1;
 }
 
 void* list_get_raw(ArrayList* list, int index) {
@@ -120,19 +172,14 @@ void list_clear(ArrayList* list) {
 void list_free(ArrayList* list) {
     if (!list) return;
     /* Owned heap-string elements (#467): walk and release each
-     * before freeing the backing array. Two element shapes:
-     *
-     *   - AetherString* (magic-tagged): `string_release` decrements
-     *     refcount, frees struct + data at zero.
-     *   - plain `char*` heap (e.g. from `string_concat`): plain
-     *     `free()` reclaims it.
-     *
-     * `is_aether_string` (byte-by-byte magic probe, ASan-clean on
-     * short literals) discriminates. Plain pointers from
-     * `string_concat` etc. don't carry the magic header; AetherStrings
-     * from `string_new_with_length` etc. do. */
-    if (list->owns_string_elements && list->items) {
+     * `owned_flags[i] == 1` element before freeing the backing
+     * array. Per-element tracking lets owned heap strings coexist
+     * with literals / ints in the same list — only the owned
+     * slots get released. AetherString (magic-tagged) goes through
+     * string_release; plain heap char* goes through libc free. */
+    if (list->owned_flags && list->items) {
         for (int i = 0; i < list->size; i++) {
+            if (!list->owned_flags[i]) continue;
             void* it = list->items[i];
             if (!it) continue;
             if (is_aether_string(it)) {
@@ -142,6 +189,11 @@ void list_free(ArrayList* list) {
             }
             list->items[i] = NULL;
         }
+    }
+    if (list->owned_flags) {
+        aether_caps_free(list->owned_flags,
+                         (size_t)list->capacity * sizeof(int));
+        list->owned_flags = NULL;
     }
     /* Clear the kind-magic so a use-after-free probe via
      * aether_value_kind() returns AETHER_KIND_UNKNOWN rather than
@@ -173,6 +225,15 @@ typedef struct HashMapEntry {
     struct HashMapEntry*  next;
     unsigned int          hash;    // cached so resize doesn't recompute
     unsigned int          key_len; // cached so key_equals can prefilter
+    /* #467: per-entry heap-string-value ownership. Set to 1 by
+     * `map_put_string_owned`; cleared by `map_put_raw` (or by
+     * an owned-put that finds a prior unowned entry, etc.). At
+     * map_clear / map_free / map_remove time, only entries with
+     * value_owned == 1 have their value released — mixing owned
+     * (heap concat results) and unowned (literal strings, int-
+     * cast-to-ptr) values on the same map is safe by construction:
+     * each entry knows who owns it. */
+    int                   value_owned;
 } HashMapEntry;
 
 struct HashMap {
@@ -180,11 +241,6 @@ struct HashMap {
     HashMapEntry** buckets;
     int capacity;
     int size;
-    /* #467: set by `map_put_string_owned` when the put value is a
-     * heap-string. map_clear walks entries and releases each
-     * value (in addition to releasing the key, which it always
-     * does). Same semantics as ArrayList's `owns_string_elements`. */
-    int owns_string_values;
 };
 
 // djb2. Also returns length via an out-param so callers don't walk the
@@ -217,7 +273,6 @@ HashMap* map_new() {
     map->_kind_magic = AETHER_KIND_MAP_MAGIC;
     map->capacity = HASHMAP_INITIAL_CAPACITY;
     map->size = 0;
-    map->owns_string_values = 0;
     map->buckets = (HashMapEntry**)aether_caps_calloc(
         (size_t)map->capacity, sizeof(HashMapEntry*));
     if (!map->buckets) { aether_caps_free(map, sizeof(HashMap)); return NULL; }
@@ -275,7 +330,19 @@ int map_put_raw(HashMap* map, const char* key, void* value) {
         // Hash check is a cheap prefilter before key_equals (which
         // still runs memcmp for false hash collisions).
         if (entry->hash == hash && key_equals(entry, key, key_len)) {
+            /* #467: if the entry was previously owned-put, release
+             * the prior heap-string before overwriting with the
+             * (unowned) new value. Subsequent map.free won't see
+             * the dropped allocation since value_owned is reset. */
+            if (entry->value_owned && entry->value) {
+                if (is_aether_string(entry->value)) {
+                    string_release(entry->value);
+                } else {
+                    free(entry->value);
+                }
+            }
             entry->value = value;
+            entry->value_owned = 0;
             return 1;
         }
         entry = entry->next;
@@ -285,10 +352,11 @@ int map_put_raw(HashMap* map, const char* key, void* value) {
     if (!new_entry) return 0;
     new_entry->key = string_new(key);
     if (!new_entry->key) { aether_caps_free(new_entry, sizeof(HashMapEntry)); return 0; }
-    new_entry->value   = value;
-    new_entry->hash    = hash;
-    new_entry->key_len = key_len;
-    new_entry->next    = map->buckets[index];
+    new_entry->value       = value;
+    new_entry->value_owned = 0;
+    new_entry->hash        = hash;
+    new_entry->key_len     = key_len;
+    new_entry->next        = map->buckets[index];
     map->buckets[index] = new_entry;
     map->size++;
     return 1;
@@ -308,20 +376,22 @@ int map_put_raw(HashMap* map, const char* key, void* value) {
  * value is heap-classified (string.concat, string interp, heap-
  * returning user-fn). Plain literals stay on map_put_raw. */
 int map_put_string_owned(HashMap* map, const char* key, const void* value) {
-    if (!map) return 0;
+    if (!map || !key) return 0;
     if (value) string_retain(value);
-    map->owns_string_values = 1;
-    /* If the put REPLACES an existing entry, the previous value
-     * needs releasing too — otherwise replacement leaks the old
-     * heap string. Walk to find any existing entry. */
-    if (value || map->size > 0) {
+
+    /* Replace path: walk the bucket. If the key exists, release
+     * the previous value when it was previously owned, then store
+     * the new value with value_owned=1. If the previous put was
+     * unowned (literal / int-cast-to-ptr), DON'T release it —
+     * the caller never expected ownership transfer for that path. */
+    if (map->size > 0) {
         unsigned int key_len = 0;
         unsigned int hash = hash_cstr_len(key, &key_len);
         unsigned int index = hash % (unsigned int)map->capacity;
         HashMapEntry* entry = map->buckets[index];
         while (entry) {
             if (entry->hash == hash && key_equals(entry, key, key_len)) {
-                if (entry->value) {
+                if (entry->value_owned && entry->value) {
                     if (is_aether_string(entry->value)) {
                         string_release(entry->value);
                     } else {
@@ -329,12 +399,24 @@ int map_put_string_owned(HashMap* map, const char* key, const void* value) {
                     }
                 }
                 entry->value = (void*)value;
+                entry->value_owned = 1;
                 return 1;
             }
             entry = entry->next;
         }
     }
-    return map_put_raw(map, key, (void*)value);
+
+    /* Fresh entry: insert via map_put_raw, then flip the new
+     * entry's value_owned. map_put_raw guarantees the inserted
+     * entry is at the head of the bucket. */
+    int ok = map_put_raw(map, key, (void*)value);
+    if (!ok) return 0;
+    unsigned int key_len = 0;
+    unsigned int hash = hash_cstr_len(key, &key_len);
+    unsigned int index = hash % (unsigned int)map->capacity;
+    HashMapEntry* head = map->buckets[index];
+    if (head) head->value_owned = 1;
+    return 1;
 }
 
 void* map_get_raw(HashMap* map, const char* key) {
@@ -377,6 +459,16 @@ void map_remove(HashMap* map, const char* key) {
             }
 
             string_release(entry->key);
+            /* #467: release the value too when this entry was
+             * owned-put. Otherwise map_remove of an owned-put
+             * entry leaks the heap string. */
+            if (entry->value_owned && entry->value) {
+                if (is_aether_string(entry->value)) {
+                    string_release(entry->value);
+                } else {
+                    free(entry->value);
+                }
+            }
             aether_caps_free(entry, sizeof(HashMapEntry));
             map->size--;
             return;
@@ -398,10 +490,12 @@ void map_clear(HashMap* map) {
         while (entry) {
             HashMapEntry* next = entry->next;
             string_release(entry->key);
-            /* #467: release heap-string values too when the map
-             * is in owns_string_values mode. Same shape as
-             * list_free's element walk. */
-            if (map->owns_string_values && entry->value) {
+            /* #467: release the value only when this specific
+             * entry was owned-put. Per-entry tracking lets a
+             * single map carry owned heap-strings + unowned
+             * literals / int-cast-to-ptr values without
+             * crashing on free of the latter. */
+            if (entry->value_owned && entry->value) {
                 if (is_aether_string(entry->value)) {
                     string_release(entry->value);
                 } else {

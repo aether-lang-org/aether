@@ -1992,6 +1992,22 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
      * <Msg>_release_fields function uses string_release after the
      * registry's declaration is visible. */
     print_line(gen, "extern void* string_new_with_length(const char* data, int length);");
+    /* Issue #467: list / map heap-string-value owning-add helpers.
+     * Prototypes emitted here so codegen can route `list.add(l,
+     * heap_str)` / `map.put(m, k, heap_str)` calls to these symbols
+     * even when the user's source doesn't `import std.list` /
+     * `import std.collections` (the inline-extern shape some tests
+     * use to declare just the raw functions). The stdlib archive
+     * always contains the symbols.
+     *
+     * Parameter types match the extern-registry's pass exactly —
+     * `void*` not `const void*` — so a duplicate decl from the
+     * registry (when the source DOES import the module) doesn't
+     * conflict. The header's `const void*` declaration is the
+     * source-of-truth for consumers in C; the registry maps Aether's
+     * `ptr` to `void*` without const, which is what this matches. */
+    print_line(gen, "extern int list_add_string_owned(void* list, void* item);");
+    print_line(gen, "extern int map_put_string_owned(void* map, const char* key, void* value);");
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
     print_line(gen, "    if (!s) return \"(null)\";");
     print_line(gen, "    return aether_string_data(s);");
@@ -2707,8 +2723,16 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                         }
                     }
                     if (msg_has_string_field) {
-                        /* `string_release` prototype is emitted in
-                         * the codegen prologue (codegen.c). */
+                        /* Forward-declare `string_release` here so the
+                         * generated release_fields function compiles
+                         * even on tests that don't `import std.string`
+                         * (and therefore don't get the extern
+                         * registry's prototype). The duplicate-but-
+                         * matching declaration is tolerated by C —
+                         * matches the registry's
+                         * `void string_release(const char*)` exactly
+                         * when std.string IS imported. */
+                        print_line(gen, "extern void string_release(const char*);");
                         print_line(gen, "static inline void %s_release_fields(%s* m) {",
                                    child->value, child->value);
                         indent(gen);
