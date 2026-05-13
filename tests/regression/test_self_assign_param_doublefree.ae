@@ -1,0 +1,101 @@
+// Regression: `p = p` self-assignment on a string parameter must
+// NOT lift `_heap_p` to 1 (which would cause the function-exit
+// defer-free to free the caller's borrowed buffer → double-free).
+//
+// Trigger pattern — "no-op free shim" common in libraries with
+// refcount-backed string lifetimes:
+//
+//   noop_free(p: string) {
+//       p = p
+//       return
+//   }
+//
+// Pre-fix on 0.157.0 (and post the Path B classifier extension
+// that recognises bare-identifier-of-tracked-local as heap=1):
+//   1. `p = p` triggers the reassignment-wrapper.
+//   2. `is_heap_string_expr(RHS=p)` returns 1 (p is a heap-tracked
+//      local in the wrapper's view).
+//   3. Wrapper sets `_heap_p = 1`.
+//   4. Function exits; defer-free fires `free(p)` → frees caller's
+//      buffer.
+//   5. Caller continues using `s` (which is the same pointer) →
+//      use-after-free, double-free if caller also frees.
+//
+// avn's `client.remote_free` and `repo_storage.rep_free` (27 call
+// sites) hit this. Filed in path-b-self-assign-param-doublefree.md.
+//
+// Fix: peephole at the reassignment-wrapper-emission top — if
+// `stmt->value == stmt->children[0]->value` (same identifier, i.e.
+// `lhs == rhs`), skip emission entirely. The self-assignment is a
+// semantic no-op; emitting nothing keeps the heap-tracker in its
+// pre-assignment state, which is correct (nothing actually
+// changed).
+
+import std.string
+
+extern exit(code: int)
+
+// "No-op free" shim — caller still owns the buffer; this function
+// does nothing observable. Pre-fix this freed the caller's buffer.
+noop_free(p: string) {
+    p = p
+    return
+}
+
+main() {
+    println("=== test_self_assign_param_doublefree ===")
+
+    // Case 1: caller-allocated string, passed through the no-op
+    // shim, then read post-call. Pre-fix this read freed memory
+    // (garbage or SIGABRT).
+    s = string.copy("hello")
+    noop_free(s)
+    if string.length(s) != 5 {
+        println("FAIL 1: length(s) after noop_free = ${string.length(s)}, expected 5")
+        exit(1)
+    }
+    if string.char_at(s, 0) != 104 {  // 'h'
+        println("FAIL 1: s[0] = ${string.char_at(s, 0)}, expected 104 ('h')")
+        exit(1)
+    }
+    if string.char_at(s, 4) != 111 {  // 'o'
+        println("FAIL 1: s[4] = ${string.char_at(s, 4)}, expected 111 ('o')")
+        exit(1)
+    }
+    println("  PASS 1: heap-allocated string survives no-op-free shim")
+
+    // Case 2: loop of 1000 noop_free calls. Pre-fix this would
+    // double-free on each subsequent free (caller's reassignment
+    // of `s` after one noop_free, then noop_free again on the
+    // new value). Confirms the shim doesn't accumulate corruption.
+    i = 0
+    while i < 1000 {
+        local_s = string.copy("iteration-payload")
+        noop_free(local_s)
+        if string.length(local_s) != 17 {
+            println("FAIL 2 iter ${i}: length = ${string.length(local_s)}, expected 17")
+            exit(1)
+        }
+        i = i + 1
+    }
+    println("  PASS 2: 1000 no-op-free shim calls, no double-free / corruption")
+
+    // Case 3: confirm a normal (non-self-assign) reassignment in a
+    // parameter still goes through the wrapper. Regression guard
+    // against over-aggressive peephole.
+    reassign_param("input")
+    println("  PASS 3: normal parameter-reassign path still works")
+
+    println("=== all cases passed ===")
+}
+
+// A function that reassigns its parameter to a fresh heap value.
+// The wrapper SHOULD fire here (the peephole skip only applies to
+// `lhs == rhs` self-assignment).
+reassign_param(p: string) {
+    p = string.concat(p, "-suffix")
+    if string.length(p) < 7 {
+        println("FAIL 3: reassign_param's p = ${p}")
+        exit(1)
+    }
+}

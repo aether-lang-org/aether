@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`p = p` self-assignment on a string parameter double-frees the caller's buffer** (`compiler/codegen/codegen_stmt.c`, `tests/regression/test_self_assign_param_doublefree.ae`). Hard correctness regression introduced by the Path B `is_heap_string_expr` extension that recognises bare-identifier-of-tracked-local as heap=1. The reassignment-wrapper's emission path runs `is_heap_string_expr(rhs)` to decide whether to set `_heap_<lhs> = 1` after the assignment. For `p = p`:
+
+  ```c
+  { const char* _tmp_old = p; p = p; if (_heap_p) free((void*)_tmp_old); _heap_p = 1; }
+  ```
+
+  Step (a) RHS=`p`, AST_IDENTIFIER, in heap-tracked-vars → `is_heap_string_expr` returns 1. Step (b) wrapper sets `_heap_p = 1`. Step (c) function-exit defer-free fires `free((void*)p)` — but `p` is a borrowed parameter; the caller still holds the same pointer and proceeds to read or free it → use-after-free or double-free (`free(): double free detected in tcache 2` under `MALLOC_CHECK_=3` / ASan).
+
+  Trigger pattern (filed by avn during 0.157.0 rebuild, hits 27 call sites in their user code via `client.remote_free` and `repo_storage.rep_free`):
+
+  ```aether
+  // Common "no-op free shim" for libraries with refcount-backed
+  // string lifetimes — the call is preserved for ABI continuity
+  // after the C-side explicit-free API was replaced.
+  noop_free(p: string) {
+      p = p
+      return
+  }
+
+  main() {
+      s = string.copy("hello")
+      noop_free(s)
+      println(s)   // pre-fix: garbage or SIGABRT
+  }
+  ```
+
+  Fix: peephole at the top of the reassignment-wrapper-emission branch — if `stmt->value == stmt->children[0]->value` (same identifier name, i.e. `lhs == rhs`), skip emission entirely. The self-assignment is semantically a no-op; emitting nothing keeps the heap-tracker in its pre-assignment state, which is correct (nothing actually changed). Guard fires before any wrapper-emission branch, so it covers every code path downstream (string-tracked, escaped, non-string, etc.) uniformly. Six lines.
+
+  Considered and rejected: making parameters borrows-by-default (refuse to flip `_heap_<param>` to 1 unless annotated `@retain` / `@own`). Broader architectural change with category-of-bugs benefits but multi-PR scope; the peephole closes the surfaced regression cleanly and the architectural fix can land as a follow-up without conflicting.
+
+  ### Upgrade notes
+
+  No user code change required. Code using the `p = p` "no-op free shim" pattern (or any other `lhs = lhs` self-assignment, however unusual) was double-freeing pre-fix; post-fix the assignment is correctly a no-op. Behaviour change is strictly correctness recovery; no regression on any other shape.
+
 ## [0.157.0]
 
 ### Fixed
