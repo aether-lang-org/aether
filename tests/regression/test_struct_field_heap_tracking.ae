@@ -1,0 +1,60 @@
+// Regression for issue #465 — struct-field heap-string ownership
+// tracking. Pre-fix: `b.value = string.concat(...)` had no tracker
+// and no destructor, so every assignment leaked the previous value
+// and the final value leaked at scope exit.
+//
+// Post-fix: each `string`-typed struct field has a hidden
+// `_heap_<field>` companion tracker emitted into the struct's C
+// definition, the reassign-wrapper frees the previous value
+// uniformly, and the auto-emitted `<Struct>_destroy(&local)` runs
+// at function exit to free the final allocation.
+//
+// 5000 iterations of (struct ctor + heap field reassign) probes
+// the hot path. Run under macOS `leaks(1)` and ASan; both must
+// report zero leaks.
+
+import std.string
+
+extern exit(code: int)
+
+struct Box {
+    label: string
+}
+
+main() {
+    println("=== test_struct_field_heap_tracking ===")
+
+    // Single struct, mutate the field with heap values in a loop.
+    b = Box { label: "" }
+    j = 0
+    while j < 5000 {
+        b.label = string.concat("box-", "world")
+        if string.length(b.label) != 9 {
+            println("FAIL iter ${j}: length=${string.length(b.label)}")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: 5000 b.label = string.concat(...) iterations stable")
+
+    // Fresh struct each iteration — exercises the destructor at
+    // each outer scope (well, here all in main; the next test
+    // would put this in a callee).
+    k = 0
+    while k < 5000 {
+        b2 = Box { label: string.concat("k=", "x") }
+        if string.length(b2.label) != 3 {
+            println("FAIL iter k=${k}: length=${string.length(b2.label)}")
+            exit(1)
+        }
+        b2.label = string.concat("y", "z")
+        if string.length(b2.label) != 2 {
+            println("FAIL iter k=${k} after reassign: length=${string.length(b2.label)}")
+            exit(1)
+        }
+        k = k + 1
+    }
+    println("  PASS: 5000 fresh-struct-per-iter + reassign stable")
+
+    println("=== all cases passed ===")
+}

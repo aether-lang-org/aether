@@ -26,6 +26,13 @@ exports (
 // ---- ArrayList raw externs ----
 extern list_new() -> ptr
 extern list_add_raw(list: ptr, item: ptr) -> int
+// Heap-string-aware add (#467). Retains the value, tags the list,
+// stores the pointer. list_free releases owned-string elements
+// before freeing the backing array. Codegen auto-routes
+// `list.add(l, heap_string_expr)` here when the value is heap-
+// classified — direct callers pick this when they want explicit
+// ownership transfer.
+extern list_add_string_owned(list: ptr, item: ptr) -> int
 extern list_get_raw(list: ptr, index: int) -> ptr
 extern list_set(list: ptr, index: int, item: ptr)
 extern list_size(list: ptr) -> int
@@ -41,6 +48,9 @@ extern map_new() -> ptr
 // annotation, the function-exit defer-free would free the bytes
 // while the map still holds a reference. See #420 follow-up.
 extern map_put_raw(map: ptr, key: @retain string, value: ptr) -> int
+// Heap-string-aware put (#467). Retains the value and tags the
+// map so map_free releases each string value before freeing.
+extern map_put_string_owned(map: ptr, key: @retain string, value: ptr) -> int
 extern map_get_raw(map: ptr, key: string) -> ptr
 extern map_has(map: ptr, key: string) -> int
 extern map_remove(map: ptr, key: string)

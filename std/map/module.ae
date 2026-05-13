@@ -7,13 +7,17 @@
 //     returns.
 
 exports (
-    map_new, map_put_raw, map_get_raw, map_has, map_remove,
+    map_new, map_put_raw, map_put_string_owned, map_get_raw, map_has, map_remove,
     map_size, map_clear, map_free, map_keys_raw, map_keys_free,
     put, get, keys
 )
 
 extern map_new() -> ptr
 extern map_put_raw(map: ptr, key: string, value: ptr) -> int
+// Heap-string-aware put (#467). Retains the value and tags the
+// map so map_free releases each string value before freeing.
+// Codegen auto-routes `map.put(m, k, heap_string_expr)` here.
+extern map_put_string_owned(map: ptr, key: string, value: ptr) -> int
 extern map_get_raw(map: ptr, key: string) -> ptr
 extern map_has(map: ptr, key: string) -> int
 extern map_remove(map: ptr, key: string)

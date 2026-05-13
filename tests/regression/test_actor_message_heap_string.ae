@@ -1,0 +1,45 @@
+// #466 — actor message heap-string ownership protocol.
+//
+// Pre-fix: sending a message with a heap-string field shallow-
+// copied the pointer. Sender's local heap got freed on reassign /
+// scope-exit; receiver's mailbox copy of the pointer dangled. The
+// existing escape-suppression at the heap-string-tracker keeps
+// the buffer alive but never frees it (UAF avoided by leak).
+//
+// Post-fix: every heap-string message field is deep-copied at the
+// SEND site (refcounted AetherString). Sender's local heap is
+// freed normally; receiver's deep-copied AetherString is released
+// when the message is freed by the runtime.
+
+import std.string
+
+extern exit(code: int)
+
+message Greeting { text: string }
+
+actor Greeter {
+    state count = 0
+
+    receive {
+        Greeting(text) -> {
+            count = count + string.length(text)
+        }
+    }
+}
+
+main() {
+    println("=== test_actor_message_heap_string ===")
+
+    g = spawn_Greeter(0)
+
+    j = 0
+    while j < 5000 {
+        msg_text = string.concat("hello-", "world")
+        g ! Greeting { text: msg_text }
+        msg_text = ""
+        j = j + 1
+    }
+
+    println("  PASS: 5000 sends with heap-string field stable")
+    println("=== all cases passed ===")
+}

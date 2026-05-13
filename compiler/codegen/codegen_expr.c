@@ -2552,6 +2552,83 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         break;
                     }
 
+                    /* List owned-string element auto-routing (#467).
+                     * `list.add(l, heap_string_expr)` (a.k.a.
+                     * `list_add_raw` after the Aether wrapper's
+                     * `list_add(list_add_raw(...))` dispatch
+                     * collapses) lands here. When the second arg is
+                     * a heap-classified string expression, route to
+                     * `list_add_string_owned` so the list retains
+                     * the value and releases it at `list.free`
+                     * time. Pre-fix, the heap-string lived forever
+                     * in the list (escape walker suppressed the
+                     * source's free; list_free didn't walk
+                     * elements) — leak. */
+                    /* List & map heap-string-value auto-routing (#467).
+                     *
+                     * `list.add(l, heap)` / `map.put(m, k, heap)`
+                     * lands here. When the value arg is a heap-
+                     * classified string, route to the `_string_owned`
+                     * variant so the container retains + releases at
+                     * free time. Two callee shapes to handle:
+                     *
+                     *   - `_raw` externs (`list_add_raw`, `map_put_raw`)
+                     *     return `int`. The owned variant also returns
+                     *     `int` — direct rewrite.
+                     *   - Wrapper functions (`list_add`, `map_put`)
+                     *     return `string` (the Go-style `"" | error`
+                     *     shape). The owned variant returns `int`, so
+                     *     a direct rewrite would change the return
+                     *     type and break the caller's
+                     *     `err = list.add(...)` assignment. Wrap in
+                     *     a ternary that preserves the string-return
+                     *     contract: `(owned(...) ? "" : "<err>")`. */
+                    /* Classify the callee: list-shape (2 args, value
+                     * at index 1) vs map-shape (3 args, value at
+                     * index 2); wrapper (`list_add` / `map_put`
+                     * returns string) vs raw extern (`list_add_raw`
+                     * / `map_put_raw` returns int). */
+                    int is_list_shape = (strcmp(c_func_name, "list_add_raw") == 0 ||
+                                         strcmp(c_func_name, "list_add") == 0);
+                    int is_map_shape  = (strcmp(c_func_name, "map_put_raw") == 0 ||
+                                         strcmp(c_func_name, "map_put") == 0);
+                    int is_wrapper    = (strcmp(c_func_name, "list_add") == 0 ||
+                                         strcmp(c_func_name, "map_put") == 0);
+                    if (is_list_shape || is_map_shape) {
+                        int val_idx           = is_list_shape ? 1 : 2;
+                        int expected_arg_count = is_list_shape ? 2 : 3;
+                        if (expr->child_count == expected_arg_count) {
+                            ASTNode* val = expr->children[val_idx];
+                            if (val && is_heap_string_expr(gen, val)) {
+                                if (is_wrapper) {
+                                    fprintf(gen->output, "(");
+                                }
+                                if (is_list_shape) {
+                                    fprintf(gen->output, "list_add_string_owned(");
+                                    generate_expression(gen, expr->children[0]);
+                                    fprintf(gen->output, ", (void*)");
+                                    generate_expression(gen, val);
+                                    fprintf(gen->output, ")");
+                                    if (is_wrapper) {
+                                        fprintf(gen->output, " ? \"\" : \"list.add failed\")");
+                                    }
+                                } else {
+                                    fprintf(gen->output, "map_put_string_owned(");
+                                    generate_expression(gen, expr->children[0]);
+                                    fprintf(gen->output, ", (const char*)");
+                                    generate_expression(gen, expr->children[1]);
+                                    fprintf(gen->output, ", (void*)");
+                                    generate_expression(gen, val);
+                                    fprintf(gen->output, ")");
+                                    if (is_wrapper) {
+                                        fprintf(gen->output, " ? \"\" : \"map.put failed\")");
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+
                     /* Argument-temp lifetime wrap. Any heap-returning
                      * AST_FUNCTION_CALL appearing in argument position
                      * is an anonymous heap allocation with no consumer
@@ -3030,20 +3107,37 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             fprintf(gen->output, "}");
             break;
         
-        case AST_STRUCT_LITERAL:
+        case AST_STRUCT_LITERAL: {
+            /* Struct-field heap-string ownership (#465): for each
+             * field-init whose expression is heap-classified, also
+             * emit `._heap_<field> = 1` so the auto-emitted
+             * <Struct>_destroy() reclaims the buffer at scope exit.
+             * Plain initializers (literal strings, scalars) default
+             * to _heap_<field> = 0 via C99 designated-init's zero-
+             * fill of unmentioned fields. */
             fprintf(gen->output, "(%s){", expr->value);
+            int emitted = 0;
             for (int i = 0; i < expr->child_count; i++) {
                 ASTNode* field_init = expr->children[i];
                 if (field_init && field_init->type == AST_ASSIGNMENT) {
-                    if (i > 0) fprintf(gen->output, ", ");
+                    if (emitted > 0) fprintf(gen->output, ", ");
                     fprintf(gen->output, ".%s = ", field_init->value);
                     if (field_init->child_count > 0) {
                         generate_expression(gen, field_init->children[0]);
+                    }
+                    emitted++;
+                    /* If the init is heap-classified, also set the
+                     * hidden tracker. */
+                    if (field_init->child_count > 0 &&
+                        is_heap_string_expr(gen, field_init->children[0])) {
+                        fprintf(gen->output, ", ._heap_%s = 1", field_init->value);
+                        emitted++;
                     }
                 }
             }
             fprintf(gen->output, "}");
             break;
+        }
         
         case AST_ARRAY_ACCESS:
             if (expr->child_count >= 2) {
@@ -3114,7 +3208,45 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     }
                                 }
                             }
-                            fprintf(gen->output, " }; aether_send_message(");
+                            fprintf(gen->output, " }; ");
+                            /* Deep-copy heap-string fields (#466).
+                             * The shallow `_msg.text = original_ptr`
+                             * assignment leaves the receiver pointing
+                             * at the sender's heap; the sender's
+                             * defer-free / reassign-wrapper would
+                             * dangle the receiver's pointer. Re-stamp
+                             * each string field with a refcounted
+                             * AetherString clone via string_new_with_
+                             * length, sized from the source's
+                             * length-aware header so binary content
+                             * with embedded NULs round-trips intact.
+                             * The receiver's <Msg>_release_fields
+                             * call (emitted at the receive-handler
+                             * dispatch) string_releases the clone
+                             * when the message is consumed. */
+                            int has_str = 0;
+                            for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                                if (f->type_kind == TYPE_STRING) { has_str = 1; break; }
+                            }
+                            if (has_str) {
+                                /* Prototypes (string_new_with_length,
+                                 * aether_string_data, aether_string_
+                                 * length) are emitted once in the
+                                 * codegen prologue (codegen.c) — no
+                                 * per-call-site re-declaration. */
+                                for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                                    if (f->type_kind == TYPE_STRING) {
+                                        fprintf(gen->output,
+                                                "if (_msg.%s) { "
+                                                "size_t _ml = aether_string_length(_msg.%s); "
+                                                "_msg.%s = (const char*)string_new_with_length("
+                                                "aether_string_data(_msg.%s), (int)_ml); "
+                                                "} ",
+                                                f->name, f->name, f->name, f->name);
+                                    }
+                                }
+                            }
+                            fprintf(gen->output, "aether_send_message(");
                             emit_send_target(gen, target, "void*");
                             fprintf(gen->output, ", &_msg, sizeof(%s)); }", message->value);
                         }
@@ -3176,7 +3308,28 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             }
                         }
 
-                        fprintf(gen->output, " }; void* _ask_r = scheduler_ask_message(");
+                        fprintf(gen->output, " }; ");
+
+                        /* Deep-copy heap-string request-message fields
+                         * (#466). Same shape as the AST_SEND_FIRE_
+                         * FORGET path — the request message carries
+                         * the sender's local heap-string pointers
+                         * into the receiver's mailbox; without deep-
+                         * copy the sender's defer-free dangles the
+                         * receiver's references. */
+                        for (MessageFieldDef* f = msg_def->fields; f; f = f->next) {
+                            if (f->type_kind == TYPE_STRING) {
+                                fprintf(gen->output,
+                                        "if (_msg.%s) { "
+                                        "size_t _ml = aether_string_length(_msg.%s); "
+                                        "_msg.%s = (const char*)string_new_with_length("
+                                        "aether_string_data(_msg.%s), (int)_ml); "
+                                        "} ",
+                                        f->name, f->name, f->name, f->name);
+                            }
+                        }
+
+                        fprintf(gen->output, "void* _ask_r = scheduler_ask_message(");
                         emit_send_target(gen, target, "ActorBase*");
                         fprintf(gen->output, ", &_msg, sizeof(%s), %d); ", message->value, timeout_ms);
 

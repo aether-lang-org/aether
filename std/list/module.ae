@@ -7,13 +7,18 @@
 //     returns.
 
 exports (
-    list_new, list_add_raw, list_get_raw, list_set, list_size,
+    list_new, list_add_raw, list_add_string_owned, list_get_raw, list_set, list_size,
     list_remove, list_clear, list_free,
     add, get
 )
 
 extern list_new() -> ptr
 extern list_add_raw(list: ptr, item: ptr) -> int
+// Heap-string-aware add (#467). Retains the value and tags the
+// list so list_free releases each string element before freeing
+// the backing array. Codegen auto-routes `list.add(l, heap_string_expr)`
+// here when the value is heap-classified.
+extern list_add_string_owned(list: ptr, item: ptr) -> int
 extern list_get_raw(list: ptr, index: int) -> ptr
 extern list_set(list: ptr, index: int, item: ptr)
 extern list_size(list: ptr) -> int

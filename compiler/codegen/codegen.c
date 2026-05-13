@@ -485,6 +485,37 @@ static int try_emit_heap_string_exit_free(CodeGenerator* gen, ASTNode* deferred)
     return 1;
 }
 
+/* Struct-destructor defer carrier (#465). Annotation:
+ *   "struct_destroy:<varname>:<StructName>"
+ * Pushed by the struct-local-declaration site in codegen_stmt.c
+ * for every local struct variable whose definition has at least
+ * one heap-string field. The emitted defer calls the auto-
+ * generated <StructName>_destroy(&<varname>) function, which
+ * walks every `_heap_<field>` tracker and frees the matching
+ * field's buffer if set. */
+static int try_emit_struct_destroy(CodeGenerator* gen, ASTNode* deferred) {
+    if (!deferred || !deferred->annotation) return 0;
+    const char* prefix = "struct_destroy:";
+    size_t plen = strlen(prefix);
+    if (strncmp(deferred->annotation, prefix, plen) != 0) return 0;
+    const char* rest = deferred->annotation + plen;
+    /* Split "<varname>:<StructName>" on the last colon — struct
+     * names don't contain colons, var names shouldn't either. */
+    const char* sep = strchr(rest, ':');
+    if (!sep || !sep[1]) return 0;
+    size_t var_len = (size_t)(sep - rest);
+    if (var_len == 0 || var_len > 200) return 0;
+    char var_buf[256];
+    memcpy(var_buf, rest, var_len);
+    var_buf[var_len] = '\0';
+    const char* struct_name = sep + 1;
+    print_indent(gen);
+    fprintf(gen->output,
+            "/* deferred */ %s_destroy(&%s);\n",
+            struct_name, var_buf);
+    return 1;
+}
+
 // Emit deferred statements for current scope only (in reverse order)
 void emit_defers_for_scope(CodeGenerator* gen) {
     if (gen->scope_depth <= 0) return;
@@ -496,6 +527,7 @@ void emit_defers_for_scope(CodeGenerator* gen) {
         ASTNode* deferred = gen->defer_stack[i];
         if (deferred) {
             if (try_emit_heap_string_exit_free(gen, deferred)) continue;
+            if (try_emit_struct_destroy(gen, deferred)) continue;
             print_indent(gen);
             fprintf(gen->output, "/* deferred */ ");
             generate_statement(gen, deferred);
@@ -575,6 +607,7 @@ void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int p
             continue;
         }
         if (try_emit_heap_string_exit_free(gen, deferred)) continue;
+        if (try_emit_struct_destroy(gen, deferred)) continue;
         print_indent(gen);
         fprintf(gen->output, "/* deferred */ ");
         generate_statement(gen, deferred);
@@ -1947,6 +1980,34 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
      * fs.read_binary, …) print their payload bytes rather than the
      * struct header. Plain char* values pass through unchanged. */
     print_line(gen, "extern const char* aether_string_data(const void* s);");
+    print_line(gen, "extern size_t aether_string_length(const void* s);");
+    /* Issue #466: actor message heap-string deep-copy at send time.
+     * `string_new_with_length` clones the source bytes into a fresh
+     * refcounted AetherString. Exposed here so the message-send
+     * codegen doesn't re-emit the prototype at every call site.
+     * `string_release` is NOT declared here — it's already declared
+     * later by the extern-registry pass (parameter type `const char*`,
+     * not `const void*`). Adding our own would create a conflicting-
+     * types error at the registry's re-declaration. The
+     * <Msg>_release_fields function uses string_release after the
+     * registry's declaration is visible. */
+    print_line(gen, "extern void* string_new_with_length(const char* data, int length);");
+    /* Issue #467: list / map heap-string-value owning-add helpers.
+     * Prototypes emitted here so codegen can route `list.add(l,
+     * heap_str)` / `map.put(m, k, heap_str)` calls to these symbols
+     * even when the user's source doesn't `import std.list` /
+     * `import std.collections` (the inline-extern shape some tests
+     * use to declare just the raw functions). The stdlib archive
+     * always contains the symbols.
+     *
+     * Parameter types match the extern-registry's pass exactly —
+     * `void*` not `const void*` — so a duplicate decl from the
+     * registry (when the source DOES import the module) doesn't
+     * conflict. The header's `const void*` declaration is the
+     * source-of-truth for consumers in C; the registry maps Aether's
+     * `ptr` to `void*` without const, which is what this matches. */
+    print_line(gen, "extern int list_add_string_owned(void* list, void* item);");
+    print_line(gen, "extern int map_put_string_owned(void* map, const char* key, void* value);");
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
     print_line(gen, "    if (!s) return \"(null)\";");
     print_line(gen, "    return aether_string_data(s);");
@@ -2641,13 +2702,60 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                     unindent(gen);
                     print_line(gen, "} %s;", child->value);
                     print_line(gen, "");
-                    
+
+                    /* Per-message heap-string-field release function
+                     * (#466). Walked by the receive-handler dispatch
+                     * before `aether_free_message` so the deep-
+                     * copied AetherString allocations the sender
+                     * stamped in (codegen_expr.c send-side) are
+                     * reclaimed when the recipient is done with the
+                     * message. No-op for messages with no string
+                     * fields; the codegen_actor.c dispatch skips
+                     * the call in that case via
+                     * `message_has_string_field`. */
+                    int msg_has_string_field = 0;
+                    for (int fi = 0; fi < child->child_count; fi++) {
+                        ASTNode* f = child->children[fi];
+                        if (f && f->type == AST_MESSAGE_FIELD &&
+                            f->node_type && f->node_type->kind == TYPE_STRING) {
+                            msg_has_string_field = 1;
+                            break;
+                        }
+                    }
+                    if (msg_has_string_field) {
+                        /* Forward-declare `string_release` here so the
+                         * generated release_fields function compiles
+                         * even on tests that don't `import std.string`
+                         * (and therefore don't get the extern
+                         * registry's prototype). The duplicate-but-
+                         * matching declaration is tolerated by C —
+                         * matches the registry's
+                         * `void string_release(const char*)` exactly
+                         * when std.string IS imported. */
+                        print_line(gen, "extern void string_release(const char*);");
+                        print_line(gen, "static inline void %s_release_fields(%s* m) {",
+                                   child->value, child->value);
+                        indent(gen);
+                        print_line(gen, "if (!m) return;");
+                        for (int fi = 0; fi < child->child_count; fi++) {
+                            ASTNode* f = child->children[fi];
+                            if (f && f->type == AST_MESSAGE_FIELD &&
+                                f->node_type && f->node_type->kind == TYPE_STRING) {
+                                print_line(gen, "if (m->%s) { string_release(m->%s); m->%s = (const char*)0; }",
+                                           f->value, f->value, f->value);
+                            }
+                        }
+                        unindent(gen);
+                        print_line(gen, "}");
+                        print_line(gen, "");
+                    }
+
                     // Generate type-specific memory pool for this message type
                     print_line(gen, "// Type-specific memory pool for %s", child->value);
                     print_line(gen, "// DECLARE_TYPE_POOL(%s)", child->value);
                     print_line(gen, "// DECLARE_TLS_POOL(%s)", child->value);
                     print_line(gen, "");
-                    
+
                     register_message_type(gen->message_registry, child->value, first_field);
 
                     // Emit to header if enabled
