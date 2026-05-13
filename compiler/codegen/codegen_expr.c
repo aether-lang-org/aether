@@ -2583,31 +2583,33 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                      *     `err = list.add(...)` assignment. Wrap in
                      *     a ternary that preserves the string-return
                      *     contract: `(owned(...) ? "" : "<err>")`. */
-                    int route_to_owned = 0;
-                    int is_list_add = 0, is_list_add_raw = 0;
-                    int is_map_put  = 0, is_map_put_raw  = 0;
-                    if (strcmp(c_func_name, "list_add_raw") == 0)    { is_list_add_raw = 1; route_to_owned = 1; }
-                    else if (strcmp(c_func_name, "list_add") == 0)   { is_list_add     = 1; route_to_owned = 1; }
-                    else if (strcmp(c_func_name, "map_put_raw") == 0){ is_map_put_raw  = 1; route_to_owned = 1; }
-                    else if (strcmp(c_func_name, "map_put") == 0)    { is_map_put      = 1; route_to_owned = 1; }
-
-                    if (route_to_owned) {
-                        int val_idx = (is_list_add || is_list_add_raw) ? 1 : 2;
-                        int expected_arg_count = (is_list_add || is_list_add_raw) ? 2 : 3;
+                    /* Classify the callee: list-shape (2 args, value
+                     * at index 1) vs map-shape (3 args, value at
+                     * index 2); wrapper (`list_add` / `map_put`
+                     * returns string) vs raw extern (`list_add_raw`
+                     * / `map_put_raw` returns int). */
+                    int is_list_shape = (strcmp(c_func_name, "list_add_raw") == 0 ||
+                                         strcmp(c_func_name, "list_add") == 0);
+                    int is_map_shape  = (strcmp(c_func_name, "map_put_raw") == 0 ||
+                                         strcmp(c_func_name, "map_put") == 0);
+                    int is_wrapper    = (strcmp(c_func_name, "list_add") == 0 ||
+                                         strcmp(c_func_name, "map_put") == 0);
+                    if (is_list_shape || is_map_shape) {
+                        int val_idx           = is_list_shape ? 1 : 2;
+                        int expected_arg_count = is_list_shape ? 2 : 3;
                         if (expr->child_count == expected_arg_count) {
                             ASTNode* val = expr->children[val_idx];
                             if (val && is_heap_string_expr(gen, val)) {
-                                int wrapper = (is_list_add || is_map_put);
-                                if (wrapper) {
+                                if (is_wrapper) {
                                     fprintf(gen->output, "(");
                                 }
-                                if (is_list_add || is_list_add_raw) {
+                                if (is_list_shape) {
                                     fprintf(gen->output, "list_add_string_owned(");
                                     generate_expression(gen, expr->children[0]);
                                     fprintf(gen->output, ", (void*)");
                                     generate_expression(gen, val);
                                     fprintf(gen->output, ")");
-                                    if (wrapper) {
+                                    if (is_wrapper) {
                                         fprintf(gen->output, " ? \"\" : \"list.add failed\")");
                                     }
                                 } else {
@@ -2618,7 +2620,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     fprintf(gen->output, ", (void*)");
                                     generate_expression(gen, val);
                                     fprintf(gen->output, ")");
-                                    if (wrapper) {
+                                    if (is_wrapper) {
                                         fprintf(gen->output, " ? \"\" : \"map.put failed\")");
                                     }
                                 }
