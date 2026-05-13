@@ -2771,6 +2771,37 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                 // Check if this is a reassignment (Python-style)
                 if (is_var_declared(gen, stmt->value)) {
+                    /* Self-assignment peephole. `p = p` is a no-op at
+                     * the semantic level; the heap-tracker wrapper
+                     * below would otherwise (a) consult
+                     * is_heap_string_expr on the RHS, which now
+                     * recognises bare-identifier-of-tracked-local as
+                     * heap=1, (b) emit `_heap_<p> = 1` at wrapper
+                     * exit, and (c) cause the function-exit defer-
+                     * free to free the buffer the caller still owns
+                     * (the parameter was a borrow, not an owned
+                     * value). avn's `noop_free(p: string) { p = p }`
+                     * shim hit this — every call double-freed the
+                     * caller's heap-allocated string. See
+                     * path-b-self-assign-param-doublefree.md filing.
+                     *
+                     * Skipping emission entirely is sound: `p = p`
+                     * has no observable effect. C doesn't even need
+                     * the statement (it'd compile to a no-op
+                     * anyway), and the heap-tracker stays in its
+                     * pre-assignment state — which is the truth
+                     * because the assignment didn't change anything.
+                     *
+                     * The guard fires before any other wrapper-
+                     * emission branch, so it covers every code path
+                     * downstream (string-tracked, escaped, non-
+                     * string, etc.) uniformly. */
+                    if (stmt->child_count > 0 && stmt->children[0] &&
+                        stmt->children[0]->type == AST_IDENTIFIER &&
+                        stmt->children[0]->value && stmt->value &&
+                        strcmp(stmt->children[0]->value, stmt->value) == 0) {
+                        break;
+                    }
                     // Already declared - generate assignment only.
                     //
                     // For string-tracked variables (issue #405) the
