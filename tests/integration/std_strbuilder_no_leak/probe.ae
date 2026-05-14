@@ -1,0 +1,92 @@
+// Integration probe: std.strbuilder's finish() returns a heap-owned
+// AetherString, and the caller's heap-tracker reclaims it at scope
+// exit. We exercise that contract across 2000 build/finish cycles and
+// assert RSS stays bounded — if either the builder struct, the
+// internal buffer, or the finished AetherString leaks, the loop
+// gives a large monotonic growth.
+//
+// The accumulator inside each iteration is also non-trivial: we
+// append 200 30-byte chunks (~6 KB output per iteration). Pre-
+// strbuilder, this shape (string.concat in a loop) was the avn
+// 5000-commit bench's hot path — O(N²) memcpy in user code,
+// algorithmically wasteful regardless of how prompt the heap-tracker
+// is. strbuilder gives amortised-O(1) per byte.
+//
+// What this test asserts:
+//   - All 2000 finished strings are length 6000 (correctness).
+//   - RSS growth across the 2000-iter loop stays under 1 MB. If
+//     finish() returned a non-heap pointer the tracker wouldn't
+//     reclaim and we'd see ~12 MB of accumulated buffers.
+//
+// What this test does NOT assert:
+//   - Wall-clock perf (CI variance is too wide). The O(1)-vs-O(N²)
+//     gap is implicit: pre-strbuilder this shape would take many
+//     seconds; with strbuilder it's well under a second on CI.
+
+import std.strbuilder
+import std.string
+
+extern getrusage_max_rss_kb() -> int
+extern exit(code: int)
+
+build_one() -> string {
+    b = strbuilder.new(1024)
+    k = 0
+    while k < 200 {
+        strbuilder.append(b, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")  // 30 bytes
+        k = k + 1
+    }
+    return strbuilder.finish(b)
+}
+
+main() {
+    println("=== std_strbuilder_no_leak ===")
+
+    // Portability gate: Windows MinGW doesn't expose getrusage; the
+    // shim returns -1. Run a single iteration to prove the codegen
+    // path executes, then exit cleanly.
+    rss_probe = getrusage_max_rss_kb()
+    if rss_probe < 0 {
+        s_smoke = build_one()
+        if string.length(s_smoke) != 6000 {
+            println("FAIL smoke: length=${string.length(s_smoke)}, expected 6000")
+            exit(1)
+        }
+        println("  PASS: getrusage unavailable, smoke-only — codegen path runs correctly")
+        println("=== all cases passed ===")
+        return
+    }
+
+    // Warm-up so the allocator settles into its steady-state pages
+    // before we measure.
+    _w = build_one()
+    if string.length(_w) != 6000 {
+        println("FAIL warm-up: length=${string.length(_w)}")
+        exit(1)
+    }
+
+    rss0 = getrusage_max_rss_kb()
+    i = 0
+    while i < 2000 {
+        s = build_one()
+        if string.length(s) != 6000 {
+            println("FAIL iter ${i}: length=${string.length(s)}, expected 6000")
+            exit(1)
+        }
+        i = i + 1
+    }
+    rss1 = getrusage_max_rss_kb()
+    growth = rss1 - rss0
+
+    // Pre-fix budget (if finish leaks): 2000 × ~6 KB ≈ 12 MB. Bound
+    // at 1024 KB gives a clean discriminator while allowing
+    // bookkeeping headroom (allocator metadata, println churn,
+    // refcounted string slack).
+    if growth > 1024 {
+        println("FAIL: RSS grew ${growth} KB across 2000 cycles (>1024 KB threshold) — finished string leaks")
+        exit(1)
+    }
+
+    println("  PASS: 2000 build/finish cycles, RSS growth ${growth} KB (bounded)")
+    println("=== all cases passed ===")
+}

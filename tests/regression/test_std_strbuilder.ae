@@ -1,0 +1,184 @@
+// Regression test for std.strbuilder — amortised-O(1) string append.
+//
+// The canonical accumulator idiom `out = string.concat(out, chunk)`
+// in a loop is O(N²) per byte. std.strbuilder is the answer: a
+// growing internal buffer with 2× doubling and a one-shot `finish`
+// that hands ownership to a refcounted AetherString.
+//
+// Cases:
+//   1. new + append + finish — basic single string assembly.
+//   2. Loop accumulator — 500 iterations × 30-byte chunks, verifying
+//      length & content end-to-end. Pre-strbuilder this shape costs
+//      O(N²) memcpy; with the builder it's O(N).
+//   3. append_byte — single-byte separator emit.
+//   4. append_int — decimal int append without round-trip through
+//      string.from_int.
+//   5. append_n — length-bearing append, honours explicit n.
+//   6. free without finish — the discard path.
+//   7. cap_hint = 0 — defaults to the small internal cap.
+//   8. cap_hint = -1 (negative) — same; sanity-checks the guard.
+//   9. Mixed lifecycle in a loop — repeated new/append/finish cycles
+//      survive without leaking the builder struct.
+
+import std.strbuilder
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== std.strbuilder regression ===")
+
+    // Case 1: new + append + finish.
+    b1 = strbuilder.new(16)
+    strbuilder.append(b1, "Hello")
+    strbuilder.append(b1, ", ")
+    strbuilder.append(b1, "world!")
+    if strbuilder.length(b1) != 13 {
+        println("  FAIL 1: length=${strbuilder.length(b1)}, expected 13")
+        exit(1)
+    }
+    out1 = strbuilder.finish(b1)
+    if string.length(out1) != 13 {
+        println("  FAIL 1: finished length=${string.length(out1)}, expected 13")
+        exit(1)
+    }
+    if out1 != "Hello, world!" {
+        println("  FAIL 1: got '${out1}'")
+        exit(1)
+    }
+    println("  PASS: new + append + finish")
+
+    // Case 2: loop accumulator — the headline use case. 500 iterations
+    // appending a 30-byte chunk = 15000 bytes total. Pre-strbuilder
+    // the equivalent string.concat loop costs ~500 * 7500 = 3.75M
+    // byte copies; with doubling it's ~15000 + bookkeeping. We
+    // verify correctness here; the perf gap is exercised by the
+    // integration probe.
+    b2 = strbuilder.new(0)
+    i = 0
+    while i < 500 {
+        strbuilder.append(b2, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")  // 30 'x's
+        i = i + 1
+    }
+    if strbuilder.length(b2) != 15000 {
+        println("  FAIL 2: length=${strbuilder.length(b2)}, expected 15000")
+        exit(1)
+    }
+    out2 = strbuilder.finish(b2)
+    if string.length(out2) != 15000 {
+        println("  FAIL 2: finished length=${string.length(out2)}, expected 15000")
+        exit(1)
+    }
+    // Spot-check a few bytes — they should all be 'x' (120).
+    if string.char_at(out2, 0) != 120 {
+        println("  FAIL 2: byte 0 = ${string.char_at(out2, 0)}, expected 120")
+        exit(1)
+    }
+    if string.char_at(out2, 14999) != 120 {
+        println("  FAIL 2: byte 14999 = ${string.char_at(out2, 14999)}, expected 120")
+        exit(1)
+    }
+    println("  PASS: 500-iteration accumulator, length and content correct")
+
+    // Case 3: append_byte.
+    b3 = strbuilder.new(8)
+    strbuilder.append(b3, "row1")
+    strbuilder.append_byte(b3, 10)   // '\n'
+    strbuilder.append(b3, "row2")
+    out3 = strbuilder.finish(b3)
+    if string.length(out3) != 9 {
+        println("  FAIL 3: length=${string.length(out3)}, expected 9")
+        exit(1)
+    }
+    if string.char_at(out3, 4) != 10 {
+        println("  FAIL 3: separator at index 4 = ${string.char_at(out3, 4)}, expected 10")
+        exit(1)
+    }
+    println("  PASS: append_byte separator")
+
+    // Case 4: append_int.
+    b4 = strbuilder.new(0)
+    strbuilder.append(b4, "count=")
+    strbuilder.append_int(b4, 42)
+    strbuilder.append_byte(b4, 44)   // ','
+    strbuilder.append_int(b4, -17)
+    out4 = strbuilder.finish(b4)
+    if out4 != "count=42,-17" {
+        println("  FAIL 4: got '${out4}', expected 'count=42,-17'")
+        exit(1)
+    }
+    println("  PASS: append_int (positive and negative)")
+
+    // Case 5: append_n — explicit length, useful for binary content.
+    // Aether string literals are NUL-terminated so we can't construct
+    // an embedded-NUL literal directly, but we CAN exercise the
+    // length-explicit path with a shorter-than-strlen request to
+    // confirm the n parameter is honored.
+    b5 = strbuilder.new(0)
+    strbuilder.append_n(b5, "abcdefgh", 3)   // only "abc"
+    strbuilder.append(b5, "XYZ")
+    out5 = strbuilder.finish(b5)
+    if out5 != "abcXYZ" {
+        println("  FAIL 5: got '${out5}', expected 'abcXYZ'")
+        exit(1)
+    }
+    println("  PASS: append_n honors explicit length")
+
+    // Case 6: free without finish — discard path. No observable side
+    // effect beyond not crashing / not leaking (ASan catches the
+    // latter).
+    b6 = strbuilder.new(128)
+    strbuilder.append(b6, "wasted work")
+    strbuilder.free(b6)
+    println("  PASS: free without finish")
+
+    // Case 7: cap_hint = 0 falls back to the default internal cap.
+    b7 = strbuilder.new(0)
+    strbuilder.append(b7, "small")
+    out7 = strbuilder.finish(b7)
+    if out7 != "small" {
+        println("  FAIL 7: cap_hint=0 path produced '${out7}'")
+        exit(1)
+    }
+    println("  PASS: cap_hint=0 uses default capacity")
+
+    // Case 8: negative cap_hint also defaults safely.
+    b8 = strbuilder.new(-1)
+    strbuilder.append(b8, "neg")
+    out8 = strbuilder.finish(b8)
+    if out8 != "neg" {
+        println("  FAIL 8: cap_hint=-1 path produced '${out8}'")
+        exit(1)
+    }
+    println("  PASS: cap_hint=-1 uses default capacity")
+
+    // Case 9: mixed lifecycle in a loop — new/append/finish 200 times.
+    // The leak budget is the heap-tracker's; if the builder struct
+    // leaks here, ASan / valgrind catches it. We also verify each
+    // iteration produces the expected output (no state bleed between
+    // builders).
+    j = 0
+    while j < 200 {
+        bx = strbuilder.new(8)
+        strbuilder.append(bx, "iter-")
+        strbuilder.append_int(bx, j)
+        sx = strbuilder.finish(bx)
+        // Smoke check on iteration 0 and 199 to keep the loop cheap.
+        if j == 0 {
+            if sx != "iter-0" {
+                println("  FAIL 9: iter 0 got '${sx}'")
+                exit(1)
+            }
+        }
+        if j == 199 {
+            if sx != "iter-199" {
+                println("  FAIL 9: iter 199 got '${sx}'")
+                exit(1)
+            }
+        }
+        j = j + 1
+    }
+    println("  PASS: 200 new/append/finish cycles, no state bleed")
+
+    println("=== All cases passed ===")
+}

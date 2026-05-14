@@ -1,0 +1,104 @@
+// std.strbuilder — amortised-O(1) string append.
+//
+// (Named `strbuilder` rather than `builder` because the latter is
+// reserved in Aether for configure-then-execute DSL functions. API
+// mirrors Java/Kotlin StringBuilder, Go's strings.Builder, Rust's
+// String::push_str.)
+//
+// The canonical accumulator idiom `out = string.concat(out, chunk)`
+// in a loop is O(N²) per byte — every concat allocates and copies the
+// full prefix. The heap-string-tracker making each leak prompt
+// doesn't address the algorithmic cost. std.strbuilder fills that
+// gap with a growing internal buffer (2× doubling on overflow):
+//
+//     b = strbuilder.new(estimated_size)
+//     while ... {
+//         strbuilder.append(b, chunk)
+//     }
+//     out = strbuilder.finish(b)         // builder consumed, `out` heap-owned
+//
+// Issue motivated by avn's 5000-commit bench; applies equally to
+// JSON serialisation, log formatting, template rendering, packed-
+// record encoding, path/URL assembly, CSV emit.
+//
+// Convention: append-family fns return 1 on success, 0 on failure
+// (matches std.bytes). `finish` is `string @heap` — caller owns the
+// returned buffer; the codegen's heap-tracker reclaims it at scope
+// exit.
+
+import std.string
+
+exports (
+    aether_strbuilder_new, aether_strbuilder_append, aether_strbuilder_append_n,
+    aether_strbuilder_append_byte, aether_strbuilder_append_int,
+    aether_strbuilder_length, aether_strbuilder_finish, aether_strbuilder_free,
+    new, append, append_n, append_byte, append_int,
+    length, finish, free
+)
+
+// ---- Raw externs ----
+extern aether_strbuilder_new(cap_hint: int) -> ptr
+extern aether_strbuilder_append(b: ptr, s: string) -> int
+extern aether_strbuilder_append_n(b: ptr, s: string, n: int) -> int
+extern aether_strbuilder_append_byte(b: ptr, c: int) -> int
+extern aether_strbuilder_append_int(b: ptr, v: int) -> int
+extern aether_strbuilder_length(b: ptr) -> int
+extern aether_strbuilder_finish(b: ptr) -> string @heap
+extern aether_strbuilder_free(b: ptr)
+
+// ---- Aether-side wrappers ----
+// Allocate a new builder with at least `cap_hint` bytes reserved. If
+// `cap_hint` is <= 0, a small default is used. Returns null on OOM
+// or cap exceeded. Initial logical length is 0.
+new(cap_hint: int) -> ptr {
+    return aether_strbuilder_new(cap_hint)
+}
+
+// Append a string. Length is taken from the AetherString header if
+// present, else via strlen — so a plain `const char*` containing
+// embedded NULs truncates at the first NUL. For binary-safe content,
+// use `append_n` with an explicit length. Returns 1 on success, 0 on
+// failure.
+append(b: ptr, s: string) -> int {
+    return aether_strbuilder_append(b, s)
+}
+
+// Append exactly `n` bytes from `s`. Binary-safe — embedded NULs
+// round-trip cleanly. Returns 1 on success, 0 on failure.
+append_n(b: ptr, s: string, n: int) -> int {
+    return aether_strbuilder_append_n(b, s, n)
+}
+
+// Append a single byte (low 8 bits of `c`). Useful for separators
+// — '\n' (10), ',' (44), 0x02, etc. — without the round-trip
+// through a 1-byte string. Returns 1 on success, 0 on failure.
+append_byte(b: ptr, c: int) -> int {
+    return aether_strbuilder_append_byte(b, c)
+}
+
+// Append the decimal representation of `v` (no padding, leading '-'
+// on negatives). Avoids constructing an intermediate AetherString
+// from string.from_int. Returns 1 on success, 0 on failure.
+append_int(b: ptr, v: int) -> int {
+    return aether_strbuilder_append_int(b, v)
+}
+
+// Current accumulated length in bytes. Returns -1 if `b` is null.
+length(b: ptr) -> int {
+    return aether_strbuilder_length(b)
+}
+
+// Finalise into a refcounted AetherString and destroy the builder.
+// After this call, `b` is invalid — do not call append, length, or
+// free on it. The returned string is heap-owned by the caller; the
+// codegen's heap-string-tracker reclaims the buffer at scope exit.
+finish(b: ptr) -> string {
+    return aether_strbuilder_finish(b)
+}
+
+// Discard the builder without producing a string. Idempotent on
+// null. Use on error paths where the in-progress output is no
+// longer wanted.
+free(b: ptr) {
+    aether_strbuilder_free(b)
+}

@@ -344,6 +344,44 @@ int string_length_n(const void* str, int known_length) {
     return (known_length < 0) ? 0 : known_length;
 }
 
+/* Length-aware char_at. Skips the strlen-bounds-check the bare
+ * string_char_at pays on every call when `str` arrives as a plain
+ * `const char*`. Filed in string-length-aware-accessors.md after
+ * avn's bench profile showed __strlen_avx2 dominating CPU at the
+ * slow batches. Trusts the caller's known_length absolutely — does
+ * NOT consult an AetherString header even if one is present. Same
+ * miss-return convention as string_char_at ('\0' for out-of-range
+ * and NULL input). */
+char string_char_at_n(const void* str, int known_length, int index) {
+    if (!str) return '\0';
+    if (known_length < 0) return '\0';
+    if (index < 0 || index >= known_length) return '\0';
+    return str_data(str)[index];
+}
+
+/* Length-aware index_of_from. Same motivation as string_char_at_n:
+ * caller has already cached the haystack length. Needle is still
+ * strlen'd (small / fixed). `start` clamped to [0, known_length];
+ * `start` > known_length OR needle longer than the searchable
+ * range returns -1. */
+int string_index_of_from_n(const void* str, int known_length,
+                           const char* substring, int start) {
+    if (!str || !substring) return -1;
+    if (known_length < 0) return -1;
+    size_t sub_len = str_len(substring);
+    const char* sub_data = str_data(substring);
+    const char* sdata = str_data(str);
+    if (start < 0) start = 0;
+    if ((size_t)start > (size_t)known_length) return -1;
+    if (sub_len > (size_t)known_length - (size_t)start) return -1;
+    for (size_t i = (size_t)start; i <= (size_t)known_length - sub_len; i++) {
+        if (memcmp(sdata + i, sub_data, sub_len) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
 char* string_to_upper(const void* str) {
     if (!str) return NULL;
     size_t slen = str_len(str);
