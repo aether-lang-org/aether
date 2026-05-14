@@ -100,6 +100,27 @@ char* string_substring_n(const void* str, int str_len_bytes, int start, int end)
  * at the C level; clamps negative input to 0. */
 int string_length_n(const void* str, int known_length);
 
+/* Length-aware sibling of string_char_at. Caller supplies the
+ * source length explicitly, so the bounds check skips the per-call
+ * strlen that string_char_at pays when `str` arrives as a plain
+ * `const char*` (the auto-unwrap at function-parameter boundary
+ * strips the AetherString header). Returns the byte at `index`, or
+ * '\0' on out-of-range / NULL input. Filed in
+ * string-length-aware-accessors.md after avn's 5000-commit bench
+ * showed 87%+ of CPU in __strlen_avx2 driven by string_char_at on
+ * a multi-KB body whose length the caller had already cached. */
+char string_char_at_n(const void* str, int known_length, int index);
+
+/* Length-aware sibling of string_index_of_from. Same motivation as
+ * string_char_at_n — caller has already computed `known_length`
+ * once and passes it in, avoiding per-call strlen of the haystack.
+ * The needle is still strlen'd (small / fixed in practice). Returns
+ * the absolute offset of the first match at or after `start`, or
+ * -1 on miss. `start` is clamped to [0, known_length]; needle
+ * longer than the searchable range returns -1. */
+int string_index_of_from_n(const void* str, int known_length,
+                           const char* substring, int start);
+
 // Construct a 1-byte AetherString from a byte code (0..255).
 // Primary use: emitting known single-byte markers (\x01, \x02, etc.)
 // into packed-string record formats without routing through a
