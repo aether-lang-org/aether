@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.strbuilder` — amortised-O(1) string append primitive** (`std/strbuilder/aether_strbuilder.{c,h}`, `std/strbuilder/module.ae`, `tests/regression/test_std_strbuilder.ae`, `tests/integration/std_strbuilder_no_leak/`). The canonical accumulator idiom `out = string.concat(out, chunk)` in a loop is O(N²) per byte — every concat reallocates and memcpy's the full prefix. The heap-string-tracker making each leaked-prefix prompt doesn't address the algorithmic cost. `std.strbuilder` fills that gap with a growing internal buffer (2× doubling on overflow): `b = strbuilder.new(cap_hint); strbuilder.append(b, chunk); out = strbuilder.finish(b)`. The API mirrors Java/Kotlin StringBuilder, Go's strings.Builder, Rust's String::push_str. Six append surface functions — `new`, `append`, `append_n`, `append_byte`, `append_int`, `length`, `finish`, `free` — cover the loop-build-and-emit shapes the avn 5000-commit bench's hot path drives (and the broader category: JSON / log / template / packed-record / path-URL assembly / CSV emit). Module is named `strbuilder` rather than `builder` because the latter is reserved in Aether for configure-then-execute DSL functions (`TOKEN_BUILDER`, `compiler/parser/parser.c:3686`). `finish()` hands the data buffer to the caller as a plain libc-freeable `char*` and frees only the wrapper struct; the heap-string-tracker's reassignment-wrapper-emitted libc-free reclaims the full output uniformly, matching the established `@heap`-extern contract (cf. `tests/integration/extern_single_value_heap/`). Buffer is `aether_caps_malloc`/`_realloc`'d throughout so a host's `aether_set_memory_cap(N)` bounds runaway accumulation. Nine cases covered by the regression test (loop accumulator, byte separators, int append, explicit-length binary, mixed-lifecycle reuse, edge cases on cap_hint) plus a 2000-build/finish RSS-bounded integration probe (12 MB growth pre-fix vs. < 1 MB post-fix as the discriminator). Feature filed by avn project; see `std-builder-request.md` for the motivating analysis.
+
 ## [0.158.0]
 
 ### Fixed
