@@ -1,0 +1,152 @@
+// Regression test for the length-aware string accessors
+// `string.char_at_n` and `string.index_of_from_n`.
+//
+// Motivation: the bare `string.char_at` / `string.index_of_from`
+// each re-strlen the haystack on every call when the haystack
+// arrives as a plain `const char*` at a function-parameter boundary
+// (the auto-unwrap strips the AetherString header). avn's bench
+// profile showed 87%+ of CPU in `__strlen_avx2` driven by these two
+// functions over a multi-KB body whose length the iterator had
+// already cached. The `_n` siblings let the caller pass the cached
+// length so the function skips strlen.
+//
+// Cases:
+//   1. char_at_n at every byte of a non-trivial string matches
+//      char_at — same observable result, faster path.
+//   2. char_at_n out-of-range returns 0 (the documented miss code).
+//   3. char_at_n trusts known_length absolutely — pass a length
+//      shorter than the actual buffer and verify the function
+//      treats bytes past that as out-of-range.
+//   4. index_of_from_n finds a needle within the haystack.
+//   5. index_of_from_n returns -1 when the needle exists past
+//      known_length — the trusted bound clips the search.
+//   6. index_of_from_n start clamping: negative start treated as 0,
+//      start at known_length or beyond returns -1.
+//   7. index_of_from_n needle longer than searchable range → -1.
+//   8. index_of_from_n same hit as bare index_of_from on an
+//      adequately-sized known_length.
+
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== string.char_at_n / index_of_from_n regression ===")
+
+    s = "hello, world"
+    slen = string.length(s)
+    if slen != 12 {
+        println("  FAIL setup: length=${slen}, expected 12")
+        exit(1)
+    }
+
+    // Case 1: char_at_n matches char_at at every valid byte.
+    i = 0
+    while i < slen {
+        a = string.char_at(s, i)
+        b = string.char_at_n(s, slen, i)
+        if a != b {
+            println("  FAIL 1: byte ${i}: char_at=${a}, char_at_n=${b}")
+            exit(1)
+        }
+        i = i + 1
+    }
+    println("  PASS 1: char_at_n matches char_at at every valid index")
+
+    // Case 2: char_at_n out-of-range returns 0.
+    if string.char_at_n(s, slen, -1) != 0 {
+        println("  FAIL 2: char_at_n with index=-1 should return 0")
+        exit(1)
+    }
+    if string.char_at_n(s, slen, slen) != 0 {
+        println("  FAIL 2: char_at_n at index=length should return 0")
+        exit(1)
+    }
+    if string.char_at_n(s, slen, slen + 100) != 0 {
+        println("  FAIL 2: char_at_n past end should return 0")
+        exit(1)
+    }
+    println("  PASS 2: char_at_n out-of-range returns 0")
+
+    // Case 3: char_at_n trusts known_length absolutely. Pass a
+    // length shorter than the actual string and verify the function
+    // treats indices past the trusted bound as out-of-range — even
+    // though those bytes are valid in the underlying buffer.
+    short_len = 5
+    if string.char_at_n(s, short_len, 4) != 111 {  // 'o'
+        println("  FAIL 3: char_at_n(s, 5, 4) should be 'o' (111)")
+        exit(1)
+    }
+    if string.char_at_n(s, short_len, 5) != 0 {
+        println("  FAIL 3: char_at_n with trusted-length=5 at index=5 should return 0")
+        exit(1)
+    }
+    if string.char_at_n(s, short_len, 11) != 0 {
+        println("  FAIL 3: char_at_n with trusted-length=5 at index=11 should return 0")
+        exit(1)
+    }
+    println("  PASS 3: char_at_n honours trusted length, treats beyond as out-of-range")
+
+    // Case 4: index_of_from_n finds a needle.
+    hit = string.index_of_from_n(s, slen, "world", 0)
+    if hit != 7 {
+        println("  FAIL 4: index_of_from_n('world', 0)=${hit}, expected 7")
+        exit(1)
+    }
+    println("  PASS 4: index_of_from_n basic hit")
+
+    // Case 5: known_length clips the search. "world" lives at
+    // index 7..11 in "hello, world". With known_length=12 (full)
+    // the 5-byte needle fits and hits at 7. With known_length=11
+    // the trusted bound stops one byte short of the needle's end,
+    // so the search range is [0, 11-5+1)=[0,7), the loop never
+    // checks i=7, miss.
+    hit_full = string.index_of_from_n(s, 12, "world", 0)
+    if hit_full != 7 {
+        println("  FAIL 5: index_of_from_n with len=12 should find 'world' at 7, got ${hit_full}")
+        exit(1)
+    }
+    miss_clipped = string.index_of_from_n(s, 11, "world", 0)
+    if miss_clipped != -1 {
+        println("  FAIL 5: index_of_from_n with len=11 should miss 'world' (needle extends past trusted bound), got ${miss_clipped}")
+        exit(1)
+    }
+    println("  PASS 5: known_length clips the search range")
+
+    // Case 6: start clamping.
+    neg = string.index_of_from_n(s, slen, "hello", -3)
+    if neg != 0 {
+        println("  FAIL 6: index_of_from_n with negative start should clamp to 0, got ${neg}")
+        exit(1)
+    }
+    past = string.index_of_from_n(s, slen, "hello", slen + 1)
+    if past != -1 {
+        println("  FAIL 6: index_of_from_n with start past length should miss, got ${past}")
+        exit(1)
+    }
+    at_end = string.index_of_from_n(s, slen, "hello", slen)
+    if at_end != -1 {
+        println("  FAIL 6: index_of_from_n with start=length should miss, got ${at_end}")
+        exit(1)
+    }
+    println("  PASS 6: start clamping (negative → 0, past length → -1)")
+
+    // Case 7: needle longer than searchable range.
+    too_long = string.index_of_from_n(s, slen, "this-is-way-too-long-to-fit", 0)
+    if too_long != -1 {
+        println("  FAIL 7: oversized needle should miss, got ${too_long}")
+        exit(1)
+    }
+    println("  PASS 7: needle larger than known_length misses cleanly")
+
+    // Case 8: same answer as bare index_of_from with adequate length.
+    a = string.index_of_from(s, "o", 5)
+    b = string.index_of_from_n(s, slen, "o", 5)
+    if a != b {
+        println("  FAIL 8: index_of_from=${a}, index_of_from_n=${b} (should match)")
+        exit(1)
+    }
+    println("  PASS 8: matches bare index_of_from on full-length search")
+
+    println("=== All cases passed ===")
+}

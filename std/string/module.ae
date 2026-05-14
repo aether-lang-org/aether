@@ -10,6 +10,7 @@ exports (
     string_starts_with, string_ends_with, string_contains,
     string_index_of, string_index_of_from, string_substring,
     string_substring_n, string_length_n,
+    string_char_at_n, string_index_of_from_n,
     string_from_char, string_to_upper, string_to_lower, string_trim,
     string_split, string_array_size, string_array_get, string_array_free,
     string_split_to_seq,
@@ -97,6 +98,26 @@ extern string_substring_n(str: string, str_len_bytes: int, start: int, end: int)
 // forgotten `string.length(s)` that would have truncated at NUL.
 // Pure no-op at the C level; clamps negative input to 0.
 extern string_length_n(str: string, known_length: int) -> int
+
+// Length-aware sibling of string_char_at. Caller supplies the
+// haystack length explicitly so the bounds check skips the per-call
+// strlen that string_char_at pays when `str` arrives as a plain
+// `const char*` (the auto-unwrap at function-parameter boundary
+// strips the AetherString header). Returns the byte at `index` as
+// an int 0..255, or 0 on out-of-range. Reach for this in hot
+// iterator-walk loops over a multi-KB body whose length the caller
+// has already cached. Filed in string-length-aware-accessors.md
+// after avn's bench profile showed __strlen_avx2 dominating CPU.
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+
+// Length-aware sibling of string_index_of_from. Same motivation as
+// string_char_at_n — caller has already cached the haystack length.
+// Needle is still strlen'd (small / fixed). Returns the absolute
+// offset of the first match at or after `start`, or -1 on miss.
+// `start` clamped to [0, known_length]; needle longer than the
+// searchable range returns -1.
+extern string_index_of_from_n(str: string, known_length: int,
+                              substring: string, start: int) -> int
 
 // Construct a 1-byte string from a byte code (0..255). Typical use
 // is emitting known single-byte separators (\x01, \x02) into packed

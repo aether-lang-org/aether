@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`string.char_at_n` / `string.index_of_from_n` — length-aware accessors that skip the per-call strlen** (`std/string/aether_string.{c,h}`, `std/string/module.ae`, `tests/regression/test_string_char_at_n_and_index_of_from_n.ae`). Both `string.char_at` and `string.index_of_from` call `str_len(str)` on every invocation to bounds-check the index. When the haystack arrives as a `string` parameter at a function boundary, #297's auto-unwrap strips the AetherString header — `str_len` then falls through to `strlen`, and any caller looping over a multi-KB body pays the full O(N) scan per byte. avn's 5000-commit bench profile (filed in `string-length-aware-accessors.md`) showed `__strlen_avx2` accounting for 87%+ of CPU at the slow batches, driven by `dir_iter_next` walking a 250 KB dir-blob body whose length the iterator had already cached at construction. The new `_n` siblings let the caller pass the cached length and skip the strlen. Pure additive surface — existing callers unaffected. `string_char_at_n(str, known_length, index) -> int` and `string_index_of_from_n(str, known_length, substring, start) -> int` mirror the existing `string_substring_n` / `string_length_n` precedent: trust the caller's known_length absolutely, do not consult the AetherString header even if one is present. The needle in `index_of_from_n` is still strlen'd (small / fixed in practice — needles are byte separators or short tokens). Eight cases covered in the regression test (every-byte match, out-of-range clamp on char_at_n, trusted-length-shorter-than-buffer, basic hit, known_length-clips-search, start clamping both directions, oversized needle, parity with bare `index_of_from`).
+
 ## [0.158.0]
 
 ### Fixed
