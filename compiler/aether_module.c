@@ -1557,6 +1557,54 @@ void module_merge_into_program(ASTNode* program) {
                 apply_inherited_selective_imports(clone, mod_ast);
 
                 insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_EXTERN_FUNCTION && decl->value &&
+                       decl->annotation &&
+                       strncmp(decl->annotation, "c_symbol:", 9) == 0) {
+                // `@extern("c_symbol") name(...)` declarations are part
+                // of the module's public surface (issue #234) — unlike
+                // bare `extern` C bindings, which stay private. Clone
+                // them into the consumer just like Aether-native
+                // wrappers so a qualified `module.name(...)` call
+                // resolves. The clone keeps the `c_symbol:` annotation,
+                // so codegen still forwards every call to the chosen C
+                // symbol; only the Aether-side name is namespace-
+                // prefixed. This is the path that makes a variadic
+                // `@extern` (e.g. std.strbuilder's `append_format`)
+                // reachable cross-module — an ordinary wrapper cannot
+                // forward a `...` tail.
+                if (has_selection) {
+                    int selected = 0;
+                    for (int k = 0; k < child->child_count; k++) {
+                        ASTNode* sel = child->children[k];
+                        if (sel && sel->type == AST_IDENTIFIER &&
+                            strcmp(sel->value, decl->value) == 0) {
+                            selected = 1;
+                            break;
+                        }
+                    }
+                    if (!selected) continue;
+                }
+
+                char prefixed[256];
+                snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, decl->value);
+
+                // Dedup — a module imported twice must not clone the
+                // extern twice (duplicate registry entries / prototypes).
+                int already = 0;
+                for (int p = 0; p < program->child_count; p++) {
+                    ASTNode* pc = program->children[p];
+                    if (pc && pc->type == AST_EXTERN_FUNCTION && pc->value &&
+                        strcmp(pc->value, prefixed) == 0) {
+                        already = 1;
+                        break;
+                    }
+                }
+                if (already) continue;
+
+                ASTNode* clone = clone_ast_node(decl);
+                free(clone->value);
+                clone->value = strdup(prefixed);
+                insert_child_at(program, clone, insert_idx++);
             } else if (decl->type == AST_CONST_DECLARATION && decl->value) {
                 // Skip if not in selective import list
                 if (has_selection) {

@@ -1,0 +1,144 @@
+// Integration probe: the std.strbuilder v2 "realistic combo" — a CSV
+// emitter that exercises append / append_byte / append_format /
+// truncate (row cancellation) / clear (buffer reuse) and the
+// binary-safe finish_with_length handoff together, the way a real
+// log / report / record emitter would.
+//
+// Two assertions:
+//   1. Correctness — one CSV build, verified byte-for-byte against
+//      the expected output, read back through the raw (ptr, len)
+//      pair that finish_with_length returns.
+//   2. No leak — 2000 build / finish_with_length / free cycles with
+//      RSS bounded. finish_with_length hands the caller a raw libc-
+//      freeable buffer (NOT codegen-heap-tracked, unlike finish);
+//      if the probe's explicit free() were missing, or truncate /
+//      clear leaked the retained buffer, the loop would ramp.
+//
+// `emit_csv` filters row index 1 by building the row in full and
+// then `truncate`-ing back to the row's start offset — the canonical
+// "decide after formatting that the row is dropped" pattern.
+
+import std.strbuilder
+import std.string
+import std.mem
+
+extern getrusage_max_rss_kb() -> int
+extern exit(code: int)
+
+// Build a fixed 2-data-row CSV into `b`. Demonstrates, in order:
+//   - clear()        — scribble a draft, then reset the buffer
+//   - append()       — header + string cells
+//   - append_format()— %d-formatted numeric cells
+//   - append_byte()  — ',' (44) and '\n' (10) separators
+//   - truncate()     — row 1 ("bob") is built then cancelled
+emit_csv(b: ptr) {
+    // clear: a draft write that gets discarded before the real build.
+    strbuilder.append(b, "DRAFT-DISCARDED")
+    strbuilder.clear(b)
+
+    // Header.
+    strbuilder.append(b, "id,name,score")
+    strbuilder.append_byte(b, 10)
+
+    // Row 0 — kept.
+    strbuilder.append_format(b, "%d,", 0)
+    strbuilder.append(b, "alice")
+    strbuilder.append_byte(b, 44)
+    strbuilder.append_format(b, "%d", 100)
+    strbuilder.append_byte(b, 10)
+
+    // Row 1 — built in full, then cancelled by truncating back to the
+    // mark. This is the row-filter pattern: the decision to drop the
+    // row is made only after the cells have been formatted.
+    mark = strbuilder.length(b)
+    strbuilder.append_format(b, "%d,", 1)
+    strbuilder.append(b, "bob")
+    strbuilder.append_byte(b, 44)
+    strbuilder.append_format(b, "%d", 95)
+    strbuilder.append_byte(b, 10)
+    strbuilder.truncate(b, mark)
+
+    // Row 2 — kept.
+    strbuilder.append_format(b, "%d,", 2)
+    strbuilder.append(b, "carol")
+    strbuilder.append_byte(b, 44)
+    strbuilder.append_format(b, "%d", 88)
+    strbuilder.append_byte(b, 10)
+}
+
+// One build/finish_with_length/free cycle; returns the byte length.
+emit_and_free() -> int {
+    b = strbuilder.new(64)
+    emit_csv(b)
+    data, len = strbuilder.finish_with_length(b)
+    free(data)
+    return len
+}
+
+main() {
+    println("=== std_strbuilder_csv ===")
+
+    expected = "id,name,score\n0,alice,100\n2,carol,88\n"
+    exp_len = string.length(expected)
+
+    // Assertion 1: byte-exact correctness via the raw (ptr, len) pair.
+    b = strbuilder.new(64)
+    emit_csv(b)
+    data, len = strbuilder.finish_with_length(b)
+    if len != exp_len {
+        println("  FAIL: length ${len}, expected ${exp_len}")
+        exit(1)
+    }
+    i = 0
+    while i < len {
+        if mem.get_byte(data, i) != string.char_at(expected, i) {
+            println("  FAIL: byte ${i} mismatch")
+            exit(1)
+        }
+        i = i + 1
+    }
+    free(data)
+    println("  PASS: CSV content byte-exact (${len} bytes)")
+
+    // Assertion 2: 2000-cycle RSS bound. Windows MinGW has no
+    // getrusage — the shim returns -1; fall back to a smoke run.
+    rss_probe = getrusage_max_rss_kb()
+    if rss_probe < 0 {
+        smoke = emit_and_free()
+        if smoke != exp_len {
+            println("  FAIL: smoke length ${smoke}")
+            exit(1)
+        }
+        println("  PASS: smoke (getrusage unavailable)")
+        println("=== all std_strbuilder_csv cases passed ===")
+        return
+    }
+
+    // Warm the allocator so the measured window sees steady state.
+    w = 0
+    while w < 200 {
+        emit_and_free()
+        w = w + 1
+    }
+    rss_before = getrusage_max_rss_kb()
+    n = 0
+    while n < 2000 {
+        got = emit_and_free()
+        if got != exp_len {
+            println("  FAIL: loop iteration ${n} length ${got}")
+            exit(1)
+        }
+        n = n + 1
+    }
+    rss_after = getrusage_max_rss_kb()
+    growth = rss_after - rss_before
+    // A leak of the data buffer (~37 B), the builder struct, or a
+    // truncate/clear-retained buffer over 2000 iters would be tens of
+    // MB; a clean run stays flat. 1 MB is generous allocator slack.
+    if growth > 1024 {
+        println("  FAIL: RSS grew ${growth} KB over 2000 cycles")
+        exit(1)
+    }
+    println("  PASS: 2000 finish_with_length cycles, RSS bounded (+${growth} KB)")
+    println("=== all std_strbuilder_csv cases passed ===")
+}

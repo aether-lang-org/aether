@@ -31,9 +31,17 @@ import std.string
 exports (
     aether_strbuilder_new, aether_strbuilder_append, aether_strbuilder_append_n,
     aether_strbuilder_append_byte, aether_strbuilder_append_int,
-    aether_strbuilder_length, aether_strbuilder_finish, aether_strbuilder_free,
+    aether_strbuilder_append_long, aether_strbuilder_append_hex,
+    aether_strbuilder_append_codepoint,
+    aether_strbuilder_length, aether_strbuilder_capacity,
+    aether_strbuilder_reserve, aether_strbuilder_truncate,
+    aether_strbuilder_clear,
+    aether_strbuilder_finish, aether_strbuilder_finish_with_length,
+    aether_strbuilder_free,
     new, append, append_n, append_byte, append_int,
-    length, finish, free
+    append_long, append_hex, append_codepoint, append_format,
+    length, capacity, reserve, truncate, clear,
+    finish, finish_with_length, free
 )
 
 // ---- Raw externs ----
@@ -42,8 +50,16 @@ extern aether_strbuilder_append(b: ptr, s: string) -> int
 extern aether_strbuilder_append_n(b: ptr, s: string, n: int) -> int
 extern aether_strbuilder_append_byte(b: ptr, c: int) -> int
 extern aether_strbuilder_append_int(b: ptr, v: int) -> int
+extern aether_strbuilder_append_long(b: ptr, v: long) -> int
+extern aether_strbuilder_append_hex(b: ptr, v: long, width: int) -> int
+extern aether_strbuilder_append_codepoint(b: ptr, cp: int) -> int
 extern aether_strbuilder_length(b: ptr) -> int
+extern aether_strbuilder_capacity(b: ptr) -> int
+extern aether_strbuilder_reserve(b: ptr, additional: int) -> int
+extern aether_strbuilder_truncate(b: ptr, new_length: int) -> int
+extern aether_strbuilder_clear(b: ptr) -> int
 extern aether_strbuilder_finish(b: ptr) -> string @heap
+extern aether_strbuilder_finish_with_length(b: ptr) -> (ptr, int)
 extern aether_strbuilder_free(b: ptr)
 
 // ---- Aether-side wrappers ----
@@ -83,9 +99,77 @@ append_int(b: ptr, v: int) -> int {
     return aether_strbuilder_append_int(b, v)
 }
 
+// Append the decimal representation of a 64-bit `v`. Use for IDs,
+// timestamps, and offsets that overflow 32 bits. Returns 1 on
+// success, 0 on failure.
+append_long(b: ptr, v: long) -> int {
+    return aether_strbuilder_append_long(b, v)
+}
+
+// Append `v` as lowercase hexadecimal. `width` is a minimum nibble
+// count — 0 for natural width, >0 to zero-pad; a value wider than
+// `width` grows rather than truncating. Negative `v` is encoded as
+// its unsigned bit pattern. Returns 1 on success, 0 on failure.
+append_hex(b: ptr, v: long, width: int) -> int {
+    return aether_strbuilder_append_hex(b, v, width)
+}
+
+// UTF-8 encode the Unicode code point `cp` and append it (1–4
+// bytes). Returns 0 — appending nothing — for invalid code points
+// (negative, surrogate halves 0xD800–0xDFFF, or above 0x10FFFF);
+// 1 on success.
+append_codepoint(b: ptr, cp: int) -> int {
+    return aether_strbuilder_append_codepoint(b, cp)
+}
+
+// printf-style formatted append: `append_format(b, fmt, ...)` with
+// any number of trailing arguments. Bound directly to the C symbol
+// via `@extern` because the trailing `...` cannot be forwarded by an
+// ordinary Aether wrapper — defining (rather than declaring) varargs
+// is not a language feature, so a thunk would have nothing to pass
+// the variadic tail through. Returns 1 on success, 0 on failure
+// (null args, encoding error, OOM).
+//
+// `%s` arguments must be plain C strings / Aether string literals —
+// an AetherString-typed variable would format its struct header, not
+// its bytes. `%d` takes int, `%lld` takes long. For binary or
+// AetherString-bearing content, use `append` / `append_n` instead.
+@extern("aether_strbuilder_append_format") append_format(b: ptr, fmt: string, ...) -> int
+
 // Current accumulated length in bytes. Returns -1 if `b` is null.
 length(b: ptr) -> int {
     return aether_strbuilder_length(b)
+}
+
+// Current buffer capacity in bytes. Companion to `length` — useful
+// for confirming a `reserve` hint took or observing growth. Returns
+// -1 if `b` is null.
+capacity(b: ptr) -> int {
+    return aether_strbuilder_capacity(b)
+}
+
+// Pre-grow the buffer so the next `additional` bytes of appends do
+// not reallocate. A performance hint only — the builder grows on
+// demand regardless. `additional` counts from the current length.
+// Returns 1 on success, 0 on failure.
+reserve(b: ptr, additional: int) -> int {
+    return aether_strbuilder_reserve(b, additional)
+}
+
+// Pop accumulated content back to `new_length` bytes. Only shrinks
+// — a `new_length` past the current length is rejected. The buffer
+// is retained, so a truncate-then-append reuse loop keeps the
+// growth amortisation. Returns 1 on success, 0 on failure (null
+// builder, out-of-range `new_length`).
+truncate(b: ptr, new_length: int) -> int {
+    return aether_strbuilder_truncate(b, new_length)
+}
+
+// Reset accumulated content to empty (truncate to 0). The buffer is
+// retained for reuse across loop iterations. Returns 1 on success,
+// 0 if `b` is null.
+clear(b: ptr) -> int {
+    return aether_strbuilder_clear(b)
 }
 
 // Finalise into a refcounted AetherString and destroy the builder.
@@ -94,6 +178,20 @@ length(b: ptr) -> int {
 // codegen's heap-string-tracker reclaims the buffer at scope exit.
 finish(b: ptr) -> string {
     return aether_strbuilder_finish(b)
+}
+
+// Binary-safe finalise: returns the raw data buffer and its exact
+// byte length as `(ptr, int)`, with NO NUL terminator appended —
+// embedded NULs are preserved as content. Use this for binary
+// protocol assembly (CBOR, msgpack, frames, packed records) where
+// the v1 `finish`'s NUL-terminated `string` would be truncated by a
+// strlen-based consumer downstream. The caller owns the returned
+// pointer and MUST free it with a raw libc free (e.g. via
+// `mem`-style handling) — position 0 is `ptr`, so it is not
+// codegen-heap-tracked. An empty builder yields a non-null buffer
+// with length 0. After this call `b` is invalid.
+finish_with_length(b: ptr) -> (ptr, int) {
+    return aether_strbuilder_finish_with_length(b)
 }
 
 // Discard the builder without producing a string. Idempotent on

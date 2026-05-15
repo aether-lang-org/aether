@@ -62,8 +62,58 @@ int aether_strbuilder_append_byte(AetherStrBuilder* b, int c);
  * failure. */
 int aether_strbuilder_append_int(AetherStrBuilder* b, int v);
 
+/* Append the decimal representation of a 64-bit `v`. Sibling of
+ * append_int for IDs, timestamps, and offsets that overflow 32 bits.
+ * Returns 1 on success, 0 on failure. */
+int aether_strbuilder_append_long(AetherStrBuilder* b, long long v);
+
+/* Append `v` as lowercase hexadecimal. `width` is a MINIMUM nibble
+ * count: 0 = natural width, >0 = zero-pad to that many nibbles; a
+ * value needing more nibbles than `width` grows rather than
+ * truncates. Negative `v` is encoded as its unsigned bit pattern.
+ * Returns 1 on success, 0 on failure (negative width, overflow). */
+int aether_strbuilder_append_hex(AetherStrBuilder* b, long long v, int width);
+
+/* UTF-8 encode the Unicode code point `cp` (1–4 bytes) and append it.
+ * Returns 0 — appending nothing — for invalid code points: negative
+ * values, UTF-16 surrogate halves (0xD800–0xDFFF), and anything past
+ * 0x10FFFF. Returns 1 on success. */
+int aether_strbuilder_append_codepoint(AetherStrBuilder* b, int cp);
+
+/* printf-style formatted append. Formats `fmt` + trailing varargs
+ * with vsnprintf and appends the result. A 256-byte stack scratch
+ * covers the common case in one pass; longer output reserves builder
+ * space and formats directly into the tail. Returns 1 on success, 0
+ * on failure (NULL args, encoding error, OOM). */
+int aether_strbuilder_append_format(AetherStrBuilder* b, const char* fmt, ...);
+
 /* Current accumulated length in bytes, or -1 if `b` is NULL. */
 int aether_strbuilder_length(AetherStrBuilder* b);
+
+/* Current buffer capacity in bytes, or -1 if `b` is NULL. The
+ * companion to `length` — mainly useful for confirming a `reserve`
+ * hint took effect / observing the doubling growth. */
+int aether_strbuilder_capacity(AetherStrBuilder* b);
+
+/* Pre-grow the buffer so the next `additional` bytes of appends will
+ * not trigger a reallocation. Pure performance hint — the builder
+ * grows on demand regardless. `additional` is measured from the
+ * current length. Returns 1 on success, 0 on failure (negative
+ * `additional`, overflow, OOM). */
+int aether_strbuilder_reserve(AetherStrBuilder* b, int additional);
+
+/* Pop accumulated content back to `new_length` bytes. Only shrinks:
+ * a `new_length` greater than the current length is rejected (it
+ * would expose uninitialised capacity as content). The buffer is
+ * retained so a truncate-then-append reuse loop keeps the growth
+ * amortisation. Returns 1 on success, 0 on failure (NULL builder,
+ * negative or out-of-range `new_length`). */
+int aether_strbuilder_truncate(AetherStrBuilder* b, int new_length);
+
+/* Reset accumulated content to empty (equivalent to truncate(b, 0)).
+ * The buffer is retained for reuse. Returns 1 on success, 0 if `b`
+ * is NULL. */
+int aether_strbuilder_clear(AetherStrBuilder* b);
 
 /* Finalise into a refcounted AetherString and destroy the builder.
  * After this call, `b` is invalid (do NOT call any strbuilder.* on
@@ -71,6 +121,20 @@ int aether_strbuilder_length(AetherStrBuilder* b);
  * allocation failure; the builder is still destroyed in the latter
  * case so resources don't leak on an OOM finalise. */
 void* aether_strbuilder_finish(AetherStrBuilder* b);
+
+/* Binary-safe finalise. Return shape — layout matches the codegen-
+ * emitted `_tuple_ptr_int` typedef for an Aether `(ptr, int)` return.
+ * `_0` is the raw data buffer, `_1` its exact byte length. */
+typedef struct { void* _0; int _1; } _tuple_ptr_int;
+
+/* Finalise into a raw (buffer, length) pair and destroy the builder.
+ * Unlike `finish`, NO NUL terminator is appended — embedded NULs are
+ * preserved as content, which is what binary-protocol assembly
+ * needs. The caller owns the returned buffer and reclaims it with a
+ * plain libc free(); it is NOT codegen-heap-tracked. An empty
+ * builder yields a non-NULL 1-byte buffer with length 0; a NULL
+ * builder yields {NULL, -1}. After this call `b` is invalid. */
+_tuple_ptr_int aether_strbuilder_finish_with_length(AetherStrBuilder* b);
 
 /* Discard the builder without producing a string. Idempotent on
  * NULL. Use this on error paths where the caller has decided

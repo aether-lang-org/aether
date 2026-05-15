@@ -203,6 +203,17 @@ md_ctx_new() -> ptr {
 
 The annotation accepts a single string literal (the C symbol name). Parameter types and return type are required, exactly as for plain `extern`.
 
+An `@extern` declaration is part of its module's public surface: unlike a bare `extern` C binding (which stays private to its defining file), an `@extern` name declared in a module is callable as `module.name(...)` from any file that imports the module. This is the mechanism a stdlib module uses to expose a C symbol under a clean qualified name without an Aether wrapper.
+
+`@extern` also accepts a trailing `...` for variadic C symbols, exactly like a plain `extern`:
+
+```aether
+@extern("aether_strbuilder_append_format")
+append_format(b: ptr, fmt: string, ...) -> int
+```
+
+Call sites pass any number of trailing arguments literally. This is the only way to give a variadic C function a clean module-qualified name — an ordinary Aether wrapper cannot forward a `...` tail (Aether has no varargs-defining syntax, only varargs-declaring).
+
 ## Exporting an Aether Function as a C Callback — `@c_callback`
 
 The inverse of `@extern`. When a C library wants you to hand it a function pointer — HTTP route handlers, signal handlers, `qsort` comparators, libcurl callbacks, sqlite hooks — annotate the Aether function with `@c_callback`. The compiler emits a stable, externally-visible C symbol that the linker can resolve from any translation unit:

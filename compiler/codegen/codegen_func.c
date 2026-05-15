@@ -48,6 +48,37 @@ const char* lookup_c_callback_symbol(CodeGenerator* gen, const char* name) {
     return NULL;
 }
 
+// Extract the C symbol bound by `@extern("c_symbol")` into `buf`.
+// Returns 1 if `ext` was declared via `@extern` (annotation begins
+// with "c_symbol:"), 0 otherwise. The stored annotation is
+// `c_symbol:NAME` for a plain `@extern` and `c_symbol:NAME;varargs`
+// when the `@extern` declaration also carries a trailing `...`; the
+// `;` delimiter never occurs inside a C identifier, so only NAME is
+// copied out regardless.
+static int extern_c_symbol(const ASTNode* ext, char* buf, size_t bufsz) {
+    if (!ext || !ext->annotation || bufsz == 0) return 0;
+    if (strncmp(ext->annotation, "c_symbol:", 9) != 0) return 0;
+    const char* s = ext->annotation + 9;
+    const char* semi = strchr(s, ';');
+    size_t n = semi ? (size_t)(semi - s) : strlen(s);
+    if (n >= bufsz) n = bufsz - 1;
+    memcpy(buf, s, n);
+    buf[n] = '\0';
+    return 1;
+}
+
+// Is `ext` a variadic extern? True both for the bare
+// `extern foo(fmt: string, ...)` form (annotation == "varargs") and
+// the `@extern("sym") foo(fmt: string, ...)` form (annotation
+// "c_symbol:NAME;varargs"). The `;varargs` suffix is matched with a
+// leading delimiter so a C symbol that merely contains the substring
+// "varargs" can never be misread as variadic.
+static int extern_is_varargs(const ASTNode* ext) {
+    if (!ext || !ext->annotation) return 0;
+    return strcmp(ext->annotation, "varargs") == 0 ||
+           strstr(ext->annotation, ";varargs") != NULL;
+}
+
 // Register an extern function's parameter types for call-site cast emission.
 // Called whenever generate_extern_declaration() processes a function.
 void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
@@ -68,9 +99,11 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
     gen->extern_registry[idx].c_name = NULL;
     // @extern("c_symbol") rebinds the call-site emission to a chosen
     // C symbol while keeping the Aether-side name in the namespace.
-    if (ext->annotation &&
-        strncmp(ext->annotation, "c_symbol:", 9) == 0) {
-        gen->extern_registry[idx].c_name = strdup(ext->annotation + 9);
+    {
+        char c_sym[256];
+        if (extern_c_symbol(ext, c_sym, sizeof(c_sym))) {
+            gen->extern_registry[idx].c_name = strdup(c_sym);
+        }
     }
     gen->extern_registry[idx].param_count = ext->child_count;
     gen->extern_registry[idx].params = NULL;
@@ -330,9 +363,9 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
     // declaration and every call site use the annotated C symbol.
     // Closes #234.
     const char* c_name = ext->value;
-    if (ext->annotation &&
-        strncmp(ext->annotation, "c_symbol:", 9) == 0) {
-        c_name = ext->annotation + 9;
+    char c_sym_buf[256];
+    if (extern_c_symbol(ext, c_sym_buf, sizeof(c_sym_buf))) {
+        c_name = c_sym_buf;
     }
 
     if (extern_name_is_libc_conflict(c_name)) {
@@ -433,15 +466,17 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
             }
         }
     }
-    int is_varargs = ext->annotation && strcmp(ext->annotation, "varargs") == 0;
+    int is_varargs = extern_is_varargs(ext);
     if (first_param && !is_varargs) {
         fprintf(gen->output, "void");
     }
 
     // Variadic externs: append `, ...` to the C prototype.  The
-    // `annotation = "varargs"` flag is set by the parser when the
-    // user writes `extern foo(fmt: string, ...)`.  Standalone `(...)`
-    // (no named params) emits as `(...)`.
+    // varargs flag is set by the parser when the user writes
+    // `extern foo(fmt: string, ...)` (annotation "varargs") or
+    // `@extern("sym") foo(fmt: string, ...)` (annotation
+    // "c_symbol:NAME;varargs").  Standalone `(...)` (no named params)
+    // emits as `(...)`.
     if (is_varargs) {
         if (first_param) {
             fprintf(gen->output, "...");
