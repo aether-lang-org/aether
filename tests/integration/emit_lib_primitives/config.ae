@@ -15,7 +15,10 @@ negate_bool(b: int) {
     return 0
 }
 
-// Float — single-precision (Aether float == C float).
+// Float — Aether `float` is IEEE-754 double-precision and lowers to
+// C `double` at every emission site (see CHANGELOG `## [current]` /
+// 0.[current] TYPE_FLOAT consistency fix). The aether_<name> emit-lib
+// signature therefore has C ABI `double(double, double)`.
 scale(x: float, factor: float) {
     return x * factor
 }

@@ -1,0 +1,88 @@
+// Regression: `extern struct Name { ...; buf: byte[] }` — a trailing
+// array field with no explicit size mirrors a C99 flexible-array
+// member.  Codegen emits `T name[];` (zero-byte field, trailing
+// storage is the caller's responsibility), not `T* name;` (pointer
+// field with 8-byte storage) — the latter is the right lowering for
+// Aether-managed dynamic arrays in a regular `struct`, but the wrong
+// lowering for `extern struct` mirroring a C flex-array header.
+//
+// Use case: mquickjs's `JSString { ...header bitfields...; uint8_t
+// buf[]; }` and similar header-followed-by-bytes layouts where the
+// caller allocates `sizeof(header) + N` and the trailing N bytes
+// hold the payload.
+
+import std.mem
+
+extern malloc(n: int) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+// Flex-array header: int field + byte[] tail.
+extern struct FlexHeader {
+    magic: int
+    buf: byte[]
+}
+
+main() {
+    println("=== test_aether_extern_struct_flex_array ===")
+
+    // Allocate header + 16 bytes of trailing storage.
+    raw = malloc(20)
+    h = raw as *FlexHeader
+    h.magic = 0xCAFE
+    h.buf[0] = 65
+    h.buf[1] = 66
+    h.buf[2] = 67
+
+    if h.magic != 0xCAFE {
+        println("FAIL 1: magic=${h.magic}")
+        exit(1)
+    }
+    if h.buf[0] != 65 || h.buf[1] != 66 || h.buf[2] != 67 {
+        println("FAIL 1: buf=[${h.buf[0]},${h.buf[1]},${h.buf[2]}]")
+        exit(1)
+    }
+    println("  PASS 1: header + flexible byte-buf round-trip")
+
+    // Variable indexing — common loop pattern.
+    int i = 0
+    while i < 10 {
+        h.buf[i] = i * 3
+        i = i + 1
+    }
+    i = 0
+    while i < 10 {
+        if h.buf[i] != i * 3 {
+            println("FAIL 2: buf[${i}]=${h.buf[i]} expected ${i * 3}")
+            exit(1)
+        }
+        i = i + 1
+    }
+    println("  PASS 2: variable indexing read/write loop")
+
+    // Byte-level verification: the flex array starts immediately after
+    // `magic` (no padding for byte alignment), so buf[k] lives at
+    // offset 4+k in the raw buffer.
+    if mem.get_byte(raw, 4) != 0 || mem.get_byte(raw, 5) != 3 || mem.get_byte(raw, 6) != 6 {
+        println("FAIL 3: byte-level offsets don't match")
+        exit(1)
+    }
+    println("  PASS 3: layout offsets match `T name[];` semantics")
+
+    // Confirm sizeof(FlexHeader) is 4, not 16: the flex array
+    // contributes 0 bytes to the struct's reported size in C.
+    // (Aether doesn't have a direct sizeof on extern struct yet,
+    // but we can verify indirectly: writing past raw+4 doesn't
+    // overlap `magic`, which is at offset 0.)
+    h.magic = 0x1234
+    h.buf[0] = 99
+    if h.magic != 0x1234 || h.buf[0] != 99 {
+        println("FAIL 4: layout overlap — magic=${h.magic} buf[0]=${h.buf[0]}")
+        exit(1)
+    }
+    println("  PASS 4: magic and buf[0] don't overlap (flex tail is zero-sized in struct)")
+
+    free(raw)
+
+    println("=== all flex-array tests passed ===")
+}

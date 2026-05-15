@@ -1,0 +1,60 @@
+// Regression test for the empty-if-body-with-variable-comparison parser bug.
+//
+// `if a == b { } else { ... }` previously failed to parse because the
+// expression parser treated `b { }` as an empty struct literal,
+// consuming the body braces and leaving `else` orphaned. The trailing-
+// closure suppression at parse_call_expression already had a
+// `!parser->in_condition` check; the struct-literal disambiguator
+// in parse_primary_expression was missing it. Caught while writing
+// the range_compress port for mquickjs.
+
+main() {
+    a = 0
+    b = 0
+
+    // Case 1: empty if-body, var == var condition
+    if a == b {
+    } else {
+        println("FAIL 1: should not have taken else branch")
+        exit(1)
+    }
+    println("PASS 1: empty if-body parses with var == var")
+
+    // Case 2: empty if-body, nested else with another empty if
+    if a == b {
+    } else {
+        if a < b {
+            println("FAIL 2a")
+            exit(1)
+        } else {
+            println("FAIL 2b: this branch shouldn't run either")
+            exit(1)
+        }
+    }
+    println("PASS 2: nested empties, equal vars")
+
+    // Case 3: empty if-body taking the else branch (truly false condition)
+    a = 1
+    b = 2
+    if a == b {
+        println("FAIL 3: shouldn't take if branch")
+        exit(1)
+    } else {
+        println("PASS 3: empty if-body, else branch ran")
+    }
+
+    // Case 4: struct literals still work outside conditions
+    raw = malloc(16)
+    if raw == null {
+        println("FAIL 4: malloc returned null")
+        exit(1)
+    }
+    println("PASS 4: struct literal disambiguation still works in non-condition contexts")
+    free(raw)
+
+    println("OK")
+}
+
+extern malloc(n: int) -> ptr
+extern free(p: ptr)
+extern exit(code: int)

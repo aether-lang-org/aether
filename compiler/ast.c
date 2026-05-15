@@ -17,6 +17,12 @@ Type* create_type(TypeKind kind) {
     type->param_types = NULL;
     type->param_count = 0;
     type->return_type = NULL;
+    /* Default to closure (`_AeClosure`-shaped). The fnptr-cast parser
+     * path (`expr as fn(...)`) flips this on a freshly-created
+     * TYPE_FUNCTION; closure types created via other paths (typechecker
+     * builtins like `unbox_closure`, function-definition return types)
+     * must NOT inherit garbage from malloc. */
+    type->is_fnptr = 0;
     return type;
 }
 
@@ -215,6 +221,7 @@ Type* clone_type(Type* type) {
     if (type->return_type) {
         new_type->return_type = clone_type(type->return_type);
     }
+    new_type->is_fnptr = type->is_fnptr;
 
     return new_type;
 }
@@ -245,6 +252,7 @@ ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int colu
     node->column = column;
     node->annotation = NULL;
     node->is_imported = 0;
+    node->bit_width = 0;
     node->source_file = NULL;
     return node;
 }
@@ -269,6 +277,7 @@ ASTNode* clone_ast_node(ASTNode* node) {
     clone->node_type = clone_type(node->node_type);
     clone->annotation = node->annotation ? strdup(node->annotation) : NULL;
     clone->is_imported = node->is_imported;
+    clone->bit_width = node->bit_width;
     clone->source_file = node->source_file ? strdup(node->source_file) : NULL;
 
     for (int i = 0; i < node->child_count; i++) {

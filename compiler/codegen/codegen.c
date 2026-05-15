@@ -144,7 +144,48 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
     gen->reply_type_capacity = 0;
+    // Typed fn-pointer locals (issue: TODO #5)
+    gen->fnptr_locals = NULL;
+    gen->fnptr_local_count = 0;
+    gen->fnptr_local_capacity = 0;
     return gen;
+}
+
+/* Register an fn-pointer-typed local so call-site codegen can emit
+ * the matching C function-pointer cast.  `sig` must be a TYPE_FUNCTION
+ * with is_fnptr=1; ownership stays with the AST (we keep a borrow,
+ * which is safe since the AST outlives codegen). */
+void register_fnptr_local(CodeGenerator* gen, const char* name, Type* sig) {
+    if (!gen || !name || !sig) return;
+    /* Replace existing entry on shadow/reassign — most recent type
+     * wins, matching scoping behaviour for local shadowing. */
+    for (int i = 0; i < gen->fnptr_local_count; i++) {
+        if (gen->fnptr_locals[i].name && strcmp(gen->fnptr_locals[i].name, name) == 0) {
+            gen->fnptr_locals[i].signature = sig;
+            return;
+        }
+    }
+    if (gen->fnptr_local_count >= gen->fnptr_local_capacity) {
+        int new_cap = gen->fnptr_local_capacity ? gen->fnptr_local_capacity * 2 : 8;
+        gen->fnptr_locals = realloc(gen->fnptr_locals,
+            (size_t)new_cap * sizeof(*gen->fnptr_locals));
+        gen->fnptr_local_capacity = new_cap;
+    }
+    gen->fnptr_locals[gen->fnptr_local_count].name = strdup(name);
+    gen->fnptr_locals[gen->fnptr_local_count].signature = sig;
+    gen->fnptr_local_count++;
+}
+
+/* Look up an fn-pointer local by name.  Returns the TYPE_FUNCTION
+ * signature (with is_fnptr=1) or NULL if not registered. */
+Type* lookup_fnptr_local(CodeGenerator* gen, const char* name) {
+    if (!gen || !name) return NULL;
+    for (int i = 0; i < gen->fnptr_local_count; i++) {
+        if (gen->fnptr_locals[i].name && strcmp(gen->fnptr_locals[i].name, name) == 0) {
+            return gen->fnptr_locals[i].signature;
+        }
+    }
+    return NULL;
 }
 
 CodeGenerator* create_code_generator_with_header(FILE* output, FILE* header, const char* header_path) {
@@ -741,7 +782,8 @@ void emit_actor_to_header(CodeGenerator* gen, ASTNode* actor) {
                             const char* c_type = "int";
                             switch (field->type_kind) {
                                 case TYPE_INT: c_type = "int"; break;
-                                case TYPE_FLOAT: c_type = "float"; break;
+                                /* See get_c_type() — Aether `float` is always C `double`. */
+                                case TYPE_FLOAT: c_type = "double"; break;
                                 case TYPE_STRING: c_type = "const char*"; break;
                                 case TYPE_BOOL: c_type = "int"; break;
                                 case TYPE_BYTE: c_type = "unsigned char"; break;
@@ -931,7 +973,17 @@ const char* get_c_type(Type* type) {
         case TYPE_INT: return "int";
         case TYPE_INT64: return "int64_t";
         case TYPE_UINT64: return "uint64_t";
-        case TYPE_FLOAT: return "float";
+        /* Aether `float` lowers to C `double`. The naming is legacy
+         * (Aether predates having two FP types), but the storage and
+         * ABI have always been 8-byte IEEE-754 — local variables are
+         * stored as C-double via bare `1.0` literals (which are
+         * C-double, not C-float), and extern function signatures
+         * already emit `double` (see codegen_func.c:325). Struct
+         * fields and forward declarations were the holdouts emitting
+         * 4-byte C `float`, which created an ABI mismatch when an
+         * Aether-defined function was called from C with a `double`
+         * argument. Now consistent everywhere. */
+        case TYPE_FLOAT: return "double";
         case TYPE_BOOL: return "int";
         /* `unsigned char` (not `uint8_t`) so the compiler's strict-aliasing
          * exemption applies: code may legally read or write any other
@@ -1009,6 +1061,11 @@ const char* get_c_type(Type* type) {
             return buffer;
         }
         case TYPE_FUNCTION:
+            /* Typed C function pointer (storage = void*).  The call
+             * site injects a `((R (*)(T1, T2))(v))` cast — keeping the
+             * storage as void* avoids C-side typedef synthesis and
+             * keeps the FFI path uniform across all signatures. */
+            if (type->is_fnptr) return "void*";
             return "_AeClosure";
         case TYPE_UNKNOWN: {
             AetherError w = {NULL, NULL, 0, 0,
@@ -1055,7 +1112,10 @@ static const char* get_abi_type(Type* type) {
         case TYPE_INT:    return "int32_t";
         case TYPE_INT64:  return "int64_t";
         case TYPE_UINT64: return "uint64_t";
-        case TYPE_FLOAT:  return "float";
+        /* Aether `float` is C `double` (8 bytes, binary64) — see
+         * get_c_type() for rationale. The public ABI (`aether_*`
+         * wrapper symbols emitted with --emit=lib) follows suit. */
+        case TYPE_FLOAT:  return "double";
         case TYPE_BOOL:   return "int32_t";
         case TYPE_BYTE:   return "unsigned char";
         case TYPE_STRING: return "const char*";
@@ -2326,6 +2386,43 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
     }
 
+    // Hoist FULL struct body emission to the top of the file (right
+    // after forward typedefs), before any function bodies that might
+    // do `view->field` member access against an imported or locally-
+    // defined struct.  Without this hoist, an imported `extern struct`
+    // whose AST_STRUCT_DEFINITION node is appended AFTER the function
+    // definitions in the merged program tree would only have a
+    // forward decl visible at the function-body emit site, producing
+    // C errors like "invalid use of incomplete typedef".  Hoisting
+    // here matches what a user would write in a hand-rolled .c file:
+    // typedef + full body up top, function bodies below.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* sd = program->children[i];
+        if (sd && sd->type == AST_STRUCT_DEFINITION) {
+            generate_struct_definition(gen, sd);
+        }
+    }
+
+    // Hoist top-level constants the same way.  Imported constants
+    // (via `import mod` → cloned into the consumer's AST as
+    // AST_CONST_DECLARATION with `is_imported=1`) land at the end of
+    // the merged program tree, AFTER consumer function bodies that
+    // may reference them.  Without this hoist, a `#define
+    // mqtypes_JSOBJ_U_OFFSET (24)` produced from `const
+    // JSOBJ_U_OFFSET = 24` in an imported module would appear too
+    // late and the consumer's `(p + mqtypes.JSOBJ_U_OFFSET)`
+    // expression would fail with `undeclared identifier`.  Same fix
+    // shape as the struct hoist above.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* cd = program->children[i];
+        if (cd && cd->type == AST_CONST_DECLARATION &&
+            cd->value && cd->child_count > 0) {
+            fprintf(gen->output, "#define %s (", cd->value);
+            generate_expression(gen, cd->children[0]);
+            fprintf(gen->output, ")\n");
+        }
+    }
+
     // Generate forward declarations for all functions FIRST so that
     // hoisted closure functions can call them without implicit declarations.
     print_line(gen, "// Forward declarations");
@@ -2784,7 +2881,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 }
                 break;
             case AST_STRUCT_DEFINITION:
-                generate_struct_definition(gen, child);
+                // Already emitted in the hoisted struct-body pass above
+                // (before function forward decls), so function bodies
+                // that do `view->field` member access see the full
+                // struct layout regardless of where the struct decl
+                // appeared in the merged program tree.
                 break;
             case AST_MAIN_FUNCTION:
                 generate_main_function(gen, child);
@@ -2795,12 +2896,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 // bodies, so all extern decls are hoisted there.
                 break;
             case AST_CONST_DECLARATION:
-                // Emit top-level constant as #define
-                if (child->value && child->child_count > 0) {
-                    fprintf(gen->output, "#define %s (", child->value);
-                    generate_expression(gen, child->children[0]);
-                    fprintf(gen->output, ")\n");
-                }
+                // Already emitted in the hoisted const-#define pass above.
+                // Hoist matches the struct-definition hoist so imported
+                // constants are visible to consumer function bodies
+                // regardless of where the AST node appears in the
+                // merged program tree.
                 break;
             default:
                 break;

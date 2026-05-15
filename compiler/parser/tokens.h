@@ -108,6 +108,7 @@ typedef enum {
     TOKEN_LSHIFT_ASSIGN,    // '<<='
     TOKEN_RSHIFT_ASSIGN,    // '>>='
     TOKEN_DOTDOT,           // '..' range operator
+    TOKEN_DOTDOTDOT,        // '...' varargs marker (extern only, v1)
 
     // Delimiters
     TOKEN_LEFT_PAREN,

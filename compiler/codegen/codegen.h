@@ -266,6 +266,22 @@ typedef struct {
     }* reply_type_map;
     int reply_type_count;
     int reply_type_capacity;
+
+    // Typed C function-pointer locals: variables whose source-level
+    // type was `fn(T1, T2, ...) -> R` (or that got that type via an
+    // `expr as fn(...)` cast on their initializer).  Storage in C is
+    // void*; the call-site codegen consults this registry to emit
+    // the matching `((R (*)(T1, T2))(name))(args)` cast.  Built by
+    // generate_variable_declaration when the AST node's node_type
+    // is TYPE_FUNCTION with is_fnptr=1.  Lookup is by Aether-side
+    // name (post-namespace-mangling not relevant — fn-pointer locals
+    // are always plain identifiers).
+    struct FnPtrLocal {
+        char* name;            // e.g. "fp"
+        Type* signature;       // TYPE_FUNCTION with is_fnptr=1
+    }* fnptr_locals;
+    int fnptr_local_count;
+    int fnptr_local_capacity;
 } CodeGenerator;
 
 // Code generation functions

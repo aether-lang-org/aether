@@ -148,6 +148,11 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor);
 /* Extern function registry — tracks param types for call-site cast emission */
 void register_extern_func(CodeGenerator* gen, ASTNode* ext);
 int is_extern_func(CodeGenerator* gen, const char* func_name);
+
+/* Typed fn-pointer locals: variables whose source-level type is
+ * `fn(T1, T2, ...) -> R` (storage = void*; call-site emits typed cast). */
+void register_fnptr_local(CodeGenerator* gen, const char* name, Type* sig);
+Type* lookup_fnptr_local(CodeGenerator* gen, const char* name);
 TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int param_idx);
 int is_aether_extern_param(CodeGenerator* gen, const char* func_name, int param_idx);
 /* Returns 1 if extern `func_name`'s parameter at `param_idx` was

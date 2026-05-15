@@ -433,8 +433,21 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
             }
         }
     }
-    if (first_param) {
+    int is_varargs = ext->annotation && strcmp(ext->annotation, "varargs") == 0;
+    if (first_param && !is_varargs) {
         fprintf(gen->output, "void");
+    }
+
+    // Variadic externs: append `, ...` to the C prototype.  The
+    // `annotation = "varargs"` flag is set by the parser when the
+    // user writes `extern foo(fmt: string, ...)`.  Standalone `(...)`
+    // (no named params) emits as `(...)`.
+    if (is_varargs) {
+        if (first_param) {
+            fprintf(gen->output, "...");
+        } else {
+            fprintf(gen->output, ", ...");
+        }
     }
 
     fprintf(gen->output, ");\n\n");
@@ -1299,6 +1312,15 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
 void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
     if (!struct_def || struct_def->type != AST_STRUCT_DEFINITION) return;
 
+    /* `extern struct` (annotation="extern") gets two opt-in C
+     * spellings that don't apply to regular Aether structs:
+     *  - bit-width annotations on integer fields emit C bitfields
+     *  - a trailing array field with no explicit size emits a C
+     *    flexible-array `T name[];` instead of the pointer-shaped
+     *    `T* name;` an Aether-managed dynamic array would use. */
+    int is_extern = struct_def->annotation &&
+                    strcmp(struct_def->annotation, "extern") == 0;
+
     // Generate C struct
     print_line(gen, "typedef struct %s {", struct_def->value);
     indent(gen);
@@ -1334,9 +1356,28 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
                 const char* element_type = get_c_type(field->node_type->element_type);
                 if (field->node_type->array_size > 0) {
                     fprintf(gen->output, "%s %s[%d];\n", element_type, field->value, field->node_type->array_size);
+                } else if (is_extern && i == struct_def->child_count - 1) {
+                    /* Trailing flexible array on an extern struct
+                     * (`buf: byte[]` as the LAST field of an
+                     * `extern struct`).  C spelling is `T name[];`
+                     * with no size — the field takes zero bytes
+                     * inside the struct and the trailing storage is
+                     * whatever the caller allocated past sizeof(struct).
+                     * Used to mirror C flexible-array tails like
+                     * `JSString.buf` (mquickjs.c:524).  The standard
+                     * `T* name` lowering is wrong for this case — it
+                     * would reserve 8 bytes for a pointer instead of
+                     * naming the trailing region. */
+                    fprintf(gen->output, "%s %s[];\n", element_type, field->value);
                 } else {
                     fprintf(gen->output, "%s* %s;\n", element_type, field->value);
                 }
+            } else if (field->bit_width > 0) {
+                // C bitfield: `type name : NN;`. Only meaningful on
+                // extern structs (the layout has to mirror a C-side
+                // declaration with the same bit widths).
+                generate_type(gen, field->node_type);
+                fprintf(gen->output, " %s : %d;\n", field->value, field->bit_width);
             } else {
                 // For non-arrays: type fieldname;
                 generate_type(gen, field->node_type);

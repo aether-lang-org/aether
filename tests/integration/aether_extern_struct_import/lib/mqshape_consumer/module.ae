@@ -1,0 +1,26 @@
+// Second consumer of the shared layout — proves a separate TU's
+// compilation sees the same struct layout as both the main program
+// and the type-defining module.
+
+import mqshape
+
+set_ab(p: ptr, av: int, bv: int) {
+    rec = p as *ABRecord
+    rec.a = av
+    rec.b = bv
+}
+
+read_b(p: ptr) -> int {
+    rec = p as *ABRecord
+    return rec.b
+}
+
+set_on_flag(p: ptr, v: int) {
+    f = p as *Flags
+    f.on = v
+}
+
+read_on_flag(p: ptr) -> int {
+    f = p as *Flags
+    return f.on
+}

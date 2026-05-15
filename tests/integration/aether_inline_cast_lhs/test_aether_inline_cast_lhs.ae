@@ -1,0 +1,84 @@
+// Regression: a statement-level inline-cast LHS assignment parses
+// correctly and writes through to the cast view.
+//
+// Without the statement-boundary guard in parse_postfix_expression,
+// a `(...)` on a fresh line is treated by the parser as a function
+// call applied to whatever expression preceded it on the previous
+// line — producing a bogus AST_FUNCTION_CALL with the previous
+// statement's expression as the callee, which then fails typecheck
+// with `Undefined function '?'`.  The guard skips the `(`-as-call
+// interpretation when the `(` is on a different source line than
+// the previous token, which matches how Aether already disambiguates
+// trailing-block braces.
+
+import std.mem
+
+extern malloc(n: int) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+struct Slot {
+    x: int
+    y: int
+}
+
+main() {
+    println("=== test_aether_inline_cast_lhs ===")
+
+    // Case 1: bare `(p as *T).field = v` at statement level.
+    raw = malloc(16)
+    (raw as *Slot).x = 11
+    (raw as *Slot).y = 22
+    view = raw as *Slot
+    if view.x != 11 || view.y != 22 {
+        println("FAIL 1: bare inline-cast LHS — x=${view.x} y=${view.y}")
+        exit(1)
+    }
+    println("  PASS 1: bare `(p as *T).field = v`")
+
+    // Case 2: nested-paren `((p + offset) as *T).field = v` —
+    // the actual mquickjs-port shape using ptr arithmetic.
+    raw2 = malloc(32)
+    // Write at offset 8 (slot.x) and offset 12 (slot.y).
+    ((raw2 + 8) as *Slot).x = 33
+    ((raw2 + 8) as *Slot).y = 44
+
+    // Verify via std.mem byte-level reads at the expected offsets.
+    // Slot.x is `int` (4 bytes) at offset 0 of the cast view, so it
+    // lives at raw2 + 8 + 0 = raw2[8]; Slot.y is at raw2 + 8 + 4 = raw2[12].
+    if mem.get_int(raw2, 8) != 33 {
+        println("FAIL 2a: byte-level slot.x = ${mem.get_int(raw2, 8)}")
+        exit(1)
+    }
+    if mem.get_int(raw2, 12) != 44 {
+        println("FAIL 2b: byte-level slot.y = ${mem.get_int(raw2, 12)}")
+        exit(1)
+    }
+    println("  PASS 2: nested-paren `((p + N) as *T).field = v`")
+
+    // Case 3: inline-cast as RHS in an expression context — was
+    // already working pre-fix (only the LHS-at-statement-start path
+    // was broken).  Confirms the fix didn't regress the read path.
+    view3 = raw as *Slot
+    sum = (raw as *Slot).x + (raw as *Slot).y
+    if sum != view3.x + view3.y {
+        println("FAIL 3: inline-cast RHS sum=${sum}")
+        exit(1)
+    }
+    println("  PASS 3: inline-cast as RHS expression")
+
+    // Case 4: previous line is a function call — the failure mode
+    // that drove the fix.  Without the guard, `println("done")\n(...).x = v`
+    // parses as `println("done")(...)`.
+    println("  about to do inline-cast after a function call")
+    (raw as *Slot).x = 99
+    if view.x != 99 {
+        println("FAIL 4: post-call inline-cast — x=${view.x}")
+        exit(1)
+    }
+    println("  PASS 4: inline-cast LHS after a previous-line call")
+
+    free(raw)
+    free(raw2)
+    println("=== all inline-cast-lhs tests passed ===")
+}

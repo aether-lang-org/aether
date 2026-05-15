@@ -287,9 +287,63 @@ Type* parse_type(Parser* parser) {
             break;
         case TOKEN_IDENTIFIER: {
             advance_token(parser);
-            // "fn" is the closure/function type
+            // "fn" is the closure/function type.  Two forms:
+            //   bare `fn`              — closure, no concrete signature
+            //   `fn(T1, T2, ...) -> R` — typed C function pointer:
+            //     emits as `void*` storage with a typed C cast injected
+            //     at the call site.  Used to declare local variables /
+            //     parameters holding a raw `ptr` returned from a C
+            //     extern (vtable lookup, signal handler table, qsort
+            //     callback handoff) so Aether can `fp(a, b)` directly
+            //     instead of routing through bespoke per-signature
+            //     `mem.call_fn3_int` shims.
             if (strcmp(token->value, "fn") == 0) {
                 type = create_type(TYPE_FUNCTION);
+                // Optional signature: `(T1, T2, ...) -> R`.  The
+                // signature is OPTIONAL so bare `fn` keeps working
+                // for closures whose param types come from inference.
+                // When the signature IS provided we treat this as a
+                // raw C function pointer (is_fnptr = 1) — storage
+                // `void*`, call site emits the matching typed cast.
+                // Bare `fn` keeps the closure semantics.
+                if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_PAREN) {
+                    type->is_fnptr = 1;
+                    advance_token(parser);  // consume '('
+                    type->param_count = 0;
+                    type->param_types = NULL;
+                    if (!(peek_token(parser) && peek_token(parser)->type == TOKEN_RIGHT_PAREN)) {
+                        do {
+                            Type* p = parse_type(parser);
+                            if (!p) {
+                                parser_error(parser, "Expected type in fn() signature");
+                                free_type(type);
+                                return NULL;
+                            }
+                            type->param_count++;
+                            type->param_types = realloc(type->param_types,
+                                (size_t)type->param_count * sizeof(Type*));
+                            type->param_types[type->param_count - 1] = p;
+                        } while (match_token(parser, TOKEN_COMMA));
+                    }
+                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                        free_type(type);
+                        return NULL;
+                    }
+                    // Return type after `->`.  Omitting `-> R` means
+                    // void return (consistent with extern/function
+                    // syntax elsewhere).
+                    if (peek_token(parser) && peek_token(parser)->type == TOKEN_ARROW) {
+                        advance_token(parser);  // consume `->`
+                        type->return_type = parse_type(parser);
+                        if (!type->return_type) {
+                            parser_error(parser, "Expected return type after `->` in fn() signature");
+                            free_type(type);
+                            return NULL;
+                        }
+                    } else {
+                        type->return_type = create_type(TYPE_VOID);
+                    }
+                }
             } else {
                 // Could be a struct type
                 type = create_type(TYPE_STRUCT);
@@ -608,8 +662,17 @@ ASTNode* parse_primary_expression(Parser* parser) {
             // A struct literal has the pattern: TypeName { field: value } or TypeName {}
             // A block-preceding identifier has statements (not field:) after the {.
             // Look 2-3 tokens ahead to check for the struct literal pattern.
+            //
+            // BUT not when we're inside an if/while/for condition — there
+            // the `{` after the identifier is the start of the statement's
+            // body, not a struct literal. Otherwise `if a == b {}` would
+            // greedily parse `b {}` as an empty struct literal and consume
+            // the body's braces, leaving `else` orphaned in the outer
+            // block. Same shape as the trailing-closure suppression above
+            // (parse_call_expression). Caught while writing range_compress
+            // for the mquickjs port.
             bool looks_like_struct = false;
-            if (next && next->type == TOKEN_LEFT_BRACE) {
+            if (next && next->type == TOKEN_LEFT_BRACE && !parser->in_condition) {
                 Token* after_brace = peek_ahead(parser, 2);
                 if (after_brace && after_brace->type == TOKEN_RIGHT_BRACE) {
                     // TypeName {} — empty struct literal
@@ -948,21 +1011,57 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
         }
 
         if (op->type == TOKEN_AS) {
-            // Pointer-overlay struct cast: `expr as *StructName`
-            // Views a raw `ptr`-typed value as a pointer-to-struct so
-            // member access (`view.field`) can reach struct fields. The
-            // `ptr` operand's lifetime is the caller's problem — the
-            // cast does NOT allocate, refcount, or auto-free. This is
-            // the systems-programming escape hatch for FFI shapes that
-            // overlay struct headers on raw memory (e.g. QuickJS-style
-            // tagged-pointer ports). The leading `*` makes the
-            // pointer-ness visible in source; the result type is
-            // spelled `*StructName` and matches type annotations on
-            // function parameters, struct fields, etc. The keyword
-            // token TOKEN_AS is shared with `import x as y` aliasing;
-            // that's parsed only inside import statements so there's
-            // no collision.
+            // Pointer-overlay cast.  Two destination shapes:
+            //   `expr as *StructName`           — struct overlay
+            //   `expr as fn(T1, T2, ...) -> R`  — typed function-ptr
+            //
+            // Struct form: views a raw `ptr`-typed value as a
+            // pointer-to-struct so member access (`view.field`) can
+            // reach struct fields. The `ptr` operand's lifetime is the
+            // caller's problem — the cast does NOT allocate, refcount,
+            // or auto-free. This is the systems-programming escape
+            // hatch for FFI shapes that overlay struct headers on raw
+            // memory (e.g. QuickJS-style tagged-pointer ports). The
+            // leading `*` makes the pointer-ness visible in source;
+            // the result type is spelled `*StructName` and matches
+            // type annotations on function parameters, struct fields,
+            // etc.
+            //
+            // Fn form: views a raw `ptr`-typed value (typically a
+            // function pointer returned by a C extern) as a typed
+            // callable.  The signature is carried on the AST node's
+            // node_type and consumed at the call site to emit the
+            // matching `((R (*)(T1, T2))(p))(a, b)` C cast.  No
+            // typedef synthesis, no storage change — locals of fn-type
+            // stay `void*`-shaped in the emitted C.  Use case: storing
+            // a vtable lookup result then invoking it directly with
+            // type checking instead of routing through bespoke
+            // per-signature `mem.call_fn3_*` shims.
+            //
+            // The keyword token TOKEN_AS is shared with `import x as y`
+            // aliasing; that's parsed only inside import statements so
+            // there's no collision.
             advance_token(parser);  /* consume `as` */
+            Token* next = peek_token(parser);
+            if (next && next->type == TOKEN_IDENTIFIER && next->value &&
+                strcmp(next->value, "fn") == 0) {
+                /* `as fn(...) -> R` — reuse parse_type's `fn(...) -> R`
+                 * branch so the signature parsing lives in one place. */
+                Type* fn_type = parse_type(parser);
+                if (!fn_type) return NULL;
+                if (fn_type->kind != TYPE_FUNCTION || fn_type->param_count < 0) {
+                    parser_error(parser, "Expected fn(T1, T2, ...) -> R after `as`");
+                    free_type(fn_type);
+                    return NULL;
+                }
+                ASTNode* cast = create_ast_node(AST_PTR_AS_FN_CAST,
+                                                NULL,
+                                                op->line, op->column);
+                cast->node_type = fn_type;
+                add_child(cast, expr);
+                expr = cast;
+                continue;
+            }
             if (!expect_token(parser, TOKEN_MULTIPLY)) return NULL;
             Token* struct_name_tok = expect_token(parser, TOKEN_IDENTIFIER);
             if (!struct_name_tok) return NULL;
@@ -976,6 +1075,30 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
         
         if (op->type == TOKEN_LEFT_PAREN) {
             // Function call: expr(arg1, arg2, ...)
+            //
+            // Statement-boundary guard: if the `(` is on a different
+            // source line from the previous token, treat it as the
+            // start of a NEW statement (a leading `(parenthesized
+            // expression)` whose member/cast result the user wants
+            // to assign into) rather than as a call applied to the
+            // expression we've parsed so far.  Aether doesn't require
+            // semicolons; this same "newline acts as statement
+            // separator unless the next token clearly continues"
+            // heuristic is already used for trailing-block braces
+            // (line ~1180 below).  Without this guard,
+            //     println("foo")
+            //     (raw as *T).field = v
+            // parses as `println("foo")(raw as *T).field = v` — one
+            // expression — producing a bogus AST_FUNCTION_CALL with
+            // expr=AST_BINARY_EXPRESSION as the callee, which then
+            // fails typecheck with `Undefined function '?'`.
+            int prev_line = (parser->current_token > 0)
+                ? parser->tokens[parser->current_token - 1]->line
+                : -1;
+            if (op->line != prev_line) {
+                break;  // not a call — let parse_statement see the `(` as a fresh statement
+            }
+
             // Extract function name - handle both simple and namespaced calls
             const char* func_name = NULL;
             if (expr && expr->type == AST_IDENTIFIER && expr->value) {
@@ -2741,6 +2864,94 @@ ASTNode* parse_extern_declaration(Parser* parser) {
     Token* extern_token = expect_token(parser, TOKEN_EXTERN);
     if (!extern_token) return NULL;
 
+    /* `extern struct Name { ... }` — declares a C struct whose
+     * layout the user is asserting matches the C side.  The Aether-
+     * side emit produces the same C struct declaration so codegen
+     * can do `view->field` member access via the standard `*Name`
+     * overlay path.  Field decls accept an optional `: NN` bit-width
+     * suffix for C bitfield support:
+     *
+     *     extern struct JSObject {
+     *         class_id: byte         // plain field
+     *     }
+     *
+     *     extern struct JSString {
+     *         is_unique: int : 1     // bitfield, 1 bit
+     *         is_ascii:  int : 1
+     *         len:       int : 27
+     *     }
+     *
+     * The user is responsible for ensuring the C-side layout matches
+     * — Aether emits the struct definition into its .gen.c file;
+     * if the surrounding C code has a competing definition under the
+     * same name in the SAME translation unit, that's a duplicate-
+     * typedef error.  Typical usage: the C side defines the struct
+     * in a private header that the .gen.c does NOT include, so each
+     * TU sees exactly one definition.  Layouts agree by construction
+     * if the Aether spelling matches the C spelling.
+     */
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_STRUCT) {
+        advance_token(parser);  // consume `struct`
+        Token* sname = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!sname) return NULL;
+        ASTNode* sd = create_ast_node(AST_STRUCT_DEFINITION, sname->value,
+                                      extern_token->line, extern_token->column);
+        sd->annotation = strdup("extern");
+        if (!expect_token(parser, TOKEN_LEFT_BRACE)) {
+            free_ast_node(sd);
+            return NULL;
+        }
+        while (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+            if (is_at_end(parser)) {
+                parser_error(parser, "Unexpected end of extern struct definition");
+                free_ast_node(sd);
+                return NULL;
+            }
+            /* Field: `name: type` (with optional `: NN` bit-width). */
+            Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!fname) { free_ast_node(sd); return NULL; }
+            ASTNode* field = create_ast_node(AST_STRUCT_FIELD, fname->value,
+                                             fname->line, fname->column);
+            if (!expect_token(parser, TOKEN_COLON)) {
+                free_ast_node(field);
+                free_ast_node(sd);
+                return NULL;
+            }
+            Type* ftype = parse_type(parser);
+            if (!ftype) {
+                free_ast_node(field);
+                free_ast_node(sd);
+                return NULL;
+            }
+            field->node_type = ftype;
+            /* Optional bit-width: `: NN` after the type. */
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
+                advance_token(parser);  // consume second ':'
+                Token* width_tok = expect_token(parser, TOKEN_NUMBER);
+                if (!width_tok || !width_tok->value) {
+                    parser_error(parser, "expected bit width after `:`");
+                    free_ast_node(field);
+                    free_ast_node(sd);
+                    return NULL;
+                }
+                int w = atoi(width_tok->value);
+                if (w <= 0 || w > 64) {
+                    parser_error(parser, "bit width out of range (1..64)");
+                    free_ast_node(field);
+                    free_ast_node(sd);
+                    return NULL;
+                }
+                field->bit_width = w;
+            }
+            add_child(sd, field);
+            /* Optional separator. */
+            if (!match_token(parser, TOKEN_COMMA)) {
+                match_token(parser, TOKEN_SEMICOLON);
+            }
+        }
+        return sd;
+    }
+
     Token* name = expect_token(parser, TOKEN_IDENTIFIER);
     if (!name) return NULL;
 
@@ -2750,8 +2961,19 @@ ASTNode* parse_extern_declaration(Parser* parser) {
                                            extern_token->line, extern_token->column);
 
     // Parse parameters with types: param: type, param2: type
+    // Trailing `...` marks the extern as variadic (C-style, v1):
+    //     extern printf(fmt: string, ...) -> int
+    // The `...` may appear as the sole "param" or after a comma
+    // following the last named parameter.
     if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
         do {
+            // Check for trailing `...`
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_DOTDOTDOT) {
+                advance_token(parser);  // consume '...'
+                if (extern_func->annotation) free(extern_func->annotation);
+                extern_func->annotation = strdup("varargs");
+                break;
+            }
             Token* param_name = expect_token(parser, TOKEN_IDENTIFIER);
             if (!param_name) break;
 

@@ -173,7 +173,31 @@ Type* infer_from_binary_op(Type* left, Type* right, const char* operator) {
         if (left->kind == TYPE_INT64 || right->kind == TYPE_INT64) {
             return create_type(TYPE_INT64);
         }
-        // ptr arithmetic: ptr +-*/ int → int (common in Aether's C interop)
+        // ptr arithmetic for + and -: result is ptr (real pointer
+        // offsetting). ptr - ptr would be ptrdiff_t, currently lowered
+        // as int — leave as-is until a use case surfaces. The previous
+        // version of this rule said `ptr +-*/ int → int` which silently
+        // truncated 64-bit pointers when stored in an inferred-type
+        // local variable; high-address heap allocations on Linux x86_64
+        // (typically ~0x55_5555_5555_0000+) would get clobbered. Real
+        // C ptr arithmetic — used by mquickjs port — needs ptr-result.
+        if (strcmp(operator, "+") == 0 || strcmp(operator, "-") == 0) {
+            if ((left->kind == TYPE_PTR && right->kind == TYPE_INT) ||
+                (left->kind == TYPE_PTR && right->kind == TYPE_INT64)) {
+                return create_type(TYPE_PTR);
+            }
+            if (left->kind == TYPE_INT && right->kind == TYPE_PTR) {
+                return create_type(TYPE_PTR);
+            }
+            // ptr - ptr: caller doing pointer-difference arithmetic
+            if (left->kind == TYPE_PTR && right->kind == TYPE_PTR &&
+                strcmp(operator, "-") == 0) {
+                return create_type(TYPE_INT64);
+            }
+        }
+        // For *, /, % on ptr/int: keep the legacy "ptr-as-int" behavior
+        // (some Aether code uses ptr to box int values; multiplying makes
+        // no sense for real pointer arithmetic). Result is int.
         if ((left->kind == TYPE_PTR && right->kind == TYPE_INT) ||
             (left->kind == TYPE_INT && right->kind == TYPE_PTR)) {
             return create_type(TYPE_INT);
@@ -353,14 +377,26 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
             for (int i = 0; i < node->child_count; i++) {
                 collect_constraints(node->children[i], ctx);
             }
-            
+
             // Look up function definition to get return type
             if (node->value) {
                 Symbol* func_sym = lookup_qualified_symbol(ctx->symbols, node->value);
                 if (func_sym && func_sym->type) {
-                    // Function call inherits the function's return type
                     if (!node->node_type || node->node_type->kind == TYPE_UNKNOWN) {
-                        node->node_type = clone_type(func_sym->type);
+                        /* Calling an fn-typed local (is_fnptr=1): the
+                         * call's result type is the function-type's
+                         * return slot, NOT the full function type.
+                         * Without this carve-out, `result = fp(...)`
+                         * would stamp `result` as having type
+                         * `fn(int, int) -> int` instead of `int`. */
+                        if (func_sym->type->kind == TYPE_FUNCTION &&
+                            func_sym->type->is_fnptr &&
+                            func_sym->type->return_type) {
+                            node->node_type = clone_type(func_sym->type->return_type);
+                        } else {
+                            // Function call inherits the function's return type
+                            node->node_type = clone_type(func_sym->type);
+                        }
                     }
                 }
             }
