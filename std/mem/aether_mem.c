@@ -95,17 +95,17 @@ int aether_mem_set_ptr(void* p, int offset, void* value) {
  * (mquickjs's __unicode_from_utf8 and friends). Aether caller
  * mallocs a slot, the C signature sees size_t*, the Aether code
  * reads/writes via this. */
-long aether_mem_get_long(void* p, int offset) {
+int64_t aether_mem_get_long(void* p, int offset) {
     if (!p) return 0;
-    return (long)*(int64_t*)((char*)p + offset);
+    return *(int64_t*)((char*)p + offset);
 }
 
 /* Write `value` as an int64_t into the slot at byte offset `offset`
  * of `p`. Returns 1 on success, 0 if `p` is NULL. Slot must be
  * 8-byte-aligned and at least 8 bytes (caller's responsibility). */
-int aether_mem_set_long(void* p, int offset, long value) {
+int aether_mem_set_long(void* p, int offset, int64_t value) {
     if (!p) return 0;
-    *(int64_t*)((char*)p + offset) = (int64_t)value;
+    *(int64_t*)((char*)p + offset) = value;
     return 1;
 }
 
@@ -135,7 +135,7 @@ int aether_mem_clz32(int value) {
 }
 
 /* Count leading zeros in a 64-bit value. UB if value is 0. */
-int aether_mem_clz64(long value) {
+int aether_mem_clz64(int64_t value) {
     return __builtin_clzll((unsigned long long)value);
 }
 
@@ -152,14 +152,14 @@ int aether_mem_clz64(long value) {
  * Caller is responsible for matching the actual signature. v1
  * supports just the 3-param shape used by rqsort_idx; future
  * shapes can grow alongside additional ports. */
-int aether_mem_call_fn3_int(void* fn, long a, long b, void* opaque) {
+int aether_mem_call_fn3_int(void* fn, int64_t a, int64_t b, void* opaque) {
     if (!fn) return 0;
     typedef int (*fn_t)(size_t, size_t, void*);
     return ((fn_t)fn)((size_t)a, (size_t)b, opaque);
 }
 
 /* Same shape but for void-returning callbacks (e.g. swap fn). */
-void aether_mem_call_fn3_void(void* fn, long a, long b, void* opaque) {
+void aether_mem_call_fn3_void(void* fn, int64_t a, int64_t b, void* opaque) {
     if (!fn) return;
     typedef void (*fn_t)(size_t, size_t, void*);
     ((fn_t)fn)((size_t)a, (size_t)b, opaque);
@@ -189,7 +189,7 @@ void aether_mem_call_fn2_void(void* fn, void* a, void* b) {
  * multi-precision long-division loop. The high limb shifted left
  * 32 + low limb routinely has bit 63 set, so signed division
  * fails; this primitive supplies the unsigned semantic. */
-int aether_mem_udiv64_32(long dividend, int divisor, void* premainder) {
+int aether_mem_udiv64_32(int64_t dividend, int divisor, void* premainder) {
     if (!premainder || divisor == 0) return 0;
     uint64_t a = (uint64_t)dividend;
     uint32_t b = (uint32_t)divisor;
@@ -212,22 +212,21 @@ int aether_mem_udiv64_32(long dividend, int divisor, void* premainder) {
  * `float64_as_uint64(d)` (defined as a union-pun in cutils.h).
  * Aether has no `union { double; int64; }` equivalent, so this
  * extern is the same primitive. */
-long aether_mem_bits_of_float(double value) {
+int64_t aether_mem_bits_of_float(double value) {
     int64_t bits;
     /* memcpy is the strict-aliasing-safe way to reinterpret. Modern
      * compilers (gcc -O1+, clang -O1+) emit a single `movq xmm,r`
      * instruction — same code as the union-pun, just without the
      * aliasing footgun. */
     __builtin_memcpy(&bits, &value, sizeof(bits));
-    return (long)bits;
+    return bits;
 }
 
 /* Inverse of aether_mem_bits_of_float — reconstitute a double from
  * its 64-bit bit pattern. Same memcpy idiom, same compiled code. */
-double aether_mem_float_from_bits(long bits) {
+double aether_mem_float_from_bits(int64_t bits) {
     double value;
-    int64_t b = (int64_t)bits;
-    __builtin_memcpy(&value, &b, sizeof(value));
+    __builtin_memcpy(&value, &bits, sizeof(value));
     return value;
 }
 
@@ -355,8 +354,8 @@ int aether_mem_set_float64(void* p, int offset, double value) {
  * (tag-bit testing on a tagged-pointer-as-int representation that
  * came back through mem.get_long) need the full integer view, then
  * convert back to ptr for the deref. */
-long aether_mem_ptr_to_long(void* p) {
-    return (long)(uintptr_t)p;
+int64_t aether_mem_ptr_to_long(void* p) {
+    return (int64_t)(uintptr_t)p;
 }
 
 /* Inverse of aether_mem_ptr_to_long. Used after stripping a tag-bit
@@ -364,6 +363,6 @@ long aether_mem_ptr_to_long(void* p) {
  * (so the tag arithmetic could happen as integer ops); the un-tagged
  * address then gets converted back to ptr for indexed reads via
  * mem.get_long / mem.get_ptr. */
-void* aether_mem_long_to_ptr(long addr) {
+void* aether_mem_long_to_ptr(int64_t addr) {
     return (void*)(uintptr_t)addr;
 }

@@ -196,7 +196,23 @@ fi
 # Case 4: end-to-end C-glue interop — Aether declares the layout,
 # C glue mutates it via the same struct name, Aether reads back.
 # This is the real-world shape (mquickjs's JSObject etc.).
+#
+# Skipped on Windows MinGW: the final link pulls in libaether's
+# `-ldl` dependency which doesn't exist on Windows (no dlopen).
+# Cases 1-3 cover the language-level surface; case 4 only adds the
+# real-world linking shape, which the rest of the test suite
+# already exercises through portable-link paths.
 # -----------------------------------------------------------------
+SKIP_CASE_4=0
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        SKIP_CASE_4=1
+        echo "  [SKIP] case 4 (C-interop link) on Windows: -ldl unavailable"
+        ;;
+esac
+
+if [ "$SKIP_CASE_4" = 0 ]; then
+
 cat > "$tmpdir/case4.ae" <<'AE'
 extern struct Header {
     magic: int
@@ -290,6 +306,7 @@ if [ "$got" != "$expected" ]; then
     echo "    got: $got"
     exit 1
 fi
+fi  # SKIP_CASE_4 guard
 
 # -----------------------------------------------------------------
 # Case 5: regression — non-extern `struct` (the existing Aether-side

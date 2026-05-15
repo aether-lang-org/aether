@@ -132,7 +132,21 @@ fi
 # that defines the underlying functions, run the binary, check the
 # output bytes.  This is the proof that the cast machinery
 # round-trips real argument and return values through the C ABI.
+#
+# Skipped on Windows MinGW: the final link pulls in libaether's
+# `-ldl` dependency which doesn't exist on Windows (no dlopen).
+# Cases 1-3 cover the language-level surface (typed casts, signatures,
+# void-return); case 4 only adds the real-world linking shape.
 # -----------------------------------------------------------------
+SKIP_CASE_4=0
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        SKIP_CASE_4=1
+        echo "  [SKIP] case 4 (C-interop link) on Windows: -ldl unavailable"
+        ;;
+esac
+
+if [ "$SKIP_CASE_4" = 0 ]; then
 cat > "$tmpdir/case4.ae" <<'AE'
 extern get_adder() -> ptr
 extern get_doubler() -> ptr
@@ -196,6 +210,7 @@ if [ "$got" != "$expected" ]; then
     echo "  got:"      ; echo "$got"      | sed 's/^/    /'
     exit 1
 fi
+fi  # SKIP_CASE_4 guard
 
 # -----------------------------------------------------------------
 # Case 5: bare `fn` (no signature) still works for closures.
