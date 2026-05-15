@@ -17,6 +17,12 @@ Type* create_type(TypeKind kind) {
     type->param_types = NULL;
     type->param_count = 0;
     type->return_type = NULL;
+    /* Default to closure (`_AeClosure`-shaped). The fnptr-cast parser
+     * path (`expr as fn(...)`) flips this on a freshly-created
+     * TYPE_FUNCTION; closure types created via other paths (typechecker
+     * builtins like `unbox_closure`, function-definition return types)
+     * must NOT inherit garbage from malloc. */
+    type->is_fnptr = 0;
     return type;
 }
 
