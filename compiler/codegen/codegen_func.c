@@ -1423,7 +1423,7 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
             ASTNode* field = struct_def->children[i];
             if (field->type == AST_STRUCT_FIELD &&
                 field->node_type && field->node_type->kind == TYPE_STRING) {
-                print_line(gen, "if (s->_heap_%s) { free((void*)s->%s); s->%s = (const char*)0; s->_heap_%s = 0; }",
+                print_line(gen, "if (s->_heap_%s) { aether_heap_str_free(s->%s); s->%s = (const char*)0; s->_heap_%s = 0; }",
                            field->value, field->value, field->value, field->value);
             }
         }

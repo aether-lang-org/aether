@@ -521,7 +521,7 @@ static int try_emit_heap_string_exit_free(CodeGenerator* gen, ASTNode* deferred)
     if (!*name) return 0;
     print_indent(gen);
     fprintf(gen->output,
-            "/* deferred */ if (_heap_%s) { free((void*)%s); %s = NULL; _heap_%s = 0; }\n",
+            "/* deferred */ if (_heap_%s) { aether_heap_str_free(%s); %s = NULL; _heap_%s = 0; }\n",
             name, name, name, name);
     return 1;
 }
@@ -2020,6 +2020,39 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    _d[_n] = '\\0';");
     print_line(gen, "    return (const char*)_d;");
     print_line(gen, "}");
+    /* AetherString-aware heap-string release. A `_heap_<name>` slot
+     * tracked by the codegen can hold two physically distinct shapes:
+     *
+     *   - a plain libc-malloc'd char* — string.concat, interpolation,
+     *     and `@heap` externs (fs.realpath, os.run_capture) all return
+     *     this; a plain free() reclaims it fully.
+     *   - a refcounted AetherString* — struct plus a SEPARATELY
+     *     allocated data buffer (`string_new_with_length`, the result
+     *     shape behind `bytes.finish`). free() on the struct alone
+     *     leaks the data buffer; the whole value must go through
+     *     `string_release`, which frees both with their recorded
+     *     sizes.
+     *
+     * Probe the AetherString magic header byte-by-byte with short-
+     * circuit (ASan-clean on 1-byte allocations — identical shape to
+     * aether_uniform_heap_str above and is_aether_string in
+     * std/string/aether_string.h). On a hit, route to string_release;
+     * string_release re-validates the full header internally, so a
+     * plain char* whose first four bytes coincidentally match the
+     * magic degrades to a 1-in-2^32 no-op (a leak, never a crash).
+     * string_release is forward-declared with the `const char*`
+     * signature the extern-registry pass also uses, so the duplicate
+     * declaration is tolerated by C. */
+    print_line(gen, "extern void string_release(const char*);");
+    print_line(gen, "static inline void aether_heap_str_free(const char* s) {");
+    print_line(gen, "    if (!s) return;");
+    print_line(gen, "    const unsigned char* _hp = (const unsigned char*)s;");
+    print_line(gen, "    if (_hp[0] == 0xDE && _hp[1] == 0xC0 && _hp[2] == 0x57 && _hp[3] == 0xAE) {");
+    print_line(gen, "        string_release(s);");
+    print_line(gen, "    } else {");
+    print_line(gen, "        free((void*)s);");
+    print_line(gen, "    }");
+    print_line(gen, "}");
     /* String interpolation helper — portable, always available */
     print_line(gen, "#include <stdarg.h>");
     print_line(gen, "static void* _aether_interp(const char* fmt, ...) {");
@@ -2045,12 +2078,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
      * `string_new_with_length` clones the source bytes into a fresh
      * refcounted AetherString. Exposed here so the message-send
      * codegen doesn't re-emit the prototype at every call site.
-     * `string_release` is NOT declared here — it's already declared
-     * later by the extern-registry pass (parameter type `const char*`,
-     * not `const void*`). Adding our own would create a conflicting-
-     * types error at the registry's re-declaration. The
-     * <Msg>_release_fields function uses string_release after the
-     * registry's declaration is visible. */
+     * `string_release` is forward-declared with the extern-registry
+     * pass's `const char*` signature above (next to the
+     * aether_heap_str_free helper). Both that declaration and the
+     * extern-registry / <Msg>_release_fields ones are identical, so
+     * the duplicates are tolerated by C — no conflicting-types error. */
     print_line(gen, "extern void* string_new_with_length(const char* data, int length);");
     /* Issue #467: list / map heap-string-value owning-add helpers.
      * Prototypes emitted here so codegen can route `list.add(l,
