@@ -131,11 +131,19 @@ if ! AETHER_HOME="$ROOT" "$AE" run "$tmpdir/case2.ae" > "$tmpdir/case2.out" 2>&1
     exit 1
 fi
 # Signed 1-bit bitfield: value `1` displays as -1 (high bit = sign).
-got=$(cat "$tmpdir/case2.out")
+# On macOS clang this emits a -Wsingle-bit-bitfield-constant-conversion
+# warning into the C compile step; the run-output redirect captures it
+# via 2>&1. The warning is descriptive ("changes value from 1 to -1") —
+# i.e. clang is confirming the same semantics we test for — but its
+# presence in the buffer breaks an exact-match. Filter to the program
+# output line; the println shape is deterministic.
+got=$(grep '^on=' "$tmpdir/case2.out" || true)
 if [ "$got" != "on=-1 off=0 val=1000" ]; then
     echo "  [FAIL] case 2: output mismatch (note signed 1-bit semantics)"
     echo "    expected: on=-1 off=0 val=1000"
     echo "    got: $got"
+    echo "    full out:"
+    cat "$tmpdir/case2.out" | sed 's/^/      /'
     exit 1
 fi
 
