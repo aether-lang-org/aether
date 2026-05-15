@@ -7,7 +7,7 @@
 
 typedef int64_t (*i64_fn)(int64_t);
 typedef int32_t (*i32_fn)(int32_t);
-typedef float   (*f_fn)(float, float);
+typedef double  (*f_fn)(double, double);
 
 int main(int argc, char** argv) {
     if (argc < 2) return 2;
@@ -29,9 +29,13 @@ int main(int argc, char** argv) {
     if (negb(1) != 0) FAIL("negate_bool(1) expected 0, got %d", negb(1));
     if (negb(42) != 0) FAIL("negate_bool(42) expected 0 (truthy), got %d", negb(42));
 
-    /* float — single-precision; check close enough */
-    float s = scale(3.0f, 2.5f);
-    if (fabsf(s - 7.5f) > 1e-5f) FAIL("scale(3.0, 2.5) = %f, expected 7.5", s);
+    /* float — Aether `float` is IEEE-754 double-precision (C double).
+     * The TYPE_FLOAT codegen-consistency fix (0.[current]) made every
+     * emission site lower TYPE_FLOAT to C double; the previous mix of
+     * `float` and `double` spellings produced silent ABI mismatches
+     * across module / FFI boundaries. */
+    double s = scale(3.0, 2.5);
+    if (fabs(s - 7.5) > 1e-9) FAIL("scale(3.0, 2.5) = %f, expected 7.5", s);
 
     dlclose(h);
     printf("OK: int64, bool, float round-trip\n");
