@@ -975,6 +975,46 @@ found_root:
                 tc.has_lib ? "found" : "not found, using source fallback");
     }
 
+    /* Toolchain-consistency check (aeb-ae-help-and-toolchain-feedback.md
+     * #3). `make install` stamps the installed version into
+     * lib/aether/VERSION next to libaether.a. When `ae` ends up
+     * resolving a runtime archive whose stamp disagrees with the
+     * compiler's own version — the classic split where a stale
+     * `current` symlink shadows an older version dir — the only
+     * symptom is a link failure with `undefined reference to
+     * aether_*`, which points nowhere near the cause. Surface the
+     * mismatch up front. Skipped in dev mode (build/ carries no
+     * stamp, and the compiler + archive are always built together
+     * there) and when the stamp is absent — absent means "cannot
+     * check", not "mismatch", so the check never breaks an install
+     * that predates the marker. */
+    if (!tc.dev_mode && tc.has_lib) {
+        char ver_path[1024];
+        snprintf(ver_path, sizeof(ver_path), "%s/lib/aether/VERSION", tc.root);
+        FILE* vf = fopen(ver_path, "r");
+        if (vf) {
+            char stamp[64] = {0};
+            if (fgets(stamp, sizeof(stamp), vf)) {
+                size_t sl = strlen(stamp);
+                while (sl > 0 && (stamp[sl - 1] == '\n' || stamp[sl - 1] == '\r' ||
+                                  stamp[sl - 1] == ' '  || stamp[sl - 1] == '\t')) {
+                    stamp[--sl] = '\0';
+                }
+                if (sl > 0 && strcmp(stamp, AE_VERSION) != 0) {
+                    fprintf(stderr,
+                        "warning: toolchain version mismatch\n"
+                        "  ae / aetherc : %s\n"
+                        "  libaether.a  : %s  (%s)\n"
+                        "  The runtime archive disagrees with the compiler. A link\n"
+                        "  failure with 'undefined reference to aether_*' below means\n"
+                        "  the archive predates the compiler — reinstall: make install\n",
+                        AE_VERSION, stamp, tc.lib);
+                }
+            }
+            fclose(vf);
+        }
+    }
+
     // Build include flags and source file lists.
     //
     // Dynamic walk over the runtime/ and std/ subtrees rather than the
