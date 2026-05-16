@@ -9,13 +9,18 @@ Aether and BSD Capsicum are two fundamentally different approaches to capability
 
 Despite the difference in scope (OS vs. language), Aether's closure-based isolation and permission hierarchy are **conceptually aligned with Capsicum's principles**. This document explores the parallels, gaps, and opportunities for Aether on FreeBSD—including the possibility of an Aether runtime that leverages Capsicum for OS-enforced containment of sandboxed actors.
 
-> **Status (current):** Aether's existing runtime sandbox — the
-> `libaether_sandbox.so` LD_PRELOAD layer and `spawn_sandboxed` — now
-> builds and runs on FreeBSD at parity with Linux. The Capsicum
-> integration described in Part 3 is **not yet implemented**; it
-> remains the roadmap for moving FreeBSD from cooperative containment
-> (LD_PRELOAD, userspace, bypassable) to OS-enforced containment
-> (Capsicum, kernel, ironclad).
+> **Status (current):**
+> - Aether's existing runtime sandbox — the `libaether_sandbox.so`
+>   LD_PRELOAD layer and `spawn_sandboxed` — builds and runs on FreeBSD
+>   at parity with Linux.
+> - **Phase 1 of the Capsicum roadmap is done:** the `std.capsicum`
+>   module (Part 3.2 below) gives hand-written Aether code direct
+>   access to `cap_enter` / `cap_rights_limit` / `cap_fcntls_limit`.
+> - Still ahead: Phase 2 — wiring Capsicum into `spawn_sandboxed` so
+>   sandboxed children get OS-enforced containment transparently,
+>   without the code asking for it. That is the step that moves
+>   FreeBSD from cooperative containment (LD_PRELOAD, userspace,
+>   bypassable) to OS-enforced (Capsicum, kernel, ironclad).
 
 ---
 
@@ -551,28 +556,31 @@ main() {
 
 ### 3.2 Concrete Implementation Roadmap
 
-#### Phase 1: Capsicum Detection & API Bindings (Low effort)
+#### Phase 1: Capsicum Detection & API Bindings — **DONE**
 
-Create `std.capsicum` module with:
+The `std.capsicum` module ships these bindings (FreeBSD-enforced,
+no-op stubs elsewhere):
 
 ```aether
-// Check if Capsicum is available
-capsicum_available() -> int
+import std.capsicum
 
-// Enter capability mode (irreversible)
-capsicum_enter() -> int
-
-// Restrict a file descriptor's rights
-capsicum_limit_rights(fd: int, rights: int) -> int
-
-// Create a process descriptor
-capsicum_create_process_descriptor(pid: int) -> int
-
-// Query a process's Capsicum state
-capsicum_is_in_capability_mode(fd: int) -> int
+capsicum.available()              // 1 if the kernel enforces Capsicum
+capsicum.enter()                  // enter capability mode — irreversible
+capsicum.in_mode()                // 1 if already sandboxed
+capsicum.rights_limit(fd, mask)   // narrow an fd to R_* rights
+capsicum.fcntls_limit(fd, mask)   // narrow allowed fcntl commands
 ```
 
-**Benefit:** Allows hand-written Aether code to leverage Capsicum today.
+Rights are an integer bitmask (`capsicum.R_READ | capsicum.R_SEEK | ...`)
+— the kernel's `cap_rights_t` is an opaque struct, so the C wrapper
+translates the mask into `cap_rights_set()` calls internally. Worked
+example: `examples/capsicum-demo.ae` (read a file, `enter()`, watch the
+next `open` get refused by the kernel).
+
+Not yet bound: process descriptors (`pdfork`/`pdwait`) and Casper
+service delegation — additive, can land without disturbing the above.
+
+**Benefit:** hand-written Aether code can leverage Capsicum today.
 
 #### Phase 2: Runtime Integration (Medium effort)
 
