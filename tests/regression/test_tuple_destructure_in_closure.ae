@@ -1,0 +1,63 @@
+// Regression: a tuple destructure (`a, b, c = f()`) inside a closure
+// body type-checks when the closure is enclosed by a non-`main`
+// function.
+//
+// Pre-fix, the typechecker's AST_CLOSURE handler walked the closure
+// body with `typecheck_expression`, which has no AST_TUPLE_DESTRUCTURE
+// case — so the destructured LHS names were never registered in the
+// closure scope and every later use failed `E0300 Undefined variable`.
+// A plain assignment registered fine, and a destructure at a function
+// body's top level went through `typecheck_statement` and so worked;
+// the gap was specifically destructure × closure. It surfaced only
+// for a non-`main` enclosing function: aeb's test-driver bundling
+// renames each test file's `main()` to a per-file function, which
+// flipped every `it`-closure tuple destructure into the failing case.
+// Filed by the avn project (tuple-destructure-in-closure-scope.md).
+//
+// Post-fix the closure body routes AST_TUPLE_DESTRUCTURE through
+// `typecheck_statement`, so the names register in the closure scope.
+// This test passing the build IS the core assertion (pre-fix it would
+// not type-check); the value checks guard that the destructured slots
+// carry the right runtime values.
+
+import std.string
+
+extern exit(code: int)
+
+multi() -> { return "a", 7, "b" }
+run(cb: fn) { cb() }
+
+// Non-`main` enclosing function — the condition that triggered the bug.
+driver() {
+    run() callback {
+        // Destructure inside the closure body.
+        x, y, z = multi()
+        if x != "a" {
+            println("  FAIL: first slot x=${x}")
+            exit(1)
+        }
+        if y != 7 {
+            println("  FAIL: second slot y=${y}")
+            exit(1)
+        }
+        if z != "b" {
+            println("  FAIL: third slot z=${z}")
+            exit(1)
+        }
+
+        // A `_` discard slot in the same closure destructure still works.
+        _, kept, _ = multi()
+        if kept != 7 {
+            println("  FAIL: discard-slot destructure kept=${kept}")
+            exit(1)
+        }
+
+        println("  PASS: tuple destructure visible inside non-main closure")
+    }
+}
+
+main() {
+    println("=== test_tuple_destructure_in_closure ===")
+    driver()
+    println("=== test_tuple_destructure_in_closure passed ===")
+}
