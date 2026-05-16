@@ -281,6 +281,28 @@ expect_match "--lib accepts PATH-style a:b specs" \
     "Label must be non-empty" \
     "$AE" help "$TMPDIR/usewidgets.ae" --lib "/no/such/dir:$TMPDIR/lib"
 
+# Case 15: a module imported more than once — plain `import widgets`
+# plus a selective `import widgets (make_widget)`, the shape a
+# closure-DSL file needs — must surface each shipped `*.help.md` hint
+# exactly ONCE. Pre-fix the hint loader ran per import statement, so a
+# twice-imported module's hint appeared twice (aeb feedback R2).
+cat > "$TMPDIR/usewidgets2x.ae" <<'EOF'
+import widgets
+import widgets (make_widget)
+main() {
+    w = widgets.make_widget("ok")
+}
+EOF
+hint_count=$("$AE" help "$TMPDIR/usewidgets2x.ae" --lib "$TMPDIR/lib" 2>&1 \
+    | grep -c "Label must be non-empty (widgets hint)")
+if [ "$hint_count" -eq 1 ]; then
+    echo "  [PASS] hint from a twice-imported module fires exactly once"
+    pass=$((pass + 1))
+else
+    echo "  [FAIL] twice-imported module hint fired $hint_count times (want 1)"
+    fail=$((fail + 1))
+fi
+
 echo
 echo "ae_help: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

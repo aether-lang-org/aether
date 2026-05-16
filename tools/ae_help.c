@@ -450,8 +450,19 @@ int ae_help_main(int argc, char** argv) {
     apply_yaml_shape_detection(&sf, findings, &n_findings, AE_HELP_MAX_FINDINGS);
     apply_top_level_dsl(&sf, findings, &n_findings, AE_HELP_MAX_FINDINGS);
 
-    /* Library-author hints: one *.help.md per imported module. */
+    /* Library-author hints: one *.help.md per imported module — and
+     * once only. A module can legitimately appear in more than one
+     * `import` statement: closure-DSL files need both `import bash`
+     * (the builder verb) and a selective `import bash (script)` (the
+     * bare setter names). `load_help_md_for_import` keys off the module
+     * name, so without deduping here every hint from a twice-imported
+     * module fires twice (aeb feedback R2). Skip names already seen. */
     for (int i = 0; i < n_imports; i++) {
+        int seen = 0;
+        for (int j = 0; j < i; j++) {
+            if (strcmp(imports[i], imports[j]) == 0) { seen = 1; break; }
+        }
+        if (seen) continue;
         load_help_md_for_import(imports[i], &sf, findings, &n_findings, AE_HELP_MAX_FINDINGS);
     }
 
