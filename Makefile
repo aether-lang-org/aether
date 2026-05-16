@@ -1244,6 +1244,32 @@ install: release ae stdlib
 	@echo "✓ Installed successfully"
 	@echo ""
 	@echo "Run: ae version"
+	@# Stale-`current`-symlink shadow check. `make install` writes the
+	@# flat layout ($(PREFIX)/{bin,lib,include,share}/aether), but `ae`
+	@# prefers $(PREFIX)/current/ whenever that symlink resolves to a
+	@# tree with lib/aether or share/aether (tools/ae.c — the
+	@# `ae version use` version-manager hook). A `current` left over
+	@# from an older install or a past `ae version use` therefore
+	@# silently shadows this fresh install: the dev rebuilds, installs,
+	@# and `ae` keeps linking the stale toolchain. `ae` only warns when
+	@# `current` is half-populated — a complete-but-stale tree looks
+	@# valid and draws no diagnostic. Surface it loudly here so the
+	@# `make && sudo make install` loop can't silently no-op. Warn
+	@# only when `current` resolves to a real directory other than
+	@# $(PREFIX) itself (a `current` -> $(PREFIX) symlink is harmless;
+	@# a broken symlink doesn't shadow because `ae` stat-checks it).
+	@cur=$$(cd "$(PREFIX)/current" 2>/dev/null && pwd -P); \
+	pfx=$$(cd "$(PREFIX)" 2>/dev/null && pwd -P); \
+	if [ -n "$$cur" ] && [ "$$cur" != "$$pfx" ]; then \
+		echo ""; \
+		echo "⚠  WARNING: $(PREFIX)/current shadows this install."; \
+		echo "   $(PREFIX)/current -> $$(readlink "$(PREFIX)/current" 2>/dev/null || echo '?')"; \
+		echo "   'ae' prefers current/ over the freshly-installed flat tree,"; \
+		echo "   so it will keep using the stale toolchain above — not this build."; \
+		echo "   Fix:  sudo rm $(PREFIX)/current      (use this flat install), or"; \
+		echo "         ae version use <version>       (re-point the symlink)"; \
+		echo ""; \
+	fi
 
 # -----------------------------------------------------------------
 # contrib — build per-module static libs (libaether_<x>.a) for every

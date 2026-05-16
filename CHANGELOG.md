@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`make install` warns when a stale `$PREFIX/current` symlink would shadow the install** (`Makefile`). `make install` writes the flat layout (`$PREFIX/{bin,lib,include,share}/aether`), but `ae` resolves its toolchain through `$PREFIX/current/` whenever that symlink points at a tree containing `lib/aether` or `share/aether` — the `ae version use` version-manager hook (`tools/ae.c`). A `current` left over from an older install scheme or a past `ae version use` therefore *silently* shadows a fresh `make install`: the maintainer rebuilds, installs, and `ae` keeps linking the stale toolchain with no diagnostic — `ae` only warns on a *half*-populated `current`, never on a complete-but-stale one. The `install` recipe now ends with a check: if `$PREFIX/current` resolves to a real directory other than `$PREFIX` itself, it prints a loud warning naming the shadowing target and the two fixes (`rm` the symlink, or `ae version use`). Diagnostic only — no change to `ae`'s resolution order, so `ae version use` workflows are unaffected. Surfaced while reinstalling the toolchain for the strbuilder-v2 consumer (aeb): a stale `current -> v0.158.0` made `import std.strbuilder` fail at link despite a correct fresh 0.161.0 build.
+
 ## [0.161.0]
 
 ### Added
