@@ -5,9 +5,18 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.153.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **FreeBSD sandbox support: LD_PRELOAD parity, `std.capsicum`, and Capsicum self-sandboxing** (`runtime/sandbox/`, `runtime/libaether_sandbox_preload.c`, `std/capsicum/`, `compiler/codegen/codegen.c`, `examples/capsicum-demo.ae`, `docs/aether_compared_to_capsicum.md`, `docs/containment-sandbox.md`). The runtime sandbox was Linux-only; this brings it to FreeBSD and adds OS-enforced containment via Capsicum. Three parts:
+    - **LD_PRELOAD parity.** `spawn_sandboxed` was gated `#if defined(__linux__)`; it is now split into self-`#ifdef`-guarded per-platform backends under `runtime/sandbox/` (`spawn_sandboxed_{linux,bsd,stub}.c`, mirroring the `aether_io_poller_*.c` convention). The FreeBSD backend locates the preload library via `sysctl(KERN_PROC_PATHNAME)` — FreeBSD does not mount `/proc`. The preload library's glibc-only entry points (`clone3` + `<linux/sched.h>`, the `*64` large-file variants, the Linux-ABI `syscall` number branch) are now `#if defined(__linux__)`-gated, and the `syscall()` override carries a platform-correct prototype (`int`/`int` on FreeBSD vs `long`/`long` on glibc). FreeBSD's `rtld-elf` honours `LD_PRELOAD` + `dlsym(RTLD_NEXT, ...)`, so the interception model works there unchanged.
+    - **`std.capsicum`.** A new module wrapping FreeBSD's Capsicum API — `capsicum.available()`, `enter()` (irreversible capability mode), `in_mode()`, `rights_limit(fd, mask)`, `fcntls_limit(fd, mask)`. The kernel's `cap_rights_t` is an opaque struct, so Aether passes an integer bitmask (`R_READ | R_SEEK | ...`) and the C wrapper translates it via `cap_rights_init`/`cap_rights_set`. Rights bits are exposed as `const` (not zero-arg functions): a `|` immediately after a call parses as a closure delimiter, so `R_READ() | R_SEEK()` would not compile. Off FreeBSD every entry point is a stub returning `CAP_UNSUPPORTED`, so code importing `std.capsicum` builds and links everywhere.
+    - **Capsicum self-sandbox.** A process launched with `AETHER_CAPSICUM=1` enters capability mode at startup: the compiler-emitted `main()` calls `aether_capsicum_autosandbox()` (`runtime/sandbox/capsicum_autosandbox.c`) right after `aether_args_init()`, and `spawn_sandboxed` sets that variable for its children. The originally-planned "parent `cap_enter`s the child then execs" model is impossible for dynamically linked binaries — `cap_enter()` forbids the runtime linker from opening `libc`/`ld-elf.so.1` — so the child execs normally and self-sandboxes after rtld has finished; `docs/aether_compared_to_capsicum.md` records the constraint. The preload library exempts the `AETHER_*` env namespace from `getenv` interception so a sandboxed Aether child can still read its own `AETHER_CAPSICUM` control variable. Verified on FreeBSD 15.0 and Linux.
 
 ## [0.166.0]
 
