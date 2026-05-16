@@ -687,11 +687,27 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
         char fn_norm[256];
         const char* fn = codegen_normalise_callee(expr->value, fn_norm, sizeof(fn_norm));
         // Hardcoded stdlib fast-path.
+        //
+        // `string_new_with_length` is the length-aware AetherString
+        // constructor — it mallocs a fresh refcounted AetherString and
+        // copies the source bytes in (`aether_bytes_finish` is itself
+        // just `string_new_with_length` + copy). Several stdlib modules
+        // build their return values with it directly and declare the
+        // extern `-> ptr`, with no `@heap` annotation, so without an
+        // intrinsic entry here every `zlib`/`cryptography`/`lzf`/`fs`
+        // decode result was classified non-heap and leaked at every
+        // caller. Recognising it by name — like `string_concat` and
+        // interpolation — closes the leak regardless of how each
+        // module spells the extern, and stops the next `-> ptr`
+        // declaration silently reintroducing it. See
+        // string-new-with-length-heap-annotation.md (follow-up to the
+        // 0.161.0 `bytes.finish` heap-ownership fix).
         if (strcmp(fn, "string_concat") == 0 ||
             strcmp(fn, "string_substring") == 0 ||
             strcmp(fn, "string_to_upper") == 0 ||
             strcmp(fn, "string_to_lower") == 0 ||
-            strcmp(fn, "string_trim") == 0) {
+            strcmp(fn, "string_trim") == 0 ||
+            strcmp(fn, "string_new_with_length") == 0) {
             return 1;
         }
         // User-defined function: only heap if its body provably
@@ -1120,13 +1136,36 @@ static int emit_uniform_heap_return_expr(CodeGenerator* gen, ASTNode* expr) {
 }
 
 // Per-position structural escape analysis for tuple-returning user
-// functions (issue #420). Returns 1 iff every `return e1, e2, ...`
+// functions (issue #420). Returns 1 iff *some* `return e0, e1, ...`
 // in `fn_def`'s body has the `position`-th return expression
-// classified as heap-string by `is_heap_string_expr`. Returns 0
-// for: any non-heap position, mixed heap/non-heap across return
-// sites, missing position, non-tuple return, or no returns at all
-// (conservative — a `void`-falling-off function can't leak via
-// tuple destructure since there's no value to destructure).
+// classified as a heap string (an OR-fold across return sites) AND
+// no whole-tuple-passthrough return vetoes it (see below). Returns 0
+// for a missing position / non-tuple return / no returns at all
+// (conservative — a `void`-falling-off function can't leak via tuple
+// destructure since there's no value to destructure).
+//
+// OR-fold + uniform-heap wrap (the zlib/cryptography/lzf decode
+// shape): these functions `return owned, n, ""` on success and
+// `return "", 0, "err"` on the error paths — a string position
+// that is heap on some return sites and a borrowed literal on
+// others. A strict AND-fold classified such a position non-heap,
+// so the caller never freed and the success-path allocation
+// leaked at every call. The OR-fold classifies it heap; the
+// matching `emit_tuple_return_position` then routes EVERY return
+// path's value at that position through `aether_uniform_heap_str`,
+// so the literal branches are malloc-duplicated and the caller can
+// free uniformly. Same contract the single-value path already runs
+// via `should_uniform_heap_return` / `emit_uniform_heap_return_expr`.
+//
+// The veto: a single-child return — `return g(...)` where `g` is
+// tuple-typed — is a whole-tuple passthrough. `emit_tuple_return_
+// position` only rewrites the `return e0, e1, ...` form, so a
+// passthrough position cannot be wrapped; it is freeable only if `g`
+// itself guarantees it (`function_def_returns_heap_at(g, position)`).
+// If `g` doesn't, the position is hard-vetoed to non-heap regardless
+// of what the wrappable returns do — otherwise the caller is told to
+// free a borrowed literal `g` returned. The cost is a (rare) missed
+// leak on the wrappable branches, never a free of non-heap memory.
 //
 // Memoisation: a comma-separated bit string in `fn_def->annotation`
 // of the form `"heap_positions:1,0,1"` where the integer count
@@ -1139,20 +1178,75 @@ static int emit_uniform_heap_return_expr(CodeGenerator* gen, ASTNode* expr) {
 // crash).
 //
 // The cache is consulted by the AST_TUPLE_DESTRUCTURE codegen
-// path (added in a follow-up commit) to decide whether to emit
-// `_heap_<lhs> = 1;` at the destructure site.
+// path to decide whether to emit `_heap_<lhs> = 1;` at the
+// destructure site, and by `emit_tuple_return_position` to decide
+// whether to wrap the return value.
+static int function_def_returns_heap_at(CodeGenerator* gen, ASTNode* fn_def,
+                                         int position);
+
 static void walk_returns_for_heap_at(CodeGenerator* gen, ASTNode* node,
-                                     int position, int* found, int* all_heap) {
-    if (!node || !*all_heap) return;
+                                     int position, ASTNode* fn_body_root,
+                                     int* found, int* any_heap, int* vetoed) {
+    if (!node || *vetoed) return;
     if (node->type == AST_RETURN_STATEMENT) {
         *found = 1;
+        /* Single-child return in a tuple-returning function is a
+         * whole-tuple passthrough — `return g(...)` where `g` is
+         * tuple-typed. F hands `g`'s tuple straight to its caller and
+         * cannot wrap an individual position: `emit_tuple_return_
+         * position` only rewrites the `return e0, e1, ...` form, never
+         * this one. So position `p` reaches F's caller freeable only
+         * if `g` already guarantees it. If `g` doesn't — or can't be
+         * resolved — F must NOT be heap-classified at `p`, else the
+         * caller is told to free a value (a borrowed literal `g`
+         * returned there) that was never malloc'd. That is a hard
+         * veto, not just "no evidence": one such return poisons the
+         * whole position regardless of what the wrappable returns do.
+         * Surfaced by `hash_file` returning `"", rerr` on one branch
+         * and `return cryptography.sha256_hex(...)` on the other —
+         * sha256_hex's error slot is a literal, so the passthrough
+         * fed a `""` to a caller told to free it (`free(): invalid
+         * pointer`). */
+        if (node->child_count == 1) {
+            ASTNode* child = node->children[0];
+            ASTNode* callee = NULL;
+            if (child && child->type == AST_FUNCTION_CALL && child->value &&
+                gen && gen->program) {
+                char fn_norm[256];
+                const char* fn = codegen_normalise_callee(child->value,
+                                                          fn_norm,
+                                                          sizeof(fn_norm));
+                callee = find_function_definition_by_name(gen->program, fn);
+            }
+            if (callee && function_def_returns_heap_at(gen, callee, position)) {
+                *any_heap = 1;
+            } else {
+                *vetoed = 1;
+            }
+            return;
+        }
         // A tuple `return a, b, c` is represented as a return statement
         // with `child_count` matching the tuple arity (children are the
         // per-position expressions). Out-of-range = "this return doesn't
-        // even produce a value at `position`" → conservative non-heap.
-        if (position < 0 || position >= node->child_count ||
-            !is_heap_string_expr(gen, node->children[position])) {
-            *all_heap = 0;
+        // produce a value at `position`" → contributes no heap evidence.
+        if (position < 0 || position >= node->child_count) return;
+        ASTNode* pos_expr = node->children[position];
+        if (is_heap_string_expr(gen, pos_expr)) { *any_heap = 1; return; }
+        /* Bare-identifier tuple position — `owned = string_new_with_
+         * length(...); return owned, n, ""`. `is_heap_string_expr`
+         * can't see the identifier as heap from the destructure
+         * site's (caller's) context, so resolve it structurally
+         * against the analysed function's own body: it is heap iff
+         * some assignment in that body sets it from a heap source.
+         * Mirrors the single-value walker's `body_assigns_var_from_
+         * heap` clause in `walk_returns_for_heap_check` — the tuple
+         * walker simply never had it, so accumulator-into-tuple
+         * shapes (zlib/cryptography/lzf decode results) classified
+         * non-heap and leaked at every caller. */
+        if (pos_expr && pos_expr->type == AST_IDENTIFIER && pos_expr->value &&
+            fn_body_root &&
+            body_assigns_var_from_heap(gen, fn_body_root, pos_expr->value)) {
+            *any_heap = 1;
         }
         return;
     }
@@ -1161,8 +1255,9 @@ static void walk_returns_for_heap_at(CodeGenerator* gen, ASTNode* node,
         node->type == AST_CLOSURE) {
         return;
     }
-    for (int i = 0; i < node->child_count && *all_heap; i++) {
-        walk_returns_for_heap_at(gen, node->children[i], position, found, all_heap);
+    for (int i = 0; i < node->child_count && !*vetoed; i++) {
+        walk_returns_for_heap_at(gen, node->children[i], position,
+                                 fn_body_root, found, any_heap, vetoed);
     }
 }
 
@@ -1230,9 +1325,14 @@ static int function_def_returns_heap_at(CodeGenerator* gen, ASTNode* fn_def,
     }
     if (body) {
         for (int p = 0; p < tuple_count; p++) {
-            int found = 0, all_heap = 1;
-            walk_returns_for_heap_at(gen, body, p, &found, &all_heap);
-            per_pos[p] = (found && all_heap) ? 1 : 0;
+            int found = 0, any_heap = 0, vetoed = 0;
+            walk_returns_for_heap_at(gen, body, p, body,
+                                     &found, &any_heap, &vetoed);
+            /* Heap at `p` iff some return makes it heap (OR-fold) AND
+             * no whole-tuple-passthrough return yields an unwrappable
+             * non-heap value there (veto). The veto wins — see the
+             * walker comment. */
+            per_pos[p] = (found && any_heap && !vetoed) ? 1 : 0;
         }
     }
 
@@ -1252,6 +1352,38 @@ static int function_def_returns_heap_at(CodeGenerator* gen, ASTNode* fn_def,
     }
     free(per_pos);
     return result;
+}
+
+/* Emit one position of a multi-value `return e0, e1, ...`. When the
+ * enclosing function classifies tuple position `j` as a heap-string
+ * position (`function_def_returns_heap_at`), route that position's
+ * value through `aether_uniform_heap_str` so EVERY return path hands
+ * the caller a malloc-owned pointer it can free uniformly: a heap
+ * value passes through (fast path), a literal / borrowed value is
+ * malloc-duplicated. Without this, a tuple-returning function with
+ * a mixed string position — heap on some return sites, a borrowed
+ * literal on others, the zlib/cryptography/lzf decode shape
+ * (`return owned, n, ""` vs `return "", 0, "err"`) — either leaked
+ * the heap branch (caller told not to free) or, post-OR-fold, would
+ * free a string literal on the error branch. The wrap closes both.
+ * Non-heap positions and non-string positions emit raw.
+ * See string-new-with-length-heap-annotation.md. */
+static void emit_tuple_return_position(CodeGenerator* gen, ASTNode* expr,
+                                       int j) {
+    int pos_heap = 0;
+    if (gen && gen->current_function && !gen->in_main_function) {
+        Type* rt = gen->current_func_return_type;
+        if (rt && rt->kind == TYPE_TUPLE && j >= 0 && j < rt->tuple_count &&
+            rt->tuple_types[j] && rt->tuple_types[j]->kind == TYPE_STRING) {
+            pos_heap = function_def_returns_heap_at(gen,
+                                                    gen->current_function, j);
+        }
+    }
+    if (pos_heap) {
+        emit_uniform_heap_return_expr(gen, expr);
+    } else {
+        generate_expression(gen, expr);
+    }
 }
 
 // Recursive: collect every variable name that may need a heap-string
@@ -4226,7 +4358,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     fprintf(gen->output, "%s _builder_ret = (%s){", tname, tname);
                     for (int j = 0; j < stmt->child_count; j++) {
                         if (j > 0) fprintf(gen->output, ", ");
-                        generate_expression(gen, stmt->children[j]);
+                        emit_tuple_return_position(gen, stmt->children[j], j);
                     }
                     fprintf(gen->output, "};\n");
                     if (owned) free_type(tuple);
@@ -4398,7 +4530,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     fprintf(gen->output, "return (%s){", tname);
                     for (int j = 0; j < stmt->child_count; j++) {
                         if (j > 0) fprintf(gen->output, ", ");
-                        generate_expression(gen, stmt->children[j]);
+                        emit_tuple_return_position(gen, stmt->children[j], j);
                     }
                     fprintf(gen->output, "};\n");
                     if (owned) free_type(tuple);
