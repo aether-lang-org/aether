@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`ae help` could not see project libraries — `--lib` rejected, `*.help.md` stdlib-only** (`tools/ae_help.c`, `tests/integration/ae_help/`). `ae help` is pitched (`docs/cic-help.md`) as the on-ramp for closure-DSL / config-as-code authors, but a config script's body is almost entirely library calls — and `ae help` rejected `--lib` outright (`unknown option '--lib'`), so every project-library call was reported as an undefined function and the output was pure noise for any non-trivial project. Filed by the aeb project (`aeb-ae-help-and-toolchain-feedback.md`). Two coupled gaps closed:
+    - **`--lib` is now accepted** — repeatable, and PATH-style `--lib a:b` split into discrete entries, matching `ae build` / `aetherc`. `$AETHER_LIB_DIR` is honoured the same way. The resolved directories are forwarded to the wrapped `aetherc` compile (so library imports resolve) *and* folded into the Levenshtein / missing-import export catalog (so suggestions draw on library exports, not just stdlib).
+    - **`*.help.md` hint files are read from `--lib` directories**, not only stdlib. `find_help_md_path` previously had an explicit `Stdlib only` cutoff; it now probes `<libdir>/<import-as-dir>/<basename>.help.md` for every resolved `--lib` entry after the stdlib miss. This is what lets a *library author* — not just the Aether core team — ship authoring-mistake hints alongside their module. Four new integration cases cover `--lib` resolution + lib-`*.help.md` surfacing, `--lib` acceptance, `$AETHER_LIB_DIR`, and PATH-style specs.
+
 ## [0.162.0]
 
 ### Changed

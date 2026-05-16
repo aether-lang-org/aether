@@ -77,10 +77,19 @@
 #define AE_HELP_MAX_LINES       8192
 #define AE_HELP_MAX_LINE_LEN    1024
 #define AE_HELP_MAX_IMPORTS     64
-#define AE_HELP_MAX_EXPORTS     2048   /* All-stdlib export catalog */
+#define AE_HELP_MAX_EXPORTS     2048   /* All-stdlib + lib export catalog */
 #define AE_HELP_NAME_LEN        64
 #define AE_HELP_PATH_LEN        1024
 #define AE_HELP_MSG_LEN         512
+#define AE_HELP_MAX_LIBS        16     /* `--lib` search-path entries */
+
+/* Library separator for PATH-style `--lib a:b` specs — matches the
+ * convention `ae build` / `aetherc` use for the multi-entry surface. */
+#ifdef _WIN32
+#define AE_HELP_LIB_SEP ';'
+#else
+#define AE_HELP_LIB_SEP ':'
+#endif
 
 /* === Types ========================================================= */
 
@@ -143,11 +152,67 @@ typedef struct {
     int verbose;
 } HelpFlags;
 
+/* Defined further down; forward-declared here so the `--lib` list
+ * helpers below can use it. */
+static void safe_strncpy(char* dst, const char* src, size_t dst_size);
+
+/* `--lib` search path. Process-global config (one `ae help`
+ * invocation analyses one script) — set once from argv + the
+ * `AETHER_LIB_DIR` env in ae_help_main, then read by the aetherc
+ * subprocess builder, the export-catalog loader, and the
+ * `*.help.md` resolver. A file-static avoids threading the list
+ * through four signatures for what is genuinely invocation-wide
+ * state. */
+static char g_lib_dirs[AE_HELP_MAX_LIBS][AE_HELP_PATH_LEN];
+static int  g_lib_count = 0;
+
+/* Append one directory to the `--lib` list (dedup, cap-checked). */
+static void help_lib_append_one(const char* dir) {
+    if (!dir || !dir[0]) return;
+    /* Drop a single trailing slash so `lib` and `lib/` dedup. */
+    char norm[AE_HELP_PATH_LEN];
+    safe_strncpy(norm, dir, sizeof(norm));
+    size_t n = strlen(norm);
+    while (n > 1 && (norm[n - 1] == '/' || norm[n - 1] == '\\')) {
+        norm[--n] = '\0';
+    }
+    for (int i = 0; i < g_lib_count; i++) {
+        if (strcmp(g_lib_dirs[i], norm) == 0) return;
+    }
+    if (g_lib_count >= AE_HELP_MAX_LIBS) {
+        fprintf(stderr, "ae help: --lib search path is full (max %d); "
+                        "ignoring '%s'\n", AE_HELP_MAX_LIBS, norm);
+        return;
+    }
+    safe_strncpy(g_lib_dirs[g_lib_count++], norm, AE_HELP_PATH_LEN);
+}
+
+/* Append a `--lib` spec, splitting PATH-style `a:b` (POSIX) /
+ * `a;b` (Windows) into discrete entries — `ae build` parity. */
+static void help_lib_append(const char* spec) {
+    if (!spec || !spec[0]) return;
+    const char* cur = spec;
+    char buf[AE_HELP_PATH_LEN];
+    while (*cur) {
+        const char* next = strchr(cur, AE_HELP_LIB_SEP);
+        size_t len = next ? (size_t)(next - cur) : strlen(cur);
+        if (len > 0) {
+            if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+            memcpy(buf, cur, len);
+            buf[len] = '\0';
+            help_lib_append_one(buf);
+        }
+        if (!next) break;
+        cur = next + 1;
+    }
+}
+
 /* === Forward declarations ========================================== */
 static int  load_source(const char* path, SourceFile* sf);
 static void free_source(SourceFile* sf);
 static int  scan_imports(SourceFile* sf, char imports[][AE_HELP_NAME_LEN], int max);
 static int  load_stdlib_export_catalog(ExportEntry* out, int max);
+static int  load_lib_export_catalog(ExportEntry* out, int max, int already);
 static int  run_aetherc_capture(const char* script_path, char* stderr_buf, size_t buf_size);
 static int  parse_aetherc_findings(const char* stderr_buf, Finding* findings, int max);
 static int  levenshtein(const char* a, const char* b);
@@ -225,7 +290,7 @@ int ae_help_is_script_target(const char* arg) {
 
 static void print_usage(void) {
     printf(
-        "Usage: ae help <script.ae> [--fix] [--json] [--llm <weights.gguf>]\n"
+        "Usage: ae help <script.ae> [--lib <dir>] [--fix] [--json] [--llm <weights.gguf>]\n"
         "\n"
         "Offline, on-machine diagnostics for closure-DSL config scripts.\n"
         "Translates the typer's terse output into actionable suggestions.\n"
@@ -237,6 +302,13 @@ static void print_usage(void) {
         "  ae help <script> --json      Machine-readable findings on stdout.\n"
         "  ae help <script> --llm <w>   Optional offline local-LLM escalation.\n"
         "                               Requires AETHER_ENABLE_LLM=1 at build time.\n"
+        "\n"
+        "Options:\n"
+        "  --lib <dir>                  Library search path for project-local\n"
+        "                               imports (repeatable; PATH-style a:b\n"
+        "                               accepted). Also honours $AETHER_LIB_DIR.\n"
+        "                               Without it, every library call in a\n"
+        "                               config script reports as undefined.\n"
         "\n"
         "Privacy:\n"
         "  No network calls. No file reads outside the script + its resolvable\n"
@@ -274,6 +346,16 @@ int ae_help_main(int argc, char** argv) {
             }
             flags.llm = 1;
             safe_strncpy(flags.llm_weights, argv[++i], sizeof(flags.llm_weights));
+        } else if (strcmp(a, "--lib") == 0) {
+            /* `--lib <dir>` — repeatable, and PATH-style `a:b`
+             * accepted. Same surface as `ae build` / `aetherc`, so a
+             * project's library directory can be analysed instead of
+             * every library call being reported as undefined. */
+            if (i + 1 >= argc) {
+                fprintf(stderr, "ae help: --lib requires a directory\n");
+                return 2;
+            }
+            help_lib_append(argv[++i]);
         } else if (a[0] == '-') {
             fprintf(stderr, "ae help: unknown option '%s'\n", a);
             return 2;
@@ -288,6 +370,14 @@ int ae_help_main(int argc, char** argv) {
     if (flags.help || !script) {
         print_usage();
         return script ? 0 : 1;
+    }
+
+    /* `AETHER_LIB_DIR` — same env `ae build` honours. Appended after
+     * any explicit `--lib` flags; dedup in help_lib_append keeps a
+     * dir named on both channels from being probed twice. */
+    {
+        const char* env_libs = getenv("AETHER_LIB_DIR");
+        if (env_libs && env_libs[0]) help_lib_append(env_libs);
     }
 
     if (flags.fix && flags.json) {
@@ -318,6 +408,10 @@ int ae_help_main(int argc, char** argv) {
         return 1;
     }
     int n_exports = load_stdlib_export_catalog(exports, AE_HELP_MAX_EXPORTS);
+    /* Extend the catalog with every `--lib` directory's modules, so
+     * Levenshtein suggestions and missing-import detection draw on
+     * project-library exports too — not just stdlib. */
+    n_exports = load_lib_export_catalog(exports, AE_HELP_MAX_EXPORTS, n_exports);
 
     /* Phase 4 — invoke aetherc with stderr captured. Findings come
      * from its already-structured `error[Eabcd]:` lines. */
@@ -599,6 +693,35 @@ static int load_stdlib_export_catalog(ExportEntry* out, int max) {
     return n;
 }
 
+/* Append the export catalogs of every `--lib` directory. For each
+ * resolved lib dir, every immediate `<lib>/<name>/module.ae` is
+ * parsed under the bare module name `<name>` — that is how a project
+ * library is imported (`import build`, not `import std.build`), so
+ * the Levenshtein / missing-import scopes match the script's call
+ * sites. `already` carries the running count from the stdlib pass so
+ * both catalogs share one array. */
+static int load_lib_export_catalog(ExportEntry* out, int max, int already) {
+    int n = already;
+    for (int li = 0; li < g_lib_count && n < max; li++) {
+        DIR* d = opendir(g_lib_dirs[li]);
+        if (!d) continue;  /* a bad --lib dir is the wrapped aetherc's
+                            * problem to report, not ours */
+        struct dirent* entry;
+        while ((entry = readdir(d)) != NULL && n < max) {
+            if (entry->d_name[0] == '.') continue;
+            char mod_path[AE_HELP_PATH_LEN];
+            if (path_format(mod_path, sizeof(mod_path), "%s%c%s%cmodule.ae",
+                            g_lib_dirs[li], PATH_SEP, entry->d_name,
+                            PATH_SEP) != 0) continue;
+            struct stat st;
+            if (stat(mod_path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            n = parse_module_exports(mod_path, entry->d_name, out, max, n);
+        }
+        closedir(d);
+    }
+    return n;
+}
+
 /* === aetherc subprocess ============================================ */
 
 /* Find aetherc binary. Prefer the same-directory sibling (this binary
@@ -800,10 +923,26 @@ static int run_aetherc_capture(const char* script_path, char* stderr_buf, size_t
      * earlier (POSIX issue + Windows path collision); we now mirror
      * it here. The previous `system(cmd)` shape was the only
      * shell-dependent invocation left in the ae_help binary. */
+    /* aetherc argv: base 4 args + one `--lib <dir>` pair per resolved
+     * search-path entry + NULL. Forwarding `--lib` lets the wrapped
+     * compile resolve project-local library imports, so `ae help` on
+     * a real config script stops flagging every library call as an
+     * undefined function. Shared by both spawn branches below. */
+    const char* argv[4 + 2 * AE_HELP_MAX_LIBS + 1];
+    int ac = 0;
+    argv[ac++] = aetherc;
+    argv[ac++] = script_path;
+    argv[ac++] = "-o";
+    argv[ac++] = sink;
+    for (int i = 0; i < g_lib_count; i++) {
+        argv[ac++] = "--lib";
+        argv[ac++] = g_lib_dirs[i];
+    }
+    argv[ac] = NULL;
+
     int rc;
 #ifdef _WIN32
     {
-        const char* argv[5] = { aetherc, script_path, "-o", sink, NULL };
         fflush(stderr);
         int saved = _dup(2);
         int fd = _open(err_file, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, 0644);
@@ -815,7 +954,6 @@ static int run_aetherc_capture(const char* script_path, char* stderr_buf, size_t
     }
 #else
     {
-        const char* argv[5] = { aetherc, script_path, "-o", sink, NULL };
         posix_spawn_file_actions_t fa;
         posix_spawn_file_actions_init(&fa);
         posix_spawn_file_actions_addopen(&fa, 2, err_file,
@@ -1531,8 +1669,22 @@ static int find_help_md_path(const char* import_name, char* out, size_t out_size
         safe_strncpy(out, probe, out_size);
         return 0;
     }
-    /* User libs may live under any --lib path; we don't probe those
-     * for v1. Stdlib only. */
+    /* Not in stdlib — probe each `--lib` directory. A project library
+     * resolved via `--lib` ships its hint file the same way stdlib
+     * does: `<libdir>/<import-as-dir>/<basename>.help.md`. This is
+     * what lets a library author (not just the Aether core team)
+     * absorb authoring-mistake knowledge into a shipped hint file. */
+    for (int li = 0; li < g_lib_count; li++) {
+        if (path_format(probe, sizeof(probe), "%s%c%s%c%s.help.md",
+                        g_lib_dirs[li], PATH_SEP, dir, PATH_SEP,
+                        basename) != 0) {
+            continue;
+        }
+        if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
+            safe_strncpy(out, probe, out_size);
+            return 0;
+        }
+    }
     return -1;
 }
 
