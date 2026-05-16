@@ -1,0 +1,104 @@
+// Integration probe for the string_new_with_length heap-source fix.
+//
+// `string_new_with_length` is the length-aware AetherString
+// constructor — it mallocs a fresh refcounted AetherString. Several
+// stdlib modules (std.zlib, std.cryptography, std.lzf, ...) build
+// their decode results with it directly and return them in a tuple:
+//
+//     owned = string_new_with_length(raw, n)
+//     return owned, n, ""
+//
+// The heap-ownership classifier never recognised it as a heap source,
+// so `owned` was non-heap, the function's string return position was
+// non-heap, and every caller leaked the result — avn's commit bench
+// ramped ~336 KB/commit through zlib.deflate / crypto base64_decode
+// (string-new-with-length-heap-annotation.md, the follow-up to the
+// 0.161.0 bytes.finish fix).
+//
+// This probe reproduces the leak shape directly, without depending on
+// any optional backend: a user function `encode` builds its result
+// with `string_new_with_length` on the success path and returns a
+// borrowed string literal on the error path — a *mixed* heap/non-heap
+// string tuple position. The fix has two halves and this exercises
+// both: the constructor is recognised as a heap source, and the
+// OR-fold + uniform-heap wrap means the literal error-path returns
+// are malloc-duplicated so the caller can free every path uniformly.
+//
+// 8000 iterations interleaving success and error returns; a leak of
+// the per-success-iteration buffer would be a multi-MB monotonic
+// ramp. The fixed build stays flat.
+
+import std.string
+
+extern string_new_with_length(data: string, length: int) -> ptr
+extern getrusage_max_rss_kb() -> int
+extern exit(code: int)
+
+// The zlib/cryptography/lzf decode shape: success path mints a fresh
+// AetherString via string_new_with_length; error path hands back a
+// borrowed literal. Position 0 is heap on some returns, not others.
+encode(src: string, fail: int) -> (string, int, string) {
+    if fail == 1 {
+        return "", 0, "bad input"
+    }
+    n = string.length(src)
+    owned = string_new_with_length(src, n)
+    return owned, n, ""
+}
+
+// One encode cycle. The destructured heap string is dropped at scope
+// exit and must be reclaimed by the destructure-site free.
+encode_once(fail: int) -> int {
+    body, n, err = encode("the-quick-brown-fox-jumps-payload", fail)
+    if fail == 1 {
+        return string.length(err)
+    }
+    return n
+}
+
+main() {
+    println("=== string_new_with_length_no_leak ===")
+
+    // Portability gate: Windows MinGW has no getrusage — smoke only.
+    rss_probe = getrusage_max_rss_kb()
+    if rss_probe < 0 {
+        n = encode_once(0)
+        if n <= 0 {
+            println("  FAIL: smoke encode produced empty result")
+            exit(1)
+        }
+        println("  PASS: smoke (getrusage unavailable)")
+        println("=== all cases passed ===")
+        return
+    }
+
+    // Warm to steady state.
+    w = 0
+    while w < 200 {
+        encode_once(w % 7)
+        w = w + 1
+    }
+    rss_before = getrusage_max_rss_kb()
+    i = 0
+    while i < 8000 {
+        // Interleave success (heap return) and error (literal return)
+        // paths so the probe exercises the uniform-heap wrap on both.
+        len = encode_once(i % 7)
+        if len <= 0 {
+            println("  FAIL: iteration ${i} produced empty result")
+            exit(1)
+        }
+        i = i + 1
+    }
+    rss_after = getrusage_max_rss_kb()
+    growth = rss_after - rss_before
+    // Pre-fix: each success iteration leaks the string_new_with_length
+    // buffer — a multi-MB monotonic ramp over 8000 iters. Post-fix the
+    // loop is flat; 1 MB is generous allocator slack.
+    if growth > 1024 {
+        println("  FAIL: RSS grew ${growth} KB over 8000 encode cycles")
+        exit(1)
+    }
+    println("  PASS: 8000 string_new_with_length cycles, RSS bounded (+${growth} KB)")
+    println("=== all cases passed ===")
+}

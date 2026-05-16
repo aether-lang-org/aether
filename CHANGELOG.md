@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`string_new_with_length`-built return values no longer leak at every call site** (`compiler/codegen/codegen_stmt.c`, `tests/integration/string_new_with_length_no_leak/`). The 0.161.0 heap-ownership fix annotated `aether_bytes_finish` as a heap source, but `bytes.finish` is not the only AetherString constructor: `string_new_with_length` is the length-aware one (`bytes.finish` is itself `string_new_with_length` + copy), and `std.zlib` / `std.cryptography` / `std.lzf` / `std.fs` build their decode results with it directly, declaring the extern `-> ptr` with no `@heap`. The classifier never recognised it, so a function like `zlib.deflate` — `owned = string_new_with_length(raw, n); return owned, n, ""` — produced a tuple return whose string position was classified non-heap, and every caller leaked the decoded buffer (avn's commit bench ramped ~336 KB/commit through `zlib.deflate` and `crypto_b64_decode`). Reported by the avn project (`string-new-with-length-heap-annotation.md`, the follow-up to `heap-ownership-return-propagation.md`). Two coupled gaps closed: (1) `string_new_with_length` is now an intrinsic heap source in `is_heap_string_expr` — recognised by name like `string_concat` and interpolation, regardless of how a module spells the extern, so the next `-> ptr` declaration can't silently reintroduce the leak; (2) the per-position tuple-return classifier (`function_def_returns_heap_at`) was a strict AND-fold that classified a string position non-heap whenever *any* return site was a borrowed literal — exactly the `return owned, n, ""` vs `return "", 0, "err"` shape of every real decode function. It is now an OR-fold, and a matching `emit_tuple_return_position` routes each heap-classified position through `aether_uniform_heap_str` on *every* return path, so the literal error-path returns are malloc-duplicated and the caller frees uniformly — the same uniform-heap contract the single-value return path already ran. Integration probe runs 8000 interleaved success/error encode cycles and bounds RSS growth.
+- **Tuple destructure inside a closure body now type-checks when the closure is enclosed by a non-`main` function** (`compiler/analysis/typechecker.c`, `tests/regression/test_tuple_destructure_in_closure.ae`). A `a, b, c = f()` destructure inside a closure body reported `E0300 Undefined variable` on every later use of the destructured names — but only when the closure was lexically inside a function other than `main`. The typechecker's `AST_CLOSURE` handler walked the closure body with `typecheck_expression`, which has no `AST_TUPLE_DESTRUCTURE` case, so the statement hit only the generic child-walk and the LHS names were never registered in the closure scope. A plain assignment registered fine (the handler special-cased `AST_VARIABLE_DECLARATION`), and a destructure at a function body's top level went through `typecheck_statement` and so worked — the gap was specifically destructure × closure. It surfaced only for a non-`main` enclosing function because `main`'s body is reached through `typecheck_statement`, so a `main`-level closure's body was already typechecked statement-wise; bundling tools that rename test files' `main()` to a per-file function flipped every closure-body tuple destructure into the failing case. Reported by the avn project (`tuple-destructure-in-closure-scope.md`). The closure-body loop now routes `AST_TUPLE_DESTRUCTURE` statements through `typecheck_statement`, whose existing handler arity-checks the RHS and registers each LHS name in the closure scope.
+
+### Upgrade notes
+
+This release tightens heap-string ownership: a function that builds a tuple
+return value with `string_new_with_length` — directly, or via a `std.zlib` /
+`std.cryptography` / `std.lzf` / `std.fs` decode function — is now classified
+heap-returning at that string position, and the destructured value is freed
+when the destructured local is released. The previous compiler classified
+that value non-heap and never freed it — a silent per-call leak.
+
+If your project destructures such a result (`data, n, err = zlib.deflate(...)`,
+`out, err = cryptography.base64_decode(...)`, …) and also stores the string
+element into a longer-lived structure (a struct field, list, or map) while
+keeping the destructured local — which is later reassigned or goes out of
+scope — the previous compiler tolerated this as a leak that kept the aliased
+buffer alive forever; this release frees the buffer when the local is
+released, so the stored alias becomes a dangling pointer. This shape is a
+use-after-free.
+
+**Recommended pre-upgrade play:**
+
+1. Grep for destructures of `zlib` / `cryptography` / `lzf` / `fs` decode
+   results, and any user function that returns a `string_new_with_length`
+   value in a tuple position.
+2. At each, check whether the destructured string element is stored into a
+   structure that outlives the destructured local. If so, that structure
+   must own an independent copy, not the alias.
+3. Rebuild under the new compiler and exercise the affected paths under
+   AddressSanitizer or valgrind — a freed-then-read alias surfaces
+   immediately as a use-after-free rather than as the old slow leak.
+
 ## [0.166.0]
 
 ### Fixed
