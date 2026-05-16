@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.strbuilder` — `aether_strbuilder_vappend_format`, a C-only `va_list`-accepting companion to `append_format`** (`std/strbuilder/aether_strbuilder.{c,h}`, `tests/runtime/test_runtime_strbuilder.c`). v1/v2 of `std.strbuilder` cover Aether-side call sites with literal arguments; the inverse direction — a variadic *defining* function written in C that wants to delegate its formatting to strbuilder and route the result through Aether — had no bridge, forcing handwritten `va_start`/`vsnprintf`/`va_end` C to stay in the in-tree mquickjs port. Aether deliberately has no defining-varargs (`foo(fmt: string, ...) { ... }` is intentionally not a language feature — platform-specific `va_list`, ABI-fragile); `vappend_format` is the C→Aether bridge that lets that exclusion not block the port. A handwritten variadic C shim that already holds a `va_list` can now do `aether_strbuilder_vappend_format(b, fmt, ap)` and move all the surrounding logic (message building, error routing, throw semantics) to Aether. This is a pure C-FFI primitive — there is **no Aether-side wrapper**, because a `va_list` cannot cross the Aether boundary, so the `module.ae` `exports` list does not grow. `aether_strbuilder_append_format` is refactored to a thin wrapper that delegates to it, with the byte-output-identical guarantee covered by a regression test. The header documents the `va_list` consumption contract: the call consumes the caller's `ap` (matching the `vsnprintf` contract), the caller must `va_end` it, and a caller needing to format the same arguments twice (e.g. a retry with a fallback format) must take its own `va_copy` before the call. C-side regression harness covers five cases — byte-identity with `append_format`, the >256-byte slow path, the caller-owns-`va_end` contract, the `va_copy` retry pattern (the shape mquickjs's `js_vsnprintf` retry needs), and NULL/empty inputs. Named downstream: the mquickjs port, where eight variadic C functions (`js_printf`, `js_vprintf`, `js_vsnprintf`/`js_snprintf`, `js_parse_error`, `cprintf`, `JS_Throw{Syntax,Type,Range,Reference}Error`) migrate from full handwritten C bodies to ~3-line C shims delegating to Aether, retiring ~200 lines of handwritten C.
+
 ## [0.163.0]
 
 ### Fixed

@@ -150,34 +150,47 @@ int aether_strbuilder_append_codepoint(AetherStrBuilder* b, int cp) {
     return aether_strbuilder_append_n(b, (const char*)enc, n);
 }
 
-int aether_strbuilder_append_format(AetherStrBuilder* b, const char* fmt, ...) {
+int aether_strbuilder_vappend_format(AetherStrBuilder* b, const char* fmt,
+                                     va_list ap) {
     if (!b || !fmt) return 0;
     /* Fast path: format into a stack scratch buffer. vsnprintf always
      * reports the length it WOULD have written, so a single probe
-     * tells us whether the scratch was large enough. */
+     * tells us whether the scratch was large enough.
+     *
+     * The probe runs against a va_copy of `ap`, not `ap` itself: a
+     * va_list is single-pass on most ABIs, and the slow path below
+     * needs a fresh traversal to re-format. The caller's `ap` is
+     * still consumed by the time this returns (see the slow path);
+     * that is the documented vsnprintf-style contract. */
     char scratch[256];
-    va_list ap;
-    va_start(ap, fmt);
-    int needed = vsnprintf(scratch, sizeof(scratch), fmt, ap);
-    va_end(ap);
+    va_list ap_probe;
+    va_copy(ap_probe, ap);
+    int needed = vsnprintf(scratch, sizeof(scratch), fmt, ap_probe);
+    va_end(ap_probe);
     if (needed < 0) return 0;  /* encoding error */
     if (needed < (int)sizeof(scratch)) {
         return aether_strbuilder_append_n(b, scratch, needed);
     }
     /* Slow path: output exceeded the scratch. Reserve room in the
      * builder for `needed` bytes plus a NUL (vsnprintf always writes
-     * a terminator), format directly into the tail, then bump the
-     * logical length by `needed` only — the NUL is not part of the
-     * content. */
+     * a terminator), format directly into the tail using the
+     * caller's `ap`, then bump the logical length by `needed` only —
+     * the NUL is not part of the content. */
     size_t end = b->length + (size_t)needed;
     if (end < b->length) return 0;  /* overflow */
     if (!strbuilder_reserve(b, end + 1)) return 0;
-    va_start(ap, fmt);
     int wrote = vsnprintf(b->data + b->length, (size_t)needed + 1, fmt, ap);
-    va_end(ap);
     if (wrote != needed) return 0;
     b->length = end;
     return 1;
+}
+
+int aether_strbuilder_append_format(AetherStrBuilder* b, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int rc = aether_strbuilder_vappend_format(b, fmt, ap);
+    va_end(ap);
+    return rc;
 }
 
 int aether_strbuilder_length(AetherStrBuilder* b) {

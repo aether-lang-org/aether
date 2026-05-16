@@ -2,6 +2,7 @@
 #define AETHER_STRBUILDER_H
 
 #include <stddef.h>
+#include <stdarg.h>
 
 /* std.strbuilder — amortised-O(1) string append primitive.
  *
@@ -84,8 +85,39 @@ int aether_strbuilder_append_codepoint(AetherStrBuilder* b, int cp);
  * with vsnprintf and appends the result. A 256-byte stack scratch
  * covers the common case in one pass; longer output reserves builder
  * space and formats directly into the tail. Returns 1 on success, 0
- * on failure (NULL args, encoding error, OOM). */
+ * on failure (NULL args, encoding error, OOM). Thin wrapper over
+ * `aether_strbuilder_vappend_format` — byte-output identical. */
 int aether_strbuilder_append_format(AetherStrBuilder* b, const char* fmt, ...);
+
+/* va_list-accepting companion to `append_format`. C-FFI ONLY — there
+ * is no Aether-side wrapper because a va_list cannot cross the Aether
+ * boundary. It exists so that a handwritten variadic C shim (which
+ * already holds a va_list from its own va_start) can delegate its
+ * formatting to a strbuilder, then route the finished bytes back to
+ * Aether — the C->Aether bridge for the *defining* side of the
+ * variadic story (Aether deliberately has no defining-varargs).
+ *
+ * va_list consumption contract: this call CONSUMES the caller's `ap`
+ * (matching the vsnprintf contract). The caller must `va_end(ap)`
+ * afterwards, and must NOT pass `ap` to a second consumer. A caller
+ * that needs to format the same arguments twice (e.g. a retry with a
+ * fallback format) must take its own `va_copy` *before* calling:
+ *
+ *     va_list ap, saved;
+ *     va_start(ap, fmt);
+ *     va_copy(saved, ap);
+ *     aether_strbuilder_vappend_format(b1, fmt, ap);     // consumes ap
+ *     va_end(ap);
+ *     aether_strbuilder_vappend_format(b2, fmt, saved);  // consumes saved
+ *     va_end(saved);
+ *
+ * Internally a va_copy is taken for the fast-path scratch probe so a
+ * 256-byte-overflowing format still has a fresh va_list to re-format
+ * from; that is an implementation detail and does not relax the
+ * "caller's ap is consumed" contract above. Returns 1 on success, 0
+ * on failure (NULL builder, NULL fmt, encoding error, OOM). */
+int aether_strbuilder_vappend_format(AetherStrBuilder* b, const char* fmt,
+                                     va_list ap);
 
 /* Current accumulated length in bytes, or -1 if `b` is NULL. */
 int aether_strbuilder_length(AetherStrBuilder* b);
