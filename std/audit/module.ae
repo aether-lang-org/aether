@@ -1,0 +1,97 @@
+// std.audit — query the sandbox audit trail.
+// Import with: import std.audit
+//
+// Aether's in-process permission layer (the stdlib grant checks that a
+// `sandbox { }` block drives) records every permission check — allowed
+// and denied — into a bounded in-memory ring buffer. std.audit reads
+// that buffer back, so a program can inspect its own sandbox decisions
+// at runtime: what was checked, against what resource, and whether it
+// passed.
+//
+// A live sink is separately available via the AETHER_SANDBOX_AUDIT
+// environment variable (none | stderr | file) — that prints checks as
+// they happen and needs no code. std.audit is the programmatic face:
+// counting denials, asserting an expected access pattern in a test,
+// surfacing a "why was this blocked" report.
+//
+// The buffer holds the most recent 256 checks; older ones roll off.
+// audit.clear() empties it — useful to scope a query to one operation.
+//
+// Typical use:
+//
+//   import std.audit
+//
+//   // ... run some sandboxed work ...
+//
+//   n = audit.count()
+//   for (i = 0; i < n; i = i + 1) {
+//       cat, res, allowed = audit.entry(i)
+//       verdict = "DENY"
+//       if allowed == 1 { verdict = "ALLOW" }
+//       println("${verdict} ${cat} ${res}")
+//   }
+
+exports (
+    // Raw externs
+    aether_audit_count, aether_audit_entry_category,
+    aether_audit_entry_resource, aether_audit_entry_allowed,
+    aether_audit_clear,
+    // Ergonomic wrappers
+    count, entry, clear, denied_count
+)
+
+// Detach a borrowed ring-buffer string into an Aether-owned copy.
+extern string_concat(a: string, b: string) -> string
+
+// ---- Raw externs (over runtime/sandbox/aether_audit.c) ----
+
+// Number of checks currently in the ring buffer.
+extern aether_audit_count() -> int
+
+// Field accessors for buffered entry `i` (0-based, oldest first).
+// The category/resource strings are borrowed — copy before the slot
+// is overwritten. The `entry()` wrapper below does that for you.
+extern aether_audit_entry_category(i: int) -> string
+extern aether_audit_entry_resource(i: int) -> string
+extern aether_audit_entry_allowed(i: int) -> int   // 1 allowed, 0 denied, -1 out of range
+
+// Drop all buffered entries.
+extern aether_audit_clear()
+
+// ---- Ergonomic wrappers (audit.* namespace) ----
+
+// How many permission checks are currently buffered.
+count() -> int {
+    return aether_audit_count()
+}
+
+// Buffered check `i` as a tuple (category, resource, allowed).
+// `allowed` is 1 (passed) or 0 (denied); for an out-of-range index the
+// tuple is ("", "", -1). The strings are Aether-owned copies, safe to
+// keep after further audit activity.
+entry(i: int) -> {
+    cat = aether_audit_entry_category(i)
+    res = aether_audit_entry_resource(i)
+    allowed = aether_audit_entry_allowed(i)
+    cat_copy = string_concat(cat, "")
+    res_copy = string_concat(res, "")
+    return cat_copy, res_copy, allowed
+}
+
+// Empty the audit buffer. Scope a later query to just the work that
+// follows by clearing first.
+clear() {
+    aether_audit_clear()
+}
+
+// Convenience: how many of the buffered checks were denials.
+denied_count() -> int {
+    n = aether_audit_count()
+    denials = 0
+    for (i = 0; i < n; i = i + 1) {
+        if aether_audit_entry_allowed(i) == 0 {
+            denials = denials + 1
+        }
+    }
+    return denials
+}

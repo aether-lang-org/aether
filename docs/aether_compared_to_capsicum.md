@@ -22,8 +22,11 @@ Despite the difference in scope (OS vs. language), Aether's closure-based isolat
 >   containment transparently. The originally-planned "parent
 >   `cap_enter`s the child" model turned out to be impossible for
 >   dynamic binaries; Part 3.2 records why and what shipped instead.
-> - Still ahead: Phases 3–4 (audit logging, Casper delegation) and
->   wiring the grant list into pre-opened `cap_rights_limit`'d fds.
+> - **Phase 3 done:** the in-process permission layer has an audit
+>   trail — a live `AETHER_SANDBOX_AUDIT` sink and a queryable
+>   `std.audit` ring buffer.
+> - Still ahead: Phase 4 (Casper delegation, jails/RCTL) and wiring the
+>   grant list into pre-opened `cap_rights_limit`'d fds.
 
 ---
 
@@ -644,22 +647,36 @@ grant list into pre-opened, `cap_rights_limit()`'d fds handed to the
 child is the remaining refinement — it needs std.file / std.net to
 expose their descriptors first.
 
-#### Phase 3: Capability Audit Logging (Medium effort)
+#### Phase 3: Audit Logging — **DONE**
 
-Add optional instrumentation:
+The in-process permission layer now records every grant check — allowed
+and denied — with two faces (`runtime/sandbox/aether_audit.c`,
+`std/audit/module.ae`):
+
+- **Live sink** — `AETHER_SANDBOX_AUDIT=none|stderr|file` (default
+  `none`), mirroring the existing `AETHER_SANDBOX_LOG` convention.
+  Emits `AETHER_ALLOWED:` / `AETHER_DENIED:` lines.
+- **Queryable log** — a 256-entry in-memory ring buffer read back via
+  `std.audit`: `audit.count()`, `audit.entry(i)` → `(category,
+  resource, allowed)`, `audit.denied_count()`, `audit.clear()`.
 
 ```aether
-// Log when a permission is granted
-audit_grant(actor_id: string, category: string, resource: string)
-
-// Log when a permission check fails
-audit_deny(actor_id: string, category: string, resource: string)
-
-// Retrieve audit log (queryable at runtime)
-audit_log() -> ptr
+import std.audit
+n = audit.count()
+for (i = 0; i < n; i = i + 1) {
+    cat, res, allowed = audit.entry(i)
+    // ...
+}
 ```
 
-**Benefit:** Forensics and debugging; understand what each actor is doing.
+The hook lives in the compiler-emitted in-process checker, so it fires
+for any `sandbox { }` block and for embedded/hosted plugins. Worked
+example: `examples/audit-demo.ae`. Per-actor attribution (the
+`actor_id` argument the original sketch imagined) is not wired — the
+checker sees category + resource, not the calling actor; adding it
+would need the actor identity threaded into the check, an additive
+follow-up. **Benefit:** forensics and debugging without external
+instrumentation.
 
 #### Phase 4: Cross-Language Capsicum Callbacks (High effort, speculative)
 
@@ -833,8 +850,10 @@ main() {
 1. **Untrusted code can still bypass checks** — If an actor is malicious and compiled with the Aether code, it can skip permission checks.
    - **Mitigation:** On FreeBSD, use Capsicum for ultimate enforcement. Don't rely on language-level checks alone for untrusted code.
 
-2. **No built-in audit trail** — Currently, permission checks don't log anything.
-   - **Mitigation:** Phase 3 (audit logging) addresses this.
+2. **Audit trail** — the in-process permission layer records every
+   check (allowed and denied) to an optional `AETHER_SANDBOX_AUDIT`
+   sink and a queryable `std.audit` ring buffer (Phase 3, done).
+   Per-actor attribution is not yet wired.
 
 3. **No resource limits** — Aether can restrict *what*, not *how much* (bandwidth, memory, CPU).
    - **Mitigation:** On FreeBSD, use RCTL for resource limits.
