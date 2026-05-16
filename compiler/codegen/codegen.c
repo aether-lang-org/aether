@@ -90,6 +90,13 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->scope_depth = 0;
     memset(gen->defer_stack, 0, sizeof(gen->defer_stack));
     memset(gen->scope_defer_start, 0, sizeof(gen->scope_defer_start));
+    // Issue #501: try/catch frame-pop tracking
+    gen->try_frame_depth = 0;
+    gen->loop_nest_depth = 0;
+    memset(gen->loop_try_base, 0, sizeof(gen->loop_try_base));
+    // Issue #501 follow-up: try-clobbered locals tracking
+    gen->try_clobbered_vars = NULL;
+    gen->try_clobbered_var_count = 0;
     // Extern function parameter registry
     gen->extern_registry = NULL;
     gen->extern_registry_count = 0;
@@ -213,6 +220,7 @@ void free_code_generator(CodeGenerator* gen) {
         }
         clear_heap_string_vars(gen);
         clear_escaped_string_vars(gen);
+        clear_try_clobbered_vars(gen);  /* Issue #501 follow-up */
         if (gen->message_registry) {
             free_message_registry(gen->message_registry);
         }
@@ -657,6 +665,208 @@ void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int p
 
 void emit_all_defers(CodeGenerator* gen) {
     emit_all_defers_protected(gen, NULL, 0);
+}
+
+// Drain any in-flight try-frame pops at a non-local exit inside a
+// try body.  See issue #501.
+//
+// The AST_TRY_STATEMENT codegen emits `aether_try_pop()` at the
+// natural end of the try body block.  A `return` (or any other
+// non-fall-through exit) from inside the body bypasses that pop and
+// leaks one panic frame per call; after AETHER_PANIC_MAX_DEPTH = 32
+// calls the runtime aborts.  This helper fires one
+// `aether_try_pop();` per live try frame so the runtime stack
+// matches the codegen-state counter on entry to the next
+// instruction.  The codegen-state counter is itself unchanged: it
+// reflects lexical nesting, not runtime control flow.  In practice
+// every call site is immediately followed by a `return ...;`, so
+// the next instruction we care about is in the caller's frame.
+//
+// The catch handler is unaffected: AST_TRY_STATEMENT emits
+// aether_try_pop() before the handler runs, and the codegen-state
+// counter is back to caller's value while the handler is generated,
+// so this helper correctly fires zero pops for returns inside catch.
+void emit_try_pops_for_nonlocal_exit(CodeGenerator* gen) {
+    if (!gen || gen->try_frame_depth <= 0) return;
+    for (int i = 0; i < gen->try_frame_depth; i++) {
+        print_indent(gen);
+        fprintf(gen->output, "aether_try_pop();\n");
+    }
+}
+
+// `break` / `continue` drain only try frames pushed inside the
+// current loop body — frames pushed outside the loop survive a
+// break/continue and must NOT be popped here.
+void emit_try_pops_for_break_continue(CodeGenerator* gen) {
+    if (!gen || gen->loop_nest_depth <= 0) return;
+    int base = gen->loop_try_base[gen->loop_nest_depth - 1];
+    int drop = gen->try_frame_depth - base;
+    if (drop <= 0) return;
+    for (int i = 0; i < drop; i++) {
+        print_indent(gen);
+        fprintf(gen->output, "aether_try_pop();\n");
+    }
+}
+
+// ----------------------------------------------------------------------
+// Issue #501 follow-up: try-clobbered locals tracking.
+//
+// A C local that's declared in an enclosing scope of a `setjmp` and
+// modified between `setjmp` and `longjmp` has indeterminate value
+// after longjmp unless declared `volatile`.  Aether's try/catch
+// codegen emits `AETHER_SIGSETJMP` and `aether_panic` siglongjmps;
+// vars assigned inside a try body that were declared OUTSIDE the
+// body are at risk.  These helpers populate and query a per-
+// function set of clobbered names; the AST_VARIABLE_DECLARATION
+// codegen consults `is_try_clobbered_var` to decide whether to
+// prefix the emitted C type with `volatile`.
+// ----------------------------------------------------------------------
+
+int is_try_clobbered_var(CodeGenerator* gen, const char* name) {
+    if (!gen || !name) return 0;
+    for (int i = 0; i < gen->try_clobbered_var_count; i++) {
+        if (gen->try_clobbered_vars[i] &&
+            strcmp(gen->try_clobbered_vars[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+void mark_try_clobbered_var(CodeGenerator* gen, const char* name) {
+    if (!gen || !name) return;
+    if (is_try_clobbered_var(gen, name)) return;
+    char** grown = realloc(gen->try_clobbered_vars,
+                           sizeof(char*) * (gen->try_clobbered_var_count + 1));
+    if (!grown) return;
+    gen->try_clobbered_vars = grown;
+    gen->try_clobbered_vars[gen->try_clobbered_var_count] = strdup(name);
+    gen->try_clobbered_var_count++;
+}
+
+void clear_try_clobbered_vars(CodeGenerator* gen) {
+    if (!gen) return;
+    if (gen->try_clobbered_vars) {
+        for (int i = 0; i < gen->try_clobbered_var_count; i++) {
+            free(gen->try_clobbered_vars[i]);
+        }
+        free(gen->try_clobbered_vars);
+    }
+    gen->try_clobbered_vars = NULL;
+    gen->try_clobbered_var_count = 0;
+}
+
+// Walk `body` looking for AST_TRY_STATEMENT nodes; for each, walk
+// the try body recursively and mark every variable name on the LHS
+// of any assignment-shaped node.  Conservative: a var declared
+// *inside* the try body also gets marked, but the volatile prefix
+// is only applied at AST_VARIABLE_DECLARATION sites where
+// gen->try_frame_depth == 0 (i.e. only when we're emitting a decl
+// in an outer scope of the try, never inside one).
+// Helper: when `lhs` is an assignment LHS, find the bare variable
+// name at its root and mark it as try-clobbered.  For:
+//   x = ...           → mark "x"
+//   x.field = ...     → mark "x"  (member access)
+//   x[i] = ...        → mark "x"  (array index)
+//   x.f.g = ...       → mark "x"  (nested member access)
+//   x[i].f = ...      → mark "x"
+// Conservative: marks the storage owner even when the LHS writes
+// to a heap-allocated sub-object (where volatile wouldn't matter)
+// — harmless, just slightly more `volatile` than strictly needed.
+static void mark_lhs_root_var(CodeGenerator* gen, ASTNode* lhs) {
+    while (lhs) {
+        if (lhs->type == AST_IDENTIFIER && lhs->value) {
+            mark_try_clobbered_var(gen, lhs->value);
+            return;
+        }
+        if (lhs->type == AST_MEMBER_ACCESS && lhs->child_count > 0) {
+            lhs = lhs->children[0];
+            continue;
+        }
+        if (lhs->type == AST_ARRAY_ACCESS && lhs->child_count > 0) {
+            lhs = lhs->children[0];
+            continue;
+        }
+        // Unrecognised LHS shape — give up (no var to mark).
+        return;
+    }
+}
+
+static void scan_try_body_for_writes(CodeGenerator* gen, ASTNode* node) {
+    if (!node) return;
+    // AST_VARIABLE_DECLARATION carries `value` = var name.  This is
+    // the shape the Aether parser emits for `x = expr` when `x` is
+    // a bare identifier at statement scope.  Mark unconditionally —
+    // the volatile prefix is only applied at AST_VARIABLE_DECLARATION
+    // emission sites when gen->try_frame_depth == 0 (only outer-scope
+    // decls need volatile; inside-try decls live and die inside the
+    // try body's C scope).
+    if (node->type == AST_VARIABLE_DECLARATION && node->value) {
+        mark_try_clobbered_var(gen, node->value);
+    }
+    // AST_ASSIGNMENT: an explicit re-assignment shape used by some
+    // parser paths (struct-literal field-init for one; the general
+    // `lhs = rhs` statement path goes via AST_BINARY_EXPRESSION,
+    // see below).
+    if (node->type == AST_ASSIGNMENT && node->child_count > 0 &&
+        node->children[0]) {
+        mark_lhs_root_var(gen, node->children[0]);
+    }
+    // AST_BINARY_EXPRESSION with op `=` / `+=` / `-=` / etc. — this
+    // is the shape Aether's parser produces for a member-access or
+    // array-index assignment like `b.val = 42` or `arr[i] = x`.
+    // `parse_binary_expression` consumes the `=` token like any
+    // other operator and builds a binary node; the statement layer
+    // wraps it in AST_EXPRESSION_STATEMENT.
+    if (node->type == AST_BINARY_EXPRESSION && node->value &&
+        node->child_count >= 1) {
+        const char* op = node->value;
+        int is_assign =
+            (op[0] == '=' && op[1] == '\0') ||
+            (op[0] != '\0' && op[1] == '=' && op[2] == '\0' &&
+             (op[0] == '+' || op[0] == '-' || op[0] == '*' ||
+              op[0] == '/' || op[0] == '%' || op[0] == '&' ||
+              op[0] == '|' || op[0] == '^'));
+        if (is_assign) {
+            mark_lhs_root_var(gen, node->children[0]);
+        }
+    }
+    // AST_COMPOUND_ASSIGNMENT: a few parser paths produce this
+    // discrete node type instead of folding into AST_BINARY_EXPRESSION.
+    if (node->type == AST_COMPOUND_ASSIGNMENT && node->child_count > 0 &&
+        node->children[0]) {
+        mark_lhs_root_var(gen, node->children[0]);
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        scan_try_body_for_writes(gen, node->children[i]);
+    }
+}
+
+static void walk_for_try_clobbered(CodeGenerator* gen, ASTNode* node) {
+    if (!node) return;
+    if (node->type == AST_TRY_STATEMENT && node->child_count >= 1) {
+        // children[0] is the try body; children[1] is the catch clause.
+        // Vars modified inside the body are the at-risk set.
+        scan_try_body_for_writes(gen, node->children[0]);
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        walk_for_try_clobbered(gen, node->children[i]);
+    }
+}
+
+void mark_try_clobbered_vars(CodeGenerator* gen, ASTNode* body) {
+    if (!gen || !body) return;
+    walk_for_try_clobbered(gen, body);
+}
+
+// Returns "volatile " when `name` is a try-clobbered local and the
+// current codegen position is OUTSIDE any try body in this
+// function.  An inside-try declaration is scoped to the try body
+// and lives/dies inside it; only outer-scope decls cross the
+// setjmp boundary and need volatile.  Returns "" otherwise.
+const char* try_volatile_qual_for(CodeGenerator* gen, const char* name) {
+    if (!gen || !name) return "";
+    if (gen->try_frame_depth > 0) return "";
+    if (!is_try_clobbered_var(gen, name)) return "";
+    return "volatile ";
 }
 
 // ============================================================================
@@ -1696,6 +1906,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     clear_declared_vars(gen);  // Reset for main function
     clear_heap_string_vars(gen);
     clear_escaped_string_vars(gen);
+    clear_try_clobbered_vars(gen);  /* Issue #501 follow-up */
     // Reset defer state for main function and enter scope
     gen->defer_count = 0;
     gen->scope_depth = 0;
@@ -1757,6 +1968,10 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
         // because the lazy tracker init was scope-local. Mirror of
         // the call in codegen_func.c::generate_function_definition.
         if (main->children[0] && main->children[0]->type == AST_BLOCK) {
+            /* Issue #501 follow-up: mark try-clobbered vars in main()
+             * so the `volatile` prefix is applied at decl sites for
+             * locals modified inside a try body. */
+            mark_try_clobbered_vars(gen, main->children[0]);
             hoist_heap_string_trackers(gen, main->children[0]);
             mark_escaped_heap_string_vars(gen, main->children[0]);
             /* Mirror the regular-function path in

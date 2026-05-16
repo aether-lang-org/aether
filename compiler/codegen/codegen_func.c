@@ -698,6 +698,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     clear_declared_vars(gen);  // Reset for each function
     clear_heap_string_vars(gen);
     clear_escaped_string_vars(gen);
+    clear_try_clobbered_vars(gen);  /* Issue #501 follow-up — per-fn set */
 
     // Mark function parameters as declared so they aren't re-declared
     // (e.g., by hoist_loop_vars when a parameter is reassigned in a loop).
@@ -880,6 +881,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         // fail to compile. See #278.
         if (body->type == AST_BLOCK) {
             hoist_if_branch_vars(gen, body);
+            /* Issue #501 follow-up: mark vars modified inside any
+             * try body in this function so AST_VARIABLE_DECLARATION
+             * codegen knows which outer-scope locals need a
+             * `volatile` C type qualifier.  Must run before the
+             * body is generated, so the per-function set is
+             * populated by the time each decl-site lookup happens. */
+            mark_try_clobbered_vars(gen, body);
             // Pre-hoist `_heap_<name>` companions for every string
             // variable in the body so the tracker is visible across
             // every nesting depth — closes the architectural blocker
@@ -1306,6 +1314,7 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
     indent(gen);
     clear_declared_vars(gen);
     clear_heap_string_vars(gen);
+    clear_try_clobbered_vars(gen);  /* Issue #501 follow-up — per-fn set */
 
     // Generate each clause as an if/else-if branch
     int is_first = 1;

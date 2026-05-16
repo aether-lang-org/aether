@@ -1,0 +1,41 @@
+// Issue #501 regression: a `break` from inside a loop where the
+// loop is INSIDE a `try { }` must NOT drain the surrounding try
+// frame — only frames pushed inside the loop body get drained.
+// This is the "false positive guard": the fix must not eagerly
+// pop frames whose `{` lexically precedes the loop's `{`.
+//
+// Strategy: run the break-loop-then-panic shape 50 times in a row.
+// Pre-fix, the break would have drained the outer try frame, so
+// the subsequent panic would `panic outside any try/catch` and
+// abort the process (we'd not survive a single iteration, let
+// alone 50).  Post-fix, the try is still live and catches the
+// panic, looping cleanly.
+
+main() {
+    survived = 0
+    outer = 0
+    while outer < 50 {
+        try {
+            iter = 0
+            while iter < 10 {
+                if iter >= 5 {
+                    // break exits the inner while.  Outer try
+                    // frame must survive this exit.
+                    break
+                }
+                iter = iter + 1
+            }
+            // We're still inside the outer try.  Panic must be
+            // caught by `catch reason` below.  If the break had
+            // drained the try frame, this would abort.
+            panic("after break")
+        } catch reason {
+            // Caught — outer try frame survived the inner break.
+        }
+        survived = survived + 1
+        outer = outer + 1
+    }
+    if survived == 50 {
+        println("break-outside-try OK")
+    }
+}

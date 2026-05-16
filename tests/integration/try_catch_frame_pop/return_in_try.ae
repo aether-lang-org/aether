@@ -1,0 +1,30 @@
+// Issue #501 regression: a `return` inside a try body must drain
+// the in-flight panic frame.  Pre-fix, the codegen-emitted
+// `aether_try_pop()` only ran on natural fall-through; a `return`
+// from inside the body bypassed it and leaked one frame per call.
+// After AETHER_PANIC_MAX_DEPTH = 32 calls the runtime aborted with
+// `aether: try/catch nesting exceeded 32 — aborting`.
+//
+// This program calls a function that returns from inside a try
+// 100 times.  Pre-fix: aborts at iteration 32.  Post-fix: prints
+// `survived 100 calls`.
+
+do_try() -> int {
+    try {
+        return 42
+    } catch reason {
+        return -1
+    }
+}
+
+main() {
+    i = 0
+    n = 0
+    while i < 100 {
+        n = do_try()
+        i = i + 1
+    }
+    if n == 42 {
+        println("survived 100 calls")
+    }
+}

@@ -1,0 +1,31 @@
+// Issue #501 follow-up regression: a local declared in an outer
+// scope of a try and modified inside the try body must be lowered
+// as `volatile T`.  Without it, the C optimizer at -O2 may keep
+// the local in a register that gets clobbered when aether_panic's
+// siglongjmp returns to the catch handler — the handler then
+// reads the stale pre-try value.  C99 7.13.2.1.
+
+main() {
+    // Scalar: x is modified in the try body, read in catch.
+    x = 0
+    try {
+        x = 42
+        panic("p")
+    } catch reason {
+        if x == 42 {
+            println("scalar OK")
+        }
+    }
+
+    // Plain int that's never assigned inside the try doesn't need
+    // volatile.  The pre-pass shouldn't mark it.  No correctness
+    // signal, just a sanity check that the analysis is selective.
+    y = 99
+    try {
+        panic("ignore-y")
+    } catch reason {
+        if y == 99 {
+            println("untouched OK")
+        }
+    }
+}

@@ -1,0 +1,26 @@
+// Issue #501 regression: a `break` inside a try body that's inside
+// a loop must drain inside-loop try frames.  Pre-fix, a `break`
+// jumping out of the loop skipped the try's pop and leaked a frame
+// per outer iteration.
+
+main() {
+    i = 0
+    iter = 0
+    while iter < 100 {
+        try {
+            // The break jumps out of the while; pre-fix this leaked
+            // the panic frame because the try's aether_try_pop() was
+            // only emitted at the natural end of the body.
+            if iter >= 50 {
+                break
+            }
+            i = i + 1
+        } catch reason {
+            // Never reached — no panic raised.
+        }
+        iter = iter + 1
+    }
+    if i == 50 {
+        println("break-in-try OK")
+    }
+}
