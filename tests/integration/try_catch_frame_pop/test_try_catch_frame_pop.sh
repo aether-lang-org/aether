@@ -65,4 +65,35 @@ run_case "$SCRIPT_DIR/return_in_try.ae"     "survived 100 calls"      "case 1 (r
 run_case "$SCRIPT_DIR/break_in_try.ae"      "break-in-try OK"         "case 2 (break in try)"
 run_case "$SCRIPT_DIR/break_outside_try.ae" "break-outside-try OK"    "case 3 (break-not-leaving-try)"
 
+# Case 4 is the volatile-across-setjmp regression.  Pre-fix, under
+# -O2 the catch handler would have read x=0 (the stale pre-try
+# value) because the C optimizer kept x in a register the panic's
+# siglongjmp clobbered.  Build with -O2 (the `ae build` default)
+# so the regression actually surfaces.  Two outputs expected:
+# "scalar OK" (the assigned-in-try-then-read-in-catch path) and
+# "untouched OK" (the sanity check that the analysis is selective).
+case4_bin="$TMPDIR/volatile_across_setjmp"
+case4_err="$TMPDIR/volatile_across_setjmp.err"
+case4_out="$TMPDIR/volatile_across_setjmp.out"
+if ! AETHER_HOME="$ROOT" "$AE" build "$SCRIPT_DIR/volatile_across_setjmp.ae" -o "$case4_bin" >/dev/null 2>"$case4_err"; then
+    echo "  [FAIL] case 4 (volatile across setjmp): ae build failed"
+    cat "$case4_err" | head -10 | sed 's/^/    /'
+    exit 1
+fi
+if ! "$case4_bin" >"$case4_out" 2>"$case4_err"; then
+    echo "  [FAIL] case 4: program returned non-zero"
+    cat "$case4_out" | sed 's/^/    /'
+    exit 1
+fi
+if ! grep -qF "scalar OK" "$case4_out"; then
+    echo "  [FAIL] case 4: 'scalar OK' missing (volatile not applied?)"
+    echo "    got:" ; cat "$case4_out" | sed 's/^/      /'
+    exit 1
+fi
+if ! grep -qF "untouched OK" "$case4_out"; then
+    echo "  [FAIL] case 4: 'untouched OK' missing"
+    echo "    got:" ; cat "$case4_out" | sed 's/^/      /'
+    exit 1
+fi
+
 echo "  [PASS] try/catch frame-pop on non-local exits (issue #501)"

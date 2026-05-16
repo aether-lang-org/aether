@@ -3188,29 +3188,36 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                          stmt->children[0]->type == AST_ARRAY_LITERAL);
 
                     // Handle array types specially (C syntax: int name[size])
+                    /* Issue #501 follow-up: volatile prefix for
+                     * try-clobbered locals.  Same `vq` value used
+                     * across each branch below so we only consult
+                     * the set once. */
+                    const char* vq = try_volatile_qual_for(gen, stmt->value);
                     if (stmt->node_type && stmt->node_type->kind == TYPE_ARRAY) {
                         const char* elem_type = get_c_type(stmt->node_type->element_type);
                         if (stmt->node_type->array_size > 0) {
-                            fprintf(gen->output, "%s %s[%d]", elem_type, stmt->value, stmt->node_type->array_size);
+                            fprintf(gen->output, "%s%s %s[%d]", vq, elem_type,
+                                    stmt->value, stmt->node_type->array_size);
                         } else {
                             // Dynamic/empty array - use pointer
-                            fprintf(gen->output, "%s* %s", elem_type, stmt->value);
+                            fprintf(gen->output, "%s%s* %s", vq, elem_type, stmt->value);
                         }
                     } else if (is_array_init) {
                         // Type system missed array type but initializer is array literal
                         int arr_size = stmt->children[0]->child_count;
                         if (arr_size > 0) {
-                            fprintf(gen->output, "int %s[%d]", stmt->value, arr_size);
+                            fprintf(gen->output, "%sint %s[%d]", vq, stmt->value, arr_size);
                         } else {
                             // Empty array [] - use NULL pointer
-                            fprintf(gen->output, "int* %s", stmt->value);
+                            fprintf(gen->output, "%sint* %s", vq, stmt->value);
                         }
                     } else if (stmt->child_count > 0 && stmt->children[0] &&
                                (stmt->children[0]->type == AST_MESSAGE_CONSTRUCTOR ||
                                 stmt->children[0]->type == AST_STRUCT_LITERAL) &&
                                stmt->children[0]->value) {
                         // Message/struct constructor — use the constructor name as type
-                        fprintf(gen->output, "%s %s", stmt->children[0]->value, stmt->value);
+                        fprintf(gen->output, "%s%s %s",
+                                vq, stmt->children[0]->value, stmt->value);
                         /* Struct-field heap-string ownership (#465).
                          * Push a function-exit defer that calls the
                          * auto-emitted <Struct>_destroy(&<var>) to
@@ -3271,6 +3278,16 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             }
                         }
 
+                        /* Issue #501 follow-up: `vq` from above
+                         * carries "volatile " when this local is
+                         * modified inside a try body of the current
+                         * function and we're emitting the decl at
+                         * outer scope.  Without this, the C optimizer
+                         * may keep the local in a register that the
+                         * panic's siglongjmp clobbers and the catch
+                         * handler reads the stale pre-try value.
+                         * C99 7.13.2.1. */
+                        fprintf(gen->output, "%s", vq);
                         generate_type(gen, var_type);
                         fprintf(gen->output, " %s", stmt->value);
                     }
