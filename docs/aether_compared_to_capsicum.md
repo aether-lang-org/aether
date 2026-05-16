@@ -9,6 +9,14 @@ Aether and BSD Capsicum are two fundamentally different approaches to capability
 
 Despite the difference in scope (OS vs. language), Aether's closure-based isolation and permission hierarchy are **conceptually aligned with Capsicum's principles**. This document explores the parallels, gaps, and opportunities for Aether on FreeBSD—including the possibility of an Aether runtime that leverages Capsicum for OS-enforced containment of sandboxed actors.
 
+> **Status (current):** Aether's existing runtime sandbox — the
+> `libaether_sandbox.so` LD_PRELOAD layer and `spawn_sandboxed` — now
+> builds and runs on FreeBSD at parity with Linux. The Capsicum
+> integration described in Part 3 is **not yet implemented**; it
+> remains the roadmap for moving FreeBSD from cooperative containment
+> (LD_PRELOAD, userspace, bypassable) to OS-enforced containment
+> (Capsicum, kernel, ironclad).
+
 ---
 
 ## Part 1: Sandbox Models Compared
@@ -383,7 +391,17 @@ seccomp_load(ctx);
 2. **For ease of use:** Use LD_PRELOAD + language-level checks (accept inherent limitations)
 3. **For production:** Use both LD_PRELOAD + seccomp + language checks (defense in depth)
 
-**On FreeBSD:** Use Capsicum as layer 4, which is **ironclad** and requires no workarounds.
+**On FreeBSD today:** the LD_PRELOAD layer (`libaether_sandbox.so` +
+`spawn_sandboxed`) builds and runs — FreeBSD's `rtld-elf` honours
+`LD_PRELOAD` and `dlsym(RTLD_NEXT, ...)` exactly as glibc's loader does,
+so FreeBSD has the same cooperative-containment story as Linux. It has
+the same userspace limitations (raw `syscall()`, statically linked
+binaries, etc.).
+
+**On FreeBSD, the goal:** add Capsicum as a layer-4 backend, which is
+**ironclad** and requires no workarounds. This is not yet implemented —
+the roadmap below (`std.capsicum` bindings, then Capsicum-backed
+`spawn_sandboxed`) is the path to it.
 
 ---
 

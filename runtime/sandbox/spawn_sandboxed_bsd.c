@@ -1,16 +1,29 @@
-// aether_spawn_sandboxed.c — spawn a child process under Aether sandbox
+// spawn_sandboxed_bsd.c — spawn a child process under Aether sandbox (FreeBSD)
 //
-// Linux-only: uses fork, shm_open, LD_PRELOAD.
-// Other platforms get a stub that returns -1 with a clear message.
+// Same model as the Linux backend: fork, shm_open, and LD_PRELOAD —
+// FreeBSD's rtld-elf honors LD_PRELOAD and dlsym(RTLD_NEXT, ...) just
+// as glibc's loader does. The one platform difference is locating the
+// running binary: FreeBSD does not mount /proc by default, so instead
+// of readlink("/proc/self/exe") we ask the kernel directly via
+// sysctl(KERN_PROC_PATHNAME).
+//
+// This is the LD_PRELOAD-parity backend only. OS-enforced containment
+// via Capsicum (cap_enter / cap_rights_limit) is separate, future work
+// — see docs/aether_compared_to_capsicum.md.
+//
+// Self-guarded: compiles to an empty object off FreeBSD. Companion
+// backends: spawn_sandboxed_linux.c, spawn_sandboxed_stub.c.
 
-#if defined(__linux__)
+#if defined(__FreeBSD__)
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <fcntl.h>
 
@@ -18,18 +31,25 @@
 extern int list_size(void*);
 extern void* list_get_raw(void*, int);
 
-// Find libaether_sandbox.so next to the running binary
+// Find libaether_sandbox.so next to the running binary.
+// FreeBSD has no /proc/self/exe by default; KERN_PROC_PATHNAME is the
+// kernel-supported way to get the executable's absolute path.
 static int find_preload_path(char* buf, int bufsize) {
-    // Try /proc/self/exe to find our binary's directory
-    // Leave room for suffix ("build/libaether_sandbox.so" = 26 chars)
+    // exe[] holds the binary path; kept well under bufsize so the
+    // snprintf below (path + "build/libaether_sandbox.so") cannot
+    // truncate. Matches the sizing in spawn_sandboxed_linux.c.
     char exe[512];
-    ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (len <= 0) {
+    size_t exe_len = sizeof(exe);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+
+    if (sysctl(mib, 4, exe, &exe_len, NULL, 0) != 0 || exe_len == 0) {
         // Fallback: look in current directory
         snprintf(buf, bufsize, "./libaether_sandbox.so");
         return access(buf, F_OK) == 0;
     }
-    exe[len] = '\0';
+    // sysctl reports exe_len including the trailing NUL; guard anyway.
+    if (exe_len < sizeof(exe)) exe[exe_len] = '\0';
+    else exe[sizeof(exe) - 1] = '\0';
 
     // Strip binary name, keep directory
     char* slash = strrchr(exe, '/');
@@ -134,12 +154,4 @@ int aether_spawn_sandboxed(void* grant_list, const char* program, const char* ar
     return -1;
 }
 
-#else
-// Non-Linux stub
-#include <stdio.h>
-int aether_spawn_sandboxed(void* grant_list, const char* program, const char* arg) {
-    (void)grant_list; (void)program; (void)arg;
-    fprintf(stderr, "[aether] spawn_sandboxed is only available on Linux\n");
-    return -1;
-}
-#endif
+#endif // __FreeBSD__

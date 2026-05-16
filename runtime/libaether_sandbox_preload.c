@@ -407,6 +407,11 @@ int openat(int dirfd, const char* path, int flags, ...) {
     return real_openat(dirfd, path, flags);
 }
 
+// open64 / openat64 / fopen64 — glibc large-file variants. These symbols
+// exist only on glibc/Linux; FreeBSD's off_t is 64-bit natively and has
+// no *64 suffixed entry points, so the whole block is Linux-gated.
+#if defined(__linux__)
+
 // open64 — glibc large file variant (skip if glibc already redirects open→open64)
 #ifndef open64
 int open64(const char* path, int flags, ...) {
@@ -457,6 +462,8 @@ FILE* fopen64(const char* path, const char* mode) {
 }
 #endif
 
+#endif // __linux__ (open64 / openat64 / fopen64)
+
 // execve
 int execve(const char* pathname, char* const argv[], char* const envp[]) {
     if (!real_execve) real_execve = dlsym(RTLD_NEXT, "execve");
@@ -485,6 +492,10 @@ pid_t fork(void) {
 // clone3 — block by default (same as fork)
 // clone() is variadic and arch-specific, hard to intercept portably.
 // clone3() is the modern replacement (Linux 5.3+), clean signature.
+// Linux-only: <linux/sched.h> and struct clone_args do not exist on
+// FreeBSD, which also has no clone3 syscall — process creation there
+// goes through fork/vfork (both intercepted above).
+#if defined(__linux__)
 #include <linux/sched.h>
 static long (*real_clone3)(struct clone_args*, size_t) = NULL;
 long clone3(struct clone_args* args, size_t size) {
@@ -495,6 +506,7 @@ long clone3(struct clone_args* args, size_t size) {
     }
     return real_clone3(args, size);
 }
+#endif // __linux__ (clone3)
 
 // vfork — same restriction as fork
 static pid_t (*real_vfork)(void) = NULL;
@@ -523,7 +535,10 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
     return real_mmap(addr, length, prot, flags, fd, offset);
 }
 
-// mmap64 — glibc may redirect mmap to mmap64
+// mmap64 — glibc may redirect mmap to mmap64. Linux-only: FreeBSD's
+// mmap is already 64-bit and exposes no mmap64 symbol; the plain mmap
+// interception above covers it.
+#if defined(__linux__)
 void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
     if (!real_mmap) real_mmap = dlsym(RTLD_NEXT, "mmap64");
     if (sandbox_active && (prot & 0x4) && fd == -1) {
@@ -533,6 +548,7 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
     }
     return real_mmap(addr, length, prot, flags, fd, offset);
 }
+#endif // __linux__ (mmap64)
 
 // mprotect — block adding PROT_EXEC to existing mappings
 int mprotect(void* addr, size_t len, int prot) {
@@ -572,20 +588,34 @@ void* dlopen(const char* filename, int flags) {
 
 // syscall — block direct syscall() which bypasses all libc interception
 // This is the nuclear escape hatch: Perl's syscall(), Python's os.syscall()
-static long (*real_syscall)(long, ...) = NULL;
-long syscall(long number, ...) {
+//
+// The prototype differs by platform and must match the libc declaration
+// exactly or the override is a compile error: glibc declares
+// `long syscall(long, ...)`, FreeBSD declares `int syscall(int, ...)`.
+#if defined(__FreeBSD__)
+typedef int aether_syscall_arg_t;
+#else
+typedef long aether_syscall_arg_t;
+#endif
+static aether_syscall_arg_t (*real_syscall)(aether_syscall_arg_t, ...) = NULL;
+aether_syscall_arg_t syscall(aether_syscall_arg_t number, ...) {
     if (!real_syscall) real_syscall = dlsym(RTLD_NEXT, "syscall");
     if (sandbox_active) {
+#if defined(__linux__)
         // Block dangerous syscalls: open(2), openat(257), connect(42),
-        // execve(59), socket(41)
+        // execve(59), socket(41). Numbers are the Linux x86-64 ABI;
+        // FreeBSD's syscall table differs, so this named-deny branch is
+        // Linux-only. The catch-all block below still denies every raw
+        // syscall() when sandboxed, on every platform.
         if (number == 2 || number == 257 || number == 42 ||
             number == 59 || number == 41) {
             char num_str[32];
-            snprintf(num_str, sizeof(num_str), "syscall_%ld", number);
+            snprintf(num_str, sizeof(num_str), "syscall_%ld", (long)number);
             log_deny("native", num_str);
             errno = EPERM;
             return -1;
         }
+#endif // __linux__
     }
     // For allowed syscalls, we can't easily forward varargs.
     // Block all when sandboxed as a safety measure.
