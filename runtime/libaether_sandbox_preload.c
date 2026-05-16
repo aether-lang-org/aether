@@ -288,6 +288,13 @@ static void __attribute__((constructor)) sandbox_init(void) {
 char* getenv(const char* name) {
     if (!real_getenv) real_getenv = dlsym(RTLD_NEXT, "getenv");
     if (!name) return real_getenv(name);
+    // The AETHER_* namespace is the sandbox's own control channel —
+    // AETHER_SANDBOX_SHM, AETHER_SANDBOX_VERBOSE, AETHER_SANDBOX_LOG,
+    // AETHER_CAPSICUM, etc. The Aether runtime inside a sandboxed child
+    // must be able to read these; an "env" grant for them would be
+    // sandbox plumbing leaking into the user-facing grant list. They
+    // carry no secrets, so exempt the whole prefix from interception.
+    if (strncmp(name, "AETHER_", 7) == 0) return real_getenv(name);
     if (!check_grant("env", name)) return NULL;
     return real_getenv(name);
 }

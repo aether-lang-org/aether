@@ -498,7 +498,7 @@ interception model requires.
 | Platform | Runtime sandbox | Notes |
 |----------|----------------|-------|
 | **Linux** | LD_PRELOAD (`libaether_sandbox.so`) | Preload locates itself via `/proc/self/exe`. Intercepts the glibc large-file (`open64`/`fopen64`/`mmap64`) and `clone3` entry points in addition to the common surface. |
-| **FreeBSD** | LD_PRELOAD (`libaether_sandbox.so`) | Preload locates itself via `sysctl(KERN_PROC_PATHNAME)` — FreeBSD does not mount `/proc` by default. No `*64` symbols and no `clone3` (process creation is `fork`/`vfork`, both intercepted). FreeBSD's native **Capsicum** would give OS-enforced, inescapable containment; a Capsicum backend is future work — see [`aether_compared_to_capsicum.md`](aether_compared_to_capsicum.md). |
+| **FreeBSD** | LD_PRELOAD + **Capsicum self-sandbox** | LD_PRELOAD works as on Linux (preload locates itself via `sysctl(KERN_PROC_PATHNAME)` — no `/proc`; no `*64`/`clone3`). **Additionally**, an Aether process launched with `AETHER_CAPSICUM=1` enters FreeBSD capability mode at startup — kernel-enforced, unbypassable containment. `spawn_sandboxed` sets that variable for Aether children automatically. See [`aether_compared_to_capsicum.md`](aether_compared_to_capsicum.md). |
 | **macOS** | Not supported | `DYLD_INSERT_LIBRARIES` exists but the hardened runtime ignores it for system binaries. `spawn_sandboxed` is a stub that fails loudly. |
 | **Windows** | Not supported | No `LD_PRELOAD` equivalent. `spawn_sandboxed` is a stub. |
 

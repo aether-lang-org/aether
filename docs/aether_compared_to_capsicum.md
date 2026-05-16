@@ -13,14 +13,17 @@ Despite the difference in scope (OS vs. language), Aether's closure-based isolat
 > - Aether's existing runtime sandbox — the `libaether_sandbox.so`
 >   LD_PRELOAD layer and `spawn_sandboxed` — builds and runs on FreeBSD
 >   at parity with Linux.
-> - **Phase 1 of the Capsicum roadmap is done:** the `std.capsicum`
->   module (Part 3.2 below) gives hand-written Aether code direct
->   access to `cap_enter` / `cap_rights_limit` / `cap_fcntls_limit`.
-> - Still ahead: Phase 2 — wiring Capsicum into `spawn_sandboxed` so
->   sandboxed children get OS-enforced containment transparently,
->   without the code asking for it. That is the step that moves
->   FreeBSD from cooperative containment (LD_PRELOAD, userspace,
->   bypassable) to OS-enforced (Capsicum, kernel, ironclad).
+> - **Phase 1 done:** the `std.capsicum` module (Part 3.2) gives
+>   hand-written Aether code direct access to `cap_enter` /
+>   `cap_rights_limit` / `cap_fcntls_limit`.
+> - **Phase 2 done:** an Aether process can self-sandbox at startup via
+>   `AETHER_CAPSICUM=1`, and `spawn_sandboxed` sets that for its
+>   children — so a spawned Aether child gets kernel-enforced Capsicum
+>   containment transparently. The originally-planned "parent
+>   `cap_enter`s the child" model turned out to be impossible for
+>   dynamic binaries; Part 3.2 records why and what shipped instead.
+> - Still ahead: Phases 3–4 (audit logging, Casper delegation) and
+>   wiring the grant list into pre-opened `cap_rights_limit`'d fds.
 
 ---
 
@@ -582,22 +585,64 @@ service delegation — additive, can land without disturbing the above.
 
 **Benefit:** hand-written Aether code can leverage Capsicum today.
 
-#### Phase 2: Runtime Integration (Medium effort)
+#### Phase 2: Runtime Integration — **DONE (self-sandbox model)**
 
-Modify the actor spawning code in `runtime/scheduler/actor_pool.c`:
+> **A correction to the original plan.** Earlier drafts of this section
+> proposed: parent opens the granted fds, `fork()`s, the child calls
+> `cap_rights_limit()` + `cap_enter()`, then execs the sandboxed
+> program. **That cannot work for the general case**, and the reason is
+> worth recording so nobody re-attempts it:
+>
+> `cap_enter()` is irreversible and forbids reaching the global
+> filesystem namespace. A `cap_enter()`'d process can no longer `open()`
+> a path. Path-based `execve(2)` is therefore denied (`ECAPMODE`). The
+> escape hatch is `fexecve(2)` — exec from a pre-opened fd — but that
+> only solves the *binary's own* path lookup. A **dynamically linked**
+> binary still needs its runtime linker (`ld-elf.so.1`) and shared
+> libraries (`libc`, ...) loaded at exec time, and those are `open()`
+> calls on paths. In capability mode they fail. So
+> `fexecve()`-after-`cap_enter()` works only for **statically linked**
+> binaries — which `python3`, `bash`, and a default `ae`-built program
+> are not.
+>
+> The model that *does* work is **self-sandboxing**: the child execs
+> normally (rtld loads every library while still unconfined), and then
+> the program itself calls `cap_enter()` at the top of its own
+> `main()`, before any user code. This is what shipped.
 
-1. When `spawn_with_context()` is called, pass the permission context to the runtime.
-2. If Capsicum is available:
-   - Map the permission context to file descriptors and rights:
-     - "tcp" + "db.internal:5432" → TCP fd to db.internal:5432 with CAP_READ | CAP_WRITE
-     - "fs_read" + "/tmp/*" → Directory fd to /tmp with CAP_READ | CAP_LOOKUP
-     - "exec" + "/bin/sh" → Not applicable; deny in capability mode
-3. Open the minimal fds in the parent (privileged) process.
-4. Fork a child process.
-5. In the child, call `cap_rights_limit()` on each fd, then `cap_enter()`.
-6. Execute the actor's code with only those fds available.
+What's implemented:
 
-**Benefit:** Transparent Capsicum integration; existing Aether code gains OS-level enforcement on FreeBSD.
+- **`capsicum_autosandbox.c`** — a runtime startup hook. The
+  compiler-emitted `main()` calls `aether_capsicum_autosandbox()`
+  immediately after `aether_args_init()` (so: after rtld has finished,
+  before user code). If `AETHER_CAPSICUM=1` is set in the environment,
+  the hook calls `cap_enter()`. If the variable is set but the kernel
+  can't honour it, the process exits rather than run unconfined — a
+  requested sandbox never silently downgrades.
+- **`spawn_sandboxed` on FreeBSD** sets `AETHER_CAPSICUM=1` in every
+  child's environment. Containment is then two-layered:
+  1. **LD_PRELOAD** — intercepts libc for *any* child, Aether or not
+     (python3, bash). Userspace, cooperative, bypassable.
+  2. **Capsicum self-sandbox** — if the child is an Aether binary it
+     reads `AETHER_CAPSICUM` and `cap_enter()`s itself. Kernel-enforced,
+     unbypassable. A non-Aether child just ignores the variable and is
+     left with layer 1.
+- The preload library exempts the `AETHER_*` env namespace from its
+  `getenv` interception, so a sandboxed Aether child can still read its
+  own `AETHER_CAPSICUM` control variable.
+
+**Benefit:** a spawned Aether child gets OS-enforced containment with no
+change to its source. Note Capsicum is strictly the harder ceiling — in
+capability mode *no* path-based open succeeds, grant list or not; the
+LD_PRELOAD grants only matter for the operations Capsicum would
+otherwise still allow (acting on already-open fds) and for non-Aether
+children.
+
+**Limitation:** a self-sandboxed program must open everything it needs
+*before* `main()` runs, or accept that path access is gone. Wiring the
+grant list into pre-opened, `cap_rights_limit()`'d fds handed to the
+child is the remaining refinement — it needs std.file / std.net to
+expose their descriptors first.
 
 #### Phase 3: Capability Audit Logging (Medium effort)
 

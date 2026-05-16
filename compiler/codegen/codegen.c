@@ -1926,6 +1926,10 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     print_line(gen, "#endif");
     // Initialize command-line arguments
     print_line(gen, "aether_args_init(argc, argv);");
+    // Opt-in OS-enforced sandbox: if AETHER_CAPSICUM=1 (FreeBSD), enter
+    // capability mode here — after rtld has loaded every shared library,
+    // before any user code or file/socket access. No-op otherwise.
+    print_line(gen, "aether_capsicum_autosandbox();");
     // main_exit_ret and main_exit: label are needed when actors exist
     // (scheduler cleanup) or when main() contains return statements.
     int needs_main_exit = gen->actor_count > 0 || has_return_statement(main);
@@ -2419,6 +2423,9 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "");
     // Declare runtime args function (avoid full header to prevent conflicts with actor runtime)
     print_line(gen, "void aether_args_init(int argc, char** argv);");
+    // Opt-in Capsicum self-sandbox hook (runtime/sandbox/capsicum_autosandbox.c).
+    // No-op unless AETHER_CAPSICUM=1 and the platform is FreeBSD.
+    print_line(gen, "void aether_capsicum_autosandbox(void);");
     print_line(gen, "");
 
     // Only include actor runtime if program uses actors

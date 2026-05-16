@@ -7,9 +7,10 @@
 // of readlink("/proc/self/exe") we ask the kernel directly via
 // sysctl(KERN_PROC_PATHNAME).
 //
-// This is the LD_PRELOAD-parity backend only. OS-enforced containment
-// via Capsicum (cap_enter / cap_rights_limit) is separate, future work
-// — see docs/aether_compared_to_capsicum.md.
+// Containment here is two-layered: the LD_PRELOAD preload library for
+// any child, plus AETHER_CAPSICUM=1 so an Aether child additionally
+// self-sandboxes with cap_enter() (kernel-enforced) via its startup
+// hook. See the child-branch comment below and capsicum_autosandbox.c.
 //
 // Self-guarded: compiles to an empty object off FreeBSD. Companion
 // backends: spawn_sandboxed_linux.c, spawn_sandboxed_stub.c.
@@ -133,6 +134,22 @@ int aether_spawn_sandboxed(void* grant_list, const char* program, const char* ar
         setenv("LD_PRELOAD", preload_path, 1);
         setenv("AETHER_SANDBOX_SHM", shm_name, 1);
         setenv("AETHER_SANDBOX_VERBOSE", "0", 0);
+
+        // Two-layer containment on FreeBSD:
+        //   1. LD_PRELOAD (above) — intercepts libc for ANY child,
+        //      including non-Aether programs (python3, bash). Userspace,
+        //      cooperative, bypassable by raw syscalls / static binaries.
+        //   2. AETHER_CAPSICUM=1 — if the child is itself an Aether
+        //      binary, its startup hook (capsicum_autosandbox.c) calls
+        //      cap_enter() after rtld has loaded, giving kernel-enforced,
+        //      unbypassable containment. A non-Aether child simply
+        //      ignores the variable, falling back to layer 1.
+        //
+        // We cannot cap_enter() the child from here ourselves:
+        // cap_enter() forbids the runtime linker, so a dynamically
+        // linked child would fail to exec. Self-sandboxing after exec is
+        // the only model that works — see capsicum_autosandbox.c.
+        setenv("AETHER_CAPSICUM", "1", 1);
 
         if (arg) {
             execlp(program, program, arg, NULL);
