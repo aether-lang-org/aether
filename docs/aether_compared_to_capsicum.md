@@ -25,8 +25,12 @@ Despite the difference in scope (OS vs. language), Aether's closure-based isolat
 > - **Phase 3 done:** the in-process permission layer has an audit
 >   trail — a live `AETHER_SANDBOX_AUDIT` sink and a queryable
 >   `std.audit` ring buffer.
-> - Still ahead: Phase 4 (Casper delegation, jails/RCTL) and wiring the
->   grant list into pre-opened `cap_rights_limit`'d fds.
+> - **Casper delegation done:** `std.casper` binds the DNS, passwd and
+>   sysctl Casper services, so a capability-mode process can still
+>   resolve hostnames and read sysctls via the casper daemon.
+> - Still ahead: jail/RCTL integration (a separate, sysadmin-facing
+>   axis) and wiring the grant list into pre-opened
+>   `cap_rights_limit`'d fds.
 
 ---
 
@@ -705,21 +709,40 @@ The Java host could:
 
 ### 3.3 FreeBSD-Specific Optimizations
 
-#### 1. Casper Daemon Integration
+#### 1. Casper Daemon Integration — **DONE (DNS, pwd, sysctl)**
 
-FreeBSD includes Casper, a daemon that provides services (DNS, syslog, pwd, grp) to capability-mode processes.
+FreeBSD includes Casper, a daemon that performs operations a
+capability-mode process can no longer do for itself — DNS resolution,
+passwd lookups, sysctl — over a channel opened *before* `cap_enter()`.
 
-**Opportunity:** Aether actors running in Capsicum mode could delegate privileged operations to Casper instead of embedding them.
+The `std.casper` module binds it (`std/casper/`):
 
 ```aether
-// Today: actor needs dns permission
-sandboxed_resolve_hostname(ctx, "example.com")
+import std.casper
+import std.capsicum
 
-// With Casper: actor has zero network rights, but can query Casper
-capsicum_casper_gethostbyname("example.com")  // Delegated to Casper daemon
+// Phase 1 — open channels while still unconfined
+c   = casper.init()
+net = casper.service(c, "system.net")
+casper.close(c)
+
+// Phase 2 — lock down
+capsicum.enter()
+
+// Phase 3 — the channel still works, sandboxed
+ip, err = casper.dns_resolve(net, "example.com")
 ```
 
-This further reduces what an actor can do directly.
+Three services are bound: `system.net` (DNS — `casper.dns_resolve`),
+`system.pwd` (`casper.pwd_uid` / `casper.pwd_home`) and `system.sysctl`
+(`casper.sysctl`). The C wrapper flattens the service result structs
+(`addrinfo`, `passwd`) to Aether strings/ints. Off FreeBSD every call
+fails cleanly and `casper.available()` returns 0. Worked example:
+`examples/casper-demo.ae` — resolves a hostname *inside* capability
+mode, which would otherwise be impossible. `syslog` and `grp` services
+are unbound but additive. Note this build vendors the Casper prototypes
+inline (the dev headers are absent on some installs, e.g. GhostBSD; the
+base runtime `.so` files satisfy the link).
 
 #### 2. Jail Integration
 
@@ -876,10 +899,11 @@ main() {
 
 ### Long Term (6+ months)
 
-1. **Audit logging** — Built-in forensics.
-2. **Casper integration** — Actor delegation to Casper daemon.
-3. **Jail + RCTL support** — Multi-level sandboxing.
-4. **Cross-language Capsicum metadata** — Hosted modules declare Capsicum needs.
+1. ~~**Audit logging** — Built-in forensics.~~ Done — `std.audit`.
+2. ~~**Casper integration** — delegation to the Casper daemon.~~ Done —
+   `std.casper` (DNS, pwd, sysctl).
+3. **Jail + RCTL support** — Multi-level sandboxing. Still ahead.
+4. **Cross-language Capsicum metadata** — Hosted modules declare Capsicum needs. Still ahead.
 
 ---
 
@@ -899,10 +923,14 @@ main() {
 
 **For Aether to become a credible sandboxing platform on FreeBSD**, the roadmap is:
 
-1. **Phase 1:** Capsicum bindings (lets hand-written Aether code use Capsicum).
-2. **Phase 2:** Runtime integration (transparent Capsicum for actors).
-3. **Phase 3:** Audit logging (forensics and debugging).
-4. **Phase 4:** Ecosystem integration (Casper, jails, RCTL).
+1. ~~**Phase 1:** Capsicum bindings~~ — done, `std.capsicum`.
+2. ~~**Phase 2:** Runtime integration~~ — done, Capsicum self-sandbox
+   (`AETHER_CAPSICUM=1`); the transparent-for-actors form turned out
+   impossible for dynamic binaries (see Part 3.2).
+3. ~~**Phase 3:** Audit logging~~ — done, `std.audit`.
+4. **Phase 4:** Ecosystem integration — Casper delegation done
+   (`std.casper`); jail/RCTL and cross-language Capsicum metadata
+   still ahead.
 
 This makes Aether a unique proposition: **the only language-level sandbox model backed by OS-level enforcement when available**.
 

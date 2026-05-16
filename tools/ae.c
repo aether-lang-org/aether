@@ -1791,6 +1791,15 @@ static void build_gcc_cmd(char* cmd, size_t size,
     const char* nghttp2_libs = "";
 #endif
 
+    // libcasper + cap_* services — std.casper delegates DNS / passwd /
+    // sysctl past Capsicum capability mode. FreeBSD-only; empty on
+    // every other platform, where std.casper links its stub path.
+#ifdef AETHER_CASPER_LIBS
+    const char* casper_libs = AETHER_CASPER_LIBS;
+#else
+    const char* casper_libs = "";
+#endif
+
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -1810,8 +1819,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
          * would fail to find any libaether symbol — silently on
          * macOS via dynamic_lookup, hard-failing on Linux. */
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -rdynamic -L%s -laether -o \"%s\" -pthread -lm %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s -rdynamic -L%s -laether -o \"%s\" -pthread -lm %s %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, nghttp2_libs, casper_libs, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
@@ -1821,8 +1830,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         }
     } else {
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, casper_libs, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
