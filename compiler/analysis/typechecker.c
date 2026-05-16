@@ -2537,11 +2537,18 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 free_type(init_type);
             }
 
-            // Add to symbol table
-            add_symbol(table, stmt->value, clone_type(stmt->node_type), 0, 0, 0);
+            // Add to symbol table. Bare `_` is a per-use discard — it
+            // is never registered as a symbol, so each `_ = <expr>`
+            // stays an independent throwaway with no type unified
+            // across occurrences (aeb-ae-help-and-toolchain-feedback.md
+            // #4). Mirrors the existing `_`-skip in the tuple-
+            // destructure path above.
+            if (stmt->value && strcmp(stmt->value, "_") != 0) {
+                add_symbol(table, stmt->value, clone_type(stmt->node_type), 0, 0, 0);
+            }
             return 1;
         }
-        
+
         case AST_ASSIGNMENT: {
             if (stmt->child_count >= 2) {
                 ASTNode* left = stmt->children[0];
