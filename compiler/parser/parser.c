@@ -3845,6 +3845,27 @@ ASTNode* parse_program(Parser* parser) {
 
                 if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
                     do {
+                        // Trailing `...` — `@extern` may be variadic just
+                        // like a bare `extern`. Record it by appending a
+                        // `;varargs` marker to the `c_symbol:NAME`
+                        // annotation; `;` never appears in a C identifier
+                        // so codegen (extern_c_symbol / extern_is_varargs)
+                        // splits the two cleanly.
+                        if (peek_token(parser) &&
+                            peek_token(parser)->type == TOKEN_DOTDOTDOT) {
+                            advance_token(parser);  // consume '...'
+                            size_t cur = ext->annotation
+                                ? strlen(ext->annotation) : 0;
+                            char* combined = (char*)malloc(cur + 9);
+                            if (combined) {
+                                if (ext->annotation)
+                                    memcpy(combined, ext->annotation, cur);
+                                memcpy(combined + cur, ";varargs", 9);
+                                free(ext->annotation);
+                                ext->annotation = combined;
+                            }
+                            break;
+                        }
                         Token* pname = expect_token(parser, TOKEN_IDENTIFIER);
                         if (!pname) break;
                         ASTNode* p = create_ast_node(AST_IDENTIFIER, pname->value,

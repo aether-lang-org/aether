@@ -2984,7 +2984,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             ASTNode* arg = expr->children[ad_arg_idx[h]];
                             const char* nm = arg_drain_lookup(arg);
                             if (nm) {
-                                fprintf(gen->output, "free((void*)%s); ", nm);
+                                fprintf(gen->output, "aether_heap_str_free(%s); ", nm);
                             }
                         }
                         fprintf(gen->output, "_ad_r; })");

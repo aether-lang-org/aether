@@ -1,0 +1,91 @@
+// Regression test: a function whose return expression is
+// `bytes.finish(...)` — or a wrapper chain bottoming out there — must
+// be classified heap-returning, and its result freed at every call
+// site with an AetherString-aware free (string_release, not a plain
+// free() that would leak the data buffer).
+//
+// Filed by the avn project as an unbounded per-commit RSS ramp
+// (heap-ownership-return-propagation.md). This test exercises
+// correctness — that the @heap classification and aether_heap_str_free
+// routing produce the right bytes and don't corrupt across a loop of
+// heap-returning calls. The leak itself is bounded by the companion
+// integration probe (tests/integration/bytes_finish_return_no_leak/);
+// under -fsanitize=address this file also flags the leak directly.
+
+import std.bytes
+import std.string
+
+extern exit(code: int)
+
+// Builds a binary-safe blob with std.bytes and hands it off via
+// bytes.finish — the canonical heap-returning shape.
+concat2(prefix: string, suf: string) -> string {
+    plen = string.length(prefix)
+    slen = string.length(suf)
+    total = plen + slen
+    buf = bytes.new(total + 1)
+    bytes.copy_from_string(buf, 0, prefix, plen)
+    bytes.copy_from_string(buf, plen, suf, slen)
+    return bytes.finish(buf, total)
+}
+
+// Wrapper chain: returns the result of another heap-returning fn.
+// The interprocedural classifier must propagate heap-ness through
+// this level too.
+envelope(body: string) -> string {
+    inner = concat2("[", body)
+    return concat2(inner, "]")
+}
+
+main() {
+    println("=== test_bytes_finish_heap_return ===")
+
+    // Direct: one heap-returning call.
+    a = concat2("tag-", "value")
+    if a != "tag-value" {
+        println("  FAIL: direct concat2 got '${a}'")
+        exit(1)
+    }
+    println("  PASS: direct bytes.finish return")
+
+    // Wrapper chain: heap-returning fn returning a heap-returning call.
+    e = envelope("payload")
+    if e != "[payload]" {
+        println("  FAIL: envelope got '${e}'")
+        exit(1)
+    }
+    println("  PASS: wrapper-chain heap return")
+
+    // Loop: 500 heap-returning calls into a reassigned variable. The
+    // reassignment wrapper must free the previous AetherString via
+    // string_release each iteration; a plain free() would leak the
+    // data buffer and corrupt nothing visible — so we assert the
+    // final value is intact as the correctness proxy.
+    acc = ""
+    i = 0
+    while i < 500 {
+        acc = concat2("item-", string.from_int(i))
+        i = i + 1
+    }
+    if acc != "item-499" {
+        println("  FAIL: loop final value '${acc}'")
+        exit(1)
+    }
+    println("  PASS: 500-iteration reassignment loop")
+
+    // Embedded-NUL survival: bytes.finish carries an explicit length,
+    // so a NUL in the middle is content. Build "A\0B" and confirm the
+    // length-aware path keeps all three bytes.
+    nb = bytes.new(4)
+    bytes.set(nb, 0, 65)   // 'A'
+    bytes.set(nb, 1, 0)    // NUL
+    bytes.set(nb, 2, 66)   // 'B'
+    blob = bytes.finish(nb, 3)
+    if string.length(blob) != 3 {
+        println("  FAIL: embedded-NUL length=${string.length(blob)}, expected 3")
+        exit(1)
+    }
+    println("  PASS: embedded-NUL blob length preserved")
+
+    println("=== all test_bytes_finish_heap_return cases passed ===")
+}

@@ -42,7 +42,13 @@ extern aether_bytes_get_le32(b: ptr, index: int) -> int
 extern aether_bytes_copy_from_string(b: ptr, dst: int, src: string, src_len: int) -> int
 // `length` here is the count of bytes to copy, not a buffer length.
 extern aether_bytes_copy_within(b: ptr, dst: int, src: int, length: int) -> int
-extern aether_bytes_finish(b: ptr, length: int) -> ptr
+// `aether_bytes_finish` returns a freshly heap-owned AetherString
+// (`string_new_with_length` — see std/bytes/aether_bytes.c). The
+// `string @heap` return tells the heap-string tracker the caller
+// owns the result, so `x = bytes.finish(...)` gets a `_heap_x = 1`
+// slot and any function returning a `bytes.finish` value is itself
+// classified heap-returning. Mirrors `aether_strbuilder_finish`.
+extern aether_bytes_finish(b: ptr, length: int) -> string @heap
 extern aether_bytes_free(b: ptr)
 
 // ---- Aether-side wrappers ----

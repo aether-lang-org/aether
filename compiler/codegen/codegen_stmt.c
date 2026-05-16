@@ -963,7 +963,7 @@ static void emit_return_escape_drains_for_unreturned(CodeGenerator* gen,
         if (preserve && strcmp(name, preserve) == 0) continue;
         print_indent(gen);
         fprintf(gen->output,
-                "if (_heap_%s) { free((void*)%s); %s = NULL; _heap_%s = 0; }\n",
+                "if (_heap_%s) { aether_heap_str_free(%s); %s = NULL; _heap_%s = 0; }\n",
                 name, name, name, name);
     }
 }
@@ -1013,7 +1013,7 @@ static int emit_struct_field_heap_assign(CodeGenerator* gen, ASTNode* lhs, ASTNo
             obj->value, lhs->value);
     generate_expression(gen, rhs);
     fprintf(gen->output,
-            "; if (%s._heap_%s) free((void*)_tmp_old); "
+            "; if (%s._heap_%s) aether_heap_str_free(_tmp_old); "
             "%s._heap_%s = %d; }\n",
             obj->value, lhs->value,
             obj->value, lhs->value,
@@ -2486,7 +2486,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     if (pos_is_heap) {
                         print_indent(gen);
                         fprintf(gen->output,
-                                "if (_tup%d._%d) free((void*)_tup%d._%d);\n",
+                                "if (_tup%d._%d) aether_heap_str_free(_tup%d._%d);\n",
                                 tmp_id, j, tmp_id, j);
                     }
                     continue;
@@ -2602,7 +2602,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             fprintf(gen->output,
                                 "{ const char* _tmp_old = %s; "
                                 "%s = _tup%d._%d; "
-                                "if (_heap_%s) free((void*)_tmp_old); "
+                                "if (_heap_%s) aether_heap_str_free(_tmp_old); "
                                 "_heap_%s = %d; }\n",
                                 var->value,
                                 var->value, tmp_id, j,
@@ -2683,7 +2683,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "{ const char* _tmp_old = self->%s; ", stmt->value);
                         fprintf(gen->output, "self->%s = ", stmt->value);
                         generate_expression(gen, stmt->children[0]);
-                        fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
+                        fprintf(gen->output, "; if (_heap_%s) aether_heap_str_free(_tmp_old);",
                                 stmt->value);
                         fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
                     }
@@ -2981,7 +2981,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
                         fprintf(gen->output, "%s = ", stmt->value);
                         generate_expression(gen, stmt->children[0]);
-                        fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
+                        fprintf(gen->output, "; if (_heap_%s) aether_heap_str_free(_tmp_old);",
                                 stmt->value);
                         if (rhs_is_alias_to_heap_var) {
                             fprintf(gen->output,
@@ -3010,7 +3010,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
                         fprintf(gen->output, "%s = ", stmt->value);
                         generate_expression(gen, stmt->children[0]);
-                        fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
+                        fprintf(gen->output, "; if (_heap_%s) aether_heap_str_free(_tmp_old);",
                                 stmt->value);
                         fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
                     } else {
