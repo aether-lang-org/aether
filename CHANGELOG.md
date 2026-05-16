@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **The heap-source sweep is finished — `string_substring_n` and `string.from_int` / `_long` / `_float` / `_char` no longer leak** (`compiler/codegen/codegen_stmt.c`, `tests/integration/string_substring_n_no_leak/`). `string-new-with-length-heap-annotation.md` closed by asking for a sweep of every runtime function that mints a fresh owned buffer; only `string_new_with_length` was made intrinsic. `string_substring_n` was the next to bite — it returns a fresh `malloc`'d buffer (identical shape to the already-recognised `string_substring`) but was not in `is_heap_string_expr`'s set, so `x = string.substring_n(...)` was never freed and a `return string.substring_n(...)` wrapper leaked at every caller (avn's residual ~77 KB/commit RSS ramp — `util.slice`). `string_substring_n`, `string_from_int`, `string_from_long`, `string_from_float` and `string_from_char` are now all recognised heap sources (each `string_from_*` `string_new(...)`s a fresh refcounted AetherString). Filed by the avn project (`new_string_len_something.md` §1). Integration probe bounds RSS over 8000 wrapper-return + direct-call cycles.
+- **Two closures in the same scope each declaring a heap-tracked local of the same name now compile** (`compiler/codegen/codegen_expr.c`, `tests/regression/test_closure_heap_tracker_two.ae`). Each closure body is its own C function and needs its own `int _heap_<name>` tracker declaration, but the codegen deduped tracker names across the whole enclosing function: the first closure got `int _heap_<name> = …;`, the second emitted a bare `_heap_<name> = …;` with no declaration in scope — a hard C compile error (`'_heap_<name>' undeclared`). The closure-body codegen now saves and resets the heap-string set per closure body, mirroring the existing per-closure reset of the declared-vars set. Filed by the avn project (`new_string_len_something.md` §2).
+- **A closure that captures a variable whose name collides with a libc symbol (`dup`, `read`, `bind`, …) now compiles** (`compiler/codegen/codegen_expr.c`, `tests/regression/test_closure_captured_libc_name.ae`). The closure-capture lowering pushed captured-variable names through `safe_c_name` — which renames libc-colliding identifiers (`dup` → `ae_dup`) — at some emission sites (the env struct field, the prologue alias, the `_aether_make_closure` parameter) but not others (the closure body's use site and the construction-site argument, which stayed raw). The result was `ae_dup` referenced where only `dup` was declared: `error: 'ae_dup' undeclared`. `safe_c_name` is correct for an emitted *function symbol* (a real link-time collision), but a captured variable is a plain C struct field / local / parameter that needs no rename — it is now emitted raw and consistently across every capture site. Filed by the avn project (`new_string_len_something.md` §3).
+- **Declarations inside a closure body — plain or tuple-destructured, at the top level or nested in an `if` / `while` — now type-check** (`compiler/analysis/typechecker.c`, `tests/regression/test_tuple_destructure_in_closure.ae`, `tests/regression/test_closure_nested_decl_scope.ae`). The typechecker's `AST_CLOSURE` handler walked the closure body with `typecheck_expression`, which has no statement cases — a declaration hit only the generic child-walk and its name was never registered in the closure scope, so every later use was `E0300 Undefined variable`. The 0.167.0 fix patched one statement kind at the body's top level (`AST_TUPLE_DESTRUCTURE`, per `tuple-destructure-in-closure-scope.md`); a plain `x = e` nested inside an `if` within the closure still slipped through (`new_string_len_something.md` §4). The closure body is now type-checked entirely through `typecheck_statement` — which registers declarations (plain and tuple alike) and recurses correctly into `if` / `while` / `for` / nested blocks — closing the class and subsuming the 0.167.0 narrow fix. Surfaces only for a non-`main` enclosing function, since `main`'s body already reaches a closure statement-wise; bundling tools that rename test files' `main()` to a per-file function hit it across a whole test suite. Reported by the avn project.
+
+### Upgrade notes
+
+This release continues the heap-ownership tightening of 0.167.0: more
+runtime functions that mint a fresh owned buffer are now recognised heap
+sources — `string_substring_n` and `string.from_int` / `_long` / `_float`
+/ `_char` (joining `string_new_with_length` from 0.167.0). A value built by
+one of these is now freed when the variable holding it is released; the
+previous compiler classified those values non-heap and never freed them —
+a silent per-call leak.
+
+If your project takes such a value (`piece = string.substring_n(...)`,
+`s = string.from_int(n)`, …) and also stores it into a longer-lived
+structure (a struct field, list, or map) while keeping the original local —
+which is later reassigned or goes out of scope — the previous compiler
+tolerated this as a leak that kept the aliased buffer alive forever; this
+release frees the buffer when the local is released, so the stored alias
+becomes a dangling pointer. This shape is a use-after-free.
+
+**Recommended pre-upgrade play:**
+
+1. Grep for `string.substring_n` and `string.from_int` / `_long` /
+   `_float` / `_char`, plus any user function that returns one of these
+   (or a `string_new_with_length` value) in a tuple position.
+2. At each, check whether the resulting string is stored into a structure
+   that outlives the original local. If so, that structure must own an
+   independent copy, not the alias.
+3. Rebuild under the new compiler and exercise the affected paths under
+   AddressSanitizer or valgrind — a freed-then-read alias surfaces
+   immediately as a use-after-free rather than as the old slow leak.
+
 ## [0.167.0]
 
 ### Fixed

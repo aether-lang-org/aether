@@ -1,0 +1,47 @@
+// Regression: a closure that captures a variable whose name collides
+// with a libc symbol (`dup`, `read`, `time`, …) compiles and runs.
+//
+// The closure-capture lowering renamed such names through
+// `safe_c_name` (`dup` → `ae_dup`) at some emission sites — the env
+// struct field, the prologue alias, the make-closure parameter — but
+// not others — the closure body's use site and the construction-site
+// argument, which stayed raw. The result was `ae_dup` referenced
+// where only `dup` was declared (and vice versa): `error: 'ae_dup'
+// undeclared`. Captured variables are now emitted raw throughout —
+// a captured variable named `dup` is a legal C field / local /
+// parameter; only emitted *function symbols* need the rename.
+// Filed by the avn project (new_string_len_something.md §3).
+//
+// Compiling IS the core assertion; the value checks guard the
+// captured values arrive intact.
+
+extern exit(code: int)
+
+run(cb: fn) { cb() }
+
+main() {
+    println("=== test_closure_captured_libc_name ===")
+
+    // Each of these names is a libc symbol (dup(2), read(2), time(2)).
+    dup = "dup-value"
+    read = "read-value"
+    time = "time-value"
+
+    run() callback {
+        if dup != "dup-value" {
+            println("  FAIL: captured dup=${dup}")
+            exit(1)
+        }
+        if read != "read-value" {
+            println("  FAIL: captured read=${read}")
+            exit(1)
+        }
+        if time != "time-value" {
+            println("  FAIL: captured time=${time}")
+            exit(1)
+        }
+    }
+
+    println("  PASS: libc-named variables capture cleanly into a closure")
+    println("=== test_closure_captured_libc_name passed ===")
+}

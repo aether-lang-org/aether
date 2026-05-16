@@ -239,15 +239,24 @@ The compiler treats these expressions as heap-allocated:
 | Expression | Reason |
 |---|---|
 | `string.concat(a, b)` | Stdlib — always `malloc`'d |
-| `string.substring(s, i, j)` | Stdlib — always `malloc`'d |
+| `string.substring(s, i, j)` / `string.substring_n(s, n, i, j)` | Stdlib — always `malloc`'d |
 | `string.to_upper(s)` / `string.to_lower(s)` | Stdlib — always `malloc`'d |
 | `string.trim(s)` | Stdlib — always `malloc`'d |
+| `string_new_with_length(data, n)` | Stdlib — the length-aware AetherString constructor (`bytes.finish` is built on it) |
+| `string.from_int` / `from_long` / `from_float` / `from_char` | Stdlib — each `string_new`s a fresh refcounted AetherString |
 | String interpolation `"foo ${x}"` | Compiler-allocated via `_aether_interp` |
 | User-defined `-> string` function whose body provably returns heap | Structural escape analysis (see below) |
+| Tuple-returning function / `@heap` extern, per position | Per-position analysis (see below) |
+
+The stdlib entries above are hard-coded as intrinsic heap sources in the
+codegen's `is_heap_string_expr` — recognised by name regardless of how a
+module declares the extern, so a `-> ptr` declaration of one of them can't
+silently reintroduce a leak. The set is grown by audit: every runtime
+function that mints a fresh owned buffer belongs here.
 
 ### User-defined `-> string` functions (issue #405)
 
-A user-defined function that returns `string` is treated as heap-allocated **iff every return statement in its body yields a heap-string-expression** (recursively considering other heap-returning user functions). This rules out functions that return string literals or forward borrowed parameters — those are NOT treated as heap and the wrapper won't try to free their results.
+A user-defined function that returns `string` is treated as heap-returning **iff *any* return statement in its body yields a heap-string-expression** (recursively considering other heap-returning user functions) — an OR-fold across the return sites. A function whose returns are *all* string literals or forwarded borrowed parameters is NOT heap-returning, and the wrapper won't try to free its results. A function that *mixes* the two — one branch `return string.concat(...)`, another `return "constant"` — *is* heap-returning: its literal branches are malloc-duplicated through the uniform-heap return wrap (see [Return-ownership contract](#return-ownership-contract-uniform-heap-return-escape) below) so the caller can free every branch identically.
 
 ```aether
 my_concat(a: string, b: string) -> string {
@@ -284,7 +293,11 @@ Pre-fix, the second branch couldn't see the first branch's tracker (it was C-sco
 
 ### Tuple destructures (issue #420)
 
-The same wrapper fires when a heap string is unpacked from a tuple. For user-defined tuple-returning functions the compiler runs a **per-position structural escape analysis** that mirrors the single-value case: it walks every `return e1, e2, e3` statement and AND-folds the heap-classification of each expression, per position. Position 0 is heap iff every return-site's first expression is heap; position 1 iff every return-site's second; and so on.
+The same wrapper fires when a heap string is unpacked from a tuple. For user-defined tuple-returning functions the compiler runs a **per-position structural escape analysis** that mirrors the single-value case. It walks every `return e0, e1, …` statement and **OR-folds** the heap-classification of each expression, per position: position `j` is heap-returning if *any* return-site's `j`-th expression is heap. Each heap-classified position is then routed through the same `aether_uniform_heap_str` wrap as a single-value return — so a position that is a fresh allocation on one branch and a borrowed literal on another (`return owned, n, ""` on success vs `return "", 0, "err"` on the error path — the shape of every `zlib` / `cryptography` / `lzf` decode function) still hands the caller a freeable pointer on *every* branch.
+
+One case vetoes the OR-fold: a **whole-tuple passthrough** return — `return g(...)` where `g` is itself tuple-typed — forwards `g`'s tuple opaquely and cannot be wrapped position-by-position. Such a position is freeable only if `g` already guarantees it (`g`'s own per-position analysis); if `g` doesn't, the position is forced non-heap, so the caller is never told to free a value the passthrough left borrowed.
+
+(Earlier releases AND-folded instead — a position counted as heap only if *every* return-site made it heap — which classified the mixed `decode`-shaped functions non-heap and leaked their success-path allocation at every caller. The OR-fold + uniform-heap wrap + passthrough veto replaced it; see CHANGELOG 0.167.0 and the `new_string_len_something.md` follow-up.)
 
 ```aether
 build_pair(prefix: string, name: string) -> (string, string) {

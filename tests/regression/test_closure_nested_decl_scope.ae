@@ -1,0 +1,62 @@
+// Regression: a plain declaration inside a nested block (`if` /
+// `while`) inside a closure body type-checks, including when the
+// closure is enclosed by a non-`main` function.
+//
+// The 0.166-series fix for tuple-destructure-in-closure-scope.md
+// special-cased `AST_TUPLE_DESTRUCTURE` at the closure-body top
+// level only. A plain `AST_VARIABLE_DECLARATION` nested inside an
+// `if` within the closure still went through `typecheck_expression`,
+// which registers nothing — `E0300 Undefined variable` at every
+// later use. The closure body is now type-checked entirely through
+// `typecheck_statement`, which recurses correctly into `if` / `while`
+// / nested blocks and registers declarations (plain and tuple) in
+// the right scope. Filed by the avn project
+// (new_string_len_something.md §4).
+//
+// Exercises all the corners that were holes: a plain decl and a
+// tuple destructure, each nested inside an `if` and inside a `while`,
+// inside a closure inside a NON-`main` function. Compiling IS the
+// assertion; value checks guard the bindings.
+
+import std.string
+
+extern exit(code: int)
+
+multi() -> { return "a", 7 }
+run(cb: fn) { cb() }
+
+// Non-`main` enclosing function — the condition the original tuple
+// fix needed; §4's nested-block hole was non-`main`-specific too.
+driver() {
+    run() callback {
+        // Plain declaration nested inside an `if`.
+        if string.length("x") > 0 {
+            c = string.length("hello")
+            if c != 5 {
+                println("  FAIL: nested-if plain decl c=${c}")
+                exit(1)
+            }
+        }
+        // Tuple destructure nested inside a `while`.
+        i = 0
+        while i < 1 {
+            s, n = multi()
+            if s != "a" {
+                println("  FAIL: nested-while destructure s=${s}")
+                exit(1)
+            }
+            if n != 7 {
+                println("  FAIL: nested-while destructure n=${n}")
+                exit(1)
+            }
+            i = i + 1
+        }
+        println("  PASS: nested-block declarations register in closure scope")
+    }
+}
+
+main() {
+    println("=== test_closure_nested_decl_scope ===")
+    driver()
+    println("=== test_closure_nested_decl_scope passed ===")
+}

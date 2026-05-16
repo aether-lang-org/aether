@@ -1214,6 +1214,21 @@ static void emit_closure_env_typedef(CodeGenerator* gen, int ci) {
     char** parent_promoted = NULL;
     int parent_promoted_count = 0;
     get_promoted_names_for_func(gen, parent_func, &parent_promoted, &parent_promoted_count);
+    /* Captured-variable C names are emitted RAW throughout the closure
+     * lowering — env struct field, prologue alias, `_aether_make_
+     * closure` param, the `_e->field = value` stores, and the
+     * construction-site argument. They must NOT go through
+     * `safe_c_name`: that helper renames libc-colliding identifiers
+     * (`dup`, `read`, `bind`, …) and is correct for *function* symbols
+     * (link collisions), but a captured variable is referenced raw
+     * everywhere else — its parent-scope declaration and the closure
+     * body's use site both emit the plain name. Applying `safe_c_name`
+     * on only some of the capture sites produced a half-renamed
+     * `ae_dup` (struct field + make-param) against a raw `dup` (parent
+     * value + body use) — `error: 'ae_dup' undeclared`. A captured
+     * variable named `dup` is a perfectly legal C struct field / local
+     * / parameter (no link symbol involved), so raw is both correct
+     * and consistent. See new_string_len_something.md §3. */
     fprintf(gen->output, "typedef struct {\n");
     if (cap_count == 0) {
         fprintf(gen->output, "    int _dummy;\n");
@@ -1228,9 +1243,9 @@ static void emit_closure_env_typedef(CodeGenerator* gen, int ci) {
                 }
             }
             if (is_promoted) {
-                fprintf(gen->output, "    %s* %s;\n", ctype, safe_c_name(captures[i]));
+                fprintf(gen->output, "    %s* %s;\n", ctype, captures[i]);
             } else {
-                fprintf(gen->output, "    %s %s;\n", ctype, safe_c_name(captures[i]));
+                fprintf(gen->output, "    %s %s;\n", ctype, captures[i]);
             }
         }
     }
@@ -1329,10 +1344,10 @@ void emit_closure_definitions(CodeGenerator* gen) {
                 // AST_IDENTIFIER emit path when the name is in
                 // current_promoted_captures.
                 fprintf(gen->output, "    %s* %s = _env->%s;\n",
-                        ctype, safe_c_name(captures[i]), safe_c_name(captures[i]));
+                        ctype, captures[i], captures[i]);
             } else {
                 fprintf(gen->output, "    %s %s = _env->%s;\n",
-                        ctype, safe_c_name(captures[i]), safe_c_name(captures[i]));
+                        ctype, captures[i], captures[i]);
             }
         }
 
@@ -1349,6 +1364,21 @@ void emit_closure_definitions(CodeGenerator* gen) {
             int prev_declared_count = gen->declared_var_count;
             gen->declared_vars = NULL;
             gen->declared_var_count = 0;
+            // Same reset for the heap-string-tracker set. Each closure
+            // body is its own C function, so its `int _heap_<name>`
+            // tracker declarations must be emitted afresh. Without
+            // this reset the set leaks across sibling closures: two
+            // closures that each declare a heap local of the same
+            // name would emit `int _heap_<name>` in the first closure
+            // and a bare `_heap_<name> = ...` (no declaration) in the
+            // second, since `mark_heap_string_var` had already flagged
+            // the name globally — a hard C-compile error
+            // (`'_heap_<name>' undeclared`). See
+            // new_string_len_something.md §2.
+            char** prev_heap = gen->heap_string_vars;
+            int prev_heap_count = gen->heap_string_var_count;
+            gen->heap_string_vars = NULL;
+            gen->heap_string_var_count = 0;
             // Publish env-backed captures so generate_statement routes writes
             // through _env-> instead of a local alias.
             char** prev_env = gen->current_env_captures;
@@ -1396,6 +1426,11 @@ void emit_closure_definitions(CodeGenerator* gen) {
             }
             gen->declared_vars = prev_declared;
             gen->declared_var_count = prev_declared_count;
+            // Free this closure body's heap-string set and restore the
+            // enclosing scope's (see the matching reset above).
+            clear_heap_string_vars(gen);
+            gen->heap_string_vars = prev_heap;
+            gen->heap_string_var_count = prev_heap_count;
             gen->in_trailing_block--;
             gen->indent_level = 0;
         }
@@ -1411,12 +1446,12 @@ void emit_closure_definitions(CodeGenerator* gen) {
             for (int i = 0; i < cap_count; i++) {
                 if (i > 0) fprintf(gen->output, ", ");
                 const char* ctype = lookup_var_c_type(gen, captures[i], parent_func);
-                fprintf(gen->output, "%s %s", ctype, safe_c_name(captures[i]));
+                fprintf(gen->output, "%s %s", ctype, captures[i]);
             }
             fprintf(gen->output, ") {\n");
             fprintf(gen->output, "    _closure_env_%d* _e = malloc(sizeof(_closure_env_%d));\n", id, id);
             for (int i = 0; i < cap_count; i++) {
-                fprintf(gen->output, "    _e->%s = %s;\n", safe_c_name(captures[i]), safe_c_name(captures[i]));
+                fprintf(gen->output, "    _e->%s = %s;\n", captures[i], captures[i]);
             }
             fprintf(gen->output, "    _AeClosure _c = { (void(*)(void))_closure_fn_%d, _e };\n", id);
             fprintf(gen->output, "    return _c;\n");
@@ -3478,7 +3513,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
                 fprintf(gen->output, "({ _closure_env_%d* _e = malloc(sizeof(_closure_env_%d)); ", id, id);
                 for (int i = 0; i < cap_count; i++) {
-                    fprintf(gen->output, "_e->%s = %s; ", safe_c_name(captures[i]), safe_c_name(captures[i]));
+                    fprintf(gen->output, "_e->%s = %s; ", captures[i], captures[i]);
                 }
                 fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = _e }; })", id);
                 fprintf(gen->output, "\n#else\n");
@@ -3486,7 +3521,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "_aether_make_closure_%d(", id);
                 for (int i = 0; i < cap_count; i++) {
                     if (i > 0) fprintf(gen->output, ", ");
-                    fprintf(gen->output, "%s", safe_c_name(captures[i]));
+                    fprintf(gen->output, "%s", captures[i]);
                 }
                 fprintf(gen->output, ")");
                 fprintf(gen->output, "\n#endif\n");
