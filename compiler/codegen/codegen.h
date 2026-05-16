@@ -77,6 +77,24 @@ typedef struct {
     int scope_defer_start[MAX_SCOPE_DEPTH];  // defer_count at scope entry
     int scope_depth;
 
+    // try { } catch { } frame-pop tracking (issue #501). Incremented
+    // before generating a try body, decremented after; the catch
+    // handler runs with the counter back at the outer value because
+    // the runtime aether_try_pop() is emitted before the handler.
+    // Every return / panic site checks this and drains the pending
+    // pops so a `return` inside a try body doesn't skip the cleanup
+    // and leak a panic frame (AETHER_PANIC_MAX_DEPTH = 32).
+    int try_frame_depth;
+
+    // try_frame_depth snapshot at the entry of each enclosing loop.
+    // `break` / `continue` only drain try frames pushed inside the
+    // current loop body (`try_frame_depth - loop_try_base[depth-1]`),
+    // not all live frames — a try whose `{` lexically precedes the
+    // loop's `{` survives a break/continue.
+    #define AETHER_MAX_LOOP_NEST 64
+    int loop_try_base[AETHER_MAX_LOOP_NEST];
+    int loop_nest_depth;
+
     // Extern function parameter type registry — used at call sites for proper casts
     // e.g., list_add(void*, void*) called with int arg → cast to (void*)(intptr_t)
     struct ExternParamInfo {
@@ -331,5 +349,15 @@ void emit_defers_for_scope(CodeGenerator* gen);
 void emit_all_defers(CodeGenerator* gen);
 void enter_scope(CodeGenerator* gen);
 void exit_scope(CodeGenerator* gen);
+
+// Drain any in-flight try-frame pops at a non-local exit (return,
+// panic, etc.) inside a try body.  No-op when not inside a try body.
+// Issue #501.
+void emit_try_pops_for_nonlocal_exit(CodeGenerator* gen);
+
+// `break` / `continue` exit a loop but stay inside any try frames
+// that were pushed BEFORE the loop body opened.  Drain only the
+// frames pushed INSIDE the current loop body.  Issue #501.
+void emit_try_pops_for_break_continue(CodeGenerator* gen);
 
 #endif

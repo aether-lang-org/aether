@@ -3820,10 +3820,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (gen->emit_lib) {
                 print_line(gen, "if (aether_caps_deadline_tripped()) { __aether_abort_call(); break; }");
             }
+            /* Issue #501: snapshot try_frame_depth at loop entry. */
+            if (gen->loop_nest_depth < AETHER_MAX_LOOP_NEST) {
+                gen->loop_try_base[gen->loop_nest_depth++] = gen->try_frame_depth;
+            }
             if (stmt->child_count > 3 && stmt->children[3]) {
                 // Body is always a statement (could be a block or single statement)
                 generate_statement(gen, stmt->children[3]); // body
             }
+            if (gen->loop_nest_depth > 0) gen->loop_nest_depth--;
             unindent(gen);
 
             print_line(gen, "}");
@@ -3867,9 +3872,16 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (gen->emit_lib) {
                 print_line(gen, "if (aether_caps_deadline_tripped()) { __aether_abort_call(); break; }");
             }
+            /* Issue #501: snapshot try_frame_depth at loop entry so
+             * `break` / `continue` inside the body drains only
+             * frames pushed *inside* the loop, not outer-scope tries. */
+            if (gen->loop_nest_depth < AETHER_MAX_LOOP_NEST) {
+                gen->loop_try_base[gen->loop_nest_depth++] = gen->try_frame_depth;
+            }
             if (stmt->child_count > 1) {
                 generate_statement(gen, stmt->children[1]);
             }
+            if (gen->loop_nest_depth > 0) gen->loop_nest_depth--;
             unindent(gen);
 
             print_line(gen, "}");
@@ -4125,6 +4137,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 if (gen->defer_count > 0) {
                     emit_all_defers(gen);
                 }
+                /* Issue #501: drain in-flight try frames before
+                 * returning, so a `return` inside a try body doesn't
+                 * leak the panic frame. */
+                emit_try_pops_for_nonlocal_exit(gen);
                 print_indent(gen);
                 fprintf(gen->output, "return result;\n");
                 gen->indent_level--;
@@ -4137,6 +4153,12 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 if (gen->defer_count > 0) {
                     emit_all_defers(gen);
                 }
+                /* Issue #501: drain in-flight try frames before
+                 * the goto so a `return` inside a try body in
+                 * main() doesn't leak the panic frame.  goto and
+                 * return are both non-local exits as far as the
+                 * try-frame stack is concerned. */
+                emit_try_pops_for_nonlocal_exit(gen);
                 print_indent(gen);
                 if (stmt->child_count > 0 && stmt->children[0] &&
                     stmt->children[0]->type != AST_PRINT_STATEMENT) {
@@ -4197,6 +4219,8 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     // unnecessary here — drain the defers and emit the
                     // return.
                     emit_all_defers(gen);
+                    /* Issue #501: drain try frames. */
+                    emit_try_pops_for_nonlocal_exit(gen);
                     print_line(gen, "return _builder_ret;");
                     break;
                 }
@@ -4302,14 +4326,20 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     emit_all_defers_protected(gen, protected_names, protected_count);
                     for (int p = 0; p < protected_count; p++) free(protected_names[p]);
                     free(protected_names);
+                    /* Issue #501: drain try frames. */
+                    emit_try_pops_for_nonlocal_exit(gen);
                     print_line(gen, "return _builder_ret;");
                 } else if (stmt->child_count > 0 && stmt->children[0] &&
                            stmt->children[0]->type == AST_PRINT_STATEMENT) {
                     emit_all_defers(gen);
                     generate_statement(gen, stmt->children[0]);
+                    /* Issue #501: drain try frames. */
+                    emit_try_pops_for_nonlocal_exit(gen);
                     print_line(gen, "return;");
                 } else {
                     emit_all_defers(gen);
+                    /* Issue #501: drain try frames. */
+                    emit_try_pops_for_nonlocal_exit(gen);
                     print_line(gen, "return;");
                 }
             } else {
@@ -4317,9 +4347,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 if (stmt->child_count > 0 && stmt->children[0] &&
                     stmt->children[0]->type == AST_PRINT_STATEMENT) {
                     generate_statement(gen, stmt->children[0]);
+                    /* Issue #501: drain try frames. */
+                    emit_try_pops_for_nonlocal_exit(gen);
                     print_line(gen, "return;");
                 } else if (stmt->child_count > 1) {
                     // Multi-value return: return a, b → return (_tuple_X_Y){a, b}
+                    /* Issue #501: drain try frames first; the
+                     * print_indent below is for the `return ...`
+                     * line, which lands after the drained pops. */
+                    emit_try_pops_for_nonlocal_exit(gen);
                     print_indent(gen);
                     // Use the function's known return type if it's a tuple
                     // (avoids UNKNOWN types from unresolved identifiers)
@@ -4373,8 +4409,13 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         emit_uniform_heap_return_expr(gen, stmt->children[0]);
                         fprintf(gen->output, ";\n");
                         emit_return_escape_drains_for_unreturned(gen, stmt->children[0]);
+                        /* Issue #501: drain try frames. */
+                        emit_try_pops_for_nonlocal_exit(gen);
                         print_line(gen, "return _no_defer_ret;");
                     } else {
+                        /* Issue #501: drain try frames before the
+                         * print_indent for the `return <expr>;` line. */
+                        emit_try_pops_for_nonlocal_exit(gen);
                         print_indent(gen);
                         fprintf(gen->output, "return");
                         if (stmt->child_count > 0) {
@@ -4401,12 +4442,18 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         case AST_BREAK_STATEMENT:
             // Emit defers for current scope before break
             emit_defers_for_scope(gen);
+            /* Issue #501: drain try frames pushed inside the current
+             * loop body so `break` from inside a try { } in a loop
+             * doesn't leak the panic frame. */
+            emit_try_pops_for_break_continue(gen);
             print_line(gen, "break;");
             break;
 
         case AST_CONTINUE_STATEMENT:
             // Emit defers for current scope before continue
             emit_defers_for_scope(gen);
+            /* Issue #501: drain inside-loop try frames. */
+            emit_try_pops_for_break_continue(gen);
             print_line(gen, "continue;");
             break;
 
@@ -4433,6 +4480,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             //
             // Each try site gets a uniquely-named frame variable so nested
             // try blocks don't shadow each other at the C level.
+            //
+            // Issue #501: a `return` (or any non-fall-through exit) from
+            // inside the body skips the body's `aether_try_pop()` and
+            // leaks a panic frame.  We bump gen->try_frame_depth while
+            // generating the body so every AST_RETURN_STATEMENT codegen
+            // inside emits a draining `aether_try_pop()` first.  The
+            // catch handler runs with the depth back at caller's value
+            // because the runtime pop is emitted before the handler
+            // body — a return inside catch has no live frame to drain.
             if (stmt->child_count != 2) break;
             ASTNode* body = stmt->children[0];
             ASTNode* catch_clause = stmt->children[1];
@@ -4447,8 +4503,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             print_line(gen, "AetherJmpFrame* _aether_try_%d = aether_try_push();", uid);
             print_line(gen, "if (AETHER_SIGSETJMP(_aether_try_%d->buf, 1) == 0) {", uid);
             indent(gen);
+            gen->try_frame_depth++;
             // Body runs inside the if; it already emits its own { } via AST_BLOCK.
             generate_statement(gen, body);
+            gen->try_frame_depth--;
             print_line(gen, "aether_try_pop();");
             unindent(gen);
             print_line(gen, "} else {");

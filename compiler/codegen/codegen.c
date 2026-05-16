@@ -90,6 +90,10 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->scope_depth = 0;
     memset(gen->defer_stack, 0, sizeof(gen->defer_stack));
     memset(gen->scope_defer_start, 0, sizeof(gen->scope_defer_start));
+    // Issue #501: try/catch frame-pop tracking
+    gen->try_frame_depth = 0;
+    gen->loop_nest_depth = 0;
+    memset(gen->loop_try_base, 0, sizeof(gen->loop_try_base));
     // Extern function parameter registry
     gen->extern_registry = NULL;
     gen->extern_registry_count = 0;
@@ -657,6 +661,47 @@ void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int p
 
 void emit_all_defers(CodeGenerator* gen) {
     emit_all_defers_protected(gen, NULL, 0);
+}
+
+// Drain any in-flight try-frame pops at a non-local exit inside a
+// try body.  See issue #501.
+//
+// The AST_TRY_STATEMENT codegen emits `aether_try_pop()` at the
+// natural end of the try body block.  A `return` (or any other
+// non-fall-through exit) from inside the body bypasses that pop and
+// leaks one panic frame per call; after AETHER_PANIC_MAX_DEPTH = 32
+// calls the runtime aborts.  This helper fires one
+// `aether_try_pop();` per live try frame so the runtime stack
+// matches the codegen-state counter on entry to the next
+// instruction.  The codegen-state counter is itself unchanged: it
+// reflects lexical nesting, not runtime control flow.  In practice
+// every call site is immediately followed by a `return ...;`, so
+// the next instruction we care about is in the caller's frame.
+//
+// The catch handler is unaffected: AST_TRY_STATEMENT emits
+// aether_try_pop() before the handler runs, and the codegen-state
+// counter is back to caller's value while the handler is generated,
+// so this helper correctly fires zero pops for returns inside catch.
+void emit_try_pops_for_nonlocal_exit(CodeGenerator* gen) {
+    if (!gen || gen->try_frame_depth <= 0) return;
+    for (int i = 0; i < gen->try_frame_depth; i++) {
+        print_indent(gen);
+        fprintf(gen->output, "aether_try_pop();\n");
+    }
+}
+
+// `break` / `continue` drain only try frames pushed inside the
+// current loop body — frames pushed outside the loop survive a
+// break/continue and must NOT be popped here.
+void emit_try_pops_for_break_continue(CodeGenerator* gen) {
+    if (!gen || gen->loop_nest_depth <= 0) return;
+    int base = gen->loop_try_base[gen->loop_nest_depth - 1];
+    int drop = gen->try_frame_depth - base;
+    if (drop <= 0) return;
+    for (int i = 0; i < drop; i++) {
+        print_indent(gen);
+        fprintf(gen->output, "aether_try_pop();\n");
+    }
 }
 
 // ============================================================================
