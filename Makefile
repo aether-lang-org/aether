@@ -1168,6 +1168,12 @@ install: release ae stdlib
 	@install -m 755 build/aetherc-release$(EXE_EXT) $(PREFIX)/bin/aetherc
 	@install -d $(PREFIX)/lib/aether
 	@install -m 644 build/libaether.a $(PREFIX)/lib/aether/
+	@# Version stamp next to libaether.a. `ae build` reads this and
+	@# compares it to the compiler's own version; a mismatch (the
+	@# classic split where a stale `current` symlink shadows a fresh
+	@# install) is reported up front instead of surfacing only as a
+	@# cryptic `undefined reference to aether_*` at link time.
+	@printf '%s\n' "$(VERSION)" > $(PREFIX)/lib/aether/VERSION
 	@# Headers: walk the runtime/ and std/ trees and mirror every .h
 	@# into $(PREFIX)/include/aether. Whole-tree copy (rather than the
 	@# per-subdir enumeration this used to do) so new modules don't

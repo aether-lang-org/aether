@@ -230,6 +230,79 @@ else
     fi
 fi
 
+# --- Project-library support (--lib / AETHER_LIB_DIR) ----------------
+# A project-local library under a --lib directory: a module plus the
+# `*.help.md` hint file a library author ships alongside it.
+mkdir -p "$TMPDIR/lib/widgets"
+cat > "$TMPDIR/lib/widgets/module.ae" <<'EOF'
+exports ( make_widget )
+make_widget(label: string) -> int { return 1 }
+EOF
+cat > "$TMPDIR/lib/widgets/widgets.help.md" <<'EOF'
+## Label must be non-empty
+
+Pattern: `make_widget`
+
+make_widget renders blank if the label is empty — pass a real string.
+EOF
+cat > "$TMPDIR/usewidgets.ae" <<'EOF'
+import widgets
+main() {
+    w = widgets.make_widget("ok")
+}
+EOF
+
+# Case 11: `--lib` resolves the project library AND reads its shipped
+# `*.help.md` — proves option acceptance, library-catalog inclusion,
+# and the lib-path help.md probe in one assertion. Pre-fix `ae help`
+# rejected `--lib` outright and never probed non-stdlib hint files.
+expect_match "--lib resolves project library + reads its *.help.md hint" \
+    "Label must be non-empty" \
+    "$AE" help "$TMPDIR/usewidgets.ae" --lib "$TMPDIR/lib"
+
+# Case 12: `--lib` is a recognised option (no 'unknown option').
+out=$("$AE" help "$TMPDIR/usewidgets.ae" --lib "$TMPDIR/lib" 2>&1)
+if printf '%s\n' "$out" | grep -q "unknown option"; then
+    echo "  [FAIL] --lib still rejected as unknown option"
+    fail=$((fail + 1))
+else
+    echo "  [PASS] --lib accepted as a valid option"
+    pass=$((pass + 1))
+fi
+
+# Case 13: AETHER_LIB_DIR env is honoured the same as --lib.
+expect_match "AETHER_LIB_DIR env resolves project library" \
+    "Label must be non-empty" \
+    env AETHER_LIB_DIR="$TMPDIR/lib" "$AE" help "$TMPDIR/usewidgets.ae"
+
+# Case 14: PATH-style `--lib a:b` splits — a bad leading entry is
+# tolerated and the good one still resolves.
+expect_match "--lib accepts PATH-style a:b specs" \
+    "Label must be non-empty" \
+    "$AE" help "$TMPDIR/usewidgets.ae" --lib "/no/such/dir:$TMPDIR/lib"
+
+# Case 15: a module imported more than once — plain `import widgets`
+# plus a selective `import widgets (make_widget)`, the shape a
+# closure-DSL file needs — must surface each shipped `*.help.md` hint
+# exactly ONCE. Pre-fix the hint loader ran per import statement, so a
+# twice-imported module's hint appeared twice (aeb feedback R2).
+cat > "$TMPDIR/usewidgets2x.ae" <<'EOF'
+import widgets
+import widgets (make_widget)
+main() {
+    w = widgets.make_widget("ok")
+}
+EOF
+hint_count=$("$AE" help "$TMPDIR/usewidgets2x.ae" --lib "$TMPDIR/lib" 2>&1 \
+    | grep -c "Label must be non-empty (widgets hint)")
+if [ "$hint_count" -eq 1 ]; then
+    echo "  [PASS] hint from a twice-imported module fires exactly once"
+    pass=$((pass + 1))
+else
+    echo "  [FAIL] twice-imported module hint fired $hint_count times (want 1)"
+    fail=$((fail + 1))
+fi
+
 echo
 echo "ae_help: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

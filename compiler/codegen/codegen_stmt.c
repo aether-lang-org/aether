@@ -1282,8 +1282,12 @@ static void collect_heap_string_var_names(CodeGenerator* gen, ASTNode* node,
                                           int* count, int cap) {
     if (!node || *count >= cap) return;
 
-    if (node->type == AST_VARIABLE_DECLARATION && node->value) {
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        strcmp(node->value, "_") != 0) {
         // Decide whether this declaration's LHS deserves a tracker.
+        // Bare `_` is a per-use discard, never a tracked variable —
+        // skipped here so a string-typed `_` destructure slot doesn't
+        // get hoisted as a `const char* _` the codegen then reuses.
         int needs_tracker = 0;
         if (node->child_count > 0 && is_heap_string_expr(gen, node->children[0])) {
             needs_tracker = 1;
@@ -2631,6 +2635,38 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         }
 
         case AST_VARIABLE_DECLARATION: {
+            /* Bare `_` is a per-use discard, not a real variable.
+             * `_ = <expr>` evaluates the RHS for its side effects and
+             * throws the value away — no declaration, no type, no
+             * shared lvalue. Without this, `_` was one C variable
+             * whose type was fixed by its first use, so a function
+             * discarding (say) a string at one site and an int at
+             * another emitted conflicting `_` declarations and failed
+             * the C compile (aeb-ae-help-and-toolchain-feedback.md
+             * #4). A freshly-allocated heap string handed to `_` is
+             * freed so the discard doesn't leak; everything else is a
+             * plain `(void)` cast. A match RHS falls through to the
+             * normal match-as-expression path. */
+            if (stmt->value && strcmp(stmt->value, "_") == 0 &&
+                stmt->child_count > 0 && stmt->children[0] &&
+                stmt->children[0]->type != AST_MATCH_STATEMENT) {
+                ASTNode* drhs = stmt->children[0];
+                int fresh_heap =
+                    (drhs->type == AST_FUNCTION_CALL ||
+                     drhs->type == AST_STRING_INTERP) &&
+                    is_heap_string_expr(gen, drhs);
+                print_indent(gen);
+                if (fresh_heap) {
+                    fprintf(gen->output, "aether_heap_str_free((void*)(");
+                    generate_expression(gen, drhs);
+                    fprintf(gen->output, "));\n");
+                } else {
+                    fprintf(gen->output, "(void)(");
+                    generate_expression(gen, drhs);
+                    fprintf(gen->output, ");\n");
+                }
+                break;
+            }
             // Register fn-pointer locals so call-site codegen can emit
             // the matching C function-pointer cast.  Two sources:
             //   - explicit annotation:  `fp: fn(int, int) -> int = ...`

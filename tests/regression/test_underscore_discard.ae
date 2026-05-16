@@ -1,0 +1,70 @@
+// Regression: bare `_` is a per-use discard, not one shared
+// type-bound variable.
+//
+// Pre-fix, `_` behaved as a single ordinary variable whose C type was
+// fixed by its first use. A function that discarded a `string` at one
+// site and an `int` at another emitted two conflicting `_`
+// declarations (`const char* _` then `_ = <int>`) and failed at the C
+// compile step with -Wint-conversion. Filed by the aeb project
+// (aeb-ae-help-and-toolchain-feedback.md #4).
+//
+// Post-fix, `_` is never registered as a symbol and never declared as
+// a C variable: each `_ = <expr>` / destructure `_` slot is an
+// independent throwaway. This test exercises `_` against mixed types
+// in one function — it passing the build IS the assertion (pre-fix it
+// would not compile); the value checks guard the discards don't
+// disturb the kept bindings.
+
+import std.string
+
+extern exit(code: int)
+
+pair_si() -> (string, int) {
+    return "hello", 42
+}
+
+heap_str() -> string {
+    return string.concat("frag-", "ment")
+}
+
+give_int() -> int {
+    return 7
+}
+
+main() {
+    println("=== test_underscore_discard ===")
+
+    // `_` discards the string position of a tuple destructure.
+    _, k = pair_si()
+    if k != 42 {
+        println("  FAIL: kept second-position value k=${k}")
+        exit(1)
+    }
+
+    // The SAME `_` now discards the int position. Pre-fix this is the
+    // assignment that broke the C compile — `_` was string-typed.
+    s, _ = pair_si()
+    if s != "hello" {
+        println("  FAIL: kept first-position value s=${s}")
+        exit(1)
+    }
+
+    // `_` discards a plain int call result.
+    _ = give_int()
+
+    // `_` discards a freshly-allocated heap string — the discard
+    // frees it, so the run stays leak-clean under ASan / valgrind.
+    _ = heap_str()
+
+    // `_` discards a bare identifier — read-and-throw-away, no free
+    // (the value is owned by `n`).
+    n = give_int()
+    _ = n
+    if n != 7 {
+        println("  FAIL: identifier value n=${n}")
+        exit(1)
+    }
+
+    println("  PASS: _ is a per-use discard across mixed types")
+    println("=== test_underscore_discard passed ===")
+}
