@@ -4230,8 +4230,9 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             print_line(gen, "}");
             break;
             
-        case AST_CASE_STATEMENT:
-            if (stmt->value && strcmp(stmt->value, "default") == 0) {
+        case AST_CASE_STATEMENT: {
+            int is_default = (stmt->value && strcmp(stmt->value, "default") == 0);
+            if (is_default) {
                 print_line(gen, "default:");
             } else {
                 fprintf(gen->output, "case ");
@@ -4240,15 +4241,41 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 }
                 fprintf(gen->output, ":\n");
             }
-            
+
             indent(gen);
             // Generate all statements in the case block (skip first child which is the case value)
-            int start_idx = (stmt->value && strcmp(stmt->value, "default") == 0) ? 0 : 1;
+            int start_idx = is_default ? 0 : 1;
             for (int i = start_idx; i < stmt->child_count; i++) {
                 generate_statement(gen, stmt->children[i]);
             }
+            // Auto-insert `break` unless the case ends with its own
+            // control-flow exit. Aether's `switch` has no
+            // fallthrough — that's the surprising-default-everyone-
+            // gets-wrong-once C inherited; we don't carry it forward.
+            // (Empty `case 7: case 8: ...` chaining isn't supported
+            // via this path — each case currently must have a body.
+            // If we add empty-fallthrough later it'll be an explicit
+            // syntax, not the silent default.)
+            int needs_break = 1;
+            int total = stmt->child_count;
+            int last = total - 1;
+            if (last >= start_idx) {
+                ASTNode* tail_stmt = stmt->children[last];
+                if (tail_stmt) {
+                    ASTNodeType t = tail_stmt->type;
+                    if (t == AST_RETURN_STATEMENT ||
+                        t == AST_BREAK_STATEMENT ||
+                        t == AST_CONTINUE_STATEMENT) {
+                        needs_break = 0;
+                    }
+                }
+            }
+            if (needs_break) {
+                print_line(gen, "break;");
+            }
             unindent(gen);
             break;
+        }
             
         case AST_RETURN_STATEMENT: {
             // Issue #348 — postcondition checks. When the enclosing
