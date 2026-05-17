@@ -1,0 +1,135 @@
+// Regression: extending the libc-conflict whitelist in
+// codegen_func.c so the listed names compile when declared as
+// `extern`.
+//
+// Previously, aetherc emitted a C forward declaration based on
+// the Aether extern signature (lowering `ptr` → `void*`, `long`
+// → `int64_t`, …). For libc functions whose real glibc prototype
+// differs (`char*` return, `size_t` args, function-pointer
+// params), that produced
+//
+//   error: conflicting types for 'strdup'; have 'void *(void *)'
+//   note: previous declaration with 'char *(const char *)'
+//
+// Names hit during the mquickjs port that motivated this fix:
+//   strdup — `char*` return / `const char*` arg
+//   qsort  — fn-pointer comparator + size_t
+//
+// The whitelist also grew to cover the obvious neighbours
+// (strstr, strchr, fwrite, getenv, …). This test exercises a
+// representative slice; each call would fail to *compile* if its
+// name weren't whitelisted, so reaching `[PASS]` proves the fix.
+
+import std.mem
+
+extern exit(code: int)
+extern strdup(s: ptr) -> ptr
+extern strstr(haystack: ptr, needle: ptr) -> ptr
+extern strchr(s: ptr, c: int) -> ptr
+extern atoi(s: ptr) -> int
+extern qsort(base: ptr, n: long, sz: long, cmp: ptr)
+extern free(p: ptr)
+extern strcmp(a: ptr, b: ptr) -> int
+extern strlen(s: ptr) -> int
+extern memcpy(dst: ptr, src: ptr, n: long) -> ptr
+extern abs(x: int) -> int
+extern malloc(sz: long) -> ptr
+
+// qsort comparator written in Aether and exported as a C
+// callback so qsort can take its address. Compares two `const
+// void**` slots (each holding a char*) lexicographically.
+@c_callback
+test_libc_cmp(p1: ptr, p2: ptr) -> int {
+    s1 = mem.get_ptr(p1, 0)
+    s2 = mem.get_ptr(p2, 0)
+    return strcmp(s1, s2)
+}
+
+main() {
+    println("=== test_extern_libc_whitelist ===")
+
+    // strdup — returns a malloc'd copy. If the prototype were
+    // wrong, gcc would already have refused to compile this file.
+    dup = strdup("hello")
+    if strcmp(dup, "hello") != 0 {
+        println("  FAIL: strdup returned wrong content")
+        exit(1)
+    }
+    if strlen(dup) != 5 {
+        println("  FAIL: strdup wrong length")
+        exit(1)
+    }
+    free(dup)
+
+    // strstr / strchr — locate substrings / chars.
+    s = "the quick brown fox"
+    hit = strstr(s, "quick")
+    if hit == null {
+        println("  FAIL: strstr missed substring")
+        exit(1)
+    }
+    chit = strchr(s, 113)        // 'q'
+    if chit == null {
+        println("  FAIL: strchr missed char")
+        exit(1)
+    }
+
+    // atoi / abs — pure number conversion.
+    if atoi("42") != 42 {
+        println("  FAIL: atoi gave wrong answer")
+        exit(1)
+    }
+    if abs(-7) != 7 {
+        println("  FAIL: abs gave wrong answer")
+        exit(1)
+    }
+
+    // qsort with an Aether @c_callback comparator — the
+    // function-pointer parameter is exactly where Aether's
+    // `void*` lowering clashed with glibc's
+    // `int(*)(const void*, const void*)` before the whitelist
+    // entry. Sort three pointers (each a char*) lexicographically.
+    sorted_buf = malloc(24)                // 3 × sizeof(void*)
+    s_a = strdup("banana")
+    s_b = strdup("apple")
+    s_c = strdup("cherry")
+    mem.set_ptr(sorted_buf, 0,  s_a)
+    mem.set_ptr(sorted_buf, 8,  s_b)
+    mem.set_ptr(sorted_buf, 16, s_c)
+    qsort(sorted_buf, 3, 8, test_libc_cmp)
+    e0 = mem.get_ptr(sorted_buf, 0)
+    e1 = mem.get_ptr(sorted_buf, 8)
+    e2 = mem.get_ptr(sorted_buf, 16)
+    if strcmp(e0, "apple") != 0 {
+        println("  FAIL: qsort e0 != apple")
+        exit(1)
+    }
+    if strcmp(e1, "banana") != 0 {
+        println("  FAIL: qsort e1 != banana")
+        exit(1)
+    }
+    if strcmp(e2, "cherry") != 0 {
+        println("  FAIL: qsort e2 != cherry")
+        exit(1)
+    }
+    free(s_a)
+    free(s_b)
+    free(s_c)
+    free(sorted_buf)
+
+    // memcpy — Aether's `long` lowering vs glibc's `size_t`
+    // would have clashed without the whitelist on some
+    // toolchains. (Already on the original list; tested here for
+    // continuity.)
+    src = strdup("the quick brown fox")
+    dst = malloc(20)
+    memcpy(dst, src, 20)
+    if strcmp(dst, src) != 0 {
+        println("  FAIL: memcpy did not copy verbatim")
+        exit(1)
+    }
+    free(dst)
+    free(src)
+
+    println("=== test_extern_libc_whitelist passed ===")
+}
