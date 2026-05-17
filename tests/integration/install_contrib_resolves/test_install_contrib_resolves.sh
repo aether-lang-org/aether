@@ -10,7 +10,12 @@
 #      had one in the source tree.
 #   2. install.sh trims the source-tree noise (.c, .m, tests/,
 #      benchmarks/, example_*.ae, test_*.sh, build.sh, ci.sh) — the
-#      install layout is descriptor-+-header only, no source.
+#      install layout is descriptor-+-header only, with one
+#      explicit carve-out: contrib/host/<lang>/aether_host_<lang>.c
+#      DOES ship (plain `make install` doesn't build the matching
+#      libaether_host_<lang>.a, so downstream apps that
+#      `import contrib.host.<lang>` compile the bridge from source).
+#      See docs/install-layout.md "What does NOT ship".
 #   3. The module.ae files are syntactically what the resolver looks
 #      for: a non-empty file at the documented path.
 
@@ -62,7 +67,9 @@ fi
 # Source-tree noise must NOT have been copied. Hits would be
 # regression of the trim step.
 unwanted_count=$( {
-    find "$CONTRIB_INSTALL" -type f -name '*.c'         2>/dev/null
+    # `.c` files: everything except the host-bridge carve-out.
+    find "$CONTRIB_INSTALL" -type f -name '*.c' \
+        ! -path '*/contrib/host/*/aether_host_*.c' 2>/dev/null
     find "$CONTRIB_INSTALL" -type f -name '*.m'         2>/dev/null
     find "$CONTRIB_INSTALL" -type d -name tests         2>/dev/null
     find "$CONTRIB_INSTALL" -type d -name benchmarks    2>/dev/null
@@ -75,7 +82,8 @@ unwanted_count=$( {
 if [ "$unwanted_count" -ne 0 ]; then
     echo "  [FAIL] install layout still contains source-tree noise:"
     {
-        find "$CONTRIB_INSTALL" -type f -name '*.c'
+        find "$CONTRIB_INSTALL" -type f -name '*.c' \
+            ! -path '*/contrib/host/*/aether_host_*.c'
         find "$CONTRIB_INSTALL" -type f -name '*.m'
         find "$CONTRIB_INSTALL" -type d -name tests
         find "$CONTRIB_INSTALL" -type d -name benchmarks
