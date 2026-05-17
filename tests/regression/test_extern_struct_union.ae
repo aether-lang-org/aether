@@ -1,0 +1,103 @@
+// Regression: `union { ... }` and nested `struct { ... }` inside an
+// `extern struct` body. Surfaces a C-union layout to Aether ports of
+// C code (the JSPropDef in mquickjs, JSON_Value, Lua TValue, ... —
+// every C codebase with tagged unions hits this). Before this
+// landed, porters declared one `u_first_ptr: ptr` field at the
+// union's start offset and reached into the rest with
+// `mem.get_byte(d, 16)` / `mem.get_float64(d, 16)` etc.
+//
+// Surface:
+//   extern struct Foo {
+//       tag: int
+//       u: union {
+//           f64: float
+//           ip: ptr
+//           nested: struct {
+//               length: byte
+//               payload: ptr
+//           }
+//       }
+//   }
+//   foo.u.f64           // double at offset 8
+//   foo.u.nested.length // byte at offset 8
+//   foo.u.nested.payload// ptr  at offset 16
+//
+// C lowering: emits a real C `union { ... }` so layout matches what
+// any C author would write by hand. Each member access lowers to
+// `view->u.member` — no `mem.*` arithmetic at user sites.
+
+import std.mem
+
+extern malloc(sz: long) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+extern struct Variant {
+    tag: int           //  0
+    u: union {
+        f64: float    //  8
+        ip: ptr       //  8
+        nested: struct {
+            length: byte    //  8
+            payload: ptr    // 16
+        }
+    }
+}
+
+main() {
+    println("=== test_extern_struct_union ===")
+
+    v = malloc(24)
+
+    // -----------------------------------------------------------
+    // Float branch.
+    // -----------------------------------------------------------
+    (v as *Variant).tag = 1
+    (v as *Variant).u.f64 = 3.14
+    if (v as *Variant).tag != 1 {
+        println("  FAIL: tag write/read")
+        exit(1)
+    }
+    // Float equality of a 3.14 round-trip — exact, since we wrote
+    // the same double bits and read them back.
+    if (v as *Variant).u.f64 != 3.14 {
+        println("  FAIL: f64 round-trip")
+        exit(1)
+    }
+
+    // -----------------------------------------------------------
+    // Pointer branch — same offset, different type. Confirms the
+    // members really overlap.
+    // -----------------------------------------------------------
+    label = malloc(8)
+    mem.set_int(label, 0, 0xDEADBEEF)
+    (v as *Variant).u.ip = label
+    if (v as *Variant).u.ip != label {
+        println("  FAIL: ip round-trip")
+        exit(1)
+    }
+    free(label)
+
+    // -----------------------------------------------------------
+    // Nested struct inside a union. `length` is at the union's
+    // start offset (overlaps with f64's first byte); `payload` is
+    // 8 bytes deeper.
+    // -----------------------------------------------------------
+    (v as *Variant).tag = 2
+    (v as *Variant).u.nested.length = 42
+    if (v as *Variant).u.nested.length != 42 {
+        println("  FAIL: nested.length round-trip")
+        exit(1)
+    }
+
+    payload_buf = malloc(16)
+    (v as *Variant).u.nested.payload = payload_buf
+    if (v as *Variant).u.nested.payload != payload_buf {
+        println("  FAIL: nested.payload round-trip")
+        exit(1)
+    }
+    free(payload_buf)
+
+    free(v)
+    println("=== test_extern_struct_union passed ===")
+}

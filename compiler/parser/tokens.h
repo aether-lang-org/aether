@@ -30,6 +30,7 @@ typedef enum {
     TOKEN_SELF,
     TOKEN_STATE,
     TOKEN_STRUCT,
+    TOKEN_UNION,
     TOKEN_IMPORT,
     TOKEN_AS,               // 'as' keyword for import aliasing
     TOKEN_EXPORT,

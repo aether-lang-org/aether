@@ -960,6 +960,31 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             return result;
         }
 
+        case AST_PTR_AS_ARRAY_CAST: {
+            /* `expr as T[]` — view the operand as a typed C array.
+             * Operand must be ptr-typed. Result type is the TYPE_ARRAY
+             * the parser stashed on expr->node_type. AST_ARRAY_ACCESS
+             * on the result emits `((T*)(expr))[i]` which scales by
+             * sizeof(T) via C semantics. */
+            if (expr->child_count == 0 || !expr->children[0])
+                return create_type(TYPE_UNKNOWN);
+            Type* operand = infer_type(expr->children[0], table);
+            if (operand) {
+                int operand_ok = operand->kind == TYPE_PTR ||
+                                 operand->kind == TYPE_INT ||
+                                 operand->kind == TYPE_INT64 ||
+                                 operand->kind == TYPE_UNKNOWN;
+                free_type(operand);
+                if (!operand_ok) {
+                    type_error("`as T[]` cast operand must be a `ptr` value",
+                               expr->line, expr->column);
+                    return create_type(TYPE_UNKNOWN);
+                }
+            }
+            if (expr->node_type) return clone_type(expr->node_type);
+            return create_type(TYPE_UNKNOWN);
+        }
+
         case AST_PTR_AS_FN_CAST: {
             /* `expr as fn(T1, T2, ...) -> R` — view the operand as a
              * typed C function pointer. Operand must be ptr-typed
@@ -2337,16 +2362,25 @@ int typecheck_struct_definition(ASTNode* struct_def, SymbolTable* table) {
     // Type check all fields
     for (int i = 0; i < struct_def->child_count; i++) {
         ASTNode* field = struct_def->children[i];
-        
+
+        // Compound fields (union { ... } / nested struct { ... }) skip the
+        // leaf-type-required check — they carry no `node_type`; their
+        // children are independently typed (and walked at access time
+        // via base_type->compound_node).
+        if (field->type == AST_STRUCT_FIELD_UNION ||
+            field->type == AST_STRUCT_FIELD_NESTED) {
+            continue;
+        }
+
         if (field->type != AST_STRUCT_FIELD) {
             type_error("Invalid struct field", field->line, field->column);
             return 0;
         }
-        
+
         // Verify field type is valid
         if (!field->node_type) {
             char error_msg[256];
-            snprintf(error_msg, sizeof(error_msg), 
+            snprintf(error_msg, sizeof(error_msg),
                     "Struct field '%s' has no type", field->value);
             type_error(error_msg, field->line, field->column);
             return 0;
@@ -3089,6 +3123,15 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             expr->node_type = infer_type(expr, table);
             return 1;
 
+        case AST_PTR_AS_ARRAY_CAST:
+            /* Walk the operand; keep the parser-populated node_type
+             * (TYPE_ARRAY with element_type) so codegen emits the
+             * correct C element-pointer cast `((T*)(expr))`. */
+            if (expr->child_count > 0) {
+                typecheck_expression(expr->children[0], table);
+            }
+            return 1;
+
         case AST_PTR_AS_FN_CAST:
             /* Walk the operand; keep the parser-populated node_type
              * (TYPE_FUNCTION with signature) so the call-site codegen
@@ -3315,21 +3358,42 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                         expr->node_type = infer_type(expr, table);
                     }
                 }
-                // Handle struct member access — look up field type from definition
+                // Handle struct member access — look up field type from definition.
+                // For `extern struct` types whose fields include union/nested
+                // compounds, we need to walk children with awareness of the
+                // compound shape — see lookup_extern_field_type in this file.
                 else if (base_type && base_type->kind == TYPE_STRUCT && base_type->struct_name) {
-                    Symbol* struct_sym = lookup_symbol(table, base_type->struct_name);
-                    if (struct_sym && struct_sym->node) {
-                        ASTNode* struct_def = struct_sym->node;
+                    // Anonymous compound — base_type.compound_node points
+                    // directly at the AST_STRUCT_FIELD_UNION / _NESTED node
+                    // produced from a previous member access. The compound's
+                    // children ARE the lookup list.
+                    ASTNode* children_owner = NULL;
+                    if (base_type->compound_node) {
+                        children_owner = base_type->compound_node;
+                    } else {
+                        Symbol* struct_sym = lookup_symbol(table, base_type->struct_name);
+                        if (struct_sym && struct_sym->node) children_owner = struct_sym->node;
+                    }
+                    if (children_owner) {
                         int found = 0;
-                        for (int fi = 0; fi < struct_def->child_count; fi++) {
-                            ASTNode* field = struct_def->children[fi];
-                            if (field && field->value && strcmp(field->value, expr->value) == 0) {
-                                if (field->node_type && field->node_type->kind != TYPE_UNKNOWN) {
-                                    expr->node_type = clone_type(field->node_type);
-                                }
-                                found = 1;
-                                break;
+                        for (int fi = 0; fi < children_owner->child_count; fi++) {
+                            ASTNode* field = children_owner->children[fi];
+                            if (!field || !field->value) continue;
+                            if (strcmp(field->value, expr->value) != 0) continue;
+                            if (field->type == AST_STRUCT_FIELD_UNION ||
+                                field->type == AST_STRUCT_FIELD_NESTED) {
+                                // Compound child: synthesize a TYPE_STRUCT
+                                // whose compound_node points at THIS field
+                                // so the next access can walk its children.
+                                Type* ct = create_type(TYPE_STRUCT);
+                                ct->struct_name = strdup("__AeCompound");
+                                ct->compound_node = field;
+                                expr->node_type = ct;
+                            } else if (field->node_type && field->node_type->kind != TYPE_UNKNOWN) {
+                                expr->node_type = clone_type(field->node_type);
                             }
+                            found = 1;
+                            break;
                         }
                         if (!found) {
                             char error_msg[256];
@@ -3366,13 +3430,19 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                         int found = 0;
                         for (int fi = 0; fi < struct_def->child_count; fi++) {
                             ASTNode* field = struct_def->children[fi];
-                            if (field && field->value && strcmp(field->value, expr->value) == 0) {
-                                if (field->node_type && field->node_type->kind != TYPE_UNKNOWN) {
-                                    expr->node_type = clone_type(field->node_type);
-                                }
-                                found = 1;
-                                break;
+                            if (!field || !field->value) continue;
+                            if (strcmp(field->value, expr->value) != 0) continue;
+                            if (field->type == AST_STRUCT_FIELD_UNION ||
+                                field->type == AST_STRUCT_FIELD_NESTED) {
+                                Type* ct = create_type(TYPE_STRUCT);
+                                ct->struct_name = strdup("__AeCompound");
+                                ct->compound_node = field;
+                                expr->node_type = ct;
+                            } else if (field->node_type && field->node_type->kind != TYPE_UNKNOWN) {
+                                expr->node_type = clone_type(field->node_type);
                             }
+                            found = 1;
+                            break;
                         }
                         if (!found) {
                             char error_msg[256];
