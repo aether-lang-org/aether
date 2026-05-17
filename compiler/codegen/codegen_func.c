@@ -327,14 +327,47 @@ int has_return_value(ASTNode* node) {
 static int extern_name_is_libc_conflict(const char* name) {
     if (!name) return 0;
     static const char* libc_names[] = {
-        "sleep", "usleep", "exit", "abort", "atexit",
+        /* Process / signal */
+        "sleep", "usleep", "exit", "_exit", "abort", "atexit",
+        "fork", "wait", "waitpid", "execv", "execvp", "execve",
+        "getpid", "getppid", "getuid", "geteuid", "getgid", "getegid",
+        "signal", "kill", "raise",
+        /* Standard I/O */
         "printf", "fprintf", "sprintf", "snprintf",
+        "vprintf", "vfprintf", "vsprintf", "vsnprintf",
         "puts", "fputs", "gets", "fgets",
+        "getc", "putc", "getchar", "putchar", "ungetc",
+        "fopen", "fclose", "fflush", "freopen",
+        "fread", "fwrite", "fseek", "ftell", "rewind",
+        "feof", "ferror", "fileno", "perror", "clearerr",
+        /* Memory */
         "malloc", "calloc", "realloc", "free",
-        "strlen", "strcmp", "strcpy", "strncpy", "strcat",
-        "memcpy", "memset", "memmove", "memcmp",
-        "open", "close", "read", "write", "fopen", "fclose",
-        "time", "clock", "signal", "kill",
+        /* String — note: strdup/strndup added; size_t-arg variants
+           like strstr/strchr also clash on prototype shape. */
+        "strlen", "strcmp", "strncmp", "strcpy", "strncpy",
+        "strcat", "strncat", "strdup", "strndup",
+        "strstr", "strchr", "strrchr", "strpbrk",
+        "strspn", "strcspn", "strtok", "strtok_r",
+        "strcasecmp", "strncasecmp",
+        "memcpy", "memset", "memmove", "memcmp", "memchr",
+        /* Number conversion */
+        "atoi", "atol", "atoll", "atof",
+        "strtol", "strtoul", "strtoll", "strtoull",
+        "strtod", "strtof",
+        "abs", "labs", "llabs",
+        /* Sort / search — fn-pointer params clash with Aether's
+           `ptr` lowering to `void*`. */
+        "qsort", "qsort_r", "bsearch",
+        /* Environment */
+        "getenv", "setenv", "putenv", "unsetenv",
+        /* POSIX file ops */
+        "open", "close", "read", "write", "lseek",
+        "dup", "dup2", "pipe",
+        "access", "isatty", "unlink", "rename", "mkdir", "rmdir",
+        "stat", "fstat", "lstat",
+        /* Time */
+        "time", "clock", "clock_gettime", "gettimeofday",
+        "localtime", "gmtime", "mktime", "strftime",
         NULL
     };
     for (int i = 0; libc_names[i]; i++) {
