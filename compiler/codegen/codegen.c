@@ -7,6 +7,24 @@
 #include "../aether_module.h"
 #include "../aether_error.h"
 
+// Map Aether type to C typename for array element declarations.
+// For arrays, the size goes after the name in C, so we need just the
+// element type, not the full "T[N]" form that get_c_type produces.
+const char* const_array_elem_c_type(Type* t) {
+    if (!t) return "const char*";
+    switch (t->kind) {
+        case TYPE_STRING:  return "char*";  // STRING type already includes 'const' in its c_type
+        case TYPE_INT:     return "int";
+        case TYPE_INT64:   return "int64_t";
+        case TYPE_UINT64:  return "uint64_t";
+        case TYPE_FLOAT:   return "double";
+        case TYPE_PTR:     return "void*";
+        case TYPE_BYTE:    return "unsigned char";
+        case TYPE_BOOL:    return "_Bool";
+        default:           return "int";
+    }
+}
+
 // Check if an AST tree uses sandbox builtins (sandbox_install, sandbox_push, spawn_sandboxed, etc.)
 static int uses_sandbox(ASTNode* node) {
     if (!node) return 0;
@@ -2674,9 +2692,19 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         ASTNode* cd = program->children[i];
         if (cd && cd->type == AST_CONST_DECLARATION &&
             cd->value && cd->child_count > 0) {
-            fprintf(gen->output, "#define %s (", cd->value);
-            generate_expression(gen, cd->children[0]);
-            fprintf(gen->output, ")\n");
+            if (cd->annotation && strcmp(cd->annotation, "array_const") == 0) {
+                // static const T NAME[] = {v1, v2, ...};
+                Type* elem_type = (cd->node_type && cd->node_type->element_type)
+                                  ? cd->node_type->element_type : NULL;
+                const char* ctype = elem_type ? const_array_elem_c_type(elem_type) : "const char*";
+                fprintf(gen->output, "static const %s %s[] = ", ctype, cd->value);
+                generate_expression(gen, cd->children[0]);
+                fprintf(gen->output, ";\n");
+            } else {
+                fprintf(gen->output, "#define %s (", cd->value);
+                generate_expression(gen, cd->children[0]);
+                fprintf(gen->output, ")\n");
+            }
         }
     }
 

@@ -1386,21 +1386,49 @@ ASTNode* parse_statement(Parser* parser) {
             return parse_python_style_declaration(parser);
 
         case TOKEN_CONST: {
-            // Local constant: const x = 5
+            // Local constant: const x = 5 or const arr[] = [1, 2, 3]
             int cline = token->line, ccol = token->column;
             advance_token(parser); // consume 'const'
             Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
             if (!cname) return NULL;
+
+            // Check for array form: const NAME[] = [...]
+            int is_array = 0;
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
+                advance_token(parser); // consume '['
+                if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) return NULL;
+                is_array = 1;
+            }
+
             if (!expect_token(parser, TOKEN_ASSIGN)) return NULL;
             ASTNode* cval = parse_expression(parser);
             if (!cval) return NULL;
             match_token(parser, TOKEN_SEMICOLON);
             ASTNode* node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
             add_child(node, cval);
-            if (cval->node_type) {
-                node->node_type = clone_type(cval->node_type);
+
+            if (is_array) {
+                node->annotation = strdup("array_const");
+                // Infer element type from first child of array literal
+                Type* elem_type = NULL;
+                if (cval->node_type == NULL && cval->child_count > 0 && cval->children[0]) {
+                    if (cval->children[0]->node_type) {
+                        elem_type = cval->children[0]->node_type;
+                    }
+                } else if (cval->node_type && cval->node_type->element_type) {
+                    elem_type = cval->node_type->element_type;
+                }
+                if (elem_type) {
+                    node->node_type = create_array_type(clone_type(elem_type), cval->child_count);
+                } else {
+                    node->node_type = create_array_type(create_type(TYPE_PTR), cval->child_count);
+                }
             } else {
-                node->node_type = create_type(TYPE_UNKNOWN);
+                if (cval->node_type) {
+                    node->node_type = clone_type(cval->node_type);
+                } else {
+                    node->node_type = create_type(TYPE_UNKNOWN);
+                }
             }
             return node;
         }
@@ -4006,21 +4034,49 @@ ASTNode* parse_program(Parser* parser) {
                 break;
             }
             case TOKEN_CONST: {
-                // Top-level constant: const NAME = value
+                // Top-level constant: const NAME = value or const arr[] = [1, 2, 3]
                 int cline = token->line, ccol = token->column;
                 advance_token(parser); // consume 'const'
                 Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
                 if (!cname) { advance_token(parser); continue; }
+
+                // Check for array form: const NAME[] = [...]
+                int is_array = 0;
+                if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
+                    advance_token(parser); // consume '['
+                    if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) { advance_token(parser); continue; }
+                    is_array = 1;
+                }
+
                 if (!expect_token(parser, TOKEN_ASSIGN)) { advance_token(parser); continue; }
                 ASTNode* cval = parse_expression(parser);
                 if (!cval) { advance_token(parser); continue; }
                 node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
                 add_child(node, cval);
-                // Infer type from value
-                if (cval->node_type) {
-                    node->node_type = clone_type(cval->node_type);
+
+                if (is_array) {
+                    node->annotation = strdup("array_const");
+                    // Infer element type from first child of array literal
+                    Type* elem_type = NULL;
+                    if (cval->node_type == NULL && cval->child_count > 0 && cval->children[0]) {
+                        if (cval->children[0]->node_type) {
+                            elem_type = cval->children[0]->node_type;
+                        }
+                    } else if (cval->node_type && cval->node_type->element_type) {
+                        elem_type = cval->node_type->element_type;
+                    }
+                    if (elem_type) {
+                        node->node_type = create_array_type(clone_type(elem_type), cval->child_count);
+                    } else {
+                        node->node_type = create_array_type(create_type(TYPE_PTR), cval->child_count);
+                    }
                 } else {
-                    node->node_type = create_type(TYPE_UNKNOWN);
+                    // Infer type from value
+                    if (cval->node_type) {
+                        node->node_type = clone_type(cval->node_type);
+                    } else {
+                        node->node_type = create_type(TYPE_UNKNOWN);
+                    }
                 }
                 break;
             }

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`const NAME[] = [...]` — top-level static const array declarations** (`compiler/parser/parser.c`, `compiler/codegen/codegen.c`, `compiler/codegen/codegen_stmt.c`, `compiler/analysis/typechecker.c`, `tests/regression/test_const_array.ae`, `tests/regression/test_const_array_int.ae`). Adds a static-data form: `const atoms[] = ["null", "false", "true"]` at top level emits `static const char* atoms[] = {"null", "false", "true"};` in the generated C; `const sizes[] = [4, 8, 16]` emits `static const int sizes[] = {4, 8, 16};`. The existing scalar `const` form (`const N = 42` → `#define N (42)`) is unaffected. Indexed access (`atoms[i]`) works on both. Motivating use case: the mquickjs port's `atoms[]` predefined-atom table, which was the last data table blocking the move of `mquickjs_build.c` contents to Aether.
+
 ## [0.173.0]
 
 ### Added

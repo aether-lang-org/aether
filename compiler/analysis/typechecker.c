@@ -2496,16 +2496,22 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                  * allowed/disallowed list. */
                 if (stmt->type == AST_CONST_DECLARATION &&
                     !is_const_expression(init, table)) {
-                    char msg[512];
-                    snprintf(msg, sizeof(msg),
-                        "const initializer must be a compile-time constant expression — "
-                        "function calls are inlined at each use site, which would re-evaluate "
-                        "the call (and re-allocate / re-side-effect) on every reference. "
-                        "Use a regular assignment in main() (or std.config / std.actors for "
-                        "process-global state) instead.");
-                    type_error(msg, stmt->line, stmt->column);
-                    free_type(init_type);
-                    return 0;
+                    /* Allow array literals for const arr[] = [...] declarations.
+                     * These emit static const arrays, not #define-inlined forms. */
+                    int is_array_const = (stmt->annotation && strcmp(stmt->annotation, "array_const") == 0 &&
+                                          init->type == AST_ARRAY_LITERAL);
+                    if (!is_array_const) {
+                        char msg[512];
+                        snprintf(msg, sizeof(msg),
+                            "const initializer must be a compile-time constant expression — "
+                            "function calls are inlined at each use site, which would re-evaluate "
+                            "the call (and re-allocate / re-side-effect) on every reference. "
+                            "Use a regular assignment in main() (or std.config / std.actors for "
+                            "process-global state) instead.");
+                        type_error(msg, stmt->line, stmt->column);
+                        free_type(init_type);
+                        return 0;
+                    }
                 }
 
                 /* Python-style "redeclaration" (`b = 999` after a prior
