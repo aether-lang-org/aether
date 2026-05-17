@@ -1,0 +1,78 @@
+// Regression: putting a non-heap string value into a `std.collections`
+// / `std.map` map — via the raw API or the wrapper — and then freeing
+// the map must not abort.
+//
+// The codegen auto-routes a string-typed map/list value into the
+// owning variant (`map_put_string_owned`) so heap values are released
+// at `map.free`. Pre-fix the routing was gated on the value being
+// string-*typed*, not heap-*owned*: a string-typed variable holding a
+// literal (`sentinel = "1"`) was tagged owned, and `map.free` then
+// called `free()` on a `.rodata` literal — `free(): invalid pointer`.
+// Filed by the avn project (map-put-raw-rewritten-to-owned.md); avn's
+// `working_copy.wc_status` builds a tracked-path set with a dummy
+// literal value and aborted every `avn status`.
+//
+// A bare heap-tracked identifier is only *maybe* heap — its ownership
+// is the runtime `_heap_<name>` flag — so it now routes through the
+// `*_maybe_owned` dispatcher. A literal-holding variable (`_heap == 0`)
+// stays unowned; a genuinely heap variable (`_heap == 1`) is owned and
+// released once. This test exercises both, on the raw API and the
+// wrapper, and frees the maps — the run completing IS the assertion
+// (pre-fix it aborted), with value checks guarding correctness.
+
+import std.map
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== test_map_put_raw_literal_value ===")
+
+    // --- raw API, literal value (the filed crash) ---
+    m1 = map.new()
+    sentinel = "1"                       // string-typed, _heap == 0
+    map.put_raw(m1, "k", sentinel)
+    map.put_raw(m1, "k2", sentinel)      // same literal, second key
+    got1, _ = map.get(m1, "k")
+    if got1 != "1" {
+        println("  FAIL: raw+literal readback got '${got1}'")
+        exit(1)
+    }
+    map.free(m1)                         // pre-fix: free() on "1" → abort
+
+    // --- raw API, heap value ---
+    m2 = map.new()
+    heap_val = string.concat("pre", "fix")   // _heap == 1
+    map.put_raw(m2, "k", heap_val)
+    got2, _ = map.get(m2, "k")
+    if got2 != "prefix" {
+        println("  FAIL: raw+heap readback got '${got2}'")
+        exit(1)
+    }
+    map.free(m2)                         // map owns heap_val, releases once
+
+    // --- wrapper, literal value (the latent wrapper case) ---
+    m3 = map.new()
+    flag = "y"                           // string-typed, _heap == 0
+    map.put(m3, "k", flag)
+    got3, _ = map.get(m3, "k")
+    if got3 != "y" {
+        println("  FAIL: wrapper+literal readback got '${got3}'")
+        exit(1)
+    }
+    map.free(m3)
+
+    // --- wrapper, heap value ---
+    m4 = map.new()
+    heap_val2 = string.concat("on", "e")     // _heap == 1
+    map.put(m4, "k", heap_val2)
+    got4, _ = map.get(m4, "k")
+    if got4 != "one" {
+        println("  FAIL: wrapper+heap readback got '${got4}'")
+        exit(1)
+    }
+    map.free(m4)
+
+    println("  PASS: literal and heap map values, raw API and wrapper")
+    println("=== test_map_put_raw_literal_value passed ===")
+}

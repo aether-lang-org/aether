@@ -1901,6 +1901,15 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     // entry point explicitly.
     if (!gen->emit_exe) return;
 
+    /* Track `main` as the current function so body-structural queries
+     * (e.g. body_assigns_var_from_heap, used by the map/list owned-
+     * value routing) can reach `main`'s body. Restored at function end.
+     * All other `gen->current_function` consumers gate on
+     * `!gen->in_main_function` first, so a main node here is inert
+     * for them. */
+    ASTNode* prev_current_function = gen->current_function;
+    gen->current_function = main;
+
     print_line(gen, "int main(int argc, char** argv) {");
     indent(gen);
     clear_declared_vars(gen);  // Reset for main function
@@ -2043,6 +2052,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     }
     unindent(gen);
     print_line(gen, "}");
+    gen->current_function = prev_current_function;
 }
 
 void generate_program(CodeGenerator* gen, ASTNode* program) {
