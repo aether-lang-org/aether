@@ -1379,6 +1379,13 @@ void emit_closure_definitions(CodeGenerator* gen) {
             int prev_heap_count = gen->heap_string_var_count;
             gen->heap_string_vars = NULL;
             gen->heap_string_var_count = 0;
+            /* Track the closure as the current function so
+             * body-structural queries (current_fn_body_block /
+             * body_assigns_var_from_heap) resolve a value identifier
+             * against the closure's own body, not the enclosing
+             * function's. */
+            ASTNode* prev_current_function = gen->current_function;
+            gen->current_function = closure;
             // Publish env-backed captures so generate_statement routes writes
             // through _env-> instead of a local alias.
             char** prev_env = gen->current_env_captures;
@@ -1431,6 +1438,7 @@ void emit_closure_definitions(CodeGenerator* gen) {
             clear_heap_string_vars(gen);
             gen->heap_string_vars = prev_heap;
             gen->heap_string_var_count = prev_heap_count;
+            gen->current_function = prev_current_function;
             gen->in_trailing_block--;
             gen->indent_level = 0;
         }
@@ -1592,6 +1600,22 @@ static void emit_send_target(CodeGenerator* gen, ASTNode* target, const char* ca
     if (needs_intptr) fprintf(gen->output, "(intptr_t)");
     generate_expression(gen, target);
     fprintf(gen->output, ")");
+}
+
+/* The AST_BLOCK body of the function / `main` / closure currently
+ * being generated, or NULL. `gen->current_function` is the enclosing
+ * AST_FUNCTION_DEFINITION / AST_MAIN_FUNCTION / AST_CLOSURE; the body
+ * is its AST_BLOCK child. Used by the map/list owned-value routing to
+ * resolve a bare identifier's heap-ness structurally. */
+static ASTNode* current_fn_body_block(CodeGenerator* gen) {
+    if (!gen || !gen->current_function) return NULL;
+    ASTNode* fn = gen->current_function;
+    for (int i = fn->child_count - 1; i >= 0; i--) {
+        if (fn->children[i] && fn->children[i]->type == AST_BLOCK) {
+            return fn->children[i];
+        }
+    }
+    return NULL;
 }
 
 void generate_expression(CodeGenerator* gen, ASTNode* expr) {
@@ -2682,7 +2706,46 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         int expected_arg_count = is_list_shape ? 2 : 3;
                         if (expr->child_count == expected_arg_count) {
                             ASTNode* val = expr->children[val_idx];
-                            if (val && is_heap_string_expr(gen, val)) {
+                            /* Route the value into the container's
+                             * owning variant only when it is genuinely
+                             * a heap allocation the container should
+                             * free.
+                             *
+                             * For a NON-identifier expression
+                             * (`string.concat(...)`, interpolation, a
+                             * heap-returning call) `is_heap_string_expr`
+                             * is exact — it is statically a fresh
+                             * allocation.
+                             *
+                             * For a bare IDENTIFIER `is_heap_string_expr`
+                             * is too coarse: it answers "is this name
+                             * heap-TRACKED" (every assigned string
+                             * variable is), which is true even for a
+                             * variable that only ever holds a literal
+                             * (`s = "1"`). Routing such a variable into
+                             * `_string_owned` tagged a `.rodata` literal
+                             * as owned and `free()`d it at container
+                             * teardown — a crash (map-put-raw-rewritten-
+                             * to-owned.md). The runtime `_heap_<name>`
+                             * flag can't rescue this either: the value
+                             * has escaped into the container call, so
+                             * the reassignment wrapper that maintains
+                             * the flag is suppressed and it reads stale.
+                             * Resolve the identifier structurally
+                             * instead — it is genuinely heap only if
+                             * some assignment in the enclosing function
+                             * body sets it from a heap source. A
+                             * variable that is only ever literal-
+                             * assigned is left un-rewritten (the
+                             * container does not own it). */
+                            int val_is_heap;
+                            if (val && val->type == AST_IDENTIFIER && val->value) {
+                                val_is_heap = body_assigns_var_from_heap(
+                                    gen, current_fn_body_block(gen), val->value);
+                            } else {
+                                val_is_heap = val && is_heap_string_expr(gen, val);
+                            }
+                            if (val_is_heap) {
                                 if (is_wrapper) {
                                     fprintf(gen->output, "(");
                                 }

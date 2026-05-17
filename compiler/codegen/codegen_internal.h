@@ -39,6 +39,17 @@ void mark_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
  * function calls in argument position. */
 int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr);
 
+/* Returns 1 if some `AST_VARIABLE_DECLARATION` for `var_name` inside
+ * `node` assigns it from a heap-string source (`is_heap_string_expr`
+ * of the RHS). A structural "is this variable ever heap-valued"
+ * query — coarser than the runtime `_heap_<name>` flag but reliable
+ * for escaped variables, whose flag the reassignment wrapper stops
+ * maintaining. Skips nested function / closure scopes. Defined in
+ * codegen_stmt.c; used by the map/list owned-value routing in
+ * codegen_expr.c. */
+int body_assigns_var_from_heap(CodeGenerator* gen, ASTNode* node,
+                               const char* var_name);
+
 /* Escape gate for heap-string arguments: returns 1 if a callee's
  * parameter slot of the given type-kind is treated as storage (the
  * recipient may stash the pointer beyond the call). Used by the

@@ -799,8 +799,8 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
  * Skips nested function / closure scopes (their assignments are in
  * a different lexical frame). Stops at the first heap-source
  * assignment to `var_name`. */
-static int body_assigns_var_from_heap(CodeGenerator* gen, ASTNode* node,
-                                       const char* var_name) {
+int body_assigns_var_from_heap(CodeGenerator* gen, ASTNode* node,
+                               const char* var_name) {
     if (!node || !var_name) return 0;
     if (node->type == AST_FUNCTION_DEFINITION ||
         node->type == AST_BUILDER_FUNCTION ||

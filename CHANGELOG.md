@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Putting a non-heap string value into a `std.collections` / `std.map` map (or `std.list`) no longer crashes at container teardown** (`compiler/codegen/codegen_expr.c`, `compiler/codegen/codegen.c`, `compiler/codegen/codegen_stmt.c`, `tests/regression/test_map_put_raw_literal_value.ae`). The codegen auto-routes a string value into the owning variant (`map_put_string_owned` / `list_add_string_owned`) so a heap value is released at `map.free` — issue #467. The routing was gated on `is_heap_string_expr`, which for a bare identifier answers "is this name heap-*tracked*" — true for *every* assigned string variable, including one that only ever holds a literal (`sentinel = "1"`). Such a variable was tagged owned, and `map.free` then `free()`d a `.rodata` literal: `free(): invalid pointer` / `double free or corruption`. It hit both the raw API (`map_put_raw`) and the `map.put` wrapper, and the runtime `_heap_<name>` flag could not rescue it — a map/list value has escaped into the container call, so the reassignment wrapper that maintains the flag is suppressed and it reads stale. Filed by the avn project (`map-put-raw-rewritten-to-owned.md`); avn's `working_copy.wc_status` builds a tracked-path set with a dummy literal value and aborted every `avn status`. The owned-routing now resolves a bare identifier *structurally* — via `body_assigns_var_from_heap`, which is reliable for escaped variables — and only routes it to the owning variant when some assignment in the enclosing function body sets it from a heap source. A literal-only variable stays on the non-owning path; a genuinely heap variable still routes to owned, so #467's leak fix is preserved. Direct heap expressions (`string.concat(...)`, interpolation) are unaffected — they were always exact.
+
 ## [0.168.0]
 
 ### Fixed
