@@ -1,0 +1,179 @@
+// Regression: std.mem bulk + endian helpers
+// (mem.copy/move/compare/set + get/set_u{16,32,64}_{le,be}).
+//
+// Added per docs/redis-porting-language-gaps.md §P2 — the Redis
+// port had to hand-roll byte loops or reach for libc shims for
+// every bulk move and endian load/store. This test exercises:
+//
+//   1. mem.copy / mem.move / mem.compare / mem.set — including
+//      mem.move over an overlapping range, mem.compare for equal/
+//      unequal/early-mismatch buffers, and mem.set as a fill.
+//   2. mem.get_u16_le / set_u16_le / get_u16_be / set_u16_be —
+//      exact byte expectations on a known buffer.
+//   3. mem.get_u32_le / set_u32_le / get_u32_be / set_u32_be —
+//      including the full 32-bit range (top-bit-set values).
+//   4. mem.get_u64_le / set_u64_le / get_u64_be / set_u64_be —
+//      including a value with bits set in every byte.
+
+import std.mem
+
+extern malloc(sz: long) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+main() {
+    println("=== test_std_mem_bulk_endian ===")
+
+    // ----------------------------------------------------------
+    // mem.set + mem.compare
+    // ----------------------------------------------------------
+    buf_a = malloc(16)
+    buf_b = malloc(16)
+    mem.set(buf_a, 0xAB, 16)
+    mem.set(buf_b, 0xAB, 16)
+    if mem.compare(buf_a, buf_b, 16) != 0 {
+        println("  FAIL: equal-buffers mem.compare != 0")
+        exit(1)
+    }
+    // Single byte diff at index 7 — mem.compare returns non-zero.
+    mem.set_byte(buf_b, 7, 0xCD)
+    if mem.compare(buf_a, buf_b, 16) == 0 {
+        println("  FAIL: unequal-buffers mem.compare == 0")
+        exit(1)
+    }
+    // Compare just the matching prefix — must still be 0.
+    if mem.compare(buf_a, buf_b, 7) != 0 {
+        println("  FAIL: prefix mem.compare != 0")
+        exit(1)
+    }
+
+    // ----------------------------------------------------------
+    // mem.copy — straight bytes.
+    // ----------------------------------------------------------
+    src = malloc(8)
+    dst = malloc(8)
+    i = 0
+    while i < 8 {
+        mem.set_byte(src, i, i + 0x10)
+        i = i + 1
+    }
+    mem.copy(dst, src, 8)
+    i = 0
+    while i < 8 {
+        if mem.get_byte(dst, i) != i + 0x10 {
+            println("  FAIL: mem.copy byte ${i} mismatch")
+            exit(1)
+        }
+        i = i + 1
+    }
+
+    // ----------------------------------------------------------
+    // mem.move — overlapping ranges. Slide a 6-byte window
+    // forward by 2 inside one 12-byte buffer; the 4-byte overlap
+    // must NOT be clobbered.
+    // ----------------------------------------------------------
+    ovl = malloc(12)
+    i = 0
+    while i < 12 {
+        mem.set_byte(ovl, i, i)
+        i = i + 1
+    }
+    // ovl[2..7] = ovl[0..5]
+    p_dst_ovl = ovl + 2
+    mem.move(p_dst_ovl, ovl, 6)
+    // After move: ovl[0..1] unchanged (0,1); ovl[2..7] = 0,1,2,3,4,5;
+    // ovl[8..11] unchanged (8,9,10,11).
+    if mem.get_byte(ovl, 0) != 0 { println("  FAIL: ovl[0]"); exit(1) }
+    if mem.get_byte(ovl, 1) != 1 { println("  FAIL: ovl[1]"); exit(1) }
+    if mem.get_byte(ovl, 2) != 0 { println("  FAIL: ovl[2]"); exit(1) }
+    if mem.get_byte(ovl, 3) != 1 { println("  FAIL: ovl[3]"); exit(1) }
+    if mem.get_byte(ovl, 4) != 2 { println("  FAIL: ovl[4]"); exit(1) }
+    if mem.get_byte(ovl, 5) != 3 { println("  FAIL: ovl[5]"); exit(1) }
+    if mem.get_byte(ovl, 6) != 4 { println("  FAIL: ovl[6]"); exit(1) }
+    if mem.get_byte(ovl, 7) != 5 { println("  FAIL: ovl[7]"); exit(1) }
+    if mem.get_byte(ovl, 8) != 8 { println("  FAIL: ovl[8]"); exit(1) }
+
+    free(buf_a)
+    free(buf_b)
+    free(src)
+    free(dst)
+    free(ovl)
+
+    // ----------------------------------------------------------
+    // 16-bit endian helpers. 0x1234 → LE byte sequence 0x34, 0x12;
+    // BE byte sequence 0x12, 0x34.
+    // ----------------------------------------------------------
+    b = malloc(16)
+    mem.set(b, 0, 16)
+    mem.set_u16_le(b, 0, 0x1234)
+    if mem.get_byte(b, 0) != 0x34 { println("  FAIL: u16_le[0]"); exit(1) }
+    if mem.get_byte(b, 1) != 0x12 { println("  FAIL: u16_le[1]"); exit(1) }
+    if mem.get_u16_le(b, 0) != 0x1234 { println("  FAIL: get_u16_le"); exit(1) }
+
+    mem.set_u16_be(b, 2, 0x1234)
+    if mem.get_byte(b, 2) != 0x12 { println("  FAIL: u16_be[0]"); exit(1) }
+    if mem.get_byte(b, 3) != 0x34 { println("  FAIL: u16_be[1]"); exit(1) }
+    if mem.get_u16_be(b, 2) != 0x1234 { println("  FAIL: get_u16_be"); exit(1) }
+
+    // Top-bit-set 16-bit value — get_u16_le returns int; 0xFFFF
+    // fits in Aether int without sign-extension since the bit
+    // pattern is masked at byte load time.
+    mem.set_u16_le(b, 4, 0xFFFF)
+    if mem.get_byte(b, 4) != 0xFF { println("  FAIL: u16_le full ff[0]"); exit(1) }
+    if mem.get_byte(b, 5) != 0xFF { println("  FAIL: u16_le full ff[1]"); exit(1) }
+    if mem.get_u16_le(b, 4) != 0xFFFF { println("  FAIL: get_u16_le full ff"); exit(1) }
+
+    // ----------------------------------------------------------
+    // 32-bit endian helpers. 0xDEADBEEF — LE → EF, BE, AD, DE;
+    // BE → DE, AD, BE, EF.
+    // ----------------------------------------------------------
+    mem.set(b, 0, 16)
+    long val32 = 0xDEADBEEF
+    mem.set_u32_le(b, 0, val32)
+    if mem.get_byte(b, 0) != 0xEF { println("  FAIL: u32_le[0]"); exit(1) }
+    if mem.get_byte(b, 1) != 0xBE { println("  FAIL: u32_le[1]"); exit(1) }
+    if mem.get_byte(b, 2) != 0xAD { println("  FAIL: u32_le[2]"); exit(1) }
+    if mem.get_byte(b, 3) != 0xDE { println("  FAIL: u32_le[3]"); exit(1) }
+    long readback = mem.get_u32_le(b, 0)
+    if readback != 0xDEADBEEF { println("  FAIL: get_u32_le full"); exit(1) }
+
+    mem.set_u32_be(b, 4, val32)
+    if mem.get_byte(b, 4) != 0xDE { println("  FAIL: u32_be[0]"); exit(1) }
+    if mem.get_byte(b, 5) != 0xAD { println("  FAIL: u32_be[1]"); exit(1) }
+    if mem.get_byte(b, 6) != 0xBE { println("  FAIL: u32_be[2]"); exit(1) }
+    if mem.get_byte(b, 7) != 0xEF { println("  FAIL: u32_be[3]"); exit(1) }
+    long readback_be = mem.get_u32_be(b, 4)
+    if readback_be != 0xDEADBEEF { println("  FAIL: get_u32_be full"); exit(1) }
+
+    // ----------------------------------------------------------
+    // 64-bit endian helpers — 0x0123456789ABCDEF, bytes set in
+    // every position.
+    // ----------------------------------------------------------
+    mem.set(b, 0, 16)
+    long val64 = 0x0123456789ABCDEF
+    mem.set_u64_le(b, 0, val64)
+    if mem.get_byte(b, 0) != 0xEF { println("  FAIL: u64_le[0]"); exit(1) }
+    if mem.get_byte(b, 1) != 0xCD { println("  FAIL: u64_le[1]"); exit(1) }
+    if mem.get_byte(b, 2) != 0xAB { println("  FAIL: u64_le[2]"); exit(1) }
+    if mem.get_byte(b, 3) != 0x89 { println("  FAIL: u64_le[3]"); exit(1) }
+    if mem.get_byte(b, 4) != 0x67 { println("  FAIL: u64_le[4]"); exit(1) }
+    if mem.get_byte(b, 5) != 0x45 { println("  FAIL: u64_le[5]"); exit(1) }
+    if mem.get_byte(b, 6) != 0x23 { println("  FAIL: u64_le[6]"); exit(1) }
+    if mem.get_byte(b, 7) != 0x01 { println("  FAIL: u64_le[7]"); exit(1) }
+    if mem.get_u64_le(b, 0) != val64 { println("  FAIL: get_u64_le"); exit(1) }
+
+    mem.set_u64_be(b, 8, val64)
+    if mem.get_byte(b, 8)  != 0x01 { println("  FAIL: u64_be[0]"); exit(1) }
+    if mem.get_byte(b, 9)  != 0x23 { println("  FAIL: u64_be[1]"); exit(1) }
+    if mem.get_byte(b, 10) != 0x45 { println("  FAIL: u64_be[2]"); exit(1) }
+    if mem.get_byte(b, 11) != 0x67 { println("  FAIL: u64_be[3]"); exit(1) }
+    if mem.get_byte(b, 12) != 0x89 { println("  FAIL: u64_be[4]"); exit(1) }
+    if mem.get_byte(b, 13) != 0xAB { println("  FAIL: u64_be[5]"); exit(1) }
+    if mem.get_byte(b, 14) != 0xCD { println("  FAIL: u64_be[6]"); exit(1) }
+    if mem.get_byte(b, 15) != 0xEF { println("  FAIL: u64_be[7]"); exit(1) }
+    if mem.get_u64_be(b, 8) != val64 { println("  FAIL: get_u64_be"); exit(1) }
+
+    free(b)
+
+    println("=== test_std_mem_bulk_endian passed ===")
+}

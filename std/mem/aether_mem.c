@@ -366,3 +366,162 @@ int64_t aether_mem_ptr_to_long(void* p) {
 void* aether_mem_long_to_ptr(int64_t addr) {
     return (void*)(uintptr_t)addr;
 }
+
+/* Bulk operations — mem.copy / mem.move / mem.compare / mem.set.
+ *
+ * Added per docs/redis-porting-language-gaps.md §P2: the Redis port
+ * had to reach for libc memcpy/memmove/memcmp/memset via project-
+ * specific shims, or hand-roll byte loops in Aether (correct but
+ * noisy and slow). These wrappers do exactly what their libc cousins
+ * do, with the same arg order and same return-value conventions.
+ * Length is `size_t` on the C side, lowered from Aether `long` —
+ * negative lengths are passed through to libc, which is undefined
+ * behaviour (same contract as calling memcpy with a negative size
+ * directly).
+ *
+ * NULL pointer is defended against (no-op for void-returning;
+ * mem.compare returns 0 on either-NULL — distinguishable from "equal
+ * bytes" only by the caller checking pointers themselves; mem.set
+ * returns NULL).
+ *
+ * These are the bulk primitives. They differ from std.bytes (which
+ * owns its buffer) and from get/set_byte (which moves one byte at a
+ * time): mem.copy etc. operate on caller-owned buffers in libc-grade
+ * bulk. */
+void* aether_mem_copy(void* dst, const void* src, int64_t n) {
+    if (!dst || !src) return dst;
+    return __builtin_memcpy(dst, src, (size_t)n);
+}
+void* aether_mem_move(void* dst, const void* src, int64_t n) {
+    if (!dst || !src) return dst;
+    return __builtin_memmove(dst, src, (size_t)n);
+}
+int aether_mem_compare(const void* a, const void* b, int64_t n) {
+    if (!a || !b) return 0;
+    return __builtin_memcmp(a, b, (size_t)n);
+}
+void* aether_mem_set_bulk(void* dst, int value, int64_t n) {
+    if (!dst) return dst;
+    return __builtin_memset(dst, value, (size_t)n);
+}
+
+/* Endian-aware 16/32/64-bit load/store at a byte offset.
+ *
+ * Unaligned-safe — each read/write goes through __builtin_memcpy,
+ * so the underlying byte stream can be at any alignment. The shift
+ * pattern is the canonical "build the integer from bytes in N-byte
+ * order"; modern compilers fold each function down to a single
+ * load+bswap (or single load on a matching-endian target).
+ *
+ * `_le` = little-endian (low byte first); `_be` = big-endian (high
+ * byte first). Names match the Redis usage: ziplist/listpack/RDB
+ * write little-endian; network frames are big-endian.
+ *
+ * Offset is bytes from `p` (same convention as the rest of std.mem);
+ * the slot must have at least 2/4/8 bytes available. NULL `p` is
+ * defended for the loaders (return 0) and the stores (no-op). */
+int aether_mem_get_u16_le(const void* p, int offset) {
+    if (!p) return 0;
+    const uint8_t* b = (const uint8_t*)p + offset;
+    return ((int)b[0]) | ((int)b[1] << 8);
+}
+int aether_mem_get_u16_be(const void* p, int offset) {
+    if (!p) return 0;
+    const uint8_t* b = (const uint8_t*)p + offset;
+    return ((int)b[0] << 8) | ((int)b[1]);
+}
+int aether_mem_set_u16_le(void* p, int offset, int value) {
+    if (!p) return 0;
+    uint8_t* b = (uint8_t*)p + offset;
+    b[0] = (uint8_t)(value & 0xff);
+    b[1] = (uint8_t)((value >> 8) & 0xff);
+    return 1;
+}
+int aether_mem_set_u16_be(void* p, int offset, int value) {
+    if (!p) return 0;
+    uint8_t* b = (uint8_t*)p + offset;
+    b[0] = (uint8_t)((value >> 8) & 0xff);
+    b[1] = (uint8_t)(value & 0xff);
+    return 1;
+}
+
+/* 32-bit return is `int64_t` so the full 0..0xFFFFFFFF range is
+ * representable (Aether's `int` is 32-bit signed; bit 31 set would
+ * otherwise sign-extend). Callers narrowing to `int` get a value
+ * that may look negative for top-bit-set inputs — that matches the
+ * direct C behaviour of `int32_t = (int32_t)u32`. */
+int64_t aether_mem_get_u32_le(const void* p, int offset) {
+    if (!p) return 0;
+    const uint8_t* b = (const uint8_t*)p + offset;
+    return ((int64_t)b[0])        |
+           ((int64_t)b[1] << 8)   |
+           ((int64_t)b[2] << 16)  |
+           ((int64_t)b[3] << 24);
+}
+int64_t aether_mem_get_u32_be(const void* p, int offset) {
+    if (!p) return 0;
+    const uint8_t* b = (const uint8_t*)p + offset;
+    return ((int64_t)b[0] << 24)  |
+           ((int64_t)b[1] << 16)  |
+           ((int64_t)b[2] << 8)   |
+           ((int64_t)b[3]);
+}
+int aether_mem_set_u32_le(void* p, int offset, int64_t value) {
+    if (!p) return 0;
+    uint8_t* b = (uint8_t*)p + offset;
+    b[0] = (uint8_t)(value & 0xff);
+    b[1] = (uint8_t)((value >> 8) & 0xff);
+    b[2] = (uint8_t)((value >> 16) & 0xff);
+    b[3] = (uint8_t)((value >> 24) & 0xff);
+    return 1;
+}
+int aether_mem_set_u32_be(void* p, int offset, int64_t value) {
+    if (!p) return 0;
+    uint8_t* b = (uint8_t*)p + offset;
+    b[0] = (uint8_t)((value >> 24) & 0xff);
+    b[1] = (uint8_t)((value >> 16) & 0xff);
+    b[2] = (uint8_t)((value >> 8) & 0xff);
+    b[3] = (uint8_t)(value & 0xff);
+    return 1;
+}
+
+int64_t aether_mem_get_u64_le(const void* p, int offset) {
+    if (!p) return 0;
+    const uint8_t* b = (const uint8_t*)p + offset;
+    return ((int64_t)b[0])        |
+           ((int64_t)b[1] << 8)   |
+           ((int64_t)b[2] << 16)  |
+           ((int64_t)b[3] << 24)  |
+           ((int64_t)b[4] << 32)  |
+           ((int64_t)b[5] << 40)  |
+           ((int64_t)b[6] << 48)  |
+           ((int64_t)b[7] << 56);
+}
+int64_t aether_mem_get_u64_be(const void* p, int offset) {
+    if (!p) return 0;
+    const uint8_t* b = (const uint8_t*)p + offset;
+    return ((int64_t)b[0] << 56)  |
+           ((int64_t)b[1] << 48)  |
+           ((int64_t)b[2] << 40)  |
+           ((int64_t)b[3] << 32)  |
+           ((int64_t)b[4] << 24)  |
+           ((int64_t)b[5] << 16)  |
+           ((int64_t)b[6] << 8)   |
+           ((int64_t)b[7]);
+}
+int aether_mem_set_u64_le(void* p, int offset, int64_t value) {
+    if (!p) return 0;
+    uint8_t* b = (uint8_t*)p + offset;
+    for (int i = 0; i < 8; i++) {
+        b[i] = (uint8_t)((value >> (i * 8)) & 0xff);
+    }
+    return 1;
+}
+int aether_mem_set_u64_be(void* p, int offset, int64_t value) {
+    if (!p) return 0;
+    uint8_t* b = (uint8_t*)p + offset;
+    for (int i = 0; i < 8; i++) {
+        b[7 - i] = (uint8_t)((value >> (i * 8)) & 0xff);
+    }
+    return 1;
+}

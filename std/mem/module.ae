@@ -44,6 +44,13 @@ exports (
     aether_mem_clz32, aether_mem_clz64,
     aether_mem_udiv64_32,
     aether_mem_call_fn3_int, aether_mem_call_fn3_void,
+    aether_mem_copy, aether_mem_move, aether_mem_compare, aether_mem_set_bulk,
+    aether_mem_get_u16_le, aether_mem_get_u16_be,
+    aether_mem_set_u16_le, aether_mem_set_u16_be,
+    aether_mem_get_u32_le, aether_mem_get_u32_be,
+    aether_mem_set_u32_le, aether_mem_set_u32_be,
+    aether_mem_get_u64_le, aether_mem_get_u64_be,
+    aether_mem_set_u64_le, aether_mem_set_u64_be,
     get_byte, set_byte, get_ptr, set_ptr,
     get_int, set_int,
     get_long, set_long,
@@ -54,7 +61,11 @@ exports (
     bits_of_float, float_from_bits,
     clz32, clz64,
     udiv64_32,
-    call_fn3_int, call_fn3_void
+    call_fn3_int, call_fn3_void,
+    copy, move, compare, set,
+    get_u16_le, get_u16_be, set_u16_le, set_u16_be,
+    get_u32_le, get_u32_be, set_u32_le, set_u32_be,
+    get_u64_le, get_u64_be, set_u64_le, set_u64_be
 )
 
 // Read unsigned byte at offset `i` from raw pointer `p`. Returns
@@ -221,6 +232,39 @@ extern aether_mem_ptr_to_long(p: ptr) -> long
 // valid pointer (same contract as POSIX read/write into a buffer).
 extern aether_mem_long_to_ptr(addr: long) -> ptr
 
+// Bulk operations — `mem.copy` / `mem.move` / `mem.compare` /
+// `mem.set`. These map directly onto libc memcpy / memmove / memcmp
+// / memset; length is a long (lowered to size_t on the C side).
+// Added per docs/redis-porting-language-gaps.md §P2; the Redis port
+// had to hand-roll byte loops or reach for libc shims for every
+// bulk move/compare.
+extern aether_mem_copy(dst: ptr, src: ptr, n: long) -> ptr
+extern aether_mem_move(dst: ptr, src: ptr, n: long) -> ptr
+extern aether_mem_compare(a: ptr, b: ptr, n: long) -> int
+extern aether_mem_set_bulk(dst: ptr, value: int, n: long) -> ptr
+
+// Endian-aware 16/32/64 load/store at a byte offset. Unaligned-safe
+// (each access uses byte-by-byte composition). `_le` is little-
+// endian (low byte first); `_be` is big-endian.
+//
+// 32-bit and 64-bit loads return `long` so the full unsigned range
+// is representable — narrowing to Aether `int` truncates the same
+// way C `(int32_t)u32` does.
+extern aether_mem_get_u16_le(p: ptr, offset: int) -> int
+extern aether_mem_get_u16_be(p: ptr, offset: int) -> int
+extern aether_mem_set_u16_le(p: ptr, offset: int, value: int) -> int
+extern aether_mem_set_u16_be(p: ptr, offset: int, value: int) -> int
+
+extern aether_mem_get_u32_le(p: ptr, offset: int) -> long
+extern aether_mem_get_u32_be(p: ptr, offset: int) -> long
+extern aether_mem_set_u32_le(p: ptr, offset: int, value: long) -> int
+extern aether_mem_set_u32_be(p: ptr, offset: int, value: long) -> int
+
+extern aether_mem_get_u64_le(p: ptr, offset: int) -> long
+extern aether_mem_get_u64_be(p: ptr, offset: int) -> long
+extern aether_mem_set_u64_le(p: ptr, offset: int, value: long) -> int
+extern aether_mem_set_u64_be(p: ptr, offset: int, value: long) -> int
+
 // Aether-side wrappers — call shape consistent with the rest of
 // std.* (`mem.get_byte(p, 0)`, `mem.set_byte(p, 0, 0xff)`).
 get_byte(p: ptr, i: int) -> int { return aether_mem_get_byte(p, i) }
@@ -255,3 +299,25 @@ call_fn3_void(fn: ptr, a: long, b: long, opaque: ptr) { aether_mem_call_fn3_void
 call_fn2_void(fn: ptr, a: ptr, b: ptr) { aether_mem_call_fn2_void(fn, a, b) }
 ptr_to_long(p: ptr) -> long { return aether_mem_ptr_to_long(p) }
 long_to_ptr(addr: long) -> ptr { return aether_mem_long_to_ptr(addr) }
+
+// Bulk wrappers — call shape `mem.copy(dst, src, n)`, etc.
+// `set` mirrors libc memset (NOT to be confused with `set_byte` /
+// `set_int` etc, which write a single value at an offset).
+copy(dst: ptr, src: ptr, n: long) -> ptr { return aether_mem_copy(dst, src, n) }
+move(dst: ptr, src: ptr, n: long) -> ptr { return aether_mem_move(dst, src, n) }
+compare(a: ptr, b: ptr, n: long) -> int { return aether_mem_compare(a, b, n) }
+set(dst: ptr, value: int, n: long) -> ptr { return aether_mem_set_bulk(dst, value, n) }
+
+// Endian-aware wrappers.
+get_u16_le(p: ptr, offset: int) -> int { return aether_mem_get_u16_le(p, offset) }
+get_u16_be(p: ptr, offset: int) -> int { return aether_mem_get_u16_be(p, offset) }
+set_u16_le(p: ptr, offset: int, value: int) -> int { return aether_mem_set_u16_le(p, offset, value) }
+set_u16_be(p: ptr, offset: int, value: int) -> int { return aether_mem_set_u16_be(p, offset, value) }
+get_u32_le(p: ptr, offset: int) -> long { return aether_mem_get_u32_le(p, offset) }
+get_u32_be(p: ptr, offset: int) -> long { return aether_mem_get_u32_be(p, offset) }
+set_u32_le(p: ptr, offset: int, value: long) -> int { return aether_mem_set_u32_le(p, offset, value) }
+set_u32_be(p: ptr, offset: int, value: long) -> int { return aether_mem_set_u32_be(p, offset, value) }
+get_u64_le(p: ptr, offset: int) -> long { return aether_mem_get_u64_le(p, offset) }
+get_u64_be(p: ptr, offset: int) -> long { return aether_mem_get_u64_be(p, offset) }
+set_u64_le(p: ptr, offset: int, value: long) -> int { return aether_mem_set_u64_le(p, offset, value) }
+set_u64_be(p: ptr, offset: int, value: long) -> int { return aether_mem_set_u64_be(p, offset, value) }
