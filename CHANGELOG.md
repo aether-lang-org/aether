@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`extern struct` accepts `union { ... }` and nested `struct { ... }` fields** (`compiler/parser/parser.c`, `compiler/parser/lexer.c`, `compiler/parser/tokens.h`, `compiler/ast.h`, `compiler/ast.c`, `compiler/codegen/codegen_func.c`, `compiler/analysis/typechecker.c`, `tests/regression/test_extern_struct_union.ae`). C structs that span an FFI boundary often contain unions — the mquickjs `JSPropDef` has six variants overlayed on the same 32-byte tail, and every Aether port of a C tagged-union shape (Lua `TValue`, JSON value, etc.) hits the same wall. Before this, porters declared one `u_first_ptr: ptr` field at the union's start offset and reached into the rest with `mem.get_byte(d, 16)` / `mem.get_float64(d, 16)` / `mem.get_ptr(d, 24)` — field names and union shape both lost. Surface: `u: union { f64: float, str: ptr, func: struct { length: byte, magic: ptr, ... } }`. Access via dotted notation: `d.u.f64` or `d.u.func.length`. C lowering emits a real `union { ... }` (and nested `struct { ... }` where present), so layout matches what any C author would write by hand. `union` is now a reserved keyword — only meaningful inside `extern struct`, since pure-Aether structs disallow it (would undermine memory safety). The typechecker carries a borrowed `compound_node` pointer on `TYPE_STRUCT` types representing anonymous compounds so chained access (`expr.u.func.length`) resolves without a global lookup.
+
+- **`expr as T[]` — typed array view over a raw pointer** (`compiler/parser/parser.c`, `compiler/ast.h`, `compiler/codegen/codegen_expr.c`, `compiler/analysis/typechecker.c`, `tests/regression/test_extern_ptr_as_array.ae`). The `as` family already covers `as *StructName` (struct overlay) and `as fn(T1, T2) -> R` (function-pointer view). The third axis — typed element-pointer view — was missing, forcing every malloc'd typed buffer in a port to be indexed via `mem.set_int(buf, 4*i, v)` boilerplate. Now: `raw = malloc(4 * n); arr = raw as int[]; arr[i] = v`. Lowers to `((int*)(raw))[i] = v`, which C scales by `sizeof(T)` automatically — no offset arithmetic at user sites. No allocation, no bounds check; same trust-the-author posture as `as *T`. Covered element types: `int`, `byte`, `long`, `ptr`, `float`. The `mquickjs_build_define_props` function in the mquickjs port allocates three int-arrays (`ident_tab`, `hash_table`, `prop_hash`); each is a candidate site for this cast on the next pass.
+
 ## [0.172.0]
 
 ### Fixed

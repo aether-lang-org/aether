@@ -618,6 +618,82 @@ main() {
 
 The `as` keyword is the same token already used for module-import aliasing (`import std.cryptography as crypto`). The two parses don't collide because import-aliasing is recognised only inside `import` statements; expression-level `as *T` is recognised only as a postfix operator on expressions. Both forms continue to work in the same source file.
 
+### Typed array view — `expr as T[]`
+
+The third axis of the `as` family (after `*StructName` and `fn(...) -> R`). Views a raw `ptr` as a typed C element-pointer so subscript access scales by `sizeof(T)` automatically. Use this whenever the underlying storage is a `malloc`'d typed buffer and you'd otherwise be writing `mem.set_int(buf, 4*i, v)` boilerplate.
+
+```aether
+extern malloc(sz: long) -> ptr
+extern free(p: ptr)
+
+main() {
+    raw = malloc(4 * 10)
+    arr = raw as int[]         // ((int*)(raw))
+    arr[3] = 42                 // ((int*)(raw))[3] = 42  → byte offset 12
+    v = arr[3]                  // ((int*)(raw))[3]
+    free(raw)
+}
+```
+
+**What you get**
+
+- C lowering: `arr = raw as int[]` emits `int* arr = ((int*)(raw));`. Subsequent `arr[i]` emits `arr[i]` which C scales by `sizeof(int) == 4`.
+- Covered element types: `int`, `long`, `byte`, `ptr`, `float` (and struct types, though for those you usually want `*Struct` member-access instead).
+- The `[]` syntax (no size) reads as "I don't know the bound — trust me to index inside it." A fixed-size `as int[10]` parses too but adds no extra checking; useful only as documentation.
+- Like `as *StructName`, this is a **view**. It does NOT allocate, free, or bounds-check. The buffer's lifetime stays with whoever produced the original `ptr`.
+- Aliasing: two views of the same memory alias each other. `arr = raw as int[]` and `arr_b = raw as byte[]` see the same bytes — that's the point.
+
+**When to reach for it**
+
+- Porting C code that uses `int *table = malloc(sizeof(int) * n); table[i] = ...` shapes. The C readability is preserved without the `mem.*` arithmetic.
+- Hot loops where the offset arithmetic was hand-rolled and likely to have a one-off bug.
+
+**When NOT to reach for it**
+
+- For Aether-owned data; prefer fixed-size stack arrays (`int[5] arr`) or the higher-level collections in `std.collections`. The `as T[]` cast is the systems-programming escape hatch, not the everyday array.
+- When you want bounds-checked storage. There is none here.
+
+### `extern struct` unions — `union { ... }` and nested `struct { ... }`
+
+C structs that span an FFI boundary often contain unions. mquickjs's `JSPropDef` has six variants overlayed on the same 32-byte tail; every tagged-union C shape (Lua `TValue`, JSON value, ...) hits the same problem.
+
+```aether
+extern struct JSPropDef {
+    def_type: int          //  0
+    name: ptr              //  8
+    u: union {             // 16
+        f64: float        //   16  — variant: JS_DEF_PROP_DOUBLE
+        str: ptr          //   16  — variant: JS_DEF_PROP_STRING
+        class1: ptr       //   16  — variant: JS_DEF_CLASS
+        func: struct {
+            length: byte  //   16  — start of variant: JS_DEF_CFUNC
+            magic: ptr    //   24
+            cproto_name: ptr //  32
+            func_name: ptr   //  40
+        }
+        getset: struct {
+            magic: ptr     //   16  — start of variant: JS_DEF_CGETSET
+            cproto_name: ptr //  24
+            get_func_name: ptr //  32
+            set_func_name: ptr //  40
+        }
+    }
+}
+```
+
+Access via dotted notation: `d.u.f64`, `d.u.func.length`, `d.u.getset.get_func_name`. Pointer-overlay access reads the same: `(raw as *JSPropDef).u.f64`.
+
+**What you get**
+
+- C lowering emits a real `union { ... }` (and nested `struct { ... }` where present) — the same C body any hand-rolled FFI declaration would write.
+- The compiler trusts the user's offsets; it does not synthesize the C layout from anything other than the literal field declarations.
+- Heap-string ownership tracking (the `_heap_<name>` companion ints emitted for `string`-typed fields) does NOT descend into unions — use `ptr`-typed fields instead. Mixed string-and-union ownership is poorly defined in C; declining to support it keeps the boundary clean.
+
+**Where it's not allowed**
+
+- Pure Aether structs (without the `extern` annotation) reject `union { ... }` at parse time — Aether's normal value semantics aren't compatible with overlapping fields.
+- `union` is now a reserved keyword and can't be used as an identifier name anywhere.
+
 ### Aether-side string-builder return types
 
 Aether-side primitives that build strings split into two camps:

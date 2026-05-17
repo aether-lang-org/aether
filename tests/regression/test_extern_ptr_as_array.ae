@@ -1,0 +1,87 @@
+// Regression: `expr as T[]` — view a raw `ptr` as a typed array.
+//
+// Before this, every malloc'd typed buffer was indexed via
+// `mem.set_int(buf, 4*i, v)` / `mem.get_int(buf, 4*i)` boilerplate.
+// That's not just ugly — every offset multiplication is a place to
+// silently corrupt the wrong slot when porting from C, where the
+// type system scales the index automatically.
+//
+// `raw as int[]` emits `((int*)(raw))` and the subsequent `arr[i]`
+// becomes `((int*)(raw))[i]`, which C scales by `sizeof(int) == 4`.
+// Same systems-programming escape hatch as `as *StructName`, but
+// at buffer-element granularity. No allocation, no bounds check —
+// the user is asserting the buffer is sized correctly.
+//
+// Covers int, byte, ptr, and long element types — the four shapes
+// mquickjs-style ports actually need.
+
+import std.mem
+extern malloc(sz: long) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+main() {
+    println("=== test_extern_ptr_as_array ===")
+
+    // ----------------------------------------------------------
+    // int[] — 4-byte slots. `arr[i]` reads/writes 4 bytes at i*4.
+    // ----------------------------------------------------------
+    raw_int = malloc(20)
+    ints = raw_int as int[]
+    i = 0
+    while i < 5 {
+        ints[i] = i * 100
+        i = i + 1
+    }
+    if ints[0] != 0   { println("  FAIL: int[0]"); exit(1) }
+    if ints[4] != 400 { println("  FAIL: int[4]"); exit(1) }
+    // Cross-check via mem.* to confirm the byte layout — ints[1] at
+    // offset 4 should equal mem.get_int(raw_int, 4).
+    if mem.get_int(raw_int, 4) != 100 {
+        println("  FAIL: int[1] layout via mem.*")
+        exit(1)
+    }
+    free(raw_int)
+
+    // ----------------------------------------------------------
+    // byte[] — 1-byte slots.
+    // ----------------------------------------------------------
+    raw_b = malloc(4)
+    bytes = raw_b as byte[]
+    bytes[0] = 0xAB
+    bytes[1] = 0xCD
+    bytes[2] = 0xEF
+    bytes[3] = 0x12
+    if bytes[0] != 0xAB { println("  FAIL: byte[0]"); exit(1) }
+    if bytes[3] != 0x12 { println("  FAIL: byte[3]"); exit(1) }
+    free(raw_b)
+
+    // ----------------------------------------------------------
+    // ptr[] — 8-byte slots on 64-bit, a table of pointers.
+    // ----------------------------------------------------------
+    raw_p = malloc(16)
+    table = raw_p as ptr[]
+    sentinel_a = malloc(4)
+    sentinel_b = malloc(4)
+    table[0] = sentinel_a
+    table[1] = sentinel_b
+    if table[0] != sentinel_a { println("  FAIL: ptr[0]"); exit(1) }
+    if table[1] != sentinel_b { println("  FAIL: ptr[1]"); exit(1) }
+    free(sentinel_a)
+    free(sentinel_b)
+    free(raw_p)
+
+    // ----------------------------------------------------------
+    // long[] — 8-byte signed slots. Covers values with bit 31 set
+    // (where `int` would have truncated).
+    // ----------------------------------------------------------
+    raw_l = malloc(16)
+    longs = raw_l as long[]
+    longs[0] = 0x7FFFFFFF_FFFFFFFF
+    longs[1] = 0x0000_0001_0000_0000
+    if longs[0] != 0x7FFFFFFF_FFFFFFFF { println("  FAIL: long[0]"); exit(1) }
+    if longs[1] != 0x0000_0001_0000_0000 { println("  FAIL: long[1]"); exit(1) }
+    free(raw_l)
+
+    println("=== test_extern_ptr_as_array passed ===")
+}

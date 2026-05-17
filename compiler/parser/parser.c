@@ -1062,7 +1062,28 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                 expr = cast;
                 continue;
             }
-            if (!expect_token(parser, TOKEN_MULTIPLY)) return NULL;
+            if (!(next && next->type == TOKEN_MULTIPLY)) {
+                // Not `as *T` — try `as T[]` (typed-array view cast).
+                // Reuse parse_type to consume the type, then assert the
+                // result is a TYPE_ARRAY. This piggy-backs on the
+                // existing `[N]` / `[]` parsing in parse_type.
+                Type* arr_type = parse_type(parser);
+                if (!arr_type) return NULL;
+                if (arr_type->kind != TYPE_ARRAY || !arr_type->element_type) {
+                    parser_error(parser,
+                        "Expected `*StructName`, `fn(...) -> R`, or `T[]` after `as`");
+                    free_type(arr_type);
+                    return NULL;
+                }
+                ASTNode* cast = create_ast_node(AST_PTR_AS_ARRAY_CAST,
+                                                NULL,
+                                                op->line, op->column);
+                cast->node_type = arr_type;
+                add_child(cast, expr);
+                expr = cast;
+                continue;
+            }
+            advance_token(parser);  // consume `*` (was just peeked)
             Token* struct_name_tok = expect_token(parser, TOKEN_IDENTIFIER);
             if (!struct_name_tok) return NULL;
             ASTNode* cast = create_ast_node(AST_PTR_AS_STRUCT_CAST,
@@ -2857,6 +2878,78 @@ ASTNode* parse_receive_statement(Parser* parser) {
     return receive_stmt;
 }
 
+// Parse one field inside an `extern struct` body. Three shapes:
+//   1. `name: type`             — leaf field. With optional `: NN` bit-width.
+//   2. `name: union { ... }`    — compound field, members overlap at the
+//                                 field's start offset (C union semantics).
+//   3. `name: struct { ... }`   — compound field, members laid out sequen-
+//                                 tially (C struct semantics). Typically
+//                                 appears as a member of a union to model
+//                                 multi-field variants like `u.func.length`
+//                                 + `u.func.magic` + ... in mquickjs's
+//                                 JSPropDef.
+//
+// Returns the field AST node, or NULL on parse error (with diagnostics
+// already emitted). Caller wires the result into the parent struct's
+// children list.
+ASTNode* parse_extern_struct_field(Parser* parser) {
+    Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
+    if (!fname) return NULL;
+
+    if (!expect_token(parser, TOKEN_COLON)) return NULL;
+
+    Token* peek = peek_token(parser);
+    if (peek && (peek->type == TOKEN_UNION || peek->type == TOKEN_STRUCT)) {
+        int is_union = (peek->type == TOKEN_UNION);
+        advance_token(parser);  // consume `union` / `struct`
+        if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
+        ASTNode* compound = create_ast_node(
+            is_union ? AST_STRUCT_FIELD_UNION : AST_STRUCT_FIELD_NESTED,
+            fname->value, fname->line, fname->column);
+        while (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+            if (is_at_end(parser)) {
+                parser_error(parser, "Unexpected end of union/struct field");
+                free_ast_node(compound);
+                return NULL;
+            }
+            ASTNode* sub = parse_extern_struct_field(parser);
+            if (!sub) { free_ast_node(compound); return NULL; }
+            add_child(compound, sub);
+            if (!match_token(parser, TOKEN_COMMA)) {
+                match_token(parser, TOKEN_SEMICOLON);
+            }
+        }
+        return compound;
+    }
+
+    ASTNode* field = create_ast_node(AST_STRUCT_FIELD, fname->value,
+                                     fname->line, fname->column);
+    Type* ftype = parse_type(parser);
+    if (!ftype) {
+        free_ast_node(field);
+        return NULL;
+    }
+    field->node_type = ftype;
+    /* Optional bit-width: `: NN` after the type. */
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
+        advance_token(parser);  // consume second ':'
+        Token* width_tok = expect_token(parser, TOKEN_NUMBER);
+        if (!width_tok || !width_tok->value) {
+            parser_error(parser, "expected bit width after `:`");
+            free_ast_node(field);
+            return NULL;
+        }
+        int w = atoi(width_tok->value);
+        if (w <= 0 || w > 64) {
+            parser_error(parser, "bit width out of range (1..64)");
+            free_ast_node(field);
+            return NULL;
+        }
+        field->bit_width = w;
+    }
+    return field;
+}
+
 // Parse extern C function declaration
 // Syntax: extern name(param: type, ...) -> return_type
 //         extern name(param: type, ...)   (void return)
@@ -2907,42 +3000,8 @@ ASTNode* parse_extern_declaration(Parser* parser) {
                 free_ast_node(sd);
                 return NULL;
             }
-            /* Field: `name: type` (with optional `: NN` bit-width). */
-            Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
-            if (!fname) { free_ast_node(sd); return NULL; }
-            ASTNode* field = create_ast_node(AST_STRUCT_FIELD, fname->value,
-                                             fname->line, fname->column);
-            if (!expect_token(parser, TOKEN_COLON)) {
-                free_ast_node(field);
-                free_ast_node(sd);
-                return NULL;
-            }
-            Type* ftype = parse_type(parser);
-            if (!ftype) {
-                free_ast_node(field);
-                free_ast_node(sd);
-                return NULL;
-            }
-            field->node_type = ftype;
-            /* Optional bit-width: `: NN` after the type. */
-            if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
-                advance_token(parser);  // consume second ':'
-                Token* width_tok = expect_token(parser, TOKEN_NUMBER);
-                if (!width_tok || !width_tok->value) {
-                    parser_error(parser, "expected bit width after `:`");
-                    free_ast_node(field);
-                    free_ast_node(sd);
-                    return NULL;
-                }
-                int w = atoi(width_tok->value);
-                if (w <= 0 || w > 64) {
-                    parser_error(parser, "bit width out of range (1..64)");
-                    free_ast_node(field);
-                    free_ast_node(sd);
-                    return NULL;
-                }
-                field->bit_width = w;
-            }
+            ASTNode* field = parse_extern_struct_field(parser);
+            if (!field) { free_ast_node(sd); return NULL; }
             add_child(sd, field);
             /* Optional separator. */
             if (!match_token(parser, TOKEN_COMMA)) {

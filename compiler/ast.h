@@ -20,6 +20,17 @@ typedef enum {
     AST_MAIN_FUNCTION,
     AST_STRUCT_DEFINITION,
     AST_STRUCT_FIELD,
+    AST_STRUCT_FIELD_UNION,    // Compound field inside `extern struct`:
+                               //   field_name: union { sub_fields... }
+                               // `value` holds the field name; children are
+                               // AST_STRUCT_FIELD / AST_STRUCT_FIELD_UNION /
+                               // AST_STRUCT_FIELD_NESTED nodes (the union
+                               // members).
+    AST_STRUCT_FIELD_NESTED,   // Compound field — a nested struct inside an
+                               // extern struct (typically appears inside a
+                               // union). Same shape as AST_STRUCT_FIELD_UNION
+                               // but emits a `struct { ... }` instead of a
+                               // `union { ... }` body.
     AST_EXTERN_FUNCTION,      // External C function declaration
     AST_BUILDER_FUNCTION,     // Builder function: block configures first, then function executes
     AST_CONST_DECLARATION,    // Top-level constant: const NAME = value
@@ -93,6 +104,20 @@ typedef enum {
                             // Result type is TYPE_PTR with element_type
                             // = TYPE_STRUCT{name}; member-access codegen
                             // emits `->field` not `.field`.
+    AST_PTR_AS_ARRAY_CAST,  // `expr as T[]` — view a raw ptr as a typed
+                            // C array (element_type[]). children[0] = expr
+                            // (must be ptr-typed); node_type carries
+                            // TYPE_ARRAY with element_type populated and
+                            // array_size = -1. Codegen emits
+                            // `((T*)(expr))`; AST_ARRAY_ACCESS on the
+                            // result then emits `((T*)(expr))[i]` which
+                            // C scales by `sizeof(T)`. No bounds check —
+                            // matches `as *StructName`'s
+                            // trust-the-author posture (the same systems-
+                            // programming escape hatch). Used by ports
+                            // of C code that need to index a malloc'd
+                            // typed buffer without the `mem.get_int(p,
+                            // 4*i)` boilerplate.
     AST_PTR_AS_FN_CAST,     // `expr as fn(T1, T2, ...) -> R` — view a
                             // raw ptr as a typed C function pointer.
                             // children[0] = expr (must be ptr-typed);
@@ -177,6 +202,14 @@ typedef struct Type {
     // Set on cast results from `expr as fn(T1, T2, ...) -> R` and on
     // any local/param annotated with `: fn(T1, T2, ...) -> R`.
     int is_fnptr;
+    // For anonymous compound types produced by `extern struct` union /
+    // nested-struct fields (issue #4 — extern struct unions). Points at
+    // the originating AST_STRUCT_FIELD_UNION or AST_STRUCT_FIELD_NESTED
+    // node so the typechecker can resolve `expr.u.f64` by walking the
+    // compound's children directly — they have no global struct name to
+    // look up. NULL on all other types. Borrowed pointer (the AST owns
+    // the storage), so don't free on type teardown.
+    struct ASTNode* compound_node;
 } Type;
 
 typedef struct ASTNode {

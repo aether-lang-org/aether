@@ -1847,6 +1847,23 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             }
             break;
 
+        case AST_PTR_AS_ARRAY_CAST:
+            /* `expr as T[]` — emit `((T*)(expr))`.  The result is a
+             * typed C pointer that an enclosing AST_ARRAY_ACCESS lowers
+             * to `((T*)(expr))[i]` (C scales by sizeof(T) automatically).
+             * No allocation, no bounds check — same systems-programming
+             * escape hatch as `as *StructName`, just at a buffer-element
+             * granularity instead of a struct-header granularity. */
+            if (expr->child_count > 0 && expr->node_type &&
+                expr->node_type->kind == TYPE_ARRAY &&
+                expr->node_type->element_type) {
+                const char* elem = get_c_type(expr->node_type->element_type);
+                fprintf(gen->output, "((%s*)(", elem);
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, "))");
+            }
+            break;
+
         case AST_PTR_AS_FN_CAST:
             /* `expr as fn(T1, T2, ...) -> R` — at this node we emit
              * just `((void*)(expr))`.  The signature is carried on

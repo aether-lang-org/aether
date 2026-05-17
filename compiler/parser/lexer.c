@@ -313,6 +313,7 @@ Token* read_identifier() {
     else if (strcmp(buffer, "self") == 0) token = create_token(TOKEN_SELF, buffer, current_line, current_column);
     else if (strcmp(buffer, "state") == 0) token = create_token(TOKEN_STATE, buffer, current_line, current_column);
     else if (strcmp(buffer, "struct") == 0) token = create_token(TOKEN_STRUCT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "union") == 0) token = create_token(TOKEN_UNION, buffer, current_line, current_column);
     else if (strcmp(buffer, "import") == 0) token = create_token(TOKEN_IMPORT, buffer, current_line, current_column);
     else if (strcmp(buffer, "as") == 0) token = create_token(TOKEN_AS, buffer, current_line, current_column);
     else if (strcmp(buffer, "export") == 0) token = create_token(TOKEN_EXPORT, buffer, current_line, current_column);
@@ -666,6 +667,7 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_SELF: return "SELF";
         case TOKEN_STATE: return "STATE";
         case TOKEN_STRUCT: return "STRUCT";
+        case TOKEN_UNION: return "UNION";
         case TOKEN_IMPORT: return "IMPORT";
         case TOKEN_AS: return "AS";
         case TOKEN_EXPORT: return "EXPORT";

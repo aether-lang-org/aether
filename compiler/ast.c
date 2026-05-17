@@ -23,6 +23,7 @@ Type* create_type(TypeKind kind) {
      * builtins like `unbox_closure`, function-definition return types)
      * must NOT inherit garbage from malloc. */
     type->is_fnptr = 0;
+    type->compound_node = NULL;
     return type;
 }
 
@@ -222,6 +223,7 @@ Type* clone_type(Type* type) {
         new_type->return_type = clone_type(type->return_type);
     }
     new_type->is_fnptr = type->is_fnptr;
+    new_type->compound_node = type->compound_node;  // borrowed; AST owns it.
 
     return new_type;
 }
@@ -363,6 +365,8 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_MAIN_FUNCTION: return "MAIN_FUNCTION";
         case AST_STRUCT_DEFINITION: return "STRUCT_DEFINITION";
         case AST_STRUCT_FIELD: return "STRUCT_FIELD";
+        case AST_STRUCT_FIELD_UNION: return "STRUCT_FIELD_UNION";
+        case AST_STRUCT_FIELD_NESTED: return "STRUCT_FIELD_NESTED";
         case AST_BLOCK: return "BLOCK";
         case AST_VARIABLE_DECLARATION: return "VARIABLE_DECLARATION";
         case AST_TUPLE_DESTRUCTURE: return "TUPLE_DESTRUCTURE";
