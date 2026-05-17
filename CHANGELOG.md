@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.mem` gains bulk and endian helpers** (`std/mem/aether_mem.c`, `std/mem/module.ae`, `tests/regression/test_std_mem_bulk_endian.ae`). Per `docs/redis-porting-language-gaps.md` §P2: `mem.copy` / `mem.move` / `mem.compare` / `mem.set` cover libc `memcpy`/`memmove`/`memcmp`/`memset` over caller-owned buffers, and `mem.get_u{16,32,64}_{le,be}` / `set_u{16,32,64}_{le,be}` give unaligned-safe little- and big-endian load/store at a byte offset. The Redis port had been hand-rolling byte loops or reaching for libc shims for every ziplist / listpack / RDB binary walk; these wrappers cover both with one-line call sites. 32- and 64-bit loaders return `long` so the full unsigned range is representable — narrowing to Aether `int` truncates the same way C `(int32_t)u32` does. Each helper guards against NULL `p`.
+
+### Fixed
+
+- **`extern` declarations for ~50 more libc functions no longer collide with glibc prototypes** (`compiler/codegen/codegen_func.c`, `tests/regression/test_extern_libc_whitelist.ae`). The libc-conflict whitelist in `extern_name_is_libc_conflict()` was originally narrow (`strlen`/`strcmp`/`strcpy`/`strncpy`/`strcat` only). Calling other libc functions from Aether — `strdup`, `qsort`, `strstr`, `strchr`, `atoi`, `getenv`, `fwrite`, `strtol`, etc. — emitted a forward declaration derived from the Aether `extern` signature (`void* strdup(void*)`) which the libc header in the same TU refused (glibc declares `char* strdup(const char*)`). Every Aether-on-libc port had to wrap such calls in a one-line C shim. The whitelist now covers the common cases — process / signal (`fork`, `getpid`, …), stdio (`fread`, `fwrite`, `fseek`, …), the `str*` family (`strdup`, `strstr`, `strchr`, …), number conversion (`atoi`, `strtol`, `strtod`, …), `qsort` / `bsearch`, env access, POSIX file ops, time — so the user's `extern foo(...)` is still useful for call-site type-aware emission while the libc header's authoritative prototype reaches the C compiler. Filed by the mquickjs port (phase-3 of `mquickjs_build.c` to Aether), where it retired two C shims for `strdup` and `qsort` in `mquickjs/mquickjs_build.c`.
+
 ## [0.170.0]
 
 ### Fixed
