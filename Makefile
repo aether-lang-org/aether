@@ -1220,7 +1220,14 @@ install: release ae stdlib
 	@find $(PREFIX)/share/aether/contrib -type f -name 'test_*.sh' -delete 2>/dev/null || true
 	@find $(PREFIX)/share/aether/contrib -type f -name 'build.sh'  -delete 2>/dev/null || true
 	@find $(PREFIX)/share/aether/contrib -type f -name 'ci.sh'     -delete 2>/dev/null || true
-	@find $(PREFIX)/share/aether/contrib -type f -name '*.c' -delete 2>/dev/null || true
+	@# Drop .c / .m noise EXCEPT the host bridges. `make install`
+	@# (no install-contrib) does NOT ship libaether_host_<lang>.a, so
+	@# downstream apps that `import contrib.host.<lang>` need the bridge
+	@# source to compile in. Without this carve-out the resolver finds
+	@# module.ae / .h but the link step has no `aether_host_<lang>_*`
+	@# symbols available — broken installed tree.
+	@find $(PREFIX)/share/aether/contrib -type f -name '*.c' \
+		! -path '*/contrib/host/*/aether_host_*.c' -delete 2>/dev/null || true
 	@find $(PREFIX)/share/aether/contrib -type f -name '*.m' -delete 2>/dev/null || true
 	@# Trim install-noise that confuses external consumers (aetherBuild
 	@# and the like). runtime/examples/ holds standalone benches with

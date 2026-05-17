@@ -124,10 +124,44 @@ that aren't link-suitable:
   the orphaned dir would produce missing-typedef errors if a
   downstream tool tried to compile it.
 - `contrib/<X>/{tests,benchmarks,example_*.ae,test_*.sh,build.sh,
-  ci.sh,*.c,*.m}` — contrib source-tree noise. The matching
-  `libaether_<X>.a` archives carry the C side; only `module.ae`
-  descriptors + public headers ship under
-  `share/aether/contrib/`.
+  ci.sh,*.m}` — contrib source-tree noise. `.c` files are also
+  dropped EXCEPT the host-language bridges at
+  `contrib/host/<lang>/aether_host_<lang>.c`. The bridges ship as
+  source because `make install` does NOT also build/install
+  `libaether_host_<lang>.a` — only `make install-contrib` does
+  that, and it's a separate opt-in step (because each bridge
+  needs the matching dev library: `python3-dev`, `liblua5.4-dev`,
+  etc.). Downstream apps that `import contrib.host.<lang>` from a
+  plain `make install` tree compile the bridge as source into
+  their own build. The matching `libaether_<X>.a` archives carry
+  the C side for everything else; only `module.ae` descriptors +
+  public headers ship under `share/aether/contrib/`.
+
+### Building against an installed Aether: required defines
+
+Apps that #include runtime/std headers and link against
+`libaether.a` from a plain `make install` tree must compile with
+the **same preprocessor defines** the install was built with —
+otherwise the header-side macros and the library-side symbols
+disagree. The two flags that matter today:
+
+- **`-DAETHER_HAS_SANDBOX`** — gates `aether_sandbox_check()`.
+  When defined, the header declares a real function and the
+  library provides it; when undefined, the header defines it as
+  a no-op macro that always returns 1. If your build compiles
+  the header without the flag but links against the library
+  built with it, you'll see linker errors for the sandbox
+  symbols (or worse — silent loss of sandbox enforcement). The
+  shipped `libaether.a` is always built with this flag (see
+  `Makefile:154` `CFLAGS`), so downstream consumers should
+  compile with it too.
+
+- Any future `AETHER_HAS_*` flags introduced for optional
+  runtime subsystems will follow the same pattern.
+
+The version stamp at `lib/aether/VERSION` catches the
+ae-vs-libaether version skew separately; the define skew is its
+own thing and silent unless a symbol actually missing.
 
 The MANIFEST never references trimmed paths — the regression test
 at `tests/integration/install_manifest/` verifies this on every

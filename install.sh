@@ -285,7 +285,12 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     find "$SRC_DIR/contrib" -type f -name 'test_*.sh' -delete 2>/dev/null || true
     find "$SRC_DIR/contrib" -type f -name 'build.sh'  -delete 2>/dev/null || true
     find "$SRC_DIR/contrib" -type f -name 'ci.sh'     -delete 2>/dev/null || true
-    find "$SRC_DIR/contrib" -type f -name '*.c' -delete 2>/dev/null || true
+    # Keep contrib/host/<lang>/aether_host_<lang>.c — plain install
+    # doesn't ship libaether_host_<lang>.a, so downstream apps that
+    # `import contrib.host.<lang>` compile the bridge from source.
+    # See docs/install-layout.md "What does NOT ship" for context.
+    find "$SRC_DIR/contrib" -type f -name '*.c' \
+        ! -path '*/contrib/host/*/aether_host_*.c' -delete 2>/dev/null || true
     find "$SRC_DIR/contrib" -type f -name '*.m' -delete 2>/dev/null || true
     # Trim install-noise that confuses external consumers
     # (aetherBuild and the like). runtime/examples/ holds standalone
