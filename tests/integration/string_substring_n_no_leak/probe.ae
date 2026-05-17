@@ -1,0 +1,76 @@
+// Integration probe for the string_substring_n heap-source fix.
+//
+// `string_substring_n` mints a fresh owned buffer (a plain malloc'd
+// `char*`, same shape as `string_substring`). The heap-ownership
+// classifier did not recognise it, so `x = string.substring_n(...)`
+// was classified non-heap and never freed, and a function that
+// `return string.substring_n(...)` was not heap-returning — every
+// caller leaked too. avn's residual ~77 KB/commit RSS ramp was
+// exactly this: `util.slice` does `return string_substring_n(...)`.
+// Filed by the avn project (new_string_len_something.md §1) — the
+// sweep `string-new-with-length-heap-annotation.md` asked for.
+//
+// This probe runs 8000 iterations of both shapes — a wrapper that
+// returns a `string.substring_n` value, and a direct local — and
+// bounds RSS growth. Pre-fix each iteration leaked both buffers
+// (tens of MB over the loop); the fixed build stays flat.
+
+import std.string
+
+extern getrusage_max_rss_kb() -> int
+extern exit(code: int)
+
+// Wrapper-return shape — the avn `util.slice` case.
+slice(s: string, slen: int, a: int, b: int) -> string {
+    return string.substring_n(s, slen, a, b)
+}
+
+main() {
+    println("=== string_substring_n_no_leak ===")
+
+    big = ""
+    i = 0
+    while i < 400 { big = string.concat(big, "abcdefghij") i = i + 1 }
+    n = string.length(big)
+
+    // Portability gate: Windows MinGW has no getrusage — smoke only.
+    rss_probe = getrusage_max_rss_kb()
+    if rss_probe < 0 {
+        piece = slice(big, n, 1, n)
+        if string.length(piece) != n - 1 {
+            println("  FAIL: smoke slice produced wrong length")
+            exit(1)
+        }
+        println("  PASS: smoke (getrusage unavailable)")
+        println("=== all cases passed ===")
+        return
+    }
+
+    // Warm to steady state.
+    w = 0
+    while w < 200 {
+        slice(big, n, 1, n)
+        string.substring_n(big, n, 1, n)
+        w = w + 1
+    }
+    rss_before = getrusage_max_rss_kb()
+    j = 0
+    while j < 8000 {
+        piece  = slice(big, n, 1, n)              // via wrapper
+        direct = string.substring_n(big, n, 1, n) // direct local
+        if string.length(piece) <= 0 { println("  FAIL: empty piece"); exit(1) }
+        if string.length(direct) <= 0 { println("  FAIL: empty direct"); exit(1) }
+        j = j + 1
+    }
+    rss_after = getrusage_max_rss_kb()
+    growth = rss_after - rss_before
+    // Pre-fix: both the wrapper-returned value and the direct local
+    // leak every iteration — tens of MB over 8000 iters. Post-fix the
+    // loop is flat; 1 MB is generous allocator slack.
+    if growth > 1024 {
+        println("  FAIL: RSS grew ${growth} KB over 8000 substring_n cycles")
+        exit(1)
+    }
+    println("  PASS: 8000 string_substring_n cycles, RSS bounded (+${growth} KB)")
+    println("=== all cases passed ===")
+}

@@ -3154,50 +3154,33 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 }
             }
 
-            // Type check the body block in the closure scope
-            // Also register variable declarations so later statements can see them
+            /* Type-check the closure body via `typecheck_statement`.
+             *
+             * A closure body is a sequence of statements, so it must be
+             * checked the same way a function body is — through
+             * `typecheck_statement`, which registers declarations
+             * (plain `AST_VARIABLE_DECLARATION` and `AST_TUPLE_
+             * DESTRUCTURE` alike) into the scope it is given, and
+             * recurses correctly into `if` / `while` / `for` / nested
+             * blocks with their own sub-scopes.
+             *
+             * The body was previously walked with `typecheck_
+             * expression`, which has no statement cases — it fell to
+             * the generic child-walk and registered nothing, so every
+             * declared name inside the closure was `E0300 Undefined
+             * variable` at its later uses. Earlier point fixes patched
+             * one statement kind at a time at the body's top level
+             * (the `AST_TUPLE_DESTRUCTURE` special-case from
+             * tuple-destructure-in-closure-scope.md); a plain `x = e`
+             * nested inside an `if` within the closure still slipped
+             * through. Routing the whole body through
+             * `typecheck_statement` closes the class — see
+             * new_string_len_something.md §4. */
             for (int i = 0; i < expr->child_count; i++) {
                 ASTNode* child = expr->children[i];
                 if (child && child->type == AST_BLOCK) {
                     for (int j = 0; j < child->child_count; j++) {
-                        ASTNode* stmt = child->children[j];
-                        /* Tuple destructure (`a, b, c = f()`) is a
-                         * statement, not an expression: arity-checking
-                         * the RHS and registering each LHS name live
-                         * in the `typecheck_statement`
-                         * AST_TUPLE_DESTRUCTURE handler. Routing it
-                         * through `typecheck_expression` only reached
-                         * that function's default child-walk, so the
-                         * destructured names were never added to
-                         * `closure_scope` and every later use inside
-                         * the closure failed with `E0300 Undefined
-                         * variable`. The plain-AST_VARIABLE_DECLARATION
-                         * path below already special-cases its own
-                         * registration; tuple destructure is the
-                         * sibling shape that was missing — and only
-                         * inside a closure, since a destructure at a
-                         * function-body's top level already goes
-                         * through `typecheck_statement`. That is why
-                         * the bug needed the closure AND a non-`main`
-                         * enclosing function to surface. See
-                         * tuple-destructure-in-closure-scope.md. */
-                        if (stmt && stmt->type == AST_TUPLE_DESTRUCTURE) {
-                            typecheck_statement(stmt, closure_scope);
-                            continue;
-                        }
-                        typecheck_expression(stmt, closure_scope);
-                        // Register variable declarations in the closure scope
-                        if (stmt && stmt->type == AST_VARIABLE_DECLARATION && stmt->value) {
-                            Type* vtype = stmt->node_type ? clone_type(stmt->node_type)
-                                                          : create_type(TYPE_INT);
-                            // Try to infer from initializer
-                            if (vtype->kind == TYPE_UNKNOWN && stmt->child_count > 0 &&
-                                stmt->children[0] && stmt->children[0]->node_type) {
-                                free_type(vtype);
-                                vtype = clone_type(stmt->children[0]->node_type);
-                            }
-                            add_symbol(closure_scope, stmt->value, vtype, 0, 0, 0);
-                        }
+                        typecheck_statement(child->children[j], closure_scope);
                     }
                 }
             }

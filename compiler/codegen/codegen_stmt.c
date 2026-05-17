@@ -702,12 +702,28 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
         // declaration silently reintroducing it. See
         // string-new-with-length-heap-annotation.md (follow-up to the
         // 0.161.0 `bytes.finish` heap-ownership fix).
+        //
+        // The `string_substring_n` / `string_from_*` entries complete
+        // the sweep `string-new-with-length-heap-annotation.md` asked
+        // for: every runtime entry point that mints a fresh owned
+        // buffer must be a recognised heap source or it leaks at every
+        // call site. `string_substring_n` returns a plain malloc'd
+        // `char*` (identical shape to the already-listed
+        // `string_substring`); `string_from_int` / `_long` / `_float`
+        // / `_char` each `string_new(...)` a fresh refcounted
+        // AetherString. `aether_heap_str_free` dispatches on the magic
+        // header, so both shapes free correctly through the tracker.
         if (strcmp(fn, "string_concat") == 0 ||
             strcmp(fn, "string_substring") == 0 ||
+            strcmp(fn, "string_substring_n") == 0 ||
             strcmp(fn, "string_to_upper") == 0 ||
             strcmp(fn, "string_to_lower") == 0 ||
             strcmp(fn, "string_trim") == 0 ||
-            strcmp(fn, "string_new_with_length") == 0) {
+            strcmp(fn, "string_new_with_length") == 0 ||
+            strcmp(fn, "string_from_int") == 0 ||
+            strcmp(fn, "string_from_long") == 0 ||
+            strcmp(fn, "string_from_float") == 0 ||
+            strcmp(fn, "string_from_char") == 0) {
             return 1;
         }
         // User-defined function: only heap if its body provably

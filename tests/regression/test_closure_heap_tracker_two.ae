@@ -1,0 +1,45 @@
+// Regression: two closures in the same scope each declaring a
+// heap-tracked local of the same name both compile.
+//
+// Each closure body is its own C function and needs its own
+// `int _heap_<name>` tracker declaration. Pre-fix the codegen deduped
+// tracker names across the whole enclosing function, so the first
+// closure got `int _heap_trimmed = …;` and the second emitted a bare
+// `_heap_trimmed = …;` with no declaration in scope — a hard C
+// compile error (`'_heap_trimmed' undeclared`). The closure-body
+// codegen now saves/resets the heap-string set per closure body.
+// Filed by the avn project (new_string_len_something.md §2).
+//
+// It passing the build IS the assertion (pre-fix it would not
+// compile); the value checks guard the trim results.
+
+import std.string
+
+extern exit(code: int)
+
+multi() -> { return "x  ", 1, "y" }
+run(cb: fn) { cb() }
+
+main() {
+    println("=== test_closure_heap_tracker_two ===")
+
+    run() callback {
+        out, _, _ = multi()
+        trimmed = string.trim(out)      // heap local
+        if trimmed != "x" {
+            println("  FAIL: closure 1 trimmed=${trimmed}")
+            exit(1)
+        }
+    }
+    run() callback {
+        out, _, _ = multi()
+        trimmed = string.trim(out)      // same name, second closure
+        if trimmed != "x" {
+            println("  FAIL: closure 2 trimmed=${trimmed}")
+            exit(1)
+        }
+    }
+
+    println("  PASS: same-named heap local in two sibling closures")
+    println("=== test_closure_heap_tracker_two passed ===")
+}
