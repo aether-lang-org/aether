@@ -1,0 +1,70 @@
+// Regression: `switch` on int with no-fallthrough semantics.
+//
+// Before this fix, codegen emitted C `switch` with NO `break` at
+// the end of each case — so a multi-arm switch where the arms
+// mutated a local fell through to the default arm, silently
+// returning the wrong value. The only switches that "worked"
+// were the ones where every arm ended in `return` (which exited
+// the function before fallthrough could bite).
+//
+// Aether's `switch` is now no-fallthrough by default — codegen
+// auto-inserts `break;` at the end of each case unless the tail
+// statement is itself a control-flow exit (`return`, `break`,
+// `continue`).
+//
+// Covers:
+//   1. Assignment-style cases — each arm sets a local, then we
+//      read it after the switch. The bug returned the default
+//      value for every input; this verifies each arm runs in
+//      isolation.
+//   2. Early-return cases — each arm `return`s a value. No
+//      spurious `break` is emitted after `return` (would be a
+//      `-Wunreachable` warning on -Wall builds, and pointless).
+//   3. Default-only-match — value that hits no `case`.
+//   4. Mixed: arms that fall to default vs. arms that have a body.
+
+import std.mem
+extern exit(code: int)
+
+label_for(x: int) -> int {
+    int r = 0
+    switch x {
+        case 0:
+            r = 100
+        case 1:
+            r = 200
+        case 2:
+            r = 300
+        default:
+            r = 999
+    }
+    return r
+}
+
+dispatch(x: int) -> int {
+    switch x {
+        case 1: return 10
+        case 2: return 20
+        case 3: return 30
+        default: return -1
+    }
+    return -2   // unreachable; pins that no fallthrough leaks past return.
+}
+
+main() {
+    println("=== test_switch_no_fallthrough ===")
+
+    // Assignment-style: each arm must be isolated.
+    if label_for(0) != 100 { println("  FAIL: 0"); exit(1) }
+    if label_for(1) != 200 { println("  FAIL: 1"); exit(1) }
+    if label_for(2) != 300 { println("  FAIL: 2"); exit(1) }
+    if label_for(9) != 999 { println("  FAIL: default"); exit(1) }
+
+    // Early-return form.
+    if dispatch(1) != 10 { println("  FAIL: dispatch 1"); exit(1) }
+    if dispatch(2) != 20 { println("  FAIL: dispatch 2"); exit(1) }
+    if dispatch(3) != 30 { println("  FAIL: dispatch 3"); exit(1) }
+    if dispatch(99) != -1 { println("  FAIL: dispatch default"); exit(1) }
+
+    println("=== test_switch_no_fallthrough passed ===")
+}

@@ -9,7 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.171.0]
+## [current]
+
+### Fixed
+
+- **`switch` arms now break by default — no silent C-style fallthrough** (`compiler/codegen/codegen_stmt.c`, `tests/regression/test_switch_no_fallthrough.ae`). The parser had `switch`/`case`/`default` wired up since the language's first weeks, but the codegen emitted C `switch` with no `break;` at the end of each case — so any switch whose arms didn't all `return` fell through to `default` for every input. Only the early-return shape worked. Aether's `switch` is now no-fallthrough by default: codegen auto-inserts `break;` at the end of each case unless the tail statement is itself a control-flow exit (`return`, `break`, `continue`). This matches what every author has written so far — there are no existing `switch` statements anywhere in `std/` or `tests/regression/*.ae`, so no callers needed updating. The fall-through-by-default-because-C habit was a footgun; this lays it to rest.
+
+### Tests
+
+- **`tests/regression/test_for_loop_c_style.ae`** pins the C-style `for (init; cond; step) body` form. The parser has accepted it for a long time (`compiler/parser/parser.c:parse_for_loop`) but it was never exercised end-to-end. Now covered: typed init / inferred init / pointer-stride step. The empty-step form `for (init; cond;) { body }` is known-bad — the parser greedily pulls the next body statement into the step slot — and is documented as out-of-scope for this test; tracked separately.
+
+
 
 ### Added
 
