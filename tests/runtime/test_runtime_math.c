@@ -109,3 +109,39 @@ TEST_CATEGORY(math_random_int_single, TEST_CATEGORY_STDLIB) {
     int result = math_random_int(5, 5);
     ASSERT_EQ(5, result);
 }
+
+TEST_CATEGORY(math_random_float_range, TEST_CATEGORY_STDLIB) {
+    /* math_random_float returns rand()/RAND_MAX — contract is the
+     * closed interval [0.0, 1.0].  Sample many times to catch a
+     * stuck or out-of-range generator. */
+    for (int i = 0; i < 100; i++) {
+        double r = math_random_float();
+        ASSERT_TRUE(r >= 0.0 && r <= 1.0);
+    }
+}
+
+TEST_CATEGORY(math_random_float_varies, TEST_CATEGORY_STDLIB) {
+    /* Guards against a degenerate generator that returns one fixed
+     * value (the failure mode behind mquickjs's JS Math.random
+     * returning a constant).  Across 50 draws at least two must
+     * differ. */
+    double first = math_random_float();
+    int saw_different = 0;
+    for (int i = 0; i < 50; i++) {
+        if (math_random_float() != first) {
+            saw_different = 1;
+            break;
+        }
+    }
+    ASSERT_TRUE(saw_different);
+}
+
+TEST_CATEGORY(math_random_float_seed_reproducible, TEST_CATEGORY_STDLIB) {
+    /* Seeding with a fixed value must make the float stream
+     * deterministic: the same seed yields the same first draw. */
+    math_random_seed(12345);
+    double a = math_random_float();
+    math_random_seed(12345);
+    double b = math_random_float();
+    ASSERT_TRUE(a == b);
+}
