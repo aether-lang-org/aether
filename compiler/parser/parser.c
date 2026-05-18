@@ -3221,6 +3221,36 @@ ASTNode* parse_extern_declaration(Parser* parser) {
         ASTNode* sd = create_ast_node(AST_STRUCT_DEFINITION, sname->value,
                                       extern_token->line, extern_token->column);
         sd->annotation = strdup("extern");
+
+        /* Optional `@c_import` after the struct name:
+         *
+         *     extern struct client @c_import { argc: int; argv: ptr }
+         *
+         * Marks a struct whose layout is *imported from a C header*,
+         * not emitted by Aether.  Aether typechecks field access and
+         * `*client` overlays against the declared fields, but codegen
+         * emits NO `typedef struct client { ... } client;` and NO
+         * forward typedef — the included header is the sole source of
+         * truth for size, layout and padding.  Without this, Aether's
+         * own typedef collides with the header's.  See
+         * redis-porting-language-gaps.md "P0: Header-Defined C Struct
+         * Interop". */
+        if (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
+            advance_token(parser);  // consume '@'
+            Token* attr = peek_token(parser);
+            if (attr && attr->type == TOKEN_IDENTIFIER && attr->value &&
+                strcmp(attr->value, "c_import") == 0) {
+                advance_token(parser);  // consume 'c_import'
+                free(sd->annotation);
+                sd->annotation = strdup("extern_c_import");
+            } else {
+                parser_error(parser,
+                    "unknown extern-struct attribute (expected @c_import)");
+                free_ast_node(sd);
+                return NULL;
+            }
+        }
+
         if (!expect_token(parser, TOKEN_LEFT_BRACE)) {
             free_ast_node(sd);
             return NULL;

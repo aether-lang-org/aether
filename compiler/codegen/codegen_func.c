@@ -1466,6 +1466,18 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
         return;
     }
 
+    /* `extern struct ... @c_import` — the struct's layout is imported
+     * from a C header, not emitted by Aether.  Emit nothing: no body,
+     * no typedef.  The included header is the sole source of truth
+     * for size, layout and padding; field access still typechecks
+     * because the AST_STRUCT_DEFINITION node carries the declared
+     * fields.  See redis-porting-language-gaps.md "P0: Header-Defined
+     * C Struct Interop". */
+    if (struct_def->annotation &&
+        strcmp(struct_def->annotation, "extern_c_import") == 0) {
+        return;
+    }
+
     /* `extern struct` (annotation="extern") gets two opt-in C
      * spellings that don't apply to regular Aether structs:
      *  - bit-width annotations on integer fields emit C bitfields

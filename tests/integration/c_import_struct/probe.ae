@@ -1,0 +1,47 @@
+// Integration test for "P0: Header-Defined C Struct Interop" from
+// docs/redis-porting-language-gaps.md.
+//
+// `extern struct Name @c_import { ... }` declares a struct whose
+// layout lives in a C header — not one Aether emits.  Aether
+// typechecks field access and `*Name` overlays against the declared
+// fields, but the generated C emits NO `typedef struct Name { ... }
+// Name;` and NO forward typedef, so it never collides with the
+// header's own definition.  The Redis port needs this to touch
+// `client`, `robj`, `dict`, etc. directly instead of writing one C
+// accessor shim per field.
+//
+// This probe:
+//   - imports `cdefs` (proving @c_import survives a module import),
+//   - casts a raw `ptr` to `*client`,
+//   - writes and reads fields (emitting plain `c->field` C),
+//   - links against client.h (force-included via aether.toml cflags)
+//     with no duplicate-typedef error.
+
+import std.mem
+import cdefs (*)
+
+extern malloc(n: size_t) -> ptr
+extern free(p: ptr)
+
+main() {
+    p = malloc(64)
+
+    c = (p as *client)
+    c.argc = 3
+    c.fd = 17
+
+    int a = c.argc
+    int f = c.fd
+    if a != 3 {
+        println("FAIL: argc=${a}, want 3")
+        return
+    }
+    if f != 17 {
+        println("FAIL: fd=${f}, want 17")
+        return
+    }
+    println("argc=${a} fd=${f}")
+
+    free(p)
+    println("OK")
+}

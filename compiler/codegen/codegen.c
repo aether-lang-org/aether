@@ -2676,6 +2676,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* sd = program->children[i];
         if (sd && sd->type == AST_STRUCT_DEFINITION && sd->value) {
+            /* `extern struct ... @c_import` — the C header owns the
+             * struct AND its typedef.  Suppress even the forward
+             * `typedef struct Name Name;` so it can't collide with the
+             * header's.  See redis-porting-language-gaps.md "P0:
+             * Header-Defined C Struct Interop". */
+            if (sd->annotation &&
+                strcmp(sd->annotation, "extern_c_import") == 0) {
+                continue;
+            }
             fprintf(gen->output, "typedef struct %s %s;\n", sd->value, sd->value);
         }
     }
