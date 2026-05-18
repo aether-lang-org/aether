@@ -581,10 +581,15 @@ void type_warning(const char* message, int line, int column) {
 // Return a human-readable type name (static buffer — for error messages only)
 static const char* type_name(Type* t) {
     if (!t) return "unknown";
+    /* C ABI alias — report the spelling the user wrote (size_t, ...). */
+    if (t->c_alias) return t->c_alias;
     switch (t->kind) {
         case TYPE_INT:      return "int";
         case TYPE_INT64:    return "long";
         case TYPE_UINT64:   return "uint64";
+        case TYPE_UINT32:   return "uint32";
+        case TYPE_UINT16:   return "uint16";
+        case TYPE_UINT8:    return "uint8";
         case TYPE_FLOAT:    return "float";
         case TYPE_BOOL:     return "bool";
         case TYPE_BYTE:     return "byte";
@@ -603,12 +608,14 @@ static const char* type_name(Type* t) {
 }
 
 static int is_integer_scalar(TypeKind kind) {
-    return kind == TYPE_INT || kind == TYPE_INT64 || kind == TYPE_UINT64;
+    return kind == TYPE_INT || kind == TYPE_INT64 || kind == TYPE_UINT64 ||
+           kind == TYPE_UINT32 || kind == TYPE_UINT16 || kind == TYPE_UINT8;
 }
 
 static TypeKind wider_integer_kind(TypeKind a, TypeKind b) {
     if (a == TYPE_UINT64 || b == TYPE_UINT64) return TYPE_UINT64;
     if (a == TYPE_INT64 || b == TYPE_INT64) return TYPE_INT64;
+    /* uint32/16/8 all fit int's value range for arithmetic. */
     return TYPE_INT;
 }
 
@@ -840,6 +847,19 @@ int is_type_compatible(Type* from, Type* to) {
     if (from->kind == TYPE_UINT64 && to->kind == TYPE_INT) return 1;
     if (from->kind == TYPE_UINT64 && to->kind == TYPE_INT64) return 1;
     if (from->kind == TYPE_INT64 && to->kind == TYPE_UINT64) return 1;
+    // uint32/uint16/uint8 — the underlying kinds of the narrow C ABI
+    // aliases (uint32_t, ...). They interconvert freely with every
+    // integer scalar; the C compiler does the actual narrowing.
+    {
+        int from_small = (from->kind == TYPE_UINT32 ||
+                          from->kind == TYPE_UINT16 ||
+                          from->kind == TYPE_UINT8);
+        int to_small   = (to->kind == TYPE_UINT32 ||
+                          to->kind == TYPE_UINT16 ||
+                          to->kind == TYPE_UINT8);
+        if (from_small && is_integer_scalar(to->kind)) return 1;
+        if (to_small && is_integer_scalar(from->kind)) return 1;
+    }
     // long <-> float compatibility
     if (from->kind == TYPE_INT64 && to->kind == TYPE_FLOAT) return 1;
     if (from->kind == TYPE_FLOAT && to->kind == TYPE_INT64) return 1;

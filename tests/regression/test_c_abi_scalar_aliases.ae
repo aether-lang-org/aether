@@ -1,0 +1,76 @@
+// Regression test for C ABI scalar aliases.
+//
+// redis-porting-language-gaps.md "P0: C ABI Scalar Aliases":
+// Redis/mquickjs ports need exact C type spellings so an Aether
+// `extern` prototype matches the system header byte-for-byte.
+//
+// The recognised aliases — int8_t/uint8_t .. int64_t/uint64_t,
+// intptr_t/uintptr_t, size_t/ssize_t/off_t, time_t/pid_t/mode_t —
+// are normal types whose underlying kind drives typechecking and
+// arithmetic; codegen emits the exact alias spelling.
+//
+// Cases (the doc's acceptance list):
+//   1. An extern matching `size_t strlen(const char *)`.
+//   2. A uint32_t field in a struct round-trips.
+//   3. uintptr_t holds a ptr round-trip without truncation.
+//   4. An ssize_t negative return path.
+//   5. Aliases usable as local-variable types.
+
+import std.mem
+
+extern strlen(s: string) -> size_t
+extern malloc(n: size_t) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+extern struct Hdr {
+    flags: uint32_t
+    sz: size_t
+}
+
+// Case 4: ssize_t negative return.
+neg() -> ssize_t {
+    return 0 - 1
+}
+
+main() {
+    // Case 1: size_t extern return, used as a size_t local.
+    size_t n = strlen("hello")
+    if n != 5 {
+        println("FAIL 1: strlen=${n}, want 5")
+        exit(1)
+    }
+    println("  PASS 1: size_t extern return")
+
+    // Case 2: uint32_t struct field round-trip.
+    h = malloc(16)
+    (h as *Hdr).flags = 4242
+    (h as *Hdr).sz = n
+    int f = (h as *Hdr).flags
+    if f != 4242 {
+        println("FAIL 2: flags=${f}, want 4242")
+        exit(1)
+    }
+    println("  PASS 2: uint32_t struct field round-trips")
+
+    // Case 3: uintptr_t holds a ptr through long<->ptr without loss.
+    uintptr_t bits = mem.ptr_to_long(h)
+    p2 = mem.long_to_ptr(bits)
+    int f2 = (p2 as *Hdr).flags
+    if f2 != 4242 {
+        println("FAIL 3: via uintptr_t flags=${f2}, want 4242")
+        exit(1)
+    }
+    println("  PASS 3: uintptr_t holds a ptr without truncation")
+
+    // Case 4: ssize_t negative return typechecks and round-trips.
+    ssize_t r = neg()
+    if r != (0 - 1) {
+        println("FAIL 4: ssize_t neg=${r}, want -1")
+        exit(1)
+    }
+    println("  PASS 4: ssize_t negative return")
+
+    free(h)
+    println("OK")
+}

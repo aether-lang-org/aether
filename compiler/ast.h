@@ -152,6 +152,9 @@ typedef enum {
     TYPE_INT,
     TYPE_INT64,
     TYPE_UINT64,
+    TYPE_UINT32,        // unsigned 32-bit — underlying kind for the
+    TYPE_UINT16,        // uint32_t / uint16_t / uint8_t C ABI aliases.
+    TYPE_UINT8,         // No bare keyword; reached only via c_abi_alias.
     TYPE_FLOAT,
     TYPE_BOOL,
     TYPE_BYTE,          // unsigned 8-bit (`unsigned char` in C). Type-precision
@@ -176,6 +179,14 @@ typedef struct Type {
     struct Type* element_type; // For arrays and actor refs
     int array_size; // For fixed-size arrays
     char* struct_name; // For struct types
+    // C ABI scalar alias (size_t, uint32_t, intptr_t, time_t, ...).
+    // When non-NULL, codegen emits this exact C spelling instead of
+    // the `kind`'s default. `kind` still governs all typechecking,
+    // arithmetic, and promotion — the alias is purely the emitted
+    // spelling, so a C extern prototype matches the system header.
+    // NULL for every non-alias type. See redis-porting-language-gaps.md
+    // "P0: C ABI Scalar Aliases".
+    char* c_alias;
     // Tuple support (multiple return values)
     struct Type** tuple_types;  // Array of element types (NULL if not tuple)
     int tuple_count;            // Number of tuple elements (0 if not tuple)

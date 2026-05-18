@@ -64,6 +64,48 @@ static int token_is_reserved_keyword(Token* token) {
     return 1;
 }
 
+// C ABI scalar aliases — recognised exact C type spellings. When a
+// type-position identifier matches one, parse_type builds a Type with
+// the given `kind` (which governs all typechecking and arithmetic)
+// plus c_alias = the name (the spelling codegen emits verbatim, so an
+// Aether `extern` prototype matches the C system header).
+//
+// `out_kind` receives the underlying TypeKind. Returns 1 on a match.
+// The set is the fixed C99/POSIX scalar family from
+// redis-porting-language-gaps.md "P0: C ABI Scalar Aliases".
+static int c_abi_alias_kind(const char* name, TypeKind* out_kind) {
+    struct { const char* alias; TypeKind kind; } table[] = {
+        /* fixed-width */
+        { "int8_t",   TYPE_INT },
+        { "uint8_t",  TYPE_UINT8 },
+        { "int16_t",  TYPE_INT },
+        { "uint16_t", TYPE_UINT16 },
+        { "int32_t",  TYPE_INT },
+        { "uint32_t", TYPE_UINT32 },
+        { "int64_t",  TYPE_INT64 },
+        { "uint64_t", TYPE_UINT64 },
+        /* pointer-width */
+        { "intptr_t",  TYPE_INT64 },
+        { "uintptr_t", TYPE_UINT64 },
+        /* size / offset */
+        { "size_t",  TYPE_UINT64 },
+        { "ssize_t", TYPE_INT64 },
+        { "off_t",   TYPE_INT64 },
+        /* platform scalars */
+        { "time_t", TYPE_INT64 },
+        { "pid_t",  TYPE_INT },
+        { "mode_t", TYPE_INT },
+    };
+    int n = (int)(sizeof(table) / sizeof(table[0]));
+    for (int i = 0; i < n; i++) {
+        if (strcmp(name, table[i].alias) == 0) {
+            *out_kind = table[i].kind;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 Token* expect_token(Parser* parser, AeTokenType expected) {
     Token* token = peek_token(parser);
     if (!token || token->type != expected) {
@@ -345,9 +387,23 @@ Type* parse_type(Parser* parser) {
                     }
                 }
             } else {
-                // Could be a struct type
-                type = create_type(TYPE_STRUCT);
-                type->struct_name = strdup(token->value);
+                /* C ABI scalar aliases — exact C type spellings the
+                 * Redis/mquickjs ports need so an Aether `extern`
+                 * prototype matches the system header byte-for-byte.
+                 * The alias is a normal Type whose `kind` drives all
+                 * typechecking/arithmetic; `c_alias` carries the C
+                 * spelling codegen emits verbatim. See
+                 * redis-porting-language-gaps.md "P0: C ABI Scalar
+                 * Aliases". */
+                TypeKind alias_kind;
+                if (c_abi_alias_kind(token->value, &alias_kind)) {
+                    type = create_type(alias_kind);
+                    type->c_alias = strdup(token->value);
+                } else {
+                    // Could be a struct type
+                    type = create_type(TYPE_STRUCT);
+                    type->struct_name = strdup(token->value);
+                }
             }
             break;
         }
@@ -1552,6 +1608,19 @@ ASTNode* parse_statement(Parser* parser) {
             // Check if this is: identifier = expression (Python-style)
             // or tuple destructuring: identifier, identifier = expression
             Token* next = peek_ahead(parser, 1);
+            // C-style typed local with a C ABI alias type:
+            //   `size_t n = ...`, `ssize_t r = ...`
+            // The leading identifier is a known alias and the next
+            // token is another identifier — unambiguously a typed
+            // declaration, same shape as `int x = ...`.
+            {
+                TypeKind _alias_k;
+                if (token->value &&
+                    c_abi_alias_kind(token->value, &_alias_k) &&
+                    next && next->type == TOKEN_IDENTIFIER) {
+                    return parse_variable_declaration(parser);
+                }
+            }
             if (next && (next->type == TOKEN_ASSIGN || next->type == TOKEN_COMMA)) {
                 return parse_python_style_declaration(parser);
             }
@@ -3320,6 +3389,14 @@ ASTNode* parse_function_definition(Parser* parser) {
                     is_typed_return = 1;
                     break;
                 case TOKEN_IDENTIFIER: {
+                    // A C ABI scalar alias (size_t, ssize_t, ...) in
+                    // return position is unambiguously a type.
+                    TypeKind alias_k;
+                    if (peek->value &&
+                        c_abi_alias_kind(peek->value, &alias_k)) {
+                        is_typed_return = 1;
+                        break;
+                    }
                     // `-> Name { ... }` — only a typed return if what
                     // follows `{` is NOT a struct-literal `field:` head.
                     Token* after_name = peek_ahead(parser, 2);

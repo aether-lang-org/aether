@@ -11,6 +11,7 @@ Type* create_type(TypeKind kind) {
     type->element_type = NULL;
     type->array_size = -1;
     type->struct_name = NULL;
+    type->c_alias = NULL;
     type->tuple_types = NULL;
     type->tuple_count = 0;
     type->tuple_heap_flags = NULL;
@@ -73,6 +74,9 @@ void free_type(Type* type) {
         }
         if (type->struct_name) {
             free(type->struct_name);
+        }
+        if (type->c_alias) {
+            free(type->c_alias);
         }
         if (type->tuple_types) {
             for (int i = 0; i < type->tuple_count; i++) {
@@ -192,6 +196,9 @@ Type* clone_type(Type* type) {
     
     if (type->struct_name) {
         new_type->struct_name = strdup(type->struct_name);
+    }
+    if (type->c_alias) {
+        new_type->c_alias = strdup(type->c_alias);
     }
 
     if (type->tuple_types && type->tuple_count > 0) {

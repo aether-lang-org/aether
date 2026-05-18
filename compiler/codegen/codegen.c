@@ -12,11 +12,15 @@
 // element type, not the full "T[N]" form that get_c_type produces.
 const char* const_array_elem_c_type(Type* t) {
     if (!t) return "const char*";
+    if (t->c_alias) return t->c_alias;
     switch (t->kind) {
         case TYPE_STRING:  return "char*";  // STRING type already includes 'const' in its c_type
         case TYPE_INT:     return "int";
         case TYPE_INT64:   return "int64_t";
         case TYPE_UINT64:  return "uint64_t";
+        case TYPE_UINT32:  return "uint32_t";
+        case TYPE_UINT16:  return "uint16_t";
+        case TYPE_UINT8:   return "uint8_t";
         case TYPE_FLOAT:   return "double";
         case TYPE_PTR:     return "void*";
         case TYPE_BYTE:    return "unsigned char";
@@ -1197,10 +1201,21 @@ const char* get_c_type(Type* type) {
         return "int";
     }
 
+    /* C ABI scalar alias — emit the exact C spelling (size_t,
+     * uint32_t, intptr_t, ...) so an Aether `extern` prototype matches
+     * the system header. The alias's `kind` still drives everything
+     * else; only the emitted name differs. */
+    if (type->c_alias) {
+        return type->c_alias;
+    }
+
     switch (type->kind) {
         case TYPE_INT: return "int";
         case TYPE_INT64: return "int64_t";
         case TYPE_UINT64: return "uint64_t";
+        case TYPE_UINT32: return "uint32_t";
+        case TYPE_UINT16: return "uint16_t";
+        case TYPE_UINT8: return "uint8_t";
         /* Aether `float` lowers to C `double`. The naming is legacy
          * (Aether predates having two FP types), but the storage and
          * ABI have always been 8-byte IEEE-754 — local variables are
@@ -1336,10 +1351,14 @@ const char* get_c_type(Type* type) {
 // wraps whatever internal representation Aether uses for maps/lists/ptrs.
 static const char* get_abi_type(Type* type) {
     if (!type) return NULL;
+    if (type->c_alias) return type->c_alias;
     switch (type->kind) {
         case TYPE_INT:    return "int32_t";
         case TYPE_INT64:  return "int64_t";
         case TYPE_UINT64: return "uint64_t";
+        case TYPE_UINT32: return "uint32_t";
+        case TYPE_UINT16: return "uint16_t";
+        case TYPE_UINT8:  return "uint8_t";
         /* Aether `float` is C `double` (8 bytes, binary64) — see
          * get_c_type() for rationale. The public ABI (`aether_*`
          * wrapper symbols emitted with --emit=lib) follows suit. */

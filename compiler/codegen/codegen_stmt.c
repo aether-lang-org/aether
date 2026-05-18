@@ -1660,6 +1660,9 @@ int call_arg_escapes(TypeKind param_kind) {
         case TYPE_INT:
         case TYPE_INT64:
         case TYPE_UINT64:
+        case TYPE_UINT32:
+        case TYPE_UINT16:
+        case TYPE_UINT8:
         case TYPE_BYTE:
         case TYPE_FLOAT:
         case TYPE_BOOL:
