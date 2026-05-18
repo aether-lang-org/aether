@@ -12,11 +12,12 @@ exports (
     io_delete_file_raw, io_file_info_raw, io_file_info_free,
     io_getenv, io_setenv_raw, io_unsetenv_raw,
     io_stderr_write_raw, io_stdout_write_raw,
+    io_perror_raw, io_errno_message_raw,
     io_fd_open_read_tuple, io_fd_open_write_tuple, io_fd_close_raw,
     io_fd_write_n, io_fd_read_n_tuple, io_fd_read_line_tuple,
     read_file, write_file, append_file, delete_file, file_info,
     setenv, unsetenv,
-    stderr_write, stdout_write,
+    stderr_write, stdout_write, perror, errno_message,
     fd_open_read, fd_open_write, fd_close,
     fd_write_n, fd_read_n, fd_read_line
 )
@@ -49,6 +50,11 @@ extern io_unsetenv_raw(name: string) -> int
 // retries on EINTR.
 extern io_stderr_write_raw(data: string, length: int) -> int
 extern io_stdout_write_raw(data: string, length: int) -> int
+
+// errno-based error reporting — see the perror / errno_message
+// wrappers below.
+extern io_perror_raw(name: string)
+extern io_errno_message_raw() -> string
 
 // Full fd-level I/O surface. Section 1 of nuther-ask-of-aether-team.md.
 // fd_open_read       → POSIX O_RDONLY  / Win _O_RDONLY | _O_BINARY
@@ -165,6 +171,28 @@ stderr_write(data: string) -> int {
 // record before the next stage reads.
 stdout_write(data: string) -> int {
     return io_stdout_write_raw(data, string.length(data))
+}
+
+// Print "name: <errno message>\n" to stderr — the POSIX perror(3).
+// Call it immediately after a failing libc-backed operation, while
+// errno is still live (same constraint as C's perror).
+//
+//     fd, err = io.fd_open_read(path)
+//     if fd < 0 { io.perror("open") ; exit(1) }
+perror(name: string) {
+    io_perror_raw(name)
+}
+
+// The current errno as a human-readable message string — strerror(3)
+// for `errno`. Same "call right after the failure" rule as perror.
+// Use this when you want the message in a string (to wrap in a
+// Go-style error tuple, log it, etc.) rather than printed to stderr.
+errno_message() -> string {
+    s = io_errno_message_raw()
+    if s == null {
+        return "unknown error"
+    }
+    return s
 }
 
 // Open `path` for reading. Returns (fd, err): success → (fd >= 0, "");
