@@ -6,7 +6,7 @@ exports (
     os_run_pipe_raw, os_wait_pid_raw, os_run_pipe_drain_and_wait_raw,
     os_getenv, os_which,
     aether_args_count, aether_args_get, aether_argv0, aether_argv_raw,
-    os_execv, os_now_utc_iso8601_raw, os_getpid_raw,
+    os_execv, os_now_utc_iso8601_raw, os_getpid_raw, exit,
     io_setenv_raw, io_unsetenv_raw,
     exec, run_capture, argv0, now_utc_iso8601, getpid,
     setenv, unsetenv,
@@ -245,6 +245,9 @@ now_utc_iso8601() -> string {
 // `getpid(2)`; Windows `_getpid()`. Returns 0 on platforms compiled
 // without filesystem support (no-op stub).
 extern os_getpid_raw() -> int
+
+// Terminate the current process with `code`.
+extern exit(code: int)
 
 getpid() -> int {
     return os_getpid_raw()
