@@ -42,8 +42,8 @@ int io_unsetenv_raw(const char* name);
 // loses the last few lines if the process is killed mid-buffer.
 // Reach for these in crash-trace paths where you need the bytes
 // flushed NOW. Section A.3 (minimal scope) of aether_changes_needed.md.
-int io_stderr_write(const char* data, int length);
-int io_stdout_write(const char* data, int length);
+int io_stderr_write_raw(const char* data, int length);
+int io_stdout_write_raw(const char* data, int length);
 
 // Tuple shapes returned by the fd-open / fd-read externs below.
 // The struct field names (_0, _1, _2) mirror the codegen-emitted

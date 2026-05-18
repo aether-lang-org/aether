@@ -20,14 +20,14 @@ void io_file_info_free(FileInfo* i) { (void)i; }
 char* io_getenv(const char* n) { (void)n; return NULL; }
 int io_setenv_raw(const char* n, const char* v) { (void)n; (void)v; return 0; }
 int io_unsetenv_raw(const char* n) { (void)n; return 0; }
-int io_stderr_write(const char* d, int n) {
+int io_stderr_write_raw(const char* d, int n) {
     if (!d || n <= 0) return 0;
     fflush(stderr);
     size_t w = fwrite(d, 1, (size_t)n, stderr);
     fflush(stderr);
     return (int)w;
 }
-int io_stdout_write(const char* d, int n) {
+int io_stdout_write_raw(const char* d, int n) {
     if (!d || n <= 0) return 0;
     fflush(stdout);
     size_t w = fwrite(d, 1, (size_t)n, stdout);
@@ -245,14 +245,14 @@ static int fd_write_all(int fd, const char* data, int length) {
     return total;
 }
 
-int io_stderr_write(const char* data, int length) {
+int io_stderr_write_raw(const char* data, int length) {
     /* fflush stdio's buffer first so interleaved println / fprintf
      * output isn't reordered around the unbuffered write. */
     fflush(stderr);
     return fd_write_all(2, data, length);
 }
 
-int io_stdout_write(const char* data, int length) {
+int io_stdout_write_raw(const char* data, int length) {
     fflush(stdout);
     return fd_write_all(1, data, length);
 }
