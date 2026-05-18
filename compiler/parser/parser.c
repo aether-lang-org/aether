@@ -183,6 +183,54 @@ Type* parse_type(Parser* parser) {
 
     Type* type = NULL;
 
+    /* `const <type>` — a C-qualified type.  Parsed by recursing on the
+     * unqualified type, then stamping a const-prefixed C spelling onto
+     * `c_alias` so codegen emits the qualifier verbatim.  The `kind`
+     * is untouched, so const-ness affects only the emitted C — enough
+     * to match a header prototype like `memcmp(const void *, const
+     * void *, size_t)` and silence conflicting-declaration warnings.
+     * `const ptr` -> `const void*`; `const *T` -> `const T*`;
+     * `const string` -> `const char*`. See
+     * redis-porting-language-gaps.md "P0: Typed And Qualified C
+     * Pointers". */
+    if (token->type == TOKEN_CONST) {
+        advance_token(parser);  // consume `const`
+        Type* inner = parse_type(parser);
+        if (!inner) {
+            parser_error(parser, "Expected a type after `const`");
+            return NULL;
+        }
+        /* Compute the unqualified C spelling, then prefix `const `. */
+        const char* base = NULL;
+        char ptr_buf[128];
+        if (inner->c_alias) {
+            base = inner->c_alias;
+        } else if (inner->kind == TYPE_PTR && inner->element_type &&
+                   inner->element_type->kind == TYPE_STRUCT &&
+                   inner->element_type->struct_name) {
+            snprintf(ptr_buf, sizeof(ptr_buf), "%s*",
+                     inner->element_type->struct_name);
+            base = ptr_buf;
+        } else if (inner->kind == TYPE_PTR) {
+            base = "void*";
+        } else if (inner->kind == TYPE_STRING) {
+            base = "char*";
+        } else if (inner->kind == TYPE_BYTE) {
+            base = "unsigned char";
+        } else if (inner->kind == TYPE_INT) {
+            base = "int";
+        } else {
+            base = NULL;  /* leave codegen's default for exotic kinds */
+        }
+        if (base) {
+            char* qualified = malloc(strlen(base) + 7 /* "const " + NUL */);
+            sprintf(qualified, "const %s", base);
+            if (inner->c_alias) free(inner->c_alias);
+            inner->c_alias = qualified;
+        }
+        return inner;
+    }
+
     // Pointer-to-struct type: `*StructName`. Lowers to `StructName*` in
     // C. Used as the return type of `expr as *StructName` (the
     // pointer-overlay cast) and accepted in any other type position
@@ -387,16 +435,33 @@ Type* parse_type(Parser* parser) {
                     }
                 }
             } else {
-                /* C ABI scalar aliases — exact C type spellings the
-                 * Redis/mquickjs ports need so an Aether `extern`
-                 * prototype matches the system header byte-for-byte.
-                 * The alias is a normal Type whose `kind` drives all
-                 * typechecking/arithmetic; `c_alias` carries the C
-                 * spelling codegen emits verbatim. See
-                 * redis-porting-language-gaps.md "P0: C ABI Scalar
-                 * Aliases". */
+                /* Named types: C string aliases, C ABI scalar
+                 * aliases, then a plain struct-name fall-through. */
                 TypeKind alias_kind;
-                if (c_abi_alias_kind(token->value, &alias_kind)) {
+                if (strcmp(token->value, "cstring") == 0) {
+                    /* `cstring` — a string whose emitted C type is the
+                     * mutable `char*` (Aether's plain `string` emits
+                     * `const char*`). For a C extern whose header has
+                     * a non-const `char *` parameter. Behaves as a
+                     * `string` for all typechecking. */
+                    type = create_type(TYPE_STRING);
+                    type->c_alias = strdup("char*");
+                } else if (strcmp(token->value, "cstring_const") == 0) {
+                    /* `cstring_const` — `const char*` spelled
+                     * explicitly. Same emitted type as plain `string`;
+                     * provided so an extern signature reads as the C
+                     * header does. */
+                    type = create_type(TYPE_STRING);
+                    type->c_alias = strdup("const char*");
+                } else if (c_abi_alias_kind(token->value, &alias_kind)) {
+                    /* C ABI scalar aliases — exact C type spellings the
+                     * Redis/mquickjs ports need so an Aether `extern`
+                     * prototype matches the system header byte-for-byte.
+                     * The alias is a normal Type whose `kind` drives all
+                     * typechecking/arithmetic; `c_alias` carries the C
+                     * spelling codegen emits verbatim. See
+                     * redis-porting-language-gaps.md "P0: C ABI Scalar
+                     * Aliases". */
                     type = create_type(alias_kind);
                     type->c_alias = strdup(token->value);
                 } else {
@@ -987,11 +1052,36 @@ ASTNode* parse_binary_expression(Parser* parser, int precedence) {
         
         Token* operator = peek_token(parser);
         if (!operator) break;
-        
+
         int op_precedence = get_operator_precedence(operator->type);
         if (op_precedence < 0) break;  // Not an operator
         if (op_precedence < precedence) break;  // Lower precedence, stop
-        
+
+        /* Newline-led `*StructName name` is a statement, not an infix
+         * multiply continuing the previous expression.  Aether treats
+         * a newline as a statement separator, but `*` is both an infix
+         * operator and the lead token of a `*StructName name = ...`
+         * typed-pointer declaration.  When `*` starts a new source
+         * line and is followed by `IDENT IDENT` (a struct name then a
+         * variable name), stop the expression here so the next
+         * statement parses as the pointer-typed local declaration.
+         * Without this, `q = (p as *T)` <newline> `*T c = q` folds the
+         * second line into `(p as *T) * T`. See
+         * redis-porting-language-gaps.md "P0: Typed And Qualified C
+         * Pointers". */
+        if (operator->type == TOKEN_MULTIPLY) {
+            Token* after  = peek_ahead(parser, 1);
+            Token* after2 = peek_ahead(parser, 2);
+            Token* prev   = peek_ahead(parser, -1);
+            if (after && after->type == TOKEN_IDENTIFIER &&
+                after2 && after2->type == TOKEN_IDENTIFIER &&
+                prev && operator->line > prev->line) {
+                /* `*` leads a new source line and is followed by
+                 * `IDENT IDENT` — a `*StructName name` declaration. */
+                break;
+            }
+        }
+
         advance_token(parser);
         ASTNode* right = parse_binary_expression(parser, op_precedence + 1);  // Left-associative
         if (!right) return NULL;
@@ -1548,7 +1638,33 @@ ASTNode* parse_statement(Parser* parser) {
             // Explicit type declaration: int x = 42;  byte b = 0x7F;
             return parse_variable_declaration(parser);
         }
-            
+
+        case TOKEN_MULTIPLY: {
+            /* `*StructName name = expr` — a typed pointer-to-struct
+             * local declaration.  Disambiguated from a deref-store
+             * (`*p = v`) by the shape `* IDENT IDENT`: a struct name
+             * followed by a variable name.  Used so an FFI handle
+             * (`*client c = ...`, `*JSContext ctx = ...`) carries its
+             * pointee identity through the type system, exactly like
+             * the param/return positions already do. See
+             * redis-porting-language-gaps.md "P0: Typed And Qualified
+             * C Pointers". */
+            Token* t1 = peek_ahead(parser, 1);  // the struct name
+            Token* t2 = peek_ahead(parser, 2);  // the variable name
+            if (t1 && t1->type == TOKEN_IDENTIFIER &&
+                t2 && t2->type == TOKEN_IDENTIFIER) {
+                return parse_variable_declaration(parser);
+            }
+            // Otherwise it's an expression statement (`*p = v`, etc.).
+            ASTNode* expr = parse_expression(parser);
+            if (!expr) return NULL;
+            match_token(parser, TOKEN_SEMICOLON);
+            ASTNode* es = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                                          token->line, token->column);
+            add_child(es, expr);
+            return es;
+        }
+
         case TOKEN_IF:
             return parse_if_statement(parser);
             
@@ -3080,6 +3196,24 @@ ASTNode* parse_extern_declaration(Parser* parser) {
      * TU sees exactly one definition.  Layouts agree by construction
      * if the Aether spelling matches the C spelling.
      */
+    /* `extern type Name` — an opaque, header-defined C type.  Used as
+     * an FFI pointee (`*Name`) for handles whose layout Aether never
+     * inspects: Redis `client`, `dictEntry`; mquickjs `JSContext`.
+     * Emits a forward typedef `typedef struct Name Name;` (an
+     * incomplete type) — `Name*` is a valid pointer, field access is
+     * not.  See redis-porting-language-gaps.md "P0: Typed And
+     * Qualified C Pointers". */
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_IDENTIFIER &&
+        peek_token(parser)->value && strcmp(peek_token(parser)->value, "type") == 0) {
+        advance_token(parser);  // consume `type`
+        Token* tname = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!tname) return NULL;
+        ASTNode* td = create_ast_node(AST_STRUCT_DEFINITION, tname->value,
+                                      extern_token->line, extern_token->column);
+        td->annotation = strdup("extern_opaque");
+        return td;
+    }
+
     if (peek_token(parser) && peek_token(parser)->type == TOKEN_STRUCT) {
         advance_token(parser);  // consume `struct`
         Token* sname = expect_token(parser, TOKEN_IDENTIFIER);
