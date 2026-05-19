@@ -5,8 +5,8 @@ exports (
     os_system, os_exec_raw, os_run, os_run_capture_raw, os_run_capture_status_raw,
     os_run_pipe_raw, os_wait_pid_raw, os_run_pipe_drain_and_wait_raw,
     os_getenv, os_which,
-    aether_args_count, aether_args_get, aether_argv0,
-    os_execv, os_now_utc_iso8601_raw, os_getpid_raw,
+    aether_args_count, aether_args_get, aether_argv0, aether_argv_raw,
+    os_execv, os_now_utc_iso8601_raw, os_getpid_raw, exit,
     os_wall_seconds_raw, os_wall_micros_raw,
     io_setenv_raw, io_unsetenv_raw,
     exec, run_capture, argv0, now_utc_iso8601, getpid,
@@ -134,6 +134,11 @@ extern aether_args_get(index: int) -> string
 // `os.argv0()` which returns "" instead of null for convenience.
 extern aether_argv0() -> string
 
+// Raw argv vector captured by the generated process entrypoint. This is for
+// C interop with APIs that need argc/argv exactly as the OS supplied them.
+// Borrowed pointer; do not free.
+extern aether_argv_raw() -> ptr
+
 // Replace the current process image with `prog`. `argv_list` is a
 // list<ptr> of C strings (element 0 is argv[0] for the new program and
 // does NOT need to match `prog`). On success this call never returns;
@@ -242,6 +247,9 @@ now_utc_iso8601() -> string {
 // `getpid(2)`; Windows `_getpid()`. Returns 0 on platforms compiled
 // without filesystem support (no-op stub).
 extern os_getpid_raw() -> int
+
+// Terminate the current process with `code`.
+extern exit(code: int)
 
 getpid() -> int {
     return os_getpid_raw()

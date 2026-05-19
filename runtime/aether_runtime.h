@@ -44,6 +44,10 @@ const char* aether_args_get(int index);
 // when aether_args_init has not been called.
 const char* aether_argv0(void);
 
+// Return the raw argv vector captured by aether_args_init. Borrowed pointer
+// into the OS argv storage; do not free or retain beyond process lifetime.
+char** aether_argv_raw(void);
+
 // Configuration queries
 const AetherRuntimeInitConfig* aether_runtime_get_config();
 int aether_runtime_has_feature(int feature_flag);
