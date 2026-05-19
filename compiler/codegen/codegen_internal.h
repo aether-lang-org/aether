@@ -17,6 +17,7 @@ void print_indent(CodeGenerator* gen);
 void print_line(CodeGenerator* gen, const char* format, ...);
 void codegen_maybe_emit_line(CodeGenerator* gen, const ASTNode* node);
 const char* get_c_type(Type* type);
+const char* const_array_elem_c_type(Type* t);
 int is_c_reserved_word(const char* name);
 const char* safe_c_name(const char* name);
 const char* get_c_operator(const char* aether_op);

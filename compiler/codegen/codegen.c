@@ -7,6 +7,28 @@
 #include "../aether_module.h"
 #include "../aether_error.h"
 
+// Map Aether type to C typename for array element declarations.
+// For arrays, the size goes after the name in C, so we need just the
+// element type, not the full "T[N]" form that get_c_type produces.
+const char* const_array_elem_c_type(Type* t) {
+    if (!t) return "const char*";
+    if (t->c_alias) return t->c_alias;
+    switch (t->kind) {
+        case TYPE_STRING:  return "char*";  // STRING type already includes 'const' in its c_type
+        case TYPE_INT:     return "int";
+        case TYPE_INT64:   return "int64_t";
+        case TYPE_UINT64:  return "uint64_t";
+        case TYPE_UINT32:  return "uint32_t";
+        case TYPE_UINT16:  return "uint16_t";
+        case TYPE_UINT8:   return "uint8_t";
+        case TYPE_FLOAT:   return "double";
+        case TYPE_PTR:     return "void*";
+        case TYPE_BYTE:    return "unsigned char";
+        case TYPE_BOOL:    return "_Bool";
+        default:           return "int";
+    }
+}
+
 // Check if an AST tree uses sandbox builtins (sandbox_install, sandbox_push, spawn_sandboxed, etc.)
 static int uses_sandbox(ASTNode* node) {
     if (!node) return 0;
@@ -1179,10 +1201,21 @@ const char* get_c_type(Type* type) {
         return "int";
     }
 
+    /* C ABI scalar alias — emit the exact C spelling (size_t,
+     * uint32_t, intptr_t, ...) so an Aether `extern` prototype matches
+     * the system header. The alias's `kind` still drives everything
+     * else; only the emitted name differs. */
+    if (type->c_alias) {
+        return type->c_alias;
+    }
+
     switch (type->kind) {
         case TYPE_INT: return "int";
         case TYPE_INT64: return "int64_t";
         case TYPE_UINT64: return "uint64_t";
+        case TYPE_UINT32: return "uint32_t";
+        case TYPE_UINT16: return "uint16_t";
+        case TYPE_UINT8: return "uint8_t";
         /* Aether `float` lowers to C `double`. The naming is legacy
          * (Aether predates having two FP types), but the storage and
          * ABI have always been 8-byte IEEE-754 — local variables are
@@ -1318,10 +1351,14 @@ const char* get_c_type(Type* type) {
 // wraps whatever internal representation Aether uses for maps/lists/ptrs.
 static const char* get_abi_type(Type* type) {
     if (!type) return NULL;
+    if (type->c_alias) return type->c_alias;
     switch (type->kind) {
         case TYPE_INT:    return "int32_t";
         case TYPE_INT64:  return "int64_t";
         case TYPE_UINT64: return "uint64_t";
+        case TYPE_UINT32: return "uint32_t";
+        case TYPE_UINT16: return "uint16_t";
+        case TYPE_UINT8:  return "uint8_t";
         /* Aether `float` is C `double` (8 bytes, binary64) — see
          * get_c_type() for rationale. The public ABI (`aether_*`
          * wrapper symbols emitted with --emit=lib) follows suit. */
@@ -2639,6 +2676,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* sd = program->children[i];
         if (sd && sd->type == AST_STRUCT_DEFINITION && sd->value) {
+            /* `extern struct ... @c_import` — the C header owns the
+             * struct AND its typedef.  Suppress even the forward
+             * `typedef struct Name Name;` so it can't collide with the
+             * header's.  See redis-porting-language-gaps.md "P0:
+             * Header-Defined C Struct Interop". */
+            if (sd->annotation &&
+                strcmp(sd->annotation, "extern_c_import") == 0) {
+                continue;
+            }
             fprintf(gen->output, "typedef struct %s %s;\n", sd->value, sd->value);
         }
     }
@@ -2674,9 +2720,19 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         ASTNode* cd = program->children[i];
         if (cd && cd->type == AST_CONST_DECLARATION &&
             cd->value && cd->child_count > 0) {
-            fprintf(gen->output, "#define %s (", cd->value);
-            generate_expression(gen, cd->children[0]);
-            fprintf(gen->output, ")\n");
+            if (cd->annotation && strcmp(cd->annotation, "array_const") == 0) {
+                // static const T NAME[] = {v1, v2, ...};
+                Type* elem_type = (cd->node_type && cd->node_type->element_type)
+                                  ? cd->node_type->element_type : NULL;
+                const char* ctype = elem_type ? const_array_elem_c_type(elem_type) : "const char*";
+                fprintf(gen->output, "static const %s %s[] = ", ctype, cd->value);
+                generate_expression(gen, cd->children[0]);
+                fprintf(gen->output, ";\n");
+            } else {
+                fprintf(gen->output, "#define %s (", cd->value);
+                generate_expression(gen, cd->children[0]);
+                fprintf(gen->output, ")\n");
+            }
         }
     }
 

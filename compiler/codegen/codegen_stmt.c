@@ -1660,6 +1660,9 @@ int call_arg_escapes(TypeKind param_kind) {
         case TYPE_INT:
         case TYPE_INT64:
         case TYPE_UINT64:
+        case TYPE_UINT32:
+        case TYPE_UINT16:
+        case TYPE_UINT8:
         case TYPE_BYTE:
         case TYPE_FLOAT:
         case TYPE_BOOL:
@@ -2530,23 +2533,34 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     switch (stmt->type) {
         case AST_CONST_DECLARATION: {
             // Local constant: const <type> <name> = <value>;
+            // or const arr[] = [v1, v2, ...];
             if (stmt->value && stmt->child_count > 0) {
                 mark_var_declared(gen, stmt->value);
-                Type* var_type = stmt->node_type;
-                if ((!var_type || var_type->kind == TYPE_VOID || var_type->kind == TYPE_UNKNOWN)
-                    && stmt->children[0] && stmt->children[0]->node_type) {
-                    var_type = stmt->children[0]->node_type;
-                }
-                // STRING already emits "const char*", skip extra const qualifier
-                if (var_type && var_type->kind == TYPE_STRING) {
-                    generate_type(gen, var_type);
+                if (stmt->annotation && strcmp(stmt->annotation, "array_const") == 0) {
+                    // static const T NAME[] = {v1, v2, ...};
+                    Type* elem_type = (stmt->node_type && stmt->node_type->element_type)
+                                      ? stmt->node_type->element_type : NULL;
+                    const char* ctype = elem_type ? const_array_elem_c_type(elem_type) : "const char*";
+                    fprintf(gen->output, "static const %s %s[] = ", ctype, stmt->value);
+                    generate_expression(gen, stmt->children[0]);
+                    fprintf(gen->output, ";\n");
                 } else {
-                    fprintf(gen->output, "const ");
-                    generate_type(gen, var_type);
+                    Type* var_type = stmt->node_type;
+                    if ((!var_type || var_type->kind == TYPE_VOID || var_type->kind == TYPE_UNKNOWN)
+                        && stmt->children[0] && stmt->children[0]->node_type) {
+                        var_type = stmt->children[0]->node_type;
+                    }
+                    // STRING already emits "const char*", skip extra const qualifier
+                    if (var_type && var_type->kind == TYPE_STRING) {
+                        generate_type(gen, var_type);
+                    } else {
+                        fprintf(gen->output, "const ");
+                        generate_type(gen, var_type);
+                    }
+                    fprintf(gen->output, " %s = ", stmt->value);
+                    generate_expression(gen, stmt->children[0]);
+                    fprintf(gen->output, ";\n");
                 }
-                fprintf(gen->output, " %s = ", stmt->value);
-                generate_expression(gen, stmt->children[0]);
-                fprintf(gen->output, ";\n");
             }
             break;
         }

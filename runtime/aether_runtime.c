@@ -187,3 +187,7 @@ const char* aether_argv0(void) {
     if (aether_argc <= 0 || !aether_argv) return NULL;
     return aether_argv[0];
 }
+
+char** aether_argv_raw(void) {
+    return aether_argv;
+}

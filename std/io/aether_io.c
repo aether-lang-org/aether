@@ -20,20 +20,22 @@ void io_file_info_free(FileInfo* i) { (void)i; }
 char* io_getenv(const char* n) { (void)n; return NULL; }
 int io_setenv_raw(const char* n, const char* v) { (void)n; (void)v; return 0; }
 int io_unsetenv_raw(const char* n) { (void)n; return 0; }
-int io_stderr_write(const char* d, int n) {
+int io_stderr_write_raw(const char* d, int n) {
     if (!d || n <= 0) return 0;
     fflush(stderr);
     size_t w = fwrite(d, 1, (size_t)n, stderr);
     fflush(stderr);
     return (int)w;
 }
-int io_stdout_write(const char* d, int n) {
+int io_stdout_write_raw(const char* d, int n) {
     if (!d || n <= 0) return 0;
     fflush(stdout);
     size_t w = fwrite(d, 1, (size_t)n, stdout);
     fflush(stdout);
     return (int)w;
 }
+void io_perror_raw(const char* name) { (void)name; }
+char* io_errno_message_raw(void) { return NULL; }
 _tuple_int_string_io io_fd_open_read_tuple(const char* p) { (void)p;  _tuple_int_string_io t; t._0 = -1; t._1 = "filesystem disabled"; return t; }
 _tuple_int_string_io io_fd_open_write_tuple(const char* p) { (void)p; _tuple_int_string_io t; t._0 = -1; t._1 = "filesystem disabled"; return t; }
 const char* io_fd_close_raw(int fd) { (void)fd; return "filesystem disabled"; }
@@ -245,16 +247,37 @@ static int fd_write_all(int fd, const char* data, int length) {
     return total;
 }
 
-int io_stderr_write(const char* data, int length) {
+int io_stderr_write_raw(const char* data, int length) {
     /* fflush stdio's buffer first so interleaved println / fprintf
      * output isn't reordered around the unbuffered write. */
     fflush(stderr);
     return fd_write_all(2, data, length);
 }
 
-int io_stdout_write(const char* data, int length) {
+int io_stdout_write_raw(const char* data, int length) {
     fflush(stdout);
     return fd_write_all(1, data, length);
+}
+
+/* perror(3): print "name: <errno message>\n" to stderr. Must be
+ * called immediately after the failing libc call, while errno is
+ * still live — same constraint as C's perror. */
+void io_perror_raw(const char* name) {
+    fflush(stderr);
+    perror(name && *name ? name : "error");
+}
+
+/* strerror(errno) for the *current* errno, as a heap string the
+ * caller owns. Same "call right after the failure" constraint.
+ * Returns a fresh copy so the static strerror buffer can't be
+ * clobbered under the caller. NULL only on OOM. */
+char* io_errno_message_raw(void) {
+    const char* m = strerror(errno);
+    if (!m) m = "unknown error";
+    size_t n = strlen(m);
+    char* out = (char*)malloc(n + 1);
+    if (out) memcpy(out, m, n + 1);
+    return out;
 }
 
 /* ─── Full fd surface (Section 1 of nuther-ask-of-aether-team.md) ──

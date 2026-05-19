@@ -1,6 +1,8 @@
 #ifndef AETHER_OS_H
 #define AETHER_OS_H
 
+#include <stdint.h>
+
 // Run a shell command, return exit code
 int os_system(const char* cmd);
 
@@ -86,5 +88,12 @@ char* os_now_utc_iso8601_raw(void);
 // names, per-process locks, log prefixes. POSIX getpid(2); Windows
 // _getpid(). Returns 0 on platforms without filesystem (no-op stub).
 int os_getpid_raw(void);
+
+// Wall-clock time as the two fields of POSIX struct timeval: whole
+// seconds since the Unix epoch, and the sub-second microsecond
+// fraction (0..999999). POSIX gettimeofday(2); Windows
+// GetSystemTimeAsFileTime. Both return 0 on no-filesystem builds.
+int64_t os_wall_seconds_raw(void);
+int     os_wall_micros_raw(void);
 
 #endif

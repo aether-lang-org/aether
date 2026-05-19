@@ -64,6 +64,48 @@ static int token_is_reserved_keyword(Token* token) {
     return 1;
 }
 
+// C ABI scalar aliases — recognised exact C type spellings. When a
+// type-position identifier matches one, parse_type builds a Type with
+// the given `kind` (which governs all typechecking and arithmetic)
+// plus c_alias = the name (the spelling codegen emits verbatim, so an
+// Aether `extern` prototype matches the C system header).
+//
+// `out_kind` receives the underlying TypeKind. Returns 1 on a match.
+// The set is the fixed C99/POSIX scalar family from
+// redis-porting-language-gaps.md "P0: C ABI Scalar Aliases".
+static int c_abi_alias_kind(const char* name, TypeKind* out_kind) {
+    struct { const char* alias; TypeKind kind; } table[] = {
+        /* fixed-width */
+        { "int8_t",   TYPE_INT },
+        { "uint8_t",  TYPE_UINT8 },
+        { "int16_t",  TYPE_INT },
+        { "uint16_t", TYPE_UINT16 },
+        { "int32_t",  TYPE_INT },
+        { "uint32_t", TYPE_UINT32 },
+        { "int64_t",  TYPE_INT64 },
+        { "uint64_t", TYPE_UINT64 },
+        /* pointer-width */
+        { "intptr_t",  TYPE_INT64 },
+        { "uintptr_t", TYPE_UINT64 },
+        /* size / offset */
+        { "size_t",  TYPE_UINT64 },
+        { "ssize_t", TYPE_INT64 },
+        { "off_t",   TYPE_INT64 },
+        /* platform scalars */
+        { "time_t", TYPE_INT64 },
+        { "pid_t",  TYPE_INT },
+        { "mode_t", TYPE_INT },
+    };
+    int n = (int)(sizeof(table) / sizeof(table[0]));
+    for (int i = 0; i < n; i++) {
+        if (strcmp(name, table[i].alias) == 0) {
+            *out_kind = table[i].kind;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 Token* expect_token(Parser* parser, AeTokenType expected) {
     Token* token = peek_token(parser);
     if (!token || token->type != expected) {
@@ -140,6 +182,54 @@ Type* parse_type(Parser* parser) {
     if (!token) return NULL;
 
     Type* type = NULL;
+
+    /* `const <type>` — a C-qualified type.  Parsed by recursing on the
+     * unqualified type, then stamping a const-prefixed C spelling onto
+     * `c_alias` so codegen emits the qualifier verbatim.  The `kind`
+     * is untouched, so const-ness affects only the emitted C — enough
+     * to match a header prototype like `memcmp(const void *, const
+     * void *, size_t)` and silence conflicting-declaration warnings.
+     * `const ptr` -> `const void*`; `const *T` -> `const T*`;
+     * `const string` -> `const char*`. See
+     * redis-porting-language-gaps.md "P0: Typed And Qualified C
+     * Pointers". */
+    if (token->type == TOKEN_CONST) {
+        advance_token(parser);  // consume `const`
+        Type* inner = parse_type(parser);
+        if (!inner) {
+            parser_error(parser, "Expected a type after `const`");
+            return NULL;
+        }
+        /* Compute the unqualified C spelling, then prefix `const `. */
+        const char* base = NULL;
+        char ptr_buf[128];
+        if (inner->c_alias) {
+            base = inner->c_alias;
+        } else if (inner->kind == TYPE_PTR && inner->element_type &&
+                   inner->element_type->kind == TYPE_STRUCT &&
+                   inner->element_type->struct_name) {
+            snprintf(ptr_buf, sizeof(ptr_buf), "%s*",
+                     inner->element_type->struct_name);
+            base = ptr_buf;
+        } else if (inner->kind == TYPE_PTR) {
+            base = "void*";
+        } else if (inner->kind == TYPE_STRING) {
+            base = "char*";
+        } else if (inner->kind == TYPE_BYTE) {
+            base = "unsigned char";
+        } else if (inner->kind == TYPE_INT) {
+            base = "int";
+        } else {
+            base = NULL;  /* leave codegen's default for exotic kinds */
+        }
+        if (base) {
+            char* qualified = malloc(strlen(base) + 7 /* "const " + NUL */);
+            sprintf(qualified, "const %s", base);
+            if (inner->c_alias) free(inner->c_alias);
+            inner->c_alias = qualified;
+        }
+        return inner;
+    }
 
     // Pointer-to-struct type: `*StructName`. Lowers to `StructName*` in
     // C. Used as the return type of `expr as *StructName` (the
@@ -345,9 +435,40 @@ Type* parse_type(Parser* parser) {
                     }
                 }
             } else {
-                // Could be a struct type
-                type = create_type(TYPE_STRUCT);
-                type->struct_name = strdup(token->value);
+                /* Named types: C string aliases, C ABI scalar
+                 * aliases, then a plain struct-name fall-through. */
+                TypeKind alias_kind;
+                if (strcmp(token->value, "cstring") == 0) {
+                    /* `cstring` — a string whose emitted C type is the
+                     * mutable `char*` (Aether's plain `string` emits
+                     * `const char*`). For a C extern whose header has
+                     * a non-const `char *` parameter. Behaves as a
+                     * `string` for all typechecking. */
+                    type = create_type(TYPE_STRING);
+                    type->c_alias = strdup("char*");
+                } else if (strcmp(token->value, "cstring_const") == 0) {
+                    /* `cstring_const` — `const char*` spelled
+                     * explicitly. Same emitted type as plain `string`;
+                     * provided so an extern signature reads as the C
+                     * header does. */
+                    type = create_type(TYPE_STRING);
+                    type->c_alias = strdup("const char*");
+                } else if (c_abi_alias_kind(token->value, &alias_kind)) {
+                    /* C ABI scalar aliases — exact C type spellings the
+                     * Redis/mquickjs ports need so an Aether `extern`
+                     * prototype matches the system header byte-for-byte.
+                     * The alias is a normal Type whose `kind` drives all
+                     * typechecking/arithmetic; `c_alias` carries the C
+                     * spelling codegen emits verbatim. See
+                     * redis-porting-language-gaps.md "P0: C ABI Scalar
+                     * Aliases". */
+                    type = create_type(alias_kind);
+                    type->c_alias = strdup(token->value);
+                } else {
+                    // Could be a struct type
+                    type = create_type(TYPE_STRUCT);
+                    type->struct_name = strdup(token->value);
+                }
             }
             break;
         }
@@ -931,11 +1052,36 @@ ASTNode* parse_binary_expression(Parser* parser, int precedence) {
         
         Token* operator = peek_token(parser);
         if (!operator) break;
-        
+
         int op_precedence = get_operator_precedence(operator->type);
         if (op_precedence < 0) break;  // Not an operator
         if (op_precedence < precedence) break;  // Lower precedence, stop
-        
+
+        /* Newline-led `*StructName name` is a statement, not an infix
+         * multiply continuing the previous expression.  Aether treats
+         * a newline as a statement separator, but `*` is both an infix
+         * operator and the lead token of a `*StructName name = ...`
+         * typed-pointer declaration.  When `*` starts a new source
+         * line and is followed by `IDENT IDENT` (a struct name then a
+         * variable name), stop the expression here so the next
+         * statement parses as the pointer-typed local declaration.
+         * Without this, `q = (p as *T)` <newline> `*T c = q` folds the
+         * second line into `(p as *T) * T`. See
+         * redis-porting-language-gaps.md "P0: Typed And Qualified C
+         * Pointers". */
+        if (operator->type == TOKEN_MULTIPLY) {
+            Token* after  = peek_ahead(parser, 1);
+            Token* after2 = peek_ahead(parser, 2);
+            Token* prev   = peek_ahead(parser, -1);
+            if (after && after->type == TOKEN_IDENTIFIER &&
+                after2 && after2->type == TOKEN_IDENTIFIER &&
+                prev && operator->line > prev->line) {
+                /* `*` leads a new source line and is followed by
+                 * `IDENT IDENT` — a `*StructName name` declaration. */
+                break;
+            }
+        }
+
         advance_token(parser);
         ASTNode* right = parse_binary_expression(parser, op_precedence + 1);  // Left-associative
         if (!right) return NULL;
@@ -1386,21 +1532,49 @@ ASTNode* parse_statement(Parser* parser) {
             return parse_python_style_declaration(parser);
 
         case TOKEN_CONST: {
-            // Local constant: const x = 5
+            // Local constant: const x = 5 or const arr[] = [1, 2, 3]
             int cline = token->line, ccol = token->column;
             advance_token(parser); // consume 'const'
             Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
             if (!cname) return NULL;
+
+            // Check for array form: const NAME[] = [...]
+            int is_array = 0;
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
+                advance_token(parser); // consume '['
+                if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) return NULL;
+                is_array = 1;
+            }
+
             if (!expect_token(parser, TOKEN_ASSIGN)) return NULL;
             ASTNode* cval = parse_expression(parser);
             if (!cval) return NULL;
             match_token(parser, TOKEN_SEMICOLON);
             ASTNode* node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
             add_child(node, cval);
-            if (cval->node_type) {
-                node->node_type = clone_type(cval->node_type);
+
+            if (is_array) {
+                node->annotation = strdup("array_const");
+                // Infer element type from first child of array literal
+                Type* elem_type = NULL;
+                if (cval->node_type == NULL && cval->child_count > 0 && cval->children[0]) {
+                    if (cval->children[0]->node_type) {
+                        elem_type = cval->children[0]->node_type;
+                    }
+                } else if (cval->node_type && cval->node_type->element_type) {
+                    elem_type = cval->node_type->element_type;
+                }
+                if (elem_type) {
+                    node->node_type = create_array_type(clone_type(elem_type), cval->child_count);
+                } else {
+                    node->node_type = create_array_type(create_type(TYPE_PTR), cval->child_count);
+                }
             } else {
-                node->node_type = create_type(TYPE_UNKNOWN);
+                if (cval->node_type) {
+                    node->node_type = clone_type(cval->node_type);
+                } else {
+                    node->node_type = create_type(TYPE_UNKNOWN);
+                }
             }
             return node;
         }
@@ -1464,7 +1638,33 @@ ASTNode* parse_statement(Parser* parser) {
             // Explicit type declaration: int x = 42;  byte b = 0x7F;
             return parse_variable_declaration(parser);
         }
-            
+
+        case TOKEN_MULTIPLY: {
+            /* `*StructName name = expr` — a typed pointer-to-struct
+             * local declaration.  Disambiguated from a deref-store
+             * (`*p = v`) by the shape `* IDENT IDENT`: a struct name
+             * followed by a variable name.  Used so an FFI handle
+             * (`*client c = ...`, `*JSContext ctx = ...`) carries its
+             * pointee identity through the type system, exactly like
+             * the param/return positions already do. See
+             * redis-porting-language-gaps.md "P0: Typed And Qualified
+             * C Pointers". */
+            Token* t1 = peek_ahead(parser, 1);  // the struct name
+            Token* t2 = peek_ahead(parser, 2);  // the variable name
+            if (t1 && t1->type == TOKEN_IDENTIFIER &&
+                t2 && t2->type == TOKEN_IDENTIFIER) {
+                return parse_variable_declaration(parser);
+            }
+            // Otherwise it's an expression statement (`*p = v`, etc.).
+            ASTNode* expr = parse_expression(parser);
+            if (!expr) return NULL;
+            match_token(parser, TOKEN_SEMICOLON);
+            ASTNode* es = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                                          token->line, token->column);
+            add_child(es, expr);
+            return es;
+        }
+
         case TOKEN_IF:
             return parse_if_statement(parser);
             
@@ -1524,6 +1724,19 @@ ASTNode* parse_statement(Parser* parser) {
             // Check if this is: identifier = expression (Python-style)
             // or tuple destructuring: identifier, identifier = expression
             Token* next = peek_ahead(parser, 1);
+            // C-style typed local with a C ABI alias type:
+            //   `size_t n = ...`, `ssize_t r = ...`
+            // The leading identifier is a known alias and the next
+            // token is another identifier — unambiguously a typed
+            // declaration, same shape as `int x = ...`.
+            {
+                TypeKind _alias_k;
+                if (token->value &&
+                    c_abi_alias_kind(token->value, &_alias_k) &&
+                    next && next->type == TOKEN_IDENTIFIER) {
+                    return parse_variable_declaration(parser);
+                }
+            }
             if (next && (next->type == TOKEN_ASSIGN || next->type == TOKEN_COMMA)) {
                 return parse_python_style_declaration(parser);
             }
@@ -2983,6 +3196,24 @@ ASTNode* parse_extern_declaration(Parser* parser) {
      * TU sees exactly one definition.  Layouts agree by construction
      * if the Aether spelling matches the C spelling.
      */
+    /* `extern type Name` — an opaque, header-defined C type.  Used as
+     * an FFI pointee (`*Name`) for handles whose layout Aether never
+     * inspects: Redis `client`, `dictEntry`; mquickjs `JSContext`.
+     * Emits a forward typedef `typedef struct Name Name;` (an
+     * incomplete type) — `Name*` is a valid pointer, field access is
+     * not.  See redis-porting-language-gaps.md "P0: Typed And
+     * Qualified C Pointers". */
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_IDENTIFIER &&
+        peek_token(parser)->value && strcmp(peek_token(parser)->value, "type") == 0) {
+        advance_token(parser);  // consume `type`
+        Token* tname = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!tname) return NULL;
+        ASTNode* td = create_ast_node(AST_STRUCT_DEFINITION, tname->value,
+                                      extern_token->line, extern_token->column);
+        td->annotation = strdup("extern_opaque");
+        return td;
+    }
+
     if (peek_token(parser) && peek_token(parser)->type == TOKEN_STRUCT) {
         advance_token(parser);  // consume `struct`
         Token* sname = expect_token(parser, TOKEN_IDENTIFIER);
@@ -2990,6 +3221,36 @@ ASTNode* parse_extern_declaration(Parser* parser) {
         ASTNode* sd = create_ast_node(AST_STRUCT_DEFINITION, sname->value,
                                       extern_token->line, extern_token->column);
         sd->annotation = strdup("extern");
+
+        /* Optional `@c_import` after the struct name:
+         *
+         *     extern struct client @c_import { argc: int; argv: ptr }
+         *
+         * Marks a struct whose layout is *imported from a C header*,
+         * not emitted by Aether.  Aether typechecks field access and
+         * `*client` overlays against the declared fields, but codegen
+         * emits NO `typedef struct client { ... } client;` and NO
+         * forward typedef — the included header is the sole source of
+         * truth for size, layout and padding.  Without this, Aether's
+         * own typedef collides with the header's.  See
+         * redis-porting-language-gaps.md "P0: Header-Defined C Struct
+         * Interop". */
+        if (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
+            advance_token(parser);  // consume '@'
+            Token* attr = peek_token(parser);
+            if (attr && attr->type == TOKEN_IDENTIFIER && attr->value &&
+                strcmp(attr->value, "c_import") == 0) {
+                advance_token(parser);  // consume 'c_import'
+                free(sd->annotation);
+                sd->annotation = strdup("extern_c_import");
+            } else {
+                parser_error(parser,
+                    "unknown extern-struct attribute (expected @c_import)");
+                free_ast_node(sd);
+                return NULL;
+            }
+        }
+
         if (!expect_token(parser, TOKEN_LEFT_BRACE)) {
             free_ast_node(sd);
             return NULL;
@@ -3292,6 +3553,14 @@ ASTNode* parse_function_definition(Parser* parser) {
                     is_typed_return = 1;
                     break;
                 case TOKEN_IDENTIFIER: {
+                    // A C ABI scalar alias (size_t, ssize_t, ...) in
+                    // return position is unambiguously a type.
+                    TypeKind alias_k;
+                    if (peek->value &&
+                        c_abi_alias_kind(peek->value, &alias_k)) {
+                        is_typed_return = 1;
+                        break;
+                    }
                     // `-> Name { ... }` — only a typed return if what
                     // follows `{` is NOT a struct-literal `field:` head.
                     Token* after_name = peek_ahead(parser, 2);
@@ -4006,21 +4275,49 @@ ASTNode* parse_program(Parser* parser) {
                 break;
             }
             case TOKEN_CONST: {
-                // Top-level constant: const NAME = value
+                // Top-level constant: const NAME = value or const arr[] = [1, 2, 3]
                 int cline = token->line, ccol = token->column;
                 advance_token(parser); // consume 'const'
                 Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
                 if (!cname) { advance_token(parser); continue; }
+
+                // Check for array form: const NAME[] = [...]
+                int is_array = 0;
+                if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
+                    advance_token(parser); // consume '['
+                    if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) { advance_token(parser); continue; }
+                    is_array = 1;
+                }
+
                 if (!expect_token(parser, TOKEN_ASSIGN)) { advance_token(parser); continue; }
                 ASTNode* cval = parse_expression(parser);
                 if (!cval) { advance_token(parser); continue; }
                 node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
                 add_child(node, cval);
-                // Infer type from value
-                if (cval->node_type) {
-                    node->node_type = clone_type(cval->node_type);
+
+                if (is_array) {
+                    node->annotation = strdup("array_const");
+                    // Infer element type from first child of array literal
+                    Type* elem_type = NULL;
+                    if (cval->node_type == NULL && cval->child_count > 0 && cval->children[0]) {
+                        if (cval->children[0]->node_type) {
+                            elem_type = cval->children[0]->node_type;
+                        }
+                    } else if (cval->node_type && cval->node_type->element_type) {
+                        elem_type = cval->node_type->element_type;
+                    }
+                    if (elem_type) {
+                        node->node_type = create_array_type(clone_type(elem_type), cval->child_count);
+                    } else {
+                        node->node_type = create_array_type(create_type(TYPE_PTR), cval->child_count);
+                    }
                 } else {
-                    node->node_type = create_type(TYPE_UNKNOWN);
+                    // Infer type from value
+                    if (cval->node_type) {
+                        node->node_type = clone_type(cval->node_type);
+                    } else {
+                        node->node_type = create_type(TYPE_UNKNOWN);
+                    }
                 }
                 break;
             }

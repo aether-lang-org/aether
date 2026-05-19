@@ -342,10 +342,14 @@ static void c_emit_str(FILE* out, const char* s) {
 // and the synthesized main() that the namespace pipeline injects.
 static const char* aether_type_spelling(Type* t) {
     if (!t) return "void";
+    if (t->c_alias) return t->c_alias;
     switch (t->kind) {
         case TYPE_INT:    return "int";
         case TYPE_INT64:  return "long";
         case TYPE_UINT64: return "ulong";
+        case TYPE_UINT32: return "uint32";
+        case TYPE_UINT16: return "uint16";
+        case TYPE_UINT8:  return "uint8";
         case TYPE_FLOAT:  return "float";
         case TYPE_BOOL:   return "bool";
         case TYPE_STRING: return "string";

@@ -1,0 +1,40 @@
+// Regression test for `io.perror` and `io.errno_message`.
+//
+// Both report off the current errno and must be called immediately
+// after a failing libc-backed operation. The test triggers a real
+// errno by opening a path that cannot exist, then checks:
+//   1. errno_message() returns a non-empty string (the strerror text).
+//   2. perror() is callable and does not crash.
+//
+// The exact message text is libc/locale-dependent, so the test only
+// asserts non-emptiness, not a specific string.
+
+import std.io
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== io.perror / io.errno_message smoke ===")
+
+    // Trigger a real errno: open a path that does not exist.
+    fd, err = io.fd_open_read("/nonexistent/aether-perror-test/xyzzy")
+    if fd >= 0 {
+        println("FAIL: open of a bogus path unexpectedly succeeded")
+        exit(1)
+    }
+
+    // errno is live here.
+    msg = io.errno_message()
+    if string.length(msg) <= 0 {
+        println("FAIL: errno_message() returned an empty string")
+        exit(1)
+    }
+    println("  PASS 1: errno_message() = \"${msg}\"")
+
+    // perror prints to stderr; just confirm it is callable / no crash.
+    io.perror("test_io_perror")
+    println("  PASS 2: perror() callable, no crash")
+
+    println("=== All cases passed ===")
+}

@@ -61,6 +61,8 @@ _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* p, void* a, 
  * (its no-FS stub returns -1 there). */
 char* os_now_utc_iso8601_raw(void) { return NULL; }
 int os_getpid_raw(void) { return 0; }
+int64_t os_wall_seconds_raw(void) { return 0; }
+int os_wall_micros_raw(void) { return 0; }
 #else
 
 #include <stdio.h>
@@ -234,6 +236,44 @@ int os_getpid_raw(void) {
 #else
     return (int)getpid();
 #endif
+}
+
+/* Wall-clock time split into whole seconds since the Unix epoch and
+ * the sub-second microsecond fraction (0..999999).  A single
+ * gettimeofday/filetime read fills a static cache so the two raw
+ * accessors are consistent when called back-to-back. struct timeval /
+ * FILETIME stay entirely C-side — Aether only ever sees int64/int. */
+#ifdef _WIN32
+#include <windows.h>
+static void aether_os_wall_now(int64_t *psec, int *pusec) {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    /* FILETIME: 100-ns ticks since 1601-01-01. Convert to Unix epoch. */
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    t -= 116444736000000000ULL;          /* 1601->1970 offset, 100ns units */
+    *psec  = (int64_t)(t / 10000000ULL);
+    *pusec = (int)((t / 10ULL) % 1000000ULL);
+}
+#else
+#include <sys/time.h>
+static void aether_os_wall_now(int64_t *psec, int *pusec) {
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) { *psec = 0; *pusec = 0; return; }
+    *psec  = (int64_t)tv.tv_sec;
+    *pusec = (int)tv.tv_usec;
+}
+#endif
+
+int64_t os_wall_seconds_raw(void) {
+    int64_t sec; int usec;
+    aether_os_wall_now(&sec, &usec);
+    return sec;
+}
+
+int os_wall_micros_raw(void) {
+    int64_t sec; int usec;
+    aether_os_wall_now(&sec, &usec);
+    return usec;
 }
 
 int os_execv(const char* prog, void* argv_list) {

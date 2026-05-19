@@ -1,0 +1,21 @@
+// Test: const array declarations emit static const arrays
+// Tests const [] = [...] declarations at top level
+
+const atoms[] = ["null", "false", "true", "if", "else"]
+const colors[] = ["red", "green", "blue"]
+
+main() {
+    // Test string array access
+    println(atoms[0])   // expect: null
+    println(atoms[1])   // expect: false
+    println(atoms[4])   // expect: else
+
+    // Test another string array
+    println(colors[0])  // expect: red
+    println(colors[2])  // expect: blue
+
+    // Test access in conditional
+    if atoms[2] == "true" {
+        println("match: ok")  // expect: match: ok
+    }
+}

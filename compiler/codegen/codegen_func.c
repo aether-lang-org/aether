@@ -412,6 +412,12 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
 
     // Generate return type (map Aether types to C types)
     if (ext->node_type && ext->node_type->kind != TYPE_VOID) {
+        /* A C ABI alias / qualified type (`c_alias` set: `size_t`,
+         * `const void*`, `char*`, ...) emits its exact C spelling so
+         * the prototype matches the system header byte-for-byte. */
+        if (ext->node_type->c_alias) {
+            fprintf(gen->output, "%s", ext->node_type->c_alias);
+        } else
         switch (ext->node_type->kind) {
             case TYPE_STRING:
                 fprintf(gen->output, "const char*");
@@ -467,6 +473,10 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
 
             // Map Aether types to C types
             if (param->node_type) {
+                if (param->node_type->c_alias) {
+                    /* C ABI alias / qualified type — exact C spelling. */
+                    fprintf(gen->output, "%s", param->node_type->c_alias);
+                } else
                 switch (param->node_type->kind) {
                     case TYPE_STRING:
                         fprintf(gen->output, "const char*");
@@ -1441,6 +1451,32 @@ static void generate_extern_struct_field(CodeGenerator* gen, ASTNode* field,
 
 void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
     if (!struct_def || struct_def->type != AST_STRUCT_DEFINITION) return;
+
+    /* `extern type Name` — an opaque, header-defined C type.  Its
+     * complete emission is the incomplete forward typedef
+     * `typedef struct Name Name;` that the forward-typedef hoist pass
+     * already emits for every struct definition.  Emitting nothing
+     * more here is deliberate: an opaque type has no body, `Name*` is
+     * a usable pointer, and field access stays a compile error.
+     * Matches a C header's own `typedef struct Name Name;` exactly.
+     * See redis-porting-language-gaps.md "P0: Typed And Qualified C
+     * Pointers". */
+    if (struct_def->annotation &&
+        strcmp(struct_def->annotation, "extern_opaque") == 0) {
+        return;
+    }
+
+    /* `extern struct ... @c_import` — the struct's layout is imported
+     * from a C header, not emitted by Aether.  Emit nothing: no body,
+     * no typedef.  The included header is the sole source of truth
+     * for size, layout and padding; field access still typechecks
+     * because the AST_STRUCT_DEFINITION node carries the declared
+     * fields.  See redis-porting-language-gaps.md "P0: Header-Defined
+     * C Struct Interop". */
+    if (struct_def->annotation &&
+        strcmp(struct_def->annotation, "extern_c_import") == 0) {
+        return;
+    }
 
     /* `extern struct` (annotation="extern") gets two opt-in C
      * spellings that don't apply to regular Aether structs:
