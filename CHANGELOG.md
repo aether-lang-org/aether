@@ -23,6 +23,20 @@ next version number before tagging the release.
 
   Reported by the avn port (`tuple-destructure-heap-classification.md`) where the leak compounded into O(N²) RSS retention in avnserver — ~800 MB resident at 5000 commits, driven by recursive directory-blob reads through `rep_read_decoded`. In-tree callers (`std/cas/module.ae` ×2, `tests/regression/test_string_eq_on_aether_string.ae`, `tests/regression/test_fs_atomic_rename_stat_binary.ae`) already used the bytes as a `string`; the typed-as-`ptr` cover was load-bearing only for the leak. Regression test asserts `aether_caps_used_bytes()` delta stays bounded (≤ 64 KB) after 200 reads of a 10 KB file — pre-fix would have grown by ~2 MB.
 
+### Upgrade notes
+
+This release tightens `fs.read_binary`'s ownership contract: the first tuple element (`bytes`) is now a heap-tracked `string` that the destructured LHS owns and that the runtime reclaims at scope exit or on destructure reassignment. The previous version mis-typed it as `ptr`, so the buffer leaked at every call site — a slow leak that nonetheless kept the underlying AetherString alive indefinitely.
+
+If your project destructures `fs.read_binary` (or any other call that ultimately bottoms out in `fs_read_binary_tuple`) and then stashes the `bytes` value into a long-lived alias — a `map.put` value, a struct field, a list element, an actor message, or a return through a wrapper that doesn't itself own the value — the previous compiler tolerated this as a leak; this release will free the alias when the destructure scope exits, leaving the long-lived holder pointing at freed memory. This shape is a **use-after-free** on the next read of the alias.
+
+The same hazard affects any user-defined wrapper whose body is `f(x) -> { return some_extern(x) }` and whose extern carries `@heap` tuple-position flags — those wrappers previously hard-vetoed heap classification (so every caller leaked) and now correctly propagate ownership. If you have such a wrapper *and* a downstream caller that aliases its destructured result into long-lived storage, the same UAF shape applies.
+
+**Recommended pre-upgrade play:**
+
+1. Run `aetherc --diagnose=ownership` against your project. The diagnostic reports per-local string-ownership verdicts and will mark `fs.read_binary`-derived destructure targets as heap-owned. Cross-reference any heap-owned local that gets passed to `map.put`, written to a struct field, returned without an explicit retention, or sent to an actor.
+2. For each such site, decide between: (a) cloning the bytes into a fresh owned copy at the alias site (`string.copy` or `string_new_with_length` if you need a length-aware copy), or (b) holding the source destructure scope open for the alias's lifetime. The leak previously did (b) by accident; (a) is the explicit form.
+3. Re-run your project under ASan or Valgrind after the upgrade. A clean run on the *previous* aetherc release tells you nothing — the leak was masking the UAF. Only a sanitiser run against the new release surfaces the real hazard.
+
 ## [0.174.0]
 
 ### Changed
