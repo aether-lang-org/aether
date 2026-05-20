@@ -351,6 +351,13 @@ void http_server_use_response_transformer(HttpServer* server,
 
 // Request parsing
 HttpRequest* http_parse_request(const char* raw_request);
+// Length-aware sibling — buf need not be NUL-terminated and may contain
+// embedded NUL bytes in the body. `len` is the authoritative byte count
+// of the whole request slice (request line + headers + body). Required
+// for binary bodies (Content-Encoding: x-lzf, octet-stream, etc.); the
+// string-shaped sibling above is a thin wrapper around this for legacy
+// callers that already have a NUL-terminated buffer.
+HttpRequest* http_parse_request_n(const char* buf, size_t len);
 const char* http_get_header(HttpRequest* req, const char* key);
 const char* http_get_query_param(HttpRequest* req, const char* key);
 const char* http_get_path_param(HttpRequest* req, const char* key);

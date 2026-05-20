@@ -192,3 +192,66 @@ TEST(http_server_post_with_body) {
     // Note: Body parsing may need additional implementation
     http_request_free(req);
 }
+
+TEST(http_server_post_binary_body_with_embedded_nul) {
+    /* Regression test (A4, 2026-05-20): an HTTP POST with binary body
+     * (Content-Encoding: x-lzf / image upload / any application/octet-
+     * stream payload) may contain embedded NUL bytes. The parser used
+     * to strdup the body and store strlen() as the length, truncating
+     * binary content at the first NUL. With the Content-Length-aware
+     * parse, the full body should survive intact.
+     *
+     * 12-byte body: 'A' 'B' '\0' '\1' 'C' 'D' '\0' '\0' 'E' 'F' '\0' 'G'
+     * — three embedded NULs at positions 2, 6, 7, 10. strlen() would
+     * return 2; Content-Length is 12. Use http_parse_request_n so the
+     * parser sees the authoritative buffer length and doesn't have to
+     * rely on strlen (which would stop at the first body NUL).
+     */
+    static const char body_bytes[12] = {
+        'A', 'B', '\0', '\1', 'C', 'D', '\0', '\0', 'E', 'F', '\0', 'G'
+    };
+    char raw[256];
+    int header_len = snprintf(raw, sizeof(raw),
+        "POST /upload HTTP/1.1\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "Content-Length: 12\r\n"
+        "\r\n");
+    memcpy(raw + header_len, body_bytes, 12);
+    raw[header_len + 12] = '\0';
+
+    HttpRequest* req = http_parse_request_n(raw, (size_t)header_len + 12);
+    ASSERT_NOT_NULL(req);
+    ASSERT_EQ(12, (int)req->body_length);
+    ASSERT_NOT_NULL(req->body);
+    ASSERT_EQ(0, memcmp(req->body, body_bytes, 12));
+    http_request_free(req);
+}
+
+TEST(http_server_post_with_oversized_content_length_clamps_safely) {
+    /* Regression test (A4 follow-up, PR #532 ASan failure): if a client
+     * sends `Content-Length: <larger-than-actual>`, the parser must not
+     * memcpy past the end of the buffered request. Previously the new
+     * Content-Length-aware code path trusted the header unconditionally,
+     * which ASan caught on the pre-existing `http_server_post_with_body`
+     * fixture (Content-Length: 25, body bytes: 19). Clamp body_cl against
+     * the bytes actually available in the buffer.
+     */
+    const char* raw_request =
+        "POST /api/users HTTP/1.1\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: 25\r\n"
+        "\r\n"
+        "{\"name\":\"John Doe\"}";  /* 19 bytes — header lies */
+
+    /* The wrapper uses strlen, which gives us the actual buffered byte
+     * count (no embedded NULs in the body here). The parser must clamp
+     * Content-Length=25 down to the 19 bytes that are actually present. */
+    HttpRequest* req = http_parse_request(raw_request);
+    ASSERT_NOT_NULL(req);
+    ASSERT_STREQ("POST", req->method);
+    /* body_length must equal the clamp target (19), not the lying 25. */
+    ASSERT_EQ(19, (int)req->body_length);
+    ASSERT_NOT_NULL(req->body);
+    ASSERT_EQ(0, memcmp(req->body, "{\"name\":\"John Doe\"}", 19));
+    http_request_free(req);
+}

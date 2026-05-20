@@ -1,0 +1,31 @@
+// Regression fixture: a module whose public tuple-returning function
+// shares its name as a strict prefix with several trailing-underscore
+// helper functions. Filed by avn-port (A6, 2026-05-20) — the report
+// claimed the consumer's typecheck failed with E0301 on the
+// prefix-shadowed entry. The bug did not actually reproduce at 0.175.0
+// + HEAD; this test pins the working shape so a future regression
+// surfaces immediately.
+//
+// Shape under test:
+//   merge_argv_new_   (trailing-underscore, prefix-shadow sibling)
+//   merge_argv_push_  (trailing-underscore, prefix-shadow sibling)
+//   merge_run_diff_   (trailing-underscore, prefix-shadow sibling)
+//   merge             (the prefix-shadowed entry — returns a TUPLE)
+
+merge_argv_new_() -> ptr {
+    return null
+}
+
+merge_argv_push_(argv: ptr, s: string) -> int {
+    return 0
+}
+
+merge_run_diff_(op: string, bp: string, tp: string) -> (string, int) {
+    return op, 0
+}
+
+merge(base: string, base_len: int,
+      ours: string, ours_len: int,
+      theirs: string, theirs_len: int) -> (string, int) {
+    return ours, 1
+}
