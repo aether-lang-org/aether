@@ -1,0 +1,114 @@
+// Regression: fs.read_binary's first tuple element (bytes) must be
+// reclaimed at scope exit / destructure reassign.
+//
+// Bug shape (avn port, tuple-destructure-heap-classification.md):
+// fs_read_binary_tuple declared position 0 as `ptr`, but the C side
+// returned an owned AetherString*. The destructure codegen reads
+// per-position `tuple_heap_flags[j]`, populated by the parser only
+// when `@heap` is in scope. `ptr` carried no flag, so every
+//
+//     bytes, _, _ = fs.read_binary(path)
+//
+// site retained the bytes buffer at scope exit. Cumulative retention
+// across recursive reads of large blobs blew avnserver up to
+// ~800 MB resident at 5000 commits — O(N²) RSS.
+//
+// Fix: extern fs_read_binary_tuple(...) -> (string @heap, int, string)
+// (same shape `fs_realpath_raw` has used since #420).
+//
+// What this test guards: read a sizable file many times, destructure
+// the result into a reused `bytes` local. Track cap-accounted bytes
+// via aether_caps_used_bytes() before vs after the loop — pre-fix the
+// delta is ~N * file_size (here ~2 MB); post-fix it's bounded by one
+// iteration's worth (the last `bytes` lives until function exit) plus
+// constant overhead.
+
+import std.fs
+import std.string
+import std.io
+
+extern exit(code: int)
+extern aether_caps_used_bytes() -> long
+
+main() {
+    println("=== fs.read_binary tuple heap reclaim ===")
+
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    path = "${tmp}/aether_fs_read_binary_heap_reclaim.bin"
+
+    // Build a ~10 KB payload so retention shows up clearly against
+    // any constant overhead in the cap counter.
+    chunk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    payload = ""
+    i = 0
+    while i < 160 {                        // 160 * 64 = 10240 bytes
+        payload = string.concat(payload, chunk)
+        i = i + 1
+    }
+    payload_len = string.length(payload)
+    if payload_len != 10240 {
+        println("FAIL: payload setup, length=${payload_len}, expected 10240")
+        exit(1)
+    }
+
+    werr = fs.write_atomic(path, payload, payload_len)
+    if werr != "" {
+        println("FAIL: write_atomic err=${werr}")
+        exit(1)
+    }
+
+    // Warm-up read: forces TLS buffers / per-thread arenas to be
+    // initialised so they don't skew the before/after snapshot.
+    wb, _, werr2 = fs.read_binary(path)
+    if werr2 != "" {
+        println("FAIL: warm-up read err=${werr2}")
+        exit(1)
+    }
+    if string.length(wb) != 10240 {
+        println("FAIL: warm-up length=${string.length(wb)}, expected 10240")
+        exit(1)
+    }
+
+    iters = 200
+    used_before = aether_caps_used_bytes()
+
+    j = 0
+    while j < iters {
+        bytes, _, rerr = fs.read_binary(path)
+        if rerr != "" {
+            println("FAIL: read iter=${j} err=${rerr}")
+            exit(1)
+        }
+        // Touch the bytes to keep the optimiser honest — the read
+        // result must be observably correct each iteration.
+        if string.length(bytes) != 10240 {
+            println("FAIL: iter=${j} length=${string.length(bytes)}, expected 10240")
+            exit(1)
+        }
+        j = j + 1
+    }
+
+    used_after = aether_caps_used_bytes()
+    delta = used_after - used_before
+
+    // Pre-fix: delta ≈ iters * 10240 = ~2 MB (every iteration leaks
+    // its bytes buffer).
+    // Post-fix: each iteration's previous `bytes` is released at the
+    // destructure-reassign before the next read; only the final
+    // iteration's bytes (plus warm-up's, until main exits) is live.
+    // Generous ceiling — 64 KB headroom for AetherString headers,
+    // arena slop, etc. — still catches the leak by 30+ ×.
+    ceiling = 65536
+    if delta > ceiling {
+        println("FAIL: cap-accounted delta=${delta} bytes after ${iters} reads (ceiling=${ceiling}). Bytes buffer not reclaimed at destructure scope.")
+        exit(1)
+    }
+    println("  PASS: delta=${delta} bytes after ${iters} reads of 10 KB (ceiling=${ceiling})")
+
+    // Cleanup
+    fs.delete(path)
+
+    println("=== heap reclaim verified ===")
+}

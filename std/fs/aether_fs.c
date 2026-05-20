@@ -757,7 +757,13 @@ _tuple_ptr_int_string fs_read_binary_tuple(const char* path) {
         return out;
     }
     AetherString* wrapped = string_new_with_length(buf, (size_t)len);
-    free(buf);
+    /* `buf` came from fs_read_binary_raw via aether_caps_malloc with
+     * capacity len + 1 (size + 1 for the trailing NUL). Release it
+     * through the matching aether_caps_free so the cap counter
+     * decrements — libc free leaks the accounting and leaves
+     * aether_caps_used_bytes() climbing by one buffer per call even
+     * once string_release lands on the wrapper. */
+    aether_caps_free(buf, (size_t)len + 1);
     if (!wrapped) {
         out._0 = (void*)string_empty();
         out._1 = 0;
