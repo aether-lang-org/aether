@@ -1302,10 +1302,50 @@ HttpRequest* http_parse_request(const char* raw_request) {
         header_start = line_end + 2;
     }
     
-    // Parse body
+    // Parse body. Binary bodies (Content-Encoding: x-lzf, gzip, etc., or
+    // any application/octet-stream payload) may contain embedded NUL
+    // bytes. The caller (see http_server_accept_loop's request-buffer
+    // assembly) reads Content-Length bytes off the wire and NUL-
+    // terminates the slice for header parsing, so the body bytes are
+    // present at *header_start* — they just don't survive a strdup/strlen
+    // pair. Honour the parsed Content-Length header to memcpy the exact
+    // byte count, falling back to strlen only when Content-Length is
+    // absent (HTTP/1.0 text bodies, malformed client requests).
+    long body_cl = -1;
+    for (int hi = 0; hi < req->header_count; hi++) {
+        if (req->header_keys[hi] &&
+            strcasecmp(req->header_keys[hi], "Content-Length") == 0 &&
+            req->header_values[hi]) {
+            body_cl = strtol(req->header_values[hi], NULL, 10);
+            if (body_cl < 0) body_cl = -1;
+            break;
+        }
+    }
     if (header_start && *header_start) {
-        req->body = strdup(header_start);
-        req->body_length = strlen(req->body);
+        if (body_cl >= 0) {
+            req->body = (char*)malloc((size_t)body_cl + 1);
+            if (req->body) {
+                if (body_cl > 0) memcpy(req->body, header_start, (size_t)body_cl);
+                req->body[body_cl] = '\0';
+                req->body_length = (size_t)body_cl;
+            } else {
+                req->body_length = 0;
+            }
+        } else {
+            req->body = strdup(header_start);
+            req->body_length = req->body ? strlen(req->body) : 0;
+        }
+    } else if (body_cl > 0) {
+        /* Content-Length advertises bytes but header_start hit '\0' —
+         * the body's first byte is NUL. Allocate and copy explicitly. */
+        req->body = (char*)malloc((size_t)body_cl + 1);
+        if (req->body) {
+            memcpy(req->body, header_start, (size_t)body_cl);
+            req->body[body_cl] = '\0';
+            req->body_length = (size_t)body_cl;
+        } else {
+            req->body_length = 0;
+        }
     } else {
         req->body = NULL;
         req->body_length = 0;

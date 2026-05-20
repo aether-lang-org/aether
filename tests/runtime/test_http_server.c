@@ -192,3 +192,35 @@ TEST(http_server_post_with_body) {
     // Note: Body parsing may need additional implementation
     http_request_free(req);
 }
+
+TEST(http_server_post_binary_body_with_embedded_nul) {
+    /* Regression test (A4, 2026-05-20): an HTTP POST with binary body
+     * (Content-Encoding: x-lzf / image upload / any application/octet-
+     * stream payload) may contain embedded NUL bytes. The parser used
+     * to strdup the body and store strlen() as the length, truncating
+     * binary content at the first NUL. With the Content-Length-aware
+     * parse, the full body should survive intact.
+     *
+     * 12-byte body: 'A' 'B' '\0' '\1' 'C' 'D' '\0' '\0' 'E' 'F' '\0' 'G'
+     * — three embedded NULs at positions 2, 6, 7, 10. strlen() would
+     * return 2; Content-Length is 12.
+     */
+    static const char body_bytes[12] = {
+        'A', 'B', '\0', '\1', 'C', 'D', '\0', '\0', 'E', 'F', '\0', 'G'
+    };
+    char raw[256];
+    int header_len = snprintf(raw, sizeof(raw),
+        "POST /upload HTTP/1.1\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "Content-Length: 12\r\n"
+        "\r\n");
+    memcpy(raw + header_len, body_bytes, 12);
+    raw[header_len + 12] = '\0';
+
+    HttpRequest* req = http_parse_request(raw);
+    ASSERT_NOT_NULL(req);
+    ASSERT_EQ(12, (int)req->body_length);
+    ASSERT_NOT_NULL(req->body);
+    ASSERT_EQ(0, memcmp(req->body, body_bytes, 12));
+    http_request_free(req);
+}

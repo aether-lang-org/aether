@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`http_parse_request` preserves binary request bodies through embedded NULs** (`std/net/aether_http_server.c`, `tests/runtime/test_http_server.c`). The server-side HTTP request parser was reading the body via `strdup(header_start)` and storing `strlen(req->body)` as `body_length`, both of which stop at the first NUL inside the body. Binary payloads — `Content-Encoding: x-lzf`, image uploads, gzip-compressed JSON, any `application/octet-stream` — arrived at the application handler truncated at their first internal `\x00`, even though the server's connection loop had already read the full `Content-Length` bytes off the wire and into its buffer. The fix consults the parsed `Content-Length` header and `memcpy`s exactly that many bytes when present, falling back to `strdup`/`strlen` only for legacy text bodies that omit the header. `http.request_body_length(req)` (already exposed as the binary-safe accessor — see `tests/syntax/test_http_request_body_length.ae`) now reports the wire-correct length end-to-end; `http.request_body(req)` returns a buffer the caller can `memcpy` `body_length` bytes from. Surfaced by the avn port (`std-http-body-truncates-at-nul.md`) where the gh-issue #2 lzf-wire-envelope smoke test rejected a 237-byte compressed POST body as 112 bytes server-side. New regression test `http_server_post_binary_body_with_embedded_nul` parses a hand-built request whose 12-byte body has three embedded NULs and asserts `body_length == 12` plus a full-buffer `memcmp` against the wire bytes.
+
 ## [0.175.0]
 
 ### Fixed
