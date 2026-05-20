@@ -1197,9 +1197,31 @@ int http_server_bind_raw(HttpServer* server, const char* host, int port) {
 }
 
 // Request parsing
-HttpRequest* http_parse_request(const char* raw_request) {
+//
+// Two entry points:
+//
+//   http_parse_request_n(buf, len) — length-aware. `len` is the
+//     authoritative byte count of the request slice; the body parse
+//     clamps `Content-Length` against the remaining bytes after the
+//     header block, so a client-supplied `Content-Length: 99999` with
+//     a 19-byte body no longer crashes via memcpy-overread (the bug
+//     ASan caught in PR #532 on the pre-existing
+//     `http_server_post_with_body` fixture).
+//
+//   http_parse_request(raw) — thin wrapper for legacy text-shaped
+//     callers; calls `_n(raw, strlen(raw))`.
+//
+// Implementation note: the request-line and header parsing still use
+// strstr, which means `buf` must be NUL-terminated at offset `len`
+// (the wire-protocol caller already NUL-pokes its receive buffer for
+// this reason; the wrapper above terminates by construction). `len`
+// is consulted only for the body-bounds clamp — exactly the place
+// where binary payloads with embedded NULs need it.
+HttpRequest* http_parse_request_n(const char* buf, size_t len) {
+    if (!buf) return NULL;
+    const char* raw_request = buf;
     HttpRequest* req = (HttpRequest*)calloc(1, sizeof(HttpRequest));
-    
+
     // Parse request line: METHOD /path HTTP/1.1
     char* line_end = strstr(raw_request, "\r\n");
     if (!line_end) {
@@ -1309,7 +1331,10 @@ HttpRequest* http_parse_request(const char* raw_request) {
     // terminates the slice for header parsing, so the body bytes are
     // present at *header_start* — they just don't survive a strdup/strlen
     // pair. Honour the parsed Content-Length header to memcpy the exact
-    // byte count, falling back to strlen only when Content-Length is
+    // byte count, clamped against `body_avail` (what's actually buffered
+    // — defends against a malicious or buggy client lying with an
+    // oversized Content-Length, which would otherwise memcpy past the
+    // buffer). Fall back to strdup/strlen only when Content-Length is
     // absent (HTTP/1.0 text bodies, malformed client requests).
     long body_cl = -1;
     for (int hi = 0; hi < req->header_count; hi++) {
@@ -1321,31 +1346,22 @@ HttpRequest* http_parse_request(const char* raw_request) {
             break;
         }
     }
-    if (header_start && *header_start) {
-        if (body_cl >= 0) {
-            req->body = (char*)malloc((size_t)body_cl + 1);
-            if (req->body) {
-                if (body_cl > 0) memcpy(req->body, header_start, (size_t)body_cl);
-                req->body[body_cl] = '\0';
-                req->body_length = (size_t)body_cl;
-            } else {
-                req->body_length = 0;
-            }
-        } else {
-            req->body = strdup(header_start);
-            req->body_length = req->body ? strlen(req->body) : 0;
-        }
-    } else if (body_cl > 0) {
-        /* Content-Length advertises bytes but header_start hit '\0' —
-         * the body's first byte is NUL. Allocate and copy explicitly. */
-        req->body = (char*)malloc((size_t)body_cl + 1);
+    size_t body_offset = (size_t)(header_start - raw_request);
+    size_t body_avail = (body_offset <= len) ? (len - body_offset) : 0;
+    if (body_cl >= 0) {
+        size_t copy_n = (size_t)body_cl;
+        if (copy_n > body_avail) copy_n = body_avail;
+        req->body = (char*)malloc(copy_n + 1);
         if (req->body) {
-            memcpy(req->body, header_start, (size_t)body_cl);
-            req->body[body_cl] = '\0';
-            req->body_length = (size_t)body_cl;
+            if (copy_n > 0) memcpy(req->body, header_start, copy_n);
+            req->body[copy_n] = '\0';
+            req->body_length = copy_n;
         } else {
             req->body_length = 0;
         }
+    } else if (header_start && *header_start) {
+        req->body = strdup(header_start);
+        req->body_length = req->body ? strlen(req->body) : 0;
     } else {
         req->body = NULL;
         req->body_length = 0;
@@ -1354,8 +1370,13 @@ HttpRequest* http_parse_request(const char* raw_request) {
     req->param_keys = NULL;
     req->param_values = NULL;
     req->param_count = 0;
-    
+
     return req;
+}
+
+HttpRequest* http_parse_request(const char* raw_request) {
+    if (!raw_request) return NULL;
+    return http_parse_request_n(raw_request, strlen(raw_request));
 }
 
 const char* http_get_header(HttpRequest* req, const char* key) {
@@ -2398,14 +2419,18 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         request_total = needed_total;
     }
 
-    /* Carve out the request slice. http_parse_request expects a
-     * NUL-terminated C string; restore the byte we overwrite after
-     * parsing so the next request's bytes (already in the buffer
-     * from a pipelined recv) survive. */
+    /* Carve out the request slice. The length-aware `_n` entry point
+     * gets the exact byte count so its body-parse clamps `Content-
+     * Length` against what's actually buffered (defends against a
+     * lying or buggy client header). We still NUL-terminate the slice
+     * before the call because the request-line / header scan inside
+     * `_n` uses strstr — restore the saved byte afterward so the next
+     * request's bytes (already buffered from a pipelined recv)
+     * survive. */
     char* req_start = conn->buf + conn->read_pos;
     char saved = req_start[request_total];
     req_start[request_total] = '\0';
-    HttpRequest* req = http_parse_request(req_start);
+    HttpRequest* req = http_parse_request_n(req_start, (size_t)request_total);
     req_start[request_total] = saved;
 
     /* Advance past the parsed bytes regardless of parse outcome —
