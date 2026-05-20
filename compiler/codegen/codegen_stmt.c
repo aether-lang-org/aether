@@ -1226,6 +1226,7 @@ static void walk_returns_for_heap_at(CodeGenerator* gen, ASTNode* node,
         if (node->child_count == 1) {
             ASTNode* child = node->children[0];
             ASTNode* callee = NULL;
+            ASTNode* ext_callee = NULL;
             if (child && child->type == AST_FUNCTION_CALL && child->value &&
                 gen && gen->program) {
                 char fn_norm[256];
@@ -1233,8 +1234,31 @@ static void walk_returns_for_heap_at(CodeGenerator* gen, ASTNode* node,
                                                           fn_norm,
                                                           sizeof(fn_norm));
                 callee = find_function_definition_by_name(gen->program, fn);
+                /* When the passthrough target is an extern (no user
+                 * fn def), consult its `@heap` tuple-position flags
+                 * directly instead of vetoing — same channel the
+                 * AST_TUPLE_DESTRUCTURE handler reads when the callee
+                 * is named directly at the destructure site. Without
+                 * this, every `-> { return some_extern(...) }` wrapper
+                 * silently dropped its callee's heap classification,
+                 * so the user-facing wrapper looked non-heap at every
+                 * destructure site. Surfaced by fs.read_binary (whose
+                 * extern, fs_read_binary_tuple, is `(string @heap,
+                 * int, string)`) leaking its bytes buffer in the avn
+                 * port — tuple-destructure-heap-classification.md. */
+                if (!callee) {
+                    ext_callee = find_extern_declaration_by_name(
+                        gen->program, fn);
+                }
             }
             if (callee && function_def_returns_heap_at(gen, callee, position)) {
+                *any_heap = 1;
+            } else if (ext_callee && ext_callee->node_type &&
+                       ext_callee->node_type->kind == TYPE_TUPLE &&
+                       position >= 0 &&
+                       position < ext_callee->node_type->tuple_count &&
+                       ext_callee->node_type->tuple_heap_flags &&
+                       ext_callee->node_type->tuple_heap_flags[position]) {
                 *any_heap = 1;
             } else {
                 *vetoed = 1;

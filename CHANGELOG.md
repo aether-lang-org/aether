@@ -9,7 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`fs.read_binary` no longer leaks the bytes buffer at scope exit** (`std/fs/module.ae`, `std/fs/aether_fs.c`, `compiler/codegen/codegen_stmt.c`, `tests/regression/test_fs_read_binary_tuple_heap_reclaim.ae`). Three load-bearing fixes:
+
+  1. `extern fs_read_binary_tuple(...) -> (ptr, int, string)` became `(string @heap, int, string)`. Position 0 was typed `ptr` but the C side returned an owned `AetherString*` from `string_new_with_length`; the tuple-destructure codegen (`AST_TUPLE_DESTRUCTURE` handler) consults `tuple_heap_flags[j]` populated by the parser only when an `@heap` annotation is in scope, so `ptr` carried no flag and every `bytes, _, _ = fs.read_binary(p)` site leaked its payload at scope exit. Matches the precedent set by `fs_realpath_raw`.
+
+  2. `function_def_returns_heap_at`'s whole-tuple-passthrough handler (`return some_extern(...)`) only consulted user function definitions when resolving the callee. An extern callee — even one carrying `@heap` tuple-position flags — fell through to a hard veto, so every user-facing wrapper of the shape `f(x) -> { return some_extern(x) }` silently dropped its callee's heap classification. The handler now also consults `find_extern_declaration_by_name` and reads the extern's `tuple_heap_flags[position]` directly. Without this second fix, the `string @heap` annotation on `fs_read_binary_tuple` had no effect at `fs.read_binary` call sites — the wrapper was the only caller in-tree.
+
+  3. `fs_read_binary_tuple` was calling libc `free(buf)` on a buffer that `fs_read_binary_raw` had allocated through `aether_caps_malloc` (with capacity `len + 1`). That bypassed cap accounting, leaving `aether_caps_used_bytes()` climbing by one buffer per call even after the AetherString itself was being released correctly. Now `aether_caps_free(buf, len + 1)`, matching the alloc side.
+
+  Reported by the avn port (`tuple-destructure-heap-classification.md`) where the leak compounded into O(N²) RSS retention in avnserver — ~800 MB resident at 5000 commits, driven by recursive directory-blob reads through `rep_read_decoded`. In-tree callers (`std/cas/module.ae` ×2, `tests/regression/test_string_eq_on_aether_string.ae`, `tests/regression/test_fs_atomic_rename_stat_binary.ae`) already used the bytes as a `string`; the typed-as-`ptr` cover was load-bearing only for the leak. Regression test asserts `aether_caps_used_bytes()` delta stays bounded (≤ 64 KB) after 200 reads of a 10 KB file — pre-fix would have grown by ~2 MB.
+
 ## [0.174.0]
+
+### Changed
+
+- **`io.stderr_write` / `io.stdout_write` are now one-arg `(data: string) -> int`** (`std/io/module.ae`, `tests/regression/test_io_unbuffered_writes.ae`). The two-arg form `(data, length)` made the caller hand over a byte count that `string` already carries; the wrapper now computes `string.length(data)` itself. The raw externs picked up the `_raw` suffix every other raw extern in `std.io` uses — `io_stderr_write_raw(data: string, length: int)` / `io_stdout_write_raw(data: string, length: int)` — and remain the entry point for callers that genuinely need a partial-length write (binary slices, embedded NULs, "drop the trailing newline" patterns). BREAKING: callers of the two-arg form must drop the length or, if the partial length was load-bearing (e.g. `n - 1` to skip a trailing `\n`), slice the input first or call the `_raw` extern directly. Surfaced by the avn port (`io-stderr-write-arity-change-undocumented.md`), which caught one silent behaviour trap (a `n - 1` write deliberately stripping a trailing newline) among five mechanical fixes.
 
 ### Added
 

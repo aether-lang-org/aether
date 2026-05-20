@@ -160,10 +160,22 @@ extern fs_release_read_binary()
 
 // Unified tuple-return shape (#271 + #273) — the canonical entry
 // point that fs.read_binary wraps. Returns (bytes, length, err):
-// (AetherString*, int, "") on success, (null, 0, "<reason>") on
-// failure. The bytes pointer owns its payload; no companion release
-// call needed.
-extern fs_read_binary_tuple(path: string) -> (ptr, int, string)
+// (AetherString*, int, "") on success, (empty, 0, "<reason>") on
+// failure.
+//
+// Position 0 (bytes) is `@heap`: the C side allocates a fresh
+// AetherString via `string_new_with_length`. The destructured LHS
+// owns the buffer; the heap-string-tracker frees it at function
+// exit (or on reassignment) — same machinery `fs_realpath_raw`
+// below relies on. Position 2 (err) stays default-borrow — the
+// error message is a static C string literal.
+//
+// Earlier shape used `(ptr, int, string)` for position 0, which
+// suppressed heap classification at every tuple-destructure site
+// and silently leaked the bytes buffer at scope exit. Reported by
+// the avn port (tuple-destructure-heap-classification.md) where it
+// drove O(N²) RSS retention in avnserver.
+extern fs_read_binary_tuple(path: string) -> (string @heap, int, string)
 
 // Structured-error pilot (issue #392) — these externs return
 // (value, kind, message) where kind is one of the KIND_* constants
