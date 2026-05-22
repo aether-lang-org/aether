@@ -1,0 +1,33 @@
+// Regression fixture for the trailing-comma parse bug.
+//
+// The `exports (…)` list below ends with a trailing comma on the last
+// name — the multi-line, one-name-per-line style used by stdlib
+// modules such as std.http.proxy. Before the fix, parse_exports_list's
+// `do { expect IDENTIFIER } while (match COMMA)` loop re-entered after
+// the trailing comma, hit `)`, and emitted a spurious
+//   error[E0100]: Expected IDENTIFIER, got RIGHT_PAREN
+// The error was mis-located onto the *importing* file's path with this
+// module's line number, and surfaced as the "nondeterministic E0100 on
+// rebuild" the avnproxy port reported.
+exports (
+    alpha,
+    beta,
+    gamma,
+)
+
+alpha(x) {
+    return x + 1
+}
+
+beta(x) {
+    return x + 2
+}
+
+gamma(x) {
+    return x + 3
+}
+
+// Private — not exported.
+internal_helper(x) {
+    return x * 100
+}

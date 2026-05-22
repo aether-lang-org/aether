@@ -1,0 +1,24 @@
+// Regression test: trailing commas in parenthesised identifier lists.
+//
+// Two parser paths are covered:
+//   1. `exports (a, b, c,)`            — see lib/listmod/module.ae
+//   2. `import mod (a, b,)` selective  — the import line below
+//
+// Both used the same `do { expect IDENTIFIER } while (match COMMA)`
+// shape, which did not tolerate a trailing comma. The proxy stdlib
+// module's export list ends with one, so any program importing
+// std.http.proxy printed a spurious E0100 (mis-located onto the
+// importer's path). aetherc recovered and exited 0, so the failure
+// was intermittent under downstream build chains. See
+// closures-with-context-builder-blockers.md (Blocker 1).
+//
+// This test must compile cleanly (no E0100) and exit 0.
+
+import listmod (alpha, beta, gamma,)
+
+main() {
+    if listmod.alpha(10) != 11 { println("FAIL alpha"); exit(1) }
+    if listmod.beta(10) != 12 { println("FAIL beta"); exit(1) }
+    if listmod.gamma(10) != 13 { println("FAIL gamma"); exit(1) }
+    println("PASS trailing-comma exports + selective import")
+}
