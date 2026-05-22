@@ -1,0 +1,51 @@
+// Regression test for the `sizeof(T)` / `offsetof(T, field)` builtins.
+//
+// Bug shape: Aether code mirroring a C struct as an `extern struct`
+// overlay had no way to ask the C compiler for the struct's size or a
+// field's byte offset. Hand-maintained offset constants drifted from
+// the real C layout (the mquickjs port shipped a stale 344 where the
+// real offset was 138, corrupting the heap). These builtins emit C's
+// own `sizeof`/`offsetof` so the value can never disagree with the
+// struct the C compiler actually lays out.
+//
+// Pre-fix: `sizeof(Foo)` / `offsetof(Foo, b)` were parse/codegen
+// errors (no such construct). Post-fix they lower to
+// `((int)sizeof(struct Foo))` / `((int)offsetof(struct Foo, b))`.
+//
+// This exercises: (1) sizeof of an extern struct, (2) offsetof of
+// each field, (3) use of the results in arithmetic / comparisons.
+
+extern exit(code: int)
+
+// An extern struct: layout owned by the C side. Fields chosen so the
+// offsets are unambiguous on LP64 (8-byte ptr/long, 4-byte int):
+//   a @ 0   (long, 8 bytes)
+//   b @ 8   (int,  4 bytes)
+//   c @ 12  (int,  4 bytes)
+// sizeof == 16.
+extern struct Layout {
+    a: long
+    b: int
+    c: int
+}
+
+main() {
+    int sz = sizeof(Layout)
+    int off_a = offsetof(Layout, a)
+    int off_b = offsetof(Layout, b)
+    int off_c = offsetof(Layout, c)
+
+    if sz != 16 { exit(1) }
+    if off_a != 0 { exit(2) }
+    if off_b != 8 { exit(3) }
+    if off_c != 12 { exit(4) }
+
+    // Usable in arithmetic: stride to the 3rd Layout in an array.
+    int third = sz * 2
+    if third != 32 { exit(5) }
+
+    // Usable in a comparison guard.
+    if offsetof(Layout, c) <= offsetof(Layout, b) { exit(6) }
+
+    exit(0)
+}

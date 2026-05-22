@@ -132,6 +132,14 @@ typedef enum {
                             // arity/types of the call's arguments.
     AST_IF_EXPRESSION,      // if cond { expr } else { expr } — value-producing
 
+    // Compile-time layout builtins over extern/struct types. Both
+    // yield an int. `value` holds the struct type name; for OFFSETOF
+    // children[0] is an AST_IDENTIFIER naming the field. Codegen emits
+    // C's sizeof(T) / offsetof(T, field) so the value always matches
+    // the real C struct layout (no hand-maintained offset constants).
+    AST_SIZEOF,             // sizeof(TypeName)
+    AST_OFFSETOF,           // offsetof(TypeName, fieldName)
+
     // Closures
     AST_CLOSURE,            // |params| -> expr  OR  |params| { block }
     AST_CLOSURE_PARAM,      // parameter in a closure: name [: type]

@@ -9,9 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.177.0]
+## [current]
 
 ### Added
+
+- **`sizeof(T)` / `offsetof(T, field)` compile-time layout builtins**
+  (`compiler/ast.h`, `compiler/parser/parser.c`,
+  `compiler/analysis/typechecker.c`, `compiler/codegen/codegen_expr.c`,
+  `tests/regression/test_sizeof_offsetof.ae`). `sizeof(StructName)` and
+  `offsetof(StructName, field)` lower to C's own
+  `((int)sizeof(struct StructName))` / `((int)offsetof(struct StructName,
+  field))`, so the value can never disagree with the layout the C
+  compiler actually produces. Motivating case: ports that mirror a C
+  struct as an `extern struct` overlay previously hand-maintained byte
+  offsets, which silently drifted from the real layout (the mquickjs
+  port shipped a stale `344` where the field had moved to `138`,
+  corrupting the heap). Spelled as call syntax over an identifier — not
+  reserved words — so only the `sizeof(` / `offsetof(` shape triggers
+  them.
 
 - **`std.mem.get_byte_sz` / `std.mem.set_byte_sz` provide size_t-indexed byte
   access** (`std/mem/module.ae`, `std/mem/aether_mem.c`,

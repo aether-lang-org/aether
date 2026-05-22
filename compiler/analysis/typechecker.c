@@ -937,6 +937,11 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_NULL_LITERAL:
             return create_type(TYPE_PTR);
 
+        case AST_SIZEOF:
+        case AST_OFFSETOF:
+            // Compile-time layout builtins; both lower to a C int.
+            return create_type(TYPE_INT);
+
         case AST_PTR_AS_STRUCT_CAST: {
             /* `expr as *StructName` — view the operand as a pointer to
              * StructName. Operand must be ptr-typed. Result is
@@ -3115,6 +3120,17 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
 
         case AST_LITERAL:
             // Literals are already typed
+            return 1;
+
+        case AST_SIZEOF:
+        case AST_OFFSETOF:
+            // Layout builtins. The child of OFFSETOF is the field name,
+            // which is NOT an expression to resolve — do not recurse
+            // (the default case would treat it as an undefined variable).
+            // Field/type validity is the C compiler's job (offsetof on a
+            // bad field is a hard C error), matching the trust-the-author
+            // posture of the `as *Struct` cast.
+            expr->node_type = create_type(TYPE_INT);
             return 1;
 
         case AST_IF_EXPRESSION:
