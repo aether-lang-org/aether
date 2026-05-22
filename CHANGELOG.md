@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Aether functions can now be C-variadic and consume their own
+  varargs** (`compiler/parser/parser.c`, `compiler/analysis/typechecker.c`,
+  `compiler/codegen/codegen_func.c`, `compiler/codegen/codegen.c`,
+  `compiler/codegen/codegen_expr.c`,
+  `tests/regression/test_va_list_consumer.ae`). A function declared with
+  a trailing `...` (`f(fmt: string, ...)`) emits a C `...` signature; its
+  body reads varargs via three intrinsics: `va_start()` (yields an opaque
+  cookie; the prologue emits `va_list __ae_va; va_start(__ae_va, <last
+  named param>)`), `va_arg(vap, T)` (lowers to `va_arg(*(va_list*)vap,
+  ctype)`), and `va_end(vap)`. The call-site arity check accepts any
+  trailing args beyond the named params for such callees. Closes #536;
+  lets C ports (e.g. mquickjs's `js_vprintf` + its `mqjs_va_arg_*`
+  helpers) move their printf-family routines fully to Aether.
+
+### Fixed
+
+- **The series-collapse loop optimizer no longer folds a loop whose body
+  consumes varargs** (`compiler/codegen/codegen_stmt.c`). `va_arg` /
+  `va_start` / `va_end` are now treated as side-effecting in
+  `expr_has_side_effects`, so a `total = total + va_arg(vl, int)`
+  accumulator loop is emitted as a real loop instead of a closed-form
+  `addend * trip_count` (which read only one vararg). Surfaced while
+  landing #536.
+
 ## [0.178.0]
 
 ### Added

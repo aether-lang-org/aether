@@ -942,6 +942,18 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             // Compile-time layout builtins; both lower to a C int.
             return create_type(TYPE_INT);
 
+        case AST_VA_START:
+            // Opaque va_list cookie, modelled as a ptr.
+            return create_type(TYPE_PTR);
+
+        case AST_VA_ARG:
+            // Yields whatever C type the call requested (parser set it).
+            return expr->node_type ? clone_type(expr->node_type)
+                                   : create_type(TYPE_PTR);
+
+        case AST_VA_END:
+            return create_type(TYPE_VOID);
+
         case AST_PTR_AS_STRUCT_CAST: {
             /* `expr as *StructName` — view the operand as a pointer to
              * StructName. Operand must be ptr-typed. Result is
@@ -3167,6 +3179,27 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             expr->node_type = create_type(TYPE_INT);
             return 1;
 
+        case AST_VA_START:
+            // No children; opaque va_list cookie (ptr).
+            expr->node_type = create_type(TYPE_PTR);
+            return 1;
+
+        case AST_VA_ARG:
+            // children[0] is the cookie expr — typecheck it; the result
+            // type was fixed by the parser from the requested C type.
+            if (expr->child_count > 0) {
+                typecheck_expression(expr->children[0], table);
+            }
+            if (!expr->node_type) expr->node_type = create_type(TYPE_PTR);
+            return 1;
+
+        case AST_VA_END:
+            if (expr->child_count > 0) {
+                typecheck_expression(expr->children[0], table);
+            }
+            expr->node_type = create_type(TYPE_VOID);
+            return 1;
+
         case AST_IF_EXPRESSION:
             // Typecheck all children (condition, then-expr, else-expr)
             for (int i = 0; i < expr->child_count; i++) {
@@ -3821,9 +3854,16 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         // `required` and `expected` (inclusive) is also OK — the
         // missing trailing args get filled in below from the
         // declared defaults.
+        // A C-variadic callee (declared `f(fixed..., ...)`, marked with
+        // annotation "varargs") accepts any number of trailing args
+        // beyond its named parameters — so any count >= the named-param
+        // count is fine.
+        int is_variadic_callee = (symbol->node->annotation &&
+                                  strcmp(symbol->node->annotation, "varargs") == 0);
         int arity_ok = (got == expected) ||
                        (ctx_first && got == expected - 1) ||
-                       (got >= required && got < expected);
+                       (got >= required && got < expected) ||
+                       (is_variadic_callee && got >= expected);
         if (!arity_ok) {
             char error_msg[256];
             if (required < expected) {

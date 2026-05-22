@@ -28,12 +28,15 @@ This means the `*_addr()` C shims in the mquickjs port are unnecessary:
 can all be deleted in favour of `<fn> as fn(...) -> R` at the call site.
 (Original ticket text wrongly believed this was missing.)
 
-## 2. `va_list` consumers cannot be authored in Aether — TRACKED IN #536
+## 2. `va_list` consumers cannot be authored in Aether — IMPLEMENTED
 
-Status (2026-05-22): not started; tracked as GitHub issue
-aether-lang-org/aether#536. Items 1 and 3 of this ticket plus the
-builder/function collision fix shipped together; this one is the
-largest and least-used, so it was held back.
+Status (2026-05-22): DONE (issue #536). A function declared with a
+trailing `...` is now C-variadic; its body reads varargs via
+`va_start()` / `va_arg(vap, T)` / `va_end(vap)` intrinsics, lowering to
+the standard C `va_list` machinery. Covered by
+`tests/regression/test_va_list_consumer.ae`. This lets the mquickjs
+port move `js_vprintf` and retire its `mqjs_va_arg_*` C helpers.
+(Original text below kept for context.)
 
 Aether can *call* C variadics (the `extern foo(..., ...)` feature is
 used heavily and works well), but cannot *define* a function that

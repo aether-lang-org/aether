@@ -1704,6 +1704,37 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             }
             break;
 
+        case AST_VA_START:
+            // The variadic function's prologue declared `va_list __ae_va`
+            // and called va_start. This expression just yields its
+            // address as the opaque cookie ptr the va_arg/va_end
+            // intrinsics consume.
+            fprintf(gen->output, "((void*)&__ae_va)");
+            break;
+
+        case AST_VA_ARG:
+            // va_arg(vap, T) → va_arg(*(va_list*)(vap), <ctype>).
+            if (expr->child_count >= 1) {
+                fprintf(gen->output, "va_arg(*(va_list*)(");
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, "), %s)",
+                        expr->node_type ? get_c_type(expr->node_type) : "void*");
+            } else {
+                fprintf(gen->output, "/* malformed va_arg */0");
+            }
+            break;
+
+        case AST_VA_END:
+            // va_end(vap) → va_end(*(va_list*)(vap)).
+            if (expr->child_count >= 1) {
+                fprintf(gen->output, "va_end(*(va_list*)(");
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, "))");
+            } else {
+                fprintf(gen->output, "/* malformed va_end */");
+            }
+            break;
+
         case AST_IDENTIFIER:
             if (!expr->value) { fprintf(gen->output, "/* NULL identifier */0"); break; }
             // Source-location intrinsics (#265) — `__LINE__` / `__FILE__` /
