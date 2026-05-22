@@ -28,7 +28,11 @@ This means the `*_addr()` C shims in the mquickjs port are unnecessary:
 can all be deleted in favour of `<fn> as fn(...) -> R` at the call site.
 (Original ticket text wrongly believed this was missing.)
 
-## 2. `va_list` consumers cannot be authored in Aether
+## 2. `va_list` consumers cannot be authored in Aether — DEFERRED
+
+Status (2026-05-22): not started; deferred to a later session. Items 1
+and 3 of this ticket plus the builder/function collision fix shipped
+together; this one is the largest and least-used, so it was held back.
 
 Aether can *call* C variadics (the `extern foo(..., ...)` feature is
 used heavily and works well), but cannot *define* a function that
