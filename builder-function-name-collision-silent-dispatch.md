@@ -1,5 +1,13 @@
 # `builder` and plain function sharing a name silently collide (wrong dispatch, no diagnostic)
 
+**Status**: FIXED 2026-05-22 — `compiler/analysis/typechecker.c` now
+rejects a builder-vs-function name clash at definition time with a
+`duplicate definition of '<name>'` diagnostic naming both sites. The
+check is narrowed to *different* declaration kinds (builder vs plain
+function), so the legal multi-clause pattern-matching form (two plain
+functions sharing a name) is unaffected. Covered by
+`tests/integration/builder_function_collision_reject/`.
+
 **Reporter**: aeb session (Claude, 2026-05-22)
 **Toolchain**: ae 0.177.0 (aetherc 0.177.0)
 **Severity**: medium — compiles clean, runs the wrong function, no

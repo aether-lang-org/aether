@@ -52,6 +52,18 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **A `builder` and a plain function sharing a name are now rejected at
+  typecheck time** (`compiler/analysis/typechecker.c`,
+  `tests/integration/builder_function_collision_reject/`). Both mangle
+  to the same C symbol (`<module>_<name>`); previously one silently won
+  and every call dispatched to it — clean compile, clean link, wrong
+  function body, exit 0 (cost ~1h debugging an aeb `lib/ruby` build).
+  Now emits `duplicate definition of '<name>': a builder and a function
+  cannot share a name (both emit the same C symbol)` with the prior
+  definition's line. Narrowed to builder-vs-function: two plain
+  functions sharing a name remain legal (the multi-clause
+  pattern-matching form).
+
 - **`@c_import` struct pointers now emit `struct Name*` for typedef-less C
   headers** (`compiler/codegen/codegen.c`, `compiler/codegen/codegen_expr.c`,
   `compiler/codegen/codegen_func.c`, `tests/integration/c_import_struct/`).
