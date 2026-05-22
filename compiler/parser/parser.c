@@ -776,6 +776,47 @@ ASTNode* parse_primary_expression(Parser* parser) {
         }
 
         case TOKEN_IDENTIFIER: {
+            // Layout builtins: sizeof(TypeName) / offsetof(TypeName, field).
+            // Lexed as plain identifiers (not reserved keywords) so user
+            // code may still name things `sizeof`/`offsetof` elsewhere;
+            // only the `sizeof(` / `offsetof(` call shape triggers these.
+            {
+                Token* after = peek_ahead(parser, 1);
+                if (after && after->type == TOKEN_LEFT_PAREN &&
+                    (strcmp(token->value, "sizeof") == 0 ||
+                     strcmp(token->value, "offsetof") == 0)) {
+                    bool is_offsetof = (strcmp(token->value, "offsetof") == 0);
+                    int line = token->line;
+                    int column = token->column;
+                    advance_token(parser);                       // consume sizeof/offsetof
+                    if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
+                    Token* tyname = expect_token(parser, TOKEN_IDENTIFIER);
+                    if (!tyname) return NULL;
+                    ASTNode* node = create_ast_node(
+                        is_offsetof ? AST_OFFSETOF : AST_SIZEOF,
+                        tyname->value, line, column);
+                    node->node_type = create_type(TYPE_INT);
+                    if (is_offsetof) {
+                        if (!expect_token(parser, TOKEN_COMMA)) {
+                            free_ast_node(node);
+                            return NULL;
+                        }
+                        Token* field = expect_token(parser, TOKEN_IDENTIFIER);
+                        if (!field) {
+                            free_ast_node(node);
+                            return NULL;
+                        }
+                        ASTNode* field_node = create_ast_node(
+                            AST_IDENTIFIER, field->value, field->line, field->column);
+                        add_child(node, field_node);
+                    }
+                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                        free_ast_node(node);
+                        return NULL;
+                    }
+                    return node;
+                }
+            }
             // Could be identifier or struct literal
             Token* next = peek_ahead(parser, 1);
             // Disambiguate: IDENTIFIER { could be a struct literal OR an identifier

@@ -9,9 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.177.0]
+## [current]
 
 ### Added
+
+- **Taking the address of an Aether function** is confirmed supported
+  via the existing `funcname as fn(T1, ...) -> R` cast — applying it to
+  a bare function name yields a real C-ABI function pointer (`ptr`),
+  passable to `qsort`, callback tables, etc.
+  (`tests/regression/test_fn_address_via_as_fn.ae`). No compiler change;
+  this locks in the capability with a regression test so C ports can
+  drop their `*_addr()` shim helpers.
+
+- **`sizeof(T)` / `offsetof(T, field)` compile-time layout builtins**
+  (`compiler/ast.h`, `compiler/parser/parser.c`,
+  `compiler/analysis/typechecker.c`, `compiler/codegen/codegen_expr.c`,
+  `tests/regression/test_sizeof_offsetof.ae`). `sizeof(StructName)` and
+  `offsetof(StructName, field)` lower to C's own
+  `((int)sizeof(struct StructName))` / `((int)offsetof(struct StructName,
+  field))`, so the value can never disagree with the layout the C
+  compiler actually produces. Motivating case: ports that mirror a C
+  struct as an `extern struct` overlay previously hand-maintained byte
+  offsets, which silently drifted from the real layout (the mquickjs
+  port shipped a stale `344` where the field had moved to `138`,
+  corrupting the heap). Spelled as call syntax over an identifier — not
+  reserved words — so only the `sizeof(` / `offsetof(` shape triggers
+  them.
 
 - **`std.mem.get_byte_sz` / `std.mem.set_byte_sz` provide size_t-indexed byte
   access** (`std/mem/module.ae`, `std/mem/aether_mem.c`,
@@ -28,6 +51,18 @@ next version number before tagging the release.
   middleware, so first matching mount wins.
 
 ### Fixed
+
+- **A `builder` and a plain function sharing a name are now rejected at
+  typecheck time** (`compiler/analysis/typechecker.c`,
+  `tests/integration/builder_function_collision_reject/`). Both mangle
+  to the same C symbol (`<module>_<name>`); previously one silently won
+  and every call dispatched to it — clean compile, clean link, wrong
+  function body, exit 0 (cost ~1h debugging an aeb `lib/ruby` build).
+  Now emits `duplicate definition of '<name>': a builder and a function
+  cannot share a name (both emit the same C symbol)` with the prior
+  definition's line. Narrowed to builder-vs-function: two plain
+  functions sharing a name remain legal (the multi-clause
+  pattern-matching form).
 
 - **`@c_import` struct pointers now emit `struct Name*` for typedef-less C
   headers** (`compiler/codegen/codegen.c`, `compiler/codegen/codegen_expr.c`,

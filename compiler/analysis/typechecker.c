@@ -937,6 +937,11 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_NULL_LITERAL:
             return create_type(TYPE_PTR);
 
+        case AST_SIZEOF:
+        case AST_OFFSETOF:
+            // Compile-time layout builtins; both lower to a C int.
+            return create_type(TYPE_INT);
+
         case AST_PTR_AS_STRUCT_CAST: {
             /* `expr as *StructName` — view the operand as a pointer to
              * StructName. Operand must be ptr-typed. Result is
@@ -1772,6 +1777,40 @@ int typecheck_program(ASTNode* program) {
             }
             case AST_BUILDER_FUNCTION:
             case AST_FUNCTION_DEFINITION: {
+                // Reject two top-level definitions that mangle to the
+                // same C symbol (<module>_<name>). A `builder` and a
+                // plain function sharing a name both emit that symbol;
+                // without this check one silently wins and every call
+                // site dispatches to the winner — clean compile, clean
+                // link, wrong function body (no diagnostic). The check
+                // runs on the post-merge program, so it catches the
+                // cross-module case too. See
+                // builder-function-name-collision-silent-dispatch.md.
+                // Only a builder-vs-plain-function clash is a true
+                // collision. Two plain functions sharing a name is the
+                // legal multi-clause / pattern-matching form (Erlang-
+                // style: several `fib(...)` clauses merged into one
+                // dispatcher), so function-vs-function must NOT fire.
+                if (child->value) {
+                    Symbol* prior = lookup_symbol(global_table, child->value);
+                    if (prior && prior->node &&
+                        (prior->node->type == AST_FUNCTION_DEFINITION ||
+                         prior->node->type == AST_BUILDER_FUNCTION) &&
+                        prior->node->type != child->type) {
+                        const char* this_kind =
+                            (child->type == AST_BUILDER_FUNCTION) ? "builder" : "function";
+                        const char* prior_kind =
+                            (prior->node->type == AST_BUILDER_FUNCTION) ? "builder" : "function";
+                        char msg[320];
+                        snprintf(msg, sizeof(msg),
+                            "duplicate definition of '%s': a %s and a %s "
+                            "cannot share a name (both emit the same C symbol); "
+                            "previous definition at line %d",
+                            child->value, prior_kind, this_kind,
+                            prior->node->line);
+                        type_error(msg, child->line, child->column);
+                    }
+                }
                 add_symbol(global_table, child->value, clone_type(child->node_type), 0, 1, 0);
                 // Store AST node so arity can be verified at call sites
                 Symbol* func_sym = lookup_symbol(global_table, child->value);
@@ -3115,6 +3154,17 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
 
         case AST_LITERAL:
             // Literals are already typed
+            return 1;
+
+        case AST_SIZEOF:
+        case AST_OFFSETOF:
+            // Layout builtins. The child of OFFSETOF is the field name,
+            // which is NOT an expression to resolve — do not recurse
+            // (the default case would treat it as an undefined variable).
+            // Field/type validity is the C compiler's job (offsetof on a
+            // bad field is a hard C error), matching the trust-the-author
+            // posture of the `as *Struct` cast.
+            expr->node_type = create_type(TYPE_INT);
             return 1;
 
         case AST_IF_EXPRESSION:

@@ -1,0 +1,54 @@
+// Regression: taking the address of an Aether-defined function so it
+// can be handed to a C API expecting a function pointer (qsort's
+// comparator, a callback table, etc.).
+//
+// `funcname as fn(T1, T2, ...) -> R` evaluates the bare function name
+// as a value; in C the function name decays to its address, and the
+// `as fn` cast lowers to `((void*)(funcname))`. The resulting `ptr`
+// is a real C-ABI function pointer.
+//
+// Pre-fix belief: the mquickjs port kept C `*_addr()` shims (e.g.
+// `mqjs_build_atom_cmp_addr`, the sort-callback `_addr` helpers)
+// because "Aether can't take the address of its own function." This
+// test proves the `as fn` cast already covers that need — no shim
+// required — so those C helpers can be deleted.
+//
+// Exercises: pass an Aether comparator's address to libc qsort and
+// confirm it actually sorts.
+
+import std.mem
+
+extern exit(code: int)
+extern qsort(base: ptr, nmemb: long, size: long, compar: ptr)
+extern malloc(n: long) -> ptr
+extern free(p: ptr)
+
+int_cmp(a: ptr, b: ptr) -> int {
+    int x = mem.get_int(a, 0)
+    int y = mem.get_int(b, 0)
+    return x - y
+}
+
+main() {
+    buf = malloc(5 * 4)
+    mem.set_int(buf, 0, 30)
+    mem.set_int(buf, 4, 10)
+    mem.set_int(buf, 8, 50)
+    mem.set_int(buf, 12, 20)
+    mem.set_int(buf, 16, 40)
+
+    // Take the address of int_cmp and hand it to qsort.
+    cmp_addr = int_cmp as fn(ptr, ptr) -> int
+    if cmp_addr == null { exit(10) }
+    qsort(buf, 5, 4, cmp_addr)
+
+    // Ascending: 10, 20, 30, 40, 50
+    if mem.get_int(buf, 0) != 10 { exit(1) }
+    if mem.get_int(buf, 4) != 20 { exit(2) }
+    if mem.get_int(buf, 8) != 30 { exit(3) }
+    if mem.get_int(buf, 12) != 40 { exit(4) }
+    if mem.get_int(buf, 16) != 50 { exit(5) }
+
+    free(buf)
+    exit(0)
+}

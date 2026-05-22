@@ -1686,6 +1686,24 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             }
             break;
 
+        case AST_SIZEOF:
+            // sizeof(TypeName) → C sizeof(struct TypeName). Extern/struct
+            // types emit as `struct <Name>` (same convention as
+            // `as *StructName`), so the value always tracks the real C
+            // layout.
+            fprintf(gen->output, "((int)sizeof(struct %s))", expr->value);
+            break;
+
+        case AST_OFFSETOF:
+            // offsetof(TypeName, field) → C offsetof(struct TypeName, field).
+            if (expr->child_count >= 1 && expr->children[0]->value) {
+                fprintf(gen->output, "((int)offsetof(struct %s, %s))",
+                        expr->value, expr->children[0]->value);
+            } else {
+                fprintf(gen->output, "/* malformed offsetof */0");
+            }
+            break;
+
         case AST_IDENTIFIER:
             if (!expr->value) { fprintf(gen->output, "/* NULL identifier */0"); break; }
             // Source-location intrinsics (#265) — `__LINE__` / `__FILE__` /
