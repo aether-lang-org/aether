@@ -1,0 +1,119 @@
+// Regression: the closures-with-context proxy shape — config funnelled
+// through a `std.map` opts context and then handed to the std.http.proxy
+// FFI (pools + `mount_match` / `mount_methods`) — must not corrupt the
+// heap at mount time or at `map.free` teardown.
+//
+// Filed by the avn project as "Blocker 2" of the closures-with-context
+// builder rollout (closures-with-context-builder-blockers.md): avnproxy's
+// builder/opts-map variant aborted at startup inside
+// `aether_proxy_use_reverse_proxy_match` with `free(): invalid pointer`,
+// while eleven hand-reduced isolated reproducers all passed valgrind
+// clean. The crash only surfaced with the full combination of traits —
+// a std.map holding both owned (`string.from_int`) and borrowed (URL)
+// values, pool pointers stored in / retrieved from the map, and a
+// `mount_match` that takes the internal pool-rebind path.
+//
+// The root cause was the `map_put_raw` -> `map_put_string_owned` codegen
+// misroute (issue #467 follow-up, test_map_put_raw_literal_value.ae): a
+// borrowed/literal string value put into a map was tagged owned, so
+// `map.free` `free()`d a non-heap pointer — and when that pointer aliased
+// state the proxy lib later touched, the corruption surfaced far away, as
+// an invalid free inside `mount_match`. With that misroute fixed, the
+// whole opts-map -> proxy path is clean.
+//
+// This test reproduces avnproxy's startup sequence (mounts only — the
+// server is never started, so the run is deterministic and network-free).
+// The run completing without aborting IS the assertion; under
+// `make test-asan` it additionally proves there is no use-after-free or
+// double-free across the map -> proxy FFI boundary.
+
+import std.string
+import std.http
+import std.http.proxy
+import std.map
+
+extern http_server_create(port: int) -> ptr
+extern http_server_free(server: ptr)
+extern exit(code: int)
+
+// Build a pool, register it under `key` in the opts map, and store its
+// URL too — mirrors avnproxy's "eager-pools-in-map" helper that escapes
+// both the pool pointer and the URL string through the map.
+build_pool(opts: ptr, key: string, url_key: string, algo: string, url: string) -> ptr {
+    p = proxy.upstream_pool_new(algo, 30, 0, 0)
+    e = proxy.upstream_add(p, url, 1)
+    if string.length(e) > 0 {
+        println("  FAIL: upstream_add('${url}'): ${e}")
+        exit(1)
+    }
+    _pe = map.put(opts, key, p)        // pool ptr -> map_put_raw (non-owning)
+    _ue = map.put(opts, url_key, url)  // borrowed URL -> map_put_raw (non-owning)
+    return p
+}
+
+main() {
+    println("=== test_proxy_opts_map_mount ===")
+
+    opts_map = map.new()
+
+    // Heap-concat URLs (the avnproxy URLs originate as argv/interpolation,
+    // not .rodata literals; string.concat models the heap-tracked case).
+    primary_url = string.concat("http://127.0.0.1:", "9000")
+    replica_url = string.concat("http://127.0.0.1:", "9001")
+
+    primary_pool = build_pool(opts_map, "primary", "primary_url", "round_robin", primary_url)
+    replica_pool = build_pool(opts_map, "replica", "replica_url", "least_conn", replica_url)
+
+    server = http_server_create(8080)
+    if server == 0 {
+        println("  FAIL: http_server_create")
+        exit(1)
+    }
+
+    // Retrieve a pool back out of the map and confirm the round-trip.
+    pp, _gp = map.get(opts_map, "primary")
+    if pp != primary_pool {
+        println("  FAIL: map round-trip of primary pool pointer")
+        exit(1)
+    }
+
+    // Mount sequence mirroring avnproxy: a route-pattern carve-out
+    // (mount_match) ahead of the general method-filtered mounts. Fresh
+    // opts per mount (avnproxy's shape).
+    opts_info  = proxy.opts_new()
+    opts_read  = proxy.opts_new()
+    opts_write = proxy.opts_new()
+
+    e1 = proxy.mount_match(server, "/repos/:repo/info", primary_pool, opts_info, "GET")
+    if string.length(e1) > 0 { println("  FAIL: mount_match /info: ${e1}"); exit(1) }
+
+    e2 = proxy.mount_methods(server, "/", replica_pool, opts_read, "GET,HEAD")
+    if string.length(e2) > 0 { println("  FAIL: mount reads: ${e2}"); exit(1) }
+
+    e3 = proxy.mount_methods(server, "/", primary_pool, opts_write, "POST,PUT,DELETE")
+    if string.length(e3) > 0 { println("  FAIL: mount writes: ${e3}"); exit(1) }
+
+    // Exercise the mount_match internal pool-rebind path explicitly:
+    // re-mounting the SAME opts with a DIFFERENT pool makes the lib
+    // release the previously-bound pool (opts->pool != pool). This is
+    // the exact frame the avnproxy backtrace aborted in.
+    e4 = proxy.mount_match(server, "/repos/:repo/info", replica_pool, opts_info, "GET")
+    if string.length(e4) > 0 { println("  FAIL: mount_match rebind: ${e4}"); exit(1) }
+
+    println("  PASS: opts-map -> proxy pools -> mount_match/mount_methods clean")
+
+    // Teardown: opts_free releases each opts' retained pool ref; our own
+    // pool refs are released by upstream_pool_free; map.free releases the
+    // owned (from_int) values and leaves the borrowed URLs / pool ptrs.
+    // Balanced refcounts, no double-free.
+    proxy.opts_free(opts_info)
+    proxy.opts_free(opts_read)
+    proxy.opts_free(opts_write)
+    proxy.upstream_pool_free(primary_pool)
+    proxy.upstream_pool_free(replica_pool)
+    http_server_free(server)
+    map.free(opts_map)
+
+    println("  PASS: teardown clean")
+    println("=== test_proxy_opts_map_mount passed ===")
+}

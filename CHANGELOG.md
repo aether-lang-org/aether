@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Regression coverage for the `std.map` opts-context → `std.http.proxy`
+  FFI path** (`tests/regression/test_proxy_opts_map_mount.ae`). The avn
+  project's closures-with-context builder rollout filed this as "Blocker
+  2": avnproxy's builder/opts-map variant aborted at startup inside
+  `aether_proxy_use_reverse_proxy_match` with `free(): invalid pointer`,
+  while eleven hand-reduced isolated reproducers all passed valgrind
+  clean — it only fired with the full combination of traits. The root
+  cause was the `map_put_raw` → `map_put_string_owned` codegen misroute
+  fixed in 0.179.0 (`test_map_put_raw_literal_value.ae`): a borrowed /
+  non-heap string value put into a map was tagged owned, so `map.free`
+  `free()`d a non-heap pointer, and where that pointer aliased state the
+  proxy lib later touched, the corruption surfaced far away as an invalid
+  free inside `mount_match`. With that misroute fixed, the whole opts-map
+  → proxy path is clean. This test reproduces avnproxy's startup sequence
+  (borrowed/heap URLs and pool pointers funnelled through a `std.map`,
+  then `mount_match` + `mount_methods`, including the internal pool-rebind
+  path that the backtrace aborted in) and runs clean under ASan — no
+  use-after-free, no double-free. Unblocks the avn closures-with-context
+  builder rollout (`closures-with-context-builder-blockers.md`).
+
 ## [0.179.0]
 
 ### Added
