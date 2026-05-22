@@ -1,0 +1,57 @@
+// Regression: an Aether function can be C-variadic and read its own
+// varargs via va_start() / va_arg(vap, T) / va_end(vap).
+//
+// Before this landed (issue #536), the printf-family routines in C
+// ports had to keep a hand-written C shim: `va_list ap; va_start(ap,
+// fmt); ...; va_end(ap)` plus a pile of per-type `va_arg(*vap, T)`
+// helpers, because Aether could declare `extern f(fmt, ...)` (call
+// side) but could not *define* a function that consumes a va_list.
+//
+// Now `f(fixed..., ...)` marks the function variadic; the body pulls
+// args with the va_start/va_arg/va_end intrinsics, which lower to the
+// obvious C (`va_list __ae_va; va_start(__ae_va, <last named>)`,
+// `va_arg(*(va_list*)vap, ctype)`, `va_end(*(va_list*)vap)`).
+//
+// Exercises: (1) int varargs in a loop, (2) mixed int/ptr varargs,
+// (3) the call-site arity check accepting extra trailing args.
+
+import std.mem
+
+extern exit(code: int)
+extern strlen(s: ptr) -> int
+
+// Sum `count` int args.
+sum_ints(count: int, ...) -> int {
+    vl = va_start()
+    int total = 0
+    int i = 0
+    while i < count {
+        total = total + va_arg(vl, int)
+        i = i + 1
+    }
+    va_end(vl)
+    return total
+}
+
+// Mixed types: an int, a string (read its length), and a ptr (test null).
+mixed(tag: int, ...) -> int {
+    vl = va_start()
+    int n = va_arg(vl, int)
+    s = va_arg(vl, ptr)
+    p = va_arg(vl, ptr)
+    va_end(vl)
+    int pnull = 0
+    if p == null { pnull = 1 }
+    return tag + n + strlen(s) + pnull
+}
+
+main() {
+    if sum_ints(4, 10, 20, 30, 40) != 100 { exit(1) }
+    if sum_ints(3, 1, 2, 3) != 6 { exit(2) }
+    if sum_ints(0) != 0 { exit(3) }
+
+    // tag=1, n=10, "abc"(len 3), null(pnull 1) => 15
+    if mixed(1, 10, "abc", null) != 15 { exit(4) }
+
+    exit(0)
+}

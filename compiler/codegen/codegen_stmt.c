@@ -143,7 +143,14 @@ static int expr_has_side_effects(ASTNode* node) {
     if (!node) return 0;
     if (node->type == AST_FUNCTION_CALL ||
         node->type == AST_SEND_FIRE_FORGET ||
-        node->type == AST_SEND_ASK) return 1;
+        node->type == AST_SEND_ASK ||
+        // va_arg advances the va_list each evaluation; va_start/va_end
+        // mutate it too. Treating them as impure stops the series-
+        // collapse optimizer from hoisting/folding them (which would
+        // read the wrong number of varargs). Issue #536.
+        node->type == AST_VA_ARG ||
+        node->type == AST_VA_START ||
+        node->type == AST_VA_END) return 1;
     for (int i = 0; i < node->child_count; i++) {
         if (expr_has_side_effects(node->children[i])) return 1;
     }

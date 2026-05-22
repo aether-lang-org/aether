@@ -673,7 +673,11 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     // Generate parameters - handle pattern matching
     int param_count = 0;
     ASTNode* body = NULL;
-    
+    // Track the C name of the last emitted named parameter — needed as
+    // the second argument to va_start() if this function is variadic.
+    char last_param_cname[256];
+    last_param_cname[0] = '\0';
+
     for (int i = 0; i < func->child_count; i++) {
         ASTNode* child = func->children[i];
         
@@ -709,8 +713,10 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             }
             if (is_promoted) {
                 fprintf(gen->output, " _param_%s", child->value);
+                snprintf(last_param_cname, sizeof(last_param_cname), "_param_%s", child->value);
             } else {
                 fprintf(gen->output, " %s", child->value);
+                snprintf(last_param_cname, sizeof(last_param_cname), "%s", child->value);
             }
             param_count++;
         } else if (child->type == AST_PATTERN_LITERAL) {
@@ -718,10 +724,12 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             if (param_count > 0) fprintf(gen->output, ", ");
             generate_type(gen, child->node_type);
             fprintf(gen->output, " _pattern_%d", param_count);
+            snprintf(last_param_cname, sizeof(last_param_cname), "_pattern_%d", param_count);
             param_count++;
         } else if (child->type == AST_PATTERN_STRUCT) {
             if (param_count > 0) fprintf(gen->output, ", ");
             fprintf(gen->output, "%s _pattern_%d", child->value, param_count);
+            snprintf(last_param_cname, sizeof(last_param_cname), "_pattern_%d", param_count);
             param_count++;
         } else if (child->type == AST_PATTERN_LIST || child->type == AST_PATTERN_CONS) {
             // List pattern becomes array pointer
@@ -744,12 +752,28 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         fprintf(gen->output, "void* _builder");
         param_count++;
     }
+    // C-variadic function (Aether `f(..., ...)`): trailing `...`. C
+    // requires at least one named parameter before it.
+    int is_variadic = (func->annotation && strcmp(func->annotation, "varargs") == 0
+                       && last_param_cname[0] != '\0');
+    if (is_variadic) {
+        if (param_count > 0) fprintf(gen->output, ", ");
+        fprintf(gen->output, "...");
+        param_count++;
+    }
     if (param_count == 0) {
         fprintf(gen->output, "void");
     }
 
     fprintf(gen->output, ") {\n");
     indent(gen);
+    // Variadic prologue: declare the hidden va_list and prime it from
+    // the last named parameter. va_start()/va_arg()/va_end() in the
+    // body operate on `&__ae_va`.
+    if (is_variadic) {
+        fprintf(gen->output, "    va_list __ae_va; va_start(__ae_va, %s);\n",
+                last_param_cname);
+    }
     clear_declared_vars(gen);  // Reset for each function
     clear_heap_string_vars(gen);
     clear_escaped_string_vars(gen);

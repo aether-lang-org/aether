@@ -2874,6 +2874,13 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         if (child->type == AST_BUILDER_FUNCTION) {
             if (param_count > 0) fprintf(gen->output, ", ");
             fprintf(gen->output, "void*");
+            param_count++;
+        }
+        // C-variadic function: trailing `...` in the prototype, matching
+        // the definition (see generate_function_definition).
+        if (child->annotation && strcmp(child->annotation, "varargs") == 0
+            && param_count > 0) {
+            fprintf(gen->output, ", ...");
         } else if (param_count == 0) {
             fprintf(gen->output, "void");
         }

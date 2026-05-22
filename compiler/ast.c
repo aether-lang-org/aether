@@ -434,6 +434,9 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_IF_EXPRESSION: return "IF_EXPRESSION";
         case AST_SIZEOF: return "SIZEOF";
         case AST_OFFSETOF: return "OFFSETOF";
+        case AST_VA_START: return "VA_START";
+        case AST_VA_ARG: return "VA_ARG";
+        case AST_VA_END: return "VA_END";
         case AST_CONST_DECLARATION: return "CONST_DECLARATION";
         case AST_STRING_INTERP: return "STRING_INTERP";
         case AST_EXTERN_FUNCTION: return "EXTERN_FUNCTION";

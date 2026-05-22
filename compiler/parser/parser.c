@@ -817,6 +817,62 @@ ASTNode* parse_primary_expression(Parser* parser) {
                     return node;
                 }
             }
+            // C variadic-consumer intrinsics: va_start() / va_arg(vap, T)
+            // / va_end(vap). Same non-reserving treatment as sizeof —
+            // intercepted only on the `va_*(`  call shape. Usable only
+            // inside a function declared with a trailing `...` param.
+            {
+                Token* after = peek_ahead(parser, 1);
+                if (after && after->type == TOKEN_LEFT_PAREN && token->value &&
+                    (strcmp(token->value, "va_start") == 0 ||
+                     strcmp(token->value, "va_arg") == 0 ||
+                     strcmp(token->value, "va_end") == 0)) {
+                    int line = token->line;
+                    int column = token->column;
+                    if (strcmp(token->value, "va_start") == 0) {
+                        advance_token(parser);                       // va_start
+                        if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
+                        if (!expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
+                        ASTNode* node = create_ast_node(AST_VA_START, NULL, line, column);
+                        node->node_type = create_type(TYPE_PTR);  // opaque va_list cookie
+                        return node;
+                    }
+                    if (strcmp(token->value, "va_arg") == 0) {
+                        advance_token(parser);                       // va_arg
+                        if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
+                        ASTNode* cookie = parse_expression(parser);  // the va_list ptr
+                        if (!cookie) return NULL;
+                        if (!expect_token(parser, TOKEN_COMMA)) {
+                            free_ast_node(cookie);
+                            return NULL;
+                        }
+                        Type* arg_type = parse_type(parser);         // requested C type
+                        if (!arg_type) { free_ast_node(cookie); return NULL; }
+                        if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                            free_ast_node(cookie);
+                            free_type(arg_type);
+                            return NULL;
+                        }
+                        ASTNode* node = create_ast_node(AST_VA_ARG, NULL, line, column);
+                        node->node_type = arg_type;
+                        add_child(node, cookie);
+                        return node;
+                    }
+                    // va_end(vap)
+                    advance_token(parser);                           // va_end
+                    if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
+                    ASTNode* cookie = parse_expression(parser);
+                    if (!cookie) return NULL;
+                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                        free_ast_node(cookie);
+                        return NULL;
+                    }
+                    ASTNode* node = create_ast_node(AST_VA_END, NULL, line, column);
+                    node->node_type = create_type(TYPE_VOID);
+                    add_child(node, cookie);
+                    return node;
+                }
+            }
             // Could be identifier or struct literal
             Token* next = peek_ahead(parser, 1);
             // Disambiguate: IDENTIFIER { could be a struct literal OR an identifier
@@ -3507,13 +3563,24 @@ ASTNode* parse_function_definition(Parser* parser) {
     ASTNode* func = create_ast_node(AST_FUNCTION_DEFINITION, name->value, name->line, name->column);
     
     // Parse parameters - can be patterns!
+    // A trailing `...` after the last named param marks the function as
+    // C-variadic: codegen emits a trailing `...` in the C signature and
+    // the body reads its varargs via va_start()/va_arg()/va_end(). The
+    // marker is recorded as annotation "varargs" (same convention as
+    // variadic externs).
     if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
         do {
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_DOTDOTDOT) {
+                advance_token(parser);  // consume '...'
+                if (func->annotation) free(func->annotation);
+                func->annotation = strdup("varargs");
+                break;
+            }
             ASTNode* param = parse_pattern(parser);
             if (!param) break;
             add_child(func, param);
         } while (match_token(parser, TOKEN_COMMA));
-        
+
         expect_token(parser, TOKEN_RIGHT_PAREN);
     }
     

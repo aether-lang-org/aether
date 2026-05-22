@@ -140,6 +140,21 @@ typedef enum {
     AST_SIZEOF,             // sizeof(TypeName)
     AST_OFFSETOF,           // offsetof(TypeName, fieldName)
 
+    // C variadic-consumer intrinsics. Let an Aether function declared
+    // with a trailing `...` param read its varargs the way C does.
+    //   AST_VA_START — `va_start()`; yields an opaque ptr (va_list
+    //     cookie). The variadic function's prologue emits the hidden
+    //     `va_list` decl + `va_start(..., <last named param>)`; this
+    //     node just yields its address. No children.
+    //   AST_VA_ARG   — `va_arg(vap, TYPE)`; children[0] = the cookie
+    //     expr; node_type = the requested type. Emits
+    //     `va_arg(*(va_list*)vap, <ctype>)`.
+    //   AST_VA_END   — `va_end(vap)`; children[0] = the cookie expr.
+    //     Emits `va_end(*(va_list*)vap)`. Yields void.
+    AST_VA_START,
+    AST_VA_ARG,
+    AST_VA_END,
+
     // Closures
     AST_CLOSURE,            // |params| -> expr  OR  |params| { block }
     AST_CLOSURE_PARAM,      // parameter in a closure: name [: type]
