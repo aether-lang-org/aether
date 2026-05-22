@@ -81,6 +81,24 @@ main() {
 }
 ```
 
+## Method-Aware Routing
+
+Multiple proxy mounts can share one listener. Registration order is
+execution order; a mount whose method or path pattern does not match
+passes through to the next middleware, so narrower carve-outs should
+be registered first.
+
+```aether
+proxy.mount_match(server, "/repos/:repo/info", primary_pool, primary_opts, "GET,HEAD")
+proxy.mount_methods(server, "/repos", primary_pool, write_opts, "POST,PUT,DELETE")
+proxy.mount_methods(server, "/repos", replica_pool, read_opts, "GET,HEAD")
+```
+
+`mount_methods` keeps the normal path-prefix match. `mount_match`
+uses std.http route-pattern syntax (`:param`, `*`) against the whole
+request path, which covers cases like `GET /repos/:repo/info` going
+to a primary while other reads fan out to replicas.
+
 ## Load-balancing algorithms
 
 | Algorithm | Selection rule | When to pick |

@@ -52,6 +52,26 @@ int aether_mem_set_byte(void* p, int i, int value) {
     return 1;
 }
 
+/* size_t-indexed companions to get_byte / set_byte. The `int` index
+ * tops out at 2 GiB; codebases whose natural index width is size_t
+ * (Redis SDS, lzf, siphash, syncio, anything walking large mmap'd
+ * regions) need the wider form to avoid a per-port `_get_byte`
+ * shim that exists only to declare a size_t parameter. Aether has
+ * no primitive narrowing via `as`, so the caller cannot convert
+ * size_t to int at the call site — the only fix is to take the
+ * wider index here. Same NULL defence; out-of-range `i` still the
+ * caller's problem. */
+int aether_mem_get_byte_sz(void* p, size_t i) {
+    if (!p) return -1;
+    return (int)((uint8_t*)p)[i];
+}
+
+int aether_mem_set_byte_sz(void* p, size_t i, int value) {
+    if (!p) return 0;
+    ((uint8_t*)p)[i] = (uint8_t)(value & 0xff);
+    return 1;
+}
+
 /* Read a void*-sized pointer value at byte offset `offset` of `p`.
  * Returns NULL if `p` is NULL or the loaded value is itself NULL.
  * Note: returning NULL conflates "p was null" with "the loaded value

@@ -1839,9 +1839,17 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             /* `expr as *StructName` — emit `((StructName*)(expr))`.
              * The result is consumed by member-access codegen above,
              * which dispatches on TYPE_PTR{element=TYPE_STRUCT} and
-             * emits `->field`. */
+             * emits `->field`.
+             *
+             * For `@c_import` structs (no aetherc-emitted typedef),
+             * use `struct StructName*` instead — bare `StructName*`
+             * fails for headers that don't ship `typedef struct N N;`. */
             if (expr->child_count > 0 && expr->value) {
-                fprintf(gen->output, "((%s*)(", expr->value);
+                if (aether_is_c_import_struct(expr->value)) {
+                    fprintf(gen->output, "((struct %s*)(", expr->value);
+                } else {
+                    fprintf(gen->output, "((%s*)(", expr->value);
+                }
                 generate_expression(gen, expr->children[0]);
                 fprintf(gen->output, "))");
             }

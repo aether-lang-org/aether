@@ -207,6 +207,16 @@ const char* c_callback_symbol(ASTNode* func);
    AST_IDENTIFIER emission so a function name passed as a function
    pointer resolves to the linked symbol, not the Aether-side name. */
 const char* lookup_c_callback_symbol(CodeGenerator* gen, const char* name);
+
+/* @c_import struct registry (codegen.c).  Populated in the pre-scan
+ * of the program so every later `*StructName` emit site can ask "do I
+ * need to write `struct N*` instead of `N*`?".  Bare `N*` requires a
+ * `typedef struct N N;` somewhere in scope; with `@c_import` aetherc
+ * emits no typedef, and headers like <time.h> for `struct tm` don't
+ * ship one either, so `N*` doesn't compile.  `struct N*` is the
+ * universally-portable form. */
+void aether_register_c_import_struct(const char* name);
+int aether_is_c_import_struct(const char* name);
 void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext);
 void generate_function_definition(CodeGenerator* gen, ASTNode* func);
 void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def);

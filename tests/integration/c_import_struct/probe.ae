@@ -2,7 +2,7 @@
 // docs/redis-porting-language-gaps.md.
 //
 // `extern struct Name @c_import { ... }` declares a struct whose
-// layout lives in a C header — not one Aether emits.  Aether
+// layout lives in a C header, not one Aether emits. Aether
 // typechecks field access and `*Name` overlays against the declared
 // fields, but the generated C emits NO `typedef struct Name { ... }
 // Name;` and NO forward typedef, so it never collides with the
@@ -15,7 +15,7 @@
 //   - casts a raw `ptr` to `*client`,
 //   - writes and reads fields (emitting plain `c->field` C),
 //   - links against client.h (force-included via aether.toml cflags)
-//     with no duplicate-typedef error.
+//     with no duplicate-typedef error and no dependency on a `client` typedef.
 
 import std.mem
 import cdefs (*)

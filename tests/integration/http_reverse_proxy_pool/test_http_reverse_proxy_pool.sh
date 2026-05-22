@@ -1,8 +1,8 @@
 #!/bin/sh
 # std.http.proxy pool/LB/health/breaker integration tests, part 1 of 2.
 #
-# Tests 1-8 live here: round-robin / weighted-RR / ip-hash / cookie-
-# hash / drain / health (× 2) / breaker-open. The remaining tests
+# Tests 1-9 live here: round-robin / weighted-RR / ip-hash / cookie-
+# hash / drain / method routing / health (x2) / breaker-open. The remaining tests
 # (breaker-recovery, cache × 3, retry, rate-limit, trace, metrics)
 # live in test_http_reverse_proxy_pool_extra.sh.
 #
@@ -330,7 +330,26 @@ C=$(metric_2xx "http://localhost:19103")
 [ $((B + C)) -eq $HEALTH_BATCH ] || fail "drain: B+C=$((B + C)) expected $HEALTH_BATCH"
 stop_proxy
 
-# ---- Test 6: health checks kill an unhealthy upstream -----
+# ---- Test 6: method + route-pattern aware routing ----------
+start_proxy proxy_methods
+info_body=$(curl -s --max-time 3 "$PROXY/repos/proj/info" 2>/dev/null)
+case "$info_body" in
+    tag=A:*) ;;
+    *) fail "method routing: GET /repos/proj/info went to '$info_body', expected A" ;;
+esac
+log_body=$(curl -s --max-time 3 "$PROXY/repos/proj/log" 2>/dev/null)
+case "$log_body" in
+    tag=B:*|tag=C:*) ;;
+    *) fail "method routing: GET /repos/proj/log went to '$log_body', expected B/C" ;;
+esac
+commit_body=$(curl -s --max-time 3 -X POST "$PROXY/repos/proj/commit" 2>/dev/null)
+case "$commit_body" in
+    tag=A:*) ;;
+    *) fail "method routing: POST /repos/proj/commit went to '$commit_body', expected A" ;;
+esac
+stop_proxy
+
+# ---- Test 7: health checks kill an unhealthy upstream -----
 start_proxy proxy_health
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
 wait_for_upstream_health "http://localhost:19102" 0 || exit 1
@@ -342,12 +361,12 @@ B=$(metric_2xx "http://localhost:19102")
 clear_upstream_b_503
 stop_proxy
 
-# ---- Test 7: health recovery — flip B back, it rejoins -----
-# Skipped on Windows: pairs with Test 6 to exercise the same health-
-# check state machine. Test 6 alone proves the unhealthy→healthy
+# ---- Test 8: health recovery — flip B back, it rejoins -----
+# Skipped on Windows: pairs with Test 7 to exercise the same health-
+# check state machine. Test 7 alone proves the unhealthy->healthy
 # transition gate; the recovery direction is symmetric.
 if [ "$IS_WIN" = "1" ]; then
-    echo "  [SKIP-WIN] Test 7 (health-recovery) — same state machine as Test 6"
+    echo "  [SKIP-WIN] Test 8 (health-recovery) - same state machine as Test 7"
 else
     start_proxy proxy_health
     curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
@@ -363,7 +382,7 @@ else
     stop_proxy
 fi
 
-# ---- Test 8: circuit breaker opens after consecutive failures ----
+# ---- Test 9: circuit breaker opens after consecutive failures ----
 start_proxy proxy_breaker
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
 parallel_echo $HEALTH_BATCH
@@ -378,7 +397,7 @@ clear_upstream_b_503
 stop_proxy
 
 if [ "$IS_WIN" = "1" ]; then
-    echo "  [PASS] http_reverse_proxy_pool: 5/8 win-reduced — RR/drain/health/breaker-open"
+    echo "  [PASS] http_reverse_proxy_pool: 6/9 win-reduced - RR/drain/methods/health/breaker-open"
 else
-    echo "  [PASS] http_reverse_proxy_pool: 8/8 — RR/WRR/ip_hash/cookie_hash/drain/health(2)/breaker-open"
+    echo "  [PASS] http_reverse_proxy_pool: 9/9 - RR/WRR/ip_hash/cookie_hash/drain/methods/health(2)/breaker-open"
 fi

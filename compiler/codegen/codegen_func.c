@@ -437,8 +437,16 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
                 if (ext->node_type->element_type &&
                     ext->node_type->element_type->kind == TYPE_STRUCT &&
                     ext->node_type->element_type->struct_name) {
-                    fprintf(gen->output, "%s*",
-                        ext->node_type->element_type->struct_name);
+                    const char* sname = ext->node_type->element_type->struct_name;
+                    if (aether_is_c_import_struct(sname)) {
+                        /* `@c_import` structs have no aetherc-emitted
+                         * typedef; some headers (<time.h> `struct tm`)
+                         * don't ship one either.  `struct Name*` is the
+                         * portable form. */
+                        fprintf(gen->output, "struct %s*", sname);
+                    } else {
+                        fprintf(gen->output, "%s*", sname);
+                    }
                 } else {
                     fprintf(gen->output, "void*");
                 }
@@ -491,8 +499,12 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
                         if (param->node_type->element_type &&
                             param->node_type->element_type->kind == TYPE_STRUCT &&
                             param->node_type->element_type->struct_name) {
-                            fprintf(gen->output, "%s*",
-                                param->node_type->element_type->struct_name);
+                            const char* sname = param->node_type->element_type->struct_name;
+                            if (aether_is_c_import_struct(sname)) {
+                                fprintf(gen->output, "struct %s*", sname);
+                            } else {
+                                fprintf(gen->output, "%s*", sname);
+                            }
                         } else {
                             fprintf(gen->output, "void*");
                         }

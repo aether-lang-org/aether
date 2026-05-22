@@ -78,6 +78,48 @@ static int is_hop_by_hop(const char* name) {
     return 0;
 }
 
+static int token_list_contains(const char* csv, const char* needle) {
+    if (!csv || !*csv) return 1;
+    if (!needle || !*needle) return 0;
+    const char* p = csv;
+    size_t nl = strlen(needle);
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        const char* start = p;
+        while (*p && *p != ',') p++;
+        const char* end = p;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        if ((size_t)(end - start) == nl && strncasecmp(start, needle, nl) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int route_pattern_matches(const char* pattern, const char* path) {
+    if (!pattern || !*pattern) return 1;
+    if (!path) path = "/";
+    if (strcmp(pattern, path) == 0) return 1;
+
+    const char* p = pattern;
+    const char* u = path;
+    while (*p && *u) {
+        if (*p == ':') {
+            p++;
+            while (*p && *p != '/') p++;
+            while (*u && *u != '/') u++;
+        } else if (*p == '*') {
+            return 1;
+        } else if (*p == *u) {
+            p++;
+            u++;
+        } else {
+            return 0;
+        }
+    }
+    return *p == '\0' && *u == '\0';
+}
+
 /* ----- helpers ----- */
 
 static const char* client_ip_for_xff(HttpRequest* req) {
@@ -268,9 +310,18 @@ int aether_middleware_reverse_proxy(HttpRequest* req,
     if (!opts || !opts->pool) return 1;  /* misconfigured — pass through */
     if (!req || !res) return 1;
 
+    if (!token_list_contains(opts->methods, req->method)) {
+        return 1;
+    }
+
+    if (opts->route_pattern &&
+        !route_pattern_matches(opts->route_pattern, req->path)) {
+        return 1;
+    }
+
     /* Path-prefix gate. Empty prefix or "/" matches everything. */
     const char* prefix = opts->path_prefix ? opts->path_prefix : "/";
-    if (*prefix && strcmp(prefix, "/") != 0) {
+    if (!opts->route_pattern && *prefix && strcmp(prefix, "/") != 0) {
         size_t pl = strlen(prefix);
         if (!req->path || strncmp(req->path, prefix, pl) != 0) {
             return 1;
@@ -670,6 +721,15 @@ const char* aether_proxy_use_reverse_proxy(HttpServer* server,
                                            const char* path_prefix,
                                            AetherProxyPool* pool,
                                            AetherProxyOpts* opts) {
+    return aether_proxy_use_reverse_proxy_methods(server, path_prefix, pool,
+                                                  opts, NULL);
+}
+
+const char* aether_proxy_use_reverse_proxy_methods(HttpServer* server,
+                                                   const char* path_prefix,
+                                                   AetherProxyPool* pool,
+                                                   AetherProxyOpts* opts,
+                                                   const char* methods_csv) {
     if (!server) return "server is null";
     if (!pool)   return "pool is null";
     if (!opts)   return "opts is null";
@@ -685,10 +745,57 @@ const char* aether_proxy_use_reverse_proxy(HttpServer* server,
     opts->pool = pool;
 
     free(opts->path_prefix);
+    free(opts->route_pattern);
+    free(opts->methods);
+    opts->route_pattern = NULL;
+    opts->methods = (methods_csv && *methods_csv) ? strdup(methods_csv) : NULL;
     opts->path_prefix = strdup(path_prefix);
-    if (!opts->path_prefix) {
+    if (!opts->path_prefix || ((methods_csv && *methods_csv) && !opts->methods)) {
         aether_proxy_pool_free(pool);  /* roll back retain */
         opts->pool = NULL;
+        free(opts->path_prefix);
+        opts->path_prefix = NULL;
+        free(opts->methods);
+        opts->methods = NULL;
+        return "out of memory";
+    }
+
+    http_server_use_middleware(server, aether_middleware_reverse_proxy, opts);
+    return "";
+}
+
+const char* aether_proxy_use_reverse_proxy_match(HttpServer* server,
+                                                 const char* path_pattern,
+                                                 AetherProxyPool* pool,
+                                                 AetherProxyOpts* opts,
+                                                 const char* methods_csv) {
+    if (!server) return "server is null";
+    if (!pool)   return "pool is null";
+    if (!opts)   return "opts is null";
+    if (!path_pattern || *path_pattern != '/') return "path_pattern must start with /";
+
+    aether_proxy_pool_retain(pool);
+    if (opts->pool && opts->pool != pool) {
+        aether_proxy_pool_free(opts->pool);
+    }
+    opts->pool = pool;
+
+    free(opts->path_prefix);
+    free(opts->route_pattern);
+    free(opts->methods);
+    opts->path_prefix = strdup("/");
+    opts->route_pattern = strdup(path_pattern);
+    opts->methods = (methods_csv && *methods_csv) ? strdup(methods_csv) : NULL;
+    if (!opts->path_prefix || !opts->route_pattern ||
+        ((methods_csv && *methods_csv) && !opts->methods)) {
+        aether_proxy_pool_free(pool);
+        opts->pool = NULL;
+        free(opts->path_prefix);
+        free(opts->route_pattern);
+        free(opts->methods);
+        opts->path_prefix = NULL;
+        opts->route_pattern = NULL;
+        opts->methods = NULL;
         return "out of memory";
     }
 

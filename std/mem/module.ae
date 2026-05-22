@@ -30,6 +30,7 @@
 
 exports (
     aether_mem_get_byte, aether_mem_set_byte,
+    aether_mem_get_byte_sz, aether_mem_set_byte_sz,
     aether_mem_get_ptr, aether_mem_set_ptr,
     aether_mem_get_int, aether_mem_set_int,
     aether_mem_get_long, aether_mem_set_long,
@@ -51,7 +52,7 @@ exports (
     aether_mem_set_u32_le, aether_mem_set_u32_be,
     aether_mem_get_u64_le, aether_mem_get_u64_be,
     aether_mem_set_u64_le, aether_mem_set_u64_be,
-    get_byte, set_byte, get_ptr, set_ptr,
+    get_byte, set_byte, get_byte_sz, set_byte_sz, get_ptr, set_ptr,
     get_int, set_int,
     get_long, set_long,
     get_int8, set_int8, get_uint8, set_uint8,
@@ -78,6 +79,15 @@ extern aether_mem_get_byte(p: ptr, i: int) -> int
 // 1 on success, 0 if `p` is null. As with get_byte, out-of-range
 // `i` is undefined behaviour.
 extern aether_mem_set_byte(p: ptr, i: int, value: int) -> int
+
+// size_t-indexed companions. The int variants top out at 2 GiB;
+// codebases whose natural index width is size_t (Redis SDS, lzf,
+// siphash, syncio, large mmap walkers) need the wider form. Aether
+// has no primitive narrowing via `as` so callers cannot convert
+// size_t to int at the call site — that's the gap these fill.
+// Same null defence; same out-of-range UB contract.
+extern aether_mem_get_byte_sz(p: ptr, i: size_t) -> int
+extern aether_mem_set_byte_sz(p: ptr, i: size_t, value: int) -> int
 
 // Read a pointer-sized value at byte offset `offset` from `p`.
 // Returns null if `p` is null OR the loaded value is null —
@@ -269,6 +279,8 @@ extern aether_mem_set_u64_be(p: ptr, offset: int, value: long) -> int
 // std.* (`mem.get_byte(p, 0)`, `mem.set_byte(p, 0, 0xff)`).
 get_byte(p: ptr, i: int) -> int { return aether_mem_get_byte(p, i) }
 set_byte(p: ptr, i: int, value: int) -> int { return aether_mem_set_byte(p, i, value) }
+get_byte_sz(p: ptr, i: size_t) -> int { return aether_mem_get_byte_sz(p, i) }
+set_byte_sz(p: ptr, i: size_t, value: int) -> int { return aether_mem_set_byte_sz(p, i, value) }
 get_ptr(p: ptr, offset: int) -> ptr { return aether_mem_get_ptr(p, offset) }
 set_ptr(p: ptr, offset: int, value: ptr) -> int { return aether_mem_set_ptr(p, offset, value) }
 get_int(p: ptr, offset: int) -> int { return aether_mem_get_int(p, offset) }
