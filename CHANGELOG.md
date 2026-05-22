@@ -13,6 +13,14 @@ next version number before tagging the release.
 
 ### Added
 
+- **Taking the address of an Aether function** is confirmed supported
+  via the existing `funcname as fn(T1, ...) -> R` cast — applying it to
+  a bare function name yields a real C-ABI function pointer (`ptr`),
+  passable to `qsort`, callback tables, etc.
+  (`tests/regression/test_fn_address_via_as_fn.ae`). No compiler change;
+  this locks in the capability with a regression test so C ports can
+  drop their `*_addr()` shim helpers.
+
 - **`sizeof(T)` / `offsetof(T, field)` compile-time layout builtins**
   (`compiler/ast.h`, `compiler/parser/parser.c`,
   `compiler/analysis/typechecker.c`, `compiler/codegen/codegen_expr.c`,
