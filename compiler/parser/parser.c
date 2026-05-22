@@ -2445,6 +2445,11 @@ ASTNode* parse_import_statement(Parser* parser) {
             expect_token(parser, TOKEN_RIGHT_PAREN);
         } else {
             do {
+                // Tolerate a trailing comma before the closing paren —
+                // `import mod (a, b,)`. Without this guard the comma's
+                // next loop iteration hits `)` and errors spuriously.
+                if (peek_token(parser) &&
+                    peek_token(parser)->type == TOKEN_RIGHT_PAREN) break;
                 Token* symbol = expect_token(parser, TOKEN_IDENTIFIER);
                 if (!symbol) break;
 
@@ -2500,6 +2505,15 @@ ASTNode* parse_exports_list(Parser* parser) {
     // it pins "this module exports nothing public" explicitly.
     if (peek_token(parser) && peek_token(parser)->type != TOKEN_RIGHT_PAREN) {
         do {
+            // Tolerate a trailing comma before the closing paren —
+            // `exports (a, b,)`. The multi-line, comma-per-line export
+            // list style (one name per line, trailing comma on the last)
+            // is common in stdlib modules (e.g. std.http.proxy). Without
+            // this guard the trailing comma's next loop iteration hits
+            // `)` and emits a spurious "Expected IDENTIFIER, got
+            // RIGHT_PAREN" parse error.
+            if (peek_token(parser) &&
+                peek_token(parser)->type == TOKEN_RIGHT_PAREN) break;
             Token* name = expect_token(parser, TOKEN_IDENTIFIER);
             if (!name) break;
             ASTNode* id = create_ast_node(AST_IDENTIFIER, name->value,

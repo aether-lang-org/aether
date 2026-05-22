@@ -29,6 +29,19 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **Trailing commas are now tolerated in `exports (…)` and selective
+  import lists** (`compiler/parser/parser.c`,
+  `tests/integration/trailing_comma_lists/`). `exports (a, b, c,)` and
+  `import mod (a, b,)` previously emitted a spurious
+  `error[E0100]: Expected IDENTIFIER, got RIGHT_PAREN` — the
+  `do { expect IDENTIFIER } while (match COMMA)` loop re-entered after
+  the trailing comma and hit `)`. Because the parser recovered and
+  exited 0, the failure was intermittent: any program importing
+  `std.http.proxy` (whose export list ends with a trailing comma)
+  printed the error, mis-located onto the *importer's* file path with
+  the proxy module's line number, and downstream build chains saw it as
+  a "nondeterministic E0100 on rebuild." Reported by the avnproxy port
+  (closures-with-context-builder-blockers.md, Blocker 1).
 - **The series-collapse loop optimizer no longer folds a loop whose body
   consumes varargs** (`compiler/codegen/codegen_stmt.c`). `va_arg` /
   `va_start` / `va_end` are now treated as side-effecting in
