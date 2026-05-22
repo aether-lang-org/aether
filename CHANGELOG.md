@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.mem.get_byte_sz` / `std.mem.set_byte_sz` provide size_t-indexed byte
+  access** (`std/mem/module.ae`, `std/mem/aether_mem.c`,
+  `tests/integration/std_mem_byte_access/`). These mirror `get_byte` /
+  `set_byte` but take a `size_t` offset, avoiding one-off C shims in ports
+  whose natural byte index is already `size_t`.
+
+- **`std.http.proxy` can route by HTTP method and route pattern**
+  (`std/http/proxy/module.ae`, `std/http/proxy/aether_proxy_middleware.c`,
+  `tests/integration/http_reverse_proxy_pool/`). New `proxy.mount_methods`
+  filters a proxy mount by a comma-separated method list, and
+  `proxy.mount_match` combines a method list with std.http route-pattern
+  syntax such as `/repos/:repo/info`. Non-matches pass through to later
+  middleware, so first matching mount wins.
+
+### Fixed
+
+- **`@c_import` struct pointers now emit `struct Name*` for typedef-less C
+  headers** (`compiler/codegen/codegen.c`, `compiler/codegen/codegen_expr.c`,
+  `compiler/codegen/codegen_func.c`, `tests/integration/c_import_struct/`).
+  Header-owned structs still emit no Aether typedef, but pointer casts,
+  extern returns and extern parameters no longer assume the header also
+  declares `typedef struct Name Name;`.
+
 ## [0.176.0]
 
 ### Fixed

@@ -3,17 +3,15 @@
 # (docs/redis-porting-language-gaps.md).
 #
 # Asserts that `extern struct Name @c_import { ... }`:
-#   1. builds and runs — fields read/write correctly through a raw
+#   1. builds and runs - fields read/write correctly through a raw
 #      `ptr` cast to `*client`;
-#   2. emits NO `typedef struct client` of its own (the C header
-#      client.h owns it; a competing typedef would be a C error);
+#   2. emits NO `typedef struct client` of its own and uses
+#      `struct client*`, because client.h deliberately has no typedef;
 #   3. survives an Aether module import (`cdefs` declares it, `probe`
 #      imports it).
 #
 # client.h is force-included into the generated C via the
-# `cflags = "-include client.h"` in aether.toml. If Aether emitted
-# its own `typedef struct client`, the build would fail with a
-# duplicate-typedef error.
+# `cflags = "-include client.h"` in aether.toml.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -41,6 +39,11 @@ fi
 if [ -n "$genc" ] && grep -Eq 'typedef struct client' "$genc"; then
     echo "  [FAIL] c_import_struct: generated C emitted a typedef for 'client'"
     echo "         (the C header owns the type; Aether must suppress it)"
+    exit 1
+fi
+if [ -n "$genc" ] && ! grep -Eq 'struct client\*' "$genc"; then
+    echo "  [FAIL] c_import_struct: generated C did not use 'struct client*'"
+    echo "         (client.h intentionally provides no bare 'client' typedef)"
     exit 1
 fi
 

@@ -19,6 +19,7 @@
 //   5. Round-trip through values that exceed byte range (caller
 //      passes 256, 0x1ff, -1) — the C side masks to low 8 bits;
 //      verify the read matches the masked value.
+//   6. size_t-indexed get_byte_sz / set_byte_sz companions.
 
 import std.mem
 
@@ -650,8 +651,29 @@ main() {
         }
     }
 
+    // Case 26: size_t-indexed byte get/set companions.
+    {
+        p = malloc(8)
+        if p == null {
+            println("  [26] FAIL: malloc(8) returned null")
+            failed = failed + 1
+        } else {
+            size_t idx = 5
+            rc = mem.set_byte_sz(p, idx, 0x1ab)
+            v = mem.get_byte_sz(p, idx)
+            if rc != 1 || v != 0xab {
+                println("  [26] FAIL: get/set_byte_sz rc=${rc}, value=${v}, expected 171")
+                failed = failed + 1
+            } else {
+                println("  [26] PASS size_t-indexed byte round-trip")
+                passed = passed + 1
+            }
+            free(p)
+        }
+    }
+
     println("")
-    println("std_mem_byte_access: ${passed} passing, ${failed} failing (of 25)")
+    println("std_mem_byte_access: ${passed} passing, ${failed} failing (of 26)")
     if failed > 0 {
         exit(1)
     }

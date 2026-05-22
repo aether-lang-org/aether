@@ -197,6 +197,8 @@ struct AetherProxyCache {
 
 struct AetherProxyOpts {
     char* path_prefix;                /* set by proxy.mount */
+    char* route_pattern;              /* optional full-path pattern */
+    char* methods;                    /* optional CSV allow-list */
     char* strip_path_prefix;
     int   preserve_host;
     int   add_xff;

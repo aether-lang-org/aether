@@ -7,8 +7,9 @@
 # (mquickjs) that fundamentally operate on raw pointers — every
 # UTF-8 decoder and bytecode interpreter does `((uint8_t*)p)[i]`.
 #
-# Exercises 25 cases across:
+# Exercises 26 cases across:
 #   * byte get/set: round-trip, NULL defence, low-8-bit masking
+#   * size_t-indexed byte get/set companions
 #   * pointer / int / long / float-bits accessors
 #   * clz32 / clz64 / udiv64_32
 #   * sized typed-array accessors (int8/uint8/int16/uint16/uint32/
@@ -37,8 +38,8 @@ if ! AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/probe.ae" >"$TMPDIR/out.log" 2>&
     exit 1
 fi
 
-if ! grep -q "std_mem_byte_access: 25 passing, 0 failing" "$TMPDIR/out.log"; then
-    echo "  [FAIL] std_mem_byte_access — not all 25 cases passed"
+if ! grep -q "std_mem_byte_access: 26 passing, 0 failing" "$TMPDIR/out.log"; then
+    echo "  [FAIL] std_mem_byte_access - not all 26 cases passed"
     tail -40 "$TMPDIR/out.log" | sed 's/^/    /'
     exit 1
 fi

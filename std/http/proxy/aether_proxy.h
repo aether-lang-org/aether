@@ -234,6 +234,27 @@ const char* aether_proxy_use_reverse_proxy(HttpServer* server,
                                            AetherProxyPool* pool,
                                            AetherProxyOpts* opts);
 
+/* Method-filtered mount. `methods_csv` is a comma/space-separated
+ * allow-list such as "GET,HEAD" or "POST, PUT, DELETE". Requests
+ * whose method is not listed pass through to later middleware/routes.
+ * Middleware registration order is preserved, so first matching
+ * proxy mount wins. */
+const char* aether_proxy_use_reverse_proxy_methods(HttpServer* server,
+                                                   const char* path_prefix,
+                                                   AetherProxyPool* pool,
+                                                   AetherProxyOpts* opts,
+                                                   const char* methods_csv);
+
+/* Method + route-pattern mount. `path_pattern` uses the same shape
+ * as std.http routes (`/repos/:repo/info`, `/assets/<wildcard>`). Unlike
+ * `path_prefix`, it matches the whole request path before forwarding.
+ * Useful for carve-outs before broader method mounts. */
+const char* aether_proxy_use_reverse_proxy_match(HttpServer* server,
+                                                 const char* path_pattern,
+                                                 AetherProxyPool* pool,
+                                                 AetherProxyOpts* opts,
+                                                 const char* methods_csv);
+
 /* One-upstream convenience. Builds a pool with one upstream + RR +
  * default opts, mounts the middleware, and returns "". The pool
  * is owned by the middleware and freed alongside the server. */

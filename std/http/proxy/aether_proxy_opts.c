@@ -29,6 +29,8 @@ void aether_proxy_opts_free(AetherProxyOpts* opts) {
     if (opts->pool) aether_proxy_pool_free(opts->pool);
     /* cache is owned by the caller; we never own it here */
     free(opts->path_prefix);
+    free(opts->route_pattern);
+    free(opts->methods);
     free(opts->strip_path_prefix);
     free(opts);
 }

@@ -46,7 +46,7 @@ exports (
     opts_set_strip_prefix, opts_set_preserve_host, opts_set_xforwarded,
     opts_bind_cache, opts_set_body_cap,
     opts_set_retry_policy, opts_set_trace_inject,
-    mount, mount_simple,
+    mount, mount_methods, mount_match, mount_simple,
     pool_metrics_text,
 )
 
@@ -100,6 +100,16 @@ extern aether_proxy_use_reverse_proxy(server: ptr,
                                       path_prefix: string,
                                       pool: ptr,
                                       opts: ptr) -> string
+extern aether_proxy_use_reverse_proxy_methods(server: ptr,
+                                              path_prefix: string,
+                                              pool: ptr,
+                                              opts: ptr,
+                                              methods_csv: string) -> string
+extern aether_proxy_use_reverse_proxy_match(server: ptr,
+                                            path_pattern: string,
+                                            pool: ptr,
+                                            opts: ptr,
+                                            methods_csv: string) -> string
 extern aether_proxy_use_simple_proxy(server: ptr,
                                      path_prefix: string,
                                      upstream_url: string,
@@ -330,6 +340,30 @@ mount(server: ptr,
       pool: ptr,
       opts: ptr) -> string {
     return aether_proxy_use_reverse_proxy(server, path_prefix, pool, opts)
+}
+
+// Mount the proxy only for specific HTTP methods. `methods_csv` is
+// comma/space-separated, e.g. "GET,HEAD" or "POST, PUT, DELETE".
+// Non-matching methods pass through to later middleware/routes.
+mount_methods(server: ptr,
+              path_prefix: string,
+              pool: ptr,
+              opts: ptr,
+              methods_csv: string) -> string {
+    return aether_proxy_use_reverse_proxy_methods(server, path_prefix, pool,
+                                                  opts, methods_csv)
+}
+
+// Mount the proxy for a route pattern + method set. `path_pattern`
+// uses std.http route syntax (`/repos/:repo/info`, `/assets/*`).
+// Register narrower carve-outs first; middleware order is first-match-wins.
+mount_match(server: ptr,
+            path_pattern: string,
+            pool: ptr,
+            opts: ptr,
+            methods_csv: string) -> string {
+    return aether_proxy_use_reverse_proxy_match(server, path_pattern, pool,
+                                                opts, methods_csv)
 }
 
 // One-upstream convenience: builds a pool with one upstream + RR +

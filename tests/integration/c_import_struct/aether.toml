@@ -3,9 +3,7 @@ name = "probe"
 path = "probe.ae"
 
 [build]
-# Force-include the C header that owns `client` into every TU,
-# including the Aether-generated .gen.c.  The .gen.c references
-# `client*` and `c->argc` but — because `client` is declared
-# `@c_import` — emits no typedef of its own, so it relies on this
-# header for the definition.
+# Force-include the C header that owns `client` into every TU, including the
+# Aether-generated .gen.c. It references `struct client*` and `c->argc` but
+# emits no typedef of its own, so it relies on this header for the definition.
 cflags = "-include client.h -I."

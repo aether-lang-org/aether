@@ -2,9 +2,8 @@
 // `@c_import` declaration carries across an Aether module import the
 // same way a regular `extern struct` does.
 //
-// `@c_import` means: the C header (client.h) owns the layout and the
-// typedef.  Aether typechecks `*client` field access against these
-// declared fields but emits no struct body and no typedef.
+// `@c_import` means: the C header (client.h) owns the layout. It deliberately
+// does not provide a `client` typedef, so generated C must use `struct client*`.
 extern struct client @c_import {
     argc: int
     argv: ptr

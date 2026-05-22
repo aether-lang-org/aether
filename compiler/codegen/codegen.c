@@ -7,6 +7,46 @@
 #include "../aether_module.h"
 #include "../aether_error.h"
 
+/* Set of struct names declared `extern struct Name @c_import`.
+ * aetherc does not emit typedefs for these because the C header owns the
+ * layout. Some headers, such as <time.h> for `struct tm`, also do not ship
+ * `typedef struct Name Name;`, so bare `Name*` is not portable. */
+static char** g_c_import_struct_names = NULL;
+static int g_c_import_struct_count = 0;
+static int g_c_import_struct_capacity = 0;
+
+void aether_register_c_import_struct(const char* name) {
+    if (!name) return;
+    for (int i = 0; i < g_c_import_struct_count; i++) {
+        if (strcmp(g_c_import_struct_names[i], name) == 0) return;
+    }
+    if (g_c_import_struct_count >= g_c_import_struct_capacity) {
+        int new_capacity = g_c_import_struct_capacity ? g_c_import_struct_capacity * 2 : 8;
+        char** grown = (char**)realloc(g_c_import_struct_names,
+            (size_t)new_capacity * sizeof(char*));
+        if (!grown) {
+            fprintf(stderr, "aetherc: out of memory registering @c_import struct\n");
+            exit(1);
+        }
+        g_c_import_struct_names = grown;
+        g_c_import_struct_capacity = new_capacity;
+    }
+    char* copy = strdup(name);
+    if (!copy) {
+        fprintf(stderr, "aetherc: out of memory registering @c_import struct\n");
+        exit(1);
+    }
+    g_c_import_struct_names[g_c_import_struct_count++] = copy;
+}
+
+int aether_is_c_import_struct(const char* name) {
+    if (!name) return 0;
+    for (int i = 0; i < g_c_import_struct_count; i++) {
+        if (strcmp(g_c_import_struct_names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
 // Map Aether type to C typename for array element declarations.
 // For arrays, the size goes after the name in C, so we need just the
 // element type, not the full "T[N]" form that get_c_type produces.
@@ -1258,13 +1298,25 @@ const char* get_c_type(Type* type) {
              * as `StructName*` so the C type carries the struct identity
              * across declarations / parameters / returns. Bare `ptr` (no
              * element type) stays `void*`. Mirrors the TYPE_ACTOR_REF
-             * shape just below. */
+             * shape just below.
+             *
+             * For `@c_import` structs we emit `struct Name*` instead:
+             * aetherc doesn't synthesise a `typedef struct Name Name;`
+             * for those (the header is supposed to), but some POSIX
+             * headers (notably <time.h> with `struct tm`) don't ship
+             * the convenience typedef.  `struct Name*` is universally
+             * portable. */
             if (type->element_type && type->element_type->kind == TYPE_STRUCT &&
                 type->element_type->struct_name) {
                 static char buffers[4][256];
                 static int buf_idx = 0;
                 char* buffer = buffers[buf_idx++ & 3];
-                snprintf(buffer, 256, "%s*", type->element_type->struct_name);
+                const char* sname = type->element_type->struct_name;
+                if (aether_is_c_import_struct(sname)) {
+                    snprintf(buffer, 256, "struct %s*", sname);
+                } else {
+                    snprintf(buffer, 256, "%s*", sname);
+                }
                 return buffer;
             }
             return "void*";
@@ -1273,8 +1325,12 @@ const char* get_c_type(Type* type) {
             static char buffers[4][256];
             static int buf_idx = 0;
             char* buffer = buffers[buf_idx++ & 3];
-            snprintf(buffer, 256, "%s",
-                    type->struct_name ? type->struct_name : "unnamed");
+            const char* sname = type->struct_name ? type->struct_name : "unnamed";
+            if (type->struct_name && aether_is_c_import_struct(type->struct_name)) {
+                snprintf(buffer, 256, "struct %s", sname);
+            } else {
+                snprintf(buffer, 256, "%s", sname);
+            }
             return buffer;
         }
         case TYPE_ARRAY: {
@@ -2683,6 +2739,9 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
              * Header-Defined C Struct Interop". */
             if (sd->annotation &&
                 strcmp(sd->annotation, "extern_c_import") == 0) {
+                /* Record this name so later emit sites can produce
+                 * `struct Name*` instead of `Name*` when needed. */
+                aether_register_c_import_struct(sd->value);
                 continue;
             }
             fprintf(gen->output, "typedef struct %s %s;\n", sd->value, sd->value);
