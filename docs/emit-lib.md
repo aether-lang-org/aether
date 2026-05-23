@@ -444,24 +444,67 @@ typedef struct {
 } AetherLibFunction;
 
 typedef struct {
-    const char* schema_version;   /* "1.0" — bump on breaking change   */
+    const char* schema_version;   /* "1.0" funcs only; "1.1" w/ closures */
     const char* aether_version;   /* compiler version                  */
     const char* primary_source;   /* the .ae passed to aetherc         */
     int                       function_count;
     const AetherLibFunction*  functions;
-    int                       closure_count;   /* always 0 in v1       */
-    const void*               closures;        /* always NULL in v1    */
+    int                       closure_count;   /* v2: closure-surface records */
+    const AetherLibClosure*   closures;        /* NULL when closure_count==0 */
 } AetherLibMeta;
 ```
 
 No JSON, no parsing, no dynamic allocation — the struct is `static const`
 in the artifact and the catalog literally lives in `.rodata`. Schema is
-versioned (`"1.0"`); within `1.x` only additive fields appear at the
-struct tail (the `closure_count` / `closures` slots are reserved for v2's
-closure-context records). v1 includes every Aether-defined function the
-linker exports; functions skipped from the `aether_<name>` alias surface
-(unsupported types, tuple returns, trailing-underscore privates) are
-also omitted from the catalog.
+versioned; within `1.x` only additive fields appear at the struct tail,
+so a "1.0" reader walks a "1.1" artifact unchanged (it reads
+`function_count`/`functions` and ignores the closure slots — they were
+always present, just NULL before). The function table includes every
+Aether-defined function the linker exports; functions skipped from the
+`aether_<name>` alias surface (unsupported types, tuple returns,
+trailing-underscore privates) are also omitted from it.
+
+#### Closure-context records (v2, schema "1.1")
+
+The flattened function table above is the foreign-FFI surface; it drops
+closures, real types, and the builder-DSL shape. The `closures` array is
+the complement: the closure surface a *downstream Aether* consumer needs
+to reconstruct a closure-with-context builder DSL at full fidelity —
+rather than the lowest-common-denominator C ABI a foreign host links
+against. Each record:
+
+```c
+typedef struct { const char* name; const char* type; } AetherLibCapture;
+
+typedef struct {
+    const char* name;              /* param / closure name, or ""       */
+    const char* role;              /* "builder" | "param" | "literal"   */
+    const char* enclosing_export;  /* the export it is reachable from   */
+    const char* signature;         /* "|int, string| -> bool"           */
+    int                     capture_count;
+    const AetherLibCapture* captures;   /* NULL when capture_count == 0  */
+    const char* source_file;
+    int         source_line;
+} AetherLibClosure;
+```
+
+Three sources populate it, all reachable from the set of top-level,
+non-imported, non-`_`-suffixed functions (which is broader than the
+ABI function table — a builder or a `fn`-parameter function is exactly
+what the ABI gate excludes, yet its bare symbol is still linkable by an
+Aether consumer):
+
+- **`builder`** — an export that takes an injected `_ctx` (the `builder`
+  keyword or the `_ctx: ptr` first-param convention). The "call me with
+  a trailing block" signal; `capture_count` is 0.
+- **`param`** — a closure-typed (`fn`) parameter of an export. `name` is
+  the parameter, `signature` its `|...| -> R` shape.
+- **`literal`** — a hoisted closure literal in an export's body, with the
+  enclosing variables it captures and their rendered Aether types.
+
+Closure-literal return types are best-effort: rendered when resolved,
+`?` when the body type-checks lazily and the type isn't known at emit
+time. Captures and parameter types are exact.
 
 ### `ae lib-info <path>` — inspect any artifact
 

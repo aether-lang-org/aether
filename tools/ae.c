@@ -6038,13 +6038,29 @@ typedef struct {
 } _AeLibInfoFn;
 
 typedef struct {
+    const char* name;
+    const char* type;
+} _AeLibInfoCap;
+
+typedef struct {
+    const char* name;
+    const char* role;
+    const char* enclosing_export;
+    const char* signature;
+    int         capture_count;
+    const _AeLibInfoCap* captures;
+    const char* source_file;
+    int         source_line;
+} _AeLibInfoClosure;
+
+typedef struct {
     const char* schema_version;
     const char* aether_version;
     const char* primary_source;
     int         function_count;
     const _AeLibInfoFn* functions;
     int         closure_count;
-    const void* closures;
+    const _AeLibInfoClosure* closures;
 } _AeLibInfoMeta;
 
 /* `ae lib-path` — introspect the resolved module-search chain.
@@ -6177,10 +6193,7 @@ static int cmd_lib_info(int argc, char** argv) {
            (m->primary_source && m->primary_source[0])
              ? m->primary_source : "(unknown)");
     printf("  Functions:     %d\n", m->function_count);
-    if (m->closure_count > 0) {
-        printf("  Closures:      %d (v2 — surface not yet emitted)\n",
-               m->closure_count);
-    }
+    printf("  Closures:      %d\n", m->closure_count);
     printf("\n");
 
     if (m->function_count > 0 && m->functions) {
@@ -6197,6 +6210,37 @@ static int cmd_lib_info(int argc, char** argv) {
                 printf("        c_symbol: %s\n", csym);
             }
             printf("        @ %s:%d\n", src, f->source_line);
+        }
+    }
+
+    /* v2 closure-context records (schema >= 1.1). These describe the
+     * closure surface the flattened C ABI drops — builder/trailing-block
+     * DSL entry points, closure-typed params, and capturing closure
+     * literals — so a downstream Aether consumer can reconstruct the
+     * builder-DSL with full fidelity. Guarded on the typed pointer being
+     * present so a "1.0" function-only artifact prints nothing extra. */
+    if (m->closure_count > 0 && m->closures) {
+        printf("\n  Closure surface:\n");
+        for (int i = 0; i < m->closure_count; i++) {
+            const _AeLibInfoClosure* c = &m->closures[i];
+            const char* role = c->role ? c->role : "?";
+            const char* encl = c->enclosing_export ? c->enclosing_export : "?";
+            const char* sig  = c->signature ? c->signature : "";
+            const char* nm   = c->name ? c->name : "";
+            const char* src  = (c->source_file && c->source_file[0])
+                               ? c->source_file : "<unknown>";
+            if (nm[0] && strcmp(nm, encl) != 0) {
+                printf("  - [%s] %s.%s %s\n", role, encl, nm, sig);
+            } else {
+                printf("  - [%s] %s %s\n", role, encl, sig);
+            }
+            for (int k = 0; k < c->capture_count && c->captures; k++) {
+                const _AeLibInfoCap* cap = &c->captures[k];
+                printf("        captures %s: %s\n",
+                       cap->name ? cap->name : "?",
+                       cap->type ? cap->type : "?");
+            }
+            printf("        @ %s:%d\n", src, c->source_line);
         }
     }
 

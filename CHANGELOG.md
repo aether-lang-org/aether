@@ -13,6 +13,31 @@ next version number before tagging the release.
 
 ### Added
 
+- **`--emit=lib` metadata now carries v2 closure-context records**
+  (`runtime/aether_lib_meta.h`, `compiler/codegen/codegen.c`,
+  `tools/ae.c`, `tests/integration/lib_meta_closures/`). The
+  `aether_lib_meta()` catalog's previously-reserved `closure_count` /
+  `closures` slots are now populated (schema bumps "1.0" → "1.1" when
+  any closure record is present). Each `AetherLibClosure` describes a
+  closure surface reachable from an export — the part the flattened C
+  ABI drops — so a downstream *Aether* consumer can reconstruct a
+  closure-with-context builder DSL at full fidelity (the "config IS
+  code" / Groovy-grade library DX goal). Three record roles:
+  `builder` (an export taking an injected `_ctx`, i.e. a trailing-block
+  DSL entry point), `param` (a closure-typed `fn` parameter, rendered
+  with its `|...| -> R` signature), and `literal` (a hoisted closure in
+  an export's body, with the enclosing variables it captures and their
+  Aether types). Records are computed over the full set of top-level,
+  non-imported, non-`_`-suffixed functions — broader than the ABI
+  function table, since a builder or `fn`-parameter function is exactly
+  what the ABI gate excludes yet still has a linkable bare symbol.
+  Everything stays `static const` in `.rodata` (no allocation, no
+  parsing), and the layout is append-only so a "1.0" reader walks a
+  "1.1" artifact unchanged. `ae lib-info` prints the closure surface
+  (role, enclosing export, signature, captures). Closure-literal return
+  types are best-effort (`?` when the body type-checks lazily);
+  captures and parameter types are exact.
+
 - **Regression coverage for the `std.map` opts-context → `std.http.proxy`
   FFI path** (`tests/regression/test_proxy_opts_map_mount.ae`). The avn
   project's closures-with-context builder rollout filed this as "Blocker

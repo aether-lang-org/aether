@@ -1,0 +1,32 @@
+// Sample library for the v2 closure-context records integration test.
+// It exercises the three closure-surface sources the metadata describes:
+//
+//   1. `route`    — a `builder` (trailing-block DSL) entry point.
+//   2. `each`     — a higher-order export with a closure-typed (`fn`)
+//                   parameter (note: such a function is *not* in the
+//                   flattened C ABI function table, yet still has a
+//                   callable bare symbol an Aether consumer can use —
+//                   the closure record is how its shape survives).
+//   3. `sum_with` — a body closure that captures an enclosing variable.
+//
+// `greet` is a plain ABI-exportable function with no closure surface,
+// present to confirm the function table and closure table coexist.
+
+import std.string
+
+builder route(path: string) {
+    return path
+}
+
+each(items: ptr, action: fn) {
+    return call(action, items)
+}
+
+sum_with(base: int, x: int) -> int {
+    adder = |y: int| -> y + base
+    return call(adder, x)
+}
+
+greet(name: string) -> string {
+    return string.concat("hi ", name)
+}
