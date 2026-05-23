@@ -2212,9 +2212,18 @@ static void prepare_binary_imports(const char* main_file) {
         snprintf(dir, sizeof(dir), "%s", abs_so);
         char* slash = strrchr(dir, '/');
         if (slash) *slash = '\0';
+        // Emit the rpath UNQUOTED — `-Wl,-rpath,<dir>`, parallel to the
+        // unquoted `-L%s` this file already uses. Quoting it
+        // (`-Wl,-rpath,"<dir>"`) leaked literal quote characters into the
+        // recorded rpath on macOS (`dyld: tried '"/.../tmp"/lib.dylib'`),
+        // so the dylib — whose install name `ae build --emit=lib` rewrites
+        // to `@rpath/<base>` on macOS — was never found at run time.
+        // Module/lib/temp dirs don't contain spaces, same assumption -L
+        // relies on. The .so itself stays quoted (it's a plain input file
+        // and links fine on both platforms).
         size_t off = strlen(g_binimport_link);
         snprintf(g_binimport_link + off, sizeof(g_binimport_link) - off,
-                 " \"%s\" -Wl,-rpath,\"%s\"", abs_so, dir);
+                 " \"%s\" -Wl,-rpath,%s", abs_so, dir);
         if (tc.verbose) {
             fprintf(stderr, "ae: binary import '%s' -> %s (stub %s)\n",
                     mod, abs_so, stub_path);
