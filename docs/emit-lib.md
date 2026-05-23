@@ -506,6 +506,49 @@ Closure-literal return types are best-effort: rendered when resolved,
 `?` when the body type-checks lazily and the type isn't known at emit
 time. Captures and parameter types are exact.
 
+#### Consuming a published library from Aether (`import`)
+
+The records above are not just for inspection — they are what lets an
+*Aether* program consume a precompiled `--emit=lib` artifact as a
+first-class `import`, with the call site reading as if the library were
+compiled in the same cycle:
+
+```aether
+import std.map        // builder default factory (map_new) lives here
+import gizmo          // resolves libgizmo.so — no gizmo.ae source needed
+
+main() {
+    println(gizmo.greet("world"))     // a function export
+    s = gizmo.section("intro") { }    // a builder (trailing-block DSL) export
+    println(s)
+}
+```
+
+When `ae run` / `ae build` sees an `import foo` that has no `foo` source
+module but a `libfoo.so` / `foo.so` on the search path, it reads that
+artifact's `aether_lib_meta()` catalog and synthesizes a small Aether
+interface stub: an `@extern("<c_symbol>") name(...) -> R` for each
+function export, and a trailing-block `builder` wrapper for each
+`builder` record (forwarding the block's config map to the library
+function's `(..., _builder)` entry point). The stub is dropped onto the
+module search path, so the *existing* source-import machinery
+(typecheck, namespace prefixing, builder registration) rehydrates the
+library — no special call-site syntax. The artifact is linked in
+(absolute path + `-rpath`), and the host's `-rdynamic` + static
+`libaether` satisfy the `.so`'s runtime symbols.
+
+Scope of the current implementation:
+
+- **Function exports** and **builder DSL entry points** are callable.
+  A builder consumer also `import std.map` (the default `map_new`
+  config factory is a `std.map` facility used at the call site).
+- **Higher-order exports** (a function taking a closure `fn` parameter)
+  are described in the metadata but not yet callable across the binary
+  boundary — passing an Aether closure into an imported function is a
+  follow-on (the closure ABI across the boundary).
+- POSIX only for now (the prepass is gated on `dlopen`); Windows DLL
+  hosting is a follow-up, matching `ae lib-info`.
+
 ### `ae lib-info <path>` — inspect any artifact
 
 The `ae` CLI ships a turnkey reader that `dlopen`s a `.so`/`.dylib`,

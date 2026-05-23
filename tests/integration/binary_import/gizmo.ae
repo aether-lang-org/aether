@@ -1,0 +1,13 @@
+// A small library published as a --emit=lib artifact, consumed by app.ae
+// purely as a binary `import gizmo`. Exercises a plain function export
+// and a builder (trailing-block DSL) export across the binary boundary.
+
+import std.string
+
+builder section(title: string) {
+    return title
+}
+
+greet(name: string) -> string {
+    return string.concat("hi ", name)
+}

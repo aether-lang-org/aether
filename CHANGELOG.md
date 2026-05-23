@@ -13,6 +13,29 @@ next version number before tagging the release.
 
 ### Added
 
+- **Consume a precompiled `--emit=lib` artifact as a first-class Aether
+  `import`** (`tools/ae.c`, `tests/integration/binary_import/`). When
+  `ae run` / `ae build` sees an `import foo` with no `foo` source module
+  but a `libfoo.so` / `foo.so` on the search path, it reads that
+  artifact's `aether_lib_meta()` catalog (the v2 closure-context schema)
+  and synthesizes an Aether interface stub: an `@extern("<c_symbol>")`
+  declaration for each function export and a trailing-block `builder`
+  wrapper for each builder entry point (forwarding the block's config
+  map to the library's `(..., _builder)` symbol). The stub is placed on
+  the module search path, so the existing source-import machinery
+  (typecheck, namespace prefixing, builder registration) rehydrates the
+  library with full call-site fidelity — `foo.greet(x)` and the builder
+  DSL `foo.section(t) { … }` read as if compiled in the same cycle. The
+  artifact is linked in (absolute path + `-rpath`); the host's
+  `-rdynamic` + static `libaether` satisfy its runtime symbols. This is
+  the consumer half of the Aether-by-Aether library DX (the producer
+  half is the v2 closure-context records, same release). Scope:
+  function exports and builder DSL entry points are callable (a builder
+  consumer also `import std.map` for the default config factory);
+  higher-order exports taking a closure parameter are described in the
+  metadata but not yet callable across the boundary (follow-on); POSIX
+  only (gated on `dlopen`), Windows DLL hosting is a follow-up.
+
 - **`--emit=lib` metadata now carries v2 closure-context records**
   (`runtime/aether_lib_meta.h`, `compiler/codegen/codegen.c`,
   `tools/ae.c`, `tests/integration/lib_meta_closures/`). The
