@@ -1,0 +1,207 @@
+// std.http.server.vcr.embed — a thin C-ABI embedding wrapper over the
+// std.http.server.vcr surface, for hosting the Aether VCR as a
+// record/playback server behind an FFI layer (e.g. servirtium-dotnet's
+// P/Invoke). vcr_embed_abi_wish.md Part B.
+//
+// Build it as a shared library and dlsym the exports:
+//
+//     ae build --emit=lib --with=fs,net \
+//         std/http/server/vcr/embed.ae -o libvcr.so
+//
+// No new VCR semantics — record / playback / mutation / parse all stay
+// exactly as the vcr module implements them. This layer adds only the
+// embedding seam the raw module surface lacks:
+//
+//   * starts the accept loop on a detached background thread
+//     (`http_server_start_background_raw`) — the vcr module's `load()`
+//     deliberately doesn't listen, pushing actor-wiring onto the caller,
+//     which an FFI host can't do;
+//   * binds synchronously *before* starting the thread so an
+//     OS-assigned port (port 0) is resolved by the time the start call
+//     returns and `vcr_embed_port` can report it;
+//   * returns caller-owned C strings (every string result is duplicated
+//     via `vcr_embed_dup`; the host frees it with `vcr_embed_free_string`)
+//     rather than the vcr surface's borrowed TLS/arena strings.
+//
+// Export naming: every function is prefixed `vcr_embed_`, so under
+// `--emit=lib` it lands as `aether_vcr_embed_<name>`. A bare `vcr_`
+// prefix would collide at link with the existing C runtime symbols in
+// `aether_vcr.c` (`vcr_last_error`, `vcr_tape_length`, …); the
+// `vcr_embed_` prefix is the embed-only namespace the wish asked us to
+// pick (open question 2).
+//
+// v1 contract: ONE active VCR server per process (the underlying
+// tape / cursor / mutation state is process-global). Returned strings
+// are NUL-terminated (binary bodies remain the existing tape limitation).
+// The opaque handle is the HTTP server pointer.
+
+import std.http.server.vcr
+import std.http
+
+// Caller-owned-string helpers (std/http/server/vcr/aether_vcr.c).
+extern vcr_embed_dup(s: string) -> string
+extern vcr_embed_free(s: string)
+
+// ---- lifecycle ----
+
+// Parse `tape_path`, bind `host:port` (port 0 = OS-assigned), start the
+// accept loop on a background thread, and return the server handle.
+// `label` is human-facing (logs/diagnostics), never the state key.
+// Returns null on parse/bind failure.
+vcr_embed_start_playback(label: string, tape_path: string, host: string, port: int) -> ptr {
+    raw = vcr.load(tape_path, port)
+    if raw == 0 {
+        return null
+    }
+    http_server_set_host(raw, host)
+    rc = http_server_bind_raw(raw, host, port)
+    if rc < 0 {
+        vcr.eject(raw)
+        return null
+    }
+    sb = http_server_start_background_raw(raw)
+    if sb < 0 {
+        return null
+    }
+    return raw
+}
+
+// Record mode: bind `host:port`, forward each request to `upstream_base`,
+// return the live response to the caller, and capture the interaction.
+// Flush to the tape with vcr_embed_stop_and_flush. Returns null on failure.
+vcr_embed_start_record(label: string, tape_path: string, upstream_base: string, host: string, port: int) -> ptr {
+    raw = vcr.load_record(tape_path, upstream_base, port)
+    if raw == 0 {
+        return null
+    }
+    http_server_set_host(raw, host)
+    rc = http_server_bind_raw(raw, host, port)
+    if rc < 0 {
+        vcr.eject(raw)
+        return null
+    }
+    sb = http_server_start_background_raw(raw)
+    if sb < 0 {
+        return null
+    }
+    return raw
+}
+
+// Stop the accept loop (playback handles just stop).
+vcr_embed_stop(s: ptr) {
+    vcr.eject(s)
+}
+
+// Record handles: stop + flush the captured markdown to `tape_path`.
+// Returns "" on success, else an error (caller frees the string).
+vcr_embed_stop_and_flush(s: ptr, tape_path: string) -> string {
+    return vcr_embed_dup(vcr.eject_record(s, tape_path))
+}
+
+// Stop + flush, overwriting the tape AND returning a non-empty drift
+// error when the new recording differs (Servirtium step-4 contract).
+vcr_embed_stop_and_flush_fail_if_changed(s: ptr, tape_path: string) -> string {
+    vcr.eject(s)
+    return vcr_embed_dup(vcr.flush_and_fail_if_changed(tape_path))
+}
+
+// ---- introspection ----
+
+// Resolved listening port (the OS-assigned port when started with 0).
+vcr_embed_port(s: ptr) -> int {
+    return http_server_port(s)
+}
+
+// "http://<host>:<port>" for the running server — caller frees.
+vcr_embed_base_url(s: ptr, host: string) -> string {
+    p = http_server_port(s)
+    url = "http://${host}:${p}"
+    return vcr_embed_dup(url)
+}
+
+vcr_embed_tape_length() -> int {
+    return vcr.tape_length()
+}
+
+vcr_embed_reset_cursor() {
+    vcr.reset_cursor()
+}
+
+// ---- diagnostics (drain after a request to assert outcomes) ----
+
+vcr_embed_last_error() -> string {
+    return vcr_embed_dup(vcr.last_error())
+}
+
+vcr_embed_last_kind() -> int {
+    return vcr.last_kind()
+}
+
+vcr_embed_last_index() -> int {
+    return vcr.last_index()
+}
+
+vcr_embed_clear_last_error() {
+    vcr.clear_last_error()
+}
+
+// ---- mutations / config (call BEFORE start, as the vcr surface requires) ----
+
+vcr_embed_redact(field: int, pattern: string, replacement: string) -> string {
+    return vcr_embed_dup(vcr.redact(field, pattern, replacement))
+}
+
+vcr_embed_unredact(field: int, pattern: string, replacement: string) -> string {
+    return vcr_embed_dup(vcr.unredact(field, pattern, replacement))
+}
+
+vcr_embed_remove_header(field: int, name: string) -> string {
+    return vcr_embed_dup(vcr.remove_header(field, name))
+}
+
+vcr_embed_note(title: string, body: string) -> string {
+    return vcr_embed_dup(vcr.note(title, body))
+}
+
+vcr_embed_static_content(mount_path: string, fs_dir: string) -> string {
+    return vcr_embed_dup(vcr.static_content(mount_path, fs_dir))
+}
+
+vcr_embed_set_strict_headers(on: int) {
+    vcr.set_strict_headers(on)
+}
+
+vcr_embed_indent_code_blocks() {
+    vcr.indent_code_blocks()
+}
+
+vcr_embed_emphasize_http_verbs() {
+    vcr.emphasize_http_verbs()
+}
+
+vcr_embed_clear_redactions() {
+    vcr.clear_redactions()
+}
+
+vcr_embed_clear_unredactions() {
+    vcr.clear_unredactions()
+}
+
+vcr_embed_clear_header_removals() {
+    vcr.clear_header_removals()
+}
+
+vcr_embed_clear_static_content() {
+    vcr.clear_static_content()
+}
+
+vcr_embed_clear_format_options() {
+    vcr.clear_format_options()
+}
+
+// ---- string ownership ----
+
+// Free any char* returned by a vcr_embed_* function above.
+vcr_embed_free_string(s: string) {
+    vcr_embed_free(s)
+}

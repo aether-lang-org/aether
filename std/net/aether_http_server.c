@@ -3353,7 +3353,12 @@ int http_server_start_raw(HttpServer* server) {
     } else if (use_actor_mode) {
         // Single-accept with I/O poller (default): one accept thread waits for data
         // before dispatching to worker actors. Best for most workloads.
-        if (http_server_bind_raw(server, server->host, server->port) < 0) {
+        // Skip the bind if the caller already bound synchronously (e.g.
+        // an embedding host that bound with port 0 and read the resolved
+        // port back via http_server_port before starting the background
+        // accept loop) — re-binding an open socket would fail.
+        if (server->socket_fd < 0 &&
+            http_server_bind_raw(server, server->host, server->port) < 0) {
             return -1;
         }
 
@@ -3378,7 +3383,10 @@ int http_server_start_raw(HttpServer* server) {
     } else
 #endif
     {
-        if (http_server_bind_raw(server, server->host, server->port) < 0) {
+        // Skip the bind if already bound synchronously (see the
+        // use_actor_mode branch above for the embedding rationale).
+        if (server->socket_fd < 0 &&
+            http_server_bind_raw(server, server->host, server->port) < 0) {
             return -1;
         }
 

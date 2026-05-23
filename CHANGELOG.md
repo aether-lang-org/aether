@@ -11,6 +11,34 @@ next version number before tagging the release.
 
 ## [current]
 
+### Added
+
+- **VCR embedding C-ABI — host the Aether record/playback server behind
+  an FFI layer** (`std/http/server/vcr/embed.ae`,
+  `std/http/server/vcr/aether_vcr.c`, `tests/integration/vcr_embed_abi/`).
+  A thin wrapper module over the existing `std.http.server.vcr` surface
+  (no new VCR semantics) that adds the embedding seam the raw module
+  lacked: it starts the accept loop on a detached background thread
+  (`http_server_start_background_raw` — `load()` deliberately doesn't
+  listen), binds *synchronously* first so an OS-assigned port (port 0)
+  is resolved before the start call returns, and returns caller-owned C
+  strings (every result duplicated via `vcr_embed_dup`; freed with
+  `aether_vcr_embed_free_string`). Built `ae build --emit=lib --with=fs,net
+  std/http/server/vcr/embed.ae`, it exports `aether_vcr_embed_*`
+  (lifecycle `start_playback`/`start_record`/`stop`/`stop_and_flush`
+  [`_fail_if_changed`], introspection `port`/`base_url`/`tape_length`/
+  `reset_cursor`, diagnostics `last_error`/`last_kind`/`last_index`/
+  `clear_last_error`, and the `redact`/`unredact`/`remove_header`/`note`/
+  `static_content` + format/clear mutations). The `vcr_embed_` prefix is
+  the embed-only namespace (a bare `vcr_` would collide at link with the
+  C runtime's `vcr_*` symbols). A C-driver integration test dlopens the
+  `.so` and round-trips a playback (`start_playback` → resolved port →
+  `base_url` → raw-socket `GET /ok` → recorded body → `last_kind` →
+  `stop`). v1 contract: one active VCR server per process; NUL-terminated
+  strings (binary bodies remain the existing tape limitation). Closes
+  `vcr_embed_abi_wish.md` Part B; unblocks servirtium-dotnet's P/Invoke
+  wrapper.
+
 ### Changed
 
 - **The precompiled runtime archive (`build/libaether.a`) is now built
