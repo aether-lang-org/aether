@@ -38,6 +38,46 @@ next version number before tagging the release.
   with the `--emit=lib` ABI and the new binary-import resolver, so it is
   intentionally deferred.
 
+- **Aliasing a live heap string into a loop variable no longer corrupts
+  the original** (`compiler/codegen/codegen_stmt.c`,
+  `tests/regression/test_alias_reassign_keeps_source_live.ae`). The
+  alias-ownership "move" for `dest = src` (where `src` is a heap-tracked
+  local) transferred `src`'s single freeing duty to `dest` and disowned
+  `src` (`_heap_src = 0`). That move is a last-use optimization — sound
+  only when `src` is dead after the alias. When `src` was read again
+  (e.g. `content` read after a `rest = content` substring-reassign
+  loop), the loop's next `rest = …` reassignment freed the buffer rest
+  had taken from `content`, so `content` dangled — a silent
+  use-after-free returning truncated/garbage bytes, no crash, no
+  diagnostic. The move was always latent; 0.175's tuple-destructure heap
+  classification began tagging `content, _ = io.read_file(…)` as
+  heap-owned, which is what started triggering it (it broke aeb's
+  `tools/extract-deps` scan/glob expansion the moment those tools were
+  rebuilt under 0.180 — reported in `180-regression.md`). Fix: a
+  conservative liveness check — when the aliased source is referenced
+  anywhere besides the alias itself, codegen now emits a binary-safe
+  defensive copy (`aether_uniform_heap_str(src, 0)`) instead of stealing
+  the buffer, so `dest` owns an independent copy and `src` survives for
+  its later reads. This is exactly the behaviour of the hand-written
+  `rest = string.concat(content, "")` workaround, now automatic. The
+  move optimization is preserved for the genuine last-use shape
+  (`sorted = new_sorted; return sorted`), where `src` has no later use.
+
+### Upgrade notes
+
+This release loosens alias ownership for `dest = src` heap-string
+assignments: when the source is still read after the alias, the alias
+takes a defensive copy instead of moving (stealing) the source's buffer.
+The previous version always moved, which freed the source out from under
+its own later reads — a use-after-free, not a leak.
+
+This change only ever *adds* a copy where a move was unsound; it cannot
+flip working code into a crash. Downstream projects that carried a
+defensive `rest = string.concat(content, "")` (or similar `+ ""`) copy
+specifically to dodge this corruption can drop it — the compiler now
+emits the copy itself, only where it is actually needed. There is no
+required pre-upgrade action.
+
 ### Added
 
 - **Consume a precompiled `--emit=lib` artifact as a first-class Aether
