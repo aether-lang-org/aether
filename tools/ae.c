@@ -2119,14 +2119,19 @@ static int ae_source_module_exists(const char* mod) {
     return 0;
 }
 
-// Locate a binary artifact for module `mod` (libMOD.so or MOD.so) on the
-// search path. Writes the resolved path into `out` and returns 1 if found.
+// Locate a binary artifact for module `mod` (libMOD.so / MOD.so /
+// libMOD.dylib / MOD.dylib) on the search path. Both extensions are
+// tried on every POSIX platform: a shared object is identified by its
+// contents, not its suffix, and `ae build --emit=lib -o libfoo.so`
+// produces a `.so`-named artifact even on macOS — dlopen and the linker
+// accept it regardless. macOS-native `.dylib` is tried first there.
+// Writes the resolved path into `out` and returns 1 if found.
 static int ae_find_binimport_so(const char* mod, char* out, size_t outcap) {
     const char* exts[] = {
 #ifdef __APPLE__
-        ".dylib"
+        ".dylib", ".so"
 #else
-        ".so"
+        ".so", ".dylib"
 #endif
     };
     const char* dirs[8 + 2];

@@ -17,6 +17,8 @@ case "$(uname -s)" in
         echo "  [SKIP] binary_import: Windows DLL hosting is a follow-up"
         exit 0
         ;;
+    Darwin) SO_EXT=".dylib" ;;
+    *)      SO_EXT=".so" ;;
 esac
 
 WORK="$(mktemp -d)"
@@ -26,13 +28,13 @@ cd "$WORK"
 
 fail() { echo "  [FAIL] $1"; exit 1; }
 
-# 1. Publish the library as a shared object.
-if ! AETHER_HOME="$ROOT" "$AE" build --emit=lib gizmo.ae -o libgizmo.so \
+# 1. Publish the library as a shared object (native extension per OS).
+if ! AETHER_HOME="$ROOT" "$AE" build --emit=lib gizmo.ae -o "libgizmo$SO_EXT" \
         >build_lib.log 2>&1; then
     echo "--- build --emit=lib log:"; cat build_lib.log
     fail "ae build --emit=lib gizmo.ae"
 fi
-[ -f libgizmo.so ] || fail "libgizmo.so not produced"
+[ -f "libgizmo$SO_EXT" ] || fail "libgizmo$SO_EXT not produced"
 
 # 2. `ae run` the consumer — the binary import is resolved transparently
 #    (no gizmo.ae source on the path; only libgizmo.so).
