@@ -11,6 +11,33 @@ next version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **A user function that forges an imported export's mangled C symbol is
+  now rejected at compile time** (`compiler/aether_module.c`,
+  `tests/integration/import_export_collision_reject/`). A module export
+  `ns.name` mangles to the flat C symbol `ns_name`; because `_` is a
+  legal identifier character, a user top-level function literally named
+  `ns_name` forges the *same* symbol. The module merge's
+  `program_has_function` dedup then silently skipped cloning the import,
+  so every `ns.name(...)` call bound to the user's function — clean
+  compile, clean link, wrong function at runtime. This cost the avn port
+  a multi-session "irreducible heap corruption" hunt: a local
+  `proxy_opts_new()` shadowed `proxy.opts_new()` (both → `proxy_opts_new`),
+  so `std.http.proxy`'s `mount_match` received a garbage opts pointer and
+  segfaulted far from the cause
+  (`user-identifiers-must-not-collide-java-style-scoping.md`). The new
+  `check_namespace_prefix_collision` pass runs after imports are resolved
+  but before merge (when the program's top-level functions are still
+  exactly the user's) and emits a loud `error[E1001]` naming both
+  symbols and the fix — the general form of the builder-vs-function
+  (0.178.0) and selective-import-shadow (#436) rejections. This is the
+  spec's "minimum fix" backstop (silent wrong-dispatch → 5-second
+  compile error); full Java-style internal symbol qualification of every
+  non-exported function is the larger follow-on, and it would interact
+  with the `--emit=lib` ABI and the new binary-import resolver, so it is
+  intentionally deferred.
+
 ### Added
 
 - **Consume a precompiled `--emit=lib` artifact as a first-class Aether
