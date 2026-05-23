@@ -1,0 +1,17 @@
+// Consumes the precompiled libgizmo.so as a first-class Aether import.
+// `gizmo.greet(...)` and the builder DSL `gizmo.section(t) { ... }` read
+// exactly as if gizmo were compiled in the same cycle. `std.map` is
+// imported because the builder's default config factory (map_new) is a
+// std.map facility used at the call site.
+
+import std.map
+import gizmo
+
+extern println(s: string)
+
+main() {
+    println(gizmo.greet("world"))
+    s = gizmo.section("intro") {
+    }
+    println(s)
+}

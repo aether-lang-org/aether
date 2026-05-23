@@ -205,6 +205,53 @@ static char g_with_caps[128] = "";
 static bool g_emit_exe = true;
 static bool g_emit_lib = false;
 
+// Extra link flags accumulated by the binary-import prepass: when a
+// program `import`s a precompiled `--emit=lib` artifact (libfoo.so),
+// `prepare_binary_imports` generates an Aether interface stub for it
+// and records the .so path + rpath here so build_gcc_cmd links it.
+// Empty for the common all-source build. POSIX-only (the prepass is
+// gated on dlopen availability); stays empty on Windows.
+static char g_binimport_link[4096] = "";
+
+// Mirror of runtime/aether_lib_meta.h's catalog structs, kept
+// layout-compatible so `ae` can dlopen a `--emit=lib` artifact and walk
+// its `aether_lib_meta()` without including the runtime header. Used by
+// both `ae lib-info` and the binary-import prepass below. Updates to the
+// schema must touch BOTH this declaration and the canonical header.
+typedef struct {
+    const char* aether_name;
+    const char* c_symbol;
+    const char* signature;
+    const char* source_file;
+    int         source_line;
+} _AeLibInfoFn;
+
+typedef struct {
+    const char* name;
+    const char* type;
+} _AeLibInfoCap;
+
+typedef struct {
+    const char* name;
+    const char* role;
+    const char* enclosing_export;
+    const char* signature;
+    int         capture_count;
+    const _AeLibInfoCap* captures;
+    const char* source_file;
+    int         source_line;
+} _AeLibInfoClosure;
+
+typedef struct {
+    const char* schema_version;
+    const char* aether_version;
+    const char* primary_source;
+    int         function_count;
+    const _AeLibInfoFn* functions;
+    int         closure_count;
+    const _AeLibInfoClosure* closures;
+} _AeLibInfoMeta;
+
 // --coverage: when set, build_gcc_cmd appends `--coverage` to the gcc
 // invocation so the resulting binary writes .gcda files when run, and
 // .gcno files sit next to the .o. Pairs with `make ci-coverage` and
@@ -1810,8 +1857,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
          * would fail to find any libaether symbol — silently on
          * macOS via dynamic_lookup, hard-failing on Linux. */
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -rdynamic -L%s -laether -o \"%s\" -pthread -lm %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s -rdynamic -L%s -laether -o \"%s\" -pthread -lm %s %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags, g_binimport_link);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
@@ -1821,8 +1868,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         }
     } else {
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags, g_binimport_link);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
@@ -1914,6 +1961,279 @@ static int build_wasm_cmd(char* cmd, size_t size,
 
     return 1;
 }
+
+// --------------------------------------------------------------------------
+// Binary-import prepass: consume a precompiled `--emit=lib` artifact as
+// an Aether `import`. When a program does `import foo` and there is no
+// `foo` source module but a `libfoo.so` / `foo.so` is on the search
+// path, we read that artifact's `aether_lib_meta()` catalog (the v2
+// schema, including closure-context records) and synthesize a small
+// Aether interface stub — `@extern(...)` declarations for the function
+// exports and trailing-block `builder` wrappers for the builder DSL
+// entry points. The stub is dropped into a temp dir that is prepended
+// to the module search path, so the existing source-import machinery
+// (typecheck, namespace prefixing, builder registration) rehydrates the
+// library with full call-site fidelity — `foo.greet(x)` and
+// `foo.route(p) { ... }` read exactly as if compiled in the same cycle.
+// The artifact itself is added to the link line. POSIX-only (gated on
+// dlopen); a no-op on Windows, where DLL hosting is a follow-up.
+// --------------------------------------------------------------------------
+
+#ifndef _WIN32
+// Split a rendered signature "(A, B) -> R" into an Aether parameter list
+// ("p0: A, p1: B"), a bare argument list ("p0, p1"), and the return type
+// ("R", or "void"). Top-level comma split tracking paren depth; the ABI
+// and builder signatures we see here are flat (no nested closure types).
+static void ae_split_signature(const char* sig,
+                               char* params, size_t pcap,
+                               char* args, size_t acap,
+                               char* ret, size_t rcap) {
+    params[0] = '\0'; args[0] = '\0';
+    snprintf(ret, rcap, "void");
+    if (!sig) return;
+    const char* lp = strchr(sig, '(');
+    const char* arrow = strstr(sig, "->");
+    if (arrow) {
+        const char* r = arrow + 2;
+        while (*r == ' ') r++;
+        snprintf(ret, rcap, "%s", r);
+        size_t rl = strlen(ret);
+        while (rl > 0 && (ret[rl-1] == ' ' || ret[rl-1] == '\n')) ret[--rl] = '\0';
+    }
+    if (!lp) return;
+    const char* rp = NULL;
+    int depth = 0;
+    for (const char* p = lp; *p; p++) {
+        if (*p == '(') depth++;
+        else if (*p == ')') { if (--depth == 0) { rp = p; break; } }
+    }
+    if (!rp || rp <= lp + 1) return;  // "()" — no params
+    char inside[1024];
+    size_t n = (size_t)(rp - (lp + 1));
+    if (n >= sizeof(inside)) n = sizeof(inside) - 1;
+    memcpy(inside, lp + 1, n);
+    inside[n] = '\0';
+
+    size_t poff = 0, aoff = 0;
+    int idx = 0, d = 0;
+    const char* start = inside;
+    for (char* p = inside; ; p++) {
+        if (*p == '(') d++;
+        else if (*p == ')') d--;
+        if ((*p == ',' && d == 0) || *p == '\0') {
+            size_t tn = (size_t)(p - start);
+            while (tn > 0 && *start == ' ') { start++; tn--; }
+            char ty[128];
+            if (tn >= sizeof(ty)) tn = sizeof(ty) - 1;
+            memcpy(ty, start, tn);
+            ty[tn] = '\0';
+            while (tn > 0 && ty[tn-1] == ' ') ty[--tn] = '\0';
+            if (ty[0]) {
+                poff += snprintf(params + poff, poff < pcap ? pcap - poff : 0,
+                                 "%sp%d: %s", idx ? ", " : "", idx, ty);
+                aoff += snprintf(args + aoff, aoff < acap ? acap - aoff : 0,
+                                 "%sp%d", idx ? ", " : "", idx);
+                idx++;
+            }
+            if (*p == '\0') break;
+            start = p + 1;
+        }
+    }
+}
+
+typedef const _AeLibInfoMeta* (*ae_meta_fn_t)(void);
+
+// dlopen `so_path`, read its aether_lib_meta catalog, and write an Aether
+// interface stub to `out`. Returns 0 on success, -1 if the artifact has
+// no readable metadata.
+static int ae_generate_binimport_stub(const char* so_path, FILE* out) {
+    void* h = dlopen(so_path, RTLD_LAZY | RTLD_LOCAL);
+    if (!h) return -1;
+    ae_meta_fn_t mf = (ae_meta_fn_t)dlsym(h, "aether_lib_meta");
+    if (!mf) { dlclose(h); return -1; }
+    const _AeLibInfoMeta* m = mf();
+    if (!m) { dlclose(h); return -1; }
+
+    fprintf(out, "// Auto-generated Aether interface for %s\n", so_path);
+    fprintf(out, "// Synthesized by `ae` from the artifact's aether_lib_meta\n");
+    fprintf(out, "// catalog (schema %s). Do not edit; regenerated each build.\n",
+            m->schema_version ? m->schema_version : "?");
+    fprintf(out, "import std.map\n\n");
+
+    char params[1100], args[600], ret[160];
+
+    // Function-table exports → `@extern("<c_symbol>") <name>(params) -> ret`.
+    for (int i = 0; i < m->function_count && m->functions; i++) {
+        const _AeLibInfoFn* f = &m->functions[i];
+        if (!f->aether_name || !f->c_symbol) continue;
+        ae_split_signature(f->signature, params, sizeof(params),
+                            args, sizeof(args), ret, sizeof(ret));
+        if (strcmp(ret, "void") == 0) {
+            fprintf(out, "@extern(\"%s\") %s(%s)\n", f->c_symbol, f->aether_name, params);
+        } else {
+            fprintf(out, "@extern(\"%s\") %s(%s) -> %s\n",
+                    f->c_symbol, f->aether_name, params, ret);
+        }
+    }
+
+    // Builder DSL entry points → an extern forwarder taking the trailing
+    // `_builder` config map plus a `builder` wrapper that the consumer's
+    // call site drives with a trailing block. The library function's bare
+    // symbol has the shape `<name>(<params>, void* _builder)` (the builder
+    // config map is passed as the final argument).
+    for (int i = 0; i < m->closure_count && m->closures; i++) {
+        const _AeLibInfoClosure* c = &m->closures[i];
+        if (!c->role || strcmp(c->role, "builder") != 0 || !c->name || !c->name[0]) continue;
+        ae_split_signature(c->signature, params, sizeof(params),
+                            args, sizeof(args), ret, sizeof(ret));
+        int is_void = (strcmp(ret, "void") == 0);
+        const char* comma = params[0] ? ", " : "";
+        const char* acomma = args[0] ? ", " : "";
+        fprintf(out, "\n@extern(\"%s\") __aeb_%s(%s%s_builder: ptr)%s%s\n",
+                c->name, c->name, params, comma,
+                is_void ? "" : " -> ", is_void ? "" : ret);
+        fprintf(out, "builder %s(%s) {\n", c->name, params);
+        fprintf(out, "    %s__aeb_%s(%s%s_builder)\n",
+                is_void ? "" : "return ", c->name, args, acomma);
+        fprintf(out, "}\n");
+    }
+
+    dlclose(h);  // m points into the .so; everything was emitted above.
+    return 0;
+}
+
+// True if a *source* module named `mod` resolves on the current search
+// path (CWD, src/, and each --lib dir). Mirrors the compiler's local
+// resolver closely enough to decide "source vs binary" for a bare import.
+static int ae_source_module_exists(const char* mod) {
+    char p[1200];
+    const char* bases[] = { ".", "src" };
+    for (size_t b = 0; b < sizeof(bases)/sizeof(bases[0]); b++) {
+        snprintf(p, sizeof(p), "%s/%s.ae", bases[b], mod);          if (path_exists(p)) return 1;
+        snprintf(p, sizeof(p), "%s/%s/module.ae", bases[b], mod);   if (path_exists(p)) return 1;
+    }
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        snprintf(p, sizeof(p), "%s/%s.ae", tc.lib_dirs[i], mod);        if (path_exists(p)) return 1;
+        snprintf(p, sizeof(p), "%s/%s/module.ae", tc.lib_dirs[i], mod); if (path_exists(p)) return 1;
+    }
+    return 0;
+}
+
+// Locate a binary artifact for module `mod` (libMOD.so / MOD.so /
+// libMOD.dylib / MOD.dylib) on the search path. Both extensions are
+// tried on every POSIX platform: a shared object is identified by its
+// contents, not its suffix, and `ae build --emit=lib -o libfoo.so`
+// produces a `.so`-named artifact even on macOS — dlopen and the linker
+// accept it regardless. macOS-native `.dylib` is tried first there.
+// Writes the resolved path into `out` and returns 1 if found.
+static int ae_find_binimport_so(const char* mod, char* out, size_t outcap) {
+    const char* exts[] = {
+#ifdef __APPLE__
+        ".dylib", ".so"
+#else
+        ".so", ".dylib"
+#endif
+    };
+    const char* dirs[8 + 2];
+    int nd = 0;
+    dirs[nd++] = ".";
+    for (int i = 0; i < tc.lib_dir_count && nd < (int)(sizeof(dirs)/sizeof(dirs[0])); i++) {
+        dirs[nd++] = tc.lib_dirs[i];
+    }
+    for (int d = 0; d < nd; d++) {
+        for (size_t e = 0; e < sizeof(exts)/sizeof(exts[0]); e++) {
+            snprintf(out, outcap, "%s/lib%s%s", dirs[d], mod, exts[e]);
+            if (path_exists(out)) return 1;
+            snprintf(out, outcap, "%s/%s%s", dirs[d], mod, exts[e]);
+            if (path_exists(out)) return 1;
+        }
+    }
+    return 0;
+}
+
+// Resolve `path` to an absolute path (best-effort) for use in -rpath and
+// on the link line, so the produced binary finds the .so at run time
+// regardless of the cwd it is launched from.
+static void ae_abspath(const char* path, char* out, size_t outcap) {
+    char* rp = realpath(path, NULL);
+    if (rp) { snprintf(out, outcap, "%s", rp); free(rp); }
+    else    { snprintf(out, outcap, "%s", path); }
+}
+
+// Scan `main_file` for `import <bare>` statements that resolve to a
+// binary artifact rather than source, generate an interface stub for
+// each into a shared temp dir (prepended to the module search path), and
+// record the artifact on the link line. Best-effort: any failure leaves
+// the build to proceed (and fail later) as an all-source build would.
+static void prepare_binary_imports(const char* main_file) {
+    FILE* f = fopen(main_file, "r");
+    if (!f) return;
+
+    char stubdir[256] = "";
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        const char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "import", 6) != 0 || (p[6] != ' ' && p[6] != '\t')) continue;
+        p += 6;
+        while (*p == ' ' || *p == '\t') p++;
+        // Module token: identifier chars only. A '.' means std./contrib./
+        // dotted path — never a bare binary import, skip.
+        char mod[128];
+        size_t mi = 0;
+        while (*p && (isalnum((unsigned char)*p) || *p == '_') && mi < sizeof(mod) - 1) {
+            mod[mi++] = *p++;
+        }
+        mod[mi] = '\0';
+        if (mi == 0 || *p == '.') continue;
+        if (ae_source_module_exists(mod)) continue;
+
+        char so_path[1200];
+        if (!ae_find_binimport_so(mod, so_path, sizeof(so_path))) continue;
+
+        if (!stubdir[0]) {
+            snprintf(stubdir, sizeof(stubdir), "/tmp/ae-binimport-XXXXXX");
+            if (!mkdtemp(stubdir)) { stubdir[0] = '\0'; break; }
+        }
+        char stub_path[512];
+        snprintf(stub_path, sizeof(stub_path), "%s/%s.ae", stubdir, mod);
+        FILE* sf = fopen(stub_path, "w");
+        if (!sf) continue;
+        int rc = ae_generate_binimport_stub(so_path, sf);
+        fclose(sf);
+        if (rc != 0) { remove(stub_path); continue; }
+
+        // Make the stub resolvable and link the artifact (absolute path +
+        // rpath so the produced binary finds it at run time). The host's
+        // -rdynamic + static libaether satisfy the .so's runtime symbols.
+        tc_lib_dir_append_one(stubdir);
+        char abs_so[1200], dir[1200];
+        ae_abspath(so_path, abs_so, sizeof(abs_so));
+        snprintf(dir, sizeof(dir), "%s", abs_so);
+        char* slash = strrchr(dir, '/');
+        if (slash) *slash = '\0';
+        // Emit the rpath UNQUOTED — `-Wl,-rpath,<dir>`, parallel to the
+        // unquoted `-L%s` this file already uses. Quoting it
+        // (`-Wl,-rpath,"<dir>"`) leaked literal quote characters into the
+        // recorded rpath on macOS (`dyld: tried '"/.../tmp"/lib.dylib'`),
+        // so the dylib — whose install name `ae build --emit=lib` rewrites
+        // to `@rpath/<base>` on macOS — was never found at run time.
+        // Module/lib/temp dirs don't contain spaces, same assumption -L
+        // relies on. The .so itself stays quoted (it's a plain input file
+        // and links fine on both platforms).
+        size_t off = strlen(g_binimport_link);
+        snprintf(g_binimport_link + off, sizeof(g_binimport_link) - off,
+                 " \"%s\" -Wl,-rpath,%s", abs_so, dir);
+        if (tc.verbose) {
+            fprintf(stderr, "ae: binary import '%s' -> %s (stub %s)\n",
+                    mod, abs_so, stub_path);
+        }
+    }
+    fclose(f);
+}
+#else
+static void prepare_binary_imports(const char* main_file) { (void)main_file; }
+#endif
 
 // --------------------------------------------------------------------------
 // Commands
@@ -2044,6 +2364,11 @@ static int cmd_run(int argc, char** argv) {
     } else {
         snprintf(exe_file, sizeof(exe_file), "%s/_ae_%d" EXE_EXT, get_temp_dir(), pid);
     }
+
+    // Binary-import prepass: synthesize interface stubs for any
+    // `import foo` that resolves to a precompiled libfoo.so, and record
+    // it on the link line. No-op for all-source programs.
+    prepare_binary_imports(file);
 
     // Step 1: Compile .ae to .c
     if (tc.verbose) printf("Compiling %s...\n", file);
@@ -4120,6 +4445,10 @@ static int cmd_build(int argc, char** argv) {
 
     printf("Building %s%s...\n", file, is_wasm ? " (wasm)" : "");
 
+    // Binary-import prepass: synthesize interface stubs for any
+    // `import foo` resolving to a precompiled libfoo.so, link it in.
+    prepare_binary_imports(file);
+
     // Step 1: .ae to .c
     build_aetherc_cmd(cmd, sizeof(cmd), file, c_file);
 
@@ -6025,27 +6354,10 @@ static void print_usage(void) {
 // walks the returned struct, and prints in human-readable form.
 //
 // The schema is layout-compatible with runtime/aether_lib_meta.h's
-// AetherLibMeta — we redeclare the minimum here to keep ae's own
-// build self-contained (no header-include race against an
-// installed runtime). Updates to the schema must touch BOTH this
-// declaration and the canonical header in lock-step.
-typedef struct {
-    const char* aether_name;
-    const char* c_symbol;
-    const char* signature;
-    const char* source_file;
-    int         source_line;
-} _AeLibInfoFn;
-
-typedef struct {
-    const char* schema_version;
-    const char* aether_version;
-    const char* primary_source;
-    int         function_count;
-    const _AeLibInfoFn* functions;
-    int         closure_count;
-    const void* closures;
-} _AeLibInfoMeta;
+// AetherLibMeta — the `_AeLibInfo*` mirror structs are declared near
+// the top of this file (shared with the binary-import prepass).
+// Updates to the schema must touch BOTH that declaration and the
+// canonical header in lock-step.
 
 /* `ae lib-path` — introspect the resolved module-search chain.
  *
@@ -6177,10 +6489,7 @@ static int cmd_lib_info(int argc, char** argv) {
            (m->primary_source && m->primary_source[0])
              ? m->primary_source : "(unknown)");
     printf("  Functions:     %d\n", m->function_count);
-    if (m->closure_count > 0) {
-        printf("  Closures:      %d (v2 — surface not yet emitted)\n",
-               m->closure_count);
-    }
+    printf("  Closures:      %d\n", m->closure_count);
     printf("\n");
 
     if (m->function_count > 0 && m->functions) {
@@ -6197,6 +6506,37 @@ static int cmd_lib_info(int argc, char** argv) {
                 printf("        c_symbol: %s\n", csym);
             }
             printf("        @ %s:%d\n", src, f->source_line);
+        }
+    }
+
+    /* v2 closure-context records (schema >= 1.1). These describe the
+     * closure surface the flattened C ABI drops — builder/trailing-block
+     * DSL entry points, closure-typed params, and capturing closure
+     * literals — so a downstream Aether consumer can reconstruct the
+     * builder-DSL with full fidelity. Guarded on the typed pointer being
+     * present so a "1.0" function-only artifact prints nothing extra. */
+    if (m->closure_count > 0 && m->closures) {
+        printf("\n  Closure surface:\n");
+        for (int i = 0; i < m->closure_count; i++) {
+            const _AeLibInfoClosure* c = &m->closures[i];
+            const char* role = c->role ? c->role : "?";
+            const char* encl = c->enclosing_export ? c->enclosing_export : "?";
+            const char* sig  = c->signature ? c->signature : "";
+            const char* nm   = c->name ? c->name : "";
+            const char* src  = (c->source_file && c->source_file[0])
+                               ? c->source_file : "<unknown>";
+            if (nm[0] && strcmp(nm, encl) != 0) {
+                printf("  - [%s] %s.%s %s\n", role, encl, nm, sig);
+            } else {
+                printf("  - [%s] %s %s\n", role, encl, sig);
+            }
+            for (int k = 0; k < c->capture_count && c->captures; k++) {
+                const _AeLibInfoCap* cap = &c->captures[k];
+                printf("        captures %s: %s\n",
+                       cap->name ? cap->name : "?",
+                       cap->type ? cap->type : "?");
+            }
+            printf("        @ %s:%d\n", src, c->source_line);
         }
     }
 

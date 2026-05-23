@@ -1044,6 +1044,13 @@ static int orchestrate_module(const char* module_name, const char* file_path,
     return 1;
 }
 
+// Reject the case where a user's top-level function forges the C symbol
+// an imported module export mangles to (e.g. local `proxy_opts_new` vs
+// `proxy.opts_new`). Defined below module_get_namespace / unwrap_export;
+// forward-declared here so module_orchestrate can call it after imports
+// are registered. Returns 0 (and prints a diagnostic) on collision.
+static int check_namespace_prefix_collision(ASTNode* program);
+
 // Top-level orchestration: scan program AST, resolve all imports,
 // parse modules, build dependency graph, detect cycles.
 int module_orchestrate(ASTNode* program) {
@@ -1086,6 +1093,13 @@ int module_orchestrate(ASTNode* program) {
     }
 
     dependency_graph_free(graph);
+
+    /* All imports are now registered, but merge hasn't run yet — so the
+     * program's top-level functions are still exactly the user's. Reject
+     * any that forge an imported export's mangled C symbol (the silent
+     * `proxy_opts_new` ↔ `proxy.opts_new` shadow). */
+    if (!check_namespace_prefix_collision(program)) return 0;
+
     return 1;
 }
 
@@ -1184,6 +1198,100 @@ static int module_has_extern_named(ASTNode* mod_ast, const char* name) {
         }
     }
     return 0;
+}
+
+/* Reject user-function-vs-imported-export symbol collisions.
+ *
+ * A module export `ns.name` mangles to the flat C symbol `ns_name`.
+ * Because `_` is a legal identifier char, a user top-level function
+ * literally named `ns_name` forges the *same* C symbol — and the merge's
+ * `program_has_function` dedup then silently skips cloning the import, so
+ * every `ns.name(...)` call binds to the user's function. Clean compile,
+ * clean link, wrong dispatch at runtime (the avnproxy `proxy_opts_new` ↔
+ * `proxy.opts_new` hunt — see user-identifiers-must-not-collide spec).
+ *
+ * This is the general form of the builder-vs-function (0.178.0) and
+ * selective-import-shadow (#436) rejections. Run after imports are
+ * registered but before merge, when the program's top-level functions
+ * are still exactly the user's. Loud `error[E1001]` instead of a silent
+ * pick — the spec's "minimum fix" backstop. (Full Java-style internal
+ * qualification of every non-exported symbol is the larger follow-on.)
+ */
+static int check_namespace_prefix_collision(ASTNode* program) {
+    if (!program) return 1;
+
+    // User (pre-merge, top-level) function / builder / extern symbols.
+    enum { MAX_USER = 4096 };
+    const char* user_names[MAX_USER];
+    int user_line[MAX_USER], user_col[MAX_USER];
+    int un = 0;
+    for (int i = 0; i < program->child_count && un < MAX_USER; i++) {
+        ASTNode* d = unwrap_export(program->children[i]);
+        if (!d || !d->value) continue;
+        if (d->type == AST_FUNCTION_DEFINITION ||
+            d->type == AST_BUILDER_FUNCTION ||
+            d->type == AST_EXTERN_FUNCTION) {
+            user_names[un] = d->value;
+            user_line[un] = d->line;
+            user_col[un]  = d->column;
+            un++;
+        }
+    }
+    if (un == 0) return 1;
+
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (!child || child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+        AetherModule* mod = module_find(child->value);
+        if (!mod || !mod->ast) continue;
+        const char* ns = module_get_namespace(child->value);
+        if (!ns) continue;
+        int has_selection = (child->child_count > 0 && child->children[0] &&
+                             child->children[0]->type == AST_IDENTIFIER);
+
+        for (int j = 0; j < mod->ast->child_count; j++) {
+            ASTNode* decl = unwrap_export(mod->ast->children[j]);
+            if (!decl || !decl->value) continue;
+            // Only entities the merge prefixes into a callable `ns_name`
+            // C symbol: Aether functions/builders and public `@extern`s.
+            int callable = (decl->type == AST_FUNCTION_DEFINITION ||
+                            decl->type == AST_BUILDER_FUNCTION ||
+                            (decl->type == AST_EXTERN_FUNCTION && decl->annotation &&
+                             strncmp(decl->annotation, "c_symbol:", 9) == 0));
+            if (!callable) continue;
+            if (has_selection) {
+                int selected = 0;
+                for (int k = 0; k < child->child_count; k++) {
+                    ASTNode* sel = child->children[k];
+                    if (sel && sel->type == AST_IDENTIFIER && sel->value &&
+                        strcmp(sel->value, decl->value) == 0) { selected = 1; break; }
+                }
+                if (!selected) continue;
+            }
+            char prefixed[256];
+            snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, decl->value);
+            for (int u = 0; u < un; u++) {
+                if (strcmp(user_names[u], prefixed) != 0) continue;
+                fprintf(stderr,
+                    "error[E1001]: local function '%s' (%d:%d) collides with "
+                    "imported '%s.%s' from '%s'\n",
+                    prefixed, user_line[u], user_col[u], ns, decl->value, child->value);
+                fprintf(stderr,
+                    "  an import mangles '%s.%s' to the flat C symbol '%s' — the\n"
+                    "  same symbol your local function emits. Every '%s.%s(...)'\n"
+                    "  call would silently dispatch to your local function: clean\n"
+                    "  compile, clean link, wrong function at runtime.\n",
+                    ns, decl->value, prefixed, ns, decl->value);
+                fprintf(stderr,
+                    "  fix one of:\n"
+                    "    - rename the local function so it isn't '%s_<name>'\n"
+                    "    - drop the local and call '%s.%s(...)' directly\n",
+                    ns, ns, decl->value);
+                return 0;
+            }
+        }
+    }
+    return 1;
 }
 
 // Check if a name is in a string array

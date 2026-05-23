@@ -13,6 +13,176 @@ next version number before tagging the release.
 
 ### Added
 
+- **VCR embedding C-ABI — host the Aether record/playback server behind
+  an FFI layer** (`std/http/server/vcr/embed.ae`,
+  `std/http/server/vcr/aether_vcr.c`, `tests/integration/vcr_embed_abi/`).
+  A thin wrapper module over the existing `std.http.server.vcr` surface
+  (no new VCR semantics) that adds the embedding seam the raw module
+  lacked: it starts the accept loop on a detached background thread
+  (`http_server_start_background_raw` — `load()` deliberately doesn't
+  listen), binds *synchronously* first so an OS-assigned port (port 0)
+  is resolved before the start call returns, and returns caller-owned C
+  strings (every result duplicated via `vcr_embed_dup`; freed with
+  `aether_vcr_embed_free_string`). Built `ae build --emit=lib --with=fs,net
+  std/http/server/vcr/embed.ae`, it exports `aether_vcr_embed_*`
+  (lifecycle `start_playback`/`start_record`/`stop`/`stop_and_flush`
+  [`_fail_if_changed`], introspection `port`/`base_url`/`tape_length`/
+  `reset_cursor`, diagnostics `last_error`/`last_kind`/`last_index`/
+  `clear_last_error`, and the `redact`/`unredact`/`remove_header`/`note`/
+  `static_content` + format/clear mutations). The `vcr_embed_` prefix is
+  the embed-only namespace (a bare `vcr_` would collide at link with the
+  C runtime's `vcr_*` symbols). A C-driver integration test dlopens the
+  `.so` and round-trips a playback (`start_playback` → resolved port →
+  `base_url` → raw-socket `GET /ok` → recorded body → `last_kind` →
+  `stop`). v1 contract: one active VCR server per process; NUL-terminated
+  strings (binary bodies remain the existing tape limitation). Closes
+  `vcr_embed_abi_wish.md` Part B; unblocks servirtium-dotnet's P/Invoke
+  wrapper.
+
+### Changed
+
+- **The precompiled runtime archive (`build/libaether.a`) is now built
+  `-fPIC`** (`Makefile`, `tests/integration/emit_lib_net/`). Without it,
+  any `ae build --emit=lib` that pulled in a TLS-using runtime object —
+  notably `std.http`'s embedded server (`aether_http.o`, whose
+  initial-exec TLS emits an `R_X86_64_TPOFF32` relocation illegal in a
+  shared object) — failed to link with `recompile with -fPIC`. The
+  `--emit=lib` examples only imported `std.map`, so the gap went
+  unexercised. Now `ae build --emit=lib --with=net` over a `std.http`
+  module produces a loadable `.so` that `dlopen`s and round-trips
+  (new `emit_lib_net` C-driver integration test). Codegen cost is
+  negligible on x86-64/arm64 (most distros default to PIE); one archive
+  serves both the exe and shared-object links. Unblocks
+  `vcr_embed_abi_wish.md` Part A (servirtium-dotnet's embedded VCR `.so`).
+
+### Added
+
+- **`http_server_port(server) -> int`** (`std/net/aether_http_server.c`,
+  `std/http/module.ae`, `std/net/module.ae`). Reports a server's
+  resolved listening port. `http_server_bind_raw` now `getsockname()`s
+  the socket after binding with port 0 (OS-assigned) and writes the
+  kernel-chosen port back, so dynamic-port users — parallel test runners,
+  the planned VCR embed layer — can discover the real port instead of
+  reading back the `0` they requested (`vcr_embed_abi_wish.md` open
+  question 3).
+
+### Fixed
+
+- **A user function that forges an imported export's mangled C symbol is
+  now rejected at compile time** (`compiler/aether_module.c`,
+  `tests/integration/import_export_collision_reject/`). A module export
+  `ns.name` mangles to the flat C symbol `ns_name`; because `_` is a
+  legal identifier character, a user top-level function literally named
+  `ns_name` forges the *same* symbol. The module merge's
+  `program_has_function` dedup then silently skipped cloning the import,
+  so every `ns.name(...)` call bound to the user's function — clean
+  compile, clean link, wrong function at runtime. This cost the avn port
+  a multi-session "irreducible heap corruption" hunt: a local
+  `proxy_opts_new()` shadowed `proxy.opts_new()` (both → `proxy_opts_new`),
+  so `std.http.proxy`'s `mount_match` received a garbage opts pointer and
+  segfaulted far from the cause
+  (`user-identifiers-must-not-collide-java-style-scoping.md`). The new
+  `check_namespace_prefix_collision` pass runs after imports are resolved
+  but before merge (when the program's top-level functions are still
+  exactly the user's) and emits a loud `error[E1001]` naming both
+  symbols and the fix — the general form of the builder-vs-function
+  (0.178.0) and selective-import-shadow (#436) rejections. This is the
+  spec's "minimum fix" backstop (silent wrong-dispatch → 5-second
+  compile error); full Java-style internal symbol qualification of every
+  non-exported function is the larger follow-on, and it would interact
+  with the `--emit=lib` ABI and the new binary-import resolver, so it is
+  intentionally deferred.
+
+- **Aliasing a live heap string into a loop variable no longer corrupts
+  the original** (`compiler/codegen/codegen_stmt.c`,
+  `tests/regression/test_alias_reassign_keeps_source_live.ae`). The
+  alias-ownership "move" for `dest = src` (where `src` is a heap-tracked
+  local) transferred `src`'s single freeing duty to `dest` and disowned
+  `src` (`_heap_src = 0`). That move is a last-use optimization — sound
+  only when `src` is dead after the alias. When `src` was read again
+  (e.g. `content` read after a `rest = content` substring-reassign
+  loop), the loop's next `rest = …` reassignment freed the buffer rest
+  had taken from `content`, so `content` dangled — a silent
+  use-after-free returning truncated/garbage bytes, no crash, no
+  diagnostic. The move was always latent; 0.175's tuple-destructure heap
+  classification began tagging `content, _ = io.read_file(…)` as
+  heap-owned, which is what started triggering it (it broke aeb's
+  `tools/extract-deps` scan/glob expansion the moment those tools were
+  rebuilt under 0.180 — reported in `180-regression.md`). Fix: a
+  conservative liveness check — when the aliased source is referenced
+  anywhere besides the alias itself, codegen now emits a binary-safe
+  defensive copy (`aether_uniform_heap_str(src, 0)`) instead of stealing
+  the buffer, so `dest` owns an independent copy and `src` survives for
+  its later reads. This is exactly the behaviour of the hand-written
+  `rest = string.concat(content, "")` workaround, now automatic. The
+  move optimization is preserved for the genuine last-use shape
+  (`sorted = new_sorted; return sorted`), where `src` has no later use.
+
+### Upgrade notes
+
+This release loosens alias ownership for `dest = src` heap-string
+assignments: when the source is still read after the alias, the alias
+takes a defensive copy instead of moving (stealing) the source's buffer.
+The previous version always moved, which freed the source out from under
+its own later reads — a use-after-free, not a leak.
+
+This change only ever *adds* a copy where a move was unsound; it cannot
+flip working code into a crash. Downstream projects that carried a
+defensive `rest = string.concat(content, "")` (or similar `+ ""`) copy
+specifically to dodge this corruption can drop it — the compiler now
+emits the copy itself, only where it is actually needed. There is no
+required pre-upgrade action.
+
+### Added
+
+- **Consume a precompiled `--emit=lib` artifact as a first-class Aether
+  `import`** (`tools/ae.c`, `tests/integration/binary_import/`). When
+  `ae run` / `ae build` sees an `import foo` with no `foo` source module
+  but a `libfoo.so` / `foo.so` on the search path, it reads that
+  artifact's `aether_lib_meta()` catalog (the v2 closure-context schema)
+  and synthesizes an Aether interface stub: an `@extern("<c_symbol>")`
+  declaration for each function export and a trailing-block `builder`
+  wrapper for each builder entry point (forwarding the block's config
+  map to the library's `(..., _builder)` symbol). The stub is placed on
+  the module search path, so the existing source-import machinery
+  (typecheck, namespace prefixing, builder registration) rehydrates the
+  library with full call-site fidelity — `foo.greet(x)` and the builder
+  DSL `foo.section(t) { … }` read as if compiled in the same cycle. The
+  artifact is linked in (absolute path + `-rpath`); the host's
+  `-rdynamic` + static `libaether` satisfy its runtime symbols. This is
+  the consumer half of the Aether-by-Aether library DX (the producer
+  half is the v2 closure-context records, same release). Scope:
+  function exports and builder DSL entry points are callable (a builder
+  consumer also `import std.map` for the default config factory);
+  higher-order exports taking a closure parameter are described in the
+  metadata but not yet callable across the boundary (follow-on); POSIX
+  only (gated on `dlopen`), Windows DLL hosting is a follow-up.
+
+- **`--emit=lib` metadata now carries v2 closure-context records**
+  (`runtime/aether_lib_meta.h`, `compiler/codegen/codegen.c`,
+  `tools/ae.c`, `tests/integration/lib_meta_closures/`). The
+  `aether_lib_meta()` catalog's previously-reserved `closure_count` /
+  `closures` slots are now populated (schema bumps "1.0" → "1.1" when
+  any closure record is present). Each `AetherLibClosure` describes a
+  closure surface reachable from an export — the part the flattened C
+  ABI drops — so a downstream *Aether* consumer can reconstruct a
+  closure-with-context builder DSL at full fidelity (the "config IS
+  code" / Groovy-grade library DX goal). Three record roles:
+  `builder` (an export taking an injected `_ctx`, i.e. a trailing-block
+  DSL entry point), `param` (a closure-typed `fn` parameter, rendered
+  with its `|...| -> R` signature), and `literal` (a hoisted closure in
+  an export's body, with the enclosing variables it captures and their
+  Aether types). Records are computed over the full set of top-level,
+  non-imported, non-`_`-suffixed functions — broader than the ABI
+  function table, since a builder or `fn`-parameter function is exactly
+  what the ABI gate excludes yet still has a linkable bare symbol.
+  Everything stays `static const` in `.rodata` (no allocation, no
+  parsing), and the layout is append-only so a "1.0" reader walks a
+  "1.1" artifact unchanged. `ae lib-info` prints the closure surface
+  (role, enclosing export, signature, captures). Closure-literal return
+  types are best-effort (`?` when the body type-checks lazily);
+  captures and parameter types are exact.
+
 - **Regression coverage for the `std.map` opts-context → `std.http.proxy`
   FFI path** (`tests/regression/test_proxy_opts_map_mount.ae`). The avn
   project's closures-with-context builder rollout filed this as "Blocker

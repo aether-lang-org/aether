@@ -1857,6 +1857,27 @@ void vcr_reset_cursor(void) {
     g_last_index = -1;
 }
 
+/* ---- Embedding string-ownership helpers (vcr_embed_abi_wish Part B) ----
+ *
+ * Strings the VCR Aether surface returns are borrowed (TLS / arena /
+ * a freshly-allocated AetherString), valid only until the next
+ * same-kind call — unusable as an FFI ownership contract. The embed
+ * wrapper hands every returned string through vcr_embed_dup() so the
+ * caller receives a plain malloc'd C string it owns and frees with
+ * vcr_embed_free(). NUL-terminated (binary bodies are a known v1 tape
+ * limitation, per TODO.md), which is fine for URLs / errors / notes. */
+char* vcr_embed_dup(const char* s) {
+    if (!s) s = "";
+    size_t n = strlen(s) + 1;
+    char* d = (char*)malloc(n);
+    if (d) memcpy(d, s, n);
+    return d;
+}
+
+void vcr_embed_free(char* s) {
+    free(s);
+}
+
 /* ---- Tape-iteration accessors (Aether-side emitter consumes these) ----
  *
  * The emitter is being ported to Aether. These accessors let the

@@ -17,15 +17,24 @@
  * dlopens an artifact, calls `aether_lib_meta()`, and prints the
  * catalog in human-readable form.
  *
- * This is the v1 / MVP scope. v2 adds closure-context records
- * (captures + capture types per closure reachable from an export);
- * the schema here reserves a `closure_count` slot already so the
- * struct can grow without ABI break.
+ * v2 (schema "1.1") fills the `closure_count` / `closures` slots the
+ * v1 layout reserved: one `AetherLibClosure` record per closure
+ * surface reachable from an exported function — builder/trailing-block
+ * DSL entry points, closure-typed parameters, and capturing closure
+ * literals in an export's body, each with its rendered signature and
+ * captured-variable list. This is what lets a *downstream Aether*
+ * consumer reconstruct a closure-with-context builder DSL at full
+ * fidelity instead of seeing the flattened C ABI. See
+ * docs/emit-lib.md → "Two kinds of consumer".
  *
- * Schema versioning: `schema_version` is set to "1.0" by every
- * artifact that uses this header. Hosts that read the metadata
- * should refuse anything not "1.<minor>" — within "1.x" the
- * additive fields below are guaranteed.
+ * Schema versioning: `schema_version` is "1.0" for function-only
+ * artifacts and "1.1" once closure records are present. Hosts that
+ * read the metadata should accept any "1.<minor>" — within "1.x"
+ * fields are only ever appended, and a reader that predates a field
+ * stops at the count/pointer it knows (a "1.0" reader ignores
+ * `closures` exactly as before; the slots were always there). The
+ * "all-zero / NULL means absent" contract holds for every appended
+ * field.
  */
 
 #ifndef AETHER_LIB_META_H
@@ -44,17 +53,56 @@ typedef struct {
     int         source_line;      /* 1-based                              */
 } AetherLibFunction;
 
+/* One captured variable in a closure's environment (v2). `type` is the
+ * Aether-readable rendering ("int", "string", "|int| -> int"), not the
+ * lowered C type — the point of these records is source-level fidelity
+ * for an Aether consumer. */
+typedef struct {
+    const char* name;             /* captured variable name              */
+    const char* type;             /* rendered Aether type                */
+} AetherLibCapture;
+
+/* One closure surface reachable from an exported function (v2).
+ *
+ * `role` is one of:
+ *   "builder"        — the export is a builder / trailing-block DSL
+ *                      entry point (takes an injected `_ctx`); call it
+ *                      with a trailing block. `signature` is the
+ *                      export's own signature; `capture_count` is 0.
+ *   "param"          — a closure-typed parameter of the export.
+ *                      `name` is the parameter name, `signature` its
+ *                      `|...| -> R` shape; `capture_count` is 0
+ *                      (captures belong to the value the caller passes).
+ *   "trailing-block" — a trailing-block closure literal in the export's
+ *                      body.
+ *   "literal"        — any other closure literal in the export's body.
+ * For the last two, `captures` lists the variables the closure closes
+ * over, with their rendered types, and `name` is the hoisted closure
+ * symbol ("" if anonymous).
+ *
+ * Stable layout — append only, never reorder. */
+typedef struct {
+    const char* name;                 /* param / hoisted-closure name, or "" */
+    const char* role;                 /* see above                           */
+    const char* enclosing_export;     /* aether_name it is reachable from     */
+    const char* signature;            /* "|int, string| -> bool"              */
+    int                       capture_count;
+    const AetherLibCapture*   captures;     /* NULL when capture_count == 0   */
+    const char* source_file;          /* path of the .ae that defined it      */
+    int         source_line;          /* 1-based                              */
+} AetherLibClosure;
+
 /* Top-level catalog. Stable layout — never reorder fields, only
  * append. New optional fields go at the end with a documented
  * "all-zero means absent" contract. */
 typedef struct {
-    const char* schema_version;   /* "1.0" — bump on breaking change      */
+    const char* schema_version;   /* "1.0" funcs only; "1.1" with closures */
     const char* aether_version;   /* compiler version that produced this   */
     const char* primary_source;   /* the main .ae file passed to aetherc   */
     int                       function_count;
     const AetherLibFunction*  functions;
-    int                       closure_count;   /* always 0 in v1; v2 fills */
-    const void*               closures;        /* always NULL in v1        */
+    int                       closure_count;   /* 0 if no closure surface   */
+    const AetherLibClosure*   closures;        /* NULL when closure_count==0 */
 } AetherLibMeta;
 
 /* The single entry point. Every `--emit=lib` artifact exports this

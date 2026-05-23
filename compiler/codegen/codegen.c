@@ -1629,6 +1629,130 @@ static void emit_lib_metadata_c_string_literal(FILE* out, const char* s) {
     fputc('"', out);
 }
 
+/* Resolve a variable's source-level Type* within a function's AST, for
+ * rendering closure-capture types in the lib metadata (v2). Checks the
+ * function's parameters first, then top-level declarations in its body.
+ * Returns NULL when the name can't be resolved (caller renders "ptr"). */
+static Type* find_var_type_in_function(ASTNode* fn, const char* name) {
+    if (!fn || !name) return NULL;
+    ASTNode* body = NULL;
+    for (int i = 0; i < fn->child_count; i++) {
+        ASTNode* c = fn->children[i];
+        if (!c) continue;
+        if (c->type == AST_BLOCK) { body = c; break; }
+        if ((c->type == AST_VARIABLE_DECLARATION || c->type == AST_PATTERN_VARIABLE) &&
+            c->value && strcmp(c->value, name) == 0) {
+            return c->node_type;
+        }
+    }
+    if (!body) return NULL;
+    for (int i = 0; i < body->child_count; i++) {
+        ASTNode* s = body->children[i];
+        if (!s) continue;
+        if (s->type == AST_VARIABLE_DECLARATION && s->value &&
+            strcmp(s->value, name) == 0) {
+            if (s->node_type) return s->node_type;
+            if (s->child_count > 0 && s->children[0]) return s->children[0]->node_type;
+        }
+    }
+    return NULL;
+}
+
+/* Local copy of "first return expression in a subtree" — the codegen_expr
+ * version is static to that TU. Used only for best-effort closure return
+ * type rendering in the lib metadata. */
+static ASTNode* meta_find_return_expr(ASTNode* node) {
+    if (!node) return NULL;
+    if (node->type == AST_RETURN_STATEMENT && node->child_count > 0) return node->children[0];
+    for (int i = 0; i < node->child_count; i++) {
+        ASTNode* f = meta_find_return_expr(node->children[i]);
+        if (f) return f;
+    }
+    return NULL;
+}
+
+/* Render a closure literal's signature as "|T1, T2| -> R" from its AST.
+ * The closure node's resolved node_type is unreliable at metadata-emit
+ * time (params/return are resolved lazily during closure codegen), so
+ * we read the AST_CLOSURE_PARAM children directly and best-effort the
+ * return type. Returns a malloc'd string the caller frees. */
+static char* render_closure_sig_ast(ASTNode* cnode) {
+    char buf[512];
+    int pos = snprintf(buf, sizeof(buf), "|");
+    int first = 1;
+    for (int i = 0; i < cnode->child_count && pos < (int)sizeof(buf) - 32; i++) {
+        ASTNode* p = cnode->children[i];
+        if (!p || p->type != AST_CLOSURE_PARAM) continue;
+        if (!first) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
+        first = 0;
+        const char* t = p->node_type ? type_to_string(p->node_type) : "?";
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", t);
+    }
+    /* Return type: prefer the closure type's return slot; otherwise the
+     * type of the body's return/arrow expression; default void. */
+    const char* rt = "void";
+    if (cnode->node_type && cnode->node_type->kind == TYPE_FUNCTION &&
+        cnode->node_type->return_type &&
+        cnode->node_type->return_type->kind != TYPE_UNKNOWN &&
+        cnode->node_type->return_type->kind != TYPE_VOID) {
+        rt = type_to_string(cnode->node_type->return_type);
+    } else {
+        /* Locate the body: an AST_BLOCK (statement body) or a bare
+         * expression child (arrow body). Render the return/arrow expr's
+         * type when known; "?" when a value is returned but its type
+         * isn't resolved yet (closure bodies type-check lazily); "void"
+         * only when there is genuinely no return value. */
+        ASTNode* rexpr = NULL;
+        int has_value = 0;
+        for (int i = cnode->child_count - 1; i >= 0; i--) {
+            ASTNode* b = cnode->children[i];
+            if (!b || b->type == AST_CLOSURE_PARAM) continue;
+            if (b->type == AST_BLOCK) {
+                rexpr = meta_find_return_expr(b);
+                has_value = (rexpr != NULL);
+            } else {
+                rexpr = b;          /* arrow body expression */
+                has_value = 1;
+            }
+            break;
+        }
+        if (has_value) {
+            rt = (rexpr && rexpr->node_type &&
+                  rexpr->node_type->kind != TYPE_UNKNOWN &&
+                  rexpr->node_type->kind != TYPE_VOID)
+                     ? type_to_string(rexpr->node_type) : "?";
+        }
+    }
+    char tail[64];
+    snprintf(tail, sizeof(tail), "| -> %s", rt);
+    /* rt may point at type_to_string's static buffer; copy via snprintf
+     * into tail before it can be clobbered, then append. */
+    if (pos < (int)sizeof(buf) - (int)strlen(tail) - 1) {
+        snprintf(buf + pos, sizeof(buf) - pos, "%s", tail);
+    }
+    return strdup(buf);
+}
+
+/* Does this function's first parameter look like an injected builder
+ * context (`_ctx: ptr`)? That convention (and the `builder` keyword,
+ * caught separately via is_builder_func_reg) is what marks a function
+ * as a trailing-block DSL entry point. */
+static int fn_takes_builder_context(ASTNode* fn) {
+    if (!fn) return 0;
+    for (int i = 0; i < fn->child_count; i++) {
+        ASTNode* c = fn->children[i];
+        if (!c) continue;
+        if (c->type == AST_GUARD_CLAUSE) continue;
+        if (c->type == AST_BLOCK) break;
+        if (c->type == AST_VARIABLE_DECLARATION || c->type == AST_PATTERN_VARIABLE) {
+            return (c->value && strcmp(c->value, "_ctx") == 0 &&
+                    c->node_type && c->node_type->kind == TYPE_PTR);
+        }
+        break;  /* first param only */
+    }
+    return 0;
+}
+
 static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
     if (!gen || !gen->emit_lib || !program) return;
 
@@ -1691,10 +1815,17 @@ static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
         "struct _AetherLibFn { const char* aether_name; const char* c_symbol;\n"
         "    const char* signature; const char* source_file; int source_line; };\n");
     fprintf(gen->output,
+        "struct _AetherLibCap { const char* name; const char* type; };\n");
+    fprintf(gen->output,
+        "struct _AetherLibClosure { const char* name; const char* role;\n"
+        "    const char* enclosing_export; const char* signature;\n"
+        "    int capture_count; const struct _AetherLibCap* captures;\n"
+        "    const char* source_file; int source_line; };\n");
+    fprintf(gen->output,
         "struct _AetherLibMeta { const char* schema_version; const char* aether_version;\n"
         "    const char* primary_source; int function_count;\n"
         "    const struct _AetherLibFn* functions;\n"
-        "    int closure_count; const void* closures; };\n\n");
+        "    int closure_count; const struct _AetherLibClosure* closures; };\n\n");
 
     fprintf(gen->output,
         "static const struct _AetherLibFn _aether_lib_fns[] = {\n");
@@ -1732,6 +1863,173 @@ static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
     }
     fprintf(gen->output, "};\n\n");
 
+    /* --- v2 closure-context records (schema 1.1) ---
+     *
+     * The closure surface reachable from the exported functions, so a
+     * downstream Aether consumer can reconstruct a closure-with-context
+     * builder DSL at full fidelity. Three sources, in this order:
+     *
+     *   1. builder      — an export that takes an injected `_ctx`
+     *                     (the `builder` keyword or the `_ctx: ptr`
+     *                     first-param convention). Call it with a
+     *                     trailing block.
+     *   2. param        — a closure-typed (`fn`) parameter of an export.
+     *   3. literal      — a hoisted closure literal in an export's body
+     *                     (gen->closures[] whose parent_func is one of
+     *                     the exports), with its captured variables.
+     *
+     * Each capture array is emitted first (named _aether_lib_caps_N) so
+     * the closure array can point at it; everything is `static const`
+     * in .rodata, no allocation, same contract as the function table. */
+    int clo_count = 0;
+    /* Closure-record candidate set: every top-level, non-imported,
+     * non-trailing-underscore function definition (and `builder`-keyword
+     * function) — WITHOUT the ABI-param gate fns[] applies. The closure
+     * surface (fn-typed params, builder `_ctx`) is exactly what the
+     * flattened ABI drops, so it rides on functions fns[] excludes; their
+     * bare symbols still have external linkage for an Aether consumer. */
+    int cfn_cap = program->child_count > 0 ? program->child_count : 1;
+    ASTNode** cfns = (ASTNode**)malloc(sizeof(ASTNode*) * cfn_cap);
+    int cfn_count = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        ASTNode* fn = child;
+        if (child && child->type == AST_EXPORT_STATEMENT && child->child_count > 0) {
+            fn = child->children[0];
+        }
+        if (!fn || !fn->value) continue;
+        if (fn->type != AST_FUNCTION_DEFINITION && fn->type != AST_BUILDER_FUNCTION) continue;
+        if (fn->is_imported) continue;
+        size_t nlen = strlen(fn->value);
+        if (nlen > 0 && fn->value[nlen - 1] == '_') continue;
+        cfns[cfn_count++] = fn;
+    }
+    /* Bookkeeping sized to: 1 builder slot + every param per candidate,
+     * plus one per discovered closure literal. */
+    int max_records = gen->closure_count + 1;
+    for (int i = 0; i < cfn_count; i++) max_records += 1 + cfns[i]->child_count;
+    int* lit_ci      = (int*)malloc(sizeof(int) * max_records);   /* gen->closures index, or -1 */
+    int* cap_arr_id  = (int*)malloc(sizeof(int) * max_records);   /* _aether_lib_caps_N id, or -1 */
+    const char** rec_name = (const char**)malloc(sizeof(char*) * max_records);
+    const char** rec_role = (const char**)malloc(sizeof(char*) * max_records);
+    const char** rec_encl = (const char**)malloc(sizeof(char*) * max_records);
+    char**       rec_sig  = (char**)malloc(sizeof(char*) * max_records);
+    const char** rec_src  = (const char**)malloc(sizeof(char*) * max_records);
+    int*         rec_line = (int*)malloc(sizeof(int) * max_records);
+
+    int cap_arr_next = 0;
+    /* 1 + 2: per candidate, builder flag then closure-typed params. */
+    for (int i = 0; i < cfn_count; i++) {
+        ASTNode* fn = cfns[i];
+        if (fn->type == AST_BUILDER_FUNCTION ||
+            is_builder_func_reg(gen, fn->value) || fn_takes_builder_context(fn)) {
+            lit_ci[clo_count] = -1; cap_arr_id[clo_count] = -1;
+            rec_name[clo_count] = fn->value;
+            rec_role[clo_count] = "builder";
+            rec_encl[clo_count] = fn->value;
+            rec_sig[clo_count]  = NULL;   /* render the fn's own signature inline below */
+            rec_src[clo_count]  = fn->source_file ? fn->source_file : "";
+            rec_line[clo_count] = fn->line;
+            clo_count++;
+        }
+        for (int p = 0; p < fn->child_count; p++) {
+            ASTNode* c = fn->children[p];
+            if (!c) continue;
+            if (c->type == AST_GUARD_CLAUSE) continue;
+            if (c->type == AST_BLOCK) break;
+            if ((c->type == AST_VARIABLE_DECLARATION || c->type == AST_PATTERN_VARIABLE) &&
+                c->node_type && c->node_type->kind == TYPE_FUNCTION) {
+                lit_ci[clo_count] = -1; cap_arr_id[clo_count] = -1;
+                rec_name[clo_count] = c->value ? c->value : "";
+                rec_role[clo_count] = "param";
+                rec_encl[clo_count] = fn->value;
+                rec_sig[clo_count]  = strdup(type_to_string(c->node_type));
+                rec_src[clo_count]  = fn->source_file ? fn->source_file : "";
+                rec_line[clo_count] = fn->line;
+                clo_count++;
+            }
+        }
+    }
+    /* 3: hoisted closure literals whose parent function is an export. */
+    for (int ci = 0; ci < gen->closure_count; ci++) {
+        const char* pf = gen->closures[ci].parent_func;
+        if (!pf) continue;
+        ASTNode* owner = NULL;
+        for (int i = 0; i < cfn_count; i++) {
+            if (cfns[i]->value && strcmp(cfns[i]->value, pf) == 0) { owner = cfns[i]; break; }
+        }
+        if (!owner) continue;   /* parent is main / synthetic / non-exported */
+        ASTNode* cnode = gen->closures[ci].closure_node;
+        int cap_n = gen->closures[ci].capture_count;
+        int this_cap_arr = -1;
+        if (cap_n > 0) {
+            this_cap_arr = cap_arr_next++;
+            fprintf(gen->output,
+                "static const struct _AetherLibCap _aether_lib_caps_%d[] = {\n",
+                this_cap_arr);
+            for (int k = 0; k < cap_n; k++) {
+                const char* cap_name = gen->closures[ci].captures[k];
+                Type* ct = find_var_type_in_function(owner, cap_name);
+                fprintf(gen->output, "    { ");
+                emit_lib_metadata_c_string_literal(gen->output, cap_name ? cap_name : "");
+                fprintf(gen->output, ", ");
+                emit_lib_metadata_c_string_literal(gen->output, ct ? type_to_string(ct) : "ptr");
+                fprintf(gen->output, " },\n");
+            }
+            fprintf(gen->output, "};\n");
+        }
+        lit_ci[clo_count]    = ci;
+        cap_arr_id[clo_count] = this_cap_arr;
+        rec_name[clo_count]  = "";   /* hoisted closures are anonymous at source level */
+        rec_role[clo_count]  = "literal";
+        rec_encl[clo_count]  = owner->value;
+        rec_sig[clo_count]   = cnode ? render_closure_sig_ast(cnode) : NULL;
+        rec_src[clo_count]   = (cnode && cnode->source_file) ? cnode->source_file
+                                 : (owner->source_file ? owner->source_file : "");
+        rec_line[clo_count]  = (cnode && cnode->line) ? cnode->line : owner->line;
+        clo_count++;
+    }
+
+    if (clo_count > 0) {
+        fprintf(gen->output,
+            "\nstatic const struct _AetherLibClosure _aether_lib_closures[] = {\n");
+        for (int r = 0; r < clo_count; r++) {
+            fprintf(gen->output, "    { ");
+            emit_lib_metadata_c_string_literal(gen->output, rec_name[r]);
+            fprintf(gen->output, ", ");
+            emit_lib_metadata_c_string_literal(gen->output, rec_role[r]);
+            fprintf(gen->output, ", ");
+            emit_lib_metadata_c_string_literal(gen->output, rec_encl[r]);
+            fprintf(gen->output, ", ");
+            if (rec_sig[r]) {
+                emit_lib_metadata_c_string_literal(gen->output, rec_sig[r]);
+            } else if (lit_ci[r] == -1 && strcmp(rec_role[r], "builder") == 0) {
+                /* Builder: render the export's own signature now (the
+                 * static type_to_string buffer is safe at point of use). */
+                ASTNode* bf = NULL;
+                for (int i = 0; i < cfn_count; i++) {
+                    if (cfns[i]->value && strcmp(cfns[i]->value, rec_encl[r]) == 0) { bf = cfns[i]; break; }
+                }
+                fputc('"', gen->output);
+                if (bf) emit_lib_metadata_signature_for(gen->output, bf);
+                fputc('"', gen->output);
+            } else {
+                fputs("\"\"", gen->output);
+            }
+            int cap_n = (lit_ci[r] >= 0) ? gen->closures[lit_ci[r]].capture_count : 0;
+            fprintf(gen->output, ", %d, ", cap_n);
+            if (cap_arr_id[r] >= 0) {
+                fprintf(gen->output, "_aether_lib_caps_%d", cap_arr_id[r]);
+            } else {
+                fputs("NULL", gen->output);
+            }
+            fprintf(gen->output, ", ");
+            emit_lib_metadata_c_string_literal(gen->output, rec_src[r]);
+            fprintf(gen->output, ", %d },\n", rec_line[r]);
+        }
+        fprintf(gen->output, "};\n\n");
+    }
+
     /* Pull the primary source path off the first non-imported fn —
      * approximation of "the .ae the user passed to aetherc". The
      * artifact may bundle multiple sources (concat-ae); naming the
@@ -1742,11 +2040,23 @@ static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
     }
     fprintf(gen->output,
         "static const struct _AetherLibMeta _aether_lib_meta = {\n");
-    fprintf(gen->output, "    \"1.0\", \"" );
+    /* schema "1.1" once any closure record is present; "1.0" keeps a
+     * function-only artifact byte-identical to v1 for existing readers. */
+    fprintf(gen->output, "    \"%s\", \"", clo_count > 0 ? "1.1" : "1.0");
     fprintf(gen->output, "%s", "0.0.0-dev");  /* version string filled in by build glue if available */
     fprintf(gen->output, "\", ");
     emit_lib_metadata_c_string_literal(gen->output, primary_src);
-    fprintf(gen->output, ", %d, _aether_lib_fns, 0, NULL\n};\n\n", fn_count);
+    if (clo_count > 0) {
+        fprintf(gen->output, ", %d, _aether_lib_fns, %d, _aether_lib_closures\n};\n\n",
+                fn_count, clo_count);
+    } else {
+        fprintf(gen->output, ", %d, _aether_lib_fns, 0, NULL\n};\n\n", fn_count);
+    }
+
+    for (int r = 0; r < clo_count; r++) free(rec_sig[r]);
+    free(cfns);
+    free(lit_ci); free(cap_arr_id); free(rec_name); free(rec_role);
+    free(rec_encl); free(rec_sig); free(rec_src); free(rec_line);
 
     /* The exported entry point. Returns a pointer to the static
      * meta struct. The local `_AetherLibMeta` tag is layout-

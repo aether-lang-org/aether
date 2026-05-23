@@ -20,6 +20,7 @@ static int conn_buffered_is_h2_preface(HttpConn* conn);
 // Stubs when networking is unavailable
 HttpServer* http_server_create(int p) { (void)p; return NULL; }
 int http_server_bind_raw(HttpServer* s, const char* h, int p) { (void)s; (void)h; (void)p; return -1; }
+int http_server_port(HttpServer* s) { (void)s; return 0; }
 void http_server_set_host(HttpServer* s, const char* h) { (void)s; (void)h; }
 int http_server_start_raw(HttpServer* s) { (void)s; return -1; }
 int http_server_start_background_raw(HttpServer* s) { (void)s; return -1; }
@@ -1192,8 +1193,28 @@ int http_server_bind_raw(HttpServer* server, const char* host, int port) {
     }
     server->host = new_host;
     server->port = port;
-    
+
+    // Resolve an OS-assigned port (port 0): the kernel picked a real
+    // port at bind() time, but `port` is still 0 here. getsockname() the
+    // bound socket and write the actual port back so dynamic-port users
+    // (parallel test runners, the VCR embed layer) can read it via
+    // http_server_port(). vcr_embed_abi_wish.md open question 3.
+    if (port == 0) {
+        struct sockaddr_in bound;
+        socklen_t blen = sizeof(bound);
+        if (getsockname(server->socket_fd, (struct sockaddr*)&bound, &blen) == 0) {
+            server->port = ntohs(bound.sin_port);
+        }
+    }
+
     return 0;
+}
+
+// Resolved listening port. For a server bound with port 0 this is the
+// OS-assigned port (see the getsockname() in http_server_bind_raw);
+// otherwise it echoes the requested port. Returns 0 if unbound.
+int http_server_port(HttpServer* server) {
+    return server ? server->port : 0;
 }
 
 // Request parsing
@@ -3332,7 +3353,12 @@ int http_server_start_raw(HttpServer* server) {
     } else if (use_actor_mode) {
         // Single-accept with I/O poller (default): one accept thread waits for data
         // before dispatching to worker actors. Best for most workloads.
-        if (http_server_bind_raw(server, server->host, server->port) < 0) {
+        // Skip the bind if the caller already bound synchronously (e.g.
+        // an embedding host that bound with port 0 and read the resolved
+        // port back via http_server_port before starting the background
+        // accept loop) — re-binding an open socket would fail.
+        if (server->socket_fd < 0 &&
+            http_server_bind_raw(server, server->host, server->port) < 0) {
             return -1;
         }
 
@@ -3357,7 +3383,10 @@ int http_server_start_raw(HttpServer* server) {
     } else
 #endif
     {
-        if (http_server_bind_raw(server, server->host, server->port) < 0) {
+        // Skip the bind if already bound synchronously (see the
+        // use_actor_mode branch above for the embedding rationale).
+        if (server->socket_fd < 0 &&
+            http_server_bind_raw(server, server->host, server->port) < 0) {
             return -1;
         }
 
