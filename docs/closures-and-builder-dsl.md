@@ -594,6 +594,22 @@ dispatch table. The ref cells provide shared mutable state across all callbacks.
 | Callback storage | Block variables | Procs/lambdas | Closures | `fn` type + `call()` |
 | Shared mutable state | Instance vars | `@variables` | Delegate fields | `ref()` cells |
 
+The Groovy column is the bar for one case the table doesn't capture:
+consuming a builder-DSL component **from a separately-published Aether
+library**. Groovy folks expect `server { ... }` from an imported library
+to feel native at the call site regardless of when or where the library
+was built. Aether reaches that today via source import + recompile (the
+imported builder's wrappers are cloned into the consumer's compile —
+literally the same compile cycle, so the DSL, context stack, and types
+all survive intact). The published-binary form of the same fidelity —
+an Aether-native artifact carrying the closure-with-context metadata so
+the DX survives without the source — is the second consumer axis
+discussed in [emit-lib.md](emit-lib.md) §*Two kinds of consumer*; it is
+distinct from the flattened `--emit=lib` FFI surface, which deliberately
+drops closures. If a downstream Aether porter asks how to ship a
+builder-DSL component, the answer is the source-import path, not
+`--emit=lib`.
+
 ## Implementation Notes
 
 Closures compile to C as:

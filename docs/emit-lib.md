@@ -8,6 +8,46 @@ Python (ctypes or SWIG), Go (cgo), Ruby, Rust (`extern "C"`), and so on.
 This document covers the v1 contract. For the broader design rationale,
 see [aether-embedded-in-host-applications.md](aether-embedded-in-host-applications.md).
 
+## Two kinds of consumer: flattened FFI vs. Aether-native
+
+Everything below describes the **flattened** contract: the artifact a
+*foreign* host (C, Java, Python, Go, Ruby, Rust) links against. That
+contract is deliberately lowest-common-denominator. Closures don't get
+an alias; `string` decays to a borrowed `const char*`; `map`/`list`
+collapse to opaque `AetherValue*`; tuples and structs don't cross at
+all. This is the right shape when the consumer doesn't speak Aether —
+the FFI floor is `extern "C"` and the library has to meet it there.
+
+There is a second axis that this document does **not** cover, because
+the consumer's language is different: **a downstream Aether project
+consuming an Aether library.** Here the goal is the opposite of
+flattening — full language fidelity. A `std/http/server`-style
+component whose surface *is* a closure-with-context builder DSL (see
+[closures-and-builder-dsl.md](closures-and-builder-dsl.md) §Builder
+Context Stack / §Invisible Context Injection) should, when pulled into
+someone else's server a year after publication, read at the consumer's
+call site exactly as if the two were compiled in the same cycle —
+real types, the trailing-block DSL intact, imports resolving the
+builder's bare setters with no glue. The bar is Groovy's library DX
+(see the comparison table in `closures-and-builder-dsl.md`), not C's
+FFI floor.
+
+Today that full-fidelity path is **source import + recompile**: the
+module resolver pulls the dependency's `.ae` source and the consumer's
+build clones its wrappers per translation unit (imported wrappers are
+emitted `static` — see [Symbol visibility matrix](#symbol-visibility-matrix)).
+"Same compile cycle" holds literally because it *is* the same compile.
+A published-binary Aether-native artifact — one carrying enough
+language-level metadata (closure-with-context records, full types, the
+DSL/builder surface, import structure) to rehydrate that DX without the
+source — is not built yet. The reserved seam for it already exists: the
+`closure_count` / `closures` fields of `aether_lib_meta`
+(see [Reflection](#reflection-the-symbol-catalog-aether_lib_meta--403)),
+documented as "always 0 / NULL in v1 … reserved for v2's closure-context
+records." When `ae publish` (roadmap, `docs/next-steps.md`) lands, this
+is the axis it has to satisfy — distinct from, and not a superset of,
+the flattened FFI contract below.
+
 ## Quick example
 
 ```aether
@@ -458,7 +498,11 @@ No JSON, no parsing, no dynamic allocation — the struct is `static const`
 in the artifact and the catalog literally lives in `.rodata`. Schema is
 versioned (`"1.0"`); within `1.x` only additive fields appear at the
 struct tail (the `closure_count` / `closures` slots are reserved for v2's
-closure-context records). v1 includes every Aether-defined function the
+closure-context records — the seam for the Aether-native consumer axis
+described under [Two kinds of consumer](#two-kinds-of-consumer-flattened-ffi-vs-aether-native):
+a flattened FFI host has no use for them, but a downstream *Aether*
+consumer needs exactly this to rehydrate a closure-with-context builder
+DSL at full fidelity). v1 includes every Aether-defined function the
 linker exports; functions skipped from the `aether_<name>` alias surface
 (unsupported types, tuple returns, trailing-underscore privates) are
 also omitted from the catalog.

@@ -8,7 +8,18 @@ mid-task. Re-read at start of every session.
 Systems language. Compiles to C. Two emit modes: `--emit=exe` (default,
 produces a binary with a `main()`) and `--emit=lib` (produces `.so`/`.dylib`
 with ABI-stable `aether_<name>` exports for FFI from C / Python / Ruby / Java
-via ctypes/SWIG/Panama). `--emit=lib` is capability-empty by default —
+via ctypes/SWIG/Panama). Note `--emit=lib` is the **flattened** contract —
+the lowest-common-denominator C ABI for a *foreign* host; closures get no
+alias, strings decay to `const char*`, collections to opaque
+`AetherValue*`. It is NOT the path for a downstream *Aether* consumer that
+wants full language fidelity (closure-with-context builder DSLs reading as
+if compiled in the same cycle — Groovy-grade library DX). That
+Aether-native axis is today source-import + recompile only; the
+published-binary form is unbuilt (seam reserved: the empty
+`closure_count`/`closures` in `aether_lib_meta`, `ae publish` on the
+roadmap). See `docs/emit-lib.md` → *Two kinds of consumer* — don't point a
+downstream Aether porter at the flattened FFI surface when they want the
+DSL. `--emit=lib` is capability-empty by default —
 `std.fs` / `std.net` / `std.os` imports are rejected. The opt-in is
 `--with=fs[,net,os]`, an explicit per-build flag for projects that ARE
 the host and want full syscall access (e.g. implementing a systems tool
