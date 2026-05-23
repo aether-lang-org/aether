@@ -16,7 +16,7 @@ exports (
     http_response_status, http_response_body, http_response_headers,
     http_response_error, http_response_ok,
     get, get_with_timeout, post, put, delete,
-    http_server_create, http_server_bind_raw, http_server_start_raw,
+    http_server_create, http_server_bind_raw, http_server_port, http_server_start_raw,
     http_server_set_host, server_set_host,
     http_server_start_background_raw,
     http_server_stop, http_server_free,
@@ -246,6 +246,10 @@ delete(url: string) -> {
 // HTTP Server - lifecycle
 extern http_server_create(port: int) -> ptr
 extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+// Resolved listening port. After binding with port 0 (OS-assigned),
+// returns the kernel-chosen port so dynamic-port users can discover it;
+// otherwise echoes the requested port. 0 if unbound.
+extern http_server_port(server: ptr) -> int
 // Set the bind address before server_start. Default is "0.0.0.0"
 // (all interfaces). Pass "127.0.0.1" to bind loopback only — useful
 // for tests because macOS / Windows firewalls don't prompt on

@@ -11,6 +11,33 @@ next version number before tagging the release.
 
 ## [current]
 
+### Changed
+
+- **The precompiled runtime archive (`build/libaether.a`) is now built
+  `-fPIC`** (`Makefile`, `tests/integration/emit_lib_net/`). Without it,
+  any `ae build --emit=lib` that pulled in a TLS-using runtime object —
+  notably `std.http`'s embedded server (`aether_http.o`, whose
+  initial-exec TLS emits an `R_X86_64_TPOFF32` relocation illegal in a
+  shared object) — failed to link with `recompile with -fPIC`. The
+  `--emit=lib` examples only imported `std.map`, so the gap went
+  unexercised. Now `ae build --emit=lib --with=net` over a `std.http`
+  module produces a loadable `.so` that `dlopen`s and round-trips
+  (new `emit_lib_net` C-driver integration test). Codegen cost is
+  negligible on x86-64/arm64 (most distros default to PIE); one archive
+  serves both the exe and shared-object links. Unblocks
+  `vcr_embed_abi_wish.md` Part A (servirtium-dotnet's embedded VCR `.so`).
+
+### Added
+
+- **`http_server_port(server) -> int`** (`std/net/aether_http_server.c`,
+  `std/http/module.ae`, `std/net/module.ae`). Reports a server's
+  resolved listening port. `http_server_bind_raw` now `getsockname()`s
+  the socket after binding with port 0 (OS-assigned) and writes the
+  kernel-chosen port back, so dynamic-port users — parallel test runners,
+  the planned VCR embed layer — can discover the real port instead of
+  reading back the `0` they requested (`vcr_embed_abi_wish.md` open
+  question 3).
+
 ### Fixed
 
 - **A user function that forges an imported export's mangled C symbol is

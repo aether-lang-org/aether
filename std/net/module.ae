@@ -14,7 +14,7 @@ exports (
     http_response_body_str, http_response_headers_str,
     http_response_status, http_response_body, http_response_headers,
     http_response_error, http_response_ok,
-    http_server_create, http_server_bind_raw, http_server_start_raw,
+    http_server_create, http_server_bind_raw, http_server_port, http_server_start_raw,
     http_server_stop, http_server_free,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
@@ -69,6 +69,7 @@ extern http_response_ok(response: ptr) -> int
 // HTTP Server - lifecycle
 extern http_server_create(port: int) -> ptr
 extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_port(server: ptr) -> int
 extern http_server_start_raw(server: ptr) -> int
 extern http_server_stop(server: ptr)
 extern http_server_free(server: ptr)

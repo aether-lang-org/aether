@@ -1,0 +1,18 @@
+// A tiny module that pulls in std.http (the embedded HTTP server, whose
+// runtime object uses initial-exec TLS). Building this --emit=lib
+// --with=net used to fail to link a shared object with
+// `relocation R_X86_64_TPOFF32 ... recompile with -fPIC`; the global
+// -fPIC on the runtime archive fixes it (vcr_embed_abi_wish.md Part A).
+// The point of the test is that the .so links and dlopens at all when a
+// TLS-using runtime object is pulled in — not the HTTP behaviour.
+
+import std.http
+import std.string
+
+ping() -> int {
+    return 7
+}
+
+echo(s: string) -> string {
+    return string.concat("echo:", s)
+}
