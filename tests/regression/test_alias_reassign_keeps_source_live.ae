@@ -1,0 +1,84 @@
+// Regression (180-regression.md): aliasing a live heap string into a
+// loop variable and reassigning that alias must NOT corrupt the
+// original it was aliased from.
+//
+// Bug shape (0.175-0.180): the alias-ownership "move" at `rest =
+// content` transferred content's single freeing duty to `rest` and
+// disowned `content` (`_heap_content = 0`). The move is a last-use
+// optimization — sound only when the source is dead afterwards. Here
+// `content` is read again past the loop, so when the loop's
+// `rest = string.substring(...)` reassignment freed the buffer rest
+// had taken from content, `content` dangled — a silent heap
+// use-after-free that read truncated/garbage bytes.
+//
+// The move was always latent; 0.175's tuple-destructure heap
+// classification (fs.read_binary reclaim) started tagging
+// `content, _ = io.read_file(...)` as heap-owned, which is what began
+// triggering the move and surfaced the corruption (it broke aeb's
+// tools/extract-deps scan/glob expansion).
+//
+// Fix: when the aliased source is still referenced past the alias,
+// take a binary-safe defensive copy (`aether_uniform_heap_str(src, 0)`)
+// instead of stealing its buffer. The alias then owns an independent
+// copy and the source survives intact for its later reads — exactly
+// the behaviour of the hand-written `rest = string.concat(content, "")`
+// workaround, now emitted by codegen automatically. The move
+// optimization is preserved for the genuine last-use shape
+// (`sorted = new_sorted; return sorted`).
+
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== test_alias_reassign_keeps_source_live ===")
+
+    // Heap string (string.concat result) — string LITERALS are
+    // interned/static and do NOT trigger the move, so the source must
+    // be a genuine malloc'd heap string.
+    content = string.concat("dep(b, \"X\") and scan(b, \"Y\")", "")
+    before_idx = string.index_of(content, "scan")
+    if before_idx != 16 {
+        println("FAIL setup: index_of(content, \"scan\") = ${before_idx}, expected 16")
+        exit(1)
+    }
+
+    // Alias `content` into `rest`, then walk it with substring-
+    // reassignments. This is the exact shape of aeb's extract-deps
+    // Pass 1; pre-fix it freed content's buffer out from under it.
+    rest = content
+    while string.length(rest) > 0 {
+        idx = string.index_of(rest, "dep(b, \"")
+        if idx < 0 {
+            rest = ""
+        } else {
+            tail = string.substring(rest, idx + 8, string.length(rest))
+            close = string.index_of(tail, "\"")
+            rest = string.substring(tail, close + 1, string.length(tail))
+        }
+    }
+
+    // `content` must be unchanged — the loop only ever reassigned the
+    // separate `rest` alias.
+    after_idx = string.index_of(content, "scan")
+    if after_idx != 16 {
+        println("FAIL: content corrupted by alias-reassign loop — index_of(content, \"scan\") = ${after_idx}, expected 16")
+        exit(1)
+    }
+    println("  PASS: aliased source survives alias's substring-reassign loop")
+
+    // Second shape: the alias is itself reassigned (not just declared)
+    // to a live heap source, then the source is read later. Exercises
+    // the reassignment alias path, not just first-declaration.
+    base = string.concat("HELLO-", "WORLD")
+    view = string.concat("seed", "")
+    view = base                     // reassign-alias to a live source
+    view = string.substring(view, 0, 5)
+    if string.length(base) != 11 {
+        println("FAIL: base corrupted by reassign-alias — length = ${string.length(base)}, expected 11")
+        exit(1)
+    }
+    println("  PASS: reassign-alias keeps source live")
+
+    println("=== all cases passed ===")
+}

@@ -138,6 +138,44 @@ static int expr_references_var(ASTNode* node, const char* var_name) {
     return 0;
 }
 
+// Counts identifier-node occurrences of `var_name` in the subtree.
+// Assignment/declaration targets are carried on `->value` of the
+// statement node (not as identifier children), so this naturally
+// counts reads/uses, not write targets.
+static int count_var_identifier_uses(ASTNode* node, const char* var_name) {
+    if (!node || !var_name) return 0;
+    int n = (node->type == AST_IDENTIFIER && node->value &&
+             strcmp(node->value, var_name) == 0) ? 1 : 0;
+    for (int i = 0; i < node->child_count; i++) {
+        n += count_var_identifier_uses(node->children[i], var_name);
+    }
+    return n;
+}
+
+// Decides whether `src_name` (the bare-identifier RHS of an alias
+// assignment `dest = src`) is still live after the alias point, in
+// which case the alias must NOT steal its buffer via an ownership
+// move — it must take a defensive copy instead.
+//
+// The ownership move (`_heap_dest = _heap_src; _heap_src = 0`) is a
+// last-use optimization: it transfers the single freeing duty to the
+// alias and disowns the source. That is only sound when the source is
+// dead after the alias. If the source is read again (e.g. `content`
+// read after a `rest = content` alias-then-reassign loop), the move
+// frees the source's buffer out from under it on the alias's next
+// reassignment — silent heap corruption (see 180-regression.md).
+//
+// We approximate liveness conservatively: if the source identifier
+// appears anywhere in the function besides the single alias-init use,
+// assume it may be read later and prefer the copy. Worst case we copy
+// when a move would have sufficed (a harmless extra allocation); we
+// never wrongly move. With no function context, default to the safe
+// copy.
+static int alias_source_must_copy(CodeGenerator* gen, const char* src_name) {
+    if (!gen || !gen->current_function || !src_name) return 1;
+    return count_var_identifier_uses(gen->current_function, src_name) > 1;
+}
+
 // Returns 1 if the expression has any side effects (function calls, sends).
 static int expr_has_side_effects(ASTNode* node) {
     if (!node) return 0;
@@ -3207,12 +3245,27 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             (rhs && rhs->type == AST_IDENTIFIER && rhs->value &&
                              is_heap_string_var(gen, rhs->value) &&
                              strcmp(rhs->value, stmt->value) != 0);
+                        /* Live-source guard (180-regression.md): if the
+                         * aliased source is read again later, take a
+                         * defensive copy instead of moving its buffer —
+                         * otherwise this slot's next free dangles the
+                         * source. */
+                        int rhs_alias_copy = (rhs_is_alias_to_heap_var &&
+                                              alias_source_must_copy(gen, rhs->value));
                         fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
                         fprintf(gen->output, "%s = ", stmt->value);
-                        generate_expression(gen, stmt->children[0]);
+                        if (rhs_alias_copy) {
+                            fprintf(gen->output, "aether_uniform_heap_str(");
+                            generate_expression(gen, stmt->children[0]);
+                            fprintf(gen->output, ", 0)");
+                        } else {
+                            generate_expression(gen, stmt->children[0]);
+                        }
                         fprintf(gen->output, "; if (_heap_%s) aether_heap_str_free(_tmp_old);",
                                 stmt->value);
-                        if (rhs_is_alias_to_heap_var) {
+                        if (rhs_alias_copy) {
+                            fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
+                        } else if (rhs_is_alias_to_heap_var) {
                             fprintf(gen->output,
                                     " _heap_%s = _heap_%s; _heap_%s = 0; }\n",
                                     stmt->value, rhs->value, rhs->value);
@@ -3507,8 +3560,28 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             // Empty array literal gets NULL, not {}
                             fprintf(gen->output, " = NULL");
                         } else {
+                            /* Live-source alias copy (180-regression.md):
+                             * `dest = src` where src is a still-live heap-
+                             * tracked local must NOT steal src's buffer.
+                             * Take a binary-safe defensive copy so dest
+                             * owns an independent buffer and src is left
+                             * intact for its later reads. The matching
+                             * heap-flag block below sets `_heap_dest = 1`
+                             * and leaves `_heap_src` untouched. */
+                            ASTNode* di = stmt->children[0];
+                            int copy_alias = (di && di->type == AST_IDENTIFIER &&
+                                              di->value &&
+                                              is_heap_string_var(gen, di->value) &&
+                                              strcmp(di->value, stmt->value) != 0 &&
+                                              alias_source_must_copy(gen, di->value));
                             fprintf(gen->output, " = ");
-                            generate_expression(gen, stmt->children[0]);
+                            if (copy_alias) {
+                                fprintf(gen->output, "aether_uniform_heap_str(");
+                                generate_expression(gen, di);
+                                fprintf(gen->output, ", 0)");
+                            } else {
+                                generate_expression(gen, stmt->children[0]);
+                            }
                         }
                     }
 
@@ -3565,8 +3638,21 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             // here would be a duplicate-definition C
                             // error. Detect via is_heap_string_var and
                             // emit assignment-only when already hoisted.
+                            /* Live-source guard (180-regression.md): when
+                             * the source is read again after this alias,
+                             * a move would free its buffer out from under
+                             * it on the alias's next reassignment. The
+                             * `dest = aether_uniform_heap_str(src, 0)`
+                             * rewrite above already replaced the bare
+                             * alias with a defensive copy, so here the
+                             * dest simply owns its own copy and the source
+                             * keeps its flag untouched. */
+                            int alias_copied = (init_is_alias_to_heap_var &&
+                                                alias_source_must_copy(gen, alias_init->value));
                             if (is_heap_string_var(gen, stmt->value)) {
-                                if (init_is_alias_to_heap_var) {
+                                if (alias_copied) {
+                                    fprintf(gen->output, "_heap_%s = 1;\n", stmt->value);
+                                } else if (init_is_alias_to_heap_var) {
                                     fprintf(gen->output,
                                             "_heap_%s = _heap_%s; _heap_%s = 0;\n",
                                             stmt->value, alias_init->value, alias_init->value);
@@ -3575,7 +3661,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                             stmt->value, init_heap ? 1 : 0);
                                 }
                             } else {
-                                if (init_is_alias_to_heap_var) {
+                                if (alias_copied) {
+                                    fprintf(gen->output,
+                                            "int _heap_%s = 1; (void)_heap_%s;\n",
+                                            stmt->value, stmt->value);
+                                } else if (init_is_alias_to_heap_var) {
                                     fprintf(gen->output,
                                             "int _heap_%s = _heap_%s; (void)_heap_%s; _heap_%s = 0;\n",
                                             stmt->value, alias_init->value,
