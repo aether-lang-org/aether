@@ -176,6 +176,18 @@ Useful preparation:
 
 ## Secondary: Embedded Server For Other Languages
 
+> **First embedding slice landed (0.181.0):** `vcr_embed_abi_wish.md`
+> (repo root) is DONE — the PIC runtime (`--emit=lib --with=net` links a
+> `.so`), the port-0 `getsockname` fix + `http_server_port()`, and the
+> `aether_vcr_embed_*` C-ABI (`std/http/server/vcr/embed.ae`), each with
+> a C-driver acceptance test. servirtium-dotnet is the first consumer.
+>
+> **Record-mode chunked decoding fixed:**
+> `vcr_record_chunked_dechunk_wish.md` is DONE — `std.http.client` now
+> de-chunks `Transfer-Encoding: chunked` responses, so record tapes
+> store (and replay serves) the decoded payload rather than chunk
+> framing. Same shape as the gzip-normalize path below.
+
 Long-horizon goal, probably many months out: make the Aether VCR usable as an embedded Servirtium server behind test-framework wrappers for higher-level languages. The primary product shape should stay server-first: the system under test talks HTTP to an Aether VCR server, and the language wrapper gives the test author a fixture object that exposes a base URL, lifecycle, tape configuration, mutations, and diagnostics.
 
 Reference point:
