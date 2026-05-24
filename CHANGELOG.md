@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **A heap string passed to a wrapper that stores it (`f(v: string) {
+  map.put(m, k, v) }`) is no longer freed out from under the container**
+  (`compiler/codegen/codegen_stmt.c`, `compiler/codegen/codegen_expr.c`,
+  `compiler/codegen/codegen_internal.h`,
+  `tests/regression/test_map_value_storing_wrapper.ae`). The escape
+  analysis judged a callee parameter purely by its declared type:
+  `ptr`/unknown params escape (the callee may stash the pointer),
+  `string` params are read-only (`string.length`, `print`, …). But a
+  user wrapper with a `string`-typed value parameter that puts it into a
+  `std.map`/`std.list` *does* let it escape — so a heap local passed in
+  was never marked escaped, the caller's function-exit defer-free
+  reclaimed it, and the map slot dangled: a later `map.get` returned
+  freed (often overwritten) memory. Silent data corruption, no
+  diagnostic, liveness-sensitive (a `println` that kept the value live
+  hid it). Reported by aeb, whose `build.fail(ctx, reason)` stored the
+  reason into a nested status map and read garbage back later
+  (`heap-string-map-value-use-after-free-multi-tu.md`; reproduces
+  single-TU too, not only across cloned-import TUs as first thought).
+  Fix: `callee_param_escapes_via_body` looks through the callee's body —
+  if the parameter reaches an escaping sink (a `ptr`/`@retain` argument,
+  a container put, transitively another storing wrapper, or a return),
+  the argument escapes even when typed `string`, so the caller keeps the
+  buffer alive. Read-only wrappers are unaffected (the walk bottoms out
+  at externs like `string.length`, which don't escape). Recursion-guarded
+  and conservative on overflow (over-marking is a leak, never a UAF).
+
+### Upgrade notes
+
+This release marks *more* heap-string values as escaping: a value handed
+to a wrapper whose body stores it (into a map/list, a `@retain` sink, or
+a return) is no longer freed at the caller's scope exit. The previous
+compiler freed it there while the container still held the pointer — a
+use-after-free returning garbage on a later read.
+
+The change only ever *keeps a value alive longer*; it cannot turn
+working code into a crash. If your project worked around this by storing
+container values as literals only, or by routing reason/label text
+through disk markers (as aeb did), you can revisit those workarounds —
+the in-memory heap-value-into-container path is now read-safe. Note the
+value is kept alive by *not freeing it at the caller*: when the container
+doesn't own the value (a non-`@retain` `map_put_raw`/`list_add_raw`
+path), it now leaks rather than dangles — the safe direction, tracked
+separately in `heap-temp-into-owned-map-leak.md`. No pre-upgrade action
+is required.
+
 ## [0.183.0]
 
 ### Added

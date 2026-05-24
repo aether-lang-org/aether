@@ -2911,6 +2911,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                              * tradeoff that gate exists to manage. */
                             TypeKind param_kind = lookup_callee_param_kind(gen, func_name, ai);
                             if (call_arg_escapes(param_kind)) continue;
+                            /* A `string`-typed param of a storing
+                             * wrapper still escapes (it reaches a
+                             * container put / @retain sink in the
+                             * callee body) — don't drain the arg-temp,
+                             * or the map slot dangles. */
+                            if (callee_param_escapes_via_body(gen, func_name, ai, 0)) continue;
                             ad_arg_idx[ad_arg_count++] = ai;
                         }
                     }

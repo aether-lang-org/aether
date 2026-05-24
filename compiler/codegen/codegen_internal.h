@@ -65,6 +65,15 @@ int call_arg_escapes(TypeKind param_kind);
  * resolved or the index is out of range. Defined in codegen_stmt.c. */
 TypeKind lookup_callee_param_kind(CodeGenerator* gen, const char* func_name, int param_idx);
 
+/* Interprocedural escape: does parameter `param_idx` of user function
+ * `func_name` flow into an escaping sink within its body (a container
+ * put / `@retain` / `ptr` callee param, transitively, or a return)?
+ * Catches storing wrappers with `string`-typed value params that
+ * `call_arg_escapes` alone would misjudge as read-only — the map-value
+ * use-after-free. `depth` is the recursion guard (start at 0). Defined
+ * in codegen_stmt.c. */
+int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name, int param_idx, int depth);
+
 /* Normalise a callee name's dots to underscores, writing into `out`
    and returning `out`. The AST stores source-level callees in dotted
    form (`"string.concat"`) but stdlib externs, the generated C call

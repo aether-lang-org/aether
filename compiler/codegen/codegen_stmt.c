@@ -1745,6 +1745,85 @@ int call_arg_escapes(TypeKind param_kind) {
     }
 }
 
+/* Interprocedural escape: does parameter `param_idx` of user function
+ * `func_name` flow into an escaping sink within that function's body —
+ * i.e. is it passed (as a bare identifier) to a call-argument position
+ * that itself escapes (a `ptr`/unknown param, a `@retain` extern param,
+ * or, recursively, another user wrapper whose param escapes), or
+ * returned?
+ *
+ * This is the missing edge behind the map-value use-after-free
+ * (heap-string-map-value-use-after-free-multi-tu.md): a storing wrapper
+ * `store(m, v: string) { map.put(m, k, v) }` has a `string`-typed value
+ * parameter, which `call_arg_escapes` treats as read-only. Without this
+ * check the caller's heap local — passed as `v` — is never marked
+ * escaped, so it's freed at the caller's scope exit while the map still
+ * holds the pointer. Looking through the callee's body sees `v` reach
+ * `map.put`'s `ptr` value parameter and reports the escape, so the
+ * caller keeps the buffer alive.
+ *
+ * Conservative on recursion overflow (returns escape — over-marking is
+ * a leak, under-marking is a UAF). Handles only direct param→sink flow
+ * and param-return; aliasing the param through an intermediate local is
+ * not tracked (rare, and the safe direction would only be a leak). */
+static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
+                                     const char* pname, int depth);
+
+int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
+                                  int param_idx, int depth) {
+    if (!gen || !gen->program || !func_name || param_idx < 0) return 0;
+    if (depth > 8) return 1;  /* recursion / mutual-recursion guard */
+    char fn_norm[256];
+    const char* fn = codegen_normalise_callee(func_name, fn_norm, sizeof(fn_norm));
+    ASTNode* fn_def = find_function_definition_by_name(gen->program, fn);
+    if (!fn_def || param_idx >= fn_def->child_count) return 0;
+    ASTNode* param = fn_def->children[param_idx];
+    if (!param || !param->value ||
+        (param->type != AST_VARIABLE_DECLARATION &&
+         param->type != AST_PATTERN_VARIABLE)) {
+        return 0;
+    }
+    const char* pname = param->value;
+    ASTNode* body = NULL;
+    for (int i = fn_def->child_count - 1; i >= 0; i--) {
+        if (fn_def->children[i] && fn_def->children[i]->type == AST_BLOCK) {
+            body = fn_def->children[i];
+            break;
+        }
+    }
+    if (!body) return 0;
+    return param_escapes_in_subtree(gen, body, pname, depth);
+}
+
+static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
+                                    const char* pname, int depth) {
+    if (!node) return 0;
+    if (node->type == AST_RETURN_STATEMENT) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* r = node->children[i];
+            if (r && r->type == AST_IDENTIFIER && r->value &&
+                strcmp(r->value, pname) == 0) return 1;
+        }
+    }
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* a = node->children[i];
+            if (a && a->type == AST_IDENTIFIER && a->value &&
+                strcmp(a->value, pname) == 0) {
+                char fn_norm[256];
+                const char* fn = codegen_normalise_callee(node->value, fn_norm, sizeof(fn_norm));
+                if (is_retain_extern_param(gen, fn, i)) return 1;
+                if (call_arg_escapes(lookup_callee_param_kind(gen, node->value, i))) return 1;
+                if (callee_param_escapes_via_body(gen, node->value, i, depth + 1)) return 1;
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        if (param_escapes_in_subtree(gen, node->children[i], pname, depth)) return 1;
+    }
+    return 0;
+}
+
 static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
                                       const char* consumed_lhs) {
     if (!call) return;
@@ -1783,7 +1862,15 @@ static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
                     mark_escaped_string_var(gen, arg->value);
                 } else {
                     TypeKind k = lookup_callee_param_kind(gen, call->value, i);
-                    if (call_arg_escapes(k)) {
+                    /* A `string`-typed param looks read-only to
+                     * call_arg_escapes, but a storing wrapper
+                     * (`f(v: string) { map.put(m, k, v) }`) lets it
+                     * escape — look through the callee's body so the
+                     * heap local isn't freed at this scope's exit while
+                     * the callee has stashed its pointer (the map-value
+                     * UAF). */
+                    if (call_arg_escapes(k) ||
+                        callee_param_escapes_via_body(gen, call->value, i, 0)) {
                         mark_escaped_string_var(gen, arg->value);
                     }
                 }
