@@ -203,6 +203,24 @@ required pre-upgrade action.
   use-after-free, no double-free. Unblocks the avn closures-with-context
   builder rollout (`closures-with-context-builder-blockers.md`).
 
+## [0.180.0]
+
+### Fixed
+
+- **Trailing commas are now tolerated in `exports (…)` and selective
+  import lists** (`compiler/parser/parser.c`,
+  `tests/integration/trailing_comma_lists/`). `exports (a, b, c,)` and
+  `import mod (a, b,)` previously emitted a spurious
+  `error[E0100]: Expected IDENTIFIER, got RIGHT_PAREN` — the
+  `do { expect IDENTIFIER } while (match COMMA)` loop re-entered after
+  the trailing comma and hit `)`. Because the parser recovered and
+  exited 0, the failure was intermittent: any program importing
+  `std.http.proxy` (whose export list ends with a trailing comma)
+  printed the error, mis-located onto the *importer's* file path with
+  the proxy module's line number, and downstream build chains saw it as
+  a "nondeterministic E0100 on rebuild." Reported by the avnproxy port
+  (closures-with-context-builder-blockers.md, Blocker 1).
+
 ## [0.179.0]
 
 ### Added
@@ -223,19 +241,6 @@ required pre-upgrade action.
 
 ### Fixed
 
-- **Trailing commas are now tolerated in `exports (…)` and selective
-  import lists** (`compiler/parser/parser.c`,
-  `tests/integration/trailing_comma_lists/`). `exports (a, b, c,)` and
-  `import mod (a, b,)` previously emitted a spurious
-  `error[E0100]: Expected IDENTIFIER, got RIGHT_PAREN` — the
-  `do { expect IDENTIFIER } while (match COMMA)` loop re-entered after
-  the trailing comma and hit `)`. Because the parser recovered and
-  exited 0, the failure was intermittent: any program importing
-  `std.http.proxy` (whose export list ends with a trailing comma)
-  printed the error, mis-located onto the *importer's* file path with
-  the proxy module's line number, and downstream build chains saw it as
-  a "nondeterministic E0100 on rebuild." Reported by the avnproxy port
-  (closures-with-context-builder-blockers.md, Blocker 1).
 - **The series-collapse loop optimizer no longer folds a loop whose body
   consumes varargs** (`compiler/codegen/codegen_stmt.c`). `va_arg` /
   `va_start` / `va_end` are now treated as side-effecting in
@@ -271,6 +276,24 @@ required pre-upgrade action.
   reserved words — so only the `sizeof(` / `offsetof(` shape triggers
   them.
 
+### Fixed
+
+- **A `builder` and a plain function sharing a name are now rejected at
+  typecheck time** (`compiler/analysis/typechecker.c`,
+  `tests/integration/builder_function_collision_reject/`). Both mangle
+  to the same C symbol (`<module>_<name>`); previously one silently won
+  and every call dispatched to it — clean compile, clean link, wrong
+  function body, exit 0 (cost ~1h debugging an aeb `lib/ruby` build).
+  Now emits `duplicate definition of '<name>': a builder and a function
+  cannot share a name (both emit the same C symbol)` with the prior
+  definition's line. Narrowed to builder-vs-function: two plain
+  functions sharing a name remain legal (the multi-clause
+  pattern-matching form).
+
+## [0.177.0]
+
+### Added
+
 - **`std.mem.get_byte_sz` / `std.mem.set_byte_sz` provide size_t-indexed byte
   access** (`std/mem/module.ae`, `std/mem/aether_mem.c`,
   `tests/integration/std_mem_byte_access/`). These mirror `get_byte` /
@@ -286,18 +309,6 @@ required pre-upgrade action.
   middleware, so first matching mount wins.
 
 ### Fixed
-
-- **A `builder` and a plain function sharing a name are now rejected at
-  typecheck time** (`compiler/analysis/typechecker.c`,
-  `tests/integration/builder_function_collision_reject/`). Both mangle
-  to the same C symbol (`<module>_<name>`); previously one silently won
-  and every call dispatched to it — clean compile, clean link, wrong
-  function body, exit 0 (cost ~1h debugging an aeb `lib/ruby` build).
-  Now emits `duplicate definition of '<name>': a builder and a function
-  cannot share a name (both emit the same C symbol)` with the prior
-  definition's line. Narrowed to builder-vs-function: two plain
-  functions sharing a name remain legal (the multi-clause
-  pattern-matching form).
 
 - **`@c_import` struct pointers now emit `struct Name*` for typedef-less C
   headers** (`compiler/codegen/codegen.c`, `compiler/codegen/codegen_expr.c`,
