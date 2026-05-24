@@ -40,6 +40,14 @@ next version number before tagging the release.
   trailers. New end-to-end integration test drives a raw-socket chunked
   upstream through both the client and the VCR record→replay path.
 
+## [0.182.0]
+
+_Docs only._ CHANGELOG version-drift reconciliation — restored the
+`[0.180.0]` and `[0.177.0]` sections the release-rename had mislabeled
+when `[current]` was absent at tag time — plus
+`changelog-release-drift-note.md`, a handoff for the release-workflow
+owner. No code changes.
+
 ## [0.181.0]
 
 ### Added
