@@ -415,8 +415,15 @@ void http_request_free_raw(HttpRequest* req) {
     free(req);
 }
 
-/* Forward decl — defined below the static request() function. */
+/* Forward decls — defined below the static request() function. */
 static int header_already_set(HttpRequest* req, const char* name);
+static char* http_extract_response_header(const char* hdr_block, const char* name);
+/* Decode HTTP/1.1 chunked transfer-encoding. Returns a malloc'd decoded
+ * buffer (NUL-terminated; *out_len excludes the NUL) or NULL on malformed
+ * framing (caller then keeps the raw body). Binary-safe (copies by
+ * length). Defined below. */
+static char* http_dechunk(const char* in, size_t in_len, size_t* out_len);
+static int http_value_has_chunked(const char* v);
 
 // -----------------------------------------------------------------
 // Core request — operates on an HttpRequest. v1 wrappers build a
@@ -801,7 +808,29 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         }
 
         response->headers = string_new(full_response);
-        response->body = string_new_with_length(header_end + 4, body_bytes);
+
+        /* De-chunk a `Transfer-Encoding: chunked` body so consumers see
+         * the decoded payload, not the raw chunk framing
+         * (`13\r\n…\r\n0\r\n\r\n`). Without this, any unknown-length /
+         * streamed upstream response (no Content-Length) came back
+         * framed — corrupting e.g. VCR record-mode tapes
+         * (vcr_record_chunked_dechunk_wish.md). Gated on the header, so
+         * only chunked bodies — already garbled today — change shape;
+         * on malformed framing we keep the raw bytes. */
+        const char* body_start = header_end + 4;
+        char* te = http_extract_response_header(full_response, "Transfer-Encoding");
+        char* dechunked = NULL;
+        size_t dechunked_len = 0;
+        if (te && http_value_has_chunked(te)) {
+            dechunked = http_dechunk(body_start, body_bytes, &dechunked_len);
+        }
+        free(te);
+        if (dechunked) {
+            response->body = string_new_with_length(dechunked, dechunked_len);
+            free(dechunked);
+        } else {
+            response->body = string_new_with_length(body_start, body_bytes);
+        }
     } else {
         response->body = string_new_with_length(full_response, total_len);
     }
@@ -875,6 +904,69 @@ static char* http_extract_response_header(const char* hdr_block, const char* nam
         p = line_end + 1;
     }
     return NULL;
+}
+
+/* Case-insensitive: does the Transfer-Encoding value name `chunked`?
+ * `chunked` is the final (and in practice only) transfer coding we
+ * decode; a comma-list like "gzip, chunked" still matches. */
+static int http_value_has_chunked(const char* v) {
+    if (!v) return 0;
+    for (const char* p = v; *p; p++) {
+        if ((*p == 'c' || *p == 'C') &&
+            (p[1] == 'h' || p[1] == 'H') && (p[2] == 'u' || p[2] == 'U') &&
+            (p[3] == 'n' || p[3] == 'N') && (p[4] == 'k' || p[4] == 'K') &&
+            (p[5] == 'e' || p[5] == 'E') && (p[6] == 'd' || p[6] == 'D')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Decode HTTP/1.1 chunked transfer-encoding (RFC 7230 §4.1). `in` /
+ * `in_len` is the raw chunk-framed body; writes the decoded length to
+ * *out_len and returns a malloc'd buffer (NUL-terminated for
+ * convenience; *out_len excludes the NUL). Returns NULL on malformed
+ * framing so the caller can fall back to the raw bytes. Binary-safe:
+ * the payload is copied by length, never scanned for NUL. Chunk
+ * extensions (`<size>;name=val`) are skipped; trailing trailers after
+ * the terminating `0` chunk are ignored. */
+static char* http_dechunk(const char* in, size_t in_len, size_t* out_len) {
+    if (!in || !out_len) return NULL;
+    char* out = (char*)malloc(in_len + 1);   /* decoded payload <= input */
+    if (!out) return NULL;
+    size_t oi = 0;
+    size_t i = 0;
+    while (i < in_len) {
+        size_t sz = 0;
+        int saw_hex = 0;
+        while (i < in_len) {
+            char c = in[i];
+            int d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else break;
+            sz = sz * 16u + (size_t)d;
+            saw_hex = 1;
+            i++;
+        }
+        if (!saw_hex) { free(out); return NULL; }   /* expected a hex size */
+        /* Skip the rest of the size line (chunk extensions) to the LF. */
+        while (i < in_len && in[i] != '\n') i++;
+        if (i >= in_len) { free(out); return NULL; } /* no CRLF after size */
+        i++;                                          /* consume the '\n' */
+        if (sz == 0) break;                           /* terminating chunk */
+        if (sz > in_len - i) { free(out); return NULL; } /* truncated chunk */
+        memcpy(out + oi, in + i, sz);
+        oi += sz;
+        i += sz;
+        /* Consume the CRLF (or bare LF) that follows the chunk data. */
+        if (i < in_len && in[i] == '\r') i++;
+        if (i < in_len && in[i] == '\n') i++;
+    }
+    out[oi] = '\0';
+    *out_len = oi;
+    return out;
 }
 
 /* Resolve a Location-header value against a base URL. The Location

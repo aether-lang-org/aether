@@ -443,6 +443,7 @@ The runtime employs a tiered optimization strategy:
 ## Documentation
 
 - [Getting Started Guide](docs/getting-started.md) - Installation and first steps
+- [Bootstrapping from source (HEAD)](docs/bootstrap-from-source.md) - Build + install the toolchain and contrib straight from this repo (for consumers tracking HEAD or pre-package); humans and LLMs
 - [Language Tutorial](docs/tutorial.md) - Learn Aether syntax and concepts
 - [Language Reference](docs/language-reference.md) - Complete language specification
 - [Standard Library Reference](docs/stdlib-reference.md) - Full stdlib surface

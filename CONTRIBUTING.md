@@ -179,6 +179,27 @@ make test-asan
 
 ## Pull Request Requirements
 
+### Docs-only PRs: skip CI with `[skip actions]`
+
+If a PR (or its commits) changes **only** Markdown / prose — `*.md`,
+`docs/`, `CHANGELOG.md`, the README, comments-as-prose — and touches no
+code, tests, build, or workflow files (`.c`, `.h`, `.ae`, `Makefile`,
+`tools/`, `.github/`, `install.sh`), put **`[skip actions]`** in the
+commit message. GitHub reads that token (also `[skip ci]` / `[ci skip]`)
+from the branch's **HEAD commit** and skips the entire workflow run — so
+a one-line doc fix doesn't spin up the dozen-runner build matrix.
+
+```
+docs: fix typo in getting-started [skip actions]
+```
+
+This conserves GitHub Actions minutes. Two cautions: it must be the HEAD
+commit that carries the token (a docs-only PR with a later code commit
+should NOT skip), and only use it when the change genuinely cannot
+affect a build — anything under `.c` / `.ae` / `Makefile` / `tools/` /
+`.github/` must run the full suite below. Skipping CI means the PR shows
+no status checks, so a maintainer merges it on review alone.
+
 ### Before Submitting
 
 Run the full CI suite locally — this is the same suite that GitHub Actions runs:

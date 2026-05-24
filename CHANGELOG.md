@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`docs/bootstrap-from-source.md`** — a from-`HEAD` build/install guide
+  for *consumers* (not contributors): clone → `make ae && make install`
+  → optional `make contrib && make install-contrib` (built only where dev
+  libs are present), with an explicit "you don't need to run the test
+  suite to use Aether" note, the downstream `$(ae cflags)` /
+  `import contrib.X` link contract, and a dedicated LLM/automation
+  recipe. Linked from the README documentation index.
+
+### Fixed
+
+- **`std.http.client` now decodes `Transfer-Encoding: chunked` response
+  bodies** (`std/net/aether_http.c`,
+  `tests/integration/vcr_record_chunked/`). The client returned the raw
+  socket body including chunk framing (`13\r\nhello-from-upstream\r\n0\r\n\r\n`)
+  for any response without `Content-Length` — extremely common for
+  streamed / unknown-length upstreams. The new `http_dechunk` decoder
+  runs when the response carries `Transfer-Encoding: chunked`, so the
+  body is the decoded payload; gated on the header, so Content-Length
+  responses are untouched, and malformed framing falls back to the raw
+  bytes. This was corrupting VCR record-mode tapes (the recorder stores
+  the client's response body), where it surfaced
+  (`vcr_record_chunked_dechunk_wish.md`, reported by servirtium-dotnet):
+  the tape now stores — and replay serves — the decoded payload. The C
+  decoder is binary-safe (copies by length) and skips chunk extensions /
+  trailers. New end-to-end integration test drives a raw-socket chunked
+  upstream through both the client and the VCR record→replay path.
+
+## [0.182.0]
+
+_Docs only._ CHANGELOG version-drift reconciliation — restored the
+`[0.180.0]` and `[0.177.0]` sections the release-rename had mislabeled
+when `[current]` was absent at tag time — plus
+`changelog-release-drift-note.md`, a handoff for the release-workflow
+owner. No code changes.
+
 ## [0.181.0]
 
 ### Added
