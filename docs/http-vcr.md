@@ -128,7 +128,7 @@ they're part of the format, not markdown escaping.
 
 | Feature                           | Functions                                   |
 |-----------------------------------|---------------------------------------------|
-| **Replay** (load + serve)         | `vcr.load`, `vcr.eject`, `vcr.tape_length`  |
+| **Replay** (load + serve)         | `vcr.load`, `vcr.load_url` (tape fetched over HTTP), `vcr.eject`, `vcr.tape_length`  |
 | **Record server**                 | `vcr.load_record`, `vcr.eject_record`       |
 | **Direct capture + flush**        | `vcr.record`, `vcr.record_full`, `vcr.record_full_response`, `vcr.clear_recording`, `vcr.flush` |
 | **Re-record checks**              | `vcr.flush_or_check`, `vcr.flush_and_fail_if_changed` |
@@ -142,6 +142,32 @@ they're part of the format, not markdown escaping.
 Field selectors for mutations: `vcr.FIELD_PATH`,
 `vcr.FIELD_REQUEST_HEADERS`, `vcr.FIELD_REQUEST_BODY`,
 `vcr.FIELD_RESPONSE_HEADERS`, `vcr.FIELD_RESPONSE_BODY`.
+
+### Ignoring a header under strict matching
+
+Strict matching (`vcr.set_strict_headers(1)`, or any tape with a
+non-empty recorded request-headers block) compares the live request's
+headers against the tape and rejects anything **unexpected** with a 599.
+Real HTTP clients defeat this by attaching headers the tape never
+recorded — Go `net/http`, `java.net.http`, Rust `ureq`, and .NET
+`HttpClient` each send their own `User-Agent`, and some add `Accept`,
+`Accept-Encoding`, or `Connection`.
+
+The lever is `vcr.remove_header(vcr.FIELD_REQUEST_HEADERS, name)`: a
+request-header removal is applied to **both** the recorded expectation
+and the live request before they are compared, so naming a header there
+tells strict matching to *ignore* it:
+
+```aether
+vcr.set_strict_headers(1)
+vcr.remove_header(vcr.FIELD_REQUEST_HEADERS, "User-Agent")  // ignore it
+raw = vcr.load("api.tape", 8080)
+```
+
+`Host` is already stripped during normalization, so it never needs this.
+Embedding via the C ABI? `aether_vcr_embed_strict_ignore_common_headers()`
+does the whole volatile set (`User-Agent`, `Accept`, `Accept-Encoding`,
+`Connection`) in one call.
 
 Gzip policy: record mode treats `Content-Encoding: gzip` as a
 transport encoding. The caller receives the upstream gzip response,
@@ -242,6 +268,8 @@ where this implementation drifted from the spec).
 | `tests/integration/test_vcr_notes.ae`                  | Step 9 — per-interaction `[Note]` blocks |
 | `tests/integration/test_vcr_strict_match.ae`           | Step 10 — header mismatch surfaces via `last_error` |
 | `tests/integration/test_vcr_strict_match_body.ae`      | Step 10 — body mismatch surfaces via `last_error` |
+| `tests/integration/test_vcr_strict_ignore_headers.ae`  | Step 10 — `remove_header(REQUEST_HEADERS, …)` makes strict matching ignore a stock client's `User-Agent` |
+| `tests/integration/vcr_embed_abi/`                     | Embed C-ABI — disk + HTTP-sourced (`start_playback_url`) playback via `dlopen` |
 | `tests/integration/test_vcr_static_content.ae`         | Step 11 — `/api/*` from tape, `/assets/*` from disk |
 | `tests/integration/test_vcr_format_options.ae`         | Step 12 — `*GET*` + indented code blocks round-trip |
 | `contrib/climate_http_tests/test_climate_real.ae`      | Live network — real WorldBank climate API |

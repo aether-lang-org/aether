@@ -139,27 +139,25 @@ Remaining gap:
 
 - The first cut assumes decoded gzip bodies are textual enough for the current tape string storage. Full arbitrary binary decoded bodies should go through the existing `base64 below` path once the record-side emitter carries explicit body lengths end to end.
 
-## HTTP-Sourced Markdown Tapes
+## HTTP-Sourced Markdown Tapes — DONE
 
 Servirtium step 16 mentions markdown recordings sourced over HTTP.
-
-Potential API:
 
 ```aether
 vcr.load_url(tape_url, port) -> ptr
 ```
 
-Implementation:
-
-- Use `std.http.client` to fetch markdown.
-- Parse the fetched string using the existing parser path, probably by extracting a `parse_tape_text(label, markdown)` helper from `parse_tape_file()`.
-- Preserve filesystem `load()` as the default.
-
-Tests:
-
-- Local test server serves a tape markdown file.
-- `vcr.load_url()` replays it.
-- Transport failure returns null and sets/prints a useful load error.
+- Uses `std.http.client` to fetch markdown, then the shared
+  `parse_tape_text(label, markdown)` path; filesystem `load()` stays the
+  default.
+- Exposed over the C ABI as `aether_vcr_embed_start_playback_url`
+  (`vcr_embed_surface_and_strict_ignore_wish.md` §1).
+- A use-after-free here (the response was freed before the borrowed body
+  string was parsed, so the fetched tape parsed as empty) was fixed when
+  the embed test gave `load_url` its first coverage — `load_url` now
+  `string.copy`s the body before freeing the response.
+- Test: `tests/integration/vcr_embed_abi/` serves `smoke.tape` from a
+  local `python3 -m http.server` and replays it via the embed ABI.
 
 ## Compatibility Suite
 
@@ -187,6 +185,17 @@ Useful preparation:
 > de-chunks `Transfer-Encoding: chunked` responses, so record tapes
 > store (and replay serves) the decoded payload rather than chunk
 > framing. Same shape as the gzip-normalize path below.
+>
+> **Embed surface gaps + strict-ignore ergonomics:**
+> `vcr_embed_surface_and_strict_ignore_wish.md` is DONE — the embed ABI
+> now wraps `flush_or_check` (`aether_vcr_embed_stop_and_flush_or_check`,
+> the non-destructive `.actual`-sibling drift variant) and `load_url`
+> (`aether_vcr_embed_start_playback_url`); a one-call
+> `aether_vcr_embed_strict_ignore_common_headers()` drops the volatile
+> request headers (`User-Agent`/`Accept`/`Accept-Encoding`/`Connection`)
+> stock clients send; and embedded mode runs quiet (`vcr.set_quiet`) so
+> load diagnostics never hit the host's stdout — the reason stays on
+> `vcr_embed_last_error()` (falling back to `vcr.load_error()`).
 
 Long-horizon goal, probably many months out: make the Aether VCR usable as an embedded Servirtium server behind test-framework wrappers for higher-level languages. The primary product shape should stay server-first: the system under test talks HTTP to an Aether VCR server, and the language wrapper gives the test author a fixture object that exposes a base URL, lifecycle, tape configuration, mutations, and diagnostics.
 

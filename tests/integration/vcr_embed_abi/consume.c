@@ -25,10 +25,12 @@
 #include <sys/socket.h>
 
 typedef void* (*start_playback_fn)(const char*, const char*, const char*, int);
+typedef void* (*start_playback_url_fn)(const char*, const char*, const char*, int);
 typedef int   (*port_fn)(void*);
 typedef char* (*base_url_fn)(void*, const char*);
 typedef int   (*tape_length_fn)(void);
 typedef int   (*last_kind_fn)(void);
+typedef char* (*strict_ignore_fn)(void);
 typedef void  (*stop_fn)(void*);
 typedef void  (*free_string_fn)(char*);
 
@@ -113,6 +115,38 @@ int main(int argc, char** argv) {
     }
 
     stop(srv);
+
+    /* New surface (vcr_embed_surface_and_strict_ignore_wish.md): assert
+     * the added exports resolve under --emit=lib, and — when a tape URL
+     * is supplied (argv[3], a local http.server serving smoke.tape) —
+     * drive a real start_playback_url round-trip. */
+    strict_ignore_fn strict_ignore =
+        (strict_ignore_fn)sym(h, "aether_vcr_embed_strict_ignore_common_headers");
+    char* ig = strict_ignore();          /* no server needed; "" on success */
+    if (ig && ig[0] != '\0') {
+        fprintf(stderr, "FAIL: strict_ignore_common_headers() returned error: %s\n", ig);
+        return 1;
+    }
+    free_string(ig);
+    /* Presence under the C ABI is the contract servirtium bindings rely on. */
+    (void)sym(h, "aether_vcr_embed_stop_and_flush_or_check");
+    start_playback_url_fn start_playback_url =
+        (start_playback_url_fn)sym(h, "aether_vcr_embed_start_playback_url");
+
+    if (argc >= 4) {
+        void* usrv = start_playback_url("url-smoke", argv[3], "127.0.0.1", 0);
+        if (!usrv) { fprintf(stderr, "FAIL: start_playback_url(%s) returned NULL\n", argv[3]); return 1; }
+        int uport = get_port(usrv);
+        if (uport <= 0) { fprintf(stderr, "FAIL: url-mode port() = %d\n", uport); return 1; }
+        char uresp[8192];
+        if (http_get(uport, "/ok", uresp, sizeof(uresp)) <= 0 || !strstr(uresp, "ok-body")) {
+            fprintf(stderr, "FAIL: url-mode GET /ok did not return recorded body\n--- response:\n%s\n", uresp);
+            return 1;
+        }
+        stop(usrv);
+        printf("OK: VCR embed start_playback_url round-trip via dlopen (tape fetched over HTTP)\n");
+    }
+
     dlclose(h);
     printf("OK: VCR embed playback round-trip via dlopen (port, base_url, GET /ok, last_kind)\n");
     return 0;
