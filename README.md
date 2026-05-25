@@ -100,10 +100,18 @@ See [Performance Benchmarks](docs/performance-benchmarks.md) for methodology and
 
 ### Install
 
-**Linux / macOS — one-line install:**
+**Linux / macOS — remote one-liner (no clone):**
 
 ```bash
-git clone https://github.com/nicolasmd87/aether.git
+curl -sSL https://raw.githubusercontent.com/aether-lang-org/aether/main/get.sh | sh
+```
+
+Fetches a pinned source tarball, builds the toolchain (Aether compiles to C, so the only prerequisites are a C compiler + GNU make — no tests run), and installs to `~/.local` (sudo-free). Pin a version with `AETHER_REF=v0.185.0`, or change the prefix with `PREFIX=/usr/local` (system-wide; needs sudo). Add `~/.local/bin` to your `PATH` if it isn't already.
+
+**Linux / macOS — full clone install** (editor extension, `ae version` management, shell-PATH setup, `~/.aether` layout):
+
+```bash
+git clone https://github.com/aether-lang-org/aether.git
 cd aether
 ./install.sh
 ```

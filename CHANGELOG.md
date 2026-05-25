@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`get.sh` — remote one-liner installer** (`get.sh`, `README.md`).
+  `curl -sSL https://raw.githubusercontent.com/aether-lang-org/aether/main/get.sh | sh`
+  fetches a pinned source tarball, builds the toolchain, and `make
+  install`s it — no clone, no tests. Mirrors aeb's installer: env knobs
+  `AETHER_REF` (tag/branch/SHA; default = latest `vX.Y.Z` tag, falls back
+  to `main`), `PREFIX` (default `~/.local`, sudo-free), `CC`. Prereqs are
+  just a C compiler + GNU make + curl/tar (Aether compiles to C, so no
+  toolchain bootstrap dependency). Complements the existing clone-time
+  `install.sh` (editor extension, `ae version` management, `~/.aether`
+  layout) and `docs/bootstrap-from-source.md` (from-HEAD developer flow).
+
 ## [0.185.0]
 
 ### Changed
