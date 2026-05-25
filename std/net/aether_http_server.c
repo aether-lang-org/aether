@@ -1,4 +1,8 @@
 #include "aether_http_server.h"
+#if !defined(_WIN32)
+#include <signal.h>    /* pthread_sigmask / sigset_t for the embedded-server signal mask */
+#include <pthread.h>
+#endif
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/aether_resource_caps.h"
 
@@ -3317,10 +3321,12 @@ int http_server_start_raw(HttpServer* server) {
 
         server->accept_thread_count = n_threads;
 
-        printf("Server running at http://%s:%d (%d accept threads, SO_REUSEPORT)\n",
-               server->host, server->port, n_threads);
-        printf("Press Ctrl+C to stop\n\n");
-        fflush(stdout);
+        if (!server->background) {
+            printf("Server running at http://%s:%d (%d accept threads, SO_REUSEPORT)\n",
+                   server->host, server->port, n_threads);
+            printf("Press Ctrl+C to stop\n\n");
+            fflush(stdout);
+        }
 
         for (int i = 1; i < n_threads; i++) {
             AcceptThreadCtx* ctx = malloc(sizeof(AcceptThreadCtx));
@@ -3372,9 +3378,11 @@ int http_server_start_raw(HttpServer* server) {
         int flags = fcntl(server->socket_fd, F_GETFL, 0);
         if (flags >= 0) fcntl(server->socket_fd, F_SETFL, flags | O_NONBLOCK);
 
-        printf("Server running at http://%s:%d\n", server->host, server->port);
-        printf("Press Ctrl+C to stop\n\n");
-        fflush(stdout);
+        if (!server->background) {
+            printf("Server running at http://%s:%d\n", server->host, server->port);
+            printf("Press Ctrl+C to stop\n\n");
+            fflush(stdout);
+        }
 
         accept_poller_loop(server, server->socket_fd, &server->accept_poller);
 
@@ -3390,9 +3398,11 @@ int http_server_start_raw(HttpServer* server) {
             return -1;
         }
 
-        printf("Server running at http://%s:%d\n", server->host, server->port);
-        printf("Press Ctrl+C to stop\n\n");
-        fflush(stdout);
+        if (!server->background) {
+            printf("Server running at http://%s:%d\n", server->host, server->port);
+            printf("Press Ctrl+C to stop\n\n");
+            fflush(stdout);
+        }
 
         /* on_start lifecycle hook (#260 Tier 3). Fires once after
          * the listen socket is bound, before the accept loop runs.
@@ -3448,14 +3458,40 @@ int http_server_start_raw(HttpServer* server) {
 
 static void* http_server_background_main(void* arg) {
     HttpServer* server = (HttpServer*)arg;
+#if !defined(_WIN32)
+    /* Embedded/background server: block async signals on this thread and
+     * every thread it spawns (the accept thread + pool workers inherit
+     * this mask). The host application — not the server's worker threads
+     * — should receive process-directed signals (SIGINT/SIGTERM, and
+     * notably SIGURG, which Go-style supervisors use for preemption). A
+     * library server intercepting them is a footgun, especially when
+     * left running in the background under a sandboxed harness
+     * (std-http-server-background-sigurg-poisons-harness.md). The
+     * synchronous fault signals (SEGV/FPE/BUS/ABRT/TRAP) are deliberately
+     * NOT blocked — blocking a signal raised by the thread itself is
+     * undefined, and the opt-in crash handler must still see them. */
+    sigset_t block;
+    sigfillset(&block);
+    sigdelset(&block, SIGSEGV);
+    sigdelset(&block, SIGFPE);
+    sigdelset(&block, SIGBUS);
+    sigdelset(&block, SIGABRT);
+    sigdelset(&block, SIGTRAP);
+    sigdelset(&block, SIGILL);
+    pthread_sigmask(SIG_BLOCK, &block, NULL);
+#endif
     http_server_start_raw(server);
     return NULL;
 }
 
 int http_server_start_background_raw(HttpServer* server) {
     if (!server) return -1;
+    /* Mark embedded mode before the thread starts so http_server_start_raw
+     * suppresses the interactive "Press Ctrl+C to stop" banner. */
+    server->background = 1;
     pthread_t tid;
     if (pthread_create(&tid, NULL, http_server_background_main, server) != 0) {
+        server->background = 0;
         return -1;
     }
     pthread_detach(tid);

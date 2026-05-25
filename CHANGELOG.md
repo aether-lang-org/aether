@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **A backgrounded `std.http.server` now runs as a quiet embedded
+  server** (`std/net/aether_http_server.c`, `std/net/aether_http_server.h`,
+  `tests/integration/http_server_background_quiet/`). Started via
+  `http_server_start_background_raw` (the embedding / `ae`-CLI background
+  path), the server no longer prints the interactive `Server running at
+  …` / `Press Ctrl+C to stop` banner — it's driven by
+  `http_server_stop`, not a TTY — and its detached accept/worker threads
+  now block async signals (`pthread_sigmask`; SIGURG, SIGINT, SIGTERM,
+  SIGPIPE, …; synchronous fault signals SEGV/FPE/BUS/ABRT/TRAP/ILL are
+  left deliverable). So a library/embedded server's worker threads never
+  intercept a process-directed signal meant for the host application.
+  Foreground servers (`http_server_start_raw` / `ae run` of a server)
+  are unchanged — banner and signal handling as before. Reported by aeb
+  (`std-http-server-background-sigurg-poisons-harness.md`): a
+  backgrounded server left lingering under a sandboxed agent/CI harness
+  poisoned the *foreground* command's exit accounting (SIGURG → 144).
+  Note the exit-144 itself is the supervising harness's accounting of a
+  lingering child process, not Aether crashing — Aether installs no
+  SIGURG/SIGINT handler; this change removes the interactive-CLI
+  behaviours from the embedded path (the requested quiet/embedded mode),
+  but a harness should still *reap* a backgrounded server rather than
+  leave it running past the command.
+
 ## [0.184.0]
 
 ### Fixed

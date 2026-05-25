@@ -1,0 +1,45 @@
+// A backgrounded std.http.server must behave like a library, not an
+// interactive CLI: no "Server running…/Press Ctrl+C to stop" banner on
+// stdout (std-http-server-background-sigurg-poisons-harness.md). It must
+// still actually serve, and stop cleanly on http_server_stop. The driving
+// shell test greps this program's stdout: it should contain BG-OK and
+// must NOT contain the interactive banner.
+//
+// Self-reaping: the server is stopped before the program exits, so no
+// lingering background server is left for a supervising harness to trip
+// over.
+
+import std.http
+import std.http.client
+import std.io
+import std.string
+
+extern http_server_start_background_raw(server: ptr) -> int
+extern http_server_port(server: ptr) -> int
+extern sleep(ms: int)
+extern exit(code: int)
+
+main() {
+    s = http.server_create(0)
+    if s == 0 { println("FAIL: server_create"); exit(1) }
+    http.server_set_host(s, "127.0.0.1")
+    rc = http_server_start_background_raw(s)
+    if rc < 0 { println("FAIL: start_background"); exit(1) }
+    sleep(200)
+
+    p = http_server_port(s)
+    if p <= 0 { println("FAIL: port unresolved"); http.server_stop(s); exit(1) }
+
+    // Prove it actually serves (the default 404 route still responds).
+    req = client.request("GET", "http://127.0.0.1:${p}/")
+    client.set_timeout(req, 3)
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if err != "" { println("FAIL: probe ${err}"); http.server_stop(s); exit(1) }
+    client.response_free(resp)
+
+    http.server_stop(s)
+    sleep(100)
+    println("BG-OK")
+    exit(0)
+}
