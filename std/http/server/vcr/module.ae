@@ -135,6 +135,7 @@ exports (
     FIELD_PATH, FIELD_RESPONSE_BODY, FIELD_REQUEST_HEADERS,
     FIELD_REQUEST_BODY, FIELD_RESPONSE_HEADERS,
     load, load_url, eject, tape_length,
+    set_quiet, load_error,
     load_record, eject_record,
     record, clear_recording, flush, flush_or_check, flush_and_fail_if_changed,
     redact, clear_redactions, unredact, clear_unredactions,
@@ -166,6 +167,8 @@ extern http_response_free(resp: ptr)
 // parse_tape_file now reads + parses, calling vcr_aether_*
 // setters to populate the C-side tape storage.
 extern vcr_load_err() -> string                       // populated by vcr_aether_set_load_err on parse failure
+extern vcr_set_quiet(on: int)                          // suppress load-path stdout diagnostics (embed ABI sets this)
+extern vcr_quiet() -> int                              // 1 when quiet mode is on
 extern vcr_tape_length() -> int
 extern vcr_dispatch(req: ptr, res: ptr, ud: ptr)     // server handler — matches next entry, emits response
 extern vcr_register_static_routes(server: ptr)         // registers configured static-content mounts
@@ -320,19 +323,48 @@ extern string_concat(a: string, b: string) -> string
 //
 // Returns null on tape parse failure or port-bind failure; the
 // reason is printed via println before the null return.
+// Load-path diagnostic. Suppressed under quiet mode (set by the embed
+// ABI) so an embedded VCR never writes to the host's stdout; the same
+// reason stays retrievable via load_error() / last_error(). Foreground
+// `import std.http.server.vcr` callers (quiet off) still see the line.
+diag(msg: string) {
+    // Record the reason so load_error() reflects every load failure
+    // (parse, fetch, and bind), not just parse errors — an embedded
+    // host needs it when stdout is suppressed.
+    vcr_aether_set_load_err(msg)
+    if vcr_quiet() == 0 {
+        println(msg)
+    }
+}
+
+// Suppress (1) or restore (0) the load-path stdout diagnostics above.
+// Embedded hosts (the embed ABI) turn this on so the library stays
+// silent; the failure reason is still available via load_error().
+set_quiet(on: int) {
+    vcr_set_quiet(on)
+}
+
+// The most recent load / load_url / load_record failure reason ("" if
+// none). Same text that the diagnostics print in non-quiet mode, so an
+// embedded host can surface *why* a start returned null without parsing
+// stdout. Populated by the parser via vcr_aether_set_load_err.
+load_error() -> string {
+    return vcr_load_err()
+}
+
 load(tape_path: string, port: int) -> ptr {
     // Aether-side parser. The pre-port C parser (still shipped as
     // vcr_load_tape) is unused by this surface but retained as a
     // fallback for the duration of the C→Aether migration.
     perr = parse_tape_file(tape_path)
     if perr != "" {
-        println("vcr.load: ${perr}")
+        diag("vcr.load: ${perr}")
         return null
     }
 
     raw = http.server_create(port)
     if raw == 0 {
-        println("vcr.load: server_create on port ${port} returned 0")
+        diag("vcr.load: server_create on port ${port} returned 0")
         return null
     }
 
@@ -357,31 +389,35 @@ load_url(tape_url: string, port: int) -> ptr {
     // Fetch the tape over HTTP using raw client (30s timeout)
     resp = http_get_with_timeout_raw(tape_url, 30000)
     if resp == null {
-        println("vcr.load_url: failed to fetch ${tape_url}")
+        diag("vcr.load_url: failed to fetch ${tape_url}")
         return null
     }
 
     err = http_response_error(resp)
     if err != "" && string.length(err) > 0 {
-        println("vcr.load_url: ${err}")
+        diag("vcr.load_url: ${err}")
         http_response_free(resp)
         return null
     }
 
-    tape_markdown = http_response_body(resp)
+    // http_response_body returns a pointer borrowed from resp; copy it
+    // out before freeing the response, or the parser below reads freed
+    // memory (the bug the embed-ABI start_playback_url test caught — the
+    // fetched tape would parse as empty: "no '## Interaction ' headers").
+    tape_markdown = string.copy(http_response_body(resp))
     http_response_free(resp)
 
     // Parse the fetched markdown using the same path as load()
     // The parser populates the C-side tape storage via vcr_aether_* calls
     perr = parse_tape_text("http-sourced", tape_markdown)
     if perr != "" {
-        println("vcr.load_url: ${perr}")
+        diag("vcr.load_url: ${perr}")
         return null
     }
 
     raw = http.server_create(port)
     if raw == 0 {
-        println("vcr.load_url: server_create on port ${port} returned 0")
+        diag("vcr.load_url: server_create on port ${port} returned 0")
         return null
     }
 
@@ -412,13 +448,13 @@ load_record(tape_path: string, upstream_base: string, port: int) -> ptr {
 
     raw = http.server_create(port)
     if raw == 0 {
-        println("vcr.load_record: server_create on port ${port} returned 0")
+        diag("vcr.load_record: server_create on port ${port} returned 0")
         return null
     }
 
     ok = vcr_register_record_routes(raw, upstream_base)
     if ok == 0 {
-        println("vcr.load_record: ${vcr_load_err()}")
+        diag("vcr.load_record: ${vcr_load_err()}")
         http.server_stop(raw)
         return null
     }
@@ -612,6 +648,20 @@ clear_unredactions() {
 // request-header removals to both the recorded expectation and the
 // live incoming request before strict matching. Header-name matching
 // is case-insensitive and exact.
+//
+// IGNORE-A-HEADER-WHEN-MATCHING: because the removal is applied to
+// *both* sides before comparison, this is also the lever for telling
+// strict matching to ignore a header. Real HTTP clients attach headers
+// the tape never recorded — Go/Java/Rust/.NET each add their own
+// `User-Agent`, `Accept`, `Accept-Encoding`, `Connection` — and strict
+// matching (correctly) rejects them as unexpected. Drop them from the
+// comparison with, e.g.:
+//
+//   vcr.remove_header(vcr.FIELD_REQUEST_HEADERS, "User-Agent")
+//
+// (Host is already stripped during normalization, so it never needs
+// this.) The embed ABI bundles the common volatile set into one call,
+// vcr_embed_strict_ignore_common_headers().
 remove_header(field: int, name: string) -> string {
     ok = vcr_add_header_removal(field, name)
     if ok == 0 { return vcr_load_err() }

@@ -35,9 +35,34 @@ fi
 if ! gcc "$SCRIPT_DIR/consume.c" -ldl -o "$TMPDIR/consume" 2>"$TMPDIR/gcc.log"; then
     echo "--- gcc log:"; cat "$TMPDIR/gcc.log"; fail "could not compile consume.c"
 fi
-if ! OUT="$("$TMPDIR/consume" "$TMPDIR/libvcr$LIB_EXT" "$SCRIPT_DIR/smoke.tape" 2>&1)"; then
+# If python3 is available, also serve the tape over HTTP so the driver
+# can exercise aether_vcr_embed_start_playback_url (tape fetched over the
+# network, not from disk). Skipped gracefully where python3 is absent.
+TAPE_URL=""
+PY_PID=""
+if command -v python3 >/dev/null 2>&1; then
+    ( cd "$SCRIPT_DIR" && exec python3 -m http.server 18137 --bind 127.0.0.1 ) \
+        >/dev/null 2>&1 &
+    PY_PID=$!
+    trap 'rm -rf "$TMPDIR"; [ -n "$PY_PID" ] && kill "$PY_PID" 2>/dev/null' EXIT
+    # Wait for the static server to come up.
+    i=0
+    while [ $i -lt 30 ]; do
+        if curl -fsS "http://127.0.0.1:18137/smoke.tape" >/dev/null 2>&1; then break; fi
+        i=$((i + 1)); sleep 0.1
+    done
+    TAPE_URL="http://127.0.0.1:18137/smoke.tape"
+fi
+
+if ! OUT="$("$TMPDIR/consume" "$TMPDIR/libvcr$LIB_EXT" "$SCRIPT_DIR/smoke.tape" $TAPE_URL 2>&1)"; then
     echo "$OUT"; fail "VCR embed C driver reported an error"
 fi
 echo "$OUT" | grep -q "^OK:" || { echo "$OUT"; fail "unexpected driver output"; }
 
-echo "  [PASS] vcr_embed_abi: embed.ae --emit=lib playback round-trips via dlopen"
+if [ -n "$TAPE_URL" ]; then
+    echo "$OUT" | grep -q "start_playback_url round-trip" \
+        || { echo "$OUT"; fail "start_playback_url round-trip did not run"; }
+    echo "  [PASS] vcr_embed_abi: --emit=lib playback round-trips via dlopen (disk + HTTP tape)"
+else
+    echo "  [PASS] vcr_embed_abi: --emit=lib playback round-trips via dlopen (disk tape; python3 absent, URL mode skipped)"
+fi

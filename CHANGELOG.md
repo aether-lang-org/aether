@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **VCR embed ABI: two missing wraps + strict-ignore ergonomics**
+  (`std/http/server/vcr/embed.ae`, `docs/http-vcr.md`,
+  `vcr_embed_surface_and_strict_ignore_wish.md`). The
+  `aether_vcr_embed_*` C ABI now exposes
+  `start_playback_url` (replay a tape fetched over HTTP) and
+  `stop_and_flush_or_check` (the non-destructive `.actual`-sibling drift
+  variant), reaching parity with the `vcr` module surface the four
+  Servirtium bindings wrap. New `aether_vcr_embed_strict_ignore_common_headers()`
+  drops the volatile request headers stock HTTP clients send
+  (`User-Agent`, `Accept`, `Accept-Encoding`, `Connection`) from strict
+  matching in one call — the underlying lever,
+  `vcr.remove_header(FIELD_REQUEST_HEADERS, name)`, is now documented as
+  the "ignore this header when matching" mechanism.
+
+### Fixed
+
+- **`vcr.load_url` use-after-free** (`std/http/server/vcr/module.ae`).
+  It freed the HTTP response before parsing the body string borrowed from
+  it, so an HTTP-sourced tape parsed as empty ("no '## Interaction '
+  headers"). The body is now copied before the response is freed. Caught
+  by `load_url`'s first test coverage (the embed `start_playback_url`
+  round-trip).
+
+### Changed
+
+- **Embedded VCR runs quiet** (`std/http/server/vcr/{aether_vcr.c,module.ae,embed.ae}`).
+  The embed ABI enables a quiet mode (`vcr.set_quiet`) so an embedded
+  library never writes `vcr.load*` diagnostics to the host's stdout; the
+  failure reason stays retrievable via `vcr_embed_last_error()` (now
+  falling back to the new `vcr.load_error()`). Foreground `import
+  std.http.server.vcr` callers are unchanged (quiet defaults off). The
+  interactive "Press Ctrl+C" banner was already silenced for background
+  servers in 0.185.0.
+
 ## [0.186.0]
 
 ### Added

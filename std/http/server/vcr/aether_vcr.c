@@ -180,6 +180,13 @@ static int          g_tape_cap   = 0;
 static int          g_tape_cursor = 0;
 static char*        g_tape_err   = NULL;
 
+/* Quiet mode: when set, the Aether vcr surface suppresses its load /
+ * load_url / load_record diagnostic prints to stdout. The embed ABI
+ * turns this on (an embedded library should never write to the host's
+ * stdout); the reason is still retrievable via vcr_load_err(). Default
+ * 0 so the foreground `import std.http.server.vcr` surface is unchanged. */
+static int          g_vcr_quiet  = 0;
+
 /* Pending note staged via vcr_note() — attaches to the next
  * vcr_record_interaction() call, then clears. NULL when nothing
  * is staged. */
@@ -446,6 +453,11 @@ void vcr_aether_set_resp_headers(int index, const char* headers);
 const char* vcr_load_err(void) {
     return g_tape_err ? g_tape_err : "";
 }
+
+/* Quiet mode toggle — see g_vcr_quiet. Set by the embed ABI so an
+ * embedded VCR doesn't print load diagnostics to the host's stdout. */
+void vcr_set_quiet(int on) { g_vcr_quiet = on ? 1 : 0; }
+int  vcr_quiet(void)       { return g_vcr_quiet; }
 
 int vcr_tape_length(void) {
     return g_tape_n;
