@@ -590,6 +590,34 @@ SIGTERM handler.
 
 ---
 
+## Embedded / background servers
+
+`http_server_start_background_raw(server)` runs the accept loop on a
+detached thread and returns immediately, so a host can keep serving
+while doing other work (and stop it later with `http_server_stop`).
+This is the *embedded* mode and behaves like a library, not a CLI:
+
+- **No banner.** It does not print `Server running at …` /
+  `Press Ctrl+C to stop` — an embedded server is controlled by
+  `http_server_stop`, not a terminal. (Foreground `server_start` still
+  prints the banner.)
+- **Quiet signals.** Its detached accept/worker threads block async
+  signals (`pthread_sigmask` — SIGURG, SIGINT, SIGTERM, SIGPIPE, …), so
+  the server's threads never intercept a process-directed signal meant
+  for the host application; the synchronous fault signals
+  (SEGV/FPE/BUS/…) stay deliverable.
+
+**Reap it — don't leave it lingering.** A backgrounded server left alive
+past the end of a command is a finite process the surrounding harness
+(a sandboxed agent, CI runner, build tool) must still account for; some
+supervisors charge the *foreground* command a non-zero/SIGURG exit for a
+lingering multi-threaded child. Always tear an embedded server down
+explicitly — `http_server_stop` (or `server_shutdown_graceful`), then
+let the process exit — rather than orphaning it
+(`std-http-server-background-sigurg-poisons-harness.md`).
+
+---
+
 ## Lifecycle hooks
 
 ```aether

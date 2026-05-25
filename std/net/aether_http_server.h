@@ -213,6 +213,13 @@ typedef struct HttpServer {
     // Accept-side I/O poller: wait for client data before dispatching to worker
     AetherIoPoller accept_poller;   // Platform poller for single-accept mode
 
+    // Embedded/background mode: set by http_server_start_background_raw.
+    // Quiets the interactive "Server running…/Press Ctrl+C" banner (an
+    // embedded server is driven by http_server_stop, not a TTY) and makes
+    // the detached accept/worker threads block async signals so they never
+    // intercept a process-directed signal meant for the host application.
+    // std-http-server-background-sigurg-poisons-harness.md
+    int background;
     // Multi-accept: one accept thread per core with SO_REUSEPORT (opt-in)
     int multi_accept;               // 0 = single accept (default), 1 = SO_REUSEPORT multi-accept
     int accept_thread_count;
