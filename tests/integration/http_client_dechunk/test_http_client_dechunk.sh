@@ -1,9 +1,12 @@
 #!/bin/sh
-# Integration test: VCR record mode against a Transfer-Encoding: chunked
-# upstream (vcr_record_chunked_dechunk_wish.md). A raw-socket C upstream
-# replies chunked (the Aether server can't — it always sets
-# Content-Length); the Aether driver asserts the client de-chunks and
-# that record→replay round-trips the decoded payload (not chunk framing).
+# Integration test: std.http.client transparently de-chunks a
+# Transfer-Encoding: chunked response (vcr_record_chunked_dechunk_wish.md,
+# stdlib-client half). A raw-socket C upstream replies chunked (the Aether
+# server can't — it always sets Content-Length); the Aether driver asserts
+# the client returns the decoded payload, not chunk framing.
+#
+# Split out of the former vcr_record_chunked test when the VCR engine moved
+# to the servirtium-vcr monorepo (the record/replay half lives there now).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -11,7 +14,7 @@ AE="$ROOT/build/ae"
 
 case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*|Windows_NT)
-        echo "  [SKIP] vcr_record_chunked on Windows (raw POSIX sockets)"
+        echo "  [SKIP] http_client_dechunk on Windows (raw POSIX sockets)"
         exit 0
         ;;
 esac
@@ -38,10 +41,10 @@ while [ "$i" -lt 100 ]; do
 done
 [ -n "$PORT" ] || fail "chunked upstream did not report a port"
 
-OUT="$(UPSTREAM_PORT="$PORT" AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/vcr_chunked.ae" 2>&1)"
+OUT="$(UPSTREAM_PORT="$PORT" AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/dechunk.ae" 2>&1)"
 if ! echo "$OUT" | grep -q "^PASS"; then
     echo "$OUT"
-    fail "VCR chunked record/replay assertions did not pass"
+    fail "std.http.client de-chunk assertion did not pass"
 fi
 
-echo "  [PASS] vcr_record_chunked: client de-chunks + record/replay store decoded payload"
+echo "  [PASS] http_client_dechunk: std.http.client de-chunks Transfer-Encoding: chunked"

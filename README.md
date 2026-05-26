@@ -457,7 +457,7 @@ The runtime employs a tiered optimization strategy:
 - [Standard Library Reference](docs/stdlib-reference.md) - Full stdlib surface
 - [HTTP Server](docs/http-server.md) - TLS, HTTP/2, middleware, health probes, metrics, graceful shutdown
 - [Reverse Proxy](docs/http-reverse-proxy.md) - `std.http.proxy` upstream pool, load balancing, health, cache, circuit breaker
-- [HTTP Record/Replay (VCR)](docs/http-vcr.md) - `std.http.server.vcr` Servirtium-format record/replay for HTTP tests
+- [HTTP Record/Replay (VCR)](docs/http-vcr.md) - moved to the [`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr) monorepo; no longer in the Aether stdlib
 - [Install Layout](docs/install-layout.md) - What ships in `~/.aether`, MANIFEST format, downstream-link contract
 - [Module System](docs/module-system-design.md) - `import`/`exports`, PATH-style `--lib` search chain, selective imports, package layout
 - [Config-IS-Code Diagnostics (`ae help`)](docs/cic-help.md) - Offline heuristic diagnostics for closure-DSL config scripts (Levenshtein, YAML→call form, missing-import suggestions, `--fix`, `--json`, optional `--llm`)

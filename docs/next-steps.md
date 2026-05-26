@@ -291,6 +291,11 @@ issue when scheduled):
 
 ## VCR recorder — delivered first cut
 
+> **Update (moved out, 2026-05):** the VCR engine has since been lifted
+> out of the Aether stdlib into the
+> [`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr)
+> monorepo. The notes below are historical (it once lived in `std`).
+
 `std.http.server.vcr` now has record mode in `std`:
 `vcr.load_record(tape_path, upstream_base, port)` binds a normal HTTP
 server, forwards inbound requests upstream using `std.http.client`,
@@ -315,6 +320,11 @@ section: HTTP-sourced tapes, compatibility-suite work, richer mutation
 phases, and eventual embedded wrapper APIs for other languages.
 
 ## VCR — keep the C-API independently consumable
+
+> **Resolved (2026-05):** this section anticipated VCR moving "out to its
+> own repo" — it now has, to
+> [`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr),
+> which owns the `aether_vcr.c` C-API and the language bindings. Historical.
 
 The current driver for VCR in Aether is concrete: exercising it
 drives the design and hardening of `std.http.server` and

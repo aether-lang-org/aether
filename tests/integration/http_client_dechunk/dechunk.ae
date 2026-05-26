@@ -1,0 +1,50 @@
+// std.http.client must transparently de-chunk a `Transfer-Encoding:
+// chunked` response body (vcr_record_chunked_dechunk_wish.md, the
+// stdlib-client half). The upstream is a raw-socket C responder
+// (chunked_upstream.c) on $UPSTREAM_PORT — the Aether HTTP server can't
+// emit chunked (it always sets Content-Length), so a hand-rolled
+// responder is needed.
+//
+// This was split out of the former tests/integration/vcr_record_chunked
+// when the VCR engine moved to the servirtium-vcr monorepo: the
+// record/replay assertions live there now (core_tests/chunked_*), but
+// the client de-chunk behaviour is a pure Aether-stdlib concern and
+// keeps its coverage here, with no VCR dependency.
+
+import std.http.client
+import std.io
+import std.string
+
+extern exit(code: int)
+
+const BODY = "hello-from-upstream"
+
+main() {
+    println("=== std.http.client de-chunk ===")
+
+    up_port = io.getenv("UPSTREAM_PORT")
+    if up_port == 0 {
+        println("FAIL: UPSTREAM_PORT not set")
+        exit(1)
+    }
+    url = "http://127.0.0.1:${up_port}/chunked"
+
+    req = client.request("GET", url)
+    client.set_timeout(req, 5)
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if err != "" {
+        println("FAIL: transport ${err} for ${url}")
+        exit(1)
+    }
+    got = string.concat(client.response_body(resp), "")
+    client.response_free(resp)
+
+    if got != BODY {
+        println("FAIL: client did not de-chunk; got '${got}'")
+        exit(1)
+    }
+    println("  PASS: client de-chunks Transfer-Encoding: chunked")
+    println("PASS")
+    exit(0)
+}

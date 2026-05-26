@@ -1,9 +1,0 @@
-[[bin]]
-name = "server"
-path = "server.ae"
-extra_sources = [
-    "../../../std/http/server/vcr/aether_vcr.c",
-    "../../../std/http/server/h2/aether_h2.c",
-    "../../../runtime/scheduler/aether_io_poller_epoll.c",
-    "../../../std/collections/aether_stringseq.c"
-]

@@ -766,48 +766,13 @@ main() {
 
 Full reference: [`docs/http-reverse-proxy.md`](http-reverse-proxy.md).
 
-### HTTP Record/Replay (`std.http.server.vcr`)
+### HTTP Record/Replay (VCR) — moved out of the stdlib
 
-Aether's implementation of [Servirtium](https://servirtium.dev) — cross-language record/replay HTTP testing. Tapes are markdown, interoperable with Java/Kotlin/Python/Go implementations of the same framework.
-
-```aether
-import std.http.server.vcr
-import std.http
-extern http_server_start_raw(server: ptr) -> int
-
-message StartVCR { raw: ptr }
-actor VCRActor { state s = 0
-    receive { StartVCR(raw) -> { s = raw; http_server_start_raw(raw) } } }
-
-main() {
-    raw = vcr.load("tests/tapes/my.tape", 18099)
-    a = spawn(VCRActor())
-    a ! StartVCR { raw: raw }
-    sleep(500)
-    body, err = http.get("http://127.0.0.1:18099/things/42")
-    vcr.eject(raw)
-}
-```
-
-**Replay:** `vcr.load(tape_path, port)` / `vcr.eject(server)` / `vcr.tape_length()`.
-
-**Record:** `vcr.load_record(tape_path, upstream_base, port)` / `vcr.eject_record(server, tape_path)` for live forwarding record mode, or direct `vcr.record(...)` / `vcr.record_full(...)` / `vcr.record_full_response(...)` / `vcr.flush(tape_path)` for tests that build interactions in-process.
-
-**Drift checks:** `vcr.flush_or_check(tape_path)` leaves a `.actual` sibling on mismatch; `vcr.flush_and_fail_if_changed(tape_path)` writes the new tape to the normal path and returns an error when bytes differ.
-
-**Secret scrubbing** (applied at flush time; in-memory capture stays untouched): `vcr.redact(...)` / `vcr.clear_redactions()` / `vcr.unredact(...)` / `vcr.clear_unredactions()` / `vcr.remove_header(...)` / `vcr.clear_header_removals()` with request/response/path/body field selectors.
-
-**Per-interaction notes:** `vcr.note(title, body)` — record-only `[Note]` markdown block attached to the next interaction.
-
-**Strict request matching:** `vcr.last_error()` / `vcr.clear_last_error()` / `vcr.last_kind()` / `vcr.last_index()` / `vcr.reset_cursor()` / `vcr.set_strict_headers(on)` — tearDown-readable mismatch diagnostics.
-
-**Gzip:** record mode stores decoded bodies for `Content-Encoding: gzip`, omits encoding/length from the tape, and playback restores gzip when callers send `Accept-Encoding: gzip`.
-
-**Static content:** `vcr.static_content(mount_path, fs_dir)` / `vcr.clear_static_content()` — bypass-the-tape mounts for Selenium/Cypress assets.
-
-**Markdown format options:** `vcr.emphasize_http_verbs()` / `vcr.indent_code_blocks()` / `vcr.clear_format_options()` — alternative emit forms; playback tolerates either.
-
-Full surface, the Servirtium roadmap status, tape format, and the test coverage map live in [`docs/http-vcr.md`](http-vcr.md).
+The Servirtium record/replay engine that used to ship as
+`std.http.server.vcr` has been lifted into its own repository,
+[`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr),
+which is now its authoritative home (alongside its language bindings).
+It is no longer part of the Aether stdlib. See [`docs/http-vcr.md`](http-vcr.md).
 
 ### TCP Sockets (Go-style)
 
