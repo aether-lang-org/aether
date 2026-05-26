@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.http` request-header iteration** (`std/net/aether_http_server.c`,
+  `std/net/aether_http_server.h`, `std/http/module.ae`). New accessors let
+  an Aether route handler enumerate **every** received request header, not
+  just look one up by name (`http_get_header`):
+  `http_request_header_count(req)`, `http_request_header_name(req, index)`,
+  `http_request_header_value(req, index)` (plus `http.request_header_*`
+  Go-style wrappers). Wire order, duplicates preserved, no
+  sort/dedup/canonicalize; out-of-range index returns `""`; same 50-header
+  cap as parsing. This was the last `std.http` gap blocking a pure-Aether
+  rewrite of the Servirtium VCR recorder (`vcr_request_header_iteration_wish.md`)
+  — the analog of `http_request_body_length` for faithful capture. Test:
+  `tests/integration/http_request_header_iter/`.
+
 ## [0.188.0]
 
 ### Removed
