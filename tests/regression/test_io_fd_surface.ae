@@ -31,7 +31,10 @@ extern exit(code: int)
 main() {
     println("=== std.io fd surface regression ===")
 
-    tmp = "/tmp/aether_fd_test.txt"
+    tmpbase = io.getenv("TEMP")
+    if tmpbase == 0 { tmpbase = io.getenv("TMPDIR") }
+    if tmpbase == 0 { tmpbase = "/tmp" }
+    tmp = "${tmpbase}/aether_fd_test.txt"
 
     // Case 1: open_write + write_n + close.
     fd, err = io.fd_open_write(tmp)

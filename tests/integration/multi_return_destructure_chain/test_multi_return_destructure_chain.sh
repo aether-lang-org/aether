@@ -85,6 +85,7 @@ cat > "$WORK/main.ae" <<'AE'
 import std.fs
 import std.cryptography
 import std.string
+import std.io
 
 extern exit(code: int)
 
@@ -97,11 +98,15 @@ hash_file(p: string) -> {
 }
 
 main() {
+    tmp = io.getenv("TEMP")
+    if tmp == 0 { tmp = io.getenv("TMPDIR") }
+    if tmp == 0 { tmp = "/tmp" }
+
     // Write a known-content file, hash it, verify the digest.
-    werr = fs.write("/tmp/hash_repro.bin", "hello, aether\n")
+    werr = fs.write("${tmp}/hash_repro.bin", "hello, aether\n")
     if werr != "" { println("write failed: ${werr}"); exit(1) }
 
-    digest, derr = hash_file("/tmp/hash_repro.bin")
+    digest, derr = hash_file("${tmp}/hash_repro.bin")
     if derr != "" { println("hash failed: ${derr}"); exit(1) }
     if string.length(digest) != 64 {
         println("digest wrong length: ${string.length(digest)}")
@@ -111,7 +116,7 @@ main() {
     // Negative path: missing file → second slot must come back as
     // a string, not whatever the int-typed-empty-string-bug left
     // behind. This is the assertion that fails before the fix.
-    _, merr = hash_file("/tmp/this/path/does/not/exist")
+    _, merr = hash_file("${tmp}/this/path/does/not/exist")
     if string.length(merr) == 0 {
         println("expected non-empty err on missing file")
         exit(1)

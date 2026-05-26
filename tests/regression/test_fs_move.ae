@@ -17,6 +17,7 @@ import std.fs
 import std.file
 import std.os
 import std.string
+import std.io
 
 extern exit(code: int)
 
@@ -29,7 +30,10 @@ read_or_empty(path: string) -> string {
 main() {
     println("=== fs.move regression ===")
 
-    tmpdir = "/tmp/aether_fs_move_test"
+    tmp = io.getenv("TEMP")
+    if tmp == 0 { tmp = io.getenv("TMPDIR") }
+    if tmp == 0 { tmp = "/tmp" }
+    tmpdir = "${tmp}/aether_fs_move_test"
     fs.delete("${tmpdir}/src.txt")
     fs.delete("${tmpdir}/dst.txt")
     fs.delete("${tmpdir}/preexist.txt")
