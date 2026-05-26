@@ -195,8 +195,10 @@ plays that role), no interfaces.
   per-request timeouts, or response headers. Reach for v2 by default
   for non-trivial client work; v1 is fine for "GET, expect 200, want
   body". Server-side stays in `std.http` (there's no v2 server). For
-  testing client code, `import std.http.server.vcr` provides
-  Servirtium-format record/replay against on-disk markdown tapes.
+  record/replay HTTP testing, the Servirtium VCR engine that used to be
+  `std.http.server.vcr` now lives in its own repo,
+  [`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr)
+  (`import core.vcr`) — it is no longer part of the Aether stdlib.
 
 ## Working with downstream users
 

@@ -19,27 +19,34 @@
 import std.fs.file_exists
 import std.fs
 import std.string
+import std.io
 
 extern exit(code: int)
 
 // Write a small file so the test isn't dependent on host filesystem
-// state. /tmp is universally writable on every CI runner we use.
+// state, into a portable temp dir (TEMP/TMPDIR with a /tmp fallback) so
+// it works on Windows CI too — /tmp is not writable on native Windows.
 main() {
-    werr = fs.write("/tmp/per_symbol_repro_marker", "marker\n")
+    tmp = io.getenv("TEMP")
+    if tmp == 0 { tmp = io.getenv("TMPDIR") }
+    if tmp == 0 { tmp = "/tmp" }
+    marker = "${tmp}/per_symbol_repro_marker"
+
+    werr = fs.write(marker, "marker\n")
     if werr != "" {
         println("FAIL: setup write: ${werr}")
         exit(1)
     }
 
     // Per-symbol form: file_exists callable bare.
-    if file_exists("/tmp/per_symbol_repro_marker") != 1 {
+    if file_exists(marker) != 1 {
         println("FAIL: file_exists should be 1 on the file we just wrote")
         exit(1)
     }
 
     // Namespace form: fs.read callable through the namespace.
     // Pre-fix this E0301'd; that's the regression we're guarding.
-    contents, rerr = fs.read("/tmp/per_symbol_repro_marker")
+    contents, rerr = fs.read(marker)
     if rerr != "" {
         println("FAIL: fs.read: ${rerr}")
         exit(1)
@@ -49,6 +56,6 @@ main() {
         exit(1)
     }
 
-    fs.delete("/tmp/per_symbol_repro_marker")
+    fs.delete(marker)
     println("PASS")
 }

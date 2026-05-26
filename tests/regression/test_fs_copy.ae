@@ -25,6 +25,7 @@ import std.fs
 import std.file
 import std.dir
 import std.string
+import std.io
 
 extern exit(code: int)
 
@@ -38,7 +39,10 @@ read_or_empty(path: string) -> string {
 main() {
     println("=== fs.copy regression ===")
 
-    tmpdir = "/tmp/aether_fs_copy_test"
+    tmp = io.getenv("TEMP")
+    if tmp == 0 { tmp = io.getenv("TMPDIR") }
+    if tmp == 0 { tmp = "/tmp" }
+    tmpdir = "${tmp}/aether_fs_copy_test"
     // Best-effort cleanup of any leftover state from a previous run.
     fs.delete("${tmpdir}/src.txt")
     fs.delete("${tmpdir}/dst.txt")

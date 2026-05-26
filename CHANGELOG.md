@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Removed
+
+- **`std.http.server.vcr` — the Servirtium VCR engine has moved out of
+  the stdlib** into its own repository,
+  [`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr),
+  now its authoritative home alongside its 12 language bindings. VCR had
+  served its purpose here — it shaped and hardened the HTTP server
+  (port-0 binding, background/quiet serving, chunked decode, the
+  `--emit=lib` PIC runtime and `aether_vcr_embed_*` C ABI) — and now
+  belongs with the cross-language bindings it serves. Removed:
+  `std/http/server/vcr/` (module + C), the 14 `test_vcr_*` tests + tape
+  fixtures + `vcr_embed_abi/` C-driver, and the `svn_*` / climate VCR
+  tests (all ported to the monorepo). Nothing in the language or the rest
+  of the stdlib imported it, so the stdlib surface is unaffected. The
+  `std.http.client` de-chunk coverage the VCR work motivated stays as a
+  VCR-free test (`tests/integration/http_client_dechunk/`). Historical
+  CHANGELOG entries (0.181/0.182/0.183/0.187) are retained.
+  `docs/http-vcr.md` is now a pointer to the monorepo.
+
 ## [0.187.0]
 
 ### Added

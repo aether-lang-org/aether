@@ -49,7 +49,7 @@ Most subdirectories cluster by topic:
 |-------------------------|---------------|
 | `http_server_*`         | HTTP server (TLS, h2, keep-alive, middleware, ops) |
 | `http_*` / `http_real_ip`, `http_auth` | HTTP middleware + features |
-| `vcr_*` / `svn_*`       | `std.http.server.vcr` record/replay tape format |
+| `http_client_dechunk`   | `std.http.client` de-chunks `Transfer-Encoding: chunked` |
 | `aeocha_*`              | `contrib/aeocha` test framework |
 | `emit_lib*`             | `--emit=lib` packaging + sandbox |
 | `namespace_*`           | `std.namespace` cross-language hosting |
