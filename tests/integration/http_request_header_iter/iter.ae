@@ -1,0 +1,103 @@
+// Regression for http.request_header_* iteration accessors
+// (vcr_request_header_iteration_wish.md): a route handler must be able to
+// enumerate EVERY received request header — count + name(i) + value(i) —
+// not just look one up by name. This is the gap that blocked a pure-Aether
+// Servirtium VCR recorder (faithful capture of whatever the SUT sent).
+//
+// Contract under test:
+//   - wire order preserved (index 0..count-1 = parse/receipt order)
+//   - duplicates preserved (two `X-Dup:` on the wire → two entries in place)
+//   - no sort / dedup / canonicalize by the accessor
+//   - out-of-range index (== count, > count, < 0) returns ""
+//
+// std.http.client can only SET (not add duplicate) headers, so we drive
+// the server with a raw TCP request carrying a hand-built header order
+// that includes a duplicate X-Dup. The handler echoes the enumeration
+// back in the body for the client side to verify.
+
+import std.http
+import std.tcp
+import std.string
+
+extern exit(code: int)
+
+const PORT = 18271
+
+// Echo every request header in iteration order, plus an out-of-range
+// probe, into the response body. Format the client can assert against:
+//   COUNT=<n>|SEQ=<name=value;...>|OOB=<name(n)>/<value(n)>/<name(-1)>|END
+handle_echo(req: ptr, res: ptr, ud: ptr) {
+    n = http.request_header_count(req)
+    seq = ""
+    i = 0
+    while i < n {
+        name = http.request_header_name(req, i)
+        val  = http.request_header_value(req, i)
+        seq = string.concat(seq, "${name}=${val};")
+        i = i + 1
+    }
+    neg = 0 - 1
+    oob = "${http.request_header_name(req, n)}/${http.request_header_value(req, n)}/${http.request_header_name(req, neg)}"
+    body = "COUNT=${n}|SEQ=${seq}|OOB=${oob}|END"
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, body)
+}
+
+main() {
+    raw = http.server_create(PORT)
+    if raw == 0 { println("FAIL: server_create"); exit(1) }
+    http.server_set_host(raw, "127.0.0.1")
+    http.server_get(raw, "/echo", handle_echo, 0)
+    if http.server_bind_raw(raw, "127.0.0.1", PORT) < 0 { println("FAIL: bind"); exit(1) }
+    if http.server_start_background_raw(raw) < 0 { println("FAIL: start_background"); exit(1) }
+    sleep(300)
+
+    // Raw request: Host, then X-Test-A / X-Dup / X-Test-B / X-Dup (the
+    // duplicate, at distinct wire positions), then Connection: close.
+    sock, cerr = tcp.connect("127.0.0.1", PORT)
+    if cerr != "" { println("FAIL: connect ${cerr}"); http.server_stop(raw); exit(1) }
+    reqstr = "GET /echo HTTP/1.1\r\nHost: 127.0.0.1:${PORT}\r\nX-Test-A: alpha\r\nX-Dup: one\r\nX-Test-B: beta\r\nX-Dup: two\r\nConnection: close\r\n\r\n"
+    tcp.write(sock, reqstr)
+
+    // Connection: close → drain until the server closes the socket.
+    resp = ""
+    reading = 1
+    while reading == 1 {
+        chunk, rerr = tcp.read(sock, 4096)
+        if rerr != "" {
+            reading = 0
+        } else {
+            if string.length(chunk) == 0 {
+                reading = 0
+            } else {
+                resp = string.concat(resp, chunk)
+            }
+        }
+    }
+    tcp.close(sock)
+    http.server_stop(raw)
+    sleep(100)
+
+    // 1. Wire order + duplicate preserved: the four X- headers appear
+    //    contiguously in exactly the sent order, X-Dup twice.
+    if string.contains(resp, "X-Test-A=alpha;X-Dup=one;X-Test-B=beta;X-Dup=two;") != 1 {
+        println("FAIL: header enumeration order/duplicates wrong")
+        println("  body: ${resp}")
+        exit(1)
+    }
+    // 2. Count = all six headers sent (Host + 4 X- + Connection).
+    if string.contains(resp, "COUNT=6") != 1 {
+        println("FAIL: expected COUNT=6, body: ${resp}")
+        exit(1)
+    }
+    // 3. Out-of-range indices (count, beyond, negative) all return "".
+    if string.contains(resp, "OOB=//") != 1 {
+        println("FAIL: out-of-range index should return empty, body: ${resp}")
+        exit(1)
+    }
+
+    println("  PASS: request-header iteration (order, duplicates, count, OOB)")
+    println("PASS")
+    exit(0)
+}

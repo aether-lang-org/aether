@@ -53,10 +53,12 @@ exports (
     http_server_set_actor_handler,
     http_request_method, http_request_path, http_request_body,
     http_request_body_length, http_request_query,
+    http_request_header_count, http_request_header_name, http_request_header_value,
     http_serve_static, http_serve_file, http_mime_type,
     serve_file, serve_static,
     request_method, request_path, request_body,
     request_body_length, request_query,
+    request_header_count, request_header_name, request_header_value,
     ae_io_await, ae_io_cancel, await_io
 )
 
@@ -603,6 +605,16 @@ extern http_request_body(req: ptr) -> string
 extern http_request_body_length(req: ptr) -> int
 extern http_request_query(req: ptr) -> string
 
+// Request-header iteration. `http_get_header` only does a named lookup;
+// these enumerate every received header so a handler can capture an
+// unknown set (e.g. a faithful record/replay recorder). Order is wire
+// order with duplicates preserved — no sort/dedup. Index range is
+// [0, http_request_header_count); out-of-range returns "". Same 50-header
+// cap as parsing.
+extern http_request_header_count(req: ptr) -> int
+extern http_request_header_name(req: ptr, index: int) -> string
+extern http_request_header_value(req: ptr, index: int) -> string
+
 // Go-style wrappers for the request field accessors.
 request_method(req: ptr) -> string {
     return http_request_method(req)
@@ -622,6 +634,18 @@ request_body_length(req: ptr) -> int {
 
 request_query(req: ptr) -> string {
     return http_request_query(req)
+}
+
+request_header_count(req: ptr) -> int {
+    return http_request_header_count(req)
+}
+
+request_header_name(req: ptr, index: int) -> string {
+    return http_request_header_name(req, index)
+}
+
+request_header_value(req: ptr, index: int) -> string {
+    return http_request_header_value(req, index)
 }
 
 // Static file serving — raw externs.

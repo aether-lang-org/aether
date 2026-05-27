@@ -111,6 +111,9 @@ const char* http_request_path(HttpRequest* r) { (void)r; return ""; }
 const char* http_request_body(HttpRequest* r) { (void)r; return ""; }
 int http_request_body_length(HttpRequest* r) { (void)r; return 0; }
 const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
+int http_request_header_count(HttpRequest* r) { (void)r; return 0; }
+const char* http_request_header_name(HttpRequest* r, int i) { (void)r; (void)i; return ""; }
+const char* http_request_header_value(HttpRequest* r, int i) { (void)r; (void)i; return ""; }
 #else
 
 #include <stdio.h>
@@ -3900,6 +3903,26 @@ int http_request_body_length(HttpRequest* req) {
 
 const char* http_request_query(HttpRequest* req) {
     return (req && req->query_string) ? req->query_string : "";
+}
+
+// Request-header iteration (vcr_request_header_iteration_wish.md). Unlike
+// http_get_header's named lookup, these enumerate every received header
+// so a handler can capture an unknown set (e.g. a faithful VCR recorder).
+// Order is the parser's insertion/wire order with duplicates preserved —
+// no sort/dedup/canonicalization here; that's consumer policy. Indices
+// out of [0, count) return "" (the same 50-header cap as parsing).
+int http_request_header_count(HttpRequest* req) {
+    return req ? req->header_count : 0;
+}
+
+const char* http_request_header_name(HttpRequest* req, int index) {
+    if (!req || !req->header_keys || index < 0 || index >= req->header_count) return "";
+    return req->header_keys[index] ? req->header_keys[index] : "";
+}
+
+const char* http_request_header_value(HttpRequest* req, int index) {
+    if (!req || !req->header_values || index < 0 || index >= req->header_count) return "";
+    return req->header_values[index] ? req->header_values[index] : "";
 }
 
 #endif // AETHER_HAS_NETWORKING

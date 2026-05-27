@@ -583,5 +583,12 @@ const char* http_request_body(HttpRequest* req);
 // embedded zero. Returns 0 if req is NULL or has no body.
 int         http_request_body_length(HttpRequest* req);
 const char* http_request_query(HttpRequest* req);
+// Request-header iteration — enumerate every received header (named
+// http_get_header only does a single lookup). Wire order, duplicates
+// preserved, no sort/dedup. index in [0, http_request_header_count);
+// out-of-range name/value return "". 50-header cap, as the parser.
+int         http_request_header_count(HttpRequest* req);
+const char* http_request_header_name(HttpRequest* req, int index);
+const char* http_request_header_value(HttpRequest* req, int index);
 
 #endif
