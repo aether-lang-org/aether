@@ -187,7 +187,7 @@ AetherString* string_from_float(float value);
 // Aether code should prefer the Go-style wrappers in std.string
 // (`string.to_int`, etc.) which return `(value, error)` tuples.
 int string_to_int_raw(const void* str, int* out_value);
-int string_to_long_raw(const void* str, long* out_value);
+int string_to_long_raw(const void* str, long long* out_value);  // 64-bit slot (Windows `long` is 32-bit)
 int string_to_float_raw(const void* str, float* out_value);
 int string_to_double_raw(const void* str, double* out_value);
 
@@ -196,8 +196,8 @@ int string_to_double_raw(const void* str, double* out_value);
 // zero-value on failure.
 int    string_try_int(const void* s);
 int    string_get_int(const void* s);
-int    string_try_long(const void* s);
-long   string_get_long(const void* s);
+int       string_try_long(const void* s);
+long long string_get_long(const void* s);  // 64-bit on every platform
 int    string_try_float(const void* s);
 double string_get_float(const void* s);  // 64-bit: Aether `float` lowers to C double
 int    string_try_double(const void* s);
