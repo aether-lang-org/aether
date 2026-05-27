@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`std.string.to_long` truncated 64-bit values to 32 bits** — two
+  independent causes, both fixed (`std/string/module.ae`,
+  `std/string/aether_string.c`, `std/string/aether_string.h`):
+  1. The Aether wrapper used an inferred multi-return (`-> {`), which
+     collapsed the `long` value slot to 32-bit `int`, so
+     `to_long("4294967296")` returned `0` on every platform. Fixed with an
+     explicit `-> (long, string)` return type. (Underlying compiler
+     limitation: inferred multi-return doesn't distinguish `long` from
+     `int`; explicit annotation is the std idiom. Worth a separate look.)
+  2. The C parse path used C `long` + `strtol`, which is only 32-bit on
+     **Windows** (LLP64) — so even after (1) it still truncated there,
+     writing 4 bytes into Aether's 8-byte slot. `string_to_long_raw` /
+     `string_get_long` / `string_try_long` now use `long long` + `strtoll`
+     (64-bit on every platform), matching what Aether's `long` lowers to.
+     This also fixes the `string_to_long_raw` raw extern on Windows.
+- **`std.string.to_float` returned garbage** (`std/string/aether_string.c`,
+  `std/string/aether_string.h`). `string_get_float` returned a 32-bit C
+  `float`, but Aether's `float` type is 64-bit (lowers to C `double`), so
+  the result register was read as a double — `to_float("2.5")` came back
+  `5.3e-315`. Now returns `(double)v` (parsing still at float precision;
+  use `to_double` for full precision). `to_int` / `to_double` were already
+  correct. Regression: `tests/regression/test_string_to_number_widths.ae`.
+
 ## [0.189.0]
 
 ### Added

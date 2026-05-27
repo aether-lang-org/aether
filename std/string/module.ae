@@ -246,7 +246,7 @@ to_int(s: string) -> {
 
 // Parse a string to a long (int64). Returns (value, "") on success,
 // (0, error) on invalid input.
-to_long(s: string) -> {
+to_long(s: string) -> (long, string) {
     ok = string_try_long(s)
     if ok == 0 {
         return 0, "invalid long"

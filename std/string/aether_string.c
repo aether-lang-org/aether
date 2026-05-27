@@ -645,13 +645,18 @@ int string_to_int_raw(const void* str, int* out_value) {
     return 1;
 }
 
-int string_to_long_raw(const void* str, long* out_value) {
+// out_value is a real 64-bit slot: Aether's `long` is int64 everywhere,
+// so we use `long long` + strtoll, NOT C `long` + strtol. On Windows
+// (LLP64) C `long` is only 32 bits, so the old `long`/strtol pair wrote
+// 4 bytes into Aether's 8-byte slot and truncated 64-bit values (e.g. a
+// stashed pointer) — fine on LP64 Linux/macOS, broken on Windows.
+int string_to_long_raw(const void* str, long long* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 
     char* endptr;
     errno = 0;
-    long val = strtol(data, &endptr, 10);
+    long long val = strtoll(data, &endptr, 10);
 
     if (endptr == data || errno == ERANGE) {
         return 0;
@@ -713,16 +718,24 @@ int string_get_int(const void* s) {
     int v = 0; string_to_int_raw(s, &v); return v;
 }
 int string_try_long(const void* s) {
-    long v; return string_to_long_raw(s, &v);
+    long long v; return string_to_long_raw(s, &v);
 }
-long string_get_long(const void* s) {
-    long v = 0; string_to_long_raw(s, &v); return v;
+// long long, not long: Aether's `long` is 64-bit on every platform; C
+// `long` is 32-bit on Windows (LLP64) and would truncate here.
+long long string_get_long(const void* s) {
+    long long v = 0; string_to_long_raw(s, &v); return v;
 }
 int string_try_float(const void* s) {
     float v; return string_to_float_raw(s, &v);
 }
-float string_get_float(const void* s) {
-    float v = 0.0f; string_to_float_raw(s, &v); return v;
+// Returns double, not float: Aether's `float` type is 64-bit (it lowers
+// to C `double`), so the extern `string_get_float -> float` expects a
+// 64-bit return. Returning a 32-bit C `float` here left Aether reading
+// the result register as a double → garbage (e.g. to_float("2.5") came
+// back 5.3e-315). We still parse at float precision (to_float's contract;
+// use to_double for full precision), then widen for the ABI.
+double string_get_float(const void* s) {
+    float v = 0.0f; string_to_float_raw(s, &v); return (double)v;
 }
 int string_try_double(const void* s) {
     double v; return string_to_double_raw(s, &v);
