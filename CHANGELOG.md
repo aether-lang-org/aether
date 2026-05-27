@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`std.string.to_long` truncated 64-bit values to 32 bits**
+  (`std/string/module.ae`). The wrapper used an inferred multi-return
+  (`-> {`), which collapsed the `long` value slot to 32-bit `int` — so
+  `to_long("4294967296")` returned `0`, silently corrupting a stashed
+  64-bit value (e.g. a pointer round-tripped through a string). Fixed by
+  giving it an explicit `-> (long, string)` return type. (Underlying
+  compiler limitation: inferred multi-return doesn't distinguish `long`
+  from `int` for the value slot; explicit annotation is the idiom, as
+  elsewhere in std. Worth a separate look.)
+- **`std.string.to_float` returned garbage** (`std/string/aether_string.c`,
+  `std/string/aether_string.h`). `string_get_float` returned a 32-bit C
+  `float`, but Aether's `float` type is 64-bit (lowers to C `double`), so
+  the result register was read as a double — `to_float("2.5")` came back
+  `5.3e-315`. Now returns `(double)v` (parsing still at float precision;
+  use `to_double` for full precision). `to_int` / `to_double` were already
+  correct. Regression: `tests/regression/test_string_to_number_widths.ae`.
+
 ## [0.189.0]
 
 ### Added

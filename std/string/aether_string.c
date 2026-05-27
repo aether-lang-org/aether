@@ -721,8 +721,14 @@ long string_get_long(const void* s) {
 int string_try_float(const void* s) {
     float v; return string_to_float_raw(s, &v);
 }
-float string_get_float(const void* s) {
-    float v = 0.0f; string_to_float_raw(s, &v); return v;
+// Returns double, not float: Aether's `float` type is 64-bit (it lowers
+// to C `double`), so the extern `string_get_float -> float` expects a
+// 64-bit return. Returning a 32-bit C `float` here left Aether reading
+// the result register as a double → garbage (e.g. to_float("2.5") came
+// back 5.3e-315). We still parse at float precision (to_float's contract;
+// use to_double for full precision), then widen for the ABI.
+double string_get_float(const void* s) {
+    float v = 0.0f; string_to_float_raw(s, &v); return (double)v;
 }
 int string_try_double(const void* s) {
     double v; return string_to_double_raw(s, &v);

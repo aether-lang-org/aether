@@ -199,7 +199,7 @@ int    string_get_int(const void* s);
 int    string_try_long(const void* s);
 long   string_get_long(const void* s);
 int    string_try_float(const void* s);
-float  string_get_float(const void* s);
+double string_get_float(const void* s);  // 64-bit: Aether `float` lowers to C double
 int    string_try_double(const void* s);
 double string_get_double(const void* s);
 

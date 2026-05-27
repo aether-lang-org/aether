@@ -1,0 +1,64 @@
+// Regression: std.string numeric parsers must preserve full width.
+//
+// Two silent-corruption bugs in the string-to-number family:
+//   1. to_long truncated to 32 bits — the inferred multi-return (`-> {`)
+//      collapsed the `long` value slot to 32-bit `int`, so a stashed
+//      64-bit value (e.g. a pointer) came back mangled. Fixed by giving
+//      to_long an explicit `-> (long, string)` return type.
+//   2. to_float returned garbage (e.g. 5.3e-315 for "2.5") — the C
+//      string_get_float returned a 32-bit `float` while Aether's `float`
+//      is 64-bit (lowers to C double), so the result register was read
+//      as a double. Fixed by returning `(double)v` from string_get_float.
+//
+// to_int and to_double were already correct; covered here so the whole
+// family is pinned.
+
+import std.string
+
+extern exit(code: int)
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    println("=== std.string to_* width regression ===")
+
+    // to_long: values that overflow 32 bits must round-trip exactly.
+    v1, e1 = string.to_long("4294967296")          // 2^32
+    if e1 != "" { fail("to_long 2^32 err: ${e1}") }
+    if v1 != 4294967296 { fail("to_long truncated 2^32 to ${v1}") }
+
+    v2, _ = string.to_long("139637976727552")       // ~0x7f00_0000_0000
+    if v2 != 139637976727552 { fail("to_long truncated 48-bit value to ${v2}") }
+
+    v3, _ = string.to_long("-8589934592")           // -2^33, sign + width
+    if v3 != -8589934592 { fail("to_long mangled negative 64-bit: ${v3}") }
+    println("  PASS: to_long preserves 64 bits (incl. sign)")
+
+    // to_int: ordinary 32-bit values unaffected.
+    i1, _ = string.to_int("1000000")
+    if i1 != 1000000 { fail("to_int wrong: ${i1}") }
+    println("  PASS: to_int")
+
+    // to_float: must not read a 32-bit float as a 64-bit double.
+    f1, fe = string.to_float("2.5")
+    if fe != "" { fail("to_float err: ${fe}") }
+    if f1 != 2.5 { fail("to_float garbage for 2.5: ${f1}") }
+    println("  PASS: to_float")
+
+    // to_double: full-precision path.
+    d1, de = string.to_double("2.5")
+    if de != "" { fail("to_double err: ${de}") }
+    if d1 != 2.5 { fail("to_double wrong: ${d1}") }
+    println("  PASS: to_double")
+
+    // Error paths still report invalid input.
+    _, be = string.to_long("not-a-number")
+    if be == "" { fail("to_long should reject 'not-a-number'") }
+    println("  PASS: invalid input rejected")
+
+    println("PASS")
+    exit(0)
+}
