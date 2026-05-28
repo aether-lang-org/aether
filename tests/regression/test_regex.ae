@@ -1,0 +1,124 @@
+// std.regex regression test — exercises the PCRE2-backed surface.
+//
+// Note: skipped (PASS without checks) if the build didn't link
+// libpcre2-8 — compile() returns null with last_error reporting
+// "built without libpcre2-8". The wrapper is correct either way; this
+// test is only meaningful when PCRE2 is actually wired in.
+
+import std.regex
+import std.string
+
+extern exit(code: int)
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    println("=== std.regex regression ===")
+
+    // Probe: is PCRE2 actually present?
+    probe, perr = regex.compile("a")
+    if probe == null {
+        println("  [SKIP] regex built without libpcre2-8: ${perr}")
+        exit(0)
+    }
+    regex.free(probe)
+
+    // ---- compile: success + syntax error path ----
+    bad, berr = regex.compile("(")
+    if bad != null { fail("expected unbalanced '(' to fail compile") }
+    if berr == "" { fail("invalid pattern should set last_error") }
+    println("  PASS: invalid pattern rejected (${berr})")
+
+    // ---- matches: yes / no ----
+    re, _ = regex.compile("hello")
+    if regex.matches(re, "well hello there") != 1 { fail("matches: positive miss") }
+    if regex.matches(re, "nothing") != 0 { fail("matches: false positive") }
+    regex.free(re)
+    println("  PASS: matches (positive + negative)")
+
+    // ---- find: span of first match; -1/-1 on no match (err "") ----
+    re2, _ = regex.compile("[0-9]+")
+    st, en, ferr = regex.find(re2, "abc 42 xyz")
+    if ferr != "" { fail("find err: ${ferr}") }
+    if st != 4 { fail("find start = ${st}, want 4") }
+    if en != 6 { fail("find end = ${en}, want 6") }
+    nst, nen, nerr = regex.find(re2, "no digits here")
+    if nerr != "" { fail("no-match should not set err, got: ${nerr}") }
+    if nst != -1 { fail("no match should give start=-1, got ${nst}") }
+    if nen != -1 { fail("no match should give end=-1, got ${nen}") }
+    regex.free(re2)
+    println("  PASS: find (span + no-match returns -1/-1, no err)")
+
+    // ---- captures: groups + count + start/end + OOB ----
+    re3, _ = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})")
+    caps, _ = regex.captures(re3, "released on 2026-05-28 today")
+    if caps == null { fail("expected match for date pattern") }
+    if regex.capture_count(caps) != 4 { fail("capture_count = ${regex.capture_count(caps)}, want 4") }
+    g0 = regex.capture(caps, 0)
+    if g0 != "2026-05-28" { fail("group 0 = '${g0}'") }
+    if regex.capture(caps, 1) != "2026" { fail("group 1 wrong") }
+    if regex.capture(caps, 2) != "05" { fail("group 2 wrong") }
+    if regex.capture(caps, 3) != "28" { fail("group 3 wrong") }
+    if regex.capture_start(caps, 0) != 12 { fail("group-0 start") }
+    if regex.capture_end(caps, 0) != 22 { fail("group-0 end") }
+    // OOB returns ""
+    oob = regex.capture(caps, 99)
+    if oob != "" { fail("OOB capture should be empty, got '${oob}'") }
+    if regex.capture_start(caps, 99) != -1 { fail("OOB start should be -1") }
+    regex.captures_free(caps)
+    regex.free(re3)
+    println("  PASS: captures (groups, count, span, OOB)")
+
+    // ---- captures: no match returns null + no error ----
+    re4, _ = regex.compile("xyz123")
+    nocap, nerr2 = regex.captures(re4, "abc")
+    if nocap != null { fail("expected null on no match") }
+    if nerr2 != "" { fail("no match should not set err, got: ${nerr2}") }
+    regex.free(re4)
+    println("  PASS: captures returns null+no-err on no match")
+
+    // ---- find_all + accessors ----
+    re5, _ = regex.compile("[a-z]+")
+    fa, _ = regex.find_all(re5, "hello world foo")
+    if regex.find_all_count(fa) != 3 { fail("find_all_count = ${regex.find_all_count(fa)}, want 3") }
+    if regex.find_all_start(fa, 0) != 0 { fail("fa[0] start") }
+    if regex.find_all_end(fa, 0) != 5 { fail("fa[0] end") }
+    if regex.find_all_start(fa, 2) != 12 { fail("fa[2] start") }
+    if regex.find_all_end(fa, 2) != 15 { fail("fa[2] end") }
+    if regex.find_all_start(fa, 99) != -1 { fail("OOB span should be -1") }
+    regex.find_all_free(fa)
+    regex.free(re5)
+    println("  PASS: find_all (count + spans + OOB)")
+
+    // ---- replace + replace_all with $-substitution ----
+    re6, _ = regex.compile("(\\w+)@(\\w+)")
+    one, _ = regex.replace(re6, "foo@bar and baz@qux", "[$1 at $2]")
+    if one != "[foo at bar] and baz@qux" { fail("replace (first only) = '${one}'") }
+    all, _ = regex.replace_all(re6, "foo@bar and baz@qux", "[$1 at $2]")
+    if all != "[foo at bar] and [baz at qux]" { fail("replace_all = '${all}'") }
+    regex.free(re6)
+    println("  PASS: replace + replace_all (with \\$1/\\$2 substitution)")
+
+    // ---- case-insensitive flag ----
+    rei, _ = regex.compile_flags("hello", regex.FLAG_CASELESS)
+    if regex.matches(rei, "HELLO WORLD") != 1 { fail("FLAG_CASELESS: case-insensitive miss") }
+    regex.free(rei)
+    println("  PASS: FLAG_CASELESS")
+
+    // ---- one-shot convenience ----
+    ok, lerr = regex.matches_lit("[0-9]+", "abc 42 xyz")
+    if lerr != "" { fail("matches_lit err: ${lerr}") }
+    if ok != 1 { fail("matches_lit miss") }
+    lst, len2, lerr2 = regex.find_lit("[0-9]+", "abc 42 xyz")
+    if lerr2 != "" { fail("find_lit err: ${lerr2}") }
+    if lst != 4 || len2 != 6 { fail("find_lit span") }
+    _, blerr = regex.matches_lit("(", "anything")
+    if blerr == "" { fail("matches_lit should surface compile err") }
+    println("  PASS: matches_lit + find_lit (incl. compile-err propagation)")
+
+    println("PASS")
+    exit(0)
+}

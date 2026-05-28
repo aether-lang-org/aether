@@ -49,6 +49,18 @@ and you link Aether-as-a-library with **`$(ae cflags)`** (never hand-rolled
 | **git** | version stamping reads `git tag` (a non-git tree falls back to the `VERSION` file) |
 | **pthreads + libm** | linked by default on POSIX (already present on Linux/macOS) |
 
+Optional **system libraries** that enable specific stdlib features
+(each is auto-detected via `pkg-config`; without it, the related stdlib
+calls return a clean "built without ..." diagnostic rather than failing
+the build):
+
+| Lib | Enables |
+|---|---|
+| `libssl-dev` / `libcrypto-dev` (OpenSSL) | TLS in `std.http.client` (HTTPS) and the `std.http` server |
+| `zlib1g-dev` (zlib) | `std.zlib.deflate`/`inflate`; HTTP gzip |
+| `libnghttp2-dev` | HTTP/2 server (`std.http` h2/h2c + HPACK) |
+| `libpcre2-dev` | `std.regex` (Perl-compatible regex via libpcre2-8) |
+
 Optional, only if you want the corresponding **contrib** module built
 natively (each is independently probed and **skipped if its dev library
 is absent** — a skip is normal, not an error):
