@@ -10,7 +10,8 @@ exports (
     math_asin, math_acos, math_atan, math_atan2,
     math_floor, math_ceil, math_round,
     math_log, math_log10, math_exp,
-    math_random_seed, math_random_int, math_random_float
+    math_random_seed, math_random_int, math_random_float,
+    math_pi, math_tau, math_e, math_deg_to_rad, math_rad_to_deg
 )
 
 // Basic operations (int/float variants)
@@ -44,3 +45,14 @@ extern math_exp(x: float) -> float
 extern math_random_seed(seed: int)
 extern math_random_int(min: int, max: int) -> int
 extern math_random_float() -> float
+
+// Function-constants. Aether has no const-expression evaluator at the
+// call site, so trigonometric / radian-conversion constants are
+// zero-arg functions. The C lowering is `return <literal>`; any
+// reasonable C compiler inlines it. Keeps the `math.*` namespace
+// uniform with the trig / pow / sqrt functions above.
+extern math_pi() -> float
+extern math_tau() -> float
+extern math_e() -> float
+extern math_deg_to_rad() -> float
+extern math_rad_to_deg() -> float

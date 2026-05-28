@@ -63,6 +63,8 @@ char* os_now_utc_iso8601_raw(void) { return NULL; }
 int os_getpid_raw(void) { return 0; }
 int64_t os_wall_seconds_raw(void) { return 0; }
 int os_wall_micros_raw(void) { return 0; }
+int64_t os_now_monotonic_ms_raw(void) { return 0; }
+int64_t os_now_monotonic_ns_raw(void) { return 0; }
 #else
 
 #include <stdio.h>
@@ -275,6 +277,82 @@ int os_wall_micros_raw(void) {
     aether_os_wall_now(&sec, &usec);
     return usec;
 }
+
+/* Monotonic clock primitives. Wall-clock time (above) is NTP-jumpable
+ * and tied to UTC; useless for animation tick loops, frame-time
+ * budgets, or measuring elapsed time across a function call. These
+ * use the per-platform monotonic source whose value-domain is opaque
+ * (epoch is boot / process-start / arbitrary) but whose *deltas*
+ * monotonically track real elapsed time.
+ *
+ * IMPORTANT: return type is int64_t, NOT C `long`. Aether's `long`
+ * lowers to int64_t on every platform, but C `long` is 32-bit on
+ * Windows (LLP64). Returning C `long` would truncate the upper 32
+ * bits into the Aether 8-byte slot on Windows — the bug PR #562
+ * caught and fixed for string_to_long_raw. Same hazard, same fix.
+ *
+ *   ms — milliseconds since boot/process-start. Wraparound at ~292
+ *        million years from epoch; not a real concern.
+ *   ns — nanoseconds. Useful for sub-ms timing (animation t-curves,
+ *        microbenchmarks). Wraparound at ~292 years; also fine.
+ */
+#ifndef _WIN32
+int64_t os_now_monotonic_ms_raw(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
+int64_t os_now_monotonic_ns_raw(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
+#else
+/* Windows: QueryPerformanceCounter gives a high-resolution monotonic
+ * counter; QueryPerformanceFrequency gives its tick rate. Frequency
+ * is invariant across the OS lifetime (Win7+), so we cache it on first
+ * call. Both functions are documented to always succeed on those
+ * versions, so we treat a 0 frequency as the only failure mode. */
+static LARGE_INTEGER qpc_freq_cache = {0};
+static int qpc_freq_initialized = 0;
+
+static int64_t qpc_freq_ticks_per_sec(void) {
+    if (!qpc_freq_initialized) {
+        if (!QueryPerformanceFrequency(&qpc_freq_cache)) return 0;
+        qpc_freq_initialized = 1;
+    }
+    return (int64_t)qpc_freq_cache.QuadPart;
+}
+
+int64_t os_now_monotonic_ms_raw(void) {
+    int64_t freq = qpc_freq_ticks_per_sec();
+    if (freq == 0) return 0;
+    LARGE_INTEGER counter;
+    if (!QueryPerformanceCounter(&counter)) return 0;
+    /* Compute ms as (ticks * 1000) / freq. Doing the multiply first
+     * preserves sub-second precision; on a 10 MHz counter this loses
+     * resolution at 2^53 ticks / 10^4 ≈ 28e8 seconds (90 years) which
+     * is fine. For very-long-lived processes the ns variant has more
+     * headroom because freq divides cleanly into 10^9 on x86. */
+    return ((int64_t)counter.QuadPart * 1000) / freq;
+}
+
+int64_t os_now_monotonic_ns_raw(void) {
+    int64_t freq = qpc_freq_ticks_per_sec();
+    if (freq == 0) return 0;
+    LARGE_INTEGER counter;
+    if (!QueryPerformanceCounter(&counter)) return 0;
+    /* Split-multiply to avoid overflowing int64 on long uptimes:
+     * ticks*1e9/freq could overflow at ~2^53/1e9 ≈ 9e15 ticks (≈ 28
+     * years on a 10 MHz counter). The split form: (ticks / freq) * 1e9
+     * + ((ticks % freq) * 1e9 / freq) — exact, no overflow. */
+    int64_t ticks = (int64_t)counter.QuadPart;
+    int64_t whole_sec = ticks / freq;
+    int64_t frac_ticks = ticks % freq;
+    return whole_sec * 1000000000 + (frac_ticks * 1000000000) / freq;
+}
+#endif
 
 int os_execv(const char* prog, void* argv_list) {
     if (!prog) return -1;

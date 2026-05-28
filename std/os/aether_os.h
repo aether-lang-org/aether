@@ -96,4 +96,21 @@ int os_getpid_raw(void);
 int64_t os_wall_seconds_raw(void);
 int     os_wall_micros_raw(void);
 
+// Monotonic clock — invariant across NTP adjustments. Value-domain is
+// opaque (epoch is boot / process-start / arbitrary); only *deltas*
+// are meaningful. Use for animation tick loops, frame-time budgets,
+// elapsed-time measurement, anything where wall-clock jumps would
+// corrupt the answer.
+//
+// Return type is int64_t (NOT C `long`): Aether's `long` is 64-bit on
+// every platform, but C `long` is 32-bit on Windows (LLP64). Returning
+// C `long` would truncate to 4 bytes in the Aether 8-byte slot — the
+// exact hazard PR #562 fixed for string_to_long_raw.
+//
+// Implementation: clock_gettime(CLOCK_MONOTONIC) on POSIX,
+// QueryPerformanceCounter on Windows. Both return 0 on
+// no-filesystem builds.
+int64_t os_now_monotonic_ms_raw(void);
+int64_t os_now_monotonic_ns_raw(void);
+
 #endif

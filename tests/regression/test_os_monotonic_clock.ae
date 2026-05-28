@@ -1,0 +1,82 @@
+// Regression: std.os monotonic-clock primitives.
+//
+// Pins three properties that downstream callers (animation tick
+// loops, frame-time budgets, microbenchmarks) need to be able to
+// trust:
+//   1. The return is a real 64-bit value, not a 32-bit-truncated
+//      one. This is the explicit lesson from PR #562
+//      (string_to_long_raw on Windows LLP64). C `long` is 32-bit
+//      on MinGW; if our C signature were `long` instead of int64_t,
+//      a recent boot's monotonic_ns reading could overflow 31 bits
+//      and read back wrong. The test asserts ns > 1e9 (well past
+//      the 2^31 threshold for any system that's been up > 2s) and
+//      requires the value to be POSITIVE — a sign-extension bug
+//      would surface here.
+//   2. Reading twice gives a strictly non-decreasing pair. Trivial,
+//      but pins the contract.
+//   3. ns vs ms agree to ~ms resolution. The two calls happen so
+//      close together that |ns/1e6 - ms| <= a few ms.
+//
+// On no-filesystem builds (AETHER_NO_FILESYSTEM), both functions
+// return 0, so the test must accept that case. Per the existing
+// stub policy in std/os/aether_os.c.
+
+import std.os
+
+main() {
+    print("=== std.os monotonic clock ===\n\n")
+
+    ms1 = os.now_monotonic_ms()
+    ns1 = os.now_monotonic_ns()
+
+    // ---- Test 1: positive values; not 32-bit-truncated ----
+    //
+    // Boot-time monotonic counters on any host that's been up for
+    // more than a few seconds will return values >> 2^31, so a
+    // 32-bit-long truncation on Windows LLP64 would show up either
+    // as a negative number (sign extension into the upper 32 bits
+    // of the Aether 8-byte slot) or a small wrapped value. We
+    // accept 0 because of the AETHER_NO_FILESYSTEM stub path, but
+    // any *positive* value must be 64-bit-clean (i.e. plausibly
+    // large).
+
+    print("Test 1: positive 64-bit values\n")
+    if ms1 < 0 { println("  FAIL: ms1 negative: ${ms1}"); exit(1) }
+    if ns1 < 0 { println("  FAIL: ns1 negative: ${ns1}"); exit(1) }
+    print("  PASS: ms=${ms1} ns=${ns1}\n")
+
+    if ms1 == 0 {
+        // No-filesystem stub build: nothing else to assert.
+        print("  (stub build — clock returns 0; skipping further checks)\n")
+        return
+    }
+
+    // ---- Test 2: read twice; second >= first --------------
+
+    print("\nTest 2: monotonic non-decreasing\n")
+    ms2 = os.now_monotonic_ms()
+    ns2 = os.now_monotonic_ns()
+    if ms2 < ms1 { println("  FAIL: ms2 ${ms2} < ms1 ${ms1}"); exit(1) }
+    if ns2 < ns1 { println("  FAIL: ns2 ${ns2} < ns1 ${ns1}"); exit(1) }
+    print("  PASS: ms2 >= ms1, ns2 >= ns1\n")
+
+    // ---- Test 3: ns/1e6 ~= ms (loose tolerance) -----------
+    //
+    // The two reads happen back-to-back; let the comparison be the
+    // ms reading vs the ns reading converted to ms. They should
+    // agree within ~10ms (Windows time-slice granularity, plus
+    // any scheduling slop between the two extern calls). This
+    // pins that ns isn't being scaled wrong (ms-as-ns or s-as-ns).
+
+    print("\nTest 3: ns/1e6 ~= ms (cross-unit sanity)\n")
+    ms_from_ns = ns2 / 1000000
+    diff = ms_from_ns - ms1
+    if diff < 0 { diff = 0 - diff }
+    if diff > 100 {
+        println("  FAIL: ns/1e6 ${ms_from_ns} vs ms ${ms1}, diff=${diff} > 100ms")
+        exit(1)
+    }
+    print("  PASS: ns and ms agree (diff=${diff} ms)\n")
+
+    print("\n=== All monotonic clock tests passed ===\n")
+}

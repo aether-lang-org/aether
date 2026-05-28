@@ -8,9 +8,11 @@ exports (
     aether_args_count, aether_args_get, aether_argv0, aether_argv_raw,
     os_execv, os_now_utc_iso8601_raw, os_getpid_raw, exit,
     os_wall_seconds_raw, os_wall_micros_raw,
+    os_now_monotonic_ms_raw, os_now_monotonic_ns_raw,
     io_setenv_raw, io_unsetenv_raw,
     exec, run_capture, argv0, now_utc_iso8601, getpid,
     wall_seconds, wall_micros,
+    now_monotonic_ms, now_monotonic_ns,
     setenv, unsetenv,
     run_pipe, wait_pid, run_pipe_drain_and_wait
 )
@@ -275,6 +277,36 @@ wall_seconds() -> long {
 
 wall_micros() -> int {
     return os_wall_micros_raw()
+}
+
+// Monotonic-clock primitives.  Unlike wall_seconds / wall_micros (UTC,
+// NTP-jumpable, useful for "when did this event happen" timestamps),
+// these are tied to a monotonic per-platform counter whose value-domain
+// is opaque — only *deltas* are meaningful.  Use them for animation
+// tick loops, frame-time budgets, microbenchmarks, and elapsed-time
+// measurements that must survive a wall-clock jump.
+//
+//   ms — milliseconds since some fixed epoch (boot / process start /
+//        arbitrary).  Wraparound at ~292 million years; no concern.
+//   ns — nanoseconds since the same epoch.  Useful for sub-millisecond
+//        timing (animation t-curves, microbenchmarks).
+//
+// Implementation: clock_gettime(CLOCK_MONOTONIC) on POSIX,
+// QueryPerformanceCounter on Windows.  Returns 0 on no-filesystem
+// builds (the same stub-policy as wall_seconds / wall_micros).
+//
+// Return type is `long` (Aether's 64-bit on every platform); the C
+// signature is int64_t, not C `long`, to avoid the LLP64 / 32-bit-long
+// truncation hazard PR #562 caught for string_to_long_raw.
+extern os_now_monotonic_ms_raw() -> long
+extern os_now_monotonic_ns_raw() -> long
+
+now_monotonic_ms() -> long {
+    return os_now_monotonic_ms_raw()
+}
+
+now_monotonic_ns() -> long {
+    return os_now_monotonic_ns_raw()
 }
 
 // Set an environment variable. Returns "" on success, error on failure.

@@ -198,6 +198,44 @@ main() {
 - `intarr_get_raw(arr, i)` / `intarr_set_raw(arr, i, v)` - Safe on OOB (returns 0 / no-op), no error report
 - `intarr_get_unchecked(arr, i)` / `intarr_set_unchecked(arr, i, v)` - Undefined behaviour on OOB, for inner loops
 
+### Fixed-size float array (`std.floatarr`)
+
+Packed double buffer — the float twin of `std.intarr`. Aether's `float`
+lowers to C `double`, so the element type is `double` end-to-end. Same
+fixed-size discipline, same bounds-check policy. Motivating use cases:
+SVG path-command argument storage, rasterizer edge tables, bbox
+accumulators, blur kernel coefficients — any `number[]`-shaped data
+where boxing each scalar into a `*Pt` struct would chase a pointer per
+element.
+
+```aether
+import std.floatarr
+
+main() {
+    // Gaussian kernel coefficients, length 2r+1 for radius r.
+    radius = 3
+    n = 2 * radius + 1
+    kernel, err = floatarr.new(n)
+    if err != "" { return }
+
+    // ... fill from sigma ...
+    floatarr_free(kernel)
+}
+```
+
+**Functions:**
+- `floatarr.new(size)` → `(ptr, string)` - Allocate zero-initialised array
+- `floatarr.new_filled(size, init)` → `(ptr, string)` - Allocate with every slot set to `init`
+- `floatarr.get(arr, i)` → `(float, string)` - Bounds-checked read
+- `floatarr.set(arr, i, value)` → `string` - Bounds-checked write
+- `floatarr_size(arr)` → `int` - Returns -1 for null
+- `floatarr_fill(arr, value)` - Reset every slot to `value`
+- `floatarr_free(arr)` - Release
+
+**Hot-path (caller-validated) variants, no bounds check:**
+- `floatarr_get_raw(arr, i)` / `floatarr_set_raw(arr, i, v)` - Safe on OOB (returns 0.0 / no-op), no error report
+- `floatarr_get_unchecked(arr, i)` / `floatarr_set_unchecked(arr, i, v)` - Undefined behaviour on OOB, for inner loops
+
 ### Mutable byte buffer (`std.bytes`)
 
 Mutable random-access byte buffer with overlap-safe forward `copy_within`. Aether's `string` is immutable; reach for `std.bytes` when you need to write bytes at arbitrary indices and read bytes the loop just wrote (binary codec output buffers, varint emit, frame layout, RLE-style overlap copy).
@@ -240,6 +278,7 @@ out = bytes.finish(b, 6)                  // "ABABAB"
 - `bytes.set_le32(b, index, value)` → `int` - Little-endian 32-bit write at index..index+3; grows; 1 on success
 - `bytes.get_le32(b, index)` → `int` - Little-endian 32-bit read; -1 if range past current length
 - `bytes.copy_from_string(b, dst, src, src_len)` → `int` - Copy from a string into the buffer at offset
+- `bytes.copy_from_bytes(dst, dst_off, src, src_off, length)` → `int` - Copy between distinct buffers (memmove semantics); grows `dst` if needed. Use for two-pass algorithms like separable Gaussian blur.
 - `bytes.copy_within(b, dst, src, length)` → `int` - Self-copy, forward byte-by-byte (RLE-safe)
 - `bytes.finish(b, length)` → `string` - Hand off to refcounted AetherString; buffer is consumed
 - `bytes.free(b)` - Discard without finishing (idempotent on null)
@@ -1499,6 +1538,10 @@ main() {
 - `os.unsetenv(name)` → `string` - Unset environment variable, returns "" on success or an error string. Same C-side function as `io.unsetenv`.
 - `os.getpid()` → `int` - Process identifier of the current process. POSIX `getpid(2)`; Windows `_getpid()`. Useful for tmpfile names (`/tmp/myprog.${os.getpid()}.tmp`), per-process locks, log prefixes, and stable tagging across forked children. Returns 0 on platforms compiled without filesystem support.
 - `os.now_utc_iso8601()` → `string` - Current UTC time as ISO-8601 (`YYYY-MM-DDThh:mm:ssZ`). Returns `""` (never null) on clock/format failure. Thread-safe.
+- `os.wall_seconds()` → `long` - Whole seconds since the Unix epoch (POSIX `gettimeofday`; Windows `GetSystemTimeAsFileTime`). NTP-jumpable — pair with `wall_micros` for sub-second precision, or use the monotonic accessors below for elapsed-time measurements.
+- `os.wall_micros()` → `int` - Sub-second microsecond fraction (0..999999) from the same `struct timeval` as `wall_seconds`.
+- `os.now_monotonic_ms()` → `long` - Monotonic clock, milliseconds since boot / process-start / arbitrary epoch. Value-domain is opaque; only *deltas* are meaningful. POSIX `clock_gettime(CLOCK_MONOTONIC)`; Windows `QueryPerformanceCounter`. Use for animation tick loops, frame-time budgets, microbenchmarks — anything that must survive a wall-clock jump.
+- `os.now_monotonic_ns()` → `long` - Same source as `now_monotonic_ms`, nanosecond precision. Useful for sub-millisecond timing.
 - `aether_args_count()` → `int` - Number of command-line arguments
 - `aether_args_get(index)` → `string` - Get the i-th argument; null if out of range
 - `aether_argv0()` → `string` - Path the OS launched the current process with (argv[0]); null before `aether_args_init` runs

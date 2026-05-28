@@ -123,3 +123,10 @@ double math_random_float(void) {
     }
     return (double)rand() / (double)RAND_MAX;
 }
+
+// Function-constants — see header comment.
+double math_pi(void)         { return 3.14159265358979323846; }
+double math_tau(void)        { return 6.28318530717958647692; }
+double math_e(void)          { return 2.71828182845904523536; }
+double math_deg_to_rad(void) { return 0.017453292519943295; }  /* PI/180 */
+double math_rad_to_deg(void) { return 57.29577951308232; }     /* 180/PI */

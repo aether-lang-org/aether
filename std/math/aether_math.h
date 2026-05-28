@@ -33,6 +33,18 @@ void math_random_seed(unsigned int seed);
 int math_random_int(int min, int max);
 double math_random_float(void);
 
+// Function-constants. Aether has no const-expression evaluator at the
+// call site, so trigonometric / radian-conversion constants are
+// exposed as zero-arg functions that return the value. The C lowering
+// is a trivial return; any reasonable C compiler inlines it. Keeps
+// the existing `math_*` convention so `math.pi()` reads alongside
+// `math.sqrt(x)` etc.
+double math_pi(void);
+double math_tau(void);
+double math_e(void);
+double math_deg_to_rad(void);   // PI/180
+double math_rad_to_deg(void);   // 180/PI
+
 // Constants
 #define PI 3.14159265358979323846
 #define E 2.71828182845904523536

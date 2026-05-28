@@ -23,11 +23,12 @@ exports (
     aether_bytes_length,
     aether_bytes_set_le16, aether_bytes_get_le16,
     aether_bytes_set_le32, aether_bytes_get_le32,
-    aether_bytes_copy_from_string, aether_bytes_copy_within,
+    aether_bytes_copy_from_string, aether_bytes_copy_from_bytes,
+    aether_bytes_copy_within,
     aether_bytes_finish, aether_bytes_free,
     new, set, get, length,
     set_le16, get_le16, set_le32, get_le32,
-    copy_from_string, copy_within, finish, free
+    copy_from_string, copy_from_bytes, copy_within, finish, free
 )
 
 // ---- Raw externs ----
@@ -40,6 +41,12 @@ extern aether_bytes_get_le16(b: ptr, index: int) -> int
 extern aether_bytes_set_le32(b: ptr, index: int, value: int) -> int
 extern aether_bytes_get_le32(b: ptr, index: int) -> int
 extern aether_bytes_copy_from_string(b: ptr, dst: int, src: string, src_len: int) -> int
+// Two-buffer copy. `dst` and `src` are distinct AetherBytes pointers;
+// `length` is the count of bytes to copy from `src` at offset
+// `src_off` into `dst` at offset `dst_off`. Grows `dst` if needed.
+// For an in-place copy (same buffer) use `copy_within` — it has the
+// deliberate RLE forward-overlap semantics that memmove() lacks.
+extern aether_bytes_copy_from_bytes(dst: ptr, dst_off: int, src: ptr, src_off: int, length: int) -> int
 // `length` here is the count of bytes to copy, not a buffer length.
 extern aether_bytes_copy_within(b: ptr, dst: int, src: int, length: int) -> int
 // `aether_bytes_finish` returns a freshly heap-owned AetherString
@@ -117,6 +124,17 @@ get_le32(b: ptr, index: int) -> int {
 // the C side). Returns 1 on success, 0 on failure.
 copy_from_string(b: ptr, dst: int, src: string, src_len: int) -> int {
     return aether_bytes_copy_from_string(b, dst, src, src_len)
+}
+
+// Copy `length` bytes from `src` buffer at offset `src_off` into
+// `dst` buffer at offset `dst_off`. The buffers must be distinct;
+// for an in-place copy use `copy_within`. Grows the destination
+// buffer if needed. Returns 1 on success, 0 on failure (NULL buffer,
+// negative offsets/length, source range past src's logical length,
+// or destination grow OOM). Canonical use: two-pass separable
+// Gaussian blur (pixels → temp → pixels).
+copy_from_bytes(dst: ptr, dst_off: int, src: ptr, src_off: int, length: int) -> int {
+    return aether_bytes_copy_from_bytes(dst, dst_off, src, src_off, length)
 }
 
 // Copy `length` bytes from offset `src` to offset `dst` *within the

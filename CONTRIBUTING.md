@@ -321,6 +321,20 @@ rot.
 exist on Windows (no `/bin/sh`, no `ln`). Direct `symlink(2)` at least
 has a clean `#ifndef _WIN32` boundary.
 
+**5a. Aether `long` lowers to `int64_t` on every platform; on the C
+side, use `int64_t` (or `long long`) — never C `long`.** On Windows
+(LLP64) C `long` is 32-bit; on LP64 Linux/macOS it's 64-bit. If a
+stdlib C function whose return is exposed as Aether `long` declares the
+return type as C `long`, the function writes 4 bytes into Aether's
+8-byte slot on Windows and either truncates large values or sign-extends
+garbage into the upper 32 bits. Same hazard for out-parameters
+(`long*` → `long long*` / `int64_t*`) and parsers (`strtol` →
+`strtoll`). PR #562 (`fix(std.string): to_long 64-bit on Windows
+too`, commit `8df0c4c`) is the canonical instance — Linux CI was happy,
+Windows CI surfaced the truncation. Default to `int64_t` from
+`<stdint.h>` for explicit width; reach for `long long` only when an
+older library API forces your hand.
+
 **6. Prefer existing portable helpers over re-rolling your own path
 handling.** `std/fs/aether_fs.c` provides `path_join`, `path_dirname`,
 `path_basename`, `path_normalize`, `path_is_absolute`. These already
