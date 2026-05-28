@@ -186,6 +186,20 @@ AetherString* string_from_long(long long value);
 // — see the .c-side comment for the full diagnosis.
 AetherString* string_from_float(double value);
 
+// Inverse of string_to_int_radix: render `value` in base `radix`
+// (2..36). Empty string on out-of-range radix; '-' prefix for
+// negatives. long long for LLP64 safety (matches the to_int_radix
+// shape).
+AetherString* string_from_int_radix(long long value, int radix);
+
+// Pad to a fixed width with `pad_char` (single-byte char code).
+// If s is already >= total_width chars, returns a fresh copy (no
+// truncation). pad_start prepends; pad_end appends. Allocation
+// behaviour is uniform across both branches so callers always
+// release the result the same way.
+AetherString* string_pad_start(const void* s, int total_width, int pad_char);
+AetherString* string_pad_end(const void* s, int total_width, int pad_char);
+
 // Parsing (string -> number) — raw form with out-parameter.
 // Returns 1 on success, 0 on failure. Result stored in out_value.
 // Aether code should prefer the Go-style wrappers in std.string

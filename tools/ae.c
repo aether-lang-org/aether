@@ -6316,6 +6316,33 @@ static int cmd_cflags(int argc, char** argv) {
         if (wrote_anything) fputc(' ', stdout);
         fputs("-pthread -lm", stdout);
         wrote_anything = 1;
+
+        // Transitive deps. libaether.a was compiled with whatever optional
+        // libraries pkg-config detected at Aether-build time (PCRE2 for
+        // std.regex; OpenSSL for std.cryptography and std.http TLS; zlib
+        // for std.zlib and HTTP gzip; nghttp2 for h2). Downstream binaries
+        // that use those modules need the SAME libs on their link line, or
+        // they get `undefined reference to pcre2_*` and similar at link
+        // time. `ae build` (cmd_build, ae.c:~1877) already appends these
+        // strings; `ae cflags` did not — the docs promise "use $(ae cflags)
+        // in your gcc line" but that promise was broken for any binary
+        // touching the four optional modules above. Now matched.
+        //
+        // Empty-string guard: pkg-config-failed builds set the macro to
+        // ""; we skip the empty case so downstream doesn't see stray
+        // whitespace.
+#ifdef AETHER_OPENSSL_LIBS
+        if (AETHER_OPENSSL_LIBS[0]) { fputc(' ', stdout); fputs(AETHER_OPENSSL_LIBS, stdout); }
+#endif
+#ifdef AETHER_ZLIB_LIBS
+        if (AETHER_ZLIB_LIBS[0])    { fputc(' ', stdout); fputs(AETHER_ZLIB_LIBS, stdout); }
+#endif
+#ifdef AETHER_NGHTTP2_LIBS
+        if (AETHER_NGHTTP2_LIBS[0]) { fputc(' ', stdout); fputs(AETHER_NGHTTP2_LIBS, stdout); }
+#endif
+#ifdef AETHER_PCRE2_LIBS
+        if (AETHER_PCRE2_LIBS[0])   { fputc(' ', stdout); fputs(AETHER_PCRE2_LIBS, stdout); }
+#endif
     }
 
     if (wrote_anything) fputc('\n', stdout);
