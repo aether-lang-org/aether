@@ -1,0 +1,233 @@
+// std.regex — Perl-compatible regular expressions (PCRE2-backed).
+// Import with: import std.regex
+//
+// Captures, $1/$2 substitutions, Unicode, look-around, alternation,
+// non-greedy, etc. — anything libpcre2-8 supports. When the build
+// didn't detect libpcre2-8 (Makefile probes pkg-config libpcre2-8),
+// every entry point still compiles but returns a clean diagnostic via
+// regex.last_error() — the build never fails for lack of the dependency.
+//
+// Quick example:
+//
+//   import std.regex
+//
+//   main() {
+//       re, err = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})")
+//       if err != "" { println("bad pattern: ${err}"); return }
+//
+//       caps, _ = regex.captures(re, "release 2026-05-28 shipped")
+//       if caps != null {
+//           // group 0 = whole match; 1..3 = captured groups
+//           println("year=${regex.capture(caps, 1)}")
+//           println("month=${regex.capture(caps, 2)}")
+//           regex.captures_free(caps)
+//       }
+//       regex.free(re)
+//   }
+//
+// Ownership: handles (re, caps, fa) are caller-owned; free them with
+// regex.free / regex.captures_free / regex.find_all_free. Strings
+// returned from regex.capture / regex.replace* are heap-tracked
+// AetherString refcounts — Aether's auto-cleanup reclaims them.
+
+exports (
+    // raw externs (callable, but the wrappers below are the Go-style API)
+    aether_regex_compile, aether_regex_free, aether_regex_matches,
+    aether_regex_captures, aether_regex_captures_count, aether_regex_captures_get,
+    aether_regex_captures_start, aether_regex_captures_end, aether_regex_captures_free,
+    aether_regex_find_all, aether_regex_find_all_count,
+    aether_regex_find_all_start, aether_regex_find_all_end, aether_regex_find_all_free,
+    aether_regex_replace, aether_regex_replace_all,
+    aether_regex_last_error, aether_regex_clear_last_error,
+
+    // Aether-side wrappers
+    compile, compile_flags, free, last_error, clear_last_error,
+    matches, find,
+    captures, capture_count, capture, capture_start, capture_end, captures_free,
+    find_all, find_all_count, find_all_start, find_all_end, find_all_free,
+    replace, replace_all,
+    matches_lit, find_lit,
+
+    // flag constants (PCRE2 option bits — pass to compile_flags)
+    FLAG_CASELESS, FLAG_MULTILINE, FLAG_DOTALL, FLAG_EXTENDED, FLAG_UNGREEDY
+)
+
+// PCRE2 option bits — kept in sync with <pcre2.h>.
+const FLAG_CASELESS   = 0x00000008   // case-insensitive match
+const FLAG_MULTILINE  = 0x00000400   // ^ and $ match per-line
+const FLAG_DOTALL     = 0x00000020   // . matches newline
+const FLAG_EXTENDED   = 0x00000080   // ignore whitespace + #comments in pattern
+const FLAG_UNGREEDY   = 0x00040000   // greedy quantifiers become lazy and vice versa
+
+// ---- Raw externs (resolved by std/regex/aether_regex.c).
+
+extern aether_regex_compile(pattern: string, flags: int) -> ptr
+extern aether_regex_free(re: ptr)
+extern aether_regex_matches(re: ptr, s: string) -> int
+
+extern aether_regex_captures(re: ptr, s: string) -> ptr
+extern aether_regex_captures_count(caps: ptr) -> int
+extern aether_regex_captures_get(caps: ptr, index: int) -> string @heap
+extern aether_regex_captures_start(caps: ptr, index: int) -> int
+extern aether_regex_captures_end(caps: ptr, index: int) -> int
+extern aether_regex_captures_free(caps: ptr)
+
+extern aether_regex_find_all(re: ptr, s: string) -> ptr
+extern aether_regex_find_all_count(fa: ptr) -> int
+extern aether_regex_find_all_start(fa: ptr, index: int) -> int
+extern aether_regex_find_all_end(fa: ptr, index: int) -> int
+extern aether_regex_find_all_free(fa: ptr)
+
+extern aether_regex_replace(re: ptr, s: string, repl: string) -> string @heap
+extern aether_regex_replace_all(re: ptr, s: string, repl: string) -> string @heap
+
+extern aether_regex_last_error() -> string
+extern aether_regex_clear_last_error()
+
+// ---- Lifecycle ------------------------------------------------------
+
+// Compile a pattern. Returns (re, "") on success; (null, error) on a
+// pattern-syntax error or when the build lacks libpcre2-8.
+compile(pattern: string) -> (ptr, string) {
+    re = aether_regex_compile(pattern, 0)
+    if re == null { return null, aether_regex_last_error() }
+    return re, ""
+}
+
+// As compile, with PCRE2 option bits (FLAG_CASELESS | FLAG_MULTILINE …).
+compile_flags(pattern: string, flags: int) -> (ptr, string) {
+    re = aether_regex_compile(pattern, flags)
+    if re == null { return null, aether_regex_last_error() }
+    return re, ""
+}
+
+// Free a compiled regex. Safe to call with null.
+free(re: ptr) {
+    aether_regex_free(re)
+}
+
+// The last error message set by compile / captures / find_all / replace*.
+// "" if none. Diagnostics for the no-match case are NOT errors — captures
+// returns null with last_error == "" when the pattern simply didn't match.
+last_error() -> string {
+    return aether_regex_last_error()
+}
+
+clear_last_error() {
+    aether_regex_clear_last_error()
+}
+
+// ---- Match queries --------------------------------------------------
+
+// Does the pattern match anywhere in s? 1 if yes, 0 if no.
+matches(re: ptr, s: string) -> int {
+    return aether_regex_matches(re, s)
+}
+
+// First match span: returns (start_byte, end_byte, err). start = -1
+// when there's no match (err == "") OR a real error (err != "").
+find(re: ptr, s: string) -> (int, int, string) {
+    caps = aether_regex_captures(re, s)
+    if caps == null {
+        e = aether_regex_last_error()
+        return -1, -1, e
+    }
+    st = aether_regex_captures_start(caps, 0)
+    en = aether_regex_captures_end(caps, 0)
+    aether_regex_captures_free(caps)
+    return st, en, ""
+}
+
+// ---- Captures -------------------------------------------------------
+//
+// captures(re, s) returns (caps, err). On a match, caps is a handle the
+// caller frees via captures_free; on no match, caps == null and err == "".
+// On a real error (corrupt pattern, OOM), caps == null and err != "".
+//
+// Group 0 = whole match; groups 1..capture_count-1 = the parenthesized
+// captures, in left-to-right order. capture(caps, i) returns "" for
+// out-of-range or unset (optional, didn't participate) groups.
+
+captures(re: ptr, s: string) -> (ptr, string) {
+    caps = aether_regex_captures(re, s)
+    if caps == null {
+        e = aether_regex_last_error()
+        return null, e
+    }
+    return caps, ""
+}
+
+capture_count(caps: ptr) -> int { return aether_regex_captures_count(caps) }
+
+capture(caps: ptr, index: int) -> string {
+    return aether_regex_captures_get(caps, index)
+}
+
+capture_start(caps: ptr, index: int) -> int {
+    return aether_regex_captures_start(caps, index)
+}
+
+capture_end(caps: ptr, index: int) -> int {
+    return aether_regex_captures_end(caps, index)
+}
+
+captures_free(caps: ptr) { aether_regex_captures_free(caps) }
+
+// ---- find_all -------------------------------------------------------
+//
+// All non-overlapping matches in s, in subject order. Returns (fa, err)
+// where fa is a handle holding N spans; iterate via find_all_count +
+// find_all_start(i) / find_all_end(i). Free with find_all_free.
+
+find_all(re: ptr, s: string) -> (ptr, string) {
+    fa = aether_regex_find_all(re, s)
+    if fa == null {
+        e = aether_regex_last_error()
+        return null, e
+    }
+    return fa, ""
+}
+
+find_all_count(fa: ptr) -> int { return aether_regex_find_all_count(fa) }
+find_all_start(fa: ptr, index: int) -> int { return aether_regex_find_all_start(fa, index) }
+find_all_end(fa: ptr, index: int) -> int { return aether_regex_find_all_end(fa, index) }
+find_all_free(fa: ptr) { aether_regex_find_all_free(fa) }
+
+// ---- Replace --------------------------------------------------------
+//
+// PCRE2 substitution syntax: $0..$9 / ${name} / $$ for literal $.
+// replace replaces only the first match; replace_all replaces every
+// non-overlapping match. Returns (out, err); err == "" on success.
+
+replace(re: ptr, s: string, repl: string) -> (string, string) {
+    out = aether_regex_replace(re, s, repl)
+    e = aether_regex_last_error()
+    return out, e
+}
+
+replace_all(re: ptr, s: string, repl: string) -> (string, string) {
+    out = aether_regex_replace_all(re, s, repl)
+    e = aether_regex_last_error()
+    return out, e
+}
+
+// ---- One-shot convenience -------------------------------------------
+//
+// Compile + match/find + free, for callers that don't need to reuse the
+// pattern. For hot loops, compile() once and reuse the handle.
+
+matches_lit(pattern: string, s: string) -> (int, string) {
+    re, err = compile(pattern)
+    if err != "" { return 0, err }
+    ok = aether_regex_matches(re, s)
+    aether_regex_free(re)
+    return ok, ""
+}
+
+find_lit(pattern: string, s: string) -> (int, int, string) {
+    re, err = compile(pattern)
+    if err != "" { return -1, -1, err }
+    st, en, ferr = find(re, s)
+    aether_regex_free(re)
+    return st, en, ferr
+}

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.regex` — Perl-compatible regex via libpcre2-8**
+  (`std/regex/{module.ae,aether_regex.c}`, `Makefile`, `tools/ae.c`,
+  `docs/bootstrap-from-source.md`). Full PCRE2 surface: captures
+  (numbered + named), `$1`/`$2`/`${name}` substitutions, Unicode,
+  look-around, alternation, non-greedy, character classes, flags
+  (`FLAG_CASELESS`/`MULTILINE`/`DOTALL`/`EXTENDED`/`UNGREEDY`). Go-style
+  wrapper API (`regex.compile`, `compile_flags`, `matches`, `find`,
+  `captures` + accessors, `find_all` + accessors, `replace`,
+  `replace_all`, one-shot `matches_lit` / `find_lit`, `last_error`).
+  PCRE2 is auto-detected via `pkg-config libpcre2-8` (mirroring the
+  existing OpenSSL/zlib/nghttp2 pattern); without `libpcre2-dev` the
+  build still succeeds and every entry point returns a clean
+  "built without libpcre2-8" via `regex.last_error()`. Test:
+  `tests/regression/test_regex.ae`.
+
 ## [0.190.0]
 
 ### Fixed
