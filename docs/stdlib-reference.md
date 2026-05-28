@@ -486,6 +486,7 @@ For a `split_once`-style operation (find the first `sep` in `s`, return the halv
 **Parsing (Go-style):**
 - `string.to_int(s)` → `(int, string)` - Parse base-10 integer
 - `string.to_long(s)` → `(long, string)` - Parse 64-bit integer
+- `string.to_int_radix(s, radix)` → `(long, string)` - Parse base-N integer; `radix` in `[2, 36]`. No `"0x"`/`"0b"` prefix recognition. Returns `long` so 32-bit-wide hex (ARGB colors, file offsets) survives. Errors on invalid radix, invalid digit, empty input, overflow, or trailing garbage.
 - `string.to_float(s)` → `(float, string)` - Parse float
 - `string.to_double(s)` → `(float, string)` - Parse double
 

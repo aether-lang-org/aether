@@ -1,0 +1,129 @@
+// Regression: std.string numeric emit-side (from_int / from_long /
+// from_float) must accept the full Aether width.
+//
+// Symmetric companion to test_string_to_number_widths.ae (which
+// covers the parse side). The from_float bug surfaced from the
+// aether-ui CVG port: snprintf("%g", value) was declared with a C
+// `float` parameter while Aether's `float` lowers to C `double`
+// (8 bytes). The Aether-side ABI pushes 8 bytes; the C side read
+// only the low 4 as IEEE-754 binary32, which is mostly mantissa →
+// garbage. `1.0` happened to read back as `+0.0f` (low-32-bits of
+// double(1.0) are all zero) → `from_float(1.0) = "0"` was the
+// smoking gun.
+//
+// Same bug class as PR #562 (`to_long` 32-bit truncation on
+// Windows; `to_float` returning a 32-bit `float` from a function
+// the Aether side expected to be 64-bit). Both directions of every
+// numeric conversion now pinned by regression tests.
+
+import std.string
+
+extern exit(code: int)
+
+eq(a: string, b: string) -> int {
+    return string.equals(a, b)
+}
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    println("=== std.string from_* width regression ===")
+
+    // ---- from_int: full int32 range round-trips -----------------
+
+    if eq(string.from_int(2147483647), "2147483647") != 1 {
+        fail("from_int(INT_MAX): got '${string.from_int(2147483647)}'")
+    }
+    if eq(string.from_int(0 - 2147483648), "-2147483648") != 1 {
+        fail("from_int(INT_MIN): got '${string.from_int(0 - 2147483648)}'")
+    }
+    if eq(string.from_int(42), "42") != 1 { fail("from_int(42)") }
+    if eq(string.from_int(0), "0") != 1 { fail("from_int(0)") }
+    println("  PASS: from_int spans INT_MAX/INT_MIN/42/0")
+
+    // ---- from_long: full int64 range round-trips ----------------
+    //
+    // 2^32 (overflows int32). 9 billion (typical big file size).
+    // -2^33 (negative beyond int32). All must survive without
+    // truncation — the long ABI on the Aether side is 64-bit on
+    // every platform (LLP64 Windows included; that's the lesson
+    // PR #562 pinned for the parse side, and the .c emit side
+    // already uses `long long` so this should round-trip).
+
+    if eq(string.from_long(4294967296), "4294967296") != 1 {
+        fail("from_long(2^32): got '${string.from_long(4294967296)}'")
+    }
+    if eq(string.from_long(9000000000), "9000000000") != 1 {
+        fail("from_long(9e9): got '${string.from_long(9000000000)}'")
+    }
+    if eq(string.from_long(0 - 8589934592), "-8589934592") != 1 {
+        fail("from_long(-2^33): got '${string.from_long(0 - 8589934592)}'")
+    }
+    if eq(string.from_long(0), "0") != 1 { fail("from_long(0)") }
+    println("  PASS: from_long spans 2^32 / 9e9 / -2^33 / 0")
+
+    // ---- from_float: Aether `float` is 64-bit -------------------
+    //
+    // These were ALL broken pre-fix (returned things like "0",
+    // "1.26444e+11", "-1.8891e+26", "-8.23097e+21"). The bug was a
+    // C `float` parameter declared against an Aether `float`
+    // (= C `double`) caller — the low 32 mantissa bits of double(1.0)
+    // are zero, so it read back as +0.0f → "0".
+
+    if eq(string.from_float(1.0), "1") != 1 {
+        fail("from_float(1.0) = '${string.from_float(1.0)}' (want \"1\")")
+    }
+    if eq(string.from_float(3.14), "3.14") != 1 {
+        fail("from_float(3.14) = '${string.from_float(3.14)}' (want \"3.14\")")
+    }
+    if eq(string.from_float(0.0001), "0.0001") != 1 {
+        fail("from_float(0.0001) = '${string.from_float(0.0001)}'")
+    }
+    if eq(string.from_float(0.0), "0") != 1 {
+        fail("from_float(0.0) = '${string.from_float(0.0)}'")
+    }
+    if eq(string.from_float(0.0 - 2.5), "-2.5") != 1 {
+        fail("from_float(-2.5) = '${string.from_float(0.0 - 2.5)}'")
+    }
+    println("  PASS: from_float 1.0 / 3.14 / 0.0001 / 0.0 / -2.5")
+
+    // ---- Round-trip: from_float -> to_double should be ~identity --
+    //
+    // The strongest cross-check: emit then parse a high-precision
+    // double and verify it's within tolerance. Pre-fix this would
+    // have looked completely scrambled; post-fix it round-trips.
+
+    // Note: from_float uses snprintf("%g", ...) which defaults to 6
+    // significant digits — that's a chosen-precision concern (the
+    // CHANGELOG flags it as a follow-up), not the width bug. So the
+    // round-trip tolerance is "within %g's truncation noise" rather
+    // than "byte-exact." If we ever switch to %.17g, tighten this.
+    s = string.from_float(3.14159265358979)
+    v, err = string.to_double(s)
+    if eq(err, "") != 1 { fail("to_double on round-trip: err=${err}") }
+    diff = v - 3.14159265358979
+    if diff < 0.0 { diff = 0.0 - diff }
+    if diff > 0.0001 {
+        fail("round-trip drift: 3.14159265358979 -> '${s}' -> ${v} (diff=${diff})")
+    }
+    println("  PASS: from_float -> to_double round-trips 3.14159265358979 within %g precision")
+
+    // ---- Round-trip: from_long -> to_long for 2^40 ---------------
+    //
+    // Pin the int64 side too: a value clearly past 2^32 must round-
+    // trip exactly (no truncation in either direction).
+
+    big = 1099511627776  // 2^40
+    s2 = string.from_long(big)
+    v2, err2 = string.to_long(s2)
+    if eq(err2, "") != 1 { fail("to_long round-trip: err=${err2}") }
+    if v2 != big {
+        fail("long round-trip: ${big} -> '${s2}' -> ${v2}")
+    }
+    println("  PASS: from_long -> to_long round-trips 2^40")
+
+    println("\n=== All from_* width tests passed ===")
+}

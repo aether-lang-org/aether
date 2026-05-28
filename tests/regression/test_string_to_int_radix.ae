@@ -1,0 +1,165 @@
+// Regression: std.string.to_int_radix(s, radix) — base-N integer
+// parse. Companion to to_int (base-10 only). Headline use cases:
+// hex color decode (parseInt(hex, 16) patterns from JS ports),
+// hex byte fields in config files, binary masks, octal mode bits.
+//
+// API contract pinned by this test:
+//   - radix in [2, 36]; anything outside errors with "radix must be..."
+//   - returns (value: long, error: string)
+//   - no "0x" / "0b" prefix recognition — caller passes digit-only
+//   - full int64 range survives (LLP64-safe, per the same lesson
+//     PR #562 baked in for to_long)
+//   - trailing whitespace OK; trailing garbage errors
+
+import std.string
+
+extern exit(code: int)
+
+eq(a: string, b: string) -> int {
+    return string.equals(a, b)
+}
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    println("=== std.string.to_int_radix ===")
+
+    // ---- Hex parse — the headline use case --------------------
+    //
+    // The CVG port's parseColorToRGBA(hex) pattern: decode each
+    // two-char hex byte into a channel value (0..255).
+
+    v, err = string.to_int_radix("ff", 16)
+    if eq(err, "") != 1 { fail("hex ff: err=${err}") }
+    if v != 255 { fail("hex ff: got ${v}, want 255") }
+
+    v, err = string.to_int_radix("00", 16)
+    if eq(err, "") != 1 { fail("hex 00: err=${err}") }
+    if v != 0 { fail("hex 00: got ${v}, want 0") }
+
+    v, err = string.to_int_radix("a0", 16)
+    if eq(err, "") != 1 { fail("hex a0: err=${err}") }
+    if v != 160 { fail("hex a0: got ${v}, want 160") }
+
+    v, err = string.to_int_radix("DEADBEEF", 16)
+    if eq(err, "") != 1 { fail("hex DEADBEEF: err=${err}") }
+    if v != 3735928559 { fail("hex DEADBEEF: got ${v}, want 3735928559") }
+    println("  PASS: hex ff/00/a0/DEADBEEF")
+
+    // ---- Mixed-case hex ---------------------------------------
+
+    v, err = string.to_int_radix("AbCdEf", 16)
+    if eq(err, "") != 1 { fail("mixed-case hex: err=${err}") }
+    if v != 11259375 { fail("AbCdEf: got ${v}, want 11259375") }
+    println("  PASS: mixed-case hex")
+
+    // ---- Binary (radix 2) -------------------------------------
+
+    v, err = string.to_int_radix("1011", 2)
+    if eq(err, "") != 1 { fail("binary 1011: err=${err}") }
+    if v != 11 { fail("binary 1011: got ${v}, want 11") }
+
+    v, err = string.to_int_radix("11111111", 2)
+    if eq(err, "") != 1 { fail("binary 8x1: err=${err}") }
+    if v != 255 { fail("binary 8x1: got ${v}, want 255") }
+    println("  PASS: binary 1011 / 11111111")
+
+    // ---- Octal (radix 8) --------------------------------------
+
+    v, err = string.to_int_radix("755", 8)
+    if eq(err, "") != 1 { fail("octal 755: err=${err}") }
+    if v != 493 { fail("octal 755: got ${v}, want 493") }
+    println("  PASS: octal 755 (chmod-style)")
+
+    // ---- Decimal still works ----------------------------------
+
+    v, err = string.to_int_radix("42", 10)
+    if eq(err, "") != 1 { fail("decimal 42: err=${err}") }
+    if v != 42 { fail("decimal 42: got ${v}, want 42") }
+    println("  PASS: decimal 42 (radix=10 equivalent to to_int)")
+
+    // ---- Radix 36 (the strtoll max) ---------------------------
+    //
+    // "z" in radix 36 is 35; "zz" is 35*36 + 35 = 1295.
+
+    v, err = string.to_int_radix("z", 36)
+    if eq(err, "") != 1 { fail("radix-36 z: err=${err}") }
+    if v != 35 { fail("radix-36 z: got ${v}, want 35") }
+
+    v, err = string.to_int_radix("zz", 36)
+    if eq(err, "") != 1 { fail("radix-36 zz: err=${err}") }
+    if v != 1295 { fail("radix-36 zz: got ${v}, want 1295") }
+    println("  PASS: radix 36 (z=35, zz=1295)")
+
+    // ---- 64-bit width survives --------------------------------
+    //
+    // The same LLP64-safety lesson as to_long. Hex value FFFFFFFF
+    // (= 2^32 - 1) cannot fit in int32 but fits in long. This was
+    // the smoking-gun bug class that PR #562 fixed for to_long
+    // on Windows — pin it here too so the next iteration of the
+    // bug surfaces immediately.
+
+    v, err = string.to_int_radix("100000000", 16)  // 2^32
+    if eq(err, "") != 1 { fail("hex 2^32: err=${err}") }
+    if v != 4294967296 { fail("hex 2^32: got ${v}, want 4294967296") }
+
+    v, err = string.to_int_radix("10000000000", 16)  // 2^40
+    if eq(err, "") != 1 { fail("hex 2^40: err=${err}") }
+    if v != 1099511627776 { fail("hex 2^40: got ${v}, want 1099511627776") }
+    println("  PASS: 64-bit hex round-trips (2^32, 2^40)")
+
+    // ---- Negative numbers -------------------------------------
+
+    v, err = string.to_int_radix("-ff", 16)
+    if eq(err, "") != 1 { fail("hex -ff: err=${err}") }
+    if v != 0 - 255 { fail("hex -ff: got ${v}, want -255") }
+    println("  PASS: negative hex")
+
+    // ---- Error: invalid radix ---------------------------------
+
+    _, err = string.to_int_radix("ff", 1)
+    if eq(err, "") == 1 { fail("radix 1 should error") }
+
+    _, err = string.to_int_radix("ff", 37)
+    if eq(err, "") == 1 { fail("radix 37 should error") }
+
+    _, err = string.to_int_radix("ff", 0)
+    if eq(err, "") == 1 { fail("radix 0 should error") }
+    println("  PASS: invalid radix (1, 37, 0) rejected")
+
+    // ---- Error: invalid digit for radix -----------------------
+    //
+    // 'g' is not a valid base-16 digit; '2' is not a valid base-2
+    // digit; '8' is not a valid base-8 digit.
+
+    _, err = string.to_int_radix("g", 16)
+    if eq(err, "") == 1 { fail("'g' in hex should error") }
+
+    _, err = string.to_int_radix("2", 2)
+    if eq(err, "") == 1 { fail("'2' in binary should error") }
+
+    _, err = string.to_int_radix("8", 8)
+    if eq(err, "") == 1 { fail("'8' in octal should error") }
+    println("  PASS: out-of-range digits rejected per radix")
+
+    // ---- Error: empty / trailing-garbage ----------------------
+
+    _, err = string.to_int_radix("", 16)
+    if eq(err, "") == 1 { fail("empty string should error") }
+
+    _, err = string.to_int_radix("ff garbage", 16)
+    if eq(err, "") == 1 { fail("trailing garbage should error") }
+    println("  PASS: empty / trailing-garbage rejected")
+
+    // ---- Trailing whitespace OK -------------------------------
+
+    v, err = string.to_int_radix("ff  ", 16)
+    if eq(err, "") != 1 { fail("trailing space: err=${err}") }
+    if v != 255 { fail("trailing space: got ${v}") }
+    println("  PASS: trailing whitespace tolerated")
+
+    println("\n=== All to_int_radix tests passed ===")
+}

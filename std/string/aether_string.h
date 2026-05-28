@@ -180,7 +180,11 @@ AetherString* string_from_int(int value);
 // 64-bit sibling of string_from_int. Uses `long long` so it covers
 // Aether's `long` type across platforms where `long` is 32-bit (MSVC).
 AetherString* string_from_long(long long value);
-AetherString* string_from_float(float value);
+// Aether's `float` lowers to C `double`, so the parameter is `double`
+// (not C `float`). Symmetric to `string_get_float` (PR #562); the
+// ABI-mismatch hazard caused `from_float(1.0)` to serialise as `"0"`
+// — see the .c-side comment for the full diagnosis.
+AetherString* string_from_float(double value);
 
 // Parsing (string -> number) — raw form with out-parameter.
 // Returns 1 on success, 0 on failure. Result stored in out_value.
@@ -190,6 +194,13 @@ int string_to_int_raw(const void* str, int* out_value);
 int string_to_long_raw(const void* str, long long* out_value);  // 64-bit slot (Windows `long` is 32-bit)
 int string_to_float_raw(const void* str, float* out_value);
 int string_to_double_raw(const void* str, double* out_value);
+
+// Base-N parse, radix in 2..36 (strtoll's range). Out-slot is
+// `long long*` for LLP64 safety, matching string_to_long_raw. No
+// "0x" / "0b" prefix recognition — caller passes the digit-only
+// substring. Returns 1 on success, 0 on null/empty/radix-out-of-range
+// /parse-failure/overflow/trailing-garbage.
+int string_to_int_radix_raw(const void* str, int radix, long long* out_value);
 
 // Split-return helpers used by the Go-style wrappers. `_try` returns
 // 1 if parseable, 0 otherwise. `_get` returns the parsed value or
@@ -202,6 +213,10 @@ int    string_try_float(const void* s);
 double string_get_float(const void* s);  // 64-bit: Aether `float` lowers to C double
 int    string_try_double(const void* s);
 double string_get_double(const void* s);
+// Base-N split-return — same shape as try_long/get_long, with a radix
+// parameter (2..36). 64-bit out-slot; safe across LLP64.
+int       string_try_int_radix(const void* s, int radix);
+long long string_get_int_radix(const void* s, int radix);
 
 // Formatting (printf-style — C-only, varargs)
 AetherString* string_format(const char* fmt, ...);

@@ -614,7 +614,19 @@ AetherString* string_from_long(long long value) {
     return string_new(buffer);
 }
 
-AetherString* string_from_float(float value) {
+// Aether's `float` lowers to C `double` (8 bytes), so the parameter
+// MUST be declared `double` here — not C `float`. Same ABI-mismatch
+// hazard PR #562 caught for the symmetric parse side
+// (`string_get_float`): the Aether caller pushes 8 bytes, the C side
+// reads only the low 4 as an IEEE-754 binary32, and most doubles'
+// low 32 bits are mostly mantissa → garbage on read. `1.0` happens to
+// serialise as `"0"` because its low 32 mantissa bits are zero, which
+// reads back as +0.0f — the smoking-gun symptom that surfaced from
+// the aether-ui CVG port.
+//
+// `%g` already prints a `double` correctly (it's the default for
+// floating-point promotion in varargs), so the format string stays.
+AetherString* string_from_float(double value) {
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "%g", value);
     return string_new(buffer);
@@ -624,6 +636,41 @@ AetherString* string_from_float(float value) {
 // The `_raw` variants take an out-parameter and return 1/0 for ok/fail.
 // The Aether-native Go-style wrappers `string.to_int` etc. in module.ae
 // call the `_try`/`_get` pairs below for a cleaner tuple-return shape.
+// Base-N integer parse. `radix` must be 2..36 (strtoll's accepted
+// range; same as C's strtol). No "0x" / "0b" prefix recognition — the
+// caller passes the digit-only substring (strtoll *does* honour an
+// "0x" prefix when radix is 0 or 16, but Aether callers historically
+// pass already-stripped substrings, and base-16 with surprise prefix
+// handling would be a footgun in things like CSV/HSV color parsing).
+// `out_value` is `long long*` (Aether `long` = int64) — same LLP64
+// safety as string_to_long_raw. Returns 1 on success, 0 on:
+//   - null/empty input or null out_value
+//   - radix outside [2, 36]
+//   - no conversion (first char not a valid digit for the radix)
+//   - ERANGE overflow
+//   - trailing non-whitespace garbage
+int string_to_int_radix_raw(const void* str, int radix, long long* out_value) {
+    const char* data = str_data(str);
+    if (!str || !data[0] || !out_value) return 0;
+    if (radix < 2 || radix > 36) return 0;
+
+    char* endptr;
+    errno = 0;
+    long long val = strtoll(data, &endptr, radix);
+
+    if (endptr == data || errno == ERANGE) {
+        return 0;
+    }
+    // Skip trailing whitespace; anything else is an error.
+    while (*endptr == ' ' || *endptr == '\t' || *endptr == '\n' || *endptr == '\r') {
+        endptr++;
+    }
+    if (*endptr != '\0') return 0;
+
+    *out_value = val;
+    return 1;
+}
+
 int string_to_int_raw(const void* str, int* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
@@ -724,6 +771,17 @@ int string_try_long(const void* s) {
 // `long` is 32-bit on Windows (LLP64) and would truncate here.
 long long string_get_long(const void* s) {
     long long v = 0; string_to_long_raw(s, &v); return v;
+}
+// Base-N split-return helpers. Same shape as try_long / get_long; the
+// `radix` parameter is forwarded to string_to_int_radix_raw. Out-slot
+// is `long long` for LLP64 safety. The Aether-side wrapper in
+// std/string/module.ae assembles these into a Go-style
+// (value, error) tuple.
+int string_try_int_radix(const void* s, int radix) {
+    long long v; return string_to_int_radix_raw(s, radix, &v);
+}
+long long string_get_int_radix(const void* s, int radix) {
+    long long v = 0; string_to_int_radix_raw(s, radix, &v); return v;
 }
 int string_try_float(const void* s) {
     float v; return string_to_float_raw(s, &v);
