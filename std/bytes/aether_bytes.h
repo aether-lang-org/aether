@@ -75,6 +75,22 @@ int aether_bytes_get_le32(AetherBytes* b, int index);
 int aether_bytes_copy_from_string(AetherBytes* b, int dst,
                                   const void* src, int src_len);
 
+/* Copy `length` bytes from `src` buffer offset `src_off` into `dst`
+ * buffer offset `dst_off`. The two buffers must be distinct; for an
+ * in-place copy use `aether_bytes_copy_within` (which has the deliberate
+ * forward-overlap semantics for RLE expansion). Grows the destination
+ * buffer if `dst_off + length` exceeds capacity, zero-filling any gap
+ * between the previous tail and `dst_off`.
+ *
+ * Returns 1 on success, 0 on failure (either buffer NULL, negative
+ * offset/length, source range past `src->length`, or destination
+ * grow OOM). Two-buffer copies are common in image-codec two-pass
+ * algorithms (separable Gaussian: horizontal pass into temp buffer,
+ * vertical pass from temp back into the output). */
+int aether_bytes_copy_from_bytes(AetherBytes* dst, int dst_off,
+                                 AetherBytes* src, int src_off,
+                                 int length);
+
 /* Copy `length` bytes from offset `src` to offset `dst` *within the
  * same buffer*, forward byte-by-byte. Bytes already written in this
  * call are visible to subsequent reads inside it — the deliberate

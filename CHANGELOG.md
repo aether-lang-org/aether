@@ -9,6 +9,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Tier-A stdlib data primitives for the aether-ui CVG port** (one
+  batched PR; each item independently small but blocking the same
+  downstream porting effort, so shipped together to conserve CI
+  minutes):
+  - **`std.floatarr` — fixed-size packed-double buffer** (new
+    `std/floatarr/module.ae`, new
+    `std/collections/aether_floatarr.c`,
+    `std/collections/aether_collections.h`, `Makefile`,
+    `tests/regression/test_floatarr.ae`). Float twin of `std.intarr`
+    with identical API shape (raw externs + Go-style wrappers; raw
+    `_unchecked` variants for hot loops). Aether's `float` lowers to
+    C `double`, so the element type is `double` end-to-end. Motivating
+    use case: SVG path-command arg storage (`number[]` in
+    `normalizer.ts`), rasterizer edge tables, bbox corner accumulators,
+    blur kernel coefficients — every `number[]` site the CVG port was
+    boxing via `*Pt`/`std.list` for one scalar each.
+  - **`std.math.pi / tau / e / deg_to_rad / rad_to_deg`** as zero-arg
+    function-constants (`std/math/{module.ae,aether_math.c,aether_math.h}`,
+    `tests/regression/test_math_constants.ae`). Aether has no
+    const-expression evaluator at the call site, so the established
+    convention is `math_pi()` → `return <literal>` (C inlines it).
+    Replaces 24+ CVG sites that re-derived `Math.PI` / `Math.PI/180`
+    from first principles per-file.
+  - **`bytes.copy_from_bytes(dst, dst_off, src, src_off, length)`**
+    (`std/bytes/{module.ae,aether_bytes.c,aether_bytes.h}`,
+    `tests/regression/test_bytes_copy_from_bytes.ae`). Two-buffer
+    copy with distinct source and destination AetherBytes pointers
+    (memmove-based with bounds checks). Companion to the existing
+    `copy_within` (same buffer, RLE-overlap semantics) and
+    `copy_from_string` (string → bytes). Motivating use case:
+    two-pass separable Gaussian blur — `pixels → temp → pixels` —
+    where `copy_within` is wrong because the buffers are distinct
+    allocations.
+  - **`os.now_monotonic_ms()` / `os.now_monotonic_ns()`** —
+    monotonic clock primitives
+    (`std/os/{module.ae,aether_os.c,aether_os.h}`,
+    `tests/regression/test_os_monotonic_clock.ae`). POSIX
+    `clock_gettime(CLOCK_MONOTONIC)`; Windows
+    `QueryPerformanceCounter` with cached `QueryPerformanceFrequency`
+    (split-multiply on the ns path to avoid int64 overflow on
+    long uptimes). The value-domain is opaque (epoch is
+    boot / process-start / arbitrary); only *deltas* are meaningful.
+    Returns 0 on no-filesystem (`AETHER_NO_FILESYSTEM`) builds. Use
+    for animation tick loops, frame-time budgets, microbenchmarks
+    — anything where wall-clock NTP-jumps would corrupt elapsed-time
+    measurement. **C signature is `int64_t`, NOT C `long`** — same
+    LLP64 / 32-bit-`long` hazard PR #562 fixed for
+    `string_to_long_raw`; documented inline so the next addition
+    starts from the right invariant. CONTRIBUTING.md adds a
+    portability note for the pattern.
+
 ## [0.191.0]
 
 ### Added

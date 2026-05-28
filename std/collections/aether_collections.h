@@ -7,6 +7,7 @@
 typedef struct ArrayList ArrayList;
 typedef struct HashMap HashMap;
 typedef struct IntArray IntArray;
+typedef struct FloatArray FloatArray;
 
 ArrayList* list_new();
 int list_add_raw(ArrayList* list, void* item);
@@ -116,5 +117,48 @@ void intarr_fill(IntArray* arr, int value);
 
 // Release the backing buffer and the struct. Idempotent on NULL.
 void intarr_free(IntArray* arr);
+
+// -------------------------------------------------------------------
+// FloatArray — fixed-size packed double buffer with O(1) random access.
+//
+// The float twin of IntArray. Same shape, same bounds-check policy.
+// Aether's `float` lowers to C `double`, so the element type is
+// `double` end-to-end. Use this for SVG path-command arg storage,
+// rasterizer edge tables, bbox accumulators, blur kernel coefficients,
+// and any other workload that wants a flat packed-double buffer
+// without going through std.list's void*-boxed-per-entry overhead.
+// -------------------------------------------------------------------
+
+// Allocate a FloatArray of `size` elements, zero-initialised. Returns
+// NULL if size is negative or allocation failed. The `_raw` suffix
+// matches intarr_new_raw's collision-avoidance with the Aether-side
+// `floatarr.new` wrapper.
+FloatArray* floatarr_new_raw(int size);
+
+// Allocate and fill with `init` at every index.
+FloatArray* floatarr_new_filled_raw(int size, double init);
+
+// Number of elements. Returns -1 if `arr` is NULL — distinguishable
+// from a legal empty array (size 0).
+int floatarr_size(FloatArray* arr);
+
+// Read the value at `i`. Returns 0.0 if `arr` is NULL or `i` is
+// out-of-range. Aether wrapper `floatarr.get` turns these into
+// Go-style `(value, err)` returns.
+double floatarr_get_raw(FloatArray* arr, int i);
+
+// Write `value` at `i`. No-op if `arr` is NULL or `i` is out-of-range.
+void floatarr_set_raw(FloatArray* arr, int i, double value);
+
+// Hot-path skip-the-bounds-check variants. Caller is responsible for
+// keeping the index in [0, size); OOB is undefined behaviour.
+double floatarr_get_unchecked(FloatArray* arr, int i);
+void   floatarr_set_unchecked(FloatArray* arr, int i, double value);
+
+// Fill every element with `value`.
+void floatarr_fill(FloatArray* arr, double value);
+
+// Release the backing buffer and the struct. Idempotent on NULL.
+void floatarr_free(FloatArray* arr);
 
 #endif

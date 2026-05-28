@@ -1,0 +1,101 @@
+// Regression: std.bytes.copy_from_bytes — two-buffer copy with
+// distinct source and destination AetherBytes pointers. The
+// motivating use case is the two-pass separable Gaussian blur
+// (pixels -> temp -> pixels): the in-place copy_within is unsafe
+// here because the two buffers genuinely are distinct allocations.
+//
+// Covers:
+//   - basic byte-for-byte copy at zero offsets
+//   - non-zero src_off and dst_off
+//   - destination grows to fit when length > existing length
+//   - zero-fill gap when dst_off > current length
+//   - failure modes: null buffers, negative offsets, src OOB
+
+import std.bytes
+
+main() {
+    print("=== std.bytes.copy_from_bytes ===\n\n")
+
+    // ---- Test 1: basic copy at zero offsets ------------------
+
+    print("Test 1: basic copy\n")
+    src = bytes.new(16)
+    bytes.set(src, 0, 0xAA)
+    bytes.set(src, 1, 0xBB)
+    bytes.set(src, 2, 0xCC)
+    bytes.set(src, 3, 0xDD)
+
+    dst = bytes.new(16)
+    ok = bytes.copy_from_bytes(dst, 0, src, 0, 4)
+    if ok != 1 { print("  FAIL: copy returned 0\n"); exit(1) }
+    if bytes.get(dst, 0) != 0xAA { print("  FAIL [0]\n"); exit(1) }
+    if bytes.get(dst, 1) != 0xBB { print("  FAIL [1]\n"); exit(1) }
+    if bytes.get(dst, 2) != 0xCC { print("  FAIL [2]\n"); exit(1) }
+    if bytes.get(dst, 3) != 0xDD { print("  FAIL [3]\n"); exit(1) }
+    if bytes.length(dst) != 4    { print("  FAIL: dst length\n"); exit(1) }
+    print("  PASS: 4 bytes copied; dst length advanced\n")
+
+    // ---- Test 2: src_off and dst_off both non-zero -----------
+
+    print("\nTest 2: non-zero offsets\n")
+    dst2 = bytes.new(16)
+    bytes.set(dst2, 0, 0x11)
+    bytes.set(dst2, 1, 0x22)
+    ok = bytes.copy_from_bytes(dst2, 5, src, 1, 2)
+    if ok != 1 { print("  FAIL: copy returned 0\n"); exit(1) }
+    // Original prefix preserved
+    if bytes.get(dst2, 0) != 0x11 { print("  FAIL [0]\n"); exit(1) }
+    if bytes.get(dst2, 1) != 0x22 { print("  FAIL [1]\n"); exit(1) }
+    // Gap zero-filled
+    if bytes.get(dst2, 2) != 0 { print("  FAIL gap [2]\n"); exit(1) }
+    if bytes.get(dst2, 3) != 0 { print("  FAIL gap [3]\n"); exit(1) }
+    if bytes.get(dst2, 4) != 0 { print("  FAIL gap [4]\n"); exit(1) }
+    // src[1..2] landed at dst[5..6]
+    if bytes.get(dst2, 5) != 0xBB { print("  FAIL [5]\n"); exit(1) }
+    if bytes.get(dst2, 6) != 0xCC { print("  FAIL [6]\n"); exit(1) }
+    if bytes.length(dst2) != 7    { print("  FAIL: dst2 length\n"); exit(1) }
+    print("  PASS: src[1..2] -> dst[5..6], gap zero-filled\n")
+
+    // ---- Test 3: failure modes ------------------------------
+
+    print("\nTest 3: failure modes\n")
+    if bytes.copy_from_bytes(null, 0, src, 0, 4) != 0 {
+        print("  FAIL: null dst should fail\n"); exit(1)
+    }
+    if bytes.copy_from_bytes(dst, 0, null, 0, 4) != 0 {
+        print("  FAIL: null src should fail\n"); exit(1)
+    }
+    if bytes.copy_from_bytes(dst, -1, src, 0, 4) != 0 {
+        print("  FAIL: negative dst_off should fail\n"); exit(1)
+    }
+    if bytes.copy_from_bytes(dst, 0, src, -1, 4) != 0 {
+        print("  FAIL: negative src_off should fail\n"); exit(1)
+    }
+    if bytes.copy_from_bytes(dst, 0, src, 0, -1) != 0 {
+        print("  FAIL: negative length should fail\n"); exit(1)
+    }
+    // src has length 4; reading 5 bytes from offset 0 is OOB
+    if bytes.copy_from_bytes(dst, 0, src, 0, 100) != 0 {
+        print("  FAIL: src OOB should fail\n"); exit(1)
+    }
+    print("  PASS: nulls, negatives, src-OOB all rejected\n")
+
+    // ---- Test 4: zero-length is no-op success ----------------
+
+    print("\nTest 4: zero-length is no-op\n")
+    dst3 = bytes.new(8)
+    if bytes.copy_from_bytes(dst3, 0, src, 0, 0) != 1 {
+        print("  FAIL: zero-length should succeed\n"); exit(1)
+    }
+    if bytes.length(dst3) != 0 {
+        print("  FAIL: zero-length grew dst\n"); exit(1)
+    }
+    print("  PASS: 0-length copy is a no-op\n")
+
+    bytes.free(src)
+    bytes.free(dst)
+    bytes.free(dst2)
+    bytes.free(dst3)
+
+    print("\n=== All copy_from_bytes tests passed ===\n")
+}

@@ -1,0 +1,153 @@
+// Regression: std.floatarr — fixed-size packed double buffer (float
+// twin of std.intarr). Covers:
+//   - allocation + size reporting
+//   - zero-initialisation
+//   - floatarr_new_filled_raw sets every slot
+//   - raw get/set round-trip
+//   - Go-style wrapper error shapes (OOB, negative, null)
+//   - floatarr_fill resets a buffer
+//   - sub-integer precision survives the round-trip (the point of
+//     having doubles in the first place)
+
+import std.floatarr
+
+eps_ok(a: float, b: float) -> int {
+    diff = a - b
+    if diff < 0.0 { diff = 0.0 - diff }
+    if diff > 0.000001 { return 0 }
+    return 1
+}
+
+main() {
+    print("=== std.floatarr ===\n\n")
+
+    // ---- Test 1: allocation + size ----------------------------
+
+    print("Test 1: allocation + size\n")
+    a, err = floatarr.new(5)
+    if err != "" {
+        println("  FAIL: new(5): ${err}")
+        exit(1)
+    }
+    if floatarr_size(a) != 5 {
+        println("  FAIL: size != 5")
+        exit(1)
+    }
+    print("  PASS: 5-element array allocated\n")
+
+    // ---- Test 2: zero-initialisation --------------------------
+
+    print("\nTest 2: zero-initialisation\n")
+    i = 0
+    while i < 5 {
+        v = floatarr_get_raw(a, i)
+        if eps_ok(v, 0.0) == 0 {
+            println("  FAIL: slot ${i} not zero")
+            exit(1)
+        }
+        i = i + 1
+    }
+    print("  PASS: every slot zero\n")
+
+    // ---- Test 3: raw set/get round-trip with sub-integer values --
+
+    print("\nTest 3: set/get (sub-integer precision)\n")
+    floatarr_set_raw(a, 0, 3.14159265)
+    floatarr_set_raw(a, 2, 2.71828)
+    floatarr_set_raw(a, 4, 0.0 - 1.5)
+    if eps_ok(floatarr_get_raw(a, 0), 3.14159265) == 0 { print("  FAIL [0]\n"); exit(1) }
+    if eps_ok(floatarr_get_raw(a, 2), 2.71828) == 0    { print("  FAIL [2]\n"); exit(1) }
+    if eps_ok(floatarr_get_raw(a, 4), 0.0 - 1.5) == 0  { print("  FAIL [4]\n"); exit(1) }
+    // Untouched slots still zero
+    if eps_ok(floatarr_get_raw(a, 1), 0.0) == 0 { print("  FAIL [1]\n"); exit(1) }
+    if eps_ok(floatarr_get_raw(a, 3), 0.0) == 0 { print("  FAIL [3]\n"); exit(1) }
+    print("  PASS: pi/e/-1.5 round-trip, untouched slots stay zero\n")
+
+    floatarr_free(a)
+
+    // ---- Test 4: new_filled ----------------------------------
+
+    print("\nTest 4: new_filled\n")
+    b, err2 = floatarr.new_filled(4, 0.5)
+    if err2 != "" {
+        println("  FAIL: new_filled: ${err2}")
+        exit(1)
+    }
+    i = 0
+    while i < 4 {
+        if eps_ok(floatarr_get_raw(b, i), 0.5) == 0 {
+            println("  FAIL: slot ${i} != 0.5")
+            exit(1)
+        }
+        i = i + 1
+    }
+    print("  PASS: every slot == 0.5\n")
+
+    // ---- Test 5: fill resets ---------------------------------
+
+    print("\nTest 5: floatarr_fill resets\n")
+    floatarr_fill(b, 99.25)
+    i = 0
+    while i < 4 {
+        if eps_ok(floatarr_get_raw(b, i), 99.25) == 0 {
+            println("  FAIL: slot ${i} after fill")
+            exit(1)
+        }
+        i = i + 1
+    }
+    print("  PASS: fill(99.25) applied to every slot\n")
+
+    floatarr_free(b)
+
+    // ---- Test 6: wrapper error shapes ------------------------
+
+    print("\nTest 6: floatarr.get error shapes\n")
+    c, _ = floatarr.new(3)
+
+    _, err_oob = floatarr.get(c, 99)
+    if err_oob == "" { print("  FAIL: OOB positive should error\n"); exit(1) }
+
+    _, err_neg = floatarr.get(c, -1)
+    if err_neg == "" { print("  FAIL: negative should error\n"); exit(1) }
+
+    _, err_null = floatarr.get(null, 0)
+    if err_null == "" { print("  FAIL: null array should error\n"); exit(1) }
+
+    floatarr_set_raw(c, 1, 7.5)
+    v, err_ok = floatarr.get(c, 1)
+    if err_ok != "" { println("  FAIL: in-range errored: ${err_ok}"); exit(1) }
+    if eps_ok(v, 7.5) == 0 { print("  FAIL: wrong value\n"); exit(1) }
+
+    print("  PASS: OOB, negative, null all error; in-range returns the value\n")
+
+    // ---- Test 7: floatarr.set error shapes -------------------
+
+    print("\nTest 7: floatarr.set error shapes\n")
+    err_s_oob = floatarr.set(c, 99, 1.0)
+    if err_s_oob == "" { print("  FAIL: set OOB should error\n"); exit(1) }
+
+    err_s_null = floatarr.set(null, 0, 1.0)
+    if err_s_null == "" { print("  FAIL: set null should error\n"); exit(1) }
+
+    err_s_ok = floatarr.set(c, 2, 12.5)
+    if err_s_ok != "" { println("  FAIL: in-range set errored: ${err_s_ok}"); exit(1) }
+    if eps_ok(floatarr_get_raw(c, 2), 12.5) == 0 { print("  FAIL: value didn't stick\n"); exit(1) }
+
+    print("  PASS\n")
+
+    floatarr_free(c)
+
+    // ---- Test 8: negative size + zero size -------------------
+
+    print("\nTest 8: edge sizes\n")
+    _, err_neg_sz = floatarr.new(-5)
+    if err_neg_sz == "" { print("  FAIL: negative size should error\n"); exit(1) }
+
+    z, err_z = floatarr.new(0)
+    if err_z != "" { println("  FAIL: size=0 errored: ${err_z}"); exit(1) }
+    if floatarr_size(z) != 0 { print("  FAIL: zero size\n"); exit(1) }
+    floatarr_free(z)
+    print("  PASS: -5 rejected; size=0 legal\n")
+
+    print("\n=== All floatarr tests passed ===\n")
+}

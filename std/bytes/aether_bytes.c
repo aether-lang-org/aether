@@ -138,6 +138,27 @@ int aether_bytes_copy_from_string(AetherBytes* b, int dst,
     return 1;
 }
 
+int aether_bytes_copy_from_bytes(AetherBytes* dst, int dst_off,
+                                 AetherBytes* src, int src_off,
+                                 int length) {
+    if (!dst || !src || dst_off < 0 || src_off < 0 || length < 0) return 0;
+    if (length == 0) return 1;
+    /* Source range must fully exist; this is a plain copy, not the
+     * forward-overlap RLE trick. */
+    if ((size_t)src_off + (size_t)length > src->length) return 0;
+    if ((size_t)src_off + (size_t)length < (size_t)src_off) return 0;  /* overflow */
+    size_t needed = (size_t)dst_off + (size_t)length;
+    if (needed < (size_t)dst_off) return 0;  /* overflow */
+    if (!bytes_reserve(dst, needed)) return 0;
+    /* memmove is correct even when dst == src buffers happen to share
+     * a backing allocation (they shouldn't, but defensive); for the
+     * deliberate in-buffer forward-overlap RLE pattern, callers must
+     * use aether_bytes_copy_within instead. */
+    memmove(dst->data + dst_off, src->data + src_off, (size_t)length);
+    if (needed > dst->length) dst->length = needed;
+    return 1;
+}
+
 int aether_bytes_copy_within(AetherBytes* b, int dst, int src, int length) {
     if (!b || dst < 0 || src < 0 || length < 0) return 0;
     if (length == 0) return 1;

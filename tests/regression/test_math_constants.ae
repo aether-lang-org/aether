@@ -1,0 +1,73 @@
+// Regression: std.math function-constants — pi, tau, e, deg_to_rad,
+// rad_to_deg. These are zero-arg functions whose C lowering is a
+// trivial `return <literal>`; the test pins the values so we'd catch
+// a typo in the constants.
+
+import std.math
+
+eps_ok(a: float, b: float, eps: float) -> int {
+    diff = a - b
+    if diff < 0.0 { diff = 0.0 - diff }
+    if diff > eps { return 0 }
+    return 1
+}
+
+main() {
+    print("=== std.math constants ===\n\n")
+
+    pi = math_pi()
+    tau = math_tau()
+    e = math_e()
+    d2r = math_deg_to_rad()
+    r2d = math_rad_to_deg()
+
+    if eps_ok(pi, 3.141592653589793, 0.000000000001) == 0 {
+        println("  FAIL: pi = ${pi}")
+        exit(1)
+    }
+    print("  PASS: pi = 3.141592653589793\n")
+
+    if eps_ok(tau, 6.283185307179586, 0.000000000001) == 0 {
+        println("  FAIL: tau = ${tau}")
+        exit(1)
+    }
+    print("  PASS: tau = 6.283185307179586\n")
+
+    if eps_ok(e, 2.718281828459045, 0.000000000001) == 0 {
+        println("  FAIL: e = ${e}")
+        exit(1)
+    }
+    print("  PASS: e = 2.718281828459045\n")
+
+    // tau == 2 * pi (within tolerance)
+    if eps_ok(tau, 2.0 * pi, 0.000000000001) == 0 {
+        println("  FAIL: tau != 2*pi: tau=${tau} 2pi=${2.0 * pi}")
+        exit(1)
+    }
+    print("  PASS: tau == 2*pi\n")
+
+    // deg_to_rad * 180 == pi (within tolerance)
+    if eps_ok(d2r * 180.0, pi, 0.000000000001) == 0 {
+        println("  FAIL: deg_to_rad * 180 != pi")
+        exit(1)
+    }
+    print("  PASS: deg_to_rad * 180 == pi\n")
+
+    // rad_to_deg * pi == 180 (within tolerance)
+    if eps_ok(r2d * pi, 180.0, 0.0000000001) == 0 {
+        println("  FAIL: rad_to_deg * pi != 180")
+        exit(1)
+    }
+    print("  PASS: rad_to_deg * pi == 180\n")
+
+    // Sanity-check via trig: sin(pi/2) ~= 1
+    half_pi = pi / 2.0
+    s = math_sin(half_pi)
+    if eps_ok(s, 1.0, 0.000000000001) == 0 {
+        println("  FAIL: sin(pi/2) = ${s}, want 1.0")
+        exit(1)
+    }
+    print("  PASS: sin(pi/2) == 1.0\n")
+
+    print("\n=== All math constants tests passed ===\n")
+}
