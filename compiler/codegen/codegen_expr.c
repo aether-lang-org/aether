@@ -2680,25 +2680,88 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         }
                         fprintf(gen->output, ")");
                     } else {
-                        // Fallback: generic closure invocation via function pointer cast
-                        // Determine return type — if call() result is used, assume int
-                        const char* ret = (expr->node_type &&
-                            expr->node_type->kind != TYPE_VOID &&
-                            expr->node_type->kind != TYPE_UNKNOWN) ?
-                            get_c_type(expr->node_type) : "int";
+                        /* Fallback: generic closure invocation via
+                         * function-pointer cast.  Determine the
+                         * cast's return type from (in order):
+                         *
+                         *   1. the call expression's node_type (the
+                         *      typechecker fills this in when the
+                         *      `fn`-typed variable has a known
+                         *      return-type signature).
+                         *   2. the closure_arg's declared
+                         *      `return_type` (when `cb` has a typed
+                         *      `fn(args) -> ret` signature).
+                         *   3. the **enclosing function's** declared
+                         *      return type — handles the bare-`fn`
+                         *      shape `f(cb: fn) -> R { return cb(...) }`
+                         *      that has no signature info to read.
+                         *
+                         * Pre-fix: when all three were UNKNOWN the
+                         * cast defaulted to `int`.  For non-int
+                         * returns this was a silent miscompile —
+                         * float, string, ptr all wrong:
+                         *   - float: int return slot reads rax instead
+                         *     of xmm0 (x86-64 SysV) → silent zero.
+                         *   - string: int reinterpreted as
+                         *     AetherString* → segfault when the
+                         *     heap-tracker dereferences it.
+                         *   - ptr: UB but happens to survive on
+                         *     x86-64 SysV (int and ptr both in rax);
+                         *     gcc warns "returning 'int' from a
+                         *     function with return type 'const
+                         *     char *'", and on Windows LLP64 the
+                         *     upper 32 bits truncate.
+                         * Filed in aether/fn_return_float_cast.md
+                         * (widened to "any non-int return") from
+                         * the AeVG (CVG → Aether) port.
+                         *
+                         * The arg-type slots get the same
+                         * closure_arg-declared-signature path when
+                         * available, falling back to the supplied
+                         * arg's `node_type`. */
+                        Type* closure_sig = (closure_arg && closure_arg->node_type &&
+                                             closure_arg->node_type->kind == TYPE_FUNCTION)
+                                            ? closure_arg->node_type : NULL;
+                        Type* ret_t = NULL;
+                        if (expr->node_type && expr->node_type->kind != TYPE_VOID &&
+                            expr->node_type->kind != TYPE_UNKNOWN) {
+                            ret_t = expr->node_type;
+                        } else if (closure_sig && closure_sig->return_type &&
+                                   closure_sig->return_type->kind != TYPE_UNKNOWN) {
+                            ret_t = closure_sig->return_type;
+                        } else if (gen->current_func_return_type &&
+                                   gen->current_func_return_type->kind != TYPE_VOID &&
+                                   gen->current_func_return_type->kind != TYPE_UNKNOWN) {
+                            /* Last resort: the call is a `return
+                             * cb(...)` statement inside a typed
+                             * fn, and the enclosing fn's return
+                             * type dictates the cast's return slot.
+                             * Imperfect if the call result is
+                             * discarded or used in a non-return
+                             * position, but those cases already
+                             * have `expr->node_type` set correctly. */
+                            ret_t = gen->current_func_return_type;
+                        }
+                        const char* ret = ret_t ? get_c_type(ret_t) : "int";
                         fprintf(gen->output, "((%s(*)(void*", ret);
+                        int sig_pi = 0;
                         for (int i = 1; i < expr->child_count; i++) {
                             ASTNode* arg = expr->children[i];
                             if (arg && arg->type == AST_CLOSURE &&
                                 arg->value && strcmp(arg->value, "trailing") == 0) continue;
-                            // Infer arg type
                             const char* atype = "int";
-                            if (arg && arg->node_type) {
+                            if (closure_sig && sig_pi < closure_sig->param_count &&
+                                closure_sig->param_types &&
+                                closure_sig->param_types[sig_pi] &&
+                                closure_sig->param_types[sig_pi]->kind != TYPE_UNKNOWN) {
+                                atype = get_c_type(closure_sig->param_types[sig_pi]);
+                            } else if (arg && arg->node_type) {
                                 atype = get_c_type(arg->node_type);
                             } else if (arg && arg->type == AST_CLOSURE) {
                                 atype = "_AeClosure";
                             }
                             fprintf(gen->output, ", %s", atype);
+                            sig_pi++;
                         }
                         fprintf(gen->output, "))");
                         generate_expression(gen, closure_arg);

@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Closure-call trampoline emitted `int`-return cast for any return
+  type → segfault on string-returning closures, GCC warning on
+  ptr/struct returns** — `compiler/codegen/codegen_expr.c`,
+  `tests/regression/test_fn_closure_call_return_types.ae`. Reported
+  in `aether/fn_return_float_cast.md` from the AeVG (CVG → Aether)
+  port (initially float-only, widened 2026-05-30 to "any non-int
+  return"). The trampoline that invokes a `fn`-typed parameter's
+  `_AeClosure.fn` defaulted the cast's return-type slot to `int`
+  when the call's `node_type` was UNKNOWN — which it always is for
+  a bare-`fn` parameter (no signature info to read). String-typed
+  closures **segfaulted** (int reinterpreted as `AetherString*` →
+  heap-tracker dereferenced a non-heap value); ptr/struct returns
+  worked by ABI luck on x86-64 SysV (both int and void* live in
+  rax) but GCC warned and Windows LLP64 would truncate.
+
+  Fix: extend the return-type fallback chain. The cast's return
+  type now resolves in order: (1) the call's `node_type` if known;
+  (2) the closure_arg's declared `return_type` (typed
+  `fn(args) -> ret` signature); (3) the **enclosing function's**
+  declared return type — handles the bare-`fn` shape
+  `f(cb: fn) -> R { return cb(...) }` that has no signature to
+  read. Argument types also resolve from the closure_arg's
+  declared `param_types[]` when available. Default-to-`int` only
+  fires when none resolve. The same fix surface that landed for
+  string/ptr returns also tightens int return cases by surfacing
+  the right type at the C boundary.
+
+  **Known follow-up (NOT in this PR):** float-returning bare-fn
+  calls remain broken under -O2. When a bare named function is
+  wrapped at the coercion site as `(_AeClosure){.fn=name,
+  .env=NULL}`, the wrapped fn's REAL C signature is `R(args)` (no
+  env), but the trampoline calls it as `R(void*, args)` — incompat-
+  ible-pointer-conversion UB that -O2 folds to undefined (typically
+  zero for non-int values via floating-point return registers). Real
+  fix needs a per-bare-fn adapter wrapper at the wrap site (a
+  codegen-emitted `_aether_bare_adapter_N(void* env, args) -> R`
+  that ignores env and forwards). Tracked separately; the
+  string-segfault and GCC-warning shapes are closed by this PR.
+
 ## [0.194.0]
 
 ### Added

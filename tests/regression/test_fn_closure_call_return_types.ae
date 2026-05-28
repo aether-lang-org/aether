@@ -1,0 +1,112 @@
+// Regression: closure-call trampoline emits a return-type-correct
+// cast for non-int returns.
+//
+// Filed in aether/fn_return_float_cast.md (widened 2026-05-30 from
+// float-only to "any non-int return"). The trampoline historically
+// emitted `((int(*)(void*, args))cb.fn)` regardless of the actual
+// return type. The bug had two layers:
+//
+// LAYER 1 (this commit fixes): the cast's return-type slot was
+// hard-coded to `int` when the call expression's `node_type` was
+// UNKNOWN. For a bare-`fn` parameter (no signature in the type
+// system), the typechecker leaves the call's node_type unknown, so
+// the cast defaulted to `int`. Non-int return values were
+// reinterpreted:
+//   - string: int reinterpreted as AetherString* — segfault when
+//     the heap-tracker dereferences it.
+//   - ptr: UB but survives on x86-64 SysV by ABI luck (both int and
+//     void* live in rax); GCC warns "returning 'int' from a
+//     function with return type 'const char *'".
+//   - float: the closure-adapter path returns via the integer return
+//     register (rax) but a float-returning bare fn writes to xmm0 —
+//     silent zero. (See LAYER 2 below for why float still fails
+//     after this fix.)
+//
+// Fix: extend the return-type fallback chain to consult, in order:
+//   1. the call's `node_type` (the typechecker fills this when the
+//      `fn`-typed variable has a known return-type signature);
+//   2. the closure_arg's declared `return_type` (typed
+//      `fn(args) -> ret`);
+//   3. the **enclosing function's** declared return type — handles
+//      the bare-`fn` shape `f(cb: fn) -> R { return cb(...) }` that
+//      has no signature info to read.
+// Argument types also resolve from the closure_arg's declared
+// `param_types[]` when available. Default-to-`int` only fires when
+// none of the above resolve.
+//
+// LAYER 2 (NOT yet fixed; tracked as a follow-up to this PR): when
+// a bare named function is wrapped in `(_AeClosure){.fn=name,
+// .env=NULL}`, the wrapped function's REAL C signature is `R(args)`
+// (no env), but the trampoline calls it as `R(void*, args)` — a
+// cast that's incompatible with the declared function type. Under
+// -O2 gcc sees both declarations (same TU), detects the
+// incompatible-pointer-conversion UB, and folds the call result to
+// undefined. For non-int returns going through float / pointer
+// registers on x86-64 SysV, that surfaces as a silent zero / wrong
+// value. Fixing it cleanly needs a per-bare-fn adapter wrapper at
+// the wrap site (the codegen generates a `_aether_bare_adapter_N`
+// of signature `(void* env, args) -> R` that ignores env and
+// forwards to the bare fn). Out of scope for this commit — the
+// fix here closes the more common shapes (closures with captured
+// state, string/ptr returns).
+//
+// This test exercises the string and ptr return-type cases that
+// LAYER 1 fixes. Float-returning bare-fn calls remain known-broken
+// under -O2 and are NOT covered here.
+
+import std.string
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+// String-returning closure.
+my_greeting() -> string { return "hello" }
+
+call_string(cb: fn) -> string {
+    return cb()
+}
+
+// Ptr-returning closure.
+my_buf() -> ptr { return malloc(16) }
+
+call_ptr(cb: fn) -> ptr {
+    return cb()
+}
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    print("=== closure-call return types (string, ptr) ===\n\n")
+
+    // ---- string ----
+    //
+    // Pre-fix: int reinterpreted as AetherString* → segfault on
+    // string-cleanup dereference. Post-fix: cast resolves through
+    // the enclosing fn's return type (`-> string`), the trampoline
+    // returns AetherString* through the pointer return register,
+    // the caller assigns into a string-typed local cleanly.
+
+    s = call_string(my_greeting)
+    if string.equals(s, "hello") != 1 {
+        fail("my_greeting() → '${s}', want 'hello'")
+    }
+    print("  PASS: string (no segfault, value correct)\n")
+
+    // ---- ptr ----
+    //
+    // Pre-fix: int return slot reads the ptr register on x86-64
+    // SysV (both in rax), so the value survives — but GCC warns,
+    // and on Windows LLP64 the upper 32 bits would truncate.
+    // Post-fix: cast says ptr, no warning, no truncation hazard.
+
+    p = call_ptr(my_buf)
+    if p == null { fail("my_buf() returned null") }
+    free(p)
+    print("  PASS: ptr (non-null, freeable)\n")
+
+    print("\n=== closure-call return-type tests passed ===\n")
+}
