@@ -68,6 +68,36 @@ if printf %s "$libs_only" | grep -q -- "-I"; then
     exit 1
 fi
 
+# Transitive deps: if libaether.a was compiled with PCRE2 / OpenSSL /
+# zlib / nghttp2 (detectable via the unresolved-symbol set in its
+# archive), `ae cflags --libs` MUST emit the corresponding -l flags
+# — otherwise downstream `gcc app.c $(ae cflags)` fails to link with
+# `undefined reference to pcre2_*` and similar. This pattern shipped
+# v0.193.0 broken; fix here in tools/ae.c cmd_cflags. The check uses
+# nm on the local libaether.a so it only fails when there's a real
+# symbol-to-flag mismatch (it self-skips on a no-pcre2 build).
+LIBAETHER="$ROOT/build/libaether.a"
+if [ -f "$LIBAETHER" ] && command -v nm >/dev/null 2>&1; then
+    # For each (symbol-prefix, expected-flag-pattern) pair: if the
+    # archive references the symbol family, the link flags must
+    # mention the corresponding library.
+    check_dep() {
+        sym_pat="$1"; flag_pat="$2"; name="$3"
+        if nm "$LIBAETHER" 2>/dev/null | grep -q "U $sym_pat"; then
+            if ! printf %s "$libs_only" | grep -qE -- "$flag_pat"; then
+                echo "  [FAIL] ae_cflags --libs: libaether.a references $name ($sym_pat) but no $flag_pat in cflags"
+                echo "  ---- libs ----"
+                echo "$libs_only"
+                exit 1
+            fi
+        fi
+    }
+    check_dep 'pcre2_'    '-lpcre2-8'           'PCRE2'
+    check_dep 'SSL_'      '-l(ssl|crypto)'      'OpenSSL'
+    check_dep 'deflate'   '-lz'                 'zlib'
+    check_dep 'nghttp2_'  '-lnghttp2'           'nghttp2'
+fi
+
 # Functional check: `gcc trivial.c $(ae cflags) -o out` runs end-to-end.
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -88,5 +118,5 @@ if [ "$actual" != "ae_cflags ok" ]; then
     exit 1
 fi
 
-echo "  [PASS] ae_cflags: full / --cflags / --libs subsets correct, gcc \$(ae cflags) builds"
+echo "  [PASS] ae_cflags: full / --cflags / --libs subsets correct, transitive deps present, gcc \$(ae cflags) builds"
 exit 0

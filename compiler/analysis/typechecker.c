@@ -886,6 +886,24 @@ int is_type_compatible(Type* from, Type* to) {
     if (from->kind == TYPE_INT && to->kind == TYPE_PTR) return 1;
     if (from->kind == TYPE_PTR && to->kind == TYPE_INT) return 1;
 
+    /* fn ↔ ptr compatibility (the Option B1 boxing shape). A closure
+     * stored as ptr (struct field, list/map element) and recovered
+     * back to a `fn` slot — codegen wraps the cross-direction
+     * transitions in _aether_box_closure / _aether_unbox_closure
+     * (compiler/codegen/codegen_expr.c at the AST_FUNCTION_CALL
+     * arg-emit loop and at struct-field assignment).
+     *
+     * Without this rule, `h.cb = c` where `h.cb: ptr` and `c: fn`
+     * fails at typecheck with E0200 — exactly the gap the aether-ui
+     * CVG port hit in `grammar_element.ae` for 17 callback fields
+     * (`onClick`, `bindFill`, `whenPredicate`, etc.).  Raw-C-fn-
+     * pointer form (TYPE_FUNCTION with is_fnptr=1, storage = void*)
+     * has always been ptr-compatible by virtue of the `as fn`
+     * cast contract; this extends the same compatibility to the
+     * `_AeClosure`-shaped form (is_fnptr=0). */
+    if (from->kind == TYPE_FUNCTION && to->kind == TYPE_PTR) return 1;
+    if (from->kind == TYPE_PTR && to->kind == TYPE_FUNCTION) return 1;
+
     // byte → int / int64 / float: safe widenings.
     // Reverse direction (int → byte) is intentionally NOT here — it's
     // gated at the assignment site so out-of-range integer literals

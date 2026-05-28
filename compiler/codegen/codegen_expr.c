@@ -2030,7 +2030,46 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
 
                     fprintf(gen->output, " %s ", get_c_operator(expr->value));
                     if (ptr_int_cmp && rhs_is_ptr) fprintf(gen->output, "(intptr_t)");
-                    generate_expression(gen, expr->children[1]);
+                    /* fn ↔ ptr coercion at struct-field assignment.
+                     * Mirror of the call-site coercion path. The
+                     * parser lands `h.cb = c` as
+                     * AST_BINARY_EXPRESSION (op="="). When the LHS
+                     * is a `ptr`-typed value and the RHS is a `fn`-
+                     * shaped value (is_fnptr=0) or a bare named
+                     * function, wrap the RHS in
+                     * _aether_box_closure(...) so the closure
+                     * round-trips through the field with the env
+                     * slot intact. */
+                    int assign_box_struct = 0;
+                    int assign_box_bare_fn = 0;
+                    if (is_assignment && lhs_is_ptr) {
+                        if (rtype && rtype->kind == TYPE_FUNCTION && !rtype->is_fnptr) {
+                            assign_box_struct = 1;
+                        } else if (expr->children[1] &&
+                                   expr->children[1]->type == AST_IDENTIFIER &&
+                                   expr->children[1]->value && gen->program) {
+                            for (int pi = 0; pi < gen->program->child_count; pi++) {
+                                ASTNode* pc = gen->program->children[pi];
+                                if (pc && (pc->type == AST_FUNCTION_DEFINITION ||
+                                           pc->type == AST_BUILDER_FUNCTION) &&
+                                    pc->value && strcmp(pc->value, expr->children[1]->value) == 0) {
+                                    assign_box_bare_fn = 1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (assign_box_struct) {
+                        fprintf(gen->output, "_aether_box_closure(");
+                        generate_expression(gen, expr->children[1]);
+                        fprintf(gen->output, ")");
+                    } else if (assign_box_bare_fn) {
+                        fprintf(gen->output, "_aether_box_closure((_AeClosure){ .fn = (void(*)(void))(");
+                        generate_expression(gen, expr->children[1]);
+                        fprintf(gen->output, "), .env = NULL })");
+                    } else {
+                        generate_expression(gen, expr->children[1]);
+                    }
                     if (!skip_parens) fprintf(gen->output, ")");
                 }
             }
@@ -3063,6 +3102,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         // Cast int→void* when param expects void* (TYPE_PTR).
                         // Check extern registry first, then user-defined function params.
                         TypeKind expected = lookup_extern_param_kind(gen, c_func_name, arg_printed);
+                        /* For TYPE_FUNCTION params we also need the full
+                         * Type* so we can read `is_fnptr` — the boxing
+                         * coercions below only apply to the closure
+                         * shape (is_fnptr=0), NOT to raw C fn pointers
+                         * declared as `fn(T1, T2, ...) -> R` (is_fnptr=1,
+                         * storage = void*). Without this gate, passing
+                         * a bare named function to a `fn(args)->ret`
+                         * param would emit an _AeClosure struct literal
+                         * where the receiver expects void*. */
+                        Type* expected_type = NULL;
                         if (expected == TYPE_UNKNOWN) {
                             // Look up user-defined function's param type.
                             // Try both the original call-site name and the
@@ -3081,6 +3130,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                         if (fp->type == AST_GUARD_CLAUSE || fp->type == AST_BLOCK) continue;
                                         if (pi == arg_printed && fp->node_type) {
                                             expected = fp->node_type->kind;
+                                            expected_type = fp->node_type;
                                         }
                                         pi++;
                                     }
@@ -3088,7 +3138,89 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 }
                             }
                         }
+                        int expected_is_fnptr_form = (expected == TYPE_FUNCTION &&
+                            expected_type && expected_type->is_fnptr);
                         if (expected == TYPE_PTR && arg->node_type &&
+                            arg->node_type->kind == TYPE_FUNCTION &&
+                            !arg->node_type->is_fnptr) {
+                            /* Closure (`_AeClosure` struct) → ptr slot.
+                             * Heap-box the struct so the receiver can
+                             * stash it in a list/map/struct ptr field
+                             * with the env slot intact, and the
+                             * inverse coercion (TYPE_FUNCTION expected,
+                             * TYPE_PTR arg, below) can recover it.
+                             *
+                             * `is_fnptr=1` means the source is a raw C
+                             * function pointer (produced by `expr as
+                             * fn(...)` casts — storage is `void*`, not
+                             * `_AeClosure`); that path falls through
+                             * to the default identity emit, which is
+                             * the established working behaviour from
+                             * tests/regression/test_fn_address_via_as_fn.ae
+                             * (Aether-fn address handed to qsort, etc.).
+                             * The filing's repro (fn_ptr_coercion.md)
+                             * was on the is_fnptr=0 closure path —
+                             * a `fn`-typed local that's a real
+                             * _AeClosure struct value.
+                             *
+                             * Pre-fix: `fn`-typed local arg into a
+                             * `ptr` slot caused gcc "expected void* but
+                             * argument is of type _AeClosure" — silent
+                             * type-check accept, hard fail at C compile. */
+                            fprintf(gen->output, "_aether_box_closure(");
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, ")");
+                        } else if (expected == TYPE_FUNCTION &&
+                                   !expected_is_fnptr_form &&
+                                   !(arg->node_type && arg->node_type->is_fnptr)) {
+                            /* The receiver slot is `fn` (an _AeClosure
+                             * struct — bare `fn` with no signature).
+                             * The raw-fnptr form `fn(T1, ...) -> R`
+                             * (expected_is_fnptr_form) is `void*`-shaped
+                             * and falls through to the default emit:
+                             * a bare named function decays to its
+                             * address, which the C side reads as
+                             * `void*`. The argument shape can be:
+                             *
+                             *   (a) a bare named function — emit a
+                             *       struct literal with env=NULL so
+                             *       the receiver gets a real
+                             *       _AeClosure value.
+                             *   (b) a `fn`-typed local — already an
+                             *       _AeClosure; pass through.
+                             *   (c) a `ptr` value (boxed closure
+                             *       recovered from list/map/struct
+                             *       field) — unbox.
+                             *
+                             * Pre-fix: (a) caused gcc "expected
+                             * _AeClosure but argument is of type int
+                             * (*)(void)" — the silent type-check pass
+                             * that the fn_ptr_coercion.md filing
+                             * surfaced. */
+                            int arg_is_bare_fn = 0;
+                            if (arg->type == AST_IDENTIFIER && arg->value && gen->program) {
+                                for (int pi = 0; pi < gen->program->child_count; pi++) {
+                                    ASTNode* pc = gen->program->children[pi];
+                                    if (pc && (pc->type == AST_FUNCTION_DEFINITION ||
+                                               pc->type == AST_BUILDER_FUNCTION) &&
+                                        pc->value && strcmp(pc->value, arg->value) == 0) {
+                                        arg_is_bare_fn = 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (arg_is_bare_fn) {
+                                fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))(");
+                                generate_expression(gen, arg);
+                                fprintf(gen->output, "), .env = NULL }");
+                            } else if (arg->node_type && arg->node_type->kind == TYPE_PTR) {
+                                fprintf(gen->output, "_aether_unbox_closure(");
+                                generate_expression(gen, arg);
+                                fprintf(gen->output, ")");
+                            } else {
+                                generate_expression(gen, arg);
+                            }
+                        } else if (expected == TYPE_PTR && arg->node_type &&
                             (arg->node_type->kind == TYPE_INT || arg->node_type->kind == TYPE_BOOL)) {
                             fprintf(gen->output, "(void*)(intptr_t)(");
                             generate_expression(gen, arg);

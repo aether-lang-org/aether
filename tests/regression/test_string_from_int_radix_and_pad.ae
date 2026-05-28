@@ -1,0 +1,150 @@
+// Regression: std.string.from_int_radix (inverse of v0.193's
+// to_int_radix) + string.pad_start / string.pad_end.
+//
+// Headline use case: hex color emit for the CVG port's lerp_color
+// — JS-side `r.toString(16).padStart(2, '0')` round-trip into a
+// `#rrggbb` string. Both functions together so the round-trip works
+// for any color channel value 0..255 (and any other JS-style
+// padStart-of-radix-N use beyond CVG).
+
+import std.string
+
+extern exit(code: int)
+
+eq(a: string, b: string) -> int {
+    return string.equals(a, b)
+}
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    println("=== std.string.from_int_radix + pad_start/end ===")
+
+    // ---- from_int_radix: basic hex emit -----------------------
+
+    if eq(string.from_int_radix(255, 16), "ff") != 1 {
+        fail("hex 255: got '${string.from_int_radix(255, 16)}'")
+    }
+    if eq(string.from_int_radix(0, 16), "0") != 1 { fail("hex 0") }
+    if eq(string.from_int_radix(16, 16), "10") != 1 { fail("hex 16") }
+    if eq(string.from_int_radix(160, 16), "a0") != 1 {
+        fail("hex 160: got '${string.from_int_radix(160, 16)}'")
+    }
+    if eq(string.from_int_radix(3735928559, 16), "deadbeef") != 1 {
+        fail("hex DEADBEEF: got '${string.from_int_radix(3735928559, 16)}'")
+    }
+    println("  PASS: hex 0 / 16 / a0 / ff / deadbeef")
+
+    // ---- from_int_radix: binary / octal / decimal -------------
+
+    if eq(string.from_int_radix(11, 2), "1011") != 1 { fail("binary 11") }
+    if eq(string.from_int_radix(255, 2), "11111111") != 1 { fail("binary 255") }
+    if eq(string.from_int_radix(493, 8), "755") != 1 { fail("octal 493") }
+    if eq(string.from_int_radix(42, 10), "42") != 1 { fail("decimal 42") }
+    println("  PASS: binary 11/255, octal 493, decimal 42")
+
+    // ---- from_int_radix: radix 36 (max strtoll range) ---------
+
+    if eq(string.from_int_radix(35, 36), "z") != 1 { fail("radix-36 35") }
+    if eq(string.from_int_radix(1295, 36), "zz") != 1 { fail("radix-36 1295") }
+    println("  PASS: radix 36 (35→'z', 1295→'zz')")
+
+    // ---- from_int_radix: negatives ---------------------------
+
+    if eq(string.from_int_radix(0 - 255, 16), "-ff") != 1 {
+        fail("hex -255: got '${string.from_int_radix(0 - 255, 16)}'")
+    }
+    if eq(string.from_int_radix(0 - 1, 10), "-1") != 1 { fail("decimal -1") }
+    println("  PASS: negative hex / decimal")
+
+    // ---- from_int_radix: 64-bit width survives ---------------
+    //
+    // Same LLP64-safety concern as to_int_radix: a 2^32 value
+    // pretends to be a long (int64) end-to-end. C `long` Windows
+    // truncation would surface here as a wrong digit count.
+
+    if eq(string.from_int_radix(4294967296, 16), "100000000") != 1 {
+        fail("hex 2^32: got '${string.from_int_radix(4294967296, 16)}'")
+    }
+    if eq(string.from_int_radix(1099511627776, 16), "10000000000") != 1 {
+        fail("hex 2^40: got '${string.from_int_radix(1099511627776, 16)}'")
+    }
+    println("  PASS: 64-bit hex (2^32, 2^40)")
+
+    // ---- from_int_radix: invalid radix -----------------------
+
+    if eq(string.from_int_radix(123, 1), "") != 1 { fail("radix 1 → empty") }
+    if eq(string.from_int_radix(123, 37), "") != 1 { fail("radix 37 → empty") }
+    if eq(string.from_int_radix(123, 0), "") != 1 { fail("radix 0 → empty") }
+    println("  PASS: radix 1/37/0 → empty string")
+
+    // ---- pad_start: zero-pad short ---------------------------
+
+    if eq(string.pad_start("5", 2, 48), "05") != 1 {
+        fail("pad '5' to 2 with '0': got '${string.pad_start(\"5\", 2, 48)}'")
+    }
+    if eq(string.pad_start("", 3, 48), "000") != 1 {
+        fail("pad '' to 3 with '0'")
+    }
+    if eq(string.pad_start("ff", 4, 48), "00ff") != 1 {
+        fail("pad 'ff' to 4 with '0'")
+    }
+    println("  PASS: pad_start zero-pad")
+
+    // ---- pad_start: already-long → unchanged ----------------
+
+    if eq(string.pad_start("hello", 2, 32), "hello") != 1 {
+        fail("'hello' wider than 2: must not truncate")
+    }
+    if eq(string.pad_start("ff", 2, 48), "ff") != 1 {
+        fail("'ff' equal to 2: must not pad")
+    }
+    println("  PASS: pad_start no truncation, no extra padding when long enough")
+
+    // ---- pad_start: total_width <= 0 -------------------------
+
+    if eq(string.pad_start("x", 0, 48), "x") != 1 { fail("pad_start total=0") }
+    if eq(string.pad_start("x", 0 - 5, 48), "x") != 1 { fail("pad_start total<0") }
+    println("  PASS: pad_start total_width <= 0 returns s unchanged")
+
+    // ---- pad_end: space-pad / zero-pad ----------------------
+
+    if eq(string.pad_end("hi", 5, 32), "hi   ") != 1 {
+        fail("pad_end 'hi' to 5 with space: got '${string.pad_end(\"hi\", 5, 32)}'")
+    }
+    if eq(string.pad_end("5", 3, 48), "500") != 1 {
+        fail("pad_end '5' to 3 with '0'")
+    }
+    println("  PASS: pad_end")
+
+    // ---- The headline: hex byte emit (CVG lerp_color shape) --
+    //
+    // The JS `r.toString(16).padStart(2, '0')` round-trip. 5
+    // becomes "05"; 255 stays "ff"; 16 becomes "10".
+
+    rh = string.pad_start(string.from_int_radix(5, 16), 2, 48)
+    if eq(rh, "05") != 1 { fail("CVG hex byte 5: got '${rh}'") }
+
+    rh = string.pad_start(string.from_int_radix(255, 16), 2, 48)
+    if eq(rh, "ff") != 1 { fail("CVG hex byte 255: got '${rh}'") }
+
+    rh = string.pad_start(string.from_int_radix(16, 16), 2, 48)
+    if eq(rh, "10") != 1 { fail("CVG hex byte 16: got '${rh}'") }
+
+    rh = string.pad_start(string.from_int_radix(0, 16), 2, 48)
+    if eq(rh, "00") != 1 { fail("CVG hex byte 0: got '${rh}'") }
+    println("  PASS: CVG hex-byte round-trip (5→'05', 255→'ff', 16→'10', 0→'00')")
+
+    // ---- to_int_radix / from_int_radix round-trip -----------
+
+    s = string.from_int_radix(0xDEAD, 16)
+    v, err = string.to_int_radix(s, 16)
+    if eq(err, "") != 1 { fail("round-trip to_int_radix err=${err}") }
+    if v != 0xDEAD { fail("round-trip got ${v}") }
+    println("  PASS: from_int_radix → to_int_radix round-trip")
+
+    println("\n=== All from_int_radix + pad tests passed ===")
+}

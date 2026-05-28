@@ -19,6 +19,7 @@ exports (
     string_seq_from_array, string_seq_to_array,
     string_seq_reverse, string_seq_concat, string_seq_take, string_seq_drop,
     string_to_cstr, string_from_int, string_from_long, string_from_float,
+    string_from_int_radix, string_pad_start, string_pad_end,
     string_to_int_raw, string_to_long_raw, string_to_float_raw, string_to_double_raw,
     string_try_int, string_get_int, string_try_long, string_get_long,
     string_try_float, string_get_float, string_try_double, string_get_double,
@@ -216,6 +217,23 @@ extern string_to_cstr(str: string) -> string
 extern string_from_int(value: int) -> ptr
 extern string_from_long(value: long) -> ptr
 extern string_from_float(value: float) -> ptr
+
+// Inverse of to_int_radix. Render `value` in base `radix` (2..36).
+// Returns an empty string for radix outside [2, 36]; otherwise the
+// digit string (lowercase a-z for radix 11..36), with a leading '-'
+// for negatives. No "0x" / "0b" prefix.
+//
+// Headline use: hex emit for color round-trips (RGB → #rrggbb). Pair
+// with `string.pad_start(s, 2, 48)` to get the JS
+// `r.toString(16).padStart(2, '0')` shape.
+extern string_from_int_radix(value: long, radix: int) -> ptr
+
+// Pad to a fixed width with `pad_char` (single-byte char code —
+// `48` for '0', `32` for ' '). If `s` is already >= total_width
+// chars, returns a fresh copy (no truncation). total_width <= 0
+// also returns a fresh copy. pad_start prepends; pad_end appends.
+extern string_pad_start(s: string, total_width: int, pad_char: int) -> ptr
+extern string_pad_end(s: string, total_width: int, pad_char: int) -> ptr
 
 // Parsing — raw externs (escape hatch)
 extern string_to_int_raw(str: string, out_value: ptr) -> int

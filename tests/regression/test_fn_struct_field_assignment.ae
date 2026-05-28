@@ -1,0 +1,99 @@
+// Regression: fn ↔ ptr coercion at struct-field assignment.
+//
+// Filed in aether/fn_ptr_coercion.md (follow-up): the fn_ptr_coercion
+// fix already in [current] wired Option B1 boxing at call-site
+// argument positions, but the SAME coercion shape was rejected at
+// struct-field assignment:
+//
+//   struct Holder { cb: ptr }
+//   set(h: *Holder, c: fn) {
+//       h.cb = c        // error[E0200]: Type mismatch in assignment
+//   }
+//
+// The CVG port hit this in `grammar_element.ae` for 17 callback fields
+// (onClick, bindFill, whenPredicate, etc.). Workaround was to declare
+// setter params as `ptr` everywhere, losing captured-state closures
+// through forwarding — the very thing the [current] fix unblocked
+// at call sites.
+//
+// Post-fix (this commit): the typechecker treats `fn` and `ptr` as
+// mutually compatible (via is_type_compatible), and codegen at the
+// AST_BINARY_EXPRESSION assign-emit boxes the RHS with
+// _aether_box_closure when LHS is ptr and RHS is fn-shaped (or a
+// bare named function). Mirror of the call-site coercion in
+// codegen_expr.c.
+
+import std.list
+
+extern malloc(n: long) -> ptr
+extern free(p: ptr)
+
+struct Holder {
+    cb: ptr
+}
+
+set_cb(h: *Holder, c: fn) {
+    h.cb = c
+}
+
+set_cb_bare(h: *Holder) {
+    h.cb = my_pred
+}
+
+my_pred() -> int { return 42 }
+
+main() {
+    print("=== fn → ptr at struct-field assignment ===\n\n")
+
+    // ---- 1. fn-typed param → ptr struct field ----
+    //
+    // The headline failure case. set_cb's `c: fn` argument gets
+    // assigned to `h.cb: ptr`. Pre-fix: E0200 at typecheck.
+    // Post-fix: typecheck accepts; codegen boxes the closure.
+
+    h = malloc(8) as *Holder
+    set_cb(h, my_pred)
+    if h.cb == null {
+        println("  FAIL: set_cb(my_pred): h.cb is null")
+        exit(1)
+    }
+    print("  PASS: fn-typed param → ptr struct field (boxed)\n")
+
+    // ---- 2. bare named function → ptr struct field direct ----
+    //
+    // h.cb = my_pred at a direct assignment site. Same shape as
+    // the call-site bare-fn → fn coercion: codegen emits a struct
+    // literal then boxes it.
+
+    h2 = malloc(8) as *Holder
+    set_cb_bare(h2)
+    if h2.cb == null {
+        println("  FAIL: set_cb_bare: h2.cb is null")
+        exit(1)
+    }
+    print("  PASS: bare-fn → ptr struct field direct (boxed literal)\n")
+
+    // ---- 3. multiple boxed closures are distinct ----
+    //
+    // Each assignment heap-allocates a fresh _AeClosure box; two
+    // holders pointing at the same Aether function must have
+    // different .cb pointers (sanity check that we're actually
+    // boxing, not just stashing one shared address).
+
+    h3a = malloc(8) as *Holder
+    h3b = malloc(8) as *Holder
+    set_cb(h3a, my_pred)
+    set_cb(h3b, my_pred)
+    if h3a.cb == h3b.cb {
+        println("  FAIL: two assignments produced the same box")
+        exit(1)
+    }
+    print("  PASS: distinct allocations per assignment\n")
+
+    free(h)
+    free(h2)
+    free(h3a)
+    free(h3b)
+
+    print("\n=== All struct-field fn-coercion tests passed ===\n")
+}

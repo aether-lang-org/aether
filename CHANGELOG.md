@@ -9,6 +9,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.string.from_int_radix(value, radix) -> string`** —
+  inverse of `to_int_radix` (which landed in v0.193). Renders
+  `value` in base `radix` (`[2, 36]`); empty string on invalid
+  radix; `'-'` prefix for negatives. C runtime is a hand-rolled
+  digit loop because libc snprintf only covers `%x` / `%o` / `%d`.
+  `long long` parameter, not C `long`, for LLP64 safety (the same
+  invariant `string_to_long_raw` documents — PR #562). Headline
+  use case: hex color emit for animation interpolation
+  (`r.toString(16).padStart(2, '0')` patterns). Pair with the new
+  `pad_start` below for fixed-width hex bytes.
+- **`std.string.pad_start(s, total_width, pad_char)` and
+  `string.pad_end(...)`** — pad to a fixed width with a single-byte
+  char code (`48` for `'0'`, `32` for `' '`). If `s` is already
+  `>= total_width` chars, returns a fresh copy (no truncation;
+  same allocation behaviour as the pad path so callers release
+  uniformly). `pad_char` is a char code (not a multi-char string)
+  to match `string_char_at`'s convention and avoid string-alloc
+  overhead in tight loops.
+
+### Fixed
+
+- **`fn`-typed value at struct-field assignment rejected by
+  typechecker** — `compiler/analysis/typechecker.c`,
+  `compiler/codegen/codegen_expr.c`,
+  `tests/regression/test_fn_struct_field_assignment.ae`. The
+  Option B1 fn↔ptr boxing already in `[current]` covered call-
+  site argument positions, but `h.cb = c` (where `cb: ptr` and
+  `c: fn`) was rejected at typecheck with E0200. The CVG port hit
+  this for 17 callback fields in `grammar_element.ae`
+  (`onClick`, `bindFill`, `whenPredicate`, etc.). Fix: add
+  `fn ↔ ptr` to `is_type_compatible`, and at the
+  AST_BINARY_EXPRESSION assign-emit (`=`) box a `fn`-shaped RHS
+  (or bare named function) with `_aether_box_closure(...)` when
+  the LHS is `ptr`. Mirror of the call-site coercion path. Now
+  the boxing/unboxing surface is uniform across call-site args,
+  struct-field assignments, and (already supported) `as fn` casts.
+
+- **`fn`-typed parameter / `ptr` slot coercion silently miscompiled
+  to bad C** — `compiler/codegen/codegen_expr.c`,
+  `tests/regression/test_fn_ptr_coercion.ae`. The type-checker
+  accepted three coercion shapes at call sites — bare named
+  function → `fn` param, `fn` local → `ptr` param, `ptr` (boxed
+  closure) → `fn` param — but C codegen emitted incompatible types
+  (e.g. `int (*)(void)` into a slot expecting `_AeClosure`, or
+  `_AeClosure` into a slot expecting `void*`) and gcc rejected the
+  program. Downstream (the aether-ui CVG port's `whenStack` pattern)
+  worked around it by declaring callback params as `ptr`, losing
+  captured-state closures through forwarding.
+
+  Fix (Option B1 from the filing — make `fn ↔ ptr` actually work):
+  the existing `_aether_box_closure` / `_aether_unbox_closure`
+  runtime primitives are now wired at the coercion site. `fn → ptr`
+  heap-allocates an `_AeClosure` struct and passes the pointer; bare
+  named function → `fn` param emits a struct literal
+  `(_AeClosure){ .fn=..., .env=NULL }`; `ptr → fn` unboxes back to
+  the struct. Captured-state closures now survive forwarding through
+  `ptr`-typed slots (lists, maps, struct fields, opaque externs).
+  The pre-existing direct `bare-fn → ptr` direct-arg path remains
+  backwards-compatible (existing call sites unchanged).
+- **`ae cflags --libs` did not emit transitive dep flags
+  (`-lpcre2-8`, `-lssl -lcrypto`, `-lz`, `-lnghttp2`)** —
+  `tools/ae.c`, `tests/integration/ae_cflags/test_ae_cflags.sh`.
+  `cmd_build` already passed `AETHER_OPENSSL_LIBS` / `_ZLIB_LIBS`
+  / `_NGHTTP2_LIBS` / `_PCRE2_LIBS` to gcc, but `cmd_cflags` (the
+  documented entry point for external builds via `gcc your.c
+  $(ae cflags)`) silently omitted them. So downstream consumers
+  of `std.regex` got `undefined reference to pcre2_*` at link
+  time, and consumers of `std.cryptography` / `std.http` TLS got
+  `SSL_*` failures, even though `libaether.a` was compiled with
+  those deps — the archive's symbol table held unresolved
+  references the consuming link had to satisfy. Now matched.
+  Empty-string guard preserves the no-pkg-config case (a build
+  without `libpcre2-dev` sets `PCRE2_LDFLAGS :=` empty; the
+  macro expands to `""`; emit nothing). Test extended to nm
+  the local `libaether.a` and assert each detected symbol
+  family has its matching `-l` flag.
+
 ## [0.193.0]
 
 ### Added

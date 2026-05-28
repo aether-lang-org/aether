@@ -632,6 +632,97 @@ AetherString* string_from_float(double value) {
     return string_new(buffer);
 }
 
+// Inverse of string_to_int_radix: render `value` as a base-N digit
+// string. radix in [2, 36]; out-of-range radix yields the empty
+// string (caller-detectable, matches the existing string_empty()
+// failure convention for stdlib emit-side functions). Negative
+// values get a leading '-'.
+//
+// Hand-rolled digit loop because libc only offers %x / %o / %d in
+// snprintf, not arbitrary base-N. Buffer size: 64-bit binary needs
+// 64 digits + sign + NUL = 66 bytes; we allocate 80 for headroom.
+//
+// `long long` parameter (NOT C `long`): Aether's `long` lowers to
+// int64_t on every platform; C `long` is 32-bit on Windows LLP64
+// — same lesson PR #562 pinned for string_to_long_raw, applied
+// preemptively.
+AetherString* string_from_int_radix(long long value, int radix) {
+    if (radix < 2 || radix > 36) return string_empty();
+
+    char buf[80];
+    int neg = (value < 0);
+    /* Negate via unsigned to avoid UB on LLONG_MIN (which can't be
+     * represented as a positive long long). */
+    unsigned long long v = neg
+        ? (unsigned long long)(-(value + 1)) + 1ULL
+        : (unsigned long long)value;
+
+    int n = 0;
+    if (v == 0) {
+        buf[n++] = '0';
+    } else {
+        while (v > 0) {
+            int d = (int)(v % (unsigned long long)radix);
+            buf[n++] = (d < 10) ? (char)('0' + d) : (char)('a' + d - 10);
+            v /= (unsigned long long)radix;
+        }
+    }
+    if (neg) buf[n++] = '-';
+
+    /* Reverse in place. */
+    for (int i = 0, j = n - 1; i < j; i++, j--) {
+        char t = buf[i]; buf[i] = buf[j]; buf[j] = t;
+    }
+    buf[n] = '\0';
+    return string_new_with_length(buf, (size_t)n);
+}
+
+/* Pad-start / pad-end helpers — mirror JS String.prototype.padStart
+ * / padEnd. If `s` is already >= total_width chars, returns a fresh
+ * copy (no truncation; same allocation behaviour as the pad path so
+ * callers can always release the result uniformly). total_width <= 0
+ * also returns a fresh copy.
+ *
+ * `pad_char` is a single-byte char code (int), NOT a multi-char fill
+ * string. This matches string_char_at's convention (returns int char
+ * code), avoids string-alloc overhead in tight loops, and keeps the
+ * C side a clean memset+memcpy. The aether-ui CVG port wants `48`
+ * ('0') for zero-padded hex bytes; columnar-output use cases want
+ * `32` (' '). Multi-char fill is deferred until someone needs it. */
+AetherString* string_pad_start(const void* s, int total_width, int pad_char) {
+    const char* data = str_data(s);
+    size_t len = str_len(s);
+    if (!s || total_width <= 0 || (size_t)total_width <= len) {
+        return string_new_with_length(data ? data : "", data ? len : 0);
+    }
+    size_t pad_n = (size_t)total_width - len;
+    char* tmp = (char*)malloc((size_t)total_width + 1);
+    if (!tmp) return string_empty();
+    memset(tmp, (char)pad_char, pad_n);
+    if (data && len > 0) memcpy(tmp + pad_n, data, len);
+    tmp[total_width] = '\0';
+    AetherString* out = string_new_with_length(tmp, (size_t)total_width);
+    free(tmp);
+    return out;
+}
+
+AetherString* string_pad_end(const void* s, int total_width, int pad_char) {
+    const char* data = str_data(s);
+    size_t len = str_len(s);
+    if (!s || total_width <= 0 || (size_t)total_width <= len) {
+        return string_new_with_length(data ? data : "", data ? len : 0);
+    }
+    size_t pad_n = (size_t)total_width - len;
+    char* tmp = (char*)malloc((size_t)total_width + 1);
+    if (!tmp) return string_empty();
+    if (data && len > 0) memcpy(tmp, data, len);
+    memset(tmp + len, (char)pad_char, pad_n);
+    tmp[total_width] = '\0';
+    AetherString* out = string_new_with_length(tmp, (size_t)total_width);
+    free(tmp);
+    return out;
+}
+
 // Parsing functions - convert string to numbers.
 // The `_raw` variants take an out-parameter and return 1/0 for ok/fail.
 // The Aether-native Go-style wrappers `string.to_int` etc. in module.ae
