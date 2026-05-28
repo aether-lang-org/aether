@@ -22,7 +22,8 @@ exports (
     string_to_int_raw, string_to_long_raw, string_to_float_raw, string_to_double_raw,
     string_try_int, string_get_int, string_try_long, string_get_long,
     string_try_float, string_get_float, string_try_double, string_get_double,
-    to_int, to_long, to_float, to_double,
+    string_to_int_radix_raw, string_try_int_radix, string_get_int_radix,
+    to_int, to_long, to_float, to_double, to_int_radix,
     strip_prefix, copy,
     string_format_list, format,
     string_glob_match_raw, glob_match, glob_match_pathname
@@ -221,6 +222,7 @@ extern string_to_int_raw(str: string, out_value: ptr) -> int
 extern string_to_long_raw(str: string, out_value: ptr) -> int
 extern string_to_float_raw(str: string, out_value: ptr) -> int
 extern string_to_double_raw(str: string, out_value: ptr) -> int
+extern string_to_int_radix_raw(str: string, radix: int, out_value: ptr) -> int
 
 // Parsing — split-return helpers for the Go-style wrappers.
 extern string_try_int(s: string) -> int
@@ -231,6 +233,13 @@ extern string_try_float(s: string) -> int
 extern string_get_float(s: string) -> float
 extern string_try_double(s: string) -> int
 extern string_get_double(s: string) -> float
+// Base-N parse split-return. The value slot is `long` (int64) because
+// radix-36 can exceed int32 quickly and because callers parsing hex
+// often want the full 64-bit width (32-bit ARGB colors, file offsets,
+// flag masks). Callers that only want an int can downcast at the call
+// site.
+extern string_try_int_radix(s: string, radix: int) -> int
+extern string_get_int_radix(s: string, radix: int) -> long
 
 // Parse a string to an integer. Returns (value, "") on success,
 // (0, error) on invalid input. Handles leading whitespace, sign,
@@ -272,6 +281,34 @@ to_double(s: string) -> {
         return 0.0, "invalid double"
     }
     return string_get_double(s), ""
+}
+
+// Base-N parse: like `to_long` but accepts a radix in [2, 36].
+// Headline use cases: hex color decode (`parseInt(hex, 16)` patterns),
+// hex byte fields in config files, binary masks, octal mode bits.
+// Returns (value, "") on success; (0, error) on:
+//   - radix outside [2, 36]
+//   - empty string or unparseable digits
+//   - overflow (the int64 range)
+//   - trailing non-whitespace garbage
+//
+// No "0x" / "0b" prefix recognition — pass the digit-only substring.
+// The value is `long` (int64) because radix-16/36 can exceed int32
+// quickly and because callers often want the full 64-bit width
+// (32-bit ARGB colors, file offsets, flag masks). Downcast at the
+// call site if you only want an int.
+to_int_radix(s: string, radix: int) -> (long, string) {
+    if radix < 2 {
+        return 0, "radix must be at least 2"
+    }
+    if radix > 36 {
+        return 0, "radix must be at most 36"
+    }
+    ok = string_try_int_radix(s, radix)
+    if ok == 0 {
+        return 0, "invalid integer for radix"
+    }
+    return string_get_int_radix(s, radix), ""
 }
 
 // If `s` starts with `prefix`, return (s-after-prefix, 1).

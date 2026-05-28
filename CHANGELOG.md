@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.string.to_int_radix(s, radix) -> (long, string)` — base-N
+  integer parse** (`std/string/{module.ae,aether_string.c,aether_string.h}`,
+  `tests/regression/test_string_to_int_radix.ae`). Companion to the
+  existing `to_int` (base-10 only). Headline use case: hex color
+  decode (the `parseInt(hex, 16)` patterns ports keep hand-rolling),
+  plus binary masks, octal mode bits, and any other base-N field
+  that previously needed a hand-coded loop. Radix is 2..36 (strtoll's
+  range). Returns `long` (int64), not `int`, because radix-16 / -36
+  values hit beyond int32 quickly and because the canonical use cases
+  (32-bit ARGB colors, file offsets, flag masks) want the full
+  64-bit width. Caller passes the digit-only substring — no `"0x"`
+  / `"0b"` prefix recognition (caller-controlled is the less surprising
+  default for the color-parser shape this serves). C runtime is
+  `strtoll` so the int64 invariant holds on Windows LLP64 too — same
+  lesson PR #562 pinned for `string_to_long_raw`.
+
+### Fixed
+
+- **`std.string.from_float` returned garbage** — symmetric ABI mismatch
+  to the v0.190.0 `to_float` fix (`std/string/aether_string.c`,
+  `std/string/aether_string.h`,
+  `tests/regression/test_string_from_number_widths.ae`).
+  `string_from_float` declared its parameter as C `float` (32-bit) but
+  Aether's `float` lowers to C `double` (64-bit), so the caller pushed
+  8 bytes and the C side read only the low 4 as IEEE-754 binary32 —
+  mostly mantissa, so the output was nonsense. The smoking gun:
+  `from_float(1.0)` serialised as `"0"` because `double(1.0)`'s low 32
+  mantissa bits are all zero (reads back as `+0.0f`); `from_float(3.14)`
+  came out `"1.26444e+11"`; `from_float(0.0001)` came out
+  `"-1.8891e+26"`. Now declared as `double` to match the Aether ABI.
+  No format-string change needed (`%g` already prints `double` — that's
+  the varargs default). Same bug class as PR #562 (`to_long` /
+  `to_float` Windows-truncation fixes), opposite direction; whoever
+  fixed the parse path didn't audit the emit path. The new regression
+  test pins all four numeric emit paths (`from_int` / `from_long` /
+  `from_float`) so the next iteration of this bug surfaces immediately.
+
 ## [0.192.0]
 
 ### Added
