@@ -2094,8 +2094,8 @@ ci-embedded: clean compiler
 #   libc6-dev-riscv64-cross   — riscv64 libc/headers
 #   qemu-user-static          — qemu-riscv64-static binary
 #
-# Optional libs (OpenSSL, zlib, nghttp2, GTK4) are disabled for the
-# riscv64 build — pkg-config on the host runner returns x86_64 lib
+# Optional libs (OpenSSL, zlib, nghttp2, PCRE2, GTK4) are disabled for
+# the riscv64 build — pkg-config on the host runner returns x86_64 lib
 # paths that wouldn't link against riscv64 objects. Disabling them
 # matches the std.* feature-detection pattern: the wrappers fall
 # into their "unavailable" stubs cleanly. The portability check is
@@ -2116,7 +2116,7 @@ ci-riscv64: clean
 	@$(MAKE) compiler ae stdlib \
 	    CC=riscv64-linux-gnu-gcc \
 	    EXTRA_CFLAGS="-march=rv64gc -mabi=lp64d" \
-	    OPENSSL=0 ZLIB=0 NGHTTP2=0
+	    OPENSSL=0 ZLIB=0 NGHTTP2=0 PCRE2=0
 	@echo ""
 	@echo "[2/3] Verifying cross-built binaries are riscv64 ELF..."
 	@file build/aetherc | grep -q "RISC-V" || { echo "  FAIL: aetherc not riscv64 ELF"; file build/aetherc; exit 1; }
