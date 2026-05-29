@@ -9,6 +9,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`builder name(...) with <factory>` did not module-resolve the
+  factory across an import boundary** —
+  `compiler/aether_module.c`,
+  `tests/integration/builder_with_factory_cross_module/`. The
+  builder lowering emits `_bcfg = <factory>()` at every call site,
+  but the import resolver renamed the builder's name to
+  `<ns>_<builder>` and left the `with`-factory annotation as the
+  bare unprefixed name. Consumer translation units then emitted
+  `_bcfg = mkfac()` (unresolved bare symbol) and gcc/ld failed
+  with "undefined reference to mkfac" even though `mkfac` was
+  exported from the builder's module. Filed in
+  `aether/new_aevg_asks.md` ASK 1 as the **blocker** for the AeVG
+  surface DSL (`window` / `render_to` / `record` live in the
+  `aether_ui` library and are called from example/transpiler-
+  output files).
+
+  Fix in two layers:
+  1. `rename_intra_module_refs` now rewrites the
+     `AST_BUILDER_FUNCTION` annotation alongside the body's
+     `AST_FUNCTION_CALL` / `AST_IDENTIFIER` values, so the cloned
+     builder carries `annotation = <ns>_<factory>`.
+  2. `collect_intra_module_callees` + `prune_collect_calls` now
+     treat the builder's annotation as a real call-dependency, so
+     the factory's body gets pulled into the program AST and
+     survives the mark-and-sweep dead-code prune. Without this,
+     the factory's symbol stayed declared but undefined.
+
+- **Closure-call trampoline arg-slot shift miscompiled bare
+  named functions wrapped in `_AeClosure`** —
+  `compiler/codegen/codegen.{c,h}`, `compiler/codegen/codegen_func.c`,
+  `compiler/codegen/codegen_internal.h`,
+  `compiler/codegen/codegen_expr.c`,
+  `tests/regression/test_fn_bare_adapter.ae`. Reported in
+  `aether/new_aevg_asks.md` ASK 3 (and the LAYER 2 follow-up
+  in `fn_return_float_cast.md`).
+
+  Pre-fix: at every coercion site where a bare named function got
+  wrapped as `(_AeClosure){.fn=name, .env=NULL}`, the wrapped
+  fn's REAL C signature was `R(args)` but the closure-invocation
+  trampoline called `.fn` as `R(void* env, args)` — incompatible-
+  pointer-conversion UB that shifted every argument by one
+  register/stack slot:
+    - `call(my_fn, 3, 7)` (where `my_fn(w, h) -> int`) returned
+      `3` — NULL shifted into `w`, `3` into `h`, `7` dropped.
+    - `call_it(my_double, 3.0) -> float` returned `0` (xmm0 holds
+      the real arg but the env shift puts NULL in front).
+    - string returns segfaulted; ptr returns read garbage.
+
+  Fix: codegen synthesises a per-bare-fn env-ignoring adapter
+  `_aether_bare_adapter_<name>(void* env, args) -> R` at file
+  scope. The wrap site stuffs the **adapter's** address into `.fn`
+  (not the bare fn's). The trampoline calls `adapter(env, args)`;
+  the adapter ignores `env` and forwards `args` to the real fn —
+  ABI shapes match on both sides. Adapters are registered via a
+  pre-walk that mirrors the lazy coercion-site registration and
+  emitted alongside closure definitions before main, so calls
+  through them work regardless of where in the program the wrap
+  site appears. Adapter forward decls and bodies live together
+  in the same emission block — no chicken-and-egg ordering. Closes
+  the LAYER 2 follow-up to PR #574 (the bare-fn arg/return-slot
+  hazard that PR documented but couldn't close without per-
+  signature adapter generation).
+
+### Added
+
+- **Qualified struct-literal syntax: `module.Type { field: value, ... }`** —
+  `compiler/parser/parser.c`,
+  `tests/integration/qualified_struct_literal/`. Pre-fix the parser
+  only accepted the bare-name `Type{...}` form, so a struct
+  imported with `import shapes` (vs `import shapes (Circle)`) had
+  no way to be literal-constructed cross-module without the
+  selective-import companion line. Filed in
+  `aether/new_aevg_asks.md` ASK 2 from the AeVG port.
+
+  Fix: parser detects the `IDENT . IDENT { IDENT :` (or
+  `IDENT . IDENT { }`) lookahead pattern at the primary-expression
+  dispatch and lowers it the same way as the bare-name form, just
+  with the module prefix dropped from the type name. Module struct
+  definitions land in the program AST by their bare struct name
+  (matches how the import resolver clones them), so the lowered
+  literal references the same C type either way.
+
 ## [0.195.0]
 
 ### Fixed

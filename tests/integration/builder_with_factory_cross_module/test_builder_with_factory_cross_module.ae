@@ -1,0 +1,36 @@
+// Regression: `builder name(...) with <factory>` whose factory is a
+// helper function in the SAME module must resolve correctly when the
+// builder is selectively imported by a different module.
+//
+// Pre-fix (filed in aether/new_aevg_asks.md ASK 1 from the AeVG port):
+// the import resolver renamed the builder's name to <ns>_<builder>
+// but left the `with`-factory annotation as the bare unprefixed name.
+// The consumer TU then emitted `_bcfg = mkfac()` (unresolved bare
+// symbol) and gcc/ld failed with "undefined reference to mkfac"
+// even though mkfac was exported from the builder's module.
+//
+// Two layers fixed:
+//   1. rename_intra_module_refs now rewrites the AST_BUILDER_FUNCTION
+//      annotation alongside the body's AST_FUNCTION_CALL / AST_IDENTIFIER
+//      values, so the cloned builder carries `annotation = <ns>_<factory>`.
+//   2. collect_intra_module_callees + prune_collect_calls now treat the
+//      builder's annotation as a real call-dependency, so the factory's
+//      body gets pulled into the program AST and survives the mark-and-
+//      sweep dead-code prune.
+//
+// What this test guards: a builder in lib/smod with `with mkfac` is
+// selectively imported here, called with a trailing block, and the
+// program both links and runs to completion. Pre-fix it failed at
+// gcc link time.
+
+import smod ( win )
+
+extern exit(code: int)
+
+child(_ctx: ptr, n: int) { }
+
+main() {
+    println("=== builder...with factory cross-module ===")
+    win("Calc") { child(1) }
+    println("=== all tests passed ===")
+}

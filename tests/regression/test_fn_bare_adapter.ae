@@ -1,0 +1,98 @@
+// Regression: bare named function wrapped in a `_AeClosure` for a
+// `fn`-typed slot must invoke with the correct ABI shape.
+//
+// Filed in aether/new_aevg_asks.md ASK 3 (and the LAYER 2 follow-up
+// in fn_return_float_cast.md). Pre-fix: at every coercion site
+// where a bare named function was wrapped as
+// `(_AeClosure){.fn=name, .env=NULL}`, the wrapped fn's REAL C
+// signature was `R(args)` but the closure-invocation trampoline
+// called .fn as `R(void* env, args)`. The argument-passing
+// machinery shifted everything by one register/stack slot:
+//   - call(my_fn, 3, 7) where my_fn(w, h) -> int returned 3 (env=NULL
+//     shifts into w, 3 shifts into h, 7 dropped).
+//   - call_it(my_double, 3.0) -> float returned 0 (xmm0 holds the
+//     real arg but rdi/integer ABI shift puts NULL where the float
+//     should have been read).
+//   - any string- or ptr-returning bare-fn through the trampoline
+//     either segfaulted (string) or read garbage (ptr/struct).
+//
+// Post-fix: codegen synthesises a per-bare-fn env-ignoring adapter
+// `_aether_bare_adapter_<name>(void* env, args) -> R` at file scope.
+// The wrap site stuffs the ADAPTER's address into .fn (not the bare
+// fn's). The trampoline calls adapter(env, args), the adapter
+// ignores env and forwards args to the real fn — ABI shapes match
+// on both sides.
+//
+// The adapters are registered at emission time and emitted alongside
+// closure definitions before main, so calls through them work
+// regardless of where in the program the wrap site appears.
+
+import std.math
+import std.string
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+// ---- Integer args + return (the ASK 3 headline) ----
+my_fn(w: int, h: int) -> int { return w * 100 + h }
+my_sum(a: int, b: int) -> int { return a + b }
+
+call_int(cb: fn, w: int, h: int) -> int { return cb(w, h) }
+
+// ---- Float arg + float return (LAYER 2 from fn_return_float_cast.md) ----
+my_double(x: float) -> float { return x * 2.0 }
+
+call_float(cb: fn, x: float) -> float { return cb(x) }
+
+// ---- String return ----
+my_hello() -> string { return "hello" }
+
+call_string(cb: fn) -> string { return cb() }
+
+// ---- Ptr return ----
+my_buf() -> ptr { return malloc(16) }
+
+call_ptr(cb: fn) -> ptr { return cb() }
+
+eps_ok(a: float, b: float) -> int {
+    diff = a - b
+    if diff < 0.0 { diff = 0.0 - diff }
+    if diff > 0.001 { return 0 }
+    return 1
+}
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    print("=== bare-fn → fn-slot adapter (ASK 3 + LAYER 2) ===\n\n")
+
+    // ---- 1. int args, int return ----
+    r = call_int(my_fn, 3, 7)
+    if r != 307 { fail("my_fn(3,7) → ${r}, want 307") }
+
+    r2 = call_int(my_sum, 10, 32)
+    if r2 != 42 { fail("my_sum(10,32) → ${r2}, want 42") }
+    print("  PASS: int (my_fn 307, my_sum 42)\n")
+
+    // ---- 2. float arg, float return (LAYER 2) ----
+    a = call_float(my_double, 3.0)
+    if eps_ok(a, 6.0) == 0 { fail("my_double(3.0) → ${a}, want 6.0") }
+    print("  PASS: float (my_double 3.0 → 6.0)\n")
+
+    // ---- 3. string return ----
+    s = call_string(my_hello)
+    if string.equals(s, "hello") != 1 { fail("my_hello → '${s}', want 'hello'") }
+    print("  PASS: string (my_hello → 'hello')\n")
+
+    // ---- 4. ptr return ----
+    p = call_ptr(my_buf)
+    if p == null { fail("my_buf → null") }
+    free(p)
+    print("  PASS: ptr (my_buf returns non-null)\n")
+
+    print("\n=== All bare-fn adapter tests passed ===\n")
+}

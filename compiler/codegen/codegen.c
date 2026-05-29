@@ -194,6 +194,10 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->builder_funcs_reg = NULL;
     gen->builder_func_reg_count = 0;
     gen->builder_func_reg_capacity = 0;
+    // Bare-fn adapter registry
+    gen->bare_fn_adapter_names = NULL;
+    gen->bare_fn_adapter_count = 0;
+    gen->bare_fn_adapter_capacity = 0;
     // Closure support
     gen->closure_counter = 0;
     gen->closures = NULL;
@@ -3254,6 +3258,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         print_line(gen, "// Closure definitions");
         emit_closure_definitions(gen);
     }
+
+    /* Bare-fn → fn-typed-slot adapter discovery + emit. Pre-walk the
+     * program to register every bare-fn that gets wrapped at a
+     * coercion site (mirrors the lazy registration in the wrap
+     * codegen path). Then emit forward declarations + bodies here so
+     * the user code that calls through them (main, etc.) sees the
+     * adapter symbol in scope. ASK 3 from aether/new_aevg_asks.md. */
+    discover_bare_fn_adapters(gen);
+    emit_bare_fn_adapters(gen);
 
     // Pre-pass: build request->reply type map from actor receive handlers.
     // This lets the ? operator know the reply message type at codegen time.
