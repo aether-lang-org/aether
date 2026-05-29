@@ -228,6 +228,22 @@ typedef struct {
     int builder_func_reg_count;
     int builder_func_reg_capacity;
 
+    /* Bare-fn → fn-typed-slot adapter registry. When a bare named
+     * function is wrapped into an _AeClosure at a coercion site
+     * (`(_AeClosure){.fn=name, .env=NULL}`), the real C signature of
+     * `name` is `R(args)` but the closure-invocation trampoline calls
+     * .fn as `R(void* env, args)`. Under -O2 (and silently on the
+     * arg-shift path even at -O0) this UB-via-incompatible-pointer-
+     * cast surfaces as wrong values. Fix: synthesise a per-bare-fn
+     * adapter `_aether_bare_adapter_<name>(void* env, args) -> R` at
+     * file scope that ignores env and forwards to the bare fn; the
+     * wrap site stuffs the adapter's address into .fn instead. Filed
+     * in aether/new_aevg_asks.md ASK 3 (and the LAYER 2 follow-up
+     * in fn_return_float_cast.md). */
+    char** bare_fn_adapter_names;
+    int    bare_fn_adapter_count;
+    int    bare_fn_adapter_capacity;
+
     // Closure support: track closures for hoisted C function generation
     int closure_counter;    // unique ID for closure env structs and functions
     // Map variable names to closure IDs (set during variable declaration codegen)

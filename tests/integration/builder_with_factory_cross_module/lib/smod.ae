@@ -1,0 +1,10 @@
+// Module side: a builder whose `with` factory is a same-module helper.
+// Factory returns a ptr (a real context handle that children attach to).
+
+exports ( win, mkfac )
+
+mkfac() -> ptr { return null }
+
+builder win(title: string) with mkfac {
+    println("win ${title}")
+}

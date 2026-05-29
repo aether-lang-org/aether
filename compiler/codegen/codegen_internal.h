@@ -188,6 +188,15 @@ const char* lookup_extern_c_name(CodeGenerator* gen, const char* func_name);
 int is_builder_func_reg(CodeGenerator* gen, const char* func_name);
 const char* get_builder_factory(CodeGenerator* gen, const char* func_name);
 
+/* Bare-fn → fn-typed-slot adapter registry (ASK 3). At every bare-fn
+ * wrap site we call register_bare_fn_adapter(name); at file
+ * finalisation we call emit_bare_fn_adapters() to dump the resulting
+ * env-ignoring forwarder functions. See codegen.h field comment for
+ * the bug-shape rationale. */
+int  register_bare_fn_adapter(CodeGenerator* gen, const char* bare_fn_name);
+void emit_bare_fn_adapters(CodeGenerator* gen);
+void discover_bare_fn_adapters(CodeGenerator* gen);
+
 /* Function/struct generation (codegen_func.c) */
 int has_return_value(ASTNode* node);
 

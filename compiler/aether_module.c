@@ -1340,6 +1340,28 @@ static void rename_intra_module_refs(ASTNode* node, const char* prefix,
         }
     }
 
+    /* `builder name(...) with <factory>` carries the factory name in
+     * the AST_BUILDER_FUNCTION node's `annotation` field (see
+     * parser.c:3626 and codegen_func.c:get_builder_factory which
+     * reads it back). When the builder is cloned across an import
+     * boundary, the factory needs the same intra-module rename — the
+     * codegen later emits `_bcfg = <annotation>()` verbatim, so
+     * without this the consumer TU emits a bare `mkfac()` and gets
+     * "undefined reference to mkfac" at link time even though the
+     * builder itself was renamed to `<ns>_<builder>` correctly.
+     * Filed in aether/new_aevg_asks.md ASK 1 from the AeVG port. */
+    if (node->type == AST_BUILDER_FUNCTION && node->annotation) {
+        for (int i = 0; i < func_count; i++) {
+            if (strcmp(node->annotation, func_names[i]) == 0) {
+                char prefixed[256];
+                snprintf(prefixed, sizeof(prefixed), "%s_%s", prefix, node->annotation);
+                free(node->annotation);
+                node->annotation = strdup(prefixed);
+                break;
+            }
+        }
+    }
+
     if (node->type == AST_IDENTIFIER && node->value) {
         // Only rename if this identifier matches a module constant AND is not
         // shadowed by a local variable or parameter in the enclosing function
@@ -1528,6 +1550,30 @@ static void collect_intra_module_callees(ASTNode* node, const char* ns,
         size_t ns_len = strlen(ns);
         if (strncmp(node->value, ns, ns_len) == 0 && node->value[ns_len] == '_') {
             const char* bare = node->value + ns_len + 1;
+            for (int i = 0; i < mod_func_count; i++) {
+                if (strcmp(bare, mod_func_names[i]) == 0) {
+                    if (!name_in_list(bare, out, *out_count) && *out_count < max) {
+                        out[(*out_count)++] = mod_func_names[i];
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    /* `builder name(...) with <factory>` carries the factory function
+     * name in the builder's `annotation` field. After
+     * rename_intra_module_refs has run, it's the already-prefixed
+     * `<ns>_<factory>` form. Treat it as a callee dependency of the
+     * builder so the transitive-pull-in loop above clones the
+     * factory's body into the consumer TU. Without this, a
+     * selectively-imported `builder win(...) with mkfac` from module
+     * `smod` resolves `smod_win` correctly but leaves `smod_mkfac`
+     * unresolved — bare `mkfac()` in the emitted C with no
+     * declaration. Filed in aether/new_aevg_asks.md ASK 1. */
+    if (node->type == AST_BUILDER_FUNCTION && node->annotation) {
+        size_t ns_len = strlen(ns);
+        if (strncmp(node->annotation, ns, ns_len) == 0 && node->annotation[ns_len] == '_') {
+            const char* bare = node->annotation + ns_len + 1;
             for (int i = 0; i < mod_func_count; i++) {
                 if (strcmp(bare, mod_func_names[i]) == 0) {
                     if (!name_in_list(bare, out, *out_count) && *out_count < max) {
@@ -2185,6 +2231,19 @@ static void prune_collect_calls(ASTNode* node, NameSet* seen, NameSet* worklist)
                  node->children[0]->value, node->value);
         if (nameset_add(seen, qualified)) {
             nameset_add(worklist, qualified);
+        }
+    }
+    /* `builder name(...) with <factory>` carries the factory name in
+     * the AST_BUILDER_FUNCTION's `annotation` field. Codegen lowers
+     * the call site as `_bcfg = <annotation>()`, so the factory is
+     * a real (call-site) dependency of the builder even though it
+     * doesn't appear in the body. Without seeding it here, the
+     * mark-and-sweep dead-code prune drops the cross-module-cloned
+     * factory body and the consumer TU emits an unresolved bare
+     * call. Filed in aether/new_aevg_asks.md ASK 1. */
+    if (node->type == AST_BUILDER_FUNCTION && node->annotation) {
+        if (nameset_add(seen, node->annotation)) {
+            nameset_add(worklist, node->annotation);
         }
     }
     for (int i = 0; i < node->child_count; i++) {

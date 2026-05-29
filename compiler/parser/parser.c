@@ -875,6 +875,61 @@ ASTNode* parse_primary_expression(Parser* parser) {
             }
             // Could be identifier or struct literal
             Token* next = peek_ahead(parser, 1);
+
+            /* Qualified struct literal: `module.Type { field: value }`.
+             * Pattern: IDENTIFIER `.` IDENTIFIER `{` IDENTIFIER `:`
+             * (with the empty-struct variant `module.Type{}`). Parse
+             * the dotted name into the struct_name so the rest of the
+             * struct-literal lowering uses `Type` as the struct (which
+             * is what the rename pass produces — modules' struct
+             * definitions go into the program AST by their bare name,
+             * not module-prefixed). Filed in aether/new_aevg_asks.md
+             * ASK 2 from the AeVG port. */
+            if (next && next->type == TOKEN_DOT && !parser->in_condition) {
+                Token* t_type = peek_ahead(parser, 2);
+                Token* t_brace = peek_ahead(parser, 3);
+                if (t_type && t_type->type == TOKEN_IDENTIFIER &&
+                    t_brace && t_brace->type == TOKEN_LEFT_BRACE) {
+                    Token* t_after = peek_ahead(parser, 4);
+                    int looks_qualified_struct = 0;
+                    if (t_after && t_after->type == TOKEN_RIGHT_BRACE) {
+                        looks_qualified_struct = 1;
+                    } else if (t_after && t_after->type == TOKEN_IDENTIFIER) {
+                        Token* t_colon = peek_ahead(parser, 5);
+                        if (t_colon && t_colon->type == TOKEN_COLON) {
+                            looks_qualified_struct = 1;
+                        }
+                    }
+                    if (looks_qualified_struct) {
+                        /* Drop the module prefix — module structs land
+                         * in the program AST by their bare name. */
+                        char* struct_name = strdup(t_type->value);
+                        int s_line = token->line;
+                        int s_col = token->column;
+                        advance_token(parser);  /* module ident */
+                        advance_token(parser);  /* . */
+                        advance_token(parser);  /* Type ident */
+                        advance_token(parser);  /* { */
+
+                        ASTNode* struct_lit = create_ast_node(AST_STRUCT_LITERAL, struct_name, s_line, s_col);
+                        if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+                            do {
+                                Token* field_name = expect_token(parser, TOKEN_IDENTIFIER);
+                                if (!field_name) { free_ast_node(struct_lit); return NULL; }
+                                if (!expect_token(parser, TOKEN_COLON)) { free_ast_node(struct_lit); return NULL; }
+                                ASTNode* value_expr = parse_expression(parser);
+                                if (!value_expr) { free_ast_node(struct_lit); return NULL; }
+                                ASTNode* field_init = create_ast_node(AST_ASSIGNMENT, field_name->value,
+                                                                       field_name->line, field_name->column);
+                                add_child(field_init, value_expr);
+                                add_child(struct_lit, field_init);
+                            } while (match_token(parser, TOKEN_COMMA));
+                            if (!expect_token(parser, TOKEN_RIGHT_BRACE)) { free_ast_node(struct_lit); return NULL; }
+                        }
+                        return struct_lit;
+                    }
+                }
+            }
             // Disambiguate: IDENTIFIER { could be a struct literal OR an identifier
             // followed by a block (e.g., while i < n { ... }).
             // A struct literal has the pattern: TypeName { field: value } or TypeName {}

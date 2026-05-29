@@ -1,0 +1,27 @@
+// Regression: `module.Type { field: value }` qualified struct-literal
+// syntax. Pre-fix the parser only accepted bare-name `Type{...}`;
+// the qualified form errored at parse with "Expected statement in
+// block". Filed in aether/new_aevg_asks.md ASK 2 from the AeVG port.
+//
+// Post-fix: parser detects the IDENT `.` IDENT `{` IDENT `:` (with
+// the empty-struct `{}` variant) pattern at the primary-expression
+// dispatch and lowers it the same way as the bare form, dropping
+// the module prefix since module struct definitions are merged
+// into the program AST by their bare struct name.
+
+import shapes
+
+extern exit(code: int)
+
+main() {
+    println("=== qualified struct literal ===")
+
+    c = shapes.Circle{cx: 1.0, cy: 2.0, r: 3.0}
+    if c.r != 3.0 { println("FAIL: c.r = ${c.r}"); exit(1) }
+
+    r = shapes.Rect{x: 10, y: 20, w: 100, h: 50}
+    if r.w != 100 { println("FAIL: r.w = ${r.w}"); exit(1) }
+    if r.h != 50 { println("FAIL: r.h = ${r.h}"); exit(1) }
+
+    println("=== all tests passed ===")
+}

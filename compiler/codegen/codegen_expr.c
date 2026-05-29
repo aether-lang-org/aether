@@ -2064,9 +2064,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         generate_expression(gen, expr->children[1]);
                         fprintf(gen->output, ")");
                     } else if (assign_box_bare_fn) {
-                        fprintf(gen->output, "_aether_box_closure((_AeClosure){ .fn = (void(*)(void))(");
-                        generate_expression(gen, expr->children[1]);
-                        fprintf(gen->output, "), .env = NULL })");
+                        /* Register an env-ignoring adapter for this
+                         * bare fn so the wrap embeds the adapter
+                         * address (not the bare fn's address) into
+                         * .fn. See ASK 3 in aether/new_aevg_asks.md. */
+                        const char* bn = expr->children[1] && expr->children[1]->value
+                                         ? expr->children[1]->value : NULL;
+                        if (bn) register_bare_fn_adapter(gen, bn);
+                        fprintf(gen->output,
+                                "_aether_box_closure((_AeClosure){ .fn = (void(*)(void))_aether_bare_adapter_%s, .env = NULL })",
+                                bn ? bn : "unknown");
                     } else {
                         generate_expression(gen, expr->children[1]);
                     }
@@ -3273,9 +3280,11 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 }
                             }
                             if (arg_is_bare_fn) {
-                                fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))(");
-                                generate_expression(gen, arg);
-                                fprintf(gen->output, "), .env = NULL }");
+                                const char* bn = arg && arg->value ? arg->value : NULL;
+                                if (bn) register_bare_fn_adapter(gen, bn);
+                                fprintf(gen->output,
+                                        "(_AeClosure){ .fn = (void(*)(void))_aether_bare_adapter_%s, .env = NULL }",
+                                        bn ? bn : "unknown");
                             } else if (arg->node_type && arg->node_type->kind == TYPE_PTR) {
                                 fprintf(gen->output, "_aether_unbox_closure(");
                                 generate_expression(gen, arg);

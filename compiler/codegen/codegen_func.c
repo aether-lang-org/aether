@@ -177,6 +177,169 @@ int is_builder_func_reg(CodeGenerator* gen, const char* func_name) {
     return 0;
 }
 
+/* Find a user-fn definition by name in the program AST. Helper for
+ * the bare-fn-adapter discovery pre-pass. */
+static ASTNode* find_user_function_by_name(CodeGenerator* gen, const char* name) {
+    if (!gen || !gen->program || !name) return NULL;
+    for (int i = 0; i < gen->program->child_count; i++) {
+        ASTNode* c = gen->program->children[i];
+        if (c && (c->type == AST_FUNCTION_DEFINITION ||
+                  c->type == AST_BUILDER_FUNCTION) &&
+            c->value && strcmp(c->value, name) == 0) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+/* Pre-walk the AST registering bare-fn adapters for every coercion site
+ * where a bare named function is wrapped as `(_AeClosure){.fn=name,
+ * .env=NULL}`. This mirrors the registration that happens lazily at
+ * the wrap-site codegen — doing it eagerly lets emit_bare_fn_adapters
+ * run before main is emitted, so adapter forward declarations are
+ * visible to user code that calls through them.
+ *
+ * The mirror is conservative: we register any bare-fn identifier
+ * appearing as a call argument where the callee has a `fn`-typed
+ * param, as the RHS of an `=` assignment to a `ptr`-typed
+ * struct field, or in an `_aether_box_closure(...)` wrap position
+ * (which the call-site arg coercion also handles). False positives
+ * are harmless — they just emit an unused adapter the C compiler
+ * inlines / discards. */
+static void discover_bare_fn_adapters_walk(CodeGenerator* gen, ASTNode* node) {
+    if (!gen || !node) return;
+    /* AST_FUNCTION_CALL: register any bare-fn arg whose callee param
+     * is `fn`-typed. */
+    if (node->type == AST_FUNCTION_CALL && node->value && gen->program) {
+        ASTNode* callee = find_user_function_by_name(gen, node->value);
+        if (callee) {
+            int pi = 0;
+            for (int j = 0; j < callee->child_count; j++) {
+                ASTNode* p = callee->children[j];
+                if (!p || p->type == AST_GUARD_CLAUSE || p->type == AST_BLOCK) continue;
+                /* Map param index to call-arg index. Skip _ctx
+                 * auto-injection — the user's child index 0 maps to
+                 * the callee's first non-_ctx param. */
+                if (p->node_type && p->node_type->kind == TYPE_FUNCTION &&
+                    !p->node_type->is_fnptr &&
+                    pi < node->child_count) {
+                    ASTNode* arg = node->children[pi];
+                    if (arg && arg->type == AST_IDENTIFIER && arg->value) {
+                        if (find_user_function_by_name(gen, arg->value)) {
+                            register_bare_fn_adapter(gen, arg->value);
+                        }
+                    }
+                }
+                pi++;
+            }
+        }
+    }
+    /* AST_BINARY_EXPRESSION with op="=": register bare-fn RHS into a
+     * ptr-typed LHS struct field. Conservative: also register for any
+     * RHS that's a bare named function regardless of LHS — false
+     * positives just emit unused adapters. */
+    if (node->type == AST_BINARY_EXPRESSION && node->value &&
+        strcmp(node->value, "=") == 0 && node->child_count == 2) {
+        ASTNode* lhs = node->children[0];
+        ASTNode* rhs = node->children[1];
+        if (lhs && rhs && rhs->type == AST_IDENTIFIER && rhs->value &&
+            lhs->node_type && lhs->node_type->kind == TYPE_PTR) {
+            if (find_user_function_by_name(gen, rhs->value)) {
+                register_bare_fn_adapter(gen, rhs->value);
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        discover_bare_fn_adapters_walk(gen, node->children[i]);
+    }
+}
+
+void discover_bare_fn_adapters(CodeGenerator* gen) {
+    if (!gen || !gen->program) return;
+    discover_bare_fn_adapters_walk(gen, gen->program);
+}
+
+/* Register `bare_fn_name` as needing an env-ignoring adapter emitted at
+ * file finalisation. Returns 1 if newly added, 0 if it was already
+ * registered. Idempotent / deduping — multiple wrap sites for the same
+ * bare fn share one adapter. */
+int register_bare_fn_adapter(CodeGenerator* gen, const char* bare_fn_name) {
+    if (!gen || !bare_fn_name) return 0;
+    for (int i = 0; i < gen->bare_fn_adapter_count; i++) {
+        if (strcmp(gen->bare_fn_adapter_names[i], bare_fn_name) == 0) return 0;
+    }
+    if (gen->bare_fn_adapter_count >= gen->bare_fn_adapter_capacity) {
+        int new_cap = gen->bare_fn_adapter_capacity ? gen->bare_fn_adapter_capacity * 2 : 8;
+        char** nn = realloc(gen->bare_fn_adapter_names, sizeof(char*) * new_cap);
+        if (!nn) return 0;
+        gen->bare_fn_adapter_names = nn;
+        gen->bare_fn_adapter_capacity = new_cap;
+    }
+    gen->bare_fn_adapter_names[gen->bare_fn_adapter_count++] = strdup(bare_fn_name);
+    return 1;
+}
+
+/* Emit `_aether_bare_adapter_<name>(void* env, args) -> R` for every
+ * registered bare-fn name. The adapter ignores env and forwards to the
+ * bare fn with its real C signature. Looks up each bare fn in the
+ * program AST to derive its param + return type list; for fns that
+ * can't be resolved (shouldn't happen — registration only fires from
+ * the bare-fn coercion path which already confirms the def exists),
+ * a no-op stub is emitted so the codegen isn't blocked. Must be called
+ * AFTER all user fn forward decls and bodies — the adapter calls into
+ * the bare fn by its real C name. */
+void emit_bare_fn_adapters(CodeGenerator* gen) {
+    if (!gen || gen->bare_fn_adapter_count == 0) return;
+    if (!gen->program) return;
+    print_line(gen, "// Bare-fn → fn-typed-slot env-ignoring adapters (ASK 3)");
+    for (int i = 0; i < gen->bare_fn_adapter_count; i++) {
+        const char* fname = gen->bare_fn_adapter_names[i];
+        ASTNode* fdef = NULL;
+        for (int j = 0; j < gen->program->child_count; j++) {
+            ASTNode* c = gen->program->children[j];
+            if (c && (c->type == AST_FUNCTION_DEFINITION ||
+                      c->type == AST_BUILDER_FUNCTION) &&
+                c->value && strcmp(c->value, fname) == 0) {
+                fdef = c;
+                break;
+            }
+        }
+        if (!fdef) continue;  /* Shouldn't happen; registration gate
+                               * already confirmed existence. */
+        /* Walk the def's children to find params and return type.
+         * Skip AST_GUARD_CLAUSE and AST_BLOCK; the remaining typed
+         * nodes are the params, in order. */
+        ASTNode* params[16];
+        int param_count = 0;
+        for (int k = 0; k < fdef->child_count && param_count < 16; k++) {
+            ASTNode* p = fdef->children[k];
+            if (!p) continue;
+            if (p->type == AST_GUARD_CLAUSE || p->type == AST_BLOCK) continue;
+            params[param_count++] = p;
+        }
+        Type* rt = fdef->node_type;
+        const char* ret_c = (rt && rt->kind != TYPE_UNKNOWN)
+                            ? get_c_type(rt) : "void";
+        fprintf(gen->output, "static %s _aether_bare_adapter_%s(void* _env",
+                ret_c, fname);
+        for (int k = 0; k < param_count; k++) {
+            ASTNode* p = params[k];
+            const char* pt = p->node_type ? get_c_type(p->node_type) : "int";
+            fprintf(gen->output, ", %s _a%d", pt, k);
+        }
+        fprintf(gen->output, ") {\n    (void)_env;\n    ");
+        if (rt && rt->kind != TYPE_VOID && rt->kind != TYPE_UNKNOWN) {
+            fprintf(gen->output, "return ");
+        }
+        fprintf(gen->output, "%s(", fname);
+        for (int k = 0; k < param_count; k++) {
+            if (k > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "_a%d", k);
+        }
+        fprintf(gen->output, ");\n}\n");
+    }
+}
+
 // Get the factory function for a builder function (default: "map_new").
 const char* get_builder_factory(CodeGenerator* gen, const char* func_name) {
     if (!gen || !func_name) return "map_new";
