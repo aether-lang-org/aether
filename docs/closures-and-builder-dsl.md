@@ -4,6 +4,57 @@ Aether supports closures, trailing blocks, and a builder-style DSL pattern inspi
 Smalltalk's blocks, Ruby's blocks/procs, and Groovy's closures. This document covers the
 syntax, semantics, and the builder context mechanism that enables pseudo-declarative DSLs.
 
+The compact name for this whole language feature — closures + trailing blocks executing
+in the caller's context to give pseudo-declarative scripts — is **"DSL with scope"**,
+the term Yukihiro "Matz" Matsumoto (Ruby's creator) said he's always used for it. See
+[Paul Hammant's "That Ruby and Groovy Language Feature" (2024-02-14)][matz-dsl-scope]
+for the genealogy from Smalltalk through Ruby, Groovy, Kotlin, SwiftUI, and the
+side-by-side calculator-app comparison across each.
+
+(Another lens on the same idea, less catchy but mechanically descriptive: *"closure
+with context"* — the trailing block is a closure that runs with an implicit
+context object available to its body, which is what `_ctx: ptr` injection and the
+builder context stack provide in Aether.)
+
+[matz-dsl-scope]: https://paulhammant.com/2024/02/14/that-ruby-and-groovy-language-feature
+
+## Quick reckoner (LLM cheat-sheet)
+
+Two **independent** axes describe every trailing-block usage:
+
+**Axis 1 — Trailing-block form (what the *caller* writes after `)`):**
+
+| Form | Syntax | Runs | Captures |
+|------|--------|------|----------|
+| **Immediate** | `func() { body }` | Inline, as DSL structure | Sees enclosing scope directly (it's just inline code) |
+| **Closure (parameterised)** | `func() \|x\| { body }` or `\|x\| -> expr` | Later, when invoked via `call(...)` | Explicit parameters; captures enclosing locals by value |
+| **Callback** | `func() callback { body }` (optionally `callback \|x\|` or `callback \|x\| -> expr`) | Later, when invoked via `call(...)` | Implicit capture of enclosing-scope locals (closure with no required params) |
+
+**Axis 2 — Trailing-block-accepting function (what the *definition* declares):**
+
+| Flavour | Definition | Order | Block provides | Function provides |
+|---------|------------|-------|----------------|--------------------|
+| **Regular** | plain `func(...)` (often `_ctx: ptr` for auto-injection) | Function first, then block | Decoration / children | The container/value to fill |
+| **Builder** | `builder func(...)` (optionally `with <factory>` for the config object) | **Block first**, then function | Configuration (a config object filled via setter calls) | The action that uses the filled config |
+
+**The axes multiply.** Any of the three forms on the call side can target either flavour on the
+definition side, giving six legal combinations. Builder is NOT a fourth trailing-block form;
+it's a different function-side contract that any trailing-block form can attach to.
+
+**Related supporting machinery (covered later):**
+
+- **Builder context stack** (`_ctx: ptr` auto-injection, `builder_context()`, `_aether_ctx_push/pop`)
+  — wires parents to children automatically inside Immediate trailing blocks.
+- **Block-receiver scoping** — `receiver.method(...) { body }` falls back through `<receiver>_<name>` for bare-name calls inside `body` (issue #333).
+- **Ref cells** (`ref(v)` / `ref_get` / `ref_set`) — shared mutable state for closures (which otherwise capture by value).
+- **Boxed closures** (`box_closure` / `unbox_closure`) — heap-allocate a closure so it can be stored in `std.list` / struct fields.
+- **`fn` type** — the parameter type for "this function takes a closure"; invoked with `call(fn_var, args...)`.
+
+**Same-line rule** (line 100+): a trailing block is attached to a call only when `{`
+appears on the same line as the call's closing `)`. A `{` on the next line is an
+independent block. This is what stops `result = build()\n{ ... }` from greedily
+consuming the bare block as `build`'s closure (issue #286).
+
 ## Background
 
 The builder-style DSL pattern — where nested blocks of code describe structure
