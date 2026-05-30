@@ -531,10 +531,12 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
                 FD_ZERO(&wfds); FD_SET(sockfd, &wfds);
                 FD_ZERO(&efds); FD_SET(sockfd, &efds);
                 /* `select` takes microsecond precision via tv_usec —
-                 * slice the configured nanoseconds straight in. */
+                 * slice the configured nanoseconds straight in.
+                 * tv_usec is `suseconds_t` on POSIX and `long` on
+                 * MinGW; cast to `long` to satisfy both portably. */
                 struct timeval tv;
                 tv.tv_sec  = (time_t)(req->timeout_ns / 1000000000LL);
-                tv.tv_usec = (suseconds_t)((req->timeout_ns / 1000LL) % 1000000LL);
+                tv.tv_usec = (long)((req->timeout_ns / 1000LL) % 1000000LL);
                 int sel = select(sockfd + 1, NULL, &wfds, &efds, &tv);
                 if (sel == 0) {
                     close(sockfd);
@@ -603,7 +605,7 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
 #else
         struct timeval rwtv;
         rwtv.tv_sec  = (time_t)(req->timeout_ns / 1000000000LL);
-        rwtv.tv_usec = (suseconds_t)((req->timeout_ns / 1000LL) % 1000000LL);
+        rwtv.tv_usec = (long)((req->timeout_ns / 1000LL) % 1000000LL);
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rwtv, sizeof(rwtv));
         setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&rwtv, sizeof(rwtv));
 #endif

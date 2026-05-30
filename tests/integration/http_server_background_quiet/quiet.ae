@@ -32,7 +32,7 @@ main() {
 
     // Prove it actually serves (the default 404 route still responds).
     req = client.request("GET", "http://127.0.0.1:${p}/")
-    client.set_timeout(req, 3)
+    client.set_timeout(req, 3s)
     resp, err = client.send_request(req)
     client.request_free(req)
     if err != "" { println("FAIL: probe ${err}"); http.server_stop(s); exit(1) }

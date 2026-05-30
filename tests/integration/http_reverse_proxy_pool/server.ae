@@ -378,7 +378,7 @@ build_proxy_methods() {
     s = http.server_create(PROXY_PORT)
     if s == 0 { println("FAIL: methods server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
-    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_set_keepalive(s, 1, 0, 5000ms)
     http.server_get(s, "/proxy-metrics-primary", handle_proxy_metrics, primary)
     http.server_get(s, "/proxy-metrics-replicas", handle_proxy_metrics, replicas)
 
