@@ -1190,6 +1190,64 @@ ASTNode* parse_primary_expression(Parser* parser) {
     }
 }
 
+/* Statement-shape recogniser for issue #528. Returns 1 when the
+ * pending operator looks like the start of a new statement rather
+ * than a continuation of the current binary expression.
+ *
+ * Two conditions must both hold:
+ *   (a) the operator starts a strictly later source line than its
+ *       preceding token (multi-line expression boundary), and
+ *   (b) the tokens immediately after the operator form a
+ *       recognisable statement-leading shape for that operator.
+ *
+ * Add new operator branches here as new ambiguities surface. Each
+ * branch should be CONSERVATIVE: returning 1 stops the binary loop,
+ * so any false positive breaks a legitimate multi-line expression
+ * like:
+ *     x = a
+ *         * b
+ * (operator-led continuation, no statement shape afterwards). Only
+ * return 1 when the post-operator tokens strongly signal a fresh
+ * statement.
+ *
+ * Currently handled — TOKEN_MULTIPLY:
+ *   `*StructName name [= ...]`  (typed-pointer local declaration)
+ *   `*ident = ...`              (deref-store via a named ptr)
+ *
+ * Theoretical hazards documented in #528 but not (yet) detected:
+ *   `-x = ...` / `+x = ...`     (unary-prefixed expression statement)
+ *   `(expr) = ...`              (parenthesised expression statement)
+ *   `[a, b, c]`                 (array-literal statement)
+ * These are vanishingly rare in practice; add branches if/when they
+ * actually bite. */
+static int is_newline_led_statement(Parser* parser, Token* op) {
+    if (!op) return 0;
+
+    Token* prev = peek_ahead(parser, -1);
+    if (!prev || op->line <= prev->line) return 0;
+
+    Token* a1 = peek_ahead(parser, 1);
+    Token* a2 = peek_ahead(parser, 2);
+
+    switch (op->type) {
+        case TOKEN_MULTIPLY:
+            /* `*StructName name [= ...]` typed-pointer declaration —
+             * the original PR #527 case. `*` + IDENT + IDENT. */
+            if (a1 && a1->type == TOKEN_IDENTIFIER &&
+                a2 && a2->type == TOKEN_IDENTIFIER) {
+                return 1;
+            }
+            /* `*ident = ...` deref-store. `*` + IDENT + `=`. */
+            if (a1 && a1->type == TOKEN_IDENTIFIER &&
+                a2 && a2->type == TOKEN_ASSIGN) {
+                return 1;
+            }
+            return 0;
+        default:
+            return 0;
+    }
+}
+
 ASTNode* parse_expression(Parser* parser) {
     return parse_binary_expression(parser, 0);
 }
@@ -1214,29 +1272,35 @@ ASTNode* parse_binary_expression(Parser* parser, int precedence) {
         if (op_precedence < 0) break;  // Not an operator
         if (op_precedence < precedence) break;  // Lower precedence, stop
 
-        /* Newline-led `*StructName name` is a statement, not an infix
-         * multiply continuing the previous expression.  Aether treats
-         * a newline as a statement separator, but `*` is both an infix
-         * operator and the lead token of a `*StructName name = ...`
-         * typed-pointer declaration.  When `*` starts a new source
-         * line and is followed by `IDENT IDENT` (a struct name then a
-         * variable name), stop the expression here so the next
-         * statement parses as the pointer-typed local declaration.
-         * Without this, `q = (p as *T)` <newline> `*T c = q` folds the
-         * second line into `(p as *T) * T`. See
-         * redis-porting-language-gaps.md "P0: Typed And Qualified C
-         * Pointers". */
-        if (operator->type == TOKEN_MULTIPLY) {
-            Token* after  = peek_ahead(parser, 1);
-            Token* after2 = peek_ahead(parser, 2);
-            Token* prev   = peek_ahead(parser, -1);
-            if (after && after->type == TOKEN_IDENTIFIER &&
-                after2 && after2->type == TOKEN_IDENTIFIER &&
-                prev && operator->line > prev->line) {
-                /* `*` leads a new source line and is followed by
-                 * `IDENT IDENT` — a `*StructName name` declaration. */
-                break;
-            }
+        /* Newline-led statement-shape detection (issue #528).
+         *
+         * Aether's expression parser is not consistently
+         * newline-terminated: this loop walks operators by precedence
+         * alone, so a token that's BOTH an infix operator AND a valid
+         * statement-leading token will fold into the previous
+         * expression if it appears at the start of a new line. The
+         * canonical case (filed as the P0 typed-pointer port for
+         * Redis):
+         *
+         *     q = (p as *Pt)
+         *     *Pt c = q          // meant to be a new statement;
+         *                        // parses as `(p as *Pt) * Pt`
+         *                        // without this guard.
+         *
+         * The guard's logic: when the next operator starts a new
+         * source line AND the tokens after it form a recognisable
+         * statement-leading shape, break out of the loop so the
+         * outer statement parser picks up the new statement. If the
+         * operator crosses a line but the next tokens DON'T look like
+         * a statement-lead, this is a legitimate multi-line
+         * expression (an indented operator continuation) and we
+         * continue.
+         *
+         * See is_newline_led_statement below for the per-operator
+         * shape recognisers. Add new cases there as new ambiguities
+         * surface; the loop body stays a single break. */
+        if (is_newline_led_statement(parser, operator)) {
+            break;
         }
 
         advance_token(parser);

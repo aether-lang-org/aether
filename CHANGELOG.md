@@ -9,6 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Design doc: distinct types** (issue #480;
+  `docs/distinct-types.md`). Draft design for Nim-inspired zero-
+  runtime-cost nominal wrappers: `type Path = distinct string`,
+  `type FD = distinct int`, etc. The doc frames the open design
+  questions (cast spelling, operator inheritance, extern signature
+  interaction, pattern-matching destructure, interpolation
+  behaviour, layered distinct) with options + tradeoffs for the
+  maintainer to resolve. Implementation is gated on those
+  resolutions; this PR is the design-doc-only artefact that the
+  issue's acceptance criteria asks for.
+
+### Fixed
+
+- **Parser: line-leading operator no longer folds into previous
+  expression** (issue #528;
+  `compiler/parser/parser.c`,
+  `tests/regression/test_parser_line_leading_statements.ae`).
+  PR #527 added a targeted guard that stopped the binary-expression
+  loop when `*` started a new source line and was followed by
+  `IDENT IDENT` (a `*StructName name` typed-pointer declaration).
+  This generalises the guard into `is_newline_led_statement` so the
+  loop also breaks for `*ident = ...` deref-store and is easy to
+  extend for any future token that's both an infix operator and a
+  valid statement-leading token. The recogniser is intentionally
+  conservative: it only breaks when the post-operator tokens form a
+  recognisable statement shape, so legitimate multi-line expressions
+  (`sum = a` ↵ `    + b`) still compile. Other hazards documented in
+  #528 (`-x`, `+x`, `(expr)`, `[a, b]` as line-leading statements)
+  remain theoretical — the helper has the structure to add them
+  reactively when/if they bite.
+
+- **Typechecker rejects bare-int → Duration at parameter-passing**
+  (issue #586; `compiler/analysis/typechecker.c`,
+  `tests/regression/test_duration_param_strictness.ae`,
+  `tests/integration/duration_param_strict_error/`). PR #583's
+  Duration landing only enforced strict typing in comparisons
+  (`dur > 5` errors) but accepted bare ints at parameter passing
+  (`set_timeout(req, 5)` silently reinterpreted as 5 nanoseconds).
+  This bit PR #583 itself: three callers passing plain ints to a
+  newly-Duration-typed parameter compiled cleanly, then raced on
+  macOS where the 5ns connect-timeout fired before the connection
+  completed. The typechecker now rejects the call at compile time
+  with a diagnostic that names the unit-suffix forms (`5ns`, `5us`,
+  `5ms`, `5s`, `5m`, `5h`, `5d`, compound forms like `2m30s`). Rule
+  applies to user-defined functions, builder functions, and extern
+  functions; covers numeric scalar types (int, long, uint64,
+  uint32/16/8, float). Same rejection shape as the existing
+  comparison check.
+
+  Side-fix: extern function symbols had `symbol->node = NULL`
+  during global registration, which silently disabled the existing
+  extern argument-type validation block at the call site (and would
+  have disabled the new Duration check too). Externs now wire their
+  AST node into the symbol so both validation passes actually fire.
+
 ## [0.201.0]
 
 ### Added
