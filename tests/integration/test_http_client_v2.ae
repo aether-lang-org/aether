@@ -215,7 +215,7 @@ base_url() -> string {
 
 check_status(path: string, want: int) -> string {
     req = client.request("GET", "${base_url()}${path}")
-    client.set_timeout(req, 5)
+    client.set_timeout(req, 5s)
     resp, err = client.send_request(req)
     client.request_free(req)
     if err != "" { return "transport on ${path}: ${err}" }
@@ -280,7 +280,7 @@ main() {
         sleep(25)
         probe_req = client.request("GET", "${base_url()}/ok")
         if probe_req != null {
-            client.set_timeout(probe_req, 1)
+            client.set_timeout(probe_req, 1s)
             probe_resp, probe_err = client.send_request(probe_req)
             client.request_free(probe_req)
             if probe_err == "" {
@@ -302,7 +302,7 @@ main() {
     if req1 == null { print("  FAIL: request null\n"); exit(1) }
     e1 = client.set_header(req1, "X-Test-Foo", "alpha-beta-gamma")
     if e1 != "" { println("  FAIL set_header: ${e1}"); exit(1) }
-    e1t = client.set_timeout(req1, 5)
+    e1t = client.set_timeout(req1, 5s)
     if e1t != "" { println("  FAIL set_timeout: ${e1t}"); exit(1) }
     resp1, err1 = client.send_request(req1)
     client.request_free(req1)
@@ -318,7 +318,7 @@ main() {
     // ---- Test 2: response_header case-insensitive lookup ----
     print("\nTest 2: response_header case-insensitive lookup\n")
     req2 = client.request("GET", "${base_url()}/sets-header")
-    client.set_timeout(req2, 5)
+    client.set_timeout(req2, 5s)
     resp2, err2 = client.send_request(req2)
     client.request_free(req2)
     if err2 != "" { println("  FAIL transport: ${err2}"); exit(1) }
@@ -380,7 +380,7 @@ main() {
     print("\nTest 4: POST sends correct Content-Length\n")
     req4 = client.request("POST", "${base_url()}/echo-length")
     client.set_body(req4, "abcdef", 6, "application/octet-stream")
-    client.set_timeout(req4, 5)
+    client.set_timeout(req4, 5s)
     resp4, err4 = client.send_request(req4)
     client.request_free(req4)
     if err4 != "" { println("  FAIL transport: ${err4}"); exit(1) }
@@ -395,7 +395,7 @@ main() {
     // ---- Test 5: timeout enforcement ----
     print("\nTest 5: timeout enforcement\n")
     req5 = client.request("GET", "${base_url()}/slow")
-    client.set_timeout(req5, 1)
+    client.set_timeout(req5, 1s)
     resp5, err5 = client.send_request(req5)
     client.request_free(req5)
     if err5 == "" {
@@ -408,7 +408,7 @@ main() {
     // ---- Test 6: transport failure on refused connection ----
     print("\nTest 6: refused connection on a closed port\n")
     req6 = client.request("GET", "http://127.0.0.1:1/nope")  // port 1 = ICMP, will refuse
-    client.set_timeout(req6, 3)
+    client.set_timeout(req6, 3s)
     _, err6 = client.send_request(req6)
     client.request_free(req6)
     if err6 == "" {
@@ -487,7 +487,7 @@ main() {
     // ---- Test 10: response_body_json malformed JSON surfaces err ----
     print("\nTest 10: response_body_json on malformed JSON\n")
     req10 = client.request("GET", "${base_url()}/json-broken")
-    client.set_timeout(req10, 5)
+    client.set_timeout(req10, 5s)
     resp10, err10 = client.send_request(req10)
     client.request_free(req10)
     if err10 != "" { println("  FAIL transport: ${err10}"); exit(1) }
@@ -543,7 +543,7 @@ main() {
     print("\nTest 13: redirect chain (3 hops, relative Locations)\n")
     req13 = client.request("GET", "${base_url()}/redirect-3")
     client.set_follow_redirects(req13, 5)
-    client.set_timeout(req13, 5)
+    client.set_timeout(req13, 5s)
     resp13, err13 = client.send_request(req13)
     client.request_free(req13)
     if err13 != "" { println("  FAIL transport: ${err13}"); exit(1) }
@@ -577,7 +577,7 @@ main() {
     print("\nTest 14: redirect hop limit exceeded\n")
     req14 = client.request("GET", "${base_url()}/redirect-3")
     client.set_follow_redirects(req14, 2)  // intentionally too low
-    client.set_timeout(req14, 5)
+    client.set_timeout(req14, 5s)
     resp14, err14 = client.send_request(req14)
     client.request_free(req14)
     if err14 != "" { println("  FAIL transport: ${err14}"); exit(1) }
@@ -601,7 +601,7 @@ main() {
     print("\nTest 15: redirect loop detection\n")
     req15 = client.request("GET", "${base_url()}/redirect-self")
     client.set_follow_redirects(req15, 10)  // generous; detector should fire well before
-    client.set_timeout(req15, 5)
+    client.set_timeout(req15, 5s)
     resp15, err15 = client.send_request(req15)
     client.request_free(req15)
     if err15 != "" { println("  FAIL transport: ${err15}"); exit(1) }
@@ -620,7 +620,7 @@ main() {
     print("\nTest 16: redirect with absolute Location URL\n")
     req16 = client.request("GET", "${base_url()}/redirect-absolute")
     client.set_follow_redirects(req16, 3)
-    client.set_timeout(req16, 5)
+    client.set_timeout(req16, 5s)
     resp16, err16 = client.send_request(req16)
     client.request_free(req16)
     if err16 != "" { println("  FAIL transport: ${err16}"); exit(1) }

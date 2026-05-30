@@ -20,7 +20,7 @@
 //
 //   req = client.request("GET", "https://api.example.com/users")
 //   client.set_header(req, "Authorization", "Bearer ...")
-//   client.set_timeout(req, 30)        // explicit. 0 = block forever.
+//   client.set_timeout(req, 30s)       // explicit. 0ns = block forever.
 //   resp, err = client.send_request(req)
 //   client.request_free(req)
 //   if err != "" {
@@ -72,6 +72,7 @@ extern http_request_raw(method: string, url: string) -> ptr
 extern http_request_set_header_raw(req: ptr, name: string, value: string) -> int
 extern http_request_set_body_raw(req: ptr, body: string, length: int, content_type: string) -> int
 extern http_request_set_timeout_raw(req: ptr, seconds: int) -> int
+extern http_request_set_timeout_ns_raw(req: ptr, timeout: Duration) -> int
 extern http_request_set_follow_redirects_raw(req: ptr, max_hops: int) -> int
 extern http_request_free_raw(req: ptr)
 extern http_send_raw(req: ptr) -> ptr
@@ -120,11 +121,11 @@ set_body(req: ptr, body: string, length: int, content_type: string) -> string {
     return ""
 }
 
-// Per-request timeout in seconds. 0 = block forever (preserves the
+// Per-request timeout. 0ns = block forever (preserves the
 // v1 wrapper behaviour); negative is rejected. Applied to connect,
 // send, and recv via setsockopt + non-blocking-connect-with-select.
-set_timeout(req: ptr, seconds: int) -> string {
-    rc = http_request_set_timeout_raw(req, seconds)
+set_timeout(req: ptr, timeout: Duration) -> string {
+    rc = http_request_set_timeout_ns_raw(req, timeout)
     if rc != 0 { return "set_timeout failed" }
     return ""
 }
@@ -270,7 +271,7 @@ get_with_headers(url: string, header_pairs: ptr) -> {
     // block forever — the sugar helper picks a sensible default
     // (30s) where the bare builder would not. Callers wanting
     // different behaviour reach for the builder directly.
-    set_timeout(req, 30)
+    set_timeout(req, 30s)
 
     // Header iteration deliberately omitted at the helper level —
     // the loop is straightforward enough that callers can do it
@@ -297,7 +298,7 @@ get_with_headers(url: string, header_pairs: ptr) -> {
 post_with_status(url: string, body: string, content_type: string) -> {
     req = request("POST", url)
     if req == null { return "", 0, "request build failed" }
-    set_timeout(req, 30)
+    set_timeout(req, 30s)
     body_len = string_length(body)
     set_body(req, body, body_len, content_type)
     resp, err = send_request(req)
@@ -355,7 +356,7 @@ post_json(url: string, value: ptr) -> {
     if req == null { return null, "request build failed" }
     defer request_free(req)
 
-    set_timeout(req, 30)
+    set_timeout(req, 30s)
     set_header(req, "Content-Type", "application/json")
     set_header(req, "Accept",       "application/json")
     body_len = string_length(body_str)
@@ -395,7 +396,7 @@ head(url: string) -> {
     req = request("HEAD", url)
     if req == null { return 0, "", "request build failed" }
     defer request_free(req)
-    set_timeout(req, 30)
+    set_timeout(req, 30s)
     resp, err = send_request(req)
     if err != "" { return 0, "", err }
     status = response_status(resp)
@@ -415,7 +416,7 @@ patch(url: string, body: string, content_type: string) -> {
     req = request("PATCH", url)
     if req == null { return null, "request build failed" }
     defer request_free(req)
-    set_timeout(req, 30)
+    set_timeout(req, 30s)
     body_len = string_length(body)
     set_body(req, body, body_len, content_type)
     return send_request(req)

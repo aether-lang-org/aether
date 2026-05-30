@@ -4,6 +4,7 @@
 
 #if !AETHER_HAS_NETWORKING
 HttpResponse* http_get_raw(const char* u) { (void)u; return NULL; }
+HttpResponse* http_get_with_timeout_ns_raw(const char* u, int64_t ns) { (void)u; (void)ns; return NULL; }
 HttpResponse* http_post_raw(const char* u, const char* b, const char* c) { (void)u; (void)b; (void)c; return NULL; }
 HttpResponse* http_put_raw(const char* u, const char* b, const char* c) { (void)u; (void)b; (void)c; return NULL; }
 HttpResponse* http_delete_raw(const char* u) { (void)u; return NULL; }
@@ -19,6 +20,7 @@ HttpRequest* http_request_raw(const char* m, const char* u) { (void)m; (void)u; 
 int http_request_set_header_raw(HttpRequest* r, const char* n, const char* v) { (void)r; (void)n; (void)v; return -1; }
 int http_request_set_body_raw(HttpRequest* r, const char* b, int l, const char* c) { (void)r; (void)b; (void)l; (void)c; return -1; }
 int http_request_set_timeout_raw(HttpRequest* r, int s) { (void)r; (void)s; return -1; }
+int http_request_set_timeout_ns_raw(HttpRequest* r, int64_t ns) { (void)r; (void)ns; return -1; }
 int http_request_set_follow_redirects_raw(HttpRequest* r, int n) { (void)r; (void)n; return -1; }
 void http_request_free_raw(HttpRequest* r) { (void)r; }
 HttpResponse* http_send_raw(HttpRequest* r) { (void)r; return NULL; }
@@ -31,6 +33,7 @@ const char* http_response_redirect_error_raw(HttpResponse* r) { (void)r; return 
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <limits.h>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -388,6 +391,19 @@ int http_request_set_body_raw(HttpRequest* req, const char* body, int len, const
 int http_request_set_timeout_raw(HttpRequest* req, int seconds) {
     if (!req || seconds < 0) return -1;
     req->timeout_secs = seconds;
+    return 0;
+}
+
+static int timeout_ns_to_seconds(int64_t timeout_ns) {
+    if (timeout_ns <= 0) return 0;
+    int64_t secs = (timeout_ns + 999999999LL) / 1000000000LL;
+    if (secs > INT_MAX) return INT_MAX;
+    return (int)secs;
+}
+
+int http_request_set_timeout_ns_raw(HttpRequest* req, int64_t timeout_ns) {
+    if (!req || timeout_ns < 0) return -1;
+    req->timeout_secs = timeout_ns_to_seconds(timeout_ns);
     return 0;
 }
 
@@ -1207,6 +1223,18 @@ HttpResponse* http_get_with_timeout_raw(const char* url, int timeout_ms) {
         // timeouts are a separate change to the underlying field.
         int secs = (timeout_ms + 999) / 1000;
         http_request_set_timeout_raw(req, secs);
+    }
+    HttpResponse* resp = http_send_raw(req);
+    http_request_free_raw(req);
+    return resp;
+}
+
+HttpResponse* http_get_with_timeout_ns_raw(const char* url, int64_t timeout_ns) {
+    HttpRequest* req = http_request_raw("GET", url);
+    if (!req) return NULL;
+    if (http_request_set_timeout_ns_raw(req, timeout_ns) != 0) {
+        http_request_free_raw(req);
+        return NULL;
     }
     HttpResponse* resp = http_send_raw(req);
     http_request_free_raw(req);

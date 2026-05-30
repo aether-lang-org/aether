@@ -1228,6 +1228,10 @@ The narrow hazard: if your project routes a `bytes.finish`-derived value into a 
 
 ## [0.157.0]
 
+### Added
+
+- **First-class `Duration` literals and type** (`compiler/parser/lexer.c`, `compiler/analysis/typechecker.c`, `compiler/codegen/codegen_expr.c`, `std/http/module.ae`, `std/http/client/module.ae`, `tests/syntax/test_duration_literals.ae`). Adds `Duration` as an `int64_t` nanosecond-backed scalar with immediate unit suffix literals (`ns`, `us`, `ms`, `s`, `m`, `h`, `d`) and compound forms such as `2m30s`. Duration arithmetic now preserves units for `duration +/- duration` and `duration */ scalar`, `duration / duration` yields a float ratio, duration comparisons require another `Duration`, and accessors like `.ns`, `.ms`, and `.s` expose unit-scaled values. Printing and interpolation use a readable representation (`2500ms` renders as `2.5s`). Across `--emit=lib` ABI stubs, `Duration` lowers to plain `int64_t` nanoseconds. The public HTTP timeout wrappers now accept `Duration`: `http.get_with_timeout`, `client.set_timeout`, `http.server_set_keepalive`, and `http.server_shutdown_graceful`.
+
 ### Fixed
 
 - **Two follow-up heap-string leak classes the post-0.156.0 codegen didn't catch** (`compiler/codegen/codegen_stmt.c`, `compiler/codegen/codegen_expr.c`, `tests/integration/heap_leak_cross_fn_recursion/`, `tests/integration/heap_leak_interp_as_arg/`). Filed by avn during downstream rebuild against 0.156.0; their 5000-commit bench stayed at O(N²) shape despite the heap-ownership-critical-fixes from #471. Two distinct gaps:

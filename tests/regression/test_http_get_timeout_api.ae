@@ -7,7 +7,7 @@
 //
 // The fix surfaces the existing http_request_set_timeout_raw
 // (SO_RCVTIMEO / SO_SNDTIMEO) machinery via a new wrapper
-// http.get_with_timeout(url, timeout_ms). This test verifies the
+// http.get_with_timeout(url, timeout). This test verifies the
 // API exists, returns the documented `(body, err)` tuple shape,
 // and surfaces an error string for an unreachable host.
 //
@@ -22,7 +22,7 @@ import std.string
 
 main() {
     // Unreachable host — connect should fail fast or timeout.
-    body, err = http.get_with_timeout("http://does-not-resolve.invalid/", 1000)
+    body, err = http.get_with_timeout("http://does-not-resolve.invalid/", 1000ms)
 
     if err == "" {
         println("FAIL: expected error for unreachable host, got success")

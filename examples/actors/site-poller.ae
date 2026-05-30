@@ -7,7 +7,7 @@
 //      long-running poller doesn't leak memory.
 //   3. `after m_interval_ms -> { … }` — interval pulled from actor
 //      state, not a hardcoded literal.
-//   4. `http.get_with_timeout(url, 2000)` — 2s per-call ceiling so
+//   4. `http.get_with_timeout(url, 2000ms)` — 2s per-call ceiling so
 //      a hung site can't stall the polling actor.
 //
 // This example doesn't make real network calls (CI machines vary in
@@ -34,7 +34,7 @@ actor SitePollerOne {
         Poll -> {
             poll_count = poll_count + 1
 
-            body, err = http.get_with_timeout(url, 2000)
+            body, err = http.get_with_timeout(url, 2000ms)
             defer release(body)
 
             if err != "" {
@@ -67,7 +67,7 @@ actor SitePollerTwo {
         Poll -> {
             poll_count = poll_count + 1
 
-            body, err = http.get_with_timeout(url, 2000)
+            body, err = http.get_with_timeout(url, 2000ms)
             defer release(body)
 
             if err != "" {

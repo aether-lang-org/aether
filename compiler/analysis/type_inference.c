@@ -81,9 +81,51 @@ static TypeKind pick_integer_kind(unsigned long long magnitude, int signed_input
     return TYPE_UINT64;
 }
 
+static int duration_unit_ns(const char* unit, long long* out) {
+    if (!unit || !out) return 0;
+    if (strcmp(unit, "ns") == 0) { *out = 1LL; return 1; }
+    if (strcmp(unit, "us") == 0) { *out = 1000LL; return 1; }
+    if (strcmp(unit, "ms") == 0) { *out = 1000000LL; return 1; }
+    if (strcmp(unit, "s") == 0)  { *out = 1000000000LL; return 1; }
+    if (strcmp(unit, "m") == 0)  { *out = 60LL * 1000000000LL; return 1; }
+    if (strcmp(unit, "h") == 0)  { *out = 60LL * 60LL * 1000000000LL; return 1; }
+    if (strcmp(unit, "d") == 0)  { *out = 24LL * 60LL * 60LL * 1000000000LL; return 1; }
+    return 0;
+}
+
+static int is_duration_literal_text(const char* value) {
+    if (!value || !isdigit((unsigned char)value[0])) return 0;
+    const char* p = value;
+    int saw_unit = 0;
+    while (*p) {
+        int saw_digit = 0;
+        while (isdigit((unsigned char)*p) || *p == '.') {
+            if (isdigit((unsigned char)*p)) saw_digit = 1;
+            p++;
+        }
+        if (!saw_digit) return 0;
+        char unit[3] = {0, 0, 0};
+        if ((p[0] == 'n' || p[0] == 'u' || p[0] == 'm') && p[1] == 's') {
+            unit[0] = p[0]; unit[1] = p[1]; p += 2;
+        } else if (*p == 's' || *p == 'm' || *p == 'h' || *p == 'd') {
+            unit[0] = *p; p++;
+        } else {
+            return 0;
+        }
+        long long ns = 0;
+        if (!duration_unit_ns(unit, &ns)) return 0;
+        saw_unit = 1;
+    }
+    return saw_unit;
+}
+
 // Infer type from literal value
 Type* infer_from_literal(const char* value) {
     if (!value) return create_type(TYPE_UNKNOWN);
+
+    if (is_duration_literal_text(value)) {
+        return create_type(TYPE_DURATION);
+    }
 
     // Prefixed forms (0x / 0o / 0b) are pure-integer bit patterns.
     // Pick the narrowest integer kind that holds the value so that
@@ -169,6 +211,26 @@ Type* infer_from_binary_op(Type* left, Type* right, const char* operator) {
     if (strcmp(operator, "+") == 0 || strcmp(operator, "-") == 0 ||
         strcmp(operator, "*") == 0 || strcmp(operator, "/") == 0 ||
         strcmp(operator, "%") == 0) {
+        if ((strcmp(operator, "+") == 0 || strcmp(operator, "-") == 0) &&
+            left->kind == TYPE_DURATION && right->kind == TYPE_DURATION) {
+            return create_type(TYPE_DURATION);
+        }
+        if ((strcmp(operator, "*") == 0 || strcmp(operator, "/") == 0) &&
+            left->kind == TYPE_DURATION &&
+            (right->kind == TYPE_INT || right->kind == TYPE_INT64 ||
+             right->kind == TYPE_UINT64 || right->kind == TYPE_FLOAT)) {
+            return create_type(TYPE_DURATION);
+        }
+        if (strcmp(operator, "*") == 0 &&
+            right->kind == TYPE_DURATION &&
+            (left->kind == TYPE_INT || left->kind == TYPE_INT64 ||
+             left->kind == TYPE_UINT64 || left->kind == TYPE_FLOAT)) {
+            return create_type(TYPE_DURATION);
+        }
+        if (strcmp(operator, "/") == 0 &&
+            left->kind == TYPE_DURATION && right->kind == TYPE_DURATION) {
+            return create_type(TYPE_FLOAT);
+        }
         // If either is int64 (long), promote to int64
         if (left->kind == TYPE_INT64 || right->kind == TYPE_INT64) {
             return create_type(TYPE_INT64);
@@ -1432,4 +1494,3 @@ int infer_all_types(ASTNode* program, SymbolTable* table) {
 
     return success;
 }
-

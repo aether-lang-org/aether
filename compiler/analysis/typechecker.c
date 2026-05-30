@@ -590,6 +590,7 @@ static const char* type_name(Type* t) {
         case TYPE_UINT32:   return "uint32";
         case TYPE_UINT16:   return "uint16";
         case TYPE_UINT8:    return "uint8";
+        case TYPE_DURATION: return "Duration";
         case TYPE_FLOAT:    return "float";
         case TYPE_BOOL:     return "bool";
         case TYPE_BYTE:     return "byte";
@@ -610,6 +611,12 @@ static const char* type_name(Type* t) {
 static int is_integer_scalar(TypeKind kind) {
     return kind == TYPE_INT || kind == TYPE_INT64 || kind == TYPE_UINT64 ||
            kind == TYPE_UINT32 || kind == TYPE_UINT16 || kind == TYPE_UINT8;
+}
+
+static int is_numeric_scalar(TypeKind kind) {
+    return kind == TYPE_INT || kind == TYPE_INT64 || kind == TYPE_UINT64 ||
+           kind == TYPE_UINT32 || kind == TYPE_UINT16 || kind == TYPE_UINT8 ||
+           kind == TYPE_FLOAT;
 }
 
 static TypeKind wider_integer_kind(TypeKind a, TypeKind b) {
@@ -931,6 +938,7 @@ int is_callable(Type* type) {
         case TYPE_INT:
         case TYPE_INT64:
         case TYPE_UINT64:
+        case TYPE_DURATION:
         case TYPE_FLOAT:
         case TYPE_BOOL:
         case TYPE_STRING:
@@ -1202,6 +1210,20 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             // Look up the struct/actor type and find the field type
             if (expr->child_count > 0 && expr->children[0]) {
                 Type* base_type = infer_type(expr->children[0], table);
+                if (base_type && base_type->kind == TYPE_DURATION) {
+                    Type* out = NULL;
+                    if (expr->value && strcmp(expr->value, "ns") == 0) {
+                        out = create_type(TYPE_INT64);
+                    } else if (expr->value &&
+                               (strcmp(expr->value, "us") == 0 || strcmp(expr->value, "ms") == 0 ||
+                                strcmp(expr->value, "s") == 0 || strcmp(expr->value, "m") == 0 ||
+                                strcmp(expr->value, "h") == 0 || strcmp(expr->value, "d") == 0)) {
+                        out = create_type(TYPE_FLOAT);
+                    }
+                    free_type(base_type);
+                    if (out) return out;
+                    return create_type(TYPE_UNKNOWN);
+                }
                 // Struct field lookup
                 if (base_type && base_type->kind == TYPE_STRUCT && base_type->struct_name) {
                     Symbol* struct_sym = lookup_symbol(table, base_type->struct_name);
@@ -1267,6 +1289,19 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
     Type* left_type = left ? left->node_type : NULL;
     Type* right_type = right ? right->node_type : NULL;
 
+    // Duration comparisons are only valid against another Duration.
+    if (operator == TOKEN_EQUALS || operator == TOKEN_NOT_EQUALS ||
+        operator == TOKEN_LESS || operator == TOKEN_LESS_EQUAL ||
+        operator == TOKEN_GREATER || operator == TOKEN_GREATER_EQUAL) {
+        if (left_type && right_type &&
+            (left_type->kind == TYPE_DURATION || right_type->kind == TYPE_DURATION)) {
+            if (left_type->kind == TYPE_DURATION && right_type->kind == TYPE_DURATION) {
+                return create_type(TYPE_BOOL);
+            }
+            return create_type(TYPE_UNKNOWN);
+        }
+    }
+
     // Comparison and logical operators always produce bool, even with unknown operands
     switch (operator) {
         case TOKEN_EQUALS:
@@ -1293,6 +1328,26 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
             // Numeric operations
             if (left_type->kind == TYPE_UNKNOWN || right_type->kind == TYPE_UNKNOWN) {
                 // If either type is unknown (e.g., unresolved parameter), allow it
+                return create_type(TYPE_UNKNOWN);
+            }
+            if ((operator == TOKEN_PLUS || operator == TOKEN_MINUS) &&
+                left_type->kind == TYPE_DURATION && right_type->kind == TYPE_DURATION) {
+                return create_type(TYPE_DURATION);
+            }
+            if (operator == TOKEN_MULTIPLY &&
+                ((left_type->kind == TYPE_DURATION && is_numeric_scalar(right_type->kind)) ||
+                 (right_type->kind == TYPE_DURATION && is_numeric_scalar(left_type->kind)))) {
+                return create_type(TYPE_DURATION);
+            }
+            if (operator == TOKEN_DIVIDE &&
+                left_type->kind == TYPE_DURATION && is_numeric_scalar(right_type->kind)) {
+                return create_type(TYPE_DURATION);
+            }
+            if (operator == TOKEN_DIVIDE &&
+                left_type->kind == TYPE_DURATION && right_type->kind == TYPE_DURATION) {
+                return create_type(TYPE_FLOAT);
+            }
+            if (left_type->kind == TYPE_DURATION || right_type->kind == TYPE_DURATION) {
                 return create_type(TYPE_UNKNOWN);
             }
             if (left_type->kind == TYPE_FLOAT || right_type->kind == TYPE_FLOAT) {
@@ -3440,6 +3495,27 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 typecheck_expression(base, table);
 
                 Type* base_type = infer_type(base, table);
+
+                if (base_type && base_type->kind == TYPE_DURATION) {
+                    if (expr->value && strcmp(expr->value, "ns") == 0) {
+                        expr->node_type = create_type(TYPE_INT64);
+                    } else if (expr->value &&
+                               (strcmp(expr->value, "us") == 0 || strcmp(expr->value, "ms") == 0 ||
+                                strcmp(expr->value, "s") == 0 || strcmp(expr->value, "m") == 0 ||
+                                strcmp(expr->value, "h") == 0 || strcmp(expr->value, "d") == 0)) {
+                        expr->node_type = create_type(TYPE_FLOAT);
+                    } else {
+                        char error_msg[256];
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "Type 'Duration' has no field '%s'",
+                                 expr->value ? expr->value : "?");
+                        free_type(base_type);
+                        type_error(error_msg, expr->line, expr->column);
+                        return 0;
+                    }
+                    free_type(base_type);
+                    return 1;
+                }
 
                 // Reject member access on primitive types — catch the error in Aether, not C
                 if (base_type && (base_type->kind == TYPE_INT || base_type->kind == TYPE_FLOAT ||

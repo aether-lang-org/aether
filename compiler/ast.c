@@ -108,6 +108,9 @@ const char* type_to_string(Type* type) {
     
     switch (type->kind) {
         case TYPE_INT: return "int";
+        case TYPE_INT64: return "long";
+        case TYPE_UINT64: return "uint64";
+        case TYPE_DURATION: return "Duration";
         case TYPE_FLOAT: return "float";
         case TYPE_BOOL: return "bool";
         case TYPE_BYTE: return "byte";

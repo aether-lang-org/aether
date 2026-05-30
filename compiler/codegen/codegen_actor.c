@@ -170,7 +170,8 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                 // Use atomic types for numeric fields to enable safe concurrent access
                 if (child->node_type && child->node_type->kind == TYPE_INT) {
                     fprintf(gen->output, "atomic_int %s;\n", child->value);
-                } else if (child->node_type && child->node_type->kind == TYPE_INT64) {
+                } else if (child->node_type && (child->node_type->kind == TYPE_INT64 ||
+                                                child->node_type->kind == TYPE_DURATION)) {
                     fprintf(gen->output, "_Atomic int64_t %s;\n", child->value);
                 } else {
                     generate_type(gen, child->node_type);
@@ -561,7 +562,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                             const char* cast = "";
                             if (msg_def->fields) {
                                 int fk = msg_def->fields->type_kind;
-                                if (fk == TYPE_INT64) cast = "(int64_t)";
+                                if (fk == TYPE_INT64 || fk == TYPE_DURATION) cast = "(int64_t)";
                                 else if (fk == TYPE_PTR || fk == TYPE_ACTOR_REF) cast = "(void*)";
                             }
                             print_line(gen, "if (_msg_data) {");
