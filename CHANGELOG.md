@@ -11,6 +11,19 @@ next version number before tagging the release.
 
 ## [current]
 
+### Added
+
+- **Design doc: distinct types** (issue #480;
+  `docs/distinct-types.md`). Draft design for Nim-inspired zero-
+  runtime-cost nominal wrappers: `type Path = distinct string`,
+  `type FD = distinct int`, etc. The doc frames the open design
+  questions (cast spelling, operator inheritance, extern signature
+  interaction, pattern-matching destructure, interpolation
+  behaviour, layered distinct) with options + tradeoffs for the
+  maintainer to resolve. Implementation is gated on those
+  resolutions; this PR is the design-doc-only artefact that the
+  issue's acceptance criteria asks for.
+
 ### Fixed
 
 - **Parser: line-leading operator no longer folds into previous
