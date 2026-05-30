@@ -159,8 +159,14 @@ void aether_runtime_shutdown() {
 // Command-line arguments
 int aether_argc = 0;
 char** aether_argv = NULL;
+/* Sticky one-shot seal — see aether_args_seal() below. Once set
+ * aether_args_init() also refuses to (re)populate, so calling
+ * aether_args_seal() from main early in startup remains correct
+ * even if some embedder path later re-invokes aether_args_init(). */
+static int aether_argv_sealed_flag = 0;
 
 void aether_args_init(int argc, char** argv) {
+    if (aether_argv_sealed_flag) return;
     aether_argc = argc;
     aether_argv = argv;
 }
@@ -190,4 +196,19 @@ const char* aether_argv0(void) {
 
 char** aether_argv_raw(void) {
     return aether_argv;
+}
+
+/* One-shot argv seal — see the header comment for the threat model
+ * and intended use. Clears the runtime's argv storage so subsequent
+ * accessor calls fall through their existing null / out-of-range
+ * paths and return 0 / NULL naturally — no extra branches needed in
+ * the hot accessors. Idempotent. */
+void aether_args_seal(void) {
+    aether_argv_sealed_flag = 1;
+    aether_argc = 0;
+    aether_argv = NULL;
+}
+
+int aether_args_sealed(void) {
+    return aether_argv_sealed_flag;
 }

@@ -1,0 +1,100 @@
+// Regression: std.os one-shot argv seal.
+//
+// `os.args_seal()` is a runtime gate that complements the compile-
+// time `hide` / `seal except` scope directives. Once main() has
+// consumed command-line arguments (parsing them into config state,
+// etc.), calling `os.args_seal()` zeroes the runtime's argv storage
+// and flips a sticky flag, so subsequent code in the process — even
+// imported libraries, plugin callbacks, or untrusted Aether modules
+// running in-process — sees an empty argv. There is no unseal.
+//
+// What this test guards:
+//   1. Before-seal accessors report the real values (count > 0,
+//      argv[0] non-null, sealed flag = 0).
+//   2. After-seal accessors report the empty state (count = 0,
+//      argv[0] = null, sealed flag = 1).
+//   3. args_seal() is idempotent — calling it multiple times is
+//      a no-op, no fault.
+//   4. The seal also defends against re-init: if some later code
+//      path calls aether_args_init() (e.g. an embedder), the seal
+//      sticks and the runtime refuses to repopulate argv.
+
+import std.os
+
+extern exit(code: int)
+
+// Simulates a later in-process caller trying to peek at argv after
+// main has sealed it. Reads through the os.aether_* accessors;
+// post-seal these all return their empty-state values.
+late_callback() {
+    if aether_args_count() != 0 {
+        println("FAIL: late_callback sees non-zero count")
+        exit(1)
+    }
+    if aether_args_get(0) != null {
+        println("FAIL: late_callback sees non-null argv[0]")
+        exit(1)
+    }
+}
+
+main() {
+    // ---- 1. Before seal: real values visible ----
+    n_before = aether_args_count()
+    if n_before <= 0 {
+        // The test runner invokes the binary with at least argv[0],
+        // so 0 args means the runtime didn't initialise. Bail.
+        println("FAIL: aether_args_count() reported 0 before seal")
+        exit(1)
+    }
+    if os.args_sealed() != 0 {
+        println("FAIL: args_sealed() should be 0 before seal")
+        exit(1)
+    }
+    argv0_before = aether_args_get(0)
+    if argv0_before == null {
+        println("FAIL: argv[0] is null before seal")
+        exit(1)
+    }
+    println("PASS: before-seal accessors report real values")
+
+    // ---- 2. After seal: empty state ----
+    os.args_seal()
+
+    n_after = aether_args_count()
+    if n_after != 0 {
+        println("FAIL: aether_args_count() should be 0 after seal")
+        exit(1)
+    }
+    if os.args_sealed() != 1 {
+        println("FAIL: args_sealed() should be 1 after seal")
+        exit(1)
+    }
+    argv0_after = aether_args_get(0)
+    if argv0_after != null {
+        println("FAIL: argv[0] should be null after seal")
+        exit(1)
+    }
+    println("PASS: after-seal accessors report empty state")
+
+    // ---- 3. Idempotent: calling seal twice is fine ----
+    os.args_seal()
+    os.args_seal()
+    if os.args_sealed() != 1 {
+        println("FAIL: args_sealed() should still be 1 after triple seal")
+        exit(1)
+    }
+    if aether_args_count() != 0 {
+        println("FAIL: count should still be 0 after triple seal")
+        exit(1)
+    }
+    println("PASS: args_seal() is idempotent")
+
+    // ---- 4. Late callers see the sealed (empty) state ----
+    // Mirrors the "imported library or plugin callback peeks at argv
+    // after main consumed it" scenario the seal exists to defend
+    // against.
+    late_callback()
+    println("PASS: late caller sees sealed state")
+
+    println("=== All args-seal tests passed ===")
+}
