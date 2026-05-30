@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`contrib.xml.expat` probe — 8 XML-feature coverage cases**
+  (`tests/integration/contrib_xml_expat/probe.ae`). Expands the
+  integration probe from 8 → 16 sub-cases: nesting depth tracking
+  (6-deep with siblings, balanced to 0), mixed content (text and
+  child elements interleaved in document order), whitespace-only
+  text events (pretty-printed XML produces text events for the
+  inter-element whitespace), entity decoding (`&amp;` / `&lt;` /
+  `&#65;` / `&#x42;` all resolved by libexpat before reaching the
+  text handler), UTF-8 in element names + attribute values + text
+  (`<café leño="árbol">日本語 🎉</café>` round-trips multibyte
+  byte-for-byte), CDATA payload delivery (markup chars inside
+  `<![CDATA[ ... ]]>` pass through raw via the regular text
+  handler), real-world RSS fragment (extract title/link/description
+  with the `current_field` pattern), and real-world SVG fragment
+  (count `<rect>` elements and sum their `width` attributes).
+
+  Implementation note: variables captured by `parse_with`'s handler
+  closures are hoisted to function scope rather than declared inside
+  per-case `{ ... }` blocks, sidestepping a known Aether codegen
+  issue where heap-promoted strings / strbuilder ptrs captured from
+  a nested block crash on the next event when the block exits.
+
 ## [0.199.0]
 
 ### Added

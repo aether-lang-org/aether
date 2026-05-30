@@ -83,4 +83,4 @@ if ! grep -q "All contrib.xml.expat tests passed" "$TMPDIR/run.log"; then
     exit 1
 fi
 
-echo "  [PASS] contrib_xml_expat: 8 cases"
+echo "  [PASS] contrib_xml_expat: 16 cases"
