@@ -48,6 +48,32 @@ const char* aether_argv0(void);
 // into the OS argv storage; do not free or retain beyond process lifetime.
 char** aether_argv_raw(void);
 
+/* One-shot runtime seal of the argv accessors. After this returns,
+ * aether_args_count() / aether_args_get() / aether_argv0() /
+ * aether_argv_raw() behave as if argv had never been initialised
+ * (returning 0 / NULL respectively); the internal pointer is cleared
+ * so a later peek can't recover it. Idempotent — calling it twice is
+ * a no-op. There is no unseal.
+ *
+ * Intended use: after main() has finished consuming command-line
+ * arguments (parsing flags into config, etc.), call os.args_seal()
+ * to prevent any later code — including imported libraries, plugin
+ * callbacks, or untrusted Aether modules running inside the same
+ * process — from peeking at the original argv. Complements the
+ * compile-time `hide` / `seal except` scope directives, which deny
+ * lexical access; this denies runtime access.
+ *
+ * Caveat: this is a co-operative Aether-side gate, not a kernel
+ * boundary. The OS still has the original argv in process memory
+ * (/proc/self/cmdline on Linux, sysctl on macOS) and code that
+ * goes around the Aether accessors can still read it. The seal
+ * defends against accidental late-stage Aether code touching argv,
+ * not against an attacker with arbitrary execution. Pair with the
+ * LD_PRELOAD libc sandbox if the threat model requires true
+ * inaccessibility. */
+void aether_args_seal(void);
+int  aether_args_sealed(void);
+
 // Configuration queries
 const AetherRuntimeInitConfig* aether_runtime_get_config();
 int aether_runtime_has_feature(int feature_flag);

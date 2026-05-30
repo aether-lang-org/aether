@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`os.args_seal()` / `os.args_sealed()` — one-shot runtime gate
+  on the argv accessors** (`runtime/aether_runtime.{c,h}`,
+  `std/os/module.ae`, `tests/regression/test_os_args_seal.ae`,
+  `docs/stdlib-reference.md`). After `os.args_seal()` returns, the
+  argv-reading accessors all behave as if argv had never been
+  initialised: `aether_args_count()` reports `0`,
+  `aether_args_get(i)` returns null, `os.argv0()` returns `""`,
+  `aether_argv_raw()` returns null. Idempotent — re-calling is a
+  no-op. There is no unseal; the flag is sticky for the process
+  lifetime, and a subsequent `aether_args_init()` (e.g. from an
+  embedder path) also refuses to (re-)populate.
+
+  Intended use: once `main()` has consumed the CLI flags into
+  config state, call `os.args_seal()` to prevent any later code
+  in the process (imported libraries, plugin callbacks, untrusted
+  Aether modules running in-process) from reading the original
+  argv. Complements the compile-time `hide` / `seal except`
+  scope directives — those deny *lexical* access, this denies
+  *runtime* access. A co-operative Aether-side gate, not a kernel
+  boundary: the OS still has argv in process memory (Linux
+  `/proc/self/cmdline`, macOS sysctl) and code that goes around
+  the Aether accessors can still read it. Pair with the
+  LD_PRELOAD libc sandbox for stronger guarantees.
+
+  Implementation is one sticky flag + a store-zero in the runtime;
+  the existing accessors fall through their null/out-of-range
+  early-return paths and return their empty-state values naturally
+  — no extra branches in the hot paths.
+
 ## [0.197.0]
 
 ### Fixed

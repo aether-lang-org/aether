@@ -6,6 +6,7 @@ exports (
     os_run_pipe_raw, os_wait_pid_raw, os_run_pipe_drain_and_wait_raw,
     os_getenv, os_which,
     aether_args_count, aether_args_get, aether_argv0, aether_argv_raw,
+    aether_args_seal, aether_args_sealed, args_seal, args_sealed,
     os_execv, os_now_utc_iso8601_raw, os_getpid_raw, exit,
     os_wall_seconds_raw, os_wall_micros_raw,
     os_now_monotonic_ms_raw, os_now_monotonic_ns_raw,
@@ -140,6 +141,39 @@ extern aether_argv0() -> string
 // C interop with APIs that need argc/argv exactly as the OS supplied them.
 // Borrowed pointer; do not free.
 extern aether_argv_raw() -> ptr
+
+// One-shot runtime seal of the argv accessors. After this returns,
+// `os.aether_args_count()` reports 0, `os.aether_args_get(i)` returns
+// null, `os.argv0()` returns "", and `os.aether_argv_raw()` returns
+// null — as if argv had never been initialised. Idempotent (calling
+// twice is a no-op); there is no unseal.
+//
+// Intended use: once `main()` has parsed command-line flags into its
+// own config state, call `os.args_seal()` to prevent any later code
+// in the process (imported libraries, plugin callbacks, untrusted
+// Aether modules) from reading the original argv. Complements the
+// compile-time `hide` / `seal except` scope directives: those deny
+// LEXICAL access; this denies RUNTIME access.
+//
+// Caveat: this is a co-operative Aether-side gate, not a kernel
+// boundary. The OS still has the original argv in process memory
+// (Linux /proc/self/cmdline, macOS sysctl) and code that goes around
+// the Aether accessors can still read it. The seal defends against
+// accidental late-stage Aether code touching argv, not against an
+// attacker with arbitrary execution. Pair with the LD_PRELOAD libc
+// sandbox if the threat model demands true inaccessibility.
+extern aether_args_seal()
+extern aether_args_sealed() -> int
+
+// Aether-side convenience wrappers — short names for the canonical
+// "consumed argv; seal it now" pattern.
+args_seal() {
+    aether_args_seal()
+}
+
+args_sealed() -> int {
+    return aether_args_sealed()
+}
 
 // Replace the current process image with `prog`. `argv_list` is a
 // list<ptr> of C strings (element 0 is argv[0] for the new program and
