@@ -6,6 +6,48 @@ Complete syntax and semantics of the Aether programming language.
 
 Aether is a statically-typed, compiled language combining Erlang-inspired actor concurrency with type inference. It features clean, minimal syntax and compiles to C code.
 
+## Paradigm placement
+
+Aether is a **hybrid that leans closer to functional than object-oriented**, sitting next to Go and Rust in the middle of the paradigm spectrum:
+
+```
+   pure FP                    OO + FP hybrid                  pure OO
+   Haskell                    Scala  Rust  Go                 Smalltalk
+   |--------|--------|--------|--------|--------|--------|--------|
+                              ↑
+                              Aether
+```
+
+The placement is deliberate — Aether picks the pieces of each tradition that compose cleanly and skips the ones (deep inheritance hierarchies, monad transformers, etc.) that don't earn their cost in a compiles-to-C language. Concretely:
+
+### Where Aether leans functional
+
+- **Closures + trailing blocks are first-class** and are *the* idiomatic control-flow construction. The "DSL with scope" pattern (`window("Demo") { vg { circle(...) { fill("#F00") } } }`) is built from closures running in the caller's lexical scope, not from method dispatch on a builder object. See [Closures and Builder DSL](closures-and-builder-dsl.md).
+- **No classes, no inheritance, no `self` / `this`.** Structs are plain data records (`struct Circle { cx: float, cy: float, r: float }`) with no methods attached. Behaviour comes from free functions taking the struct as an argument: `circle_area(c)` not `c.area()`.
+- **Type-annotated parameters with full inference** and **Go-style multi-return** (`-> (long, string)` for value+error tuples) — result-type-via-tuple rather than exceptions on the happy path. This is the Go / Rust functional-pragmatic family, not OO error handling.
+- **Modules with explicit `exports`** — namespaced free functions, not classes-as-namespaces. The visible surface of a module is the export list, not a public-method set.
+- **`fn` as a first-class type** — passed, stored, boxed, unboxed. Aether's closures lower to `_AeClosure { void(*fn)(void); void* env; }` with structural sharing through ref cells (`ref()` / `ref_get` / `ref_set`); the runtime treats them as values, not as method receivers.
+- **No method-dispatch machinery in the compiler.** There's no vtable, no virtual call. Every function call resolves to a direct C function call. The bare-fn-to-closure adapter machinery and the `fn ↔ ptr` coercion rules exist to make first-class function values work end-to-end — a strictly functional priority.
+
+### Where Aether borrows from OO (in a limited way)
+
+- **Actors** with state and message-receive handlers are the one piece of OO-shape machinery present — encapsulated state behind a message boundary. This is the Erlang / Pony actor model rather than Smalltalk-OO: no polymorphism, no inheritance, no method overriding. An actor is a stateful object reachable only through messages.
+- **The `_ctx` / builder-context stack DSL** lets you write code that *reads* like a fluent OO method chain (`panel("Settings") { button("OK") }`), but the underlying mechanism is closure scope + an implicit context argument, not method dispatch. The compiler injects `_ctx` automatically; no receiver is involved.
+- **Receiver-namespace fallback** for trailing blocks (`bash.test(b) { script("...") }` resolves `script` as `bash_script` — issue #333) makes free-function calls look OO at the call site, but it's a name-resolution rule, not method dispatch.
+- **Struct-field assignment and member access** (`h.cb = c`, `c.r`) are present, but they're data-oriented (record reads/writes) — the same shape Go and C have without claiming OO.
+
+### Where Aether is neither — it's just systems-pragmatic
+
+- Manual heap discipline is visible — `box_closure` / `unbox_closure`, `ref()` cells, the automatic heap-string ownership tracker (`_heap_<name>` companion flags), `defer` for resource cleanup. Closer to Rust's explicit ownership story than to either paradigm's purist position.
+- The C ABI / `extern` boundary is a first-class concern, not a hidden detail. The typechecker pragmatically allows `int ↔ ptr` and `fn ↔ ptr` coercions because surface ergonomics matter more than type-purity at the FFI boundary.
+- The capability + sandbox system (compile-time module gate / scope-level `hide` / `seal except` / LD_PRELOAD libc gate) is its own concern, orthogonal to both paradigms.
+
+### What this means in practice
+
+If you've written Go, you'll recognise the shape immediately — free functions, structs, channels (`!` send, `?` ask), explicit error returns, no classes. If you've written Elixir, the actor model and trailing-block DSLs will feel familiar. If you've written Ruby or Groovy, the "DSL with scope" idiom is borrowed directly from your lineage (Matz's term for it). If you're coming from Java or Python, the absence of method dispatch is the biggest adjustment — `circle_area(c)` instead of `c.area()` — but the rest of the surface is approachable.
+
+Aether is not, and has no plans to be, a pure FP language (no Hindley-Milner inference, no purity tracking, no monadic effects). It's also not, and has no plans to be, a class-based OO language (no inheritance, no virtual dispatch, no `self`). It picks the cross-paradigm subset that survives compilation to readable C and stays useful for systems work — concurrent servers, language ports, build tooling, embedded scripting.
+
 ## Table of Contents
 
 1. [Types](#types)

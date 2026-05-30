@@ -11,6 +11,8 @@ A compiled actor-based programming language with type inference, designed for co
 
 Aether is a compiled language that brings actor-based concurrency to systems programming. The compiler generates readable C code, providing portability and interoperability with existing C libraries.
 
+**Where it sits on the OO ↔ FP spectrum:** structs are plain data, behaviour is free functions, closures + trailing blocks are first-class — Aether leans **closer to functional than OO**, sitting near Go and Rust in the hybrid middle of the paradigm spectrum. There are no classes, no inheritance, no method dispatch; the one piece of OO machinery present is the actor (stateful, encapsulated behind a message boundary, no polymorphism). See [Language Reference § Paradigm placement](docs/language-reference.md#paradigm-placement).
+
 **Core Features:**
 - Actor-based concurrency with automatic multi-core scheduling
 - Type inference with optional annotations
