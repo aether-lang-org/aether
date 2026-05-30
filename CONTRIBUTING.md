@@ -107,6 +107,39 @@ raw without a suffix; intentionally void fire-and-forget APIs (like
 don't get wrappers. See [std/fs/module.ae](std/fs/module.ae) for the
 reference implementation.
 
+### Changing a stdlib parameter's TYPE — grep all callers first
+
+When a PR widens or replaces a parameter's type in a stdlib wrapper —
+the canonical case is `int` → a tagged-int type like `Duration`, but
+also `string` → an enum-like, or a positional arg → a struct —
+Aether's typechecker does not always reject the old call shape. A
+caller passing a bare `5` to a parameter newly typed `Duration` will
+typically compile (the literal gets accepted as the underlying
+`int64_t`), but the value is now interpreted in the new unit (5
+nanoseconds instead of 5 seconds, say). The bug is silent: the build
+is green, the test passes locally if the value happens not to matter,
+and CI fails on the platform where it does.
+
+Before merging a parameter-type change, grep the whole tree for
+callers and update them. Don't trust the typechecker to flag bare
+literals at the call site:
+
+```bash
+# Callers of the wrapper you just changed
+grep -rn "client\.set_timeout(" tests/ examples/ std/
+grep -rn "server_set_keepalive(" tests/ examples/ std/
+
+# Or, more generally, anything that compiles your wrapper-internal
+# extern symbol — externs may surface in unexpected places.
+grep -rn "http_request_set_timeout" tests/ examples/ std/
+```
+
+Bare integers at call sites that should now be Duration / domain-typed
+values are the most common miss; check examples/ too, not just tests/.
+Plain-int → Duration *comparisons* are rejected by the typechecker per
+issue #524's spec, but parameter passing is not — until that's
+tightened, this manual sweep is load-bearing.
+
 ## Adding Tests
 
 ### Test Structure
@@ -334,6 +367,26 @@ too`, commit `8df0c4c`) is the canonical instance — Linux CI was happy,
 Windows CI surfaced the truncation. Default to `int64_t` from
 `<stdint.h>` for explicit width; reach for `long long` only when an
 older library API forces your hand.
+
+**5b. POSIX typedefs that MinGW doesn't have — cast through `long` or
+`int64_t` at the assignment site.** Some typedefs are POSIX-only and
+silently absent on MinGW, where the underlying struct fields are
+plain integer types instead. Writing a literal cast through the POSIX
+typedef name builds fine on Linux/macOS and fails compilation on the
+Windows matrix runners with `error: 'X' undeclared`. The portable
+play is to cast through the underlying type (which both sides accept
+without warning), not the typedef.
+
+| POSIX typedef | POSIX target type | MinGW field type | Portable cast |
+|---|---|---|---|
+| `suseconds_t` | `struct timeval.tv_usec` | `long` | `(long)` |
+| `ssize_t` | `read`/`write` return | `intptr_t` / `int` | `(long long)` or `(intptr_t)` |
+| `off_t` | `lseek` / `fseeko` | `long` (32-bit on MinGW unless `_FILE_OFFSET_BITS=64`) | `(int64_t)` and use `_lseeki64` on Windows |
+
+The general rule: if a cast names a typedef, check whether MinGW's
+`<sys/types.h>` actually defines it. When in doubt, cast through the
+explicit-width type from `<stdint.h>` or the plain integer type the
+struct field declares it as.
 
 **6. Prefer existing portable helpers over re-rolling your own path
 handling.** `std/fs/aether_fs.c` provides `path_join`, `path_dirname`,
