@@ -95,11 +95,16 @@ main() {
     sb_title  = strbuilder.new(32)
     sb_link   = strbuilder.new(32)
     sb_desc   = strbuilder.new(32)
+    sb_c13_attr = strbuilder.new(16)
     c10_event_log = ""
-    c13_attr_val  = ""
     c13_elem_name_bytes = 0
     c13_text_total = 0
-    c15_current_field = ""
+    // Case 15 tracks which RSS field is currently open with an int
+    // code rather than storing the borrowed element-name string from
+    // libexpat (the pointer goes stale by the next callback — fine
+    // on Linux's allocator, but macOS reuses the slot). 0 = none,
+    // 1 = title, 2 = link, 3 = description.
+    c15_current_field = 0
 
     // ---- Case 1: simple well-formed doc, count events ----
 
@@ -441,12 +446,18 @@ main() {
         // <café leño="árbol">日本語 🎉</café> — element name with é,
         // attr name with ñ, attr value with á+r+b+o+l, text mixing
         // CJK and emoji. All captured vars hoisted to function scope
-        // (c13_*) — see the comment block at top of main().
+        // (c13_*, sb_c13_attr) — see the comment block at top of
+        // main(). The attribute value is COPIED into a strbuilder at
+        // callback time rather than stored as a borrowed string —
+        // libexpat's attr_value pointer is only valid for the
+        // duration of the start callback; storing it directly worked
+        // on Linux but the bytes were freed under us on macOS.
         ok = expat.parse_with("<café leño=\"árbol\">日本語 🎉</café>") {
             bind_start(|name: string, atts: ptr| {
                 c13_elem_name_bytes = string.length(name)
                 if expat.attr_count(atts) > 0 {
-                    c13_attr_val = expat.attr_value(atts, 0)
+                    v = expat.attr_value(atts, 0)
+                    strbuilder.append_n(sb_c13_attr, v, string.length(v))
                 }
             })
             bind_text(|text: string, len: int| {
@@ -454,6 +465,7 @@ main() {
             })
         }
         if ok != 1 { fail("UTF-8 parse failed") }
+        c13_attr_val = strbuilder.finish(sb_c13_attr)
         // "café" in UTF-8 is c(1) + a(1) + f(1) + é(2) = 5 bytes
         if c13_elem_name_bytes != 5 {
             fail("UTF-8 element name bytes = ${c13_elem_name_bytes}, want 5 ('café')")
@@ -504,24 +516,29 @@ main() {
     // we can extract the three fields the way an RSS consumer would.
 
     {
-        // Three strbuilders (sb_title/sb_link/sb_desc) plus the
-        // current-element tracker (c15_current_field) are all hoisted
-        // to function scope. The text handler picks the right one
-        // based on the currently-open element, copying bytes through
-        // append_n at the moment of delivery (the libexpat-supplied
-        // text slice is borrowed and unterminated).
+        // Three strbuilders (sb_title/sb_link/sb_desc) plus an int
+        // tracker (c15_current_field — 1/2/3 for title/link/desc)
+        // are all hoisted to function scope. The text handler picks
+        // the right one based on the currently-open element, copying
+        // bytes through append_n at the moment of delivery (the
+        // libexpat-supplied text slice is borrowed and unterminated).
+        // The start handler matches the element NAME against known
+        // RSS field names at callback time (not storing the borrowed
+        // string ptr — that goes stale by the time bind_text fires).
         rss = "<rss version=\"2.0\"><channel><item><title>Hello World</title><link>https://example.com/post/1</link><description>A short post.</description></item></channel></rss>"
         ok = expat.parse_with(rss) {
             bind_start(|name: string, atts: ptr| {
-                c15_current_field = name
+                if name == "title"       { c15_current_field = 1 }
+                if name == "link"        { c15_current_field = 2 }
+                if name == "description" { c15_current_field = 3 }
             })
             bind_text(|text: string, len: int| {
-                if c15_current_field == "title" { strbuilder.append_n(sb_title, text, len) }
-                if c15_current_field == "link"  { strbuilder.append_n(sb_link,  text, len) }
-                if c15_current_field == "description" { strbuilder.append_n(sb_desc, text, len) }
+                if c15_current_field == 1 { strbuilder.append_n(sb_title, text, len) }
+                if c15_current_field == 2 { strbuilder.append_n(sb_link,  text, len) }
+                if c15_current_field == 3 { strbuilder.append_n(sb_desc, text, len) }
             })
             bind_end(|name: string| {
-                c15_current_field = ""
+                c15_current_field = 0
             })
         }
         if ok != 1 { fail("RSS parse failed") }
