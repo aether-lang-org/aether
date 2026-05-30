@@ -297,6 +297,23 @@ print_hello() {
 
 There is no `void` keyword in the return-type position — a missing return-type annotation IS the void declaration. The `main()` function is the entry point and is always void.
 
+**`main()` takes no parameters.** There is no Aether-side `main(argc, argv)` form — the signature is uniform across every program. The runtime stashes the C-side `argc` / `argv` at startup (the codegen wraps your zero-arg `main()` in a C `int main(int argc, char** argv)` that calls `aether_args_init(argc, argv)` before any user code runs), and Aether code reaches command-line arguments through `std.os`:
+
+```aether
+import std.os
+
+main() {
+    n = os.aether_args_count()
+    i = 0
+    while i < n {
+        println("argv[${i}] = ${os.aether_args_get(i)}")
+        i = i + 1
+    }
+}
+```
+
+`os.argv0()` returns argv[0] as a string (empty if uninitialised). `os.aether_argv_raw()` exposes the original `char**` for C-interop callers that need to forward it unchanged. See [Standard Library Reference § `std.os`](stdlib-reference.md) for the full surface.
+
 ### Default arguments
 
 Parameters can carry a default expression:
