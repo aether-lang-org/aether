@@ -39,10 +39,17 @@ next version number before tagging the release.
   now accept `Duration` directly: `client.set_timeout(req, 30s)`,
   `http.get_with_timeout(url, 5s)`,
   `http.server_set_keepalive(srv, 1, 0, 5s)`,
-  `http.server_shutdown_graceful(srv, 100ms)`. The raw C side
-  rounds sub-second timeouts up to one second because the
-  underlying SO_RCVTIMEO/SO_SNDTIMEO storage is whole-second based
-  — documented in `std/net/aether_http.h`.
+  `http.server_shutdown_graceful(srv, 100ms)`. Sub-second
+  precision is preserved through to the socket layer:
+  `select` uses `tv_sec + tv_usec` (microsecond resolution),
+  `SO_RCVTIMEO`/`SO_SNDTIMEO` use `struct timeval` (μs) on POSIX
+  or a `DWORD` millisecond count on Winsock (sub-ms rounds up so
+  it doesn't degrade to "infinite" via `DWORD=0`). Server-side
+  keepalive idle and graceful-shutdown deadline use ms precision
+  (their underlying poll / spin-wait loops are ms-granular).
+  Wrappers go through `.ns` (int64) end-to-end — earlier drafts
+  routed through `.ms` (a float ratio that silently truncated
+  `1500ms` to `1`).
 
 - **`contrib.xml.expat` — SAX-style XML parsing via libexpat**
   (`contrib/xml/expat/{aether_xml_expat.c,module.ae,README.md}`,

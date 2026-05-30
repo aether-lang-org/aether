@@ -343,10 +343,10 @@ server_set_h2_concurrent_dispatch(server: ptr, worker_count: int) -> {
 //   max_requests = 0  -> unlimited per connection
 //   idle_timeout = 0ns -> use the default 30s SO_RCVTIMEO
 // Returns "" on success.
-extern http_server_set_keepalive_raw(server: ptr, enabled: int, max_requests: int, idle_ms: int) -> string
+extern http_server_set_keepalive_raw(server: ptr, enabled: int, max_requests: int, idle_ns: long) -> string
 
 server_set_keepalive(server: ptr, enabled: int, max_requests: int, idle_timeout: Duration) -> {
-    return http_server_set_keepalive_raw(server, enabled, max_requests, idle_timeout.ms)
+    return http_server_set_keepalive_raw(server, enabled, max_requests, idle_timeout.ns)
 }
 
 // Graceful shutdown (#260 Tier 3). Stops accepting new connections,
@@ -354,10 +354,10 @@ server_set_keepalive(server: ptr, enabled: int, max_requests: int, idle_timeout:
 // Returns "" on clean drain, "timeout" if connections were still
 // active when the deadline passed. Typically wired into a SIGTERM
 // handler in the entry point.
-extern http_server_shutdown_graceful_raw(server: ptr, timeout_ms: int) -> string
+extern http_server_shutdown_graceful_raw(server: ptr, timeout_ns: long) -> string
 
 server_shutdown_graceful(server: ptr, timeout: Duration) -> {
-    return http_server_shutdown_graceful_raw(server, timeout.ms)
+    return http_server_shutdown_graceful_raw(server, timeout.ns)
 }
 
 // Lifecycle hooks (#260 Tier 3). on_start fires once after the listen

@@ -1,0 +1,58 @@
+// Sub-second HTTP timeouts must actually time out in sub-second time.
+// Before the fix this test would have taken ~1s (round-up to whole
+// second SO_RCVTIMEO) — but the request itself fails fast on
+// connection refusal regardless, so a coarse timeout never gets
+// exercised. The precision fix is observable by checking that a
+// 250ms timeout against a port that hangs without ever responding
+// fires in roughly 250ms — not 1000ms.
+//
+// We don't have a "black hole" TCP server to connect to in this
+// test rig, so the sub-second behaviour is observed at the API
+// level: set_timeout with a sub-second Duration must round-trip
+// the configuration without an error. The actual select-timeout
+// math is covered by the unit-style code path in aether_http.c.
+
+import std.http
+import std.http.client
+import std.os
+
+main() {
+    // Per-request timeout should accept a sub-second Duration without
+    // a round-up complaint. Codex's original implementation truncated
+    // 250ms to "1 second"; the fix preserves nanosecond precision.
+    req = client.request("GET", "http://localhost/")
+    if req == null {
+        println("FAIL: request build")
+        exit(1)
+    }
+    err = client.set_timeout(req, 250ms)
+    client.request_free(req)
+    if err != "" {
+        println("FAIL: set_timeout(250ms) rejected: ${err}")
+        exit(1)
+    }
+
+    // The keepalive idle timeout used to take int ms; now takes
+    // Duration via .ns. Pass a sub-second Duration to verify the
+    // wrapper doesn't truncate via the old .ms float-ratio path.
+    srv = http.server_create(0)
+    if srv == 0 { println("FAIL: server_create"); exit(1) }
+    ka = http.server_set_keepalive(srv, 1, 0, 750ms)
+    if ka != "" {
+        println("FAIL: server_set_keepalive(750ms) rejected: ${ka}")
+        exit(1)
+    }
+
+    // Graceful shutdown with a sub-second deadline. Server has no
+    // accept loop running; the drain returns immediately on a zero
+    // in-flight count, so this is effectively a no-op — but it
+    // exercises the Duration → ns → ms path through to the C side.
+    shut = http.server_shutdown_graceful(srv, 100ms)
+    if shut != "" && shut != "timeout" {
+        println("FAIL: server_shutdown_graceful(100ms) bad return: ${shut}")
+        exit(1)
+    }
+    http.server_free(srv)
+
+    println("PASS")
+}

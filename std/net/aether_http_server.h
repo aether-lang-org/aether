@@ -280,7 +280,7 @@ void http_server_free(HttpServer* server);
 const char* http_server_set_keepalive_raw(HttpServer* server,
                                           int enabled,
                                           int max_requests,
-                                          int idle_ms);
+                                          int64_t idle_ns);
 
 // Enable TLS termination on this server (#260 Tier 0). Loads the cert
 // and private key from the given file paths (PEM-encoded), verifies
@@ -419,11 +419,12 @@ void http_server_set_actor_handler(HttpServer* server, void (*step_fn)(void*),
                                     void (*release_fn)(void*));
 
 // Graceful shutdown (#260 Tier 3). Stops accepting new connections,
-// then waits up to `timeout_ms` for in-flight connections to finish
+// then waits up to `timeout_ns` for in-flight connections to finish
 // naturally. Returns "" on clean drain, "timeout" if the deadline
 // passed with connections still active. Callers typically install
-// this on SIGTERM in their entry point.
-const char* http_server_shutdown_graceful_raw(HttpServer* server, int timeout_ms);
+// this on SIGTERM in their entry point. Sub-millisecond precision is
+// rounded down internally to ms (the drain spin-wait is ms-granular).
+const char* http_server_shutdown_graceful_raw(HttpServer* server, int64_t timeout_ns);
 
 // Lifecycle hooks (#260 Tier 3). on_start fires once after the
 // listen socket is bound but before the accept loop runs (good
