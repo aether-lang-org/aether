@@ -650,10 +650,10 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 ### Server Configuration
 
 - `http.server_set_tls(server, cert_path, key_path)` → `string` - HTTPS with PEM cert + key
-- `http.server_set_keepalive(server, enable, max_requests, idle_timeout_ms)` → `string` - HTTP/1.1 keep-alive
+- `http.server_set_keepalive(server, enable, max_requests, idle_timeout)` → `string` - HTTP/1.1 keep-alive with a `Duration` idle timeout
 - `http.server_set_h2(server, max_concurrent_streams)` → `string` - HTTP/2 (h2 + h2c + ALPN). `0` uses libnghttp2's default (100). Returns error string when libnghttp2 isn't linked.
 - `http.server_set_h2_concurrent_dispatch(server, worker_count)` → `string` - Server-level pthread pool for h2 stream handlers. `worker_count > 0` lets streams across all h2 connections execute their handlers in parallel; `0` (default) keeps dispatch sequential. POSIX-only; on Windows the call is a silent no-op.
-- `http.server_shutdown_graceful(server, timeout_ms)` → `string` - Stop accepting, drain in-flight, exit. h2 sessions emit GOAWAY so peers don't start new streams.
+- `http.server_shutdown_graceful(server, timeout)` → `string` - Stop accepting, drain in-flight for up to a `Duration`, exit. h2 sessions emit GOAWAY so peers don't start new streams.
 - `http.server_set_health_probes(server, live_path, ready_path, ready_check, ud)` → `string` - Built-in `/healthz` (always 200) + `/readyz` (200 only when readiness check returns 1)
 - `http.server_set_access_log(server, format, output_path)` → `string` - `"combined"` or `"json"` to a file path / `"-"` (stderr) / `""` (disable)
 - `http.server_set_metrics(server, endpoint)` → `string` - Prometheus-compatible counters/histograms (default `/metrics`)
@@ -687,7 +687,7 @@ import std.http.client
 main() {
     req = client.request("GET", "https://api.example.com/users/42")
     client.set_header(req, "Authorization", "Bearer abc123")
-    client.set_timeout(req, 30)
+    client.set_timeout(req, 30s)
     resp, err = client.send_request(req)
     client.request_free(req)
     if err != "" { return }
@@ -701,7 +701,7 @@ main() {
 - `client.request(method, url)` → `ptr` - Build a request handle
 - `client.set_header(req, name, value)` → `string` - Append a request header
 - `client.set_body(req, body, length, content_type)` → `string` - Set request body (length explicit for binary safety)
-- `client.set_timeout(req, seconds)` → `string` - Per-request timeout (`0` = block forever)
+- `client.set_timeout(req, timeout)` → `string` - `Duration` per-request timeout (`0ns` = block forever)
 - `client.send_request(req)` → `(ptr, string)` - Fire it; `(resp, "")` on success, `(null, err)` on transport failure
 - `client.request_free(req)` - Free the request handle
 

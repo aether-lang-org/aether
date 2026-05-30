@@ -164,6 +164,47 @@ static const char* translate_integer_literal(const char* value, char* out, size_
     return value;
 }
 
+static int duration_unit_ns_codegen(const char* unit, long long* out) {
+    if (!unit || !out) return 0;
+    if (strcmp(unit, "ns") == 0) { *out = 1LL; return 1; }
+    if (strcmp(unit, "us") == 0) { *out = 1000LL; return 1; }
+    if (strcmp(unit, "ms") == 0) { *out = 1000000LL; return 1; }
+    if (strcmp(unit, "s") == 0)  { *out = 1000000000LL; return 1; }
+    if (strcmp(unit, "m") == 0)  { *out = 60LL * 1000000000LL; return 1; }
+    if (strcmp(unit, "h") == 0)  { *out = 60LL * 60LL * 1000000000LL; return 1; }
+    if (strcmp(unit, "d") == 0)  { *out = 24LL * 60LL * 60LL * 1000000000LL; return 1; }
+    return 0;
+}
+
+static long long parse_duration_literal_ns(const char* value) {
+    if (!value) return 0;
+    const char* p = value;
+    long double total = 0.0L;
+    while (*p) {
+        char* end = NULL;
+        long double amount = strtold(p, &end);
+        if (end == p) break;
+        p = end;
+        char unit[3] = {0, 0, 0};
+        if ((p[0] == 'n' || p[0] == 'u' || p[0] == 'm') && p[1] == 's') {
+            unit[0] = p[0]; unit[1] = p[1]; p += 2;
+        } else if (*p == 's' || *p == 'm' || *p == 'h' || *p == 'd') {
+            unit[0] = *p; p++;
+        } else {
+            break;
+        }
+        long long scale = 0;
+        if (!duration_unit_ns_codegen(unit, &scale)) break;
+        total += amount * (long double)scale;
+    }
+    return (long long)total;
+}
+
+static long long duration_accessor_scale(const char* field) {
+    long long scale = 0;
+    return duration_unit_ns_codegen(field, &scale) ? scale : 0;
+}
+
 // ---- Closure support ----
 
 // Collect identifiers (reads) referenced in an AST subtree. Does NOT
@@ -1660,6 +1701,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     str++;
                 }
                 fprintf(gen->output, "\"");
+            } else if (expr->node_type && expr->node_type->kind == TYPE_DURATION) {
+                fprintf(gen->output, "%lldLL", parse_duration_literal_ns(expr->value));
             } else {
                 /* Numeric literals: translate 0o / 0b prefixes that C
                  * doesn't accept. Decimal / 0x pass through unchanged. */
@@ -1850,6 +1893,19 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
         case AST_MEMBER_ACCESS:
             if (expr->child_count > 0) {
                 ASTNode* child = expr->children[0];
+                if (child->node_type && child->node_type->kind == TYPE_DURATION && expr->value) {
+                    long long scale = duration_accessor_scale(expr->value);
+                    if (scale == 1) {
+                        generate_expression(gen, child);
+                    } else if (scale > 1) {
+                        fprintf(gen->output, "((double)(");
+                        generate_expression(gen, child);
+                        fprintf(gen->output, ") / %.1f)", (double)scale);
+                    } else {
+                        fprintf(gen->output, "0");
+                    }
+                    break;
+                }
 
                 int needs_atomic = 0;
                 if (child->node_type && child->node_type->kind == TYPE_ACTOR_REF && expr->value) {
@@ -2022,6 +2078,9 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     if (is_assignment) {
                         gen->generating_lvalue = 1;
                     }
+                    int duration_ratio = expr->value && strcmp(expr->value, "/") == 0 &&
+                        ltype && rtype && ltype->kind == TYPE_DURATION && rtype->kind == TYPE_DURATION;
+                    if (duration_ratio) fprintf(gen->output, "(double)");
                     if (ptr_int_cmp && lhs_is_ptr) fprintf(gen->output, "(intptr_t)");
                     generate_expression(gen, expr->children[0]);
                     if (is_assignment) {
@@ -2029,6 +2088,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     }
 
                     fprintf(gen->output, " %s ", get_c_operator(expr->value));
+                    if (duration_ratio) fprintf(gen->output, "(double)");
                     if (ptr_int_cmp && rhs_is_ptr) fprintf(gen->output, "(intptr_t)");
                     /* fn ↔ ptr coercion at struct-field assignment.
                      * Mirror of the call-site coercion path. The
@@ -2152,6 +2212,10 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             fprintf(gen->output, "printf(\"%%llu\", (unsigned long long)");
                             generate_expression(gen, arg);
                             fprintf(gen->output, ")");
+                        } else if (arg_type->kind == TYPE_DURATION) {
+                            fprintf(gen->output, "printf(\"%%s\", _aether_duration_repr(");
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, "))");
                         } else if (arg_type->kind == TYPE_FLOAT) {
                             fprintf(gen->output, "printf(\"%%f\", ");
                             generate_expression(gen, arg);
@@ -2213,6 +2277,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     Type* atype = expr->children[arg_idx]->node_type;
                                     if (atype && atype->kind == TYPE_FLOAT) fprintf(gen->output, "%%f");
                                     else if (atype && atype->kind == TYPE_INT64) fprintf(gen->output, "%%lld");
+                                    else if (atype && atype->kind == TYPE_DURATION) fprintf(gen->output, "%%s");
                                     else if (atype && (atype->kind == TYPE_STRING || atype->kind == TYPE_PTR)) fprintf(gen->output, "%%s");
                                     else if (atype && atype->kind == TYPE_BOOL) fprintf(gen->output, "%%s");
                                     else fprintf(gen->output, "%%d");
@@ -2236,6 +2301,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             if (i > 1) fprintf(gen->output, ", ");
                             Type* atype = expr->children[i]->node_type;
                             if (atype && atype->kind == TYPE_INT64) { fprintf(gen->output, "(long long)"); generate_expression(gen, expr->children[i]); }
+                            else if (atype && atype->kind == TYPE_DURATION) { fprintf(gen->output, "_aether_duration_repr("); generate_expression(gen, expr->children[i]); fprintf(gen->output, ")"); }
                             else if (atype && atype->kind == TYPE_BOOL) { generate_expression(gen, expr->children[i]); fprintf(gen->output, " ? \"true\" : \"false\""); }
                             else if (atype && (atype->kind == TYPE_STRING || atype->kind == TYPE_PTR)) { fprintf(gen->output, "_aether_safe_str("); generate_expression(gen, expr->children[i]); fprintf(gen->output, ")"); }
                             else generate_expression(gen, expr->children[i]);
@@ -2272,6 +2338,10 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             fprintf(gen->output, "printf(\"%%llu\\n\", (unsigned long long)");
                             generate_expression(gen, arg);
                             fprintf(gen->output, ")");
+                        } else if (arg_type->kind == TYPE_DURATION) {
+                            fprintf(gen->output, "printf(\"%%s\\n\", _aether_duration_repr(");
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, "))");
                         } else if (arg_type->kind == TYPE_FLOAT) {
                             fprintf(gen->output, "printf(\"%%f\\n\", ");
                             generate_expression(gen, arg);
@@ -2336,6 +2406,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     Type* atype = expr->children[arg_idx]->node_type;
                                     if (atype && atype->kind == TYPE_FLOAT) fprintf(gen->output, "%%f");
                                     else if (atype && atype->kind == TYPE_INT64) fprintf(gen->output, "%%lld");
+                                    else if (atype && atype->kind == TYPE_DURATION) fprintf(gen->output, "%%s");
                                     else if (atype && (atype->kind == TYPE_STRING || atype->kind == TYPE_PTR)) fprintf(gen->output, "%%s");
                                     else if (atype && atype->kind == TYPE_BOOL) fprintf(gen->output, "%%s");
                                     else fprintf(gen->output, "%%d");
@@ -2359,6 +2430,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             if (i > 1) fprintf(gen->output, ", ");
                             Type* atype = expr->children[i]->node_type;
                             if (atype && atype->kind == TYPE_INT64) { fprintf(gen->output, "(long long)"); generate_expression(gen, expr->children[i]); }
+                            else if (atype && atype->kind == TYPE_DURATION) { fprintf(gen->output, "_aether_duration_repr("); generate_expression(gen, expr->children[i]); fprintf(gen->output, ")"); }
                             else if (atype && atype->kind == TYPE_BOOL) { generate_expression(gen, expr->children[i]); fprintf(gen->output, " ? \"true\" : \"false\""); }
                             else if (atype && (atype->kind == TYPE_STRING || atype->kind == TYPE_PTR)) { fprintf(gen->output, "_aether_safe_str("); generate_expression(gen, expr->children[i]); fprintf(gen->output, ")"); }
                             else generate_expression(gen, expr->children[i]);
@@ -3440,6 +3512,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             case TYPE_INT:    fprintf(gen->output, "%%d");  break; \
                             case TYPE_INT64:  fprintf(gen->output, "%%lld"); break; \
                             case TYPE_UINT64: fprintf(gen->output, "%%llu"); break; \
+                            case TYPE_DURATION: fprintf(gen->output, "%%s"); break; \
                             case TYPE_FLOAT:  fprintf(gen->output, "%%g");  break; \
                             case TYPE_BOOL:   fprintf(gen->output, "%%s");  break; \
                             case TYPE_STRING: fprintf(gen->output, "%%s");  break; \
@@ -3471,6 +3544,10 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     } else if (tk == TYPE_UINT64) { \
                         fprintf(gen->output, "(unsigned long long)"); \
                         generate_expression(gen, ch); \
+                    } else if (tk == TYPE_DURATION) { \
+                        fprintf(gen->output, "_aether_duration_repr("); \
+                        generate_expression(gen, ch); \
+                        fprintf(gen->output, ")"); \
                     } else { \
                         generate_expression(gen, ch); \
                     } \
@@ -3785,6 +3862,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 case TYPE_STRING:  c_type = "const char*"; c_zero = "NULL"; break;
                                 case TYPE_INT64:   c_type = "int64_t"; c_zero = "0";  break;
                                 case TYPE_UINT64:  c_type = "uint64_t"; c_zero = "0"; break;
+                                case TYPE_DURATION: c_type = "int64_t"; c_zero = "0"; break;
                                 case TYPE_PTR:     c_type = "void*";  c_zero = "NULL"; break;
                                 default:           c_type = "int";    c_zero = "0";   break;
                             }
@@ -3821,6 +3899,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 case TYPE_FLOAT:   fprintf(gen->output, "double"); break;
                                 case TYPE_INT64:   fprintf(gen->output, "int64_t"); break;
                                 case TYPE_UINT64:  fprintf(gen->output, "uint64_t"); break;
+                                case TYPE_DURATION: fprintf(gen->output, "int64_t"); break;
                                 case TYPE_PTR:     fprintf(gen->output, "void*"); break;
                                 case TYPE_STRING:  fprintf(gen->output, "const char*"); break;
                                 default:           fprintf(gen->output, "int"); break;

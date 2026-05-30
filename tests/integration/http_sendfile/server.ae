@@ -56,7 +56,7 @@ main() {
     s = http.server_create(PORT)
     if s == 0 { println("FAIL: server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
-    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_set_keepalive(s, 1, 0, 5000ms)
     // Wildcard match — the handler does its own prefix check.
     http.server_get(s, "/static/*", handle_static, 0)
 

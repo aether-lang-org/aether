@@ -81,7 +81,7 @@ main() {
     server = http.server_create(443)
     http.server_set_tls(server, "/etc/ssl/cert.pem", "/etc/ssl/key.pem")
     http.server_set_h2(server, 0)        // 0 = nghttp2 default 100
-    http.server_set_keepalive(server, 1, 0, 30000)
+    http.server_set_keepalive(server, 1, 0, 30000ms)
 
     http.server_get(server, "/", home, 0)
     http.server_start(server)
@@ -312,7 +312,7 @@ specifically for WS/SSE alongside the h2 traffic.
 ## HTTP/1.1 keep-alive
 
 ```aether
-http.server_set_keepalive(server, 1, 100, 30000)
+http.server_set_keepalive(server, 1, 100, 30000ms)
 //                              ^   ^    ^
 //                       enabled max  idle_ms
 ```
@@ -578,12 +578,12 @@ order after the response transformer chain.
 ## Graceful shutdown
 
 ```aether
-err = http.server_shutdown_graceful(server, 5000)  // 5-second deadline
+err = http.server_shutdown_graceful(server, 5000ms)  // 5-second deadline
 if err != "" { println("warning: ${err}") }       // "timeout" if not drained
 ```
 
 Stops accepting new connections (closes the listen socket), then
-waits up to `timeout_ms` for in-flight ones to drain. Backed by an
+waits up to the supplied `Duration` for in-flight ones to drain. Backed by an
 atomic `inflight_connections` counter accurate across both
 thread-pool and actor-dispatch modes. Typically wired into a
 SIGTERM handler.

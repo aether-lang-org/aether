@@ -261,6 +261,48 @@ Token* read_number() {
         buffer[i++] = advance();
     }
 
+    // Duration suffixes: ns, us, ms, s, m, h, d. Compound forms
+    // (`2m30s`, `1h15m`) stay a single numeric token so parser
+    // precedence remains ordinary literal precedence.
+    while (current_pos < source_length) {
+        int unit_len = 0;
+        if (current_pos + 1 < source_length &&
+            ((source[current_pos] == 'n' && source[current_pos + 1] == 's') ||
+             (source[current_pos] == 'u' && source[current_pos + 1] == 's') ||
+             (source[current_pos] == 'm' && source[current_pos + 1] == 's'))) {
+            unit_len = 2;
+        } else if (source[current_pos] == 's' || source[current_pos] == 'm' ||
+                   source[current_pos] == 'h' || source[current_pos] == 'd') {
+            unit_len = 1;
+        }
+
+        if (unit_len == 0) break;
+
+        char after_unit = (current_pos + unit_len < source_length) ? source[current_pos + unit_len] : '\0';
+        if (isalpha((unsigned char)after_unit) || after_unit == '_') break;
+
+        for (int u = 0; u < unit_len; u++) {
+            if (i >= capacity - 1) {
+                capacity *= 2;
+                char* new_buf = realloc(buffer, capacity);
+                if (!new_buf) { free(buffer); return create_token(TOKEN_ERROR, "out of memory", current_line, current_column); }
+                buffer = new_buf;
+            }
+            buffer[i++] = advance();
+        }
+
+        while (current_pos < source_length &&
+               (isdigit(peek()) || (peek() == '.' && (current_pos + 1 >= source_length || source[current_pos + 1] != '.')))) {
+            if (i >= capacity - 1) {
+                capacity *= 2;
+                char* new_buf = realloc(buffer, capacity);
+                if (!new_buf) { free(buffer); return create_token(TOKEN_ERROR, "out of memory", current_line, current_column); }
+                buffer = new_buf;
+            }
+            buffer[i++] = advance();
+        }
+    }
+
     buffer[i] = '\0';
     Token* token = create_token(TOKEN_NUMBER, buffer, current_line, current_column);
     free(buffer);
@@ -339,6 +381,7 @@ Token* read_identifier() {
     else if (strcmp(buffer, "int") == 0) token = create_token(TOKEN_INT, buffer, current_line, current_column);
     else if (strcmp(buffer, "long") == 0) token = create_token(TOKEN_INT64, buffer, current_line, current_column);
     else if (strcmp(buffer, "uint64") == 0) token = create_token(TOKEN_UINT64, buffer, current_line, current_column);
+    else if (strcmp(buffer, "Duration") == 0) token = create_token(TOKEN_DURATION, buffer, current_line, current_column);
     else if (strcmp(buffer, "float") == 0) token = create_token(TOKEN_FLOAT, buffer, current_line, current_column);
     else if (strcmp(buffer, "bool") == 0) token = create_token(TOKEN_BOOL, buffer, current_line, current_column);
     else if (strcmp(buffer, "byte") == 0) token = create_token(TOKEN_BYTE, buffer, current_line, current_column);

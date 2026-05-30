@@ -1,0 +1,47 @@
+main() {
+    Duration timeout = 5s
+    frame = 200ms
+    warmup = 2m30s
+    tick = 100ns
+
+    if timeout.ns != 5000000000 {
+        println("FAIL: 5s ns accessor")
+        exit(1)
+    }
+    if warmup.ns != 150000000000 {
+        println("FAIL: 2m30s compound literal")
+        exit(1)
+    }
+    if (frame + 300ms).ns != 500000000 {
+        println("FAIL: duration addition")
+        exit(1)
+    }
+    if (timeout - 2s).ns != 3000000000 {
+        println("FAIL: duration subtraction")
+        exit(1)
+    }
+    if (tick * 3).ns != 300 {
+        println("FAIL: duration multiply")
+        exit(1)
+    }
+    if (timeout / 5).ns != 1000000000 {
+        println("FAIL: duration divide by scalar")
+        exit(1)
+    }
+    if timeout / 2500ms != 2.0 {
+        println("FAIL: duration ratio")
+        exit(1)
+    }
+    if !(2500ms > 2s) {
+        println("FAIL: duration comparison")
+        exit(1)
+    }
+
+    s = "${2500ms}"
+    if s != "2.5s" {
+        println("FAIL: duration repr")
+        exit(1)
+    }
+
+    println("PASS")
+}

@@ -59,6 +59,7 @@ typedef enum {
     TOKEN_INT,
     TOKEN_INT64,
     TOKEN_UINT64,
+    TOKEN_DURATION,         // 'Duration' type — int64 nanoseconds
     TOKEN_FLOAT,
     TOKEN_BOOL,
     TOKEN_BYTE,             // 'byte' type — unsigned 8-bit (`unsigned char` in C)

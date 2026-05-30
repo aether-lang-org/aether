@@ -178,6 +178,7 @@ typedef enum {
     TYPE_UINT32,        // unsigned 32-bit — underlying kind for the
     TYPE_UINT16,        // uint32_t / uint16_t / uint8_t C ABI aliases.
     TYPE_UINT8,         // No bare keyword; reached only via c_abi_alias.
+    TYPE_DURATION,      // signed 64-bit nanosecond count
     TYPE_FLOAT,
     TYPE_BOOL,
     TYPE_BYTE,          // unsigned 8-bit (`unsigned char` in C). Type-precision

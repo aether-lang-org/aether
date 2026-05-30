@@ -2,6 +2,7 @@
 #define AETHER_HTTP_H
 
 #include "../string/aether_string.h"
+#include <stdint.h>
 
 typedef struct {
     int status_code;
@@ -53,6 +54,7 @@ HttpResponse* http_get_raw(const char* url);
 // SO_SNDTIMEO storage is integer seconds; pass 0 for "block forever"
 // (matches http_get_raw's default).
 HttpResponse* http_get_with_timeout_raw(const char* url, int timeout_ms);
+HttpResponse* http_get_with_timeout_ns_raw(const char* url, int64_t timeout_ns);
 HttpResponse* http_post_raw(const char* url, const char* body, const char* content_type);
 HttpResponse* http_put_raw(const char* url, const char* body, const char* content_type);
 HttpResponse* http_delete_raw(const char* url);
@@ -131,6 +133,11 @@ int http_request_set_body_raw(HttpRequest* req, const char* body, int len, const
 // (preserves v1's behaviour). Negative values are an error.
 int http_request_set_timeout_raw(HttpRequest* req, int seconds);
 
+// Per-request timeout as nanoseconds. Positive sub-second values round
+// up to one second while the underlying socket-timeout storage is still
+// whole-second based. 0 means "no timeout — block forever".
+int http_request_set_timeout_ns_raw(HttpRequest* req, int64_t timeout_ns);
+
 // Configure automatic redirect-following on this request. `max_hops` of
 // 0 (the default) keeps the v1/v2 behaviour: redirects are returned as
 // 30x to the caller, which decides what to do. `max_hops > 0` follows
@@ -179,4 +186,3 @@ const char* http_response_effective_url_raw(HttpResponse* response);
 const char* http_response_redirect_error_raw(HttpResponse* response);
 
 #endif
-

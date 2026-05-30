@@ -48,7 +48,7 @@ main() {
         println("server_create failed")
         return
     }
-    http.server_set_keepalive(server, 1, 0, 30000)
+    http.server_set_keepalive(server, 1, 0, 30000ms)
 
     // ---- Pool ---------------------------------------------------
     // Weighted round-robin: A serves ~3/6 of traffic, B ~2/6, C ~1/6.

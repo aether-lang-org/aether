@@ -42,7 +42,7 @@ main() {
     }
 
     // Enable keep-alive: max 5 requests per connection, 5-second idle.
-    ka_err = http.server_set_keepalive(raw, 1, 5, 5000)
+    ka_err = http.server_set_keepalive(raw, 1, 5, 5000ms)
     if ka_err != "" {
         println("FAIL: server_set_keepalive: ${ka_err}")
         exit(1)

@@ -9,7 +9,7 @@
 // which are compiled into libaether.a
 
 exports (
-    http_get_raw, http_get_with_timeout_raw,
+    http_get_raw, http_get_with_timeout_raw, http_get_with_timeout_ns_raw,
     http_post_raw, http_put_raw, http_delete_raw,
     http_response_free, http_response_status_code,
     http_response_body_str, http_response_headers_str,
@@ -68,13 +68,14 @@ exports (
 // together, or to implement custom retry logic). Most callers should
 // use the Go-style wrappers below.
 extern http_get_raw(url: string) -> ptr
-// http.get with a per-call timeout. timeout_ms=0 blocks forever
+// http.get with a per-call timeout. 0ns blocks forever
 // (matches http.get's default). Sub-second values are rounded UP to
 // whole seconds because the underlying SO_RCVTIMEO field is integer
 // seconds. Use this any time the target URL isn't local — a hung
 // DNS lookup or unresponsive server otherwise stalls the calling
 // actor's entire message handler.
 extern http_get_with_timeout_raw(url: string, timeout_ms: int) -> ptr
+extern http_get_with_timeout_ns_raw(url: string, timeout: Duration) -> ptr
 extern http_post_raw(url: string, body: string, content_type: string) -> ptr
 extern http_put_raw(url: string, body: string, content_type: string) -> ptr
 extern http_delete_raw(url: string) -> ptr
@@ -132,14 +133,14 @@ get(url: string) -> {
     return body_copy, ""
 }
 
-// GET a URL with a per-call timeout (milliseconds). Same return shape
+// GET a URL with a per-call timeout. Same return shape
 // as `get`. Use this for any third-party URL — without it, a hung
-// site stalls the calling actor's whole message handler. timeout_ms=0
+// site stalls the calling actor's whole message handler. 0ns
 // preserves `get`'s "block forever" default; values <1000 are rounded
 // up to 1 second under the hood (the underlying socket-timeout field
 // is integer seconds today).
-get_with_timeout(url: string, timeout_ms: int) -> {
-    response = http_get_with_timeout_raw(url, timeout_ms)
+get_with_timeout(url: string, timeout: Duration) -> {
+    response = http_get_with_timeout_ns_raw(url, timeout)
     if response == null {
         return "", "out of memory"
     }
@@ -340,23 +341,23 @@ server_set_h2_concurrent_dispatch(server: ptr, worker_count: int) -> {
 // HTTP/1.1 keep-alive (#260 Tier 0). When enabled, the server reads
 // multiple requests off one socket instead of closing after each.
 //   max_requests = 0  -> unlimited per connection
-//   idle_ms      = 0  -> use the default 30s SO_RCVTIMEO
+//   idle_timeout = 0ns -> use the default 30s SO_RCVTIMEO
 // Returns "" on success.
 extern http_server_set_keepalive_raw(server: ptr, enabled: int, max_requests: int, idle_ms: int) -> string
 
-server_set_keepalive(server: ptr, enabled: int, max_requests: int, idle_ms: int) -> {
-    return http_server_set_keepalive_raw(server, enabled, max_requests, idle_ms)
+server_set_keepalive(server: ptr, enabled: int, max_requests: int, idle_timeout: Duration) -> {
+    return http_server_set_keepalive_raw(server, enabled, max_requests, idle_timeout.ms)
 }
 
 // Graceful shutdown (#260 Tier 3). Stops accepting new connections,
-// then waits up to `timeout_ms` for in-flight ones to finish naturally.
+// then waits up to `timeout` for in-flight ones to finish naturally.
 // Returns "" on clean drain, "timeout" if connections were still
 // active when the deadline passed. Typically wired into a SIGTERM
 // handler in the entry point.
 extern http_server_shutdown_graceful_raw(server: ptr, timeout_ms: int) -> string
 
-server_shutdown_graceful(server: ptr, timeout_ms: int) -> {
-    return http_server_shutdown_graceful_raw(server, timeout_ms)
+server_shutdown_graceful(server: ptr, timeout: Duration) -> {
+    return http_server_shutdown_graceful_raw(server, timeout.ms)
 }
 
 // Lifecycle hooks (#260 Tier 3). on_start fires once after the listen
