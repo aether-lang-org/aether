@@ -1,0 +1,301 @@
+// Integration test for contrib.xml.expat — SAX-style streaming XML
+// parser veneer over libexpat.
+//
+// What this exercises:
+//   1. parser_new / parser_free lifecycle
+//   2. start / end / text handler registration via `as fn(...)`
+//   3. user-data slot round-trip (handlers find their state through
+//      get_user_data; bare-fn + user-data is the low-level API
+//      mirroring libexpat directly)
+//   4. attribute walking (attr_count / attr_name / attr_value)
+//   5. text-content delivery (uncopied buffer slice + explicit length)
+//   6. parse error reporting (error_string / error_line / error_column)
+//   7. multi-chunk parse (the streaming use case — caller feeds bytes
+//      in pieces with is_final=0 on intermediate chunks)
+//   8. closure builder veneer (parse_with { bind_start ... }) — the
+//      ergonomic DX layer that uses captured-state closures instead
+//      of a manual user-data struct.
+
+import contrib.xml.expat
+import std.mem
+import std.string
+
+extern malloc(n: int) -> ptr
+extern free(p: ptr)
+
+// Per-parse counter struct. Allocated by main, stashed via the parser's
+// user-data slot, and read by the handlers. Layout matters: each field
+// is an int (4 bytes) at predictable offsets so mem.get_int / set_int
+// can target them directly.
+struct ParseCounters {
+    start_count:  int     // offset 0
+    end_count:    int     // offset 4
+    text_count:   int     // offset 8
+    last_attrs:   int     // offset 12  — attr_count from the most recent start
+    last_text_len: int    // offset 16
+}
+
+// ---- Handlers --------------------------------------------------------
+//
+// These are bare named functions so the `as fn(...)` cast in
+// module.ae's on_start/on_end/on_text materialises a raw C function
+// pointer libexpat can invoke directly. Per-parse state goes through
+// the user-data slot.
+
+count_start(ud: ptr, name: string, atts: ptr) {
+    // Bump start_count and stash the attribute count for the most
+    // recent element. The element name is not retained — libexpat
+    // owns the storage.
+    c = ud as *ParseCounters
+    c.start_count = c.start_count + 1
+    c.last_attrs  = expat.attr_count(atts)
+}
+
+count_end(ud: ptr, name: string) {
+    c = ud as *ParseCounters
+    c.end_count = c.end_count + 1
+}
+
+count_text(ud: ptr, text: ptr, len: int) {
+    c = ud as *ParseCounters
+    c.text_count    = c.text_count + 1
+    c.last_text_len = c.last_text_len + len   // sum across chunked text
+}
+
+// ---- Helpers --------------------------------------------------------
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+new_counters() -> *ParseCounters {
+    c = malloc(32) as *ParseCounters       // 5 int fields, 32 bytes is comfortable
+    c.start_count   = 0
+    c.end_count     = 0
+    c.text_count    = 0
+    c.last_attrs    = 0
+    c.last_text_len = 0
+    return c
+}
+
+main() {
+    println("=== contrib.xml.expat integration test ===")
+
+    // ---- Case 1: simple well-formed doc, count events ----
+
+    {
+        p = expat.parser_new()
+        if p == null { fail("parser_new returned null") }
+        defer expat.parser_free(p)
+
+        c = new_counters()
+        defer free(c)
+        expat.set_user_data(p, c)
+        expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
+        expat.on_end(p,   count_end as fn(ptr, string) -> void)
+        expat.on_text(p,  count_text as fn(ptr, ptr, int) -> void)
+
+        doc = "<root><a/><b>hi</b><c x=\"1\" y=\"two\"/></root>"
+        ok = expat.parse(p, doc, string.length(doc), 1)
+        if ok != 1 {
+            fail("parse failed: ${expat.error_string(p)}")
+        }
+
+        cc = c as *ParseCounters
+        if cc.start_count != 4 { fail("start_count = ${cc.start_count}, want 4 (root,a,b,c)") }
+        if cc.end_count   != 4 { fail("end_count = ${cc.end_count}, want 4") }
+        // The text handler must have fired at least once for "hi". libexpat
+        // may chunk text content, so we don't assert a precise count — just
+        // that the total length sums to the literal we passed.
+        if cc.text_count == 0 { fail("text_count = 0, want at least 1 for 'hi'") }
+        if cc.last_text_len != 2 { fail("last_text_len = ${cc.last_text_len}, want 2 (length of 'hi')") }
+        println("  PASS: 4 starts / 4 ends / 2 bytes of text counted")
+    }
+
+    // ---- Case 2: attribute walking ----
+    //
+    // The last_attrs field captures the attr_count from the MOST RECENT
+    // start. After parsing <c x=1 y=2/>, last_attrs should be 2.
+
+    {
+        p = expat.parser_new()
+        defer expat.parser_free(p)
+        c = new_counters()
+        defer free(c)
+        expat.set_user_data(p, c)
+        expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
+        expat.on_end(p,   count_end as fn(ptr, string) -> void)
+
+        doc = "<root><c x=\"1\" y=\"two\" z=\"three\"/></root>"
+        ok = expat.parse(p, doc, string.length(doc), 1)
+        if ok != 1 { fail("parse(attrs) failed: ${expat.error_string(p)}") }
+
+        cc = c as *ParseCounters
+        // last_attrs reflects the LAST start element seen — that's `c`
+        // with 3 attributes (the root element had zero).
+        if cc.last_attrs != 3 { fail("last_attrs = ${cc.last_attrs}, want 3 (x,y,z)") }
+        println("  PASS: attr_count == 3 for <c x y z/>")
+    }
+
+    // ---- Case 3: parse error reporting ----
+    //
+    // An unclosed tag must surface a non-null error string and a
+    // sensible (line, column) location. We don't pin the exact message
+    // text (libexpat versions vary), but it must be non-null.
+
+    {
+        p = expat.parser_new()
+        defer expat.parser_free(p)
+
+        bad = "<root><unclosed></root>"
+        ok = expat.parse(p, bad, string.length(bad), 1)
+        if ok == 1 { fail("parse(bad) unexpectedly succeeded") }
+
+        msg = expat.error_string(p)
+        if msg == null { fail("error_string returned null after parse failure") }
+        // Line/column should at least be > 0 for the location of the
+        // mismatched </root>.
+        if expat.error_line(p) <= 0   { fail("error_line <= 0 after failure") }
+        if expat.error_column(p) < 0  { fail("error_column < 0 after failure") }
+        println("  PASS: parse error surfaced (msg='${msg}' at line ${expat.error_line(p)})")
+    }
+
+    // ---- Case 4: multi-chunk parse ----
+    //
+    // The streaming use case: caller feeds bytes in pieces. is_final=0
+    // on intermediate chunks; is_final=1 on the last chunk so libexpat
+    // flushes pending state. Final counters must equal the
+    // single-chunk parse of the concatenated input.
+
+    {
+        p = expat.parser_new()
+        defer expat.parser_free(p)
+        c = new_counters()
+        defer free(c)
+        expat.set_user_data(p, c)
+        expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
+        expat.on_end(p,   count_end as fn(ptr, string) -> void)
+        expat.on_text(p,  count_text as fn(ptr, ptr, int) -> void)
+
+        chunk1 = "<root><a>hel"
+        chunk2 = "lo</a><b/></root>"
+        if expat.parse(p, chunk1, string.length(chunk1), 0) != 1 {
+            fail("chunk1 parse failed: ${expat.error_string(p)}")
+        }
+        if expat.parse(p, chunk2, string.length(chunk2), 1) != 1 {
+            fail("chunk2 parse failed: ${expat.error_string(p)}")
+        }
+
+        cc = c as *ParseCounters
+        if cc.start_count != 3 { fail("multi-chunk start_count = ${cc.start_count}, want 3") }
+        if cc.end_count   != 3 { fail("multi-chunk end_count = ${cc.end_count}, want 3") }
+        // "hello" totals 5 bytes regardless of how libexpat chunks it
+        // across the parse-buffer boundary.
+        if cc.last_text_len != 5 {
+            fail("multi-chunk last_text_len = ${cc.last_text_len}, want 5")
+        }
+        println("  PASS: multi-chunk parse counts match single-chunk")
+    }
+
+    // ---- Case 5: parser independence ----
+    //
+    // Two parsers used concurrently (sequentially in this single-
+    // threaded test) must keep their own user-data and not cross-
+    // contaminate counters. Validates that the handler-pointer
+    // registration is per-parser, not global.
+
+    {
+        p1 = expat.parser_new()
+        defer expat.parser_free(p1)
+        c1 = new_counters()
+        defer free(c1)
+        expat.set_user_data(p1, c1)
+        expat.on_start(p1, count_start as fn(ptr, string, ptr) -> void)
+
+        p2 = expat.parser_new()
+        defer expat.parser_free(p2)
+        c2 = new_counters()
+        defer free(c2)
+        expat.set_user_data(p2, c2)
+        expat.on_start(p2, count_start as fn(ptr, string, ptr) -> void)
+
+        d1 = "<a/><b/>"           // not well-formed standalone — single root needed
+        d1_root = "<r><a/><b/></r>"
+        d2_root = "<r><x/></r>"
+        if expat.parse(p1, d1_root, string.length(d1_root), 1) != 1 {
+            fail("p1 parse failed: ${expat.error_string(p1)}")
+        }
+        if expat.parse(p2, d2_root, string.length(d2_root), 1) != 1 {
+            fail("p2 parse failed: ${expat.error_string(p2)}")
+        }
+
+        cc1 = c1 as *ParseCounters
+        cc2 = c2 as *ParseCounters
+        if cc1.start_count != 3 { fail("p1 start_count = ${cc1.start_count}, want 3 (r,a,b)") }
+        if cc2.start_count != 2 { fail("p2 start_count = ${cc2.start_count}, want 2 (r,x)") }
+        println("  PASS: two parsers track their own counters independently")
+    }
+
+    // ---- Case 6: closure builder veneer — single handler ----
+    //
+    // The parse_with { bind_start(...) } trailing-block surface lets
+    // the caller register a captured-state closure for start events
+    // without allocating a user-data struct. The closure captures
+    // `count` from main's scope directly.
+
+    {
+        count = 0
+        ok = expat.parse_with("<root><a/><b/><c/></root>") {
+            bind_start(|name: string, atts: ptr| {
+                count = count + 1
+            })
+        }
+        if ok != 1 { fail("parse_with single-handler failed") }
+        if count != 4 { fail("parse_with count = ${count}, want 4 (root,a,b,c)") }
+        println("  PASS: parse_with { bind_start } counts 4 elements via closure capture")
+    }
+
+    // ---- Case 7: closure builder veneer — all three handlers ----
+    //
+    // Three closures sharing the same enclosing scope, each capturing
+    // a distinct local. The C-side dispatcher must keep them apart on
+    // a per-event basis (one libexpat user_data slot fan-outs to three
+    // closures via xml_parser_install_handlerset).
+
+    {
+        starts = 0
+        ends   = 0
+        bytes  = 0
+        ok = expat.parse_with("<g>hi<inner/>there</g>") {
+            bind_start(|name: string, atts: ptr| { starts = starts + 1 })
+            bind_end(  |name: string|             { ends   = ends + 1 })
+            bind_text( |text: string, len: int|   { bytes  = bytes + len })
+        }
+        if ok != 1 { fail("parse_with 3-handler failed") }
+        if starts != 2 { fail("parse_with starts = ${starts}, want 2 (g,inner)") }
+        if ends   != 2 { fail("parse_with ends = ${ends}, want 2") }
+        if bytes  != 7 { fail("parse_with bytes = ${bytes}, want 7 ('hi'+'there')") }
+        println("  PASS: parse_with 3-handler fan-out (2 starts / 2 ends / 7 text bytes)")
+    }
+
+    // ---- Case 8: closure builder veneer — missing handlers OK ----
+    //
+    // Registering only `bind_start` (no bind_end, no bind_text) must
+    // still parse cleanly. xml_parser_install_handlerset only wires
+    // handlers for which has_start / has_end / has_text is set.
+
+    {
+        only_starts = 0
+        ok = expat.parse_with("<root><a><b/></a></root>") {
+            bind_start(|name: string, atts: ptr| {
+                only_starts = only_starts + 1
+            })
+        }
+        if ok != 1 { fail("parse_with start-only failed") }
+        if only_starts != 3 { fail("parse_with only_starts = ${only_starts}, want 3 (root,a,b)") }
+        println("  PASS: parse_with with only bind_start works (3 starts)")
+    }
+
+    println("=== All contrib.xml.expat tests passed ===")
+}

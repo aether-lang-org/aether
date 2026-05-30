@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`contrib.xml.expat` — SAX-style XML parsing via libexpat**
+  (`contrib/xml/expat/{aether_xml_expat.c,module.ae,README.md}`,
+  `tests/integration/contrib_xml_expat/`). Thin Aether veneer over
+  libexpat's native streaming SAX model: caller registers
+  per-event handlers (start element / end element / character
+  data), then feeds bytes into the parser; libexpat invokes the
+  registered handlers as it walks the input.
+
+  Surface (namespace is `expat.*` per the contrib path):
+  - Parser lifecycle: `expat.parser_new()` /
+    `expat.parser_free(p)`.
+  - User-data slot: `expat.set_user_data(p, ud)` /
+    `expat.get_user_data(p)` — per-parse state for the raw
+    bare-fn handler surface.
+  - Handler registration (raw surface): `expat.on_start(p, cb)` /
+    `expat.on_end(p, cb)` / `expat.on_text(p, cb)`. Caller
+    materialises the C function pointer at the call site with
+    `my_handler as fn(args) -> void` — same qsort-style idiom as
+    `tests/regression/test_fn_address_via_as_fn.ae`.
+  - Closure builder veneer (ergonomic DX layer):
+    `expat.parse_with(input) { bind_start(|name, atts| {...})
+    bind_end(|name| {...}) bind_text(|text, len| {...}) }` —
+    captured-state closures replace the user-data struct
+    boilerplate, capturing locals from the enclosing scope
+    directly. Routes the three closures through a C-side
+    handler-set dispatcher so each event hits its own captured
+    env (libexpat's single user_data slot can't carry three
+    independent envs natively).
+  - Drive: `expat.parse(p, buf, len, is_final) -> int` (1 ok, 0
+    error) or the one-shot `expat.parse_full(p, buf, len)`.
+  - Error reporting: `expat.error_string(p)` /
+    `expat.error_line(p)` / `expat.error_column(p)`.
+  - Attribute walking: `expat.attr_count(atts)` /
+    `expat.attr_name(atts, i)` / `expat.attr_value(atts, i)` —
+    hides libexpat's *2 pair-striding from Aether-side loops.
+
+  Build: pkg-config-detected libexpat at link time. The wrapper
+  is NOT bundled into `libaether.a` — same opt-in contrib-tier
+  pattern as `contrib.sqlite`: consuming projects list
+  `contrib/xml/expat/aether_xml_expat.c` in their
+  `aether.toml`'s `extra_sources` and add
+  `link_flags = "-lexpat"` to `[build]`. Install libexpat from
+  the system package (`libexpat-dev` on Debian/Ubuntu,
+  `expat-devel` on Fedora, `brew install expat` on macOS). The
+  integration test probes via pkg-config (with a gcc-link
+  fallback) and SKIPs cleanly when libexpat is absent.
+
+  Test: `tests/integration/contrib_xml_expat/probe.ae` covers
+  eight sub-cases under one process: well-formed-doc event
+  counting, attribute walking, parse-error reporting with
+  line/column, multi-chunk streaming parse, two-parser
+  independence (handlers don't cross-contaminate state across
+  parsers), and three closure-veneer cases (single-handler
+  closure capture, three-handler fan-out, missing-handler
+  graceful path).
+
+  Not in v1: namespace-aware parsing (`XML_ParserCreateNS`),
+  DOM-tree construction (this is streaming SAX only),
+  comment/PI/CDATA/external-entity handlers. See README.md for
+  the full list.
+
 ## [0.198.0]
 
 ### Added

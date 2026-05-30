@@ -1,0 +1,317 @@
+// contrib.xml.expat — thin libexpat veneer for Aether.
+// Import with: import contrib.xml.expat
+//
+// SAX-style streaming XML parser. Mirrors libexpat's native model:
+// caller registers per-event handlers (start element, end element,
+// character data), then feeds bytes into the parser; libexpat
+// invokes the registered handlers as it walks the input.
+//
+// Surface:
+//   xml.parser_new()                     -> ptr               // null on OOM
+//   xml.parser_free(p)                   -> void
+//   xml.set_user_data(p, ud)             -> void              // forwarded to libexpat XML_SetUserData
+//   xml.get_user_data(p)                 -> ptr               // round-trips
+//   xml.on_start(p, cb)                  -> void              // cb = fn(ud: ptr, name: string, atts: ptr)
+//   xml.on_end(p, cb)                    -> void              // cb = fn(ud: ptr, name: string)
+//   xml.on_text(p, cb)                   -> void              // cb = fn(ud: ptr, text: ptr, len: int)
+//   xml.parse(p, buf, len, is_final)     -> int               // 1 success, 0 parse error
+//   xml.error_string(p)                  -> string            // null when no error
+//   xml.error_line(p)                    -> int
+//   xml.error_column(p)                  -> int
+//   xml.attr_count(atts)                 -> int               // number of name/value PAIRS
+//   xml.attr_name(atts, i)               -> string
+//   xml.attr_value(atts, i)              -> string
+//
+// Callback signatures use bare-fn `as fn(...)` casts to materialise a
+// raw C function pointer that libexpat invokes directly. v1 does NOT
+// support captured-state closures for SAX handlers — per-parse state
+// goes through the user-data slot (set/get_user_data). The same
+// pattern as tests/regression/test_fn_address_via_as_fn.ae.
+//
+// The TEXT handler receives an UNCOPIED, UNTERMINATED slice of the
+// input buffer with an explicit length. Aether's `string` type treats
+// it as a borrowed pointer — copy what you need (`string.from_bytes`
+// / strbuilder.append_bytes / std.bytes-style copy) before the next
+// libexpat callback fires.
+//
+// Build:
+//   - Drop `contrib/xml/expat/aether_xml_expat.c` into your project's
+//     aether.toml [[bin]] `extra_sources`.
+//   - Add `[build] link_flags = "-lexpat"` to your aether.toml.
+//   - If the system doesn't have libexpat-dev, the link fails — this
+//     module doesn't ship a runtime "xml unavailable" fallback (same
+//     rationale as contrib/sqlite). The integration test probes for
+//     pkg-config and SKIPs cleanly when libexpat is missing.
+
+import std.string
+import std.map
+
+exports (
+    parser_new, parser_free,
+    set_user_data, get_user_data,
+    on_start, on_end, on_text,
+    parse, error_string, error_line, error_column,
+    attr_count, attr_name, attr_value,
+
+    // Raw externs — exposed so escape-hatch callers can use the
+    // `xml_*` C symbols directly without going through the Aether-
+    // side wrappers above.
+    xml_parser_new, xml_parser_free,
+    xml_parser_set_user_data, xml_parser_get_user_data,
+    xml_parser_set_start_handler, xml_parser_set_end_handler,
+    xml_parser_set_text_handler,
+    xml_parse_chunk, xml_parser_error_string,
+    xml_parser_error_line, xml_parser_error_column,
+    xml_attr_count, xml_attr_name, xml_attr_value
+)
+
+// ---- Raw externs ----------------------------------------------------
+
+extern xml_parser_new() -> ptr
+extern xml_parser_free(p: ptr)
+extern xml_parser_set_user_data(p: ptr, ud: ptr)
+extern xml_parser_get_user_data(p: ptr) -> ptr
+extern xml_parser_set_start_handler(p: ptr, fn: ptr)
+extern xml_parser_set_end_handler(p: ptr, fn: ptr)
+extern xml_parser_set_text_handler(p: ptr, fn: ptr)
+extern xml_parse_chunk(p: ptr, buf: string, len: int, is_final: int) -> int
+extern xml_parser_error_string(p: ptr) -> string
+extern xml_parser_error_line(p: ptr) -> int
+extern xml_parser_error_column(p: ptr) -> int
+extern xml_attr_count(atts: ptr) -> int
+extern xml_attr_name(atts: ptr, i: int) -> string
+extern xml_attr_value(atts: ptr, i: int) -> string
+
+// ---- Aether-side surface --------------------------------------------
+
+// Allocate a new parser. Returns null on out-of-memory; the caller
+// MUST call `parser_free(p)` when done (or `defer parser_free(p)` at
+// allocation site).
+parser_new() -> ptr {
+    return xml_parser_new()
+}
+
+parser_free(p: ptr) {
+    xml_parser_free(p)
+}
+
+// User-data slot forwarded to libexpat's XML_SetUserData. The pointer
+// is handed back as the first arg to every handler callback. Use it
+// to carry per-parse state (a counter, a builder, a struct ptr) —
+// captured-state closures are not supported for SAX handlers in v1.
+set_user_data(p: ptr, ud: ptr) {
+    xml_parser_set_user_data(p, ud)
+}
+
+get_user_data(p: ptr) -> ptr {
+    return xml_parser_get_user_data(p)
+}
+
+// Register the start-element handler. The callback receives:
+//   ud:    the user-data ptr set via set_user_data
+//   name:  the element's tag name (borrowed; libexpat owns the storage)
+//   atts:  the attributes array — use attr_count / attr_name / attr_value
+//          to walk it (the array's storage is libexpat's; do not retain)
+//
+// The Aether bare-fn is passed through `as fn(ptr, string, ptr)` to
+// materialise a raw C function pointer; libexpat calls it directly.
+// Returning a closure with captured state would route through the
+// _AeClosure trampoline and is NOT supported here — pass per-parse
+// state via the user-data slot.
+// The callback parameter is typed `ptr` (NOT `fn`) because the
+// Aether-side `as fn(...)` cast only accepts `ptr`-typed operands.
+// Callers materialise a raw C function pointer at the CALL SITE via:
+//
+//   expat.on_start(p, my_handler as fn(ptr, string, ptr) -> void)
+//
+// where `my_handler(ud: ptr, name: string, atts: ptr) { ... }` is a
+// bare named function. The bare-fn-name → ptr decay + the typed
+// `as fn` cast together produce the function-pointer ptr libexpat
+// expects. This matches the qsort idiom from
+// tests/regression/test_fn_address_via_as_fn.ae.
+on_start(p: ptr, cb: ptr) {
+    xml_parser_set_start_handler(p, cb)
+}
+
+// Register the end-element handler. Receives (ud, name). Caller
+// materialises with `my_handler as fn(ptr, string) -> void`.
+on_end(p: ptr, cb: ptr) {
+    xml_parser_set_end_handler(p, cb)
+}
+
+// Register the character-data (text content) handler.
+//
+// Receives (ud, text, len). The `text` pointer is an UNCOPIED,
+// UNTERMINATED slice of the input buffer — treat it as borrowed.
+// libexpat may chunk text content across multiple callbacks
+// (typically at internal-buffer boundaries); concatenate via a
+// strbuilder if you need the full run as one string.
+//
+// Caller materialises with `my_handler as fn(ptr, ptr, int) -> void`.
+on_text(p: ptr, cb: ptr) {
+    xml_parser_set_text_handler(p, cb)
+}
+
+// Feed bytes into the parser. `is_final` should be 1 on the last
+// chunk of the document (so libexpat flushes any pending state) and
+// 0 on intermediate chunks. Returns 1 on success, 0 on parse error
+// — use `error_string` / `error_line` / `error_column` on `p` to
+// retrieve the failure detail.
+parse(p: ptr, buf: string, len: int, is_final: int) -> int {
+    return xml_parse_chunk(p, buf, len, is_final)
+}
+
+// One-shot convenience for an entire in-memory document. Equivalent
+// to `parse(p, buf, length, 1)`. Returns 1 on success, 0 on error.
+parse_full(p: ptr, buf: string, len: int) -> int {
+    return xml_parse_chunk(p, buf, len, 1)
+}
+
+error_string(p: ptr) -> string {
+    return xml_parser_error_string(p)
+}
+
+error_line(p: ptr) -> int {
+    return xml_parser_error_line(p)
+}
+
+error_column(p: ptr) -> int {
+    return xml_parser_error_column(p)
+}
+
+// Attribute-array accessors. libexpat passes attributes as a
+// NULL-terminated array of alternating name/value pairs. These
+// helpers hide the *2 striding so Aether loops can write
+//   i = 0; while i < attr_count(atts) { ... attr_name(atts, i) ... }
+// rather than indexing the raw array by hand.
+attr_count(atts: ptr) -> int {
+    return xml_attr_count(atts)
+}
+
+attr_name(atts: ptr, i: int) -> string {
+    return xml_attr_name(atts, i)
+}
+
+attr_value(atts: ptr, i: int) -> string {
+    return xml_attr_value(atts, i)
+}
+
+// ---- Closure-based ergonomic surface (the DX layer) ------------------
+//
+// The raw SAX surface above is a 1:1 binding of libexpat's C API.
+// It's correct and complete, but it requires every handler to be a
+// top-level bare named function and demands a manual user-data
+// struct for per-parse state. That's friction for any caller that
+// just wants "let me count elements" or "give me every <title>'s
+// text".
+//
+// The veneer below uses Aether's `builder` trailing-block DSL with
+// captured-state closures as handlers. A C-side dispatcher routes
+// libexpat's events to the right closure: each event has its own
+// captured env, so they can't share libexpat's single user_data
+// slot directly — the C trampolines handle the per-event
+// indirection. The closures capture variables from the enclosing
+// Aether scope normally, and the captured state is alive for the
+// duration of `parse_with`'s run because the closures live in the
+// surrounding lexical scope.
+//
+// Usage:
+//
+//   import contrib.xml.expat
+//
+//   main() {
+//       count = 0
+//       expat.parse_with("<a/><b/><c/>") {
+//           bind_start(|env: ptr, name: string, atts: ptr| {
+//               count = count + 1
+//           })
+//       }
+//       println("count = ${count}")     // 3
+//   }
+//
+// The trailing block runs against an internal map context; the
+// `bind_start` / `bind_end` / `bind_text` setters box their closures
+// into the map. After the block, `parse_with`'s body extracts the
+// boxed closures, installs them on a handler-set, drives the
+// parser, then frees everything. The closures' captured-env memory
+// is owned by the enclosing scope and stays valid for the duration
+// of the call.
+
+extern xml_handlerset_new() -> ptr
+extern xml_handlerset_free(hs: ptr)
+extern xml_handlerset_set_start(hs: ptr, boxed_closure: ptr)
+extern xml_handlerset_set_end(hs: ptr, boxed_closure: ptr)
+extern xml_handlerset_set_text(hs: ptr, boxed_closure: ptr)
+extern xml_parser_install_handlerset(p: ptr, hs: ptr)
+
+// Setters for use inside a `parse_with { ... }` trailing block.
+// Each boxes its closure and stashes the heap pointer into the
+// builder's `_ctx` map under a known key. The builder body reads
+// those keys and wires the closures into the handler-set.
+//
+// Closure signatures:
+//   bind_start: |env: ptr, name: string, atts: ptr|
+//   bind_end:   |env: ptr, name: string|
+//   bind_text:  |env: ptr, text: string, len: int|
+//
+// The first `env: ptr` parameter is required by the dispatcher's
+// ABI but is unused in the user's body (the closure already has
+// captured-variable access via its own env).
+bind_start(_ctx: ptr, cb: fn) {
+    boxed = box_closure(cb)
+    map_put_raw(_ctx, "start", boxed)
+}
+
+bind_end(_ctx: ptr, cb: fn) {
+    boxed = box_closure(cb)
+    map_put_raw(_ctx, "end", boxed)
+}
+
+bind_text(_ctx: ptr, cb: fn) {
+    boxed = box_closure(cb)
+    map_put_raw(_ctx, "text", boxed)
+}
+
+// One-shot: parse an in-memory document with closure-based
+// handlers. Use as a builder with a trailing block:
+//
+//   expat.parse_with(input) {
+//       bind_start(|env, name, atts| { ... })
+//       bind_end(  |env, name|       { ... })
+//       bind_text( |env, text, len|  { ... })
+//   }
+//
+// Returns 1 on success, 0 on parse error. (For error details use
+// the raw API — `parse_with` doesn't expose them in v1.)
+builder parse_with(input: string): int {
+    p = xml_parser_new()
+    if p == null { return 0 }
+    hs = xml_handlerset_new()
+    if hs == null {
+        xml_parser_free(p)
+        return 0
+    }
+
+    if _builder != null {
+        if map_has(_builder, "start") == 1 {
+            boxed = map_get_raw(_builder, "start")
+            xml_handlerset_set_start(hs, boxed)
+        }
+        if map_has(_builder, "end") == 1 {
+            boxed = map_get_raw(_builder, "end")
+            xml_handlerset_set_end(hs, boxed)
+        }
+        if map_has(_builder, "text") == 1 {
+            boxed = map_get_raw(_builder, "text")
+            xml_handlerset_set_text(hs, boxed)
+        }
+    }
+
+    xml_parser_install_handlerset(p, hs)
+    n = string.length(input)
+    ok = xml_parse_chunk(p, input, n, 1)
+
+    xml_handlerset_free(hs)
+    xml_parser_free(p)
+    return ok
+}
