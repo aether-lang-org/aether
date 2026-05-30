@@ -30,7 +30,7 @@ main() {
     url = "http://127.0.0.1:${up_port}/chunked"
 
     req = client.request("GET", url)
-    client.set_timeout(req, 5)
+    client.set_timeout(req, 5s)
     resp, err = client.send_request(req)
     client.request_free(req)
     if err != "" {

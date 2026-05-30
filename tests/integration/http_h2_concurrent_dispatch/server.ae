@@ -64,7 +64,7 @@ main() {
         exit(1)
     }
 
-    ka_err = http.server_set_keepalive(raw, 1, 0, 5000)
+    ka_err = http.server_set_keepalive(raw, 1, 0, 5000ms)
     if ka_err != "" {
         println("FAIL: server_set_keepalive: ${ka_err}")
         exit(1)

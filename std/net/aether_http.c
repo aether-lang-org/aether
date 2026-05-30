@@ -4,6 +4,7 @@
 
 #if !AETHER_HAS_NETWORKING
 HttpResponse* http_get_raw(const char* u) { (void)u; return NULL; }
+HttpResponse* http_get_with_timeout_ns_raw(const char* u, int64_t ns) { (void)u; (void)ns; return NULL; }
 HttpResponse* http_post_raw(const char* u, const char* b, const char* c) { (void)u; (void)b; (void)c; return NULL; }
 HttpResponse* http_put_raw(const char* u, const char* b, const char* c) { (void)u; (void)b; (void)c; return NULL; }
 HttpResponse* http_delete_raw(const char* u) { (void)u; return NULL; }
@@ -19,6 +20,7 @@ HttpRequest* http_request_raw(const char* m, const char* u) { (void)m; (void)u; 
 int http_request_set_header_raw(HttpRequest* r, const char* n, const char* v) { (void)r; (void)n; (void)v; return -1; }
 int http_request_set_body_raw(HttpRequest* r, const char* b, int l, const char* c) { (void)r; (void)b; (void)l; (void)c; return -1; }
 int http_request_set_timeout_raw(HttpRequest* r, int s) { (void)r; (void)s; return -1; }
+int http_request_set_timeout_ns_raw(HttpRequest* r, int64_t ns) { (void)r; (void)ns; return -1; }
 int http_request_set_follow_redirects_raw(HttpRequest* r, int n) { (void)r; (void)n; return -1; }
 void http_request_free_raw(HttpRequest* r) { (void)r; }
 HttpResponse* http_send_raw(HttpRequest* r) { (void)r; return NULL; }
@@ -31,6 +33,7 @@ const char* http_response_redirect_error_raw(HttpResponse* r) { (void)r; return 
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <limits.h>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -308,7 +311,11 @@ struct HttpRequest {
     char* body;          /* may be NULL; binary-safe via body_len */
     int   body_len;      /* explicit length; 0 if no body */
     char* content_type;  /* may be NULL; defaults applied at send time */
-    int   timeout_secs;  /* 0 = no timeout (block forever) */
+    int64_t timeout_ns;  /* 0 = no timeout (block forever). Whole-ns
+                          * precision; the platform timeout calls
+                          * (select tv, SO_RCVTIMEO timeval, Winsock
+                          * DWORD ms) slice this down to whatever
+                          * granularity they support. */
     int   max_redirects; /* 0 = don't follow (default); N>0 = follow up to N hops */
 };
 
@@ -387,7 +394,13 @@ int http_request_set_body_raw(HttpRequest* req, const char* body, int len, const
 
 int http_request_set_timeout_raw(HttpRequest* req, int seconds) {
     if (!req || seconds < 0) return -1;
-    req->timeout_secs = seconds;
+    req->timeout_ns = (int64_t)seconds * 1000000000LL;
+    return 0;
+}
+
+int http_request_set_timeout_ns_raw(HttpRequest* req, int64_t timeout_ns) {
+    if (!req || timeout_ns < 0) return -1;
+    req->timeout_ns = timeout_ns;
     return 0;
 }
 
@@ -486,7 +499,7 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
      * caller asked for one. Without a timeout, fall through to the
      * original blocking connect (preserves v1 behaviour exactly). */
     int connect_rc;
-    if (req->timeout_secs > 0) {
+    if (req->timeout_ns > 0) {
 #ifdef _WIN32
         u_long nb = 1;
         ioctlsocket(sockfd, FIONBIO, &nb);
@@ -517,9 +530,13 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
                 fd_set wfds, efds;
                 FD_ZERO(&wfds); FD_SET(sockfd, &wfds);
                 FD_ZERO(&efds); FD_SET(sockfd, &efds);
+                /* `select` takes microsecond precision via tv_usec —
+                 * slice the configured nanoseconds straight in.
+                 * tv_usec is `suseconds_t` on POSIX and `long` on
+                 * MinGW; cast to `long` to satisfy both portably. */
                 struct timeval tv;
-                tv.tv_sec = req->timeout_secs;
-                tv.tv_usec = 0;
+                tv.tv_sec  = (time_t)(req->timeout_ns / 1000000000LL);
+                tv.tv_usec = (long)((req->timeout_ns / 1000LL) % 1000000LL);
                 int sel = select(sockfd + 1, NULL, &wfds, &efds, &tv);
                 if (sel == 0) {
                     close(sockfd);
@@ -572,15 +589,23 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
          * `set_timeout(35)` would degrade to a 35-millisecond recv
          * timeout, which fires almost instantly and surfaces as
          * "recv timeout or I/O error" before any sane upstream can
-         * even respond. Use the right type per platform. */
+         * even respond. Use the right type per platform.
+         *
+         * Both shapes carry sub-second precision: POSIX gets the full
+         * microsecond resolution via tv_usec; Winsock rounds up to
+         * the next whole millisecond (sub-ms DWORD=0 is ambiguous
+         * with "infinite"). */
 #ifdef _WIN32
-        DWORD rwtv_ms = (DWORD)req->timeout_secs * 1000U;
+        /* (ns + 999999) / 1000000 = ms rounded up; 1ns becomes 1ms. */
+        int64_t ms_total = (req->timeout_ns + 999999LL) / 1000000LL;
+        if (ms_total > 0xFFFFFFFFLL) ms_total = 0xFFFFFFFFLL;
+        DWORD rwtv_ms = (DWORD)ms_total;
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rwtv_ms, sizeof(rwtv_ms));
         setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&rwtv_ms, sizeof(rwtv_ms));
 #else
         struct timeval rwtv;
-        rwtv.tv_sec = req->timeout_secs;
-        rwtv.tv_usec = 0;
+        rwtv.tv_sec  = (time_t)(req->timeout_ns / 1000000000LL);
+        rwtv.tv_usec = (long)((req->timeout_ns / 1000LL) % 1000000LL);
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rwtv, sizeof(rwtv));
         setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&rwtv, sizeof(rwtv));
 #endif
@@ -1207,6 +1232,18 @@ HttpResponse* http_get_with_timeout_raw(const char* url, int timeout_ms) {
         // timeouts are a separate change to the underlying field.
         int secs = (timeout_ms + 999) / 1000;
         http_request_set_timeout_raw(req, secs);
+    }
+    HttpResponse* resp = http_send_raw(req);
+    http_request_free_raw(req);
+    return resp;
+}
+
+HttpResponse* http_get_with_timeout_ns_raw(const char* url, int64_t timeout_ns) {
+    HttpRequest* req = http_request_raw("GET", url);
+    if (!req) return NULL;
+    if (http_request_set_timeout_ns_raw(req, timeout_ns) != 0) {
+        http_request_free_raw(req);
+        return NULL;
     }
     HttpResponse* resp = http_send_raw(req);
     http_request_free_raw(req);

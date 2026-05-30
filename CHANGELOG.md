@@ -9,6 +9,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **First-class `Duration` type with literal suffixes** (issue #524;
+  `compiler/parser/lexer.c`, `compiler/parser/parser.c`,
+  `compiler/parser/tokens.h`, `compiler/ast.{h,c}`,
+  `compiler/analysis/{typechecker.c,type_inference.c}`,
+  `compiler/codegen/{codegen.c,codegen_expr.c,codegen_stmt.c,codegen_actor.c}`,
+  `compiler/aetherc.c`, `std/http/{module.ae,client/module.ae}`,
+  `std/net/aether_http.{c,h}`, `tests/syntax/test_duration_literals.ae`,
+  `tests/syntax/test_duration_http_timeouts.ae`,
+  `tests/integration/duration_type_error/`).
+  Numeric literals with a time-unit suffix (`ns`, `us`, `ms`, `s`,
+  `m`, `h`, `d`) are now `Duration` values stored as `int64_t`
+  nanosecond counts. Compound forms supported (`2m30s`, `1h15m`).
+  Arithmetic: `dur + dur` / `dur - dur` → `Duration`,
+  `dur * scalar` / `dur / scalar` → `Duration`, `dur / dur` →
+  `float` (ratio), `dur <op> dur` → `bool`. Comparing a `Duration`
+  against a plain number is a type error (no silent coercion).
+  Component accessors `.ns` (int64) and `.us`/`.ms`/`.s`/`.m`/`.h`/
+  `.d` (float ratio) read the value in that unit. Interpolation and
+  `println` render via `_aether_duration_repr` which picks the
+  largest readable unit and trims trailing zeros (`2500ms` prints
+  `2.5s`). FFI: across the `aether_<name>` ABI boundary a `Duration`
+  lowers to a plain `int64_t` (nanoseconds), so C/Python/Java
+  consumers see an integer, not an opaque type. HTTP timeout APIs
+  now accept `Duration` directly: `client.set_timeout(req, 30s)`,
+  `http.get_with_timeout(url, 5s)`,
+  `http.server_set_keepalive(srv, 1, 0, 5s)`,
+  `http.server_shutdown_graceful(srv, 100ms)`. Sub-second
+  precision is preserved through to the socket layer:
+  `select` uses `tv_sec + tv_usec` (microsecond resolution),
+  `SO_RCVTIMEO`/`SO_SNDTIMEO` use `struct timeval` (μs) on POSIX
+  or a `DWORD` millisecond count on Winsock (sub-ms rounds up so
+  it doesn't degrade to "infinite" via `DWORD=0`). Server-side
+  keepalive idle and graceful-shutdown deadline use ms precision
+  (their underlying poll / spin-wait loops are ms-granular).
+  Wrappers go through `.ns` (int64) end-to-end — earlier drafts
+  routed through `.ms` (a float ratio that silently truncated
+  `1500ms` to `1`).
+
+- **`contrib.xml.expat` — SAX-style XML parsing via libexpat**
+  (`contrib/xml/expat/{aether_xml_expat.c,module.ae,README.md}`,
+  `tests/integration/contrib_xml_expat/`). Thin Aether veneer over
+  libexpat's native streaming SAX model: caller registers
+  per-event handlers (start element / end element / character
+  data), then feeds bytes into the parser; libexpat invokes the
+  registered handlers as it walks the input.
+
+  Surface (namespace is `expat.*` per the contrib path):
+  - Parser lifecycle: `expat.parser_new()` /
+    `expat.parser_free(p)`.
+  - User-data slot: `expat.set_user_data(p, ud)` /
+    `expat.get_user_data(p)` — per-parse state for the raw
+    bare-fn handler surface.
+  - Handler registration (raw surface): `expat.on_start(p, cb)` /
+    `expat.on_end(p, cb)` / `expat.on_text(p, cb)`. Caller
+    materialises the C function pointer at the call site with
+    `my_handler as fn(args) -> void` — same qsort-style idiom as
+    `tests/regression/test_fn_address_via_as_fn.ae`.
+  - Closure builder veneer (ergonomic DX layer):
+    `expat.parse_with(input) { bind_start(|name, atts| {...})
+    bind_end(|name| {...}) bind_text(|text, len| {...}) }` —
+    captured-state closures replace the user-data struct
+    boilerplate, capturing locals from the enclosing scope
+    directly. Routes the three closures through a C-side
+    handler-set dispatcher so each event hits its own captured
+    env (libexpat's single user_data slot can't carry three
+    independent envs natively).
+  - Drive: `expat.parse(p, buf, len, is_final) -> int` (1 ok, 0
+    error) or the one-shot `expat.parse_full(p, buf, len)`.
+  - Error reporting: `expat.error_string(p)` /
+    `expat.error_line(p)` / `expat.error_column(p)`.
+  - Attribute walking: `expat.attr_count(atts)` /
+    `expat.attr_name(atts, i)` / `expat.attr_value(atts, i)` —
+    hides libexpat's *2 pair-striding from Aether-side loops.
+
+  Build: pkg-config-detected libexpat at link time. The wrapper
+  is NOT bundled into `libaether.a` — same opt-in contrib-tier
+  pattern as `contrib.sqlite`: consuming projects list
+  `contrib/xml/expat/aether_xml_expat.c` in their
+  `aether.toml`'s `extra_sources` and add
+  `link_flags = "-lexpat"` to `[build]`. Install libexpat from
+  the system package (`libexpat-dev` on Debian/Ubuntu,
+  `expat-devel` on Fedora, `brew install expat` on macOS). The
+  integration test probes via pkg-config (with a gcc-link
+  fallback) and SKIPs cleanly when libexpat is absent.
+
+  Test: `tests/integration/contrib_xml_expat/probe.ae` covers
+  eight sub-cases under one process: well-formed-doc event
+  counting, attribute walking, parse-error reporting with
+  line/column, multi-chunk streaming parse, two-parser
+  independence (handlers don't cross-contaminate state across
+  parsers), and three closure-veneer cases (single-handler
+  closure capture, three-handler fan-out, missing-handler
+  graceful path).
+
+  Not in v1: namespace-aware parsing (`XML_ParserCreateNS`),
+  DOM-tree construction (this is streaming SAX only),
+  comment/PI/CDATA/external-entity handlers. See README.md for
+  the full list.
+
 ## [0.198.0]
 
 ### Added

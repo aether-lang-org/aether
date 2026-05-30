@@ -39,11 +39,11 @@ const char* http_server_set_h2_raw(HttpServer* s, int m) {
 const char* http_server_set_h2_concurrent_dispatch_raw(HttpServer* s, int n) {
     (void)s; (void)n; return "HTTP/2 unavailable: networking not built in";
 }
-const char* http_server_set_keepalive_raw(HttpServer* s, int e, int m, int i) {
+const char* http_server_set_keepalive_raw(HttpServer* s, int e, int m, int64_t i) {
     (void)s; (void)e; (void)m; (void)i; return "keep-alive unavailable: networking not built in";
 }
 void http_server_drain_connection(HttpServer* s, int fd) { (void)s; (void)fd; }
-const char* http_server_shutdown_graceful_raw(HttpServer* s, int t) { (void)s; (void)t; return ""; }
+const char* http_server_shutdown_graceful_raw(HttpServer* s, int64_t t) { (void)s; (void)t; return ""; }
 void http_server_set_on_start(HttpServer* s, HttpLifecycleHook h, void* u) { (void)s; (void)h; (void)u; }
 void http_server_set_on_stop (HttpServer* s, HttpLifecycleHook h, void* u) { (void)s; (void)h; (void)u; }
 const char* http_server_set_health_probes_raw(HttpServer* s, const char* lp, const char* rp,
@@ -120,6 +120,7 @@ const char* http_request_header_value(HttpRequest* r, int i) { (void)r; (void)i;
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include "../../runtime/utils/aether_thread.h"
 
 #ifdef _WIN32
@@ -667,11 +668,17 @@ HttpServer* http_server_create(int port) {
 const char* http_server_set_keepalive_raw(HttpServer* server,
                                           int enabled,
                                           int max_requests,
-                                          int idle_ms) {
+                                          int64_t idle_ns) {
     if (!server) return "server is null";
     server->keep_alive_enabled = enabled ? 1 : 0;
     server->keep_alive_max = max_requests < 0 ? 0 : max_requests;
-    server->keep_alive_idle_ms = idle_ms < 0 ? 0 : idle_ms;
+    /* Storage is ms-granular (the keepalive poll/timeout paths run
+     * in ms). Sub-ms keepalive intervals would be silly; round down
+     * to ms here so we don't carry false precision. */
+    int64_t idle_ms = idle_ns / 1000000LL;
+    if (idle_ms < 0) idle_ms = 0;
+    if (idle_ms > INT_MAX) idle_ms = INT_MAX;
+    server->keep_alive_idle_ms = (int)idle_ms;
     return "";
 }
 
@@ -691,7 +698,7 @@ void http_server_set_on_stop(HttpServer* server, HttpLifecycleHook hook, void* u
     server->on_stop_user_data = user_data;
 }
 
-const char* http_server_shutdown_graceful_raw(HttpServer* server, int timeout_ms) {
+const char* http_server_shutdown_graceful_raw(HttpServer* server, int64_t timeout_ns) {
     if (!server) return "server is null";
 
     /* Stop accepting new connections — this unblocks the accept
@@ -700,6 +707,11 @@ const char* http_server_shutdown_graceful_raw(HttpServer* server, int timeout_ms
      * we just wait for the inflight counter to drain. */
     http_server_stop(server);
 
+    /* The drain spin-wait is ms-granular; round down ns→ms.
+     * 0 or negative reverts to the previous 5s default. */
+    int64_t timeout_ms_64 = timeout_ns / 1000000LL;
+    if (timeout_ms_64 > INT_MAX) timeout_ms_64 = INT_MAX;
+    int timeout_ms = (int)timeout_ms_64;
     if (timeout_ms <= 0) timeout_ms = 5000;
 
     /* Spin-wait with an exponential-ish back-off, capped at 50ms.

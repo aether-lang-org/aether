@@ -51,7 +51,7 @@ main() {
 
     // Enable keep-alive so the same TCP connection can carry an h2c
     // upgrade and the resulting h2 frames.
-    ka_err = http.server_set_keepalive(server, 1, 0, 30000)
+    ka_err = http.server_set_keepalive(server, 1, 0, 30000ms)
     if ka_err != "" {
         println("keepalive error: ${ka_err}")
         return

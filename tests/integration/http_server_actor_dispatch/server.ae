@@ -45,7 +45,7 @@ main() {
     }
 
     // Generous keep-alive: 100 requests per connection, 10s idle.
-    err = http.server_set_keepalive(raw, 1, 100, 10000)
+    err = http.server_set_keepalive(raw, 1, 100, 10000ms)
     if err != "" {
         println("FAIL: keepalive: ${err}")
         exit(1)

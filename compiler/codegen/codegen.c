@@ -104,7 +104,7 @@ int contains_send_expression(ASTNode* node) {
 
 static int is_inlineable_scalar(int type_kind) {
     switch (type_kind) {
-        case TYPE_INT: case TYPE_INT64: case TYPE_PTR:
+        case TYPE_INT: case TYPE_INT64: case TYPE_UINT64: case TYPE_DURATION: case TYPE_PTR:
             return 1;
         default:
             return 0;
@@ -1260,6 +1260,7 @@ const char* get_c_type(Type* type) {
         case TYPE_UINT32: return "uint32_t";
         case TYPE_UINT16: return "uint16_t";
         case TYPE_UINT8: return "uint8_t";
+        case TYPE_DURATION: return "int64_t";
         /* Aether `float` lowers to C `double`. The naming is legacy
          * (Aether predates having two FP types), but the storage and
          * ABI have always been 8-byte IEEE-754 — local variables are
@@ -1419,6 +1420,7 @@ static const char* get_abi_type(Type* type) {
         case TYPE_UINT32: return "uint32_t";
         case TYPE_UINT16: return "uint16_t";
         case TYPE_UINT8:  return "uint8_t";
+        case TYPE_DURATION: return "int64_t";
         /* Aether `float` is C `double` (8 bytes, binary64) — see
          * get_c_type() for rationale. The public ABI (`aether_*`
          * wrapper symbols emitted with --emit=lib) follows suit. */
@@ -2735,6 +2737,27 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
     print_line(gen, "    if (!s) return \"(null)\";");
     print_line(gen, "    return aether_string_data(s);");
+    print_line(gen, "}");
+    print_line(gen, "static inline const char* _aether_duration_repr(int64_t ns) {");
+    print_line(gen, "    static char _buf[64];");
+    print_line(gen, "    int64_t abs_ns = ns < 0 ? -ns : ns;");
+    print_line(gen, "    struct _du { const char* suffix; int64_t scale; } units[] = {");
+    print_line(gen, "        {\"d\", 86400000000000LL}, {\"h\", 3600000000000LL},");
+    print_line(gen, "        {\"m\", 60000000000LL}, {\"s\", 1000000000LL},");
+    print_line(gen, "        {\"ms\", 1000000LL}, {\"us\", 1000LL}, {\"ns\", 1LL}");
+    print_line(gen, "    };");
+    print_line(gen, "    for (size_t i = 0; i < sizeof(units) / sizeof(units[0]); i++) {");
+    print_line(gen, "        if (abs_ns >= units[i].scale || units[i].scale == 1) {");
+    print_line(gen, "            if (ns %% units[i].scale == 0) {");
+    print_line(gen, "                snprintf(_buf, sizeof(_buf), \"%%lld%%s\", (long long)(ns / units[i].scale), units[i].suffix);");
+    print_line(gen, "            } else {");
+    print_line(gen, "                double v = (double)ns / (double)units[i].scale;");
+    print_line(gen, "                snprintf(_buf, sizeof(_buf), \"%%.9g%%s\", v, units[i].suffix);");
+    print_line(gen, "            }");
+    print_line(gen, "            return _buf;");
+    print_line(gen, "        }");
+    print_line(gen, "    }");
+    print_line(gen, "    return \"0ns\";");
     print_line(gen, "}");
     // Built-in `sleep(ms)` lowers to aether_sleep_ms — a runtime helper
     // with a stable, prefixed name so user `extern sleep(...)` doesn't

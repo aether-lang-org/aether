@@ -351,6 +351,10 @@ Type* parse_type(Parser* parser) {
             advance_token(parser);
             type = create_type(TYPE_UINT64);
             break;
+        case TOKEN_DURATION:
+            advance_token(parser);
+            type = create_type(TYPE_DURATION);
+            break;
         case TOKEN_FLOAT:
             advance_token(parser);
             type = create_type(TYPE_FLOAT);
@@ -763,6 +767,7 @@ ASTNode* parse_primary_expression(Parser* parser) {
         // Type keywords used as namespace names: string.new(), int.parse(), etc.
         case TOKEN_STRING:
         case TOKEN_INT:
+        case TOKEN_DURATION:
         case TOKEN_FLOAT:
         case TOKEN_BOOL: {
             // Check if followed by dot - treat as namespace identifier
@@ -1770,6 +1775,7 @@ ASTNode* parse_statement(Parser* parser) {
         case TOKEN_INT:
         case TOKEN_INT64:
         case TOKEN_UINT64:
+        case TOKEN_DURATION:
         case TOKEN_STRING:
         case TOKEN_FLOAT:
         case TOKEN_BOOL:
@@ -2613,6 +2619,7 @@ ASTNode* parse_export_statement(Parser* parser) {
         case TOKEN_INT:
         case TOKEN_INT64:
         case TOKEN_UINT64:
+        case TOKEN_DURATION:
         case TOKEN_FLOAT:
         case TOKEN_BOOL:
         case TOKEN_BYTE:
@@ -3083,6 +3090,7 @@ ASTNode* parse_actor_definition(Parser* parser) {
             
             if (next_tok && (next_tok->type == TOKEN_INT || next_tok->type == TOKEN_INT64 ||
                             next_tok->type == TOKEN_UINT64 ||
+                            next_tok->type == TOKEN_DURATION ||
                             next_tok->type == TOKEN_FLOAT ||
                             next_tok->type == TOKEN_STRING || next_tok->type == TOKEN_BOOL ||
                             next_tok->type == TOKEN_BYTE)) {
@@ -3709,6 +3717,7 @@ ASTNode* parse_function_definition(Parser* parser) {
                 case TOKEN_INT:
                 case TOKEN_INT64:
                 case TOKEN_UINT64:
+                case TOKEN_DURATION:
                 case TOKEN_FLOAT:
                 case TOKEN_BOOL:
                 case TOKEN_BYTE:
@@ -3769,6 +3778,7 @@ ASTNode* parse_function_definition(Parser* parser) {
                             case TOKEN_INT:
                             case TOKEN_INT64:
                             case TOKEN_UINT64:
+                            case TOKEN_DURATION:
                             case TOKEN_FLOAT:
                             case TOKEN_BOOL:
                             case TOKEN_BYTE:
@@ -3967,6 +3977,7 @@ ASTNode* parse_pattern(Parser* parser) {
         case TOKEN_INT:
         case TOKEN_INT64:
         case TOKEN_UINT64:
+        case TOKEN_DURATION:
         case TOKEN_FLOAT:
         case TOKEN_BOOL:
         case TOKEN_BYTE:
@@ -4130,6 +4141,7 @@ ASTNode* parse_struct_definition(Parser* parser) {
         Type* c_type = NULL;
         if (peek && (peek->type == TOKEN_INT  || peek->type == TOKEN_INT64 ||
                      peek->type == TOKEN_UINT64 ||
+                     peek->type == TOKEN_DURATION ||
                      peek->type == TOKEN_FLOAT || peek->type == TOKEN_BOOL  ||
                      peek->type == TOKEN_BYTE  ||
                      peek->type == TOKEN_STRING || peek->type == TOKEN_PTR)) {
@@ -4518,6 +4530,7 @@ ASTNode* parse_program(Parser* parser) {
             case TOKEN_INT:
             case TOKEN_INT64:
             case TOKEN_UINT64:
+            case TOKEN_DURATION:
             case TOKEN_FLOAT:
             case TOKEN_BOOL:
             case TOKEN_BYTE:

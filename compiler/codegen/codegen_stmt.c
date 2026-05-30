@@ -1732,6 +1732,7 @@ int call_arg_escapes(TypeKind param_kind) {
         case TYPE_UINT32:
         case TYPE_UINT16:
         case TYPE_UINT8:
+        case TYPE_DURATION:
         case TYPE_BYTE:
         case TYPE_FLOAT:
         case TYPE_BOOL:
@@ -5175,6 +5176,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "printf(\"%%lld\", (long long)");
                         generate_expression(gen, first_arg);
                         fprintf(gen->output, ");\n");
+                    } else if (arg_type->kind == TYPE_DURATION) {
+                        fprintf(gen->output, "printf(\"%%s\", _aether_duration_repr(");
+                        generate_expression(gen, first_arg);
+                        fprintf(gen->output, "));\n");
                     } else if (arg_type->kind == TYPE_PTR) {
                         // NULL-safe via helper (no double-evaluation)
                         fprintf(gen->output, "printf(\"%%s\", _aether_safe_str(");
@@ -5232,6 +5237,8 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                         fprintf(gen->output, "%%f");
                                     } else if (atype && atype->kind == TYPE_INT64) {
                                         fprintf(gen->output, "%%lld");
+                                    } else if (atype && atype->kind == TYPE_DURATION) {
+                                        fprintf(gen->output, "%%s");
                                     } else if (atype && (atype->kind == TYPE_STRING || atype->kind == TYPE_PTR)) {
                                         fprintf(gen->output, "%%s");
                                     } else if (atype && atype->kind == TYPE_BOOL) {
@@ -5266,6 +5273,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             if (atype && atype->kind == TYPE_INT64) {
                                 fprintf(gen->output, "(long long)");
                                 generate_expression(gen, arg);
+                            } else if (atype && atype->kind == TYPE_DURATION) {
+                                fprintf(gen->output, "_aether_duration_repr(");
+                                generate_expression(gen, arg);
+                                fprintf(gen->output, ")");
                             } else if (atype && atype->kind == TYPE_BOOL) {
                                 generate_expression(gen, arg);
                                 fprintf(gen->output, " ? \"true\" : \"false\"");

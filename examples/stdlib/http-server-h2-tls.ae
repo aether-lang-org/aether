@@ -98,7 +98,7 @@ main() {
         }
     }
 
-    ka_err = http.server_set_keepalive(server, 1, 0, 30000)
+    ka_err = http.server_set_keepalive(server, 1, 0, 30000ms)
     if ka_err != "" {
         println("keepalive: ${ka_err}")
         return

@@ -188,7 +188,7 @@ build_upstream_a() {
     s = http.server_create(UP_A_PORT)
     if s == 0 { println("FAIL: A server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
-    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_set_keepalive(s, 1, 0, 5000ms)
     http.server_get(s, "/echo",            handle_echo_a,         0)
     http.server_post(s, "/echo",           handle_echo_a,         0)
     http.server_get(s, "/repos/:repo/info", handle_echo_a,        0)
@@ -206,7 +206,7 @@ build_upstream_b() {
     s = http.server_create(UP_B_PORT)
     if s == 0 { println("FAIL: B server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
-    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_set_keepalive(s, 1, 0, 5000ms)
     http.server_get(s,  "/echo",            handle_echo_b,         0)
     http.server_post(s, "/echo",            handle_echo_b,         0)
     http.server_get(s,  "/repos/:repo/info", handle_echo_b,        0)
@@ -229,7 +229,7 @@ build_upstream_c() {
     s = http.server_create(UP_C_PORT)
     if s == 0 { println("FAIL: C server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
-    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_set_keepalive(s, 1, 0, 5000ms)
     http.server_get(s, "/echo",           handle_echo_c,         0)
     http.server_post(s, "/echo",          handle_echo_c,         0)
     http.server_get(s, "/repos/:repo/info", handle_echo_c,       0)
@@ -264,7 +264,7 @@ build_and_start_proxy(pool: ptr, opts: ptr, expose_metrics: int) {
     s = http.server_create(PROXY_PORT)
     if s == 0 { println("FAIL: proxy server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
-    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_set_keepalive(s, 1, 0, 5000ms)
     if expose_metrics != 0 {
         // Register BEFORE the proxy mount. The proxy is mounted at
         // "/echo" so it doesn't shadow this admin endpoint — real-
@@ -358,7 +358,7 @@ build_proxy_drain() {
     s = http.server_create(PROXY_PORT)
     if s == 0 { println("FAIL: drain server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
-    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_set_keepalive(s, 1, 0, 5000ms)
     http.server_get(s, "/proxy-metrics", handle_proxy_metrics, pool)
     err = proxy.mount(s, "/echo", pool, opts)
     if err != "" { println("FAIL: drain mount: ${err}"); exit(1) }
@@ -378,7 +378,7 @@ build_proxy_methods() {
     s = http.server_create(PROXY_PORT)
     if s == 0 { println("FAIL: methods server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
-    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_set_keepalive(s, 1, 0, 5000ms)
     http.server_get(s, "/proxy-metrics-primary", handle_proxy_metrics, primary)
     http.server_get(s, "/proxy-metrics-replicas", handle_proxy_metrics, replicas)
 

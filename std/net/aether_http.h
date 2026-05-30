@@ -2,6 +2,7 @@
 #define AETHER_HTTP_H
 
 #include "../string/aether_string.h"
+#include <stdint.h>
 
 typedef struct {
     int status_code;
@@ -53,6 +54,7 @@ HttpResponse* http_get_raw(const char* url);
 // SO_SNDTIMEO storage is integer seconds; pass 0 for "block forever"
 // (matches http_get_raw's default).
 HttpResponse* http_get_with_timeout_raw(const char* url, int timeout_ms);
+HttpResponse* http_get_with_timeout_ns_raw(const char* url, int64_t timeout_ns);
 HttpResponse* http_post_raw(const char* url, const char* body, const char* content_type);
 HttpResponse* http_put_raw(const char* url, const char* body, const char* content_type);
 HttpResponse* http_delete_raw(const char* url);
@@ -127,9 +129,20 @@ int http_request_set_header_raw(HttpRequest* req, const char* name, const char* 
 // Replaces any prior body.
 int http_request_set_body_raw(HttpRequest* req, const char* body, int len, const char* content_type);
 
-// Per-request timeout in seconds. 0 means "no timeout — block forever"
-// (preserves v1's behaviour). Negative values are an error.
+// Per-request timeout in whole seconds (v1 surface). 0 means
+// "no timeout — block forever". Negative values are an error.
+// Internally multiplied to nanoseconds; prefer
+// `http_request_set_timeout_ns_raw` for sub-second precision.
 int http_request_set_timeout_raw(HttpRequest* req, int seconds);
+
+// Per-request timeout as nanoseconds. 0 means "no timeout — block
+// forever". Sub-second precision is preserved through to the socket
+// layer: `select` uses tv_sec + tv_usec (microsecond resolution),
+// `SO_RCVTIMEO`/`SO_SNDTIMEO` use `struct timeval` (microseconds) on
+// POSIX or a DWORD millisecond count on Winsock. POSIX retains full
+// μs; Winsock rounds up to the next whole millisecond so that a
+// sub-ms value doesn't degrade to "infinite" via DWORD=0.
+int http_request_set_timeout_ns_raw(HttpRequest* req, int64_t timeout_ns);
 
 // Configure automatic redirect-following on this request. `max_hops` of
 // 0 (the default) keeps the v1/v2 behaviour: redirects are returned as
@@ -179,4 +192,3 @@ const char* http_response_effective_url_raw(HttpResponse* response);
 const char* http_response_redirect_error_raw(HttpResponse* response);
 
 #endif
-

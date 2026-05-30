@@ -1102,7 +1102,7 @@ main() {
 
 **Client (Go-style):**
 - `http.get(url)` → `(string, string)` - HTTP GET, returns `(body, err)`
-- `http.get_with_timeout(url, timeout_ms)` → `(string, string)` - HTTP GET with a per-call timeout. `timeout_ms == 0` keeps `get`'s "block forever" default; positive values are rounded up to whole seconds (the underlying `SO_RCVTIMEO`/`SO_SNDTIMEO` storage is integer seconds). For any third-party URL — without a timeout, a hung site stalls the calling actor's whole message handler.
+- `http.get_with_timeout(url, timeout)` → `(string, string)` - HTTP GET with a `Duration` per-call timeout. `0ns` keeps `get`'s "block forever" default; positive values are rounded up to whole seconds internally today. For any third-party URL — without a timeout, a hung site stalls the calling actor's whole message handler.
 - `http.post(url, body, content_type)` → `(string, string)` - HTTP POST
 - `http.put(url, body, content_type)` → `(string, string)` - HTTP PUT
 - `http.delete(url)` → `(string, string)` - HTTP DELETE
@@ -1140,10 +1140,10 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`, `http_server_set_h
 
 **Server Configuration:**
 - `http.server_set_tls(server, cert_path, key_path)` → `string` - Enable HTTPS with PEM cert + key.
-- `http.server_set_keepalive(server, enable, max_requests, idle_timeout_ms)` → `string` - HTTP/1.1 keep-alive (`max_requests=0` is unlimited per connection).
+- `http.server_set_keepalive(server, enable, max_requests, idle_timeout)` → `string` - HTTP/1.1 keep-alive with a `Duration` idle timeout (`max_requests=0` is unlimited per connection).
 - `http.server_set_h2(server, max_concurrent_streams)` → `string` - Enable HTTP/2 (h2 + h2c + ALPN). `max_concurrent_streams=0` uses libnghttp2's default (100). Returns error string when the build is missing libnghttp2.
 - `http.server_set_h2_concurrent_dispatch(server, worker_count)` → `string` - Server-level pthread pool for h2 stream handlers. `worker_count > 0` lets streams across all h2 connections execute their handlers in parallel; `worker_count == 0` (default) keeps dispatch sequential on each connection thread. POSIX-only; on Windows the call is a silent no-op. See `docs/http-server.md` for the architecture rationale (pthreads vs actors, server-level vs per-connection).
-- `http.server_shutdown_graceful(server, timeout_ms)` → `string` - Stop accepting new connections, drain in-flight requests, exit. h2 sessions emit a `GOAWAY` frame so peers know not to start new streams while existing ones complete.
+- `http.server_shutdown_graceful(server, timeout)` → `string` - Stop accepting new connections, drain in-flight requests for up to a `Duration`, exit. h2 sessions emit a `GOAWAY` frame so peers know not to start new streams while existing ones complete.
 - `http.server_set_health_probes(server, live_path, ready_path, ready_check, ud)` → `string` - Built-in `/healthz` (always 200) + `/readyz` (200 only when the readiness check returns 1).
 - `http.server_set_access_log(server, format, output_path)` → `string` - Built-in access logger. `format` is `"combined"` or `"json"`; `output_path` is a file path, `"-"` for stderr, or `""` to disable.
 - `http.server_set_metrics(server, endpoint)` → `string` - Prometheus-compatible counters/histograms at the configured endpoint (default `"/metrics"`).
@@ -1300,7 +1300,7 @@ main() {
     req = client.request("GET", "https://api.example.com/users/42")
     client.set_header(req, "Authorization", "Bearer abc123")
     client.set_header(req, "Accept",        "application/json")
-    client.set_timeout(req, 30)
+    client.set_timeout(req, 30s)
 
     resp, err = client.send_request(req)
     client.request_free(req)
@@ -1320,7 +1320,7 @@ main() {
 - `client.request(method, url)` → `ptr` - Build a request handle (method as arbitrary string)
 - `client.set_header(req, name, value)` → `string` - Append `Name: value` to outgoing headers
 - `client.set_body(req, body, length, content_type)` → `string` - Set request body (length explicit so binary payloads with embedded NULs survive)
-- `client.set_timeout(req, seconds)` → `string` - Per-request timeout (`0` = block forever)
+- `client.set_timeout(req, timeout)` → `string` - `Duration` per-request timeout (`0ns` = block forever)
 - `client.send_request(req)` → `(ptr, string)` - Fire the request; returns `(resp, "")` on transport success or `(null, err)` on failure
 - `client.request_free(req)` - Free the request handle
 

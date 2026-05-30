@@ -350,6 +350,7 @@ static const char* aether_type_spelling(Type* t) {
         case TYPE_UINT32: return "uint32";
         case TYPE_UINT16: return "uint16";
         case TYPE_UINT8:  return "uint8";
+        case TYPE_DURATION: return "Duration";
         case TYPE_FLOAT:  return "float";
         case TYPE_BOOL:   return "bool";
         case TYPE_STRING: return "string";
