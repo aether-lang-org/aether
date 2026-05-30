@@ -13,6 +13,37 @@ next version number before tagging the release.
 
 ### Added
 
+- **First-class `Duration` type with literal suffixes** (issue #524;
+  `compiler/parser/lexer.c`, `compiler/parser/parser.c`,
+  `compiler/parser/tokens.h`, `compiler/ast.{h,c}`,
+  `compiler/analysis/{typechecker.c,type_inference.c}`,
+  `compiler/codegen/{codegen.c,codegen_expr.c,codegen_stmt.c,codegen_actor.c}`,
+  `compiler/aetherc.c`, `std/http/{module.ae,client/module.ae}`,
+  `std/net/aether_http.{c,h}`, `tests/syntax/test_duration_literals.ae`,
+  `tests/syntax/test_duration_http_timeouts.ae`,
+  `tests/integration/duration_type_error/`).
+  Numeric literals with a time-unit suffix (`ns`, `us`, `ms`, `s`,
+  `m`, `h`, `d`) are now `Duration` values stored as `int64_t`
+  nanosecond counts. Compound forms supported (`2m30s`, `1h15m`).
+  Arithmetic: `dur + dur` / `dur - dur` → `Duration`,
+  `dur * scalar` / `dur / scalar` → `Duration`, `dur / dur` →
+  `float` (ratio), `dur <op> dur` → `bool`. Comparing a `Duration`
+  against a plain number is a type error (no silent coercion).
+  Component accessors `.ns` (int64) and `.us`/`.ms`/`.s`/`.m`/`.h`/
+  `.d` (float ratio) read the value in that unit. Interpolation and
+  `println` render via `_aether_duration_repr` which picks the
+  largest readable unit and trims trailing zeros (`2500ms` prints
+  `2.5s`). FFI: across the `aether_<name>` ABI boundary a `Duration`
+  lowers to a plain `int64_t` (nanoseconds), so C/Python/Java
+  consumers see an integer, not an opaque type. HTTP timeout APIs
+  now accept `Duration` directly: `client.set_timeout(req, 30s)`,
+  `http.get_with_timeout(url, 5s)`,
+  `http.server_set_keepalive(srv, 1, 0, 5s)`,
+  `http.server_shutdown_graceful(srv, 100ms)`. The raw C side
+  rounds sub-second timeouts up to one second because the
+  underlying SO_RCVTIMEO/SO_SNDTIMEO storage is whole-second based
+  — documented in `std/net/aether_http.h`.
+
 - **`contrib.xml.expat` — SAX-style XML parsing via libexpat**
   (`contrib/xml/expat/{aether_xml_expat.c,module.ae,README.md}`,
   `tests/integration/contrib_xml_expat/`). Thin Aether veneer over
@@ -1292,10 +1323,6 @@ The narrow hazard: if your project routes a `bytes.finish`-derived value into a 
   No user code change required. Code using the `p = p` "no-op free shim" pattern (or any other `lhs = lhs` self-assignment, however unusual) was double-freeing pre-fix; post-fix the assignment is correctly a no-op. Behaviour change is strictly correctness recovery; no regression on any other shape.
 
 ## [0.157.0]
-
-### Added
-
-- **First-class `Duration` literals and type** (`compiler/parser/lexer.c`, `compiler/analysis/typechecker.c`, `compiler/codegen/codegen_expr.c`, `std/http/module.ae`, `std/http/client/module.ae`, `tests/syntax/test_duration_literals.ae`). Adds `Duration` as an `int64_t` nanosecond-backed scalar with immediate unit suffix literals (`ns`, `us`, `ms`, `s`, `m`, `h`, `d`) and compound forms such as `2m30s`. Duration arithmetic now preserves units for `duration +/- duration` and `duration */ scalar`, `duration / duration` yields a float ratio, duration comparisons require another `Duration`, and accessors like `.ns`, `.ms`, and `.s` expose unit-scaled values. Printing and interpolation use a readable representation (`2500ms` renders as `2.5s`). Across `--emit=lib` ABI stubs, `Duration` lowers to plain `int64_t` nanoseconds. The public HTTP timeout wrappers now accept `Duration`: `http.get_with_timeout`, `client.set_timeout`, `http.server_set_keepalive`, and `http.server_shutdown_graceful`.
 
 ### Fixed
 
