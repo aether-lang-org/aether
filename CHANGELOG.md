@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Typechecker rejects bare-int → Duration at parameter-passing**
+  (issue #586; `compiler/analysis/typechecker.c`,
+  `tests/regression/test_duration_param_strictness.ae`,
+  `tests/integration/duration_param_strict_error/`). PR #583's
+  Duration landing only enforced strict typing in comparisons
+  (`dur > 5` errors) but accepted bare ints at parameter passing
+  (`set_timeout(req, 5)` silently reinterpreted as 5 nanoseconds).
+  This bit PR #583 itself: three callers passing plain ints to a
+  newly-Duration-typed parameter compiled cleanly, then raced on
+  macOS where the 5ns connect-timeout fired before the connection
+  completed. The typechecker now rejects the call at compile time
+  with a diagnostic that names the unit-suffix forms (`5ns`, `5us`,
+  `5ms`, `5s`, `5m`, `5h`, `5d`, compound forms like `2m30s`). Rule
+  applies to user-defined functions, builder functions, and extern
+  functions; covers numeric scalar types (int, long, uint64,
+  uint32/16/8, float). Same rejection shape as the existing
+  comparison check.
+
+  Side-fix: extern function symbols had `symbol->node = NULL`
+  during global registration, which silently disabled the existing
+  extern argument-type validation block at the call site (and would
+  have disabled the new Duration check too). Externs now wire their
+  AST node into the symbol so both validation passes actually fire.
+
 ## [0.201.0]
 
 ### Added

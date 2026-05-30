@@ -1924,8 +1924,18 @@ int typecheck_program(ASTNode* program) {
                 break;
             }
             case AST_EXTERN_FUNCTION: {
-                // Register extern C function in symbol table
+                // Register extern C function in symbol table. Wire the
+                // AST node into the symbol too so call-site type
+                // validation (typecheck_function_call's Duration check
+                // and the existing extern-arg type-check block) can
+                // walk the declared parameters. Without this, both
+                // checks silently no-op on externs because they gate
+                // on `symbol->node`.
                 add_symbol(global_table, child->value, clone_type(child->node_type), 0, 1, 0);
+                Symbol* extern_sym = lookup_symbol(global_table, child->value);
+                if (extern_sym) {
+                    extern_sym->node = child;
+                }
                 break;
             }
             case AST_STRUCT_DEFINITION: {
@@ -4108,6 +4118,97 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     // Type check arguments and validate types against parameters
     for (int i = 0; i < call->child_count; i++) {
         typecheck_expression(call->children[i], table);
+    }
+
+    /* Duration parameter-passing strictness (issue #586): plain int /
+     * long / uint64 / float passed to a Duration-typed parameter
+     * silently reinterprets as nanoseconds, which bit PR #583 (the
+     * test that called `client.set_timeout(req, 5)` got a 5ns timeout
+     * and failed on macOS). The comparison rule already rejects
+     * `dur > 5` at infer_binary_type; this extends the same rule to
+     * parameter-passing for BOTH extern and user-defined callees.
+     *
+     * Bare numeric literals must use a unit suffix (`5s`, `200ms`,
+     * `100ns`); identifier values typed as a plain integer need to
+     * be wrapped in an explicit construction. The error message
+     * names the literal forms so the fix is obvious.
+     *
+     * Scope is intentionally narrow to TYPE_DURATION; if/when other
+     * tagged-int types land (Bytes, Pixels, …) generalise then. */
+    if (symbol->node &&
+        (symbol->node->type == AST_FUNCTION_DEFINITION ||
+         symbol->node->type == AST_BUILDER_FUNCTION ||
+         symbol->node->type == AST_EXTERN_FUNCTION)) {
+        int has_ctx = has_ctx_first_param(symbol->node);
+        int arg_offset = 0;
+        int got = call->child_count;
+        int expected = count_function_params(symbol->node);
+        /* Mirror the arity logic at line ~3957: when the callee
+         * declares _ctx first and the caller's arg count is
+         * expected-1, the DSL auto-injects _ctx, so param index 0
+         * has no corresponding arg slot — skip it by starting
+         * arg_offset at -1 (param[1] aligns to arg[0]). */
+        if (has_ctx && got == expected - 1) arg_offset = -1;
+        int param_idx = 0;
+        /* User-defined / builder functions store the body as the final
+         * child; extern declarations do not. Cap the loop accordingly
+         * so we don't try to treat the body as a parameter. */
+        int param_scan_limit =
+            (symbol->node->type == AST_EXTERN_FUNCTION)
+                ? symbol->node->child_count
+                : symbol->node->child_count - 1;
+        for (int i = 0; i < param_scan_limit; i++) {
+            ASTNode* param = symbol->node->children[i];
+            if (!param) continue;
+            if (param->type == AST_GUARD_CLAUSE) continue;
+            /* Param-decl shapes:
+             *   - User-defined fn:  AST_VARIABLE_DECLARATION or AST_PATTERN_VARIABLE
+             *   - Extern fn:        AST_IDENTIFIER (parser builds them this way;
+             *                       see parse_extern_declaration in parser.c)
+             * Skip anything that isn't one of these param shapes. */
+            if (param->type != AST_VARIABLE_DECLARATION &&
+                param->type != AST_PATTERN_VARIABLE &&
+                param->type != AST_IDENTIFIER) continue;
+
+            int arg_slot = param_idx + arg_offset;
+            param_idx++;
+            if (arg_slot < 0 || arg_slot >= call->child_count) continue;
+
+            Type* param_type = param->node_type;
+            if (!param_type || param_type->kind != TYPE_DURATION) continue;
+
+            ASTNode* arg = call->children[arg_slot];
+            if (!arg) continue;
+            Type* arg_type = infer_type(arg, table);
+            if (!arg_type) continue;
+
+            int arg_is_plain_numeric =
+                arg_type->kind == TYPE_INT ||
+                arg_type->kind == TYPE_INT64 ||
+                arg_type->kind == TYPE_UINT64 ||
+                arg_type->kind == TYPE_UINT32 ||
+                arg_type->kind == TYPE_UINT16 ||
+                arg_type->kind == TYPE_UINT8 ||
+                arg_type->kind == TYPE_FLOAT;
+            int arg_is_duration = arg_type->kind == TYPE_DURATION;
+            int arg_is_unknown = arg_type->kind == TYPE_UNKNOWN;
+
+            if (arg_is_plain_numeric && !arg_is_duration && !arg_is_unknown) {
+                char error_msg[384];
+                const char* pname = param->value ? param->value : "?";
+                snprintf(error_msg, sizeof(error_msg),
+                         "Cannot pass %s where Duration expected "
+                         "(argument %d '%s' of '%s'). "
+                         "Use a time-unit suffix on the literal: "
+                         "5ns, 5us, 5ms, 5s, 5m, 5h, 5d (compound "
+                         "forms like 2m30s also accepted).",
+                         type_name(arg_type),
+                         arg_slot + 1, pname,
+                         call->value ? call->value : "?");
+                type_error(error_msg, arg->line, arg->column);
+            }
+            free_type(arg_type);
+        }
     }
 
     // Validate argument types for extern functions (which always have typed params)

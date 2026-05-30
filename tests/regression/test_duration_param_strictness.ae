@@ -1,0 +1,40 @@
+// Issue #586: typechecker must reject bare-int -> Duration at
+// parameter-passing sites. Bare numeric literals in a Duration slot
+// silently reinterpret as nanoseconds — `set_timeout(req, 5)` →
+// 5ns timeout. The compiler now rejects this at typecheck time.
+//
+// This file is the POSITIVE half — every call should typecheck
+// cleanly because every Duration argument uses a time-unit suffix
+// or is itself Duration-typed. The negative cases (compile-time
+// rejection of bare ints) live in
+// tests/integration/duration_param_strict_error/.
+
+set_dur(t: Duration) -> int {
+    return 0
+}
+
+main() {
+    // Bare Duration literals — all suffixes
+    _ = set_dur(100ns)
+    _ = set_dur(50us)
+    _ = set_dur(200ms)
+    _ = set_dur(5s)
+    _ = set_dur(3m)
+    _ = set_dur(3h)
+    _ = set_dur(7d)
+
+    // Compound literal
+    _ = set_dur(2m30s)
+
+    // Duration variable
+    d = 5s
+    _ = set_dur(d)
+
+    // Duration arithmetic result
+    _ = set_dur(2s + 500ms)
+
+    // Duration scaled by a scalar
+    _ = set_dur(100ms * 3)
+
+    println("PASS")
+}
