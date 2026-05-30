@@ -13,6 +13,24 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **Parser: line-leading operator no longer folds into previous
+  expression** (issue #528;
+  `compiler/parser/parser.c`,
+  `tests/regression/test_parser_line_leading_statements.ae`).
+  PR #527 added a targeted guard that stopped the binary-expression
+  loop when `*` started a new source line and was followed by
+  `IDENT IDENT` (a `*StructName name` typed-pointer declaration).
+  This generalises the guard into `is_newline_led_statement` so the
+  loop also breaks for `*ident = ...` deref-store and is easy to
+  extend for any future token that's both an infix operator and a
+  valid statement-leading token. The recogniser is intentionally
+  conservative: it only breaks when the post-operator tokens form a
+  recognisable statement shape, so legitimate multi-line expressions
+  (`sum = a` ↵ `    + b`) still compile. Other hazards documented in
+  #528 (`-x`, `+x`, `(expr)`, `[a, b]` as line-leading statements)
+  remain theoretical — the helper has the structure to add them
+  reactively when/if they bite.
+
 - **Typechecker rejects bare-int → Duration at parameter-passing**
   (issue #586; `compiler/analysis/typechecker.c`,
   `tests/regression/test_duration_param_strictness.ae`,

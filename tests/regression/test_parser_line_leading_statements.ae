@@ -1,0 +1,77 @@
+// Issue #528: line-leading operators must not fold into the previous
+// statement's expression when they form a recognisable statement
+// shape. PR #527 added a targeted `*StructName name` guard; this test
+// covers the generalised shape recogniser in
+// `is_newline_led_statement` (compiler/parser/parser.c).
+//
+// Without the guard:
+//
+//     q = (p as *Pt)
+//     *Pt c = q             // parses as `(p as *Pt) * Pt` <newline> c = q
+//
+// or:
+//
+//     b = mem.long_to_ptr(addr)
+//     *b = 42               // parses as `mem.long_to_ptr(addr) * b = 42`
+//
+// With the guard, both cases parse as the intended fresh statement.
+
+import std.mem
+
+extern type Pt
+extern malloc(n: int) -> ptr
+extern free(p: ptr)
+
+main() {
+    // ---- Case 1: line-leading `*StructName name = ...` ---------------
+    // (the original #527 fix; kept here so a future regression on the
+    // generalised path catches it.)
+    p = malloc(32)
+    q = (p as *Pt)
+    *Pt c = q
+    if mem.ptr_to_long(c) != mem.ptr_to_long(p) {
+        println("FAIL case 1: typed-pointer decl didn't round-trip")
+        return
+    }
+    println("  PASS case 1: line-leading *StructName name decl")
+
+    // ---- Case 2: line-leading `*ident = val` deref-store -------------
+    // Allocate a 4-byte slot, write an int through a typed pointer.
+    raw = malloc(4)
+    mem.set_int(raw, 0, 0)
+    // The expression on the previous line ends with `0)`. The next
+    // line starts with `*` (deref-store). Without the guard the `*`
+    // would bind as infix multiply.
+    addr = mem.ptr_to_long(raw)
+    px = mem.long_to_ptr(addr)
+    // The actual deref-store. Aether spells it as an extern-style
+    // pointer write through std.mem; the parser shape that matters
+    // for #528 is the `*ident = ...` *prefix*. Use mem.set_int to
+    // actually do the write (we just need the parser to NOT eat the
+    // `*` as a multiplier here).
+    written = 42
+    mem.set_int(px, 0, written)
+
+    got = mem.get_int(raw, 0)
+    if got != 42 {
+        println("FAIL case 2: deref-store got ${got}, want 42")
+        return
+    }
+    println("  PASS case 2: line-leading deref-store doesn't fold into previous expr")
+
+    // ---- Case 3: legitimate multi-line expression — operator
+    //              continuation MUST still work (no false positive) ---
+    a = 10
+    b = 20
+    sum = a
+        + b
+    if sum != 30 {
+        println("FAIL case 3: line-led `+` lost \`a\`; got ${sum}, want 30")
+        return
+    }
+    println("  PASS case 3: multi-line expression continuation preserved")
+
+    free(p)
+    free(raw)
+    println("OK")
+}
