@@ -1,0 +1,92 @@
+// Local wall-clock time access. Verifies the LocalTime struct fields
+// are populated by os.now_local() and that os.now_local_iso8601()
+// returns a plausibly-shaped string.
+//
+// The test can't assert exact values (time marches on), but checks:
+//   - struct fields are populated (year > 1970)
+//   - fields fall within their declared ranges
+//   - ISO-8601 string has the expected character classes at the right
+//     positions and ends with either 'Z' or a `[+-]HH:MM` offset
+//   - the struct year matches the year embedded in the ISO string
+//     (sanity-check that the two surfaces agree on what 'now' is)
+
+import std.os
+import std.string
+
+extern free(p: ptr)
+
+main() {
+    t = os.now_local()
+    defer free(t)
+
+    if t.year < 2026 {
+        println("FAIL: year = ${t.year}, want >= 2026 (test was written 2026-05)")
+        exit(1)
+    }
+    if t.month < 1 { fail("month") }
+    if t.month > 12 { fail("month upper") }
+    if t.day < 1 { fail("day") }
+    if t.day > 31 { fail("day upper") }
+    if t.hour < 0 { fail("hour") }
+    if t.hour > 23 { fail("hour upper") }
+    if t.minute < 0 { fail("minute") }
+    if t.minute > 59 { fail("minute upper") }
+    if t.second < 0 { fail("second") }
+    if t.second > 60 { fail("second upper") }
+    if t.nanos < 0 { fail("nanos") }
+    if t.nanos > 999999999 { fail("nanos upper") }
+    if t.tz_offset_minutes < 0 - 720 { fail("tz lower") }
+    if t.tz_offset_minutes > 840 { fail("tz upper") }
+    println("  PASS struct fields: ${t.year}-${t.month}-${t.day} ${t.hour}:${t.minute}:${t.second} (tz=${t.tz_offset_minutes}m)")
+
+    s = os.now_local_iso8601()
+    if string.length(s) < 20 {
+        println("FAIL: iso8601 too short: '${s}'")
+        exit(1)
+    }
+    // Shape check: position 4 must be '-', 7 '-', 10 'T', 13 ':', 16 ':'
+    if string.char_at(s, 4) != 45 { fail("iso8601 pos 4 not '-'") }    // '-'
+    if string.char_at(s, 7) != 45 { fail("iso8601 pos 7 not '-'") }    // '-'
+    if string.char_at(s, 10) != 84 { fail("iso8601 pos 10 not 'T'") }  // 'T'
+    if string.char_at(s, 13) != 58 { fail("iso8601 pos 13 not ':'") }  // ':'
+    if string.char_at(s, 16) != 58 { fail("iso8601 pos 16 not ':'") }  // ':'
+
+    // The suffix is either "Z" (length 20) or "[+-]HH:MM" (length 25)
+    n = string.length(s)
+    if n != 20 {
+        if n != 25 {
+            println("FAIL: iso8601 length ${n}, want 20 or 25 ('${s}')")
+            exit(1)
+        }
+        // [+-]HH:MM offset
+        sign = string.char_at(s, 19)
+        if sign != 43 {
+            if sign != 45 {
+                println("FAIL: iso8601 offset sign not + or -: '${s}'")
+                exit(1)
+            }
+        }
+        if string.char_at(s, 22) != 58 { fail("iso8601 offset ':' missing") }
+    }
+    println("  PASS iso8601 shape: '${s}'")
+
+    // Sanity: the year prefix of the ISO string must match the struct's year.
+    // Year is the first 4 chars (e.g. "2026").
+    iso_year_thousands = string.char_at(s, 0) - 48
+    iso_year_hundreds  = string.char_at(s, 1) - 48
+    iso_year_tens      = string.char_at(s, 2) - 48
+    iso_year_ones      = string.char_at(s, 3) - 48
+    iso_year = iso_year_thousands * 1000 + iso_year_hundreds * 100 + iso_year_tens * 10 + iso_year_ones
+    if iso_year != t.year {
+        println("FAIL: iso year ${iso_year} != struct year ${t.year} (one of the two clocks crossed a year boundary mid-call?)")
+        exit(1)
+    }
+    println("  PASS struct and ISO string agree on year (${t.year})")
+
+    println("OK")
+}
+
+fail(label: string) {
+    println("FAIL: ${label} out of range")
+    exit(1)
+}

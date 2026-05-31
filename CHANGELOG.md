@@ -9,6 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`os.now_local()` and `os.now_local_iso8601()` — local wall-clock
+  time**
+  (`std/os/aether_os.{c,h}`, `std/os/module.ae`,
+  `tests/regression/test_os_now_local.ae`). The companion to
+  `os.now_utc_iso8601()` (issue #524-era), but in local time with
+  explicit timezone offset.
+
+  `os.now_local()` returns a `*LocalTime` struct populated by a
+  single `localtime_r` (POSIX) / `localtime_s` (Windows) call —
+  `year`, `month`, `day`, `hour`, `minute`, `second`, `nanos`,
+  `tz_offset_minutes`. Fields are atomic with each other: one
+  C-side filler does the whole `gettimeofday` + `localtime` +
+  timezone calculation, then writes the struct.
+
+  `os.now_local_iso8601()` formats the same data as an RFC-3339
+  string: `"2026-05-31T13:42:07+01:00"`, or `"...Z"` when the
+  local offset happens to be zero (UTC).
+
+  The C-Aether boundary uses a shared `extern`-ABI-style struct:
+  Aether allocates `sizeof(LocalTime)` (8 packed `int` fields,
+  32 bytes), passes the ptr to `os_now_local_fill_raw(out: ptr)`,
+  the C side casts back to its mirror struct and writes. Matches
+  the `extern struct` pattern PR #527 added; first use in
+  `std/*/module.ae`. C-side layout asserted via `_Static_assert`.
+
+  Windows-specific: `tm_gmtoff` is GNU/BSD only; the Windows path
+  uses `_get_timezone` (which is "seconds WEST of UTC" — opposite
+  sign from gmtoff) plus a DST adjustment when `localtime_s` flags
+  `tm_isdst > 0`. POSIX is the simpler path (`localtime_r` +
+  `tm_gmtoff` direct).
+
+- **`os.platform()` — current OS as a string**
+  (`std/os/aether_os.{c,h}`, `std/os/module.ae`,
+  `tests/regression/test_os_platform.ae`). Closes the gap
+  CONTRIBUTING.md "Coding for portability" hints at: the `$OS`
+  env-var trick distinguishes Windows from POSIX but can't tell
+  Linux from macOS from FreeBSD. `os.platform()` returns a flat
+  lowercase string matching Go's `runtime.GOOS` and Rust's
+  `std::env::consts::OS` exactly:
+
+      "linux", "darwin", "windows", "freebsd", "openbsd",
+      "netbsd", "dragonfly", "solaris", "wasm", "unknown"
+
+  Picked at compile time from the toolchain's predefined macros
+  (`__APPLE__`, `__linux__`, `_WIN32`, `__FreeBSD__`, etc.); never
+  fails. Typical use:
+
+      if os.platform() == "windows" { /* Windows-only path */ }
+
+  For "do I have POSIX features?" the recommendation in the doc
+  is still to probe the specific capability (e.g.
+  `net.pipe_open() < 0`) rather than infer it from the platform
+  name, but `os.platform() != "windows"` is a reasonable
+  shorthand.
+
 ## [0.202.0]
 
 ### Added

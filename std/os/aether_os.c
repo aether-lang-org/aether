@@ -60,6 +60,9 @@ _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* p, void* a, 
 /* ipc_parent_channel_raw — implemented in std/ipc/aether_ipc.c
  * (its no-FS stub returns -1 there). */
 char* os_now_utc_iso8601_raw(void) { return NULL; }
+char* os_now_local_iso8601_raw(void) { return NULL; }
+void os_now_local_fill_raw(void* out) { (void)out; }
+char* os_platform_raw(void) { return NULL; }
 int os_getpid_raw(void) { return 0; }
 int64_t os_wall_seconds_raw(void) { return 0; }
 int os_wall_micros_raw(void) { return 0; }
@@ -223,6 +226,166 @@ char* os_now_utc_iso8601_raw(void) {
         return strdup("");
     }
     return strdup(buf);
+}
+
+/* ---- Local wall-clock time ------------------------------------------
+ *
+ * Aether's `now_local()` allocates a `LocalTime` struct and hands it
+ * to `os_now_local_fill_raw` to populate. ONE `gettimeofday` +
+ * `localtime_r` call per Aether call — fields are atomic with each
+ * other.
+ *
+ * The companion `os_now_local_iso8601_raw` formats the same data into
+ * an RFC-3339 / ISO-8601 string with explicit timezone offset
+ * (`"YYYY-MM-DDThh:mm:ss±HH:MM"`, or `"...Z"` when offset == 0).
+ *
+ * Timezone offset: tm_gmtoff is GNU/BSD; on Windows the offset is
+ * derived via `_get_timezone` (note: opposite sign from gmtoff —
+ * _timezone is "seconds WEST of UTC", gmtoff is "seconds EAST"). DST
+ * adjustment on Windows: `localtime_s` writes `tm_isdst`; we add
+ * 3600 seconds when DST is active.
+ *
+ * The C-side AetherOsLocalTime struct mirrors the Aether-side
+ * `struct LocalTime` in std/os/module.ae exactly: eight `int`
+ * fields, no padding. Layout is asserted at compile time. */
+typedef struct AetherOsLocalTime {
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second;
+    int nanos;
+    int tz_offset_minutes;
+} AetherOsLocalTime;
+
+/* Layout sanity — every consumer mallocs sizeof(LocalTime) on the
+ * Aether side; this asserts the C struct matches that assumption. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(AetherOsLocalTime) == 8 * sizeof(int),
+               "AetherOsLocalTime must be 8 packed ints to match Aether's struct LocalTime");
+#endif
+
+#ifdef _WIN32
+static int aether_os_local_tz_offset_seconds(const struct tm* tm_buf) {
+    long tz_seconds_west = 0;
+    _get_timezone(&tz_seconds_west);
+    int offset = (int)(-tz_seconds_west);  /* convert "west" to "east" */
+    if (tm_buf && tm_buf->tm_isdst > 0) offset += 3600;
+    return offset;
+}
+#endif
+
+/* Forward decl — defined further down next to the wall-clock raw
+ * getters. We call it from os_now_local_fill_raw to read seconds +
+ * usec in one shot. */
+static void aether_os_wall_now(int64_t *psec, int *pusec);
+
+/* Fill an Aether-allocated LocalTime struct with the current local
+ * wall-clock time. The Aether wrapper allocates sizeof(LocalTime),
+ * passes its ptr here. The void* signature matches the public header
+ * (keeps AetherOsLocalTime an internal detail); we cast back inside.
+ * On failure (clock read / localtime conversion) the struct is
+ * zeroed; the wrapper surfaces year == 0 as the failure signal. */
+void os_now_local_fill_raw(void* out_ptr) {
+    if (!out_ptr) return;
+    AetherOsLocalTime* out = (AetherOsLocalTime*)out_ptr;
+    int64_t sec; int usec;
+    aether_os_wall_now(&sec, &usec);
+    time_t t = (time_t)sec;
+    struct tm tm_buf;
+#ifdef _WIN32
+    if (localtime_s(&tm_buf, &t) != 0) {
+        memset(out, 0, sizeof *out);
+        return;
+    }
+    int tz_seconds = aether_os_local_tz_offset_seconds(&tm_buf);
+#else
+    if (!localtime_r(&t, &tm_buf)) {
+        memset(out, 0, sizeof *out);
+        return;
+    }
+    int tz_seconds = (int)tm_buf.tm_gmtoff;
+#endif
+    out->year              = tm_buf.tm_year + 1900;
+    out->month             = tm_buf.tm_mon + 1;
+    out->day               = tm_buf.tm_mday;
+    out->hour              = tm_buf.tm_hour;
+    out->minute            = tm_buf.tm_min;
+    out->second            = tm_buf.tm_sec;
+    out->nanos             = usec * 1000;
+    out->tz_offset_minutes = tz_seconds / 60;
+}
+
+/* RFC-3339 / ISO-8601 with explicit timezone offset:
+ *   "YYYY-MM-DDThh:mm:ss+HH:MM"   (positive offset)
+ *   "YYYY-MM-DDThh:mm:ss-HH:MM"   (negative offset)
+ *   "YYYY-MM-DDThh:mm:ssZ"        (offset == 0, UTC-equivalent)
+ * 25 chars + NUL maximum. Returns strdup'd; "" on failure. */
+char* os_now_local_iso8601_raw(void) {
+    AetherOsLocalTime lt;
+    os_now_local_fill_raw(&lt);
+    if (lt.year == 0) return strdup("");  /* localtime failed */
+    /* 64 bytes is generous — the longest legitimate output is 25 chars
+     * + NUL, and oversizing here avoids gcc's -Wformat-truncation
+     * cautious worst-case analysis (it can't prove the int args fit
+     * in 4 / 2 digits respectively). */
+    char buf[64];
+    if (lt.tz_offset_minutes == 0) {
+        snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                 lt.year, lt.month, lt.day, lt.hour, lt.minute, lt.second);
+    } else {
+        int abs_min = lt.tz_offset_minutes < 0
+                          ? -lt.tz_offset_minutes
+                          : lt.tz_offset_minutes;
+        snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02d:%02d%c%02d:%02d",
+                 lt.year, lt.month, lt.day, lt.hour, lt.minute, lt.second,
+                 lt.tz_offset_minutes < 0 ? '-' : '+',
+                 abs_min / 60, abs_min % 60);
+    }
+    return strdup(buf);
+}
+
+/* Platform name as a flat lowercase string, matching the Go/Rust
+ * convention (Go `runtime.GOOS`, Rust `std::env::consts::OS`):
+ *
+ *   "linux"      Linux kernel (any libc)
+ *   "darwin"     macOS / iOS / any Darwin kernel
+ *   "windows"    Windows (any toolchain: MSVC, MinGW, MSYS2)
+ *   "freebsd"    FreeBSD
+ *   "openbsd"    OpenBSD
+ *   "netbsd"     NetBSD
+ *   "dragonfly"  DragonFly BSD
+ *   "solaris"    Solaris / illumos
+ *   "wasm"       WebAssembly (Emscripten or wasi)
+ *   "unknown"    None of the above matched at compile time
+ *
+ * Picked at compile time via the toolchain's standard predefined
+ * macros (__APPLE__, __linux__, _WIN32, etc.). The returned string
+ * is a strdup'd copy so callers can assign and the runtime's heap-
+ * string tracker can free uniformly. */
+char* os_platform_raw(void) {
+#if defined(_WIN32) || defined(_WIN64)
+    return strdup("windows");
+#elif defined(__APPLE__)
+    return strdup("darwin");
+#elif defined(__linux__)
+    return strdup("linux");
+#elif defined(__FreeBSD__)
+    return strdup("freebsd");
+#elif defined(__OpenBSD__)
+    return strdup("openbsd");
+#elif defined(__NetBSD__)
+    return strdup("netbsd");
+#elif defined(__DragonFly__)
+    return strdup("dragonfly");
+#elif defined(__sun) && (defined(__SVR4) || defined(__svr4__))
+    return strdup("solaris");
+#elif defined(__EMSCRIPTEN__) || defined(__wasi__) || defined(__wasm__)
+    return strdup("wasm");
+#else
+    return strdup("unknown");
+#endif
 }
 
 /* Process identifier for the current process. Useful for tmpfile names

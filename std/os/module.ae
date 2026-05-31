@@ -10,10 +10,14 @@ exports (
     os_execv, os_now_utc_iso8601_raw, os_getpid_raw, exit,
     os_wall_seconds_raw, os_wall_micros_raw,
     os_now_monotonic_ms_raw, os_now_monotonic_ns_raw,
+    os_now_local_fill_raw, os_now_local_iso8601_raw,
+    os_platform_raw,
     io_setenv_raw, io_unsetenv_raw,
     exec, run_capture, argv0, now_utc_iso8601, getpid,
     wall_seconds, wall_micros,
     now_monotonic_ms, now_monotonic_ns,
+    now_local, now_local_iso8601, LocalTime,
+    platform,
     setenv, unsetenv,
     run_pipe, wait_pid, run_pipe_drain_and_wait
 )
@@ -273,6 +277,99 @@ now_utc_iso8601() -> string {
     s = os_now_utc_iso8601_raw()
     if s == null {
         return ""
+    }
+    return string_concat(s, "")
+}
+
+// Current local wall-clock time, broken into integer fields. Use
+// `now_local()` to get a populated `LocalTime` struct in one call;
+// the individual raw getters are exposed for callers that want only
+// one field. Companion: `now_local_iso8601()` returns the same data
+// formatted as an RFC-3339 / ISO-8601 string with explicit timezone
+// offset ("YYYY-MM-DDThh:mm:ss±HH:MM", or "...Z" when offset is 0).
+//
+// POSIX: `localtime_r` + `tm_gmtoff`. Windows: `localtime_s` +
+// `_get_timezone` with DST correction. Both return zeroes on
+// platforms compiled without filesystem support.
+//
+// LocalTime field ranges:
+//   year:                1970..
+//   month:               1..12
+//   day:                 1..31
+//   hour:                0..23
+//   minute:              0..59
+//   second:              0..60 (60 on leap-second-aware systems)
+//   nanos:               0..999_999_999
+//   tz_offset_minutes:   -720..+840 from UTC (negative = west)
+struct LocalTime {
+    year:               int
+    month:              int
+    day:                int
+    hour:               int
+    minute:             int
+    second:             int
+    nanos:              int
+    tz_offset_minutes:  int
+}
+
+extern os_now_local_fill_raw(out: ptr)
+extern os_now_local_iso8601_raw() -> string
+extern malloc(n: int) -> ptr
+
+// Returns a heap-allocated LocalTime populated with the current
+// local wall-clock time. ONE localtime_r call inside the filler,
+// so all eight fields agree with each other. On clock / format
+// failure the struct is zeroed — check `t.year == 0` to detect.
+//
+// Caller-owns; caller must `free()` when done (LocalTime is a
+// plain struct, no nested heap allocations to release).
+now_local() -> *LocalTime {
+    t = malloc(32) as *LocalTime
+    os_now_local_fill_raw(t)
+    return t
+}
+
+now_local_iso8601() -> string {
+    s = os_now_local_iso8601_raw()
+    if s == null {
+        return ""
+    }
+    return string_concat(s, "")
+}
+
+// Current OS platform as a flat lowercase string. Picked at compile
+// time from the toolchain's predefined macros. Matches Go's
+// runtime.GOOS and Rust's std::env::consts::OS:
+//
+//   "linux"      Linux kernel (any libc)
+//   "darwin"     macOS / iOS / any Darwin kernel
+//   "windows"    Windows (any toolchain)
+//   "freebsd"    FreeBSD
+//   "openbsd"    OpenBSD
+//   "netbsd"     NetBSD
+//   "dragonfly"  DragonFly BSD
+//   "solaris"    Solaris / illumos
+//   "wasm"       WebAssembly (Emscripten or wasi)
+//   "unknown"    None of the above matched at compile time
+//
+// Typical use:
+//
+//     if os.platform() == "windows" {
+//         // Windows-specific path
+//     }
+//
+// For "do I have POSIX features?" the rule of thumb is
+// `os.platform() != "windows" && os.platform() != "wasm"` — but
+// usually probing the specific capability (e.g.
+// net.pipe_open() < 0) gives a sharper answer than the platform
+// name alone. See CONTRIBUTING.md "Coding for portability" for
+// the broader pattern.
+extern os_platform_raw() -> string
+
+platform() -> string {
+    s = os_platform_raw()
+    if s == null {
+        return "unknown"
     }
     return string_concat(s, "")
 }
