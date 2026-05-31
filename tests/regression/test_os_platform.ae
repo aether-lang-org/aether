@@ -1,0 +1,41 @@
+// os.platform() returns a flat lowercase string identifying the
+// current OS (Go runtime.GOOS / Rust std::env::consts::OS values).
+//
+// Test strategy: we don't know which platform CI will run on, so we
+// just verify the value is in the documented set and never empty.
+// The CI matrix covers Linux GCC, Linux Clang, macOS ARM64, macOS
+// x86_64, Windows MSYS2 — between them, this exercises four of the
+// documented strings.
+
+import std.os
+import std.string
+
+main() {
+    p = os.platform()
+    if string.length(p) == 0 {
+        println("FAIL: platform() returned empty string")
+        exit(1)
+    }
+
+    // Set of values documented in the module.ae doc-comment plus
+    // "unknown". A future BSD / WASM port should add itself here.
+    is_known = 0
+    if p == "linux"     { is_known = 1 }
+    if p == "darwin"    { is_known = 1 }
+    if p == "windows"   { is_known = 1 }
+    if p == "freebsd"   { is_known = 1 }
+    if p == "openbsd"   { is_known = 1 }
+    if p == "netbsd"    { is_known = 1 }
+    if p == "dragonfly" { is_known = 1 }
+    if p == "solaris"   { is_known = 1 }
+    if p == "wasm"      { is_known = 1 }
+    if p == "unknown"   { is_known = 1 }
+
+    if is_known == 0 {
+        println("FAIL: platform() returned unrecognized value '${p}'")
+        exit(1)
+    }
+
+    println("  PASS: platform() == '${p}'")
+    println("OK")
+}

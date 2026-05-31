@@ -84,6 +84,43 @@ char* os_run_capture_raw(const char* prog, void* argv, void* env);
 // land without disturbing this one.
 char* os_now_utc_iso8601_raw(void);
 
+// Local wall-clock time. Aether's `now_local()` allocates a LocalTime
+// struct (32 bytes / 8 int fields) and hands its pointer to
+// os_now_local_fill_raw, which fills the struct in a single
+// localtime_r call so all fields are atomic with each other.
+//
+// LocalTime fields (matching std/os/module.ae's struct LocalTime):
+//   year                1970..
+//   month               1..12
+//   day                 1..31
+//   hour                0..23
+//   minute              0..59
+//   second              0..60 (60 on leap-second-aware systems)
+//   nanos               0..999_999_999
+//   tz_offset_minutes   -720..+840 from UTC (negative = west)
+//
+// POSIX uses localtime_r + tm_gmtoff; Windows uses localtime_s +
+// _get_timezone (with DST correction). On failure the struct is
+// zeroed (year == 0 signals failure to the wrapper).
+//
+// Companion: os_now_local_iso8601_raw returns the same data as an
+// RFC-3339-compatible string ("YYYY-MM-DDThh:mm:ss±HH:MM", or
+// "...Z" when the local offset is zero).
+//
+// `void*` parameter rather than the C struct type to keep the public
+// header free of the implementation detail; the .c file casts it back
+// to AetherOsLocalTime* on entry.
+void os_now_local_fill_raw(void* out);
+char* os_now_local_iso8601_raw(void);
+
+// Platform name as a flat lowercase string. Matches Go's runtime.GOOS
+// and Rust's std::env::consts::OS exactly:
+//   "linux", "darwin", "windows", "freebsd", "openbsd", "netbsd",
+//   "dragonfly", "solaris", "wasm", or "unknown" if nothing matched.
+// Decided at compile time via toolchain-predefined macros; never
+// fails. Returns a strdup'd copy.
+char* os_platform_raw(void);
+
 // Process identifier for the current process. Useful for tmpfile
 // names, per-process locks, log prefixes. POSIX getpid(2); Windows
 // _getpid(). Returns 0 on platforms without filesystem (no-op stub).
