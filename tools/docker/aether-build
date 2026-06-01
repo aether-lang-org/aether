@@ -1,0 +1,366 @@
+#!/bin/sh
+# aether-build — compile Aether .ae sources through a container, on a
+# host that has podman (or docker) but no Aether toolchain installed.
+#
+# The chicken-and-egg target: Bazzite / Silverblue / CoreOS / similar
+# immutable-host workflows where `dnf install gcc` is not on the table
+# but `podman run` is. This script is the entire bridge.
+#
+#
+# ── USAGE ──────────────────────────────────────────────────────────
+#
+#   aether-build hello.ae                  # → ./out/hello
+#   aether-build hello.ae greeter          # → ./out/greeter
+#   aether-build hello.ae mylib --emit=lib # → ./out/libmylib.so
+#
+#   aether-build --aeb                     # run aeb in cwd (needs writable
+#                                          #   /work bind; auto-applied)
+#   aether-build --aeb tools/.build.ae     # run aeb against a target file
+#
+#   aether-build --rebuild-image           # force image rebuild (e.g. after
+#                                          #   bumping AETHER_REF below)
+#
+# Override via env vars:
+#   AETHER_BUILDER_IMAGE=aether-builder:slim     # image tag (default)
+#   AETHER_WORK_DIR=/path/to/sources             # default: $PWD
+#   AETHER_OUT_DIR=/path/to/dropoff              # default: $PWD/out
+#   AETHER_REF=v0.203.0                          # Aether release to bake in
+#   AETHER_TARBALL=/path/to/aether-0.203.0.tgz   # skip download, use this
+#   HEADERS_REF=6872b5d...                       # hosted-language-headers pin
+#
+#
+# ── SOURCE ACQUISITION ─────────────────────────────────────────────
+#
+# At image-bootstrap time the script needs the Aether source. The
+# acquisition is tried in this order, falling through on failure:
+#
+#   1. $AETHER_TARBALL — explicit path to a release tarball. Useful
+#      for air-gapped installs (scp the script + tarball, set the
+#      env var, build the image with zero network).
+#   2. ~/.cache/aether-build/aether-${AETHER_REF}.tar.gz — cached
+#      from a previous run. Subsequent --rebuild-image calls re-use
+#      this cache, no re-download.
+#   3. Download from GitHub release tarball URL into the cache,
+#      then COPY into the image. Needs network on the host (but
+#      not the container).
+#   4. Fall back to `git clone` inside the image. Needs network
+#      inside the container at build time.
+#
+#
+# ── WHAT'S IN THE IMAGE ────────────────────────────────────────────
+#
+# A debian:bookworm-slim base with:
+#   - gcc + libc6-dev + the -dev packages Aether-emitted C links
+#     against (libssl, libnghttp2, libpcre2, libexpat, libsqlite3, zlib)
+#   - The Aether toolchain (aetherc, ae, libaether.a, stdlib) installed
+#     from the AETHER_REF release via `make install`
+#   - All five C-bridge host headers (Python, Lua, Perl, Ruby, JS)
+#     pre-vendored from the hosted-language-headers repo at HEADERS_REF
+#     (so end-user programs can `import contrib.host.python` etc.
+#     without per-language toggles)
+#
+# NOT in the image (deliberately):
+#   - Host-language RUNTIMES (libpython3.so, libruby.so, …). The
+#     compile step links lazily; the resulting binary dlopens these
+#     at runtime on the DEPLOY host, not in the toolchain container.
+#     Whoever runs the binary needs the runtime on their box.
+#   - The JDK / JRE. Programs using contrib.host.java need an
+#     additional Java path; not bundled here. See --with-java
+#     (TODO — Java requires JDK 21+ for the contrib.host.java
+#     Foreign Function API; bookworm only has 17. Pending follow-up.)
+#
+#
+# ── ON THE DEPLOY HOST ─────────────────────────────────────────────
+#
+# After you copy your compiled binary off the container, the host
+# running it needs the runtime libraries for whichever host bridges
+# the binary uses. Examples:
+#   Bazzite / Fedora-derived:  rpm-ostree install python3 ruby lua perl
+#   Debian / Ubuntu:           apt install python3 ruby lua5.4 perl-base
+#   Alpine:                    apk add python3 ruby lua5.4 perl
+# Missing runtime → "libfoo.so not found" at startup. Install and retry.
+#
+#
+# ── ENGINE NOTES ───────────────────────────────────────────────────
+#
+# podman (rootless): script auto-detects and uses --userns=keep-id so
+# bind-mounted host dirs (work, out) are writable.
+# docker: script auto-detects and uses -u $(id -u):$(id -g) instead.
+
+set -eu
+
+# ── Configuration ─────────────────────────────────────────────────
+
+IMAGE="${AETHER_BUILDER_IMAGE:-aether-builder:slim}"
+WORK="${AETHER_WORK_DIR:-$PWD}"
+OUT="${AETHER_OUT_DIR:-$PWD/out}"
+AETHER_REF="${AETHER_REF:-v0.203.0}"
+HEADERS_REF="${HEADERS_REF:-6872b5df70b3098387a2ca44839e67293c14d54a}"
+
+# ── Container engine detection ────────────────────────────────────
+
+detect_engine() {
+    if command -v podman >/dev/null 2>&1; then
+        echo "podman"
+    elif command -v docker >/dev/null 2>&1; then
+        echo "docker"
+    else
+        echo "aether-build: no container engine (podman or docker) on PATH" >&2
+        echo "aether-build: install one and retry (Bazzite has podman pre-installed)" >&2
+        exit 1
+    fi
+}
+
+ENGINE="$(detect_engine)"
+
+if [ "$ENGINE" = "podman" ]; then
+    # Rootless podman maps the container's UID 0 into a subuid range
+    # on the host, not the calling user. --userns=keep-id flips that
+    # to 1:1 mapping so the calling user sees writable bind mounts
+    # they own on the host.
+    USERNS_FLAGS="--userns=keep-id"
+else
+    # docker (rootful by default): just run as the calling user.
+    USERNS_FLAGS="-u $(id -u):$(id -g)"
+fi
+
+# ── Source acquisition ────────────────────────────────────────────
+
+# Acquire the Aether source for the image build, in priority order:
+#   1. $AETHER_TARBALL env var — explicit path to a release tarball
+#      (useful for air-gapped installs: `AETHER_TARBALL=~/foo.tgz
+#      aether-build hello.ae`).
+#   2. ~/.cache/aether-build/aether-${AETHER_REF}.tar.gz — cached
+#      download from a previous run.
+#   3. Download from GitHub release URL into the cache, then use it.
+#   4. Fall back to `git clone` inside the image (requires the
+#      image's network access to reach github.com at build time).
+#
+# Sets $SOURCE_STAGE to the Containerfile fragment that brings the
+# source into /src — either a COPY of the staged tarball, or a
+# git-clone inside the image.
+
+acquire_source() {
+    BUILDCTX="$1"
+    CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/aether-build"
+    mkdir -p "$CACHE_DIR"
+
+    # Step 1: explicit env-var tarball.
+    if [ -n "${AETHER_TARBALL:-}" ]; then
+        if [ ! -f "$AETHER_TARBALL" ]; then
+            echo "aether-build: AETHER_TARBALL=$AETHER_TARBALL not found" >&2
+            exit 1
+        fi
+        echo "aether-build: using AETHER_TARBALL=$AETHER_TARBALL" >&2
+        cp "$AETHER_TARBALL" "$BUILDCTX/aether-src.tar.gz"
+        SOURCE_STAGE='COPY aether-src.tar.gz /src.tar.gz
+RUN mkdir -p /src && tar xzf /src.tar.gz -C /src --strip-components=1 && rm /src.tar.gz'
+        return
+    fi
+
+    # Step 2 + 3: cached tarball, downloading first if absent.
+    TARBALL="$CACHE_DIR/aether-${AETHER_REF}.tar.gz"
+    if [ ! -f "$TARBALL" ]; then
+        URL="https://github.com/aether-lang-org/aether/archive/refs/tags/${AETHER_REF}.tar.gz"
+        echo "aether-build: fetching $URL" >&2
+        echo "aether-build:   → $TARBALL" >&2
+        if command -v curl >/dev/null 2>&1; then
+            if ! curl -L --fail -o "$TARBALL.partial" "$URL"; then
+                rm -f "$TARBALL.partial"
+                echo "aether-build: curl download failed; falling back to in-image git clone" >&2
+            else
+                mv "$TARBALL.partial" "$TARBALL"
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if ! wget -O "$TARBALL.partial" "$URL"; then
+                rm -f "$TARBALL.partial"
+                echo "aether-build: wget download failed; falling back to in-image git clone" >&2
+            else
+                mv "$TARBALL.partial" "$TARBALL"
+            fi
+        else
+            echo "aether-build: neither curl nor wget available; will git-clone in the image" >&2
+        fi
+    else
+        echo "aether-build: using cached $TARBALL" >&2
+    fi
+
+    if [ -f "$TARBALL" ]; then
+        cp "$TARBALL" "$BUILDCTX/aether-src.tar.gz"
+        SOURCE_STAGE='COPY aether-src.tar.gz /src.tar.gz
+RUN mkdir -p /src && tar xzf /src.tar.gz -C /src --strip-components=1 && rm /src.tar.gz'
+        return
+    fi
+
+    # Step 4: fallback — git clone inside the image. The image build
+    # needs network access to github.com at this point.
+    SOURCE_STAGE="RUN git clone --depth 1 --branch ${AETHER_REF} \\
+        https://github.com/aether-lang-org/aether.git /src"
+}
+
+# ── Image bootstrap (one-time) ────────────────────────────────────
+
+# If the image doesn't exist locally, build it from the embedded
+# Containerfile heredoc. This is the chicken-and-egg break: the
+# script IS the build recipe, so a single `curl` of this file is
+# enough to get a working toolchain.
+
+bootstrap_image() {
+    echo "aether-build: image '$IMAGE' not present locally, building it now." >&2
+    echo "aether-build: this is a one-time setup (~5 minutes, ~330 MB on disk)." >&2
+
+    BUILDCTX="$(mktemp -d)"
+    # The trap fires on script exit so the temp dir is cleaned up
+    # even if the build fails partway.
+    trap 'rm -rf "$BUILDCTX"' EXIT
+
+    # Stage the Aether source — sets $SOURCE_STAGE (a Containerfile
+    # fragment). Caching + offline-capable per acquire_source's
+    # priority list above.
+    acquire_source "$BUILDCTX"
+
+    cat > "$BUILDCTX/Containerfile" <<CONTAINERFILE
+# Auto-generated by aether-build — see the embedded heredoc in that
+# script for the source of truth.
+
+FROM debian:bookworm-slim
+
+# Base toolchain + the -dev packages Aether-emitted C wants at
+# link time. gcc + libc6-dev (not build-essential — we don't need
+# g++ or dpkg-dev).
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+        gcc make libc6-dev ca-certificates git pkg-config \\
+        libssl-dev zlib1g-dev libnghttp2-dev libpcre2-dev \\
+        libexpat1-dev libsqlite3-dev \\
+ && rm -rf /var/lib/apt/lists/*
+
+# Source-acquisition stage — either a COPY of a cached / supplied
+# tarball, or a git-clone inside the image. Decided by the host-side
+# acquire_source() in aether-build before this Containerfile was
+# rendered.
+${SOURCE_STAGE}
+
+# Build & install Aether from the staged source.
+RUN cd /src \\
+ && make \\
+ && make install \\
+ && rm -rf /src
+
+# Vendor C-bridge host headers from a pinned commit of the
+# hosted-language-headers repo. These let user programs that
+# import contrib.host.{python,lua,perl,ruby,js} compile cleanly
+# without per-language toggles. Runtime shared libs are NOT
+# installed here — see the script's "ON THE DEPLOY HOST" notes.
+RUN git clone --depth 1 \\
+        https://github.com/aether-lang-org/hosted-language-headers.git /opt/hdr \\
+ && cd /opt/hdr \\
+ && (git rev-parse ${HEADERS_REF} >/dev/null 2>&1 \\
+     || git fetch --depth 1 origin ${HEADERS_REF}) \\
+ && git checkout ${HEADERS_REF} \\
+ && mkdir -p /opt/aether/include \\
+ && cp -r /opt/hdr/python     /opt/aether/include/python \\
+ && cp -r /opt/hdr/lua        /opt/aether/include/lua5.4 \\
+ && cp -r /opt/hdr/perl       /opt/aether/include/perl \\
+ && cp -r /opt/hdr/ruby       /opt/aether/include/ruby \\
+ && cp -r /opt/hdr/ruby-arch  /opt/aether/include/ruby-arch \\
+ && cp    /opt/hdr/js/*.h     /opt/aether/include/ \\
+ && rm -rf /opt/hdr
+
+# Bind-mount points: source comes in at /work, products land at /out.
+RUN mkdir -p /work /out
+WORKDIR /work
+
+# The entrypoint dispatches direct-ae-build vs aeb modes; see the
+# script's case statement that invokes \`docker run ... <args>\`.
+COPY aether-build-entry.sh /usr/local/bin/aether-build-entry.sh
+RUN chmod +x /usr/local/bin/aether-build-entry.sh
+ENTRYPOINT ["/usr/local/bin/aether-build-entry.sh"]
+CONTAINERFILE
+
+    # Drop the container's entrypoint dispatcher alongside the
+    # Containerfile so the image build can COPY it in.
+    cat > "$BUILDCTX/aether-build-entry.sh" <<'ENTRYPOINT_EOF'
+#!/bin/sh
+# Container-side dispatcher. The host-side `aether-build` script
+# decides whether this gets called as "ae build hello.ae" or as
+# "aeb [target]" and passes the right args. We just route.
+set -eu
+
+case "${1:-}" in
+    --aeb)
+        shift
+        if [ ! -w /work ]; then
+            echo "aether-build (container): /work read-only; aeb needs to write target/" >&2
+            exit 1
+        fi
+        if ! command -v aeb >/dev/null 2>&1; then
+            echo "aether-build (container): aeb not installed in this image" >&2
+            exit 1
+        fi
+        aeb "$@"
+        # Copy produced artifacts to /out.
+        if [ -d /work/target ]; then
+            find /work/target -type f \( -perm -u+x -o -name '*.so' -o -name '*.a' -o -name '*.jar' \) \
+                -exec sh -c 'install -D "$1" "/out/${1#/work/target/}"' _ {} \;
+        fi
+        ;;
+    *)
+        src="$1"; shift
+        out_name="${1:-}"
+        if [ -n "$out_name" ]; then shift; else out_name="$(basename "$src" .ae)"; fi
+        if [ ! -f "/work/$src" ]; then
+            echo "aether-build (container): /work/$src not found" >&2
+            exit 1
+        fi
+        ae build "/work/$src" -o "/out/$out_name" "$@"
+        ;;
+esac
+ENTRYPOINT_EOF
+
+    "$ENGINE" build -t "$IMAGE" -f "$BUILDCTX/Containerfile" "$BUILDCTX"
+    trap - EXIT
+    rm -rf "$BUILDCTX"
+    echo "aether-build: image '$IMAGE' ready" >&2
+}
+
+# ── Flag handling ─────────────────────────────────────────────────
+
+case "${1:-}" in
+    --rebuild-image)
+        # Force rebuild — useful when bumping AETHER_REF / HEADERS_REF.
+        "$ENGINE" rmi "$IMAGE" 2>/dev/null || true
+        bootstrap_image
+        echo "aether-build: image rebuilt; run again with your build args." >&2
+        exit 0
+        ;;
+    --help|-h|"")
+        # Strip the leading shebang + comment block out of this file
+        # and print it. The shebang line is line 1; the usage block
+        # starts at line 2 and ends at the first non-comment line.
+        sed -n '2,/^[^#]/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
+        exit 0
+        ;;
+esac
+
+# ── Image bootstrap if missing ────────────────────────────────────
+
+if ! "$ENGINE" image inspect "$IMAGE" >/dev/null 2>&1; then
+    bootstrap_image
+fi
+
+# ── Run ──────────────────────────────────────────────────────────
+
+mkdir -p "$OUT"
+
+# aeb mode needs /work writable (target/ lands next to sources).
+# Direct ae build mode uses /work read-only as a defensive default.
+case "${1:-}" in
+    --aeb) MODE_MOUNT="-v $WORK:/work" ;;
+    *)     MODE_MOUNT="-v $WORK:/work:ro" ;;
+esac
+
+exec "$ENGINE" run --rm $USERNS_FLAGS \
+    $MODE_MOUNT \
+    -v "$OUT:/out" \
+    "$IMAGE" \
+    "$@"
