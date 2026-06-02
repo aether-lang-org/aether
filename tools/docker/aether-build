@@ -28,9 +28,11 @@
 #   AETHER_TARBALL=/path/to/aether-0.203.0.tgz   # skip download, use this
 #   HEADERS_REF=6872b5d...                       # hosted-language-headers pin
 #   AETHER_USERNS=""                             # drop --userns flag entirely
-#                                                #   (some rootless setups don't
-#                                                #   need it; useful if your
-#                                                #   crun rejects the default)
+#                                                #   (auto-detected on Bazzite /
+#                                                #   SELinux+crun hosts; set
+#                                                #   explicitly to force on
+#                                                #   other hosts where the
+#                                                #   default crashes)
 #   AETHER_SELINUX_LABEL=Z                       # bind-mount SELinux label;
 #                                                #   set to "" on non-SELinux
 #                                                #   hosts if it causes issues,
@@ -124,22 +126,41 @@ ENGINE="$(detect_engine)"
 if [ "$ENGINE" = "podman" ]; then
     # Rootless podman maps the container's UID 0 into a subuid range
     # on the host, not the calling user. We want bind-mounted host
-    # dirs to be writable by the calling user — three paths to that:
+    # dirs to be writable by the calling user. Three paths to that
+    # ownership outcome, picked in this order:
     #
-    #   1. (default) Explicit `--userns=keep-id:uid=$(id -u),gid=…`.
-    #      Some crun versions (notably Bazzite-shipped) reject the
-    #      bare `--userns=keep-id` form with an
-    #      "crun: readlink ``: No such file or directory" error.
-    #      The explicit uid/gid form works on those AND on every
-    #      older podman/crun that accepts the bare form.
-    #   2. (override) Set `AETHER_USERNS=` (empty) to drop the flag
-    #      entirely — works on some rootless setups where the
-    #      default user-namespace mapping already gives correct
-    #      ownership (true on Bazzite under SELinux Z-relabeled
-    #      mounts).
-    #   3. (override) Set `AETHER_USERNS=--userns=<whatever>` to
-    #      pass an arbitrary flag through.
-    USERNS_FLAGS="${AETHER_USERNS---userns=keep-id:uid=$(id -u),gid=$(id -g)}"
+    #   1. If the host is SELinux-enforcing AND the runtime is crun
+    #      (the Bazzite / Fedora Silverblue / RHEL-family default),
+    #      DON'T pass any --userns flag. Bazzite's crun crashes on
+    #      both the bare keep-id form and the explicit
+    #      keep-id:uid=…,gid=… form ("crun: readlink ``: No such
+    #      file or directory" — confirmed by downstream retest
+    #      against both forms). Without the flag, ownership comes
+    #      out right anyway when the bind mounts have the SELinux
+    #      :Z label (see SELabel section below).
+    #
+    #   2. On other rootless setups, default to the explicit
+    #      keep-id:uid=,gid= form — accepted by every crun version
+    #      we've seen outside Bazzite and gives 1:1 UID mapping so
+    #      the calling user owns the bind-mounted output.
+    #
+    #   3. Override either default via $AETHER_USERNS:
+    #         AETHER_USERNS=""                    drop the flag
+    #         AETHER_USERNS=--userns=<whatever>   pass through
+    if [ -n "${AETHER_USERNS+set}" ]; then
+        # Explicit override (including empty = no flag) wins.
+        USERNS_FLAGS="$AETHER_USERNS"
+    elif [ -f /sys/fs/selinux/enforce ] \
+         && [ "$(cat /sys/fs/selinux/enforce 2>/dev/null)" = "1" ] \
+         && podman info --format '{{.Host.OCIRuntime.Name}}' 2>/dev/null \
+             | grep -q '^crun$'; then
+        # Bazzite / Silverblue / similar — keep-id crashes crun;
+        # the :Z-relabeled bind mounts get correct ownership
+        # without a userns flag.
+        USERNS_FLAGS=""
+    else
+        USERNS_FLAGS="--userns=keep-id:uid=$(id -u),gid=$(id -g)"
+    fi
 else
     # docker (rootful by default): just run as the calling user.
     USERNS_FLAGS="-u $(id -u):$(id -g)"
@@ -407,18 +428,40 @@ fi
 # On non-SELinux hosts (Debian/Ubuntu/Arch desktop) the option is
 # a no-op, so defaulting to `:Z` is safe.
 # Override via AETHER_SELINUX_LABEL=z, or =""(empty) to disable.
+#
+# Construction subtlety: podman parses -v as
+# `host:container[:opt[,opt...]]` — the FIRST option after the
+# container path is separated with a COLON, subsequent ones with a
+# COMMA. So we can't blindly append ",Z" — when there's no other
+# option (the /out mount), the suffix must be ":Z" to land at /out
+# instead of the literal container path "/out,Z". mount_opts()
+# below builds the correct separator-aware string for each mount.
 SELABEL="${AETHER_SELINUX_LABEL-Z}"
-if [ -n "$SELABEL" ]; then SELABEL_SUFFIX=",$SELABEL"; else SELABEL_SUFFIX=""; fi
+
+# mount_opts <ro-flag-or-empty>
+#   Emits the option suffix that follows the container path —
+#   ":ro,Z", ":ro", ":Z", or "" — handling separator placement.
+mount_opts() {
+    _ro="${1:-}"
+    if [ -n "$_ro" ] && [ -n "$SELABEL" ]; then
+        printf ':%s,%s' "$_ro" "$SELABEL"
+    elif [ -n "$_ro" ]; then
+        printf ':%s' "$_ro"
+    elif [ -n "$SELABEL" ]; then
+        printf ':%s' "$SELABEL"
+    fi
+}
 
 # aeb mode needs /work writable (target/ lands next to sources).
 # Direct ae build mode uses /work read-only as a defensive default.
 case "${1:-}" in
-    --aeb) MODE_MOUNT="-v $WORK:/work$SELABEL_SUFFIX" ;;
-    *)     MODE_MOUNT="-v $WORK:/work:ro$SELABEL_SUFFIX" ;;
+    --aeb) WORK_OPTS="$(mount_opts)" ;;
+    *)     WORK_OPTS="$(mount_opts ro)" ;;
 esac
+OUT_OPTS="$(mount_opts)"
 
 exec "$ENGINE" run --rm $USERNS_FLAGS \
-    $MODE_MOUNT \
-    -v "$OUT:/out$SELABEL_SUFFIX" \
+    -v "$WORK:/work$WORK_OPTS" \
+    -v "$OUT:/out$OUT_OPTS" \
     "$IMAGE" \
     "$@"
