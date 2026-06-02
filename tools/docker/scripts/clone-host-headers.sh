@@ -30,21 +30,19 @@ if [ -d "$HEADERS_DIR/.git" ]; then
     fi
 fi
 
-# Shallow clone to keep image-layer size minimal. Then check out
-# the pinned commit. --filter=blob:none would be even smaller but
-# requires git 2.19+ which bookworm-bookworm has (2.39) — keep
-# this simple.
+# Full clone, then check out the pinned commit. A `--depth 1` clone
+# would be smaller, BUT then `git fetch --depth 1 origin <SHA>`
+# requires the server to allow fetching arbitrary commit SHAs that
+# aren't ref tips (uploadpack.allowAnySHA1InWant). GitHub usually
+# supports it, but a real Bazzite report (2026-05-30) showed it
+# failing with `fatal: reference is not a tree: <sha>`. A full clone
+# of hosted-language-headers is ~14 MB and the .git dir is dropped
+# below — small price for deterministic image builds.
 mkdir -p "$(dirname "$HEADERS_DIR")"
 rm -rf "$HEADERS_DIR"
-git clone --depth 1 "$HEADERS_REPO" "$HEADERS_DIR"
+git clone "$HEADERS_REPO" "$HEADERS_DIR"
 cd "$HEADERS_DIR"
-
-# `--depth 1` lands us on the current HEAD of the default branch.
-# If that's not the pinned commit, deepen the clone and check out.
-if [ "$(git rev-parse HEAD)" != "$HEADERS_REF" ]; then
-    git fetch --depth 1 origin "$HEADERS_REF"
-    git checkout "$HEADERS_REF"
-fi
+git checkout "$HEADERS_REF"
 
 # Drop .git to save layer size — we won't be running git operations
 # against the repo again from inside the image.
