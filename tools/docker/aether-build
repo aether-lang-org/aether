@@ -315,7 +315,18 @@ case "${1:-}" in
             exit 1
         fi
         if ! command -v aeb >/dev/null 2>&1; then
-            echo "aether-build (container): aeb not installed in this image" >&2
+            # --aeb is a guarded extension seam: this base image
+            # ships ae/aetherc but NOT aeb. aeb's own Docker layer
+            # is expected to FROM this base, install aeb, and
+            # inherit this entrypoint so the --aeb branch goes
+            # live. Point the user at how to get there rather than
+            # dead-ending them.
+            echo "aether-build (container): --aeb needs an aeb-bearing image."  >&2
+            echo "  The base aether-builder image ships ae/aetherc but NOT aeb."  >&2
+            echo "  Layer aeb on top: see aeb's tools/container/Containerfile.aeb-toolchain" >&2
+            echo "  ( https://github.com/aether-lang-org/aeb )"                   >&2
+            echo "  Then re-run with the aeb image:"                              >&2
+            echo "    AETHER_BUILDER_IMAGE=aeb-toolchain:slim aether-build --aeb <target>"  >&2
             exit 1
         fi
         aeb "$@"
