@@ -293,11 +293,17 @@ RUN cd /src \\
 # import contrib.host.{python,lua,perl,ruby,js} compile cleanly
 # without per-language toggles. Runtime shared libs are NOT
 # installed here — see the script's "ON THE DEPLOY HOST" notes.
-RUN git clone --depth 1 \\
+#
+# Full clone (not --depth 1): a shallow clone lands on HEAD only,
+# and a subsequent `git fetch origin <sha>` requires the server
+# to have uploadpack.allowAnySHA1InWant enabled. GitHub supports
+# that for most repos but it can fail with
+# "fatal: reference is not a tree: <sha>". Full-history clone is
+# ~14 MB one-time during image build — small price for
+# deterministic behaviour across GitHub config quirks.
+RUN git clone \\
         https://github.com/aether-lang-org/hosted-language-headers.git /opt/hdr \\
  && cd /opt/hdr \\
- && (git rev-parse ${HEADERS_REF} >/dev/null 2>&1 \\
-     || git fetch --depth 1 origin ${HEADERS_REF}) \\
  && git checkout ${HEADERS_REF} \\
  && mkdir -p /opt/aether/include \\
  && cp -r /opt/hdr/python     /opt/aether/include/python \\
