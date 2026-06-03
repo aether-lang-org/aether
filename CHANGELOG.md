@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`aether.toml` `[build]` `cflags` / `link_flags` support `${VAR}`
+  expansion against the process environment**
+  (`tools/ae.c`,
+  `tests/integration/aether_toml_env_var_expansion/`,
+  `contrib/host/python/README.md`).
+  Values like `link_flags = "${AETHER_PYTHON_LDFLAGS}"` now substitute
+  the named env var at build time. Use case: container-built / host-
+  deployed flows (aeb-ctr on Bazzite, etc.) where the deploy host's
+  linker flags are known only to the orchestrator, not to the
+  toolchain image. The orchestrator probes the host once, passes the
+  string in via `-e VAR=…`, and the in-container `ae build` consumes
+  it through this expansion.
+
+  **Security:** name allowlist — only `${AETHER_*}` is honoured (e.g.
+  `${AETHER_PYTHON_LDFLAGS}`, `${AETHER_RUBY_LDFLAGS}`). Anything
+  else warns to stderr and expands to the empty string, so an
+  attacker who can write arbitrary env vars cannot hijack the link
+  line via `${PATH}`, `${LD_PRELOAD}`, etc. The allowlist is
+  conservative for v1; widening can come under review.
+
+  **Other rules:** unset `${AETHER_*}` warns + expands empty (clarity
+  failure mode); `\$` is a literal `$`; bare `$VAR` (no braces) is
+  NOT expanded; shell `$(...)` command substitution is NOT supported
+  (would let any `aether.toml` exec arbitrary commands at build time).
+
 ## [0.203.0]
 
 ### Added

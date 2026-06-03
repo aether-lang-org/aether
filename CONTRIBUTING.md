@@ -404,6 +404,24 @@ skip guards you wrote, which is where most per-test PR breakage lives:
 OS=Windows_NT build/test_syntax_test_my_new_test
 ```
 
+**8. `aether.toml` `[build] cflags` / `link_flags` support `${VAR}`
+expansion, NOT `$(shell substitution)`.** The values are copied
+verbatim into the gcc argv via `posix_spawnp` — no shell runs over
+them. `link_flags = "$(python3-config --ldflags --embed)"` reaches
+gcc as literal text and fails. `link_flags = "${AETHER_X}"` is
+expanded against the process environment by `ae` itself.
+
+The env-var name is restricted to the `AETHER_*` allowlist for
+security (so an attacker who can write env vars on CI can't hijack
+the link line via `${LD_PRELOAD}` etc.). Unset names and
+non-allowlisted names both warn to stderr and expand to empty.
+`\$` is a literal `$`. Bare `$VAR` without braces is NOT expanded.
+
+Practical contributor implication: when you add a new `contrib/host/*`
+language bridge, name its env contract `AETHER_<LANG>_LDFLAGS` /
+`AETHER_<LANG>_CFLAGS` so the existing allowlist accepts it without
+code changes here.
+
 ### Additional Checks
 
 1. **No memory leaks**
