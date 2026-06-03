@@ -291,6 +291,23 @@ next version number before tagging the release.
   issue where heap-promoted strings / strbuilder ptrs captured from
   a nested block crash on the next event when the block exits.
 
+## [0.200.0]
+
+### Documentation
+
+- **CONTRIBUTING.md — POSIX typedef portability + stdlib param-type
+  grep recipe** (PR #585, `CONTRIBUTING.md`).
+  - **§5b**: documents the MinGW gap for POSIX-only typedefs
+    (`suseconds_t`, `ssize_t`, `off_t`); recommends casting through
+    the underlying integer type (`long`, `intptr_t`, `int64_t`)
+    rather than the typedef name, which silently breaks on the
+    Windows matrix.
+  - **"Changing a stdlib parameter's TYPE"**: when a PR widens or
+    replaces a stdlib parameter's type (canonical case
+    `int → Duration`), the typechecker doesn't always reject the
+    old call shape — grep all callers in `tests/`, `examples/`,
+    `std/` before merging. Codifies the rule we hit on PR #583.
+
 ## [0.199.0]
 
 ### Added
@@ -512,6 +529,21 @@ next version number before tagging the release.
   definitions land in the program AST by their bare struct name
   (matches how the import resolver clones them), so the lowered
   literal references the same C type either way.
+
+## [0.196.0]
+
+### Documentation
+
+- **`docs/closures-and-builder-dsl.md` — LLM quick-reckoner +
+  DSL-with-scope attribution** (PR #576,
+  `docs/closures-and-builder-dsl.md`).
+  Pins down the trailing-block / `_ctx` / `builder…with` semantics
+  in a form an LLM (or human reader) can use as a single-page
+  reference. Captures the rules that the existing builder-DSL code
+  enforces but had nowhere documented: when `()` is required for a
+  trailing block, how `_ctx` injection scopes through nested
+  builder calls, how `builder...with` differs from a plain factory
+  call. Companion to the `[builder DSL]` memory notes.
 
 ## [0.195.0]
 
