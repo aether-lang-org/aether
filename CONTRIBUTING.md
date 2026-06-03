@@ -422,6 +422,21 @@ language bridge, name its env contract `AETHER_<LANG>_LDFLAGS` /
 `AETHER_<LANG>_CFLAGS` so the existing allowlist accepts it without
 code changes here.
 
+**9. New `contrib/host/<lang>` bridges are auto-linked by `ae build`
+when imported — do NOT ask users to repeat themselves.** `ae build`
+scans the entry .ae for `import contrib.host.<lang>` and queues
+`libaether_host_<lang>.a` onto the link line automatically (the .a
+is built by `tests/scripts/contrib_build.sh`; install paths handled
+by `make install-contrib`). Users only need to supply the HOST
+LANGUAGE'S OWN runtime link flags (the `${AETHER_<LANG>_LDFLAGS}`
+for `libpython`, `libruby`, etc.) — never the bridge .a itself.
+
+When adding a new bridge: the only step on the `ae` side is to
+verify the .a name matches `libaether_host_<lang>.a` and lives next
+to `libaether.a` (install) or in `build/contrib/` (dev). The scan
+loop in `tools/ae.c` keys on the `<lang>` token after
+`import contrib.host.` and needs no per-language code.
+
 ### Additional Checks
 
 1. **No memory leaks**
