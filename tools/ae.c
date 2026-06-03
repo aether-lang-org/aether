@@ -1216,8 +1216,101 @@ found_root:
 #  pragma GCC diagnostic pop
 #endif
 
+// Expand ${VAR} occurrences in `src` against the process environment,
+// writing into dst (NUL-terminated, truncated if needed). Unset vars
+// expand to the empty string and emit a one-time stderr warning
+// (clarity, not security — silent expansion to "" is the most
+// surprising failure mode of this feature). `\$` is a literal `$`;
+// bare `$VAR` (without braces) is NOT expanded — keeps the grammar
+// tight and avoids ambiguity with `-L$LIB-foo`-style values. Shell
+// `$(...)` command substitution is intentionally NOT supported
+// (would let any aether.toml exec arbitrary commands at build time).
+//
+// SECURITY: name allowlist — only `AETHER_*` (uppercase letters,
+// digits, underscore) is honoured. Anything else expands to empty
+// + warning. The threat model: `aether.toml` is project-trusted,
+// and the env var contribution is a side channel from whoever runs
+// the build. By restricting names to a documented prefix, an
+// attacker who can write arbitrary env (e.g. via a CI permission
+// gap) can only hijack the contract this codebase declares — not
+// e.g. ${PATH}, ${HOME}, or ${LD_PRELOAD}. The allowlist is
+// deliberately conservative for v1; widening to a richer namespace
+// can come later under review. Removing it entirely would not
+// introduce a new RCE primitive (a hostile aether.toml can already
+// put `-Wl,...` literally in link_flags), but the allowlist makes
+// the *implicit* environment surface narrower and easier to audit.
+//
+// Why this is needed: aether.toml `[build] link_flags` / `cflags`
+// values are copied verbatim into the gcc argv via posix_spawnp.
+// No shell sees them, so `$(python3-config --ldflags --embed)` and
+// raw `${VAR}` would reach gcc as literal text and fail. Containerised
+// builds (aeb-ctr) probe the deploy host for host-specific runtime
+// link flags and pass them in via env (-e VAR=…), so the toml needs
+// a way to consume that. `${VAR}` is that way.
+static bool env_var_name_allowed(const char* name, size_t n) {
+    if (n < 8) return false;                       // "AETHER_" + ≥1
+    if (memcmp(name, "AETHER_", 7) != 0) return false;
+    for (size_t i = 0; i < n; i++) {
+        char c = name[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'))
+            return false;
+    }
+    return true;
+}
+
+static void expand_env_vars(const char* src, char* dst, size_t dst_size) {
+    if (dst_size == 0) return;
+    size_t di = 0;
+    for (size_t si = 0; src[si] != '\0' && di + 1 < dst_size; ) {
+        if (src[si] == '\\' && src[si + 1] == '$') {
+            dst[di++] = '$';
+            si += 2;
+            continue;
+        }
+        if (src[si] == '$' && src[si + 1] == '{') {
+            const char* end = strchr(src + si + 2, '}');
+            if (end) {
+                char name[128];
+                size_t n = (size_t)(end - (src + si + 2));
+                if (n < sizeof(name)) {
+                    memcpy(name, src + si + 2, n);
+                    name[n] = '\0';
+                    if (!env_var_name_allowed(name, n)) {
+                        fprintf(stderr,
+                            "ae: warning: aether.toml ${%s} not expanded "
+                            "(only ${AETHER_*} env vars are honoured); "
+                            "substituting empty string\n", name);
+                    } else {
+                        const char* v = getenv(name);
+                        if (v) {
+                            size_t vl = strlen(v);
+                            size_t room = dst_size - 1 - di;
+                            size_t cp = vl < room ? vl : room;
+                            memcpy(dst + di, v, cp);
+                            di += cp;
+                        } else {
+                            fprintf(stderr,
+                                "ae: warning: aether.toml references "
+                                "${%s} which is unset; substituting "
+                                "empty string\n", name);
+                        }
+                    }
+                    si = (size_t)(end - src) + 1;
+                    continue;
+                }
+                // Name too long: fall through and copy the literal '$'.
+            }
+            // Unterminated ${: fall through and copy the literal '$'.
+        }
+        dst[di++] = src[si++];
+    }
+    dst[di] = '\0';
+}
+
 // Get link_flags from aether.toml [build] section
-// Returns empty string if not found or no aether.toml
+// Returns empty string if not found or no aether.toml.
+// `${VAR}` occurrences are expanded against the process environment
+// (see expand_env_vars()).
 static const char* get_link_flags(void) {
     static char flags[1024] = "";
     static bool checked = false;
@@ -1232,8 +1325,7 @@ static const char* get_link_flags(void) {
 
     const char* val = toml_get_value(doc, "build", "link_flags");
     if (val) {
-        strncpy(flags, val, sizeof(flags) - 1);
-        flags[sizeof(flags) - 1] = '\0';
+        expand_env_vars(val, flags, sizeof(flags));
     }
 
     toml_free_document(doc);
@@ -1352,8 +1444,7 @@ static const char* get_cflags(void) {
 
     const char* val = toml_get_value(doc, "build", "cflags");
     if (val) {
-        strncpy(flags, val, sizeof(flags) - 1);
-        flags[sizeof(flags) - 1] = '\0';
+        expand_env_vars(val, flags, sizeof(flags));
     }
 
     toml_free_document(doc);
