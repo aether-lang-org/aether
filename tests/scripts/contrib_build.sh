@@ -36,6 +36,16 @@ BASE_CFLAGS=(
 # available. Returns 0 if available, 1 if not. (Mirror of the probe
 # helpers in contrib_host_demos.sh — kept in sync, not sourced, so
 # this script stays runnable even if the demos script is renamed.)
+#
+# Vendored-headers fallback: each probe checks /opt/aether/include/<lang>/
+# FIRST (populated by tools/docker/aether-build's Containerfile heredoc
+# from the pinned hosted-language-headers repo). Building the bridge .a
+# only needs the headers; the actual runtime lib is dlopen'd by the
+# bridge at end-user runtime, so the toolchain image stays slim — no
+# distro -dev packages need to be installed.
+
+# Standard vendored prefix in the aether-build image. Override for tests.
+VENDORED_INC="${AETHER_CONTRIB_VENDORED_INC:-/opt/aether/include}"
 
 probe_sqlite() {
     if pkg-config --exists sqlite3 2>/dev/null; then
@@ -52,6 +62,10 @@ probe_sqlite() {
 }
 
 probe_lua() {
+    if [ -f "$VENDORED_INC/lua5.4/lua.h" ]; then
+        echo "-I$VENDORED_INC/lua5.4"
+        return 0
+    fi
     for v in lua5.4 lua5.3 lua; do
         if pkg-config --exists "$v" 2>/dev/null; then
             pkg-config --cflags-only-I "$v"
@@ -62,6 +76,10 @@ probe_lua() {
 }
 
 probe_python() {
+    if [ -f "$VENDORED_INC/python/Python.h" ]; then
+        echo "-I$VENDORED_INC/python"
+        return 0
+    fi
     if command -v python3-config >/dev/null 2>&1; then
         python3-config --includes
         return 0
@@ -70,6 +88,14 @@ probe_python() {
 }
 
 probe_ruby() {
+    # Ruby has split portable + arch-specific headers in the vendored
+    # layout (the hosted-language-headers repo mirrors what ruby-dev
+    # ships — `ruby.h` includes `ruby/config.h` whose location is
+    # arch-specific, hence the separate ruby-arch dir).
+    if [ -f "$VENDORED_INC/ruby/ruby.h" ]; then
+        echo "-I$VENDORED_INC/ruby -I$VENDORED_INC/ruby-arch"
+        return 0
+    fi
     for v in ruby-3.2 ruby-3.1 ruby-3.0 ruby; do
         if pkg-config --exists "$v" 2>/dev/null; then
             pkg-config --cflags-only-I "$v"
@@ -80,6 +106,10 @@ probe_ruby() {
 }
 
 probe_perl() {
+    if [ -f "$VENDORED_INC/perl/perl.h" ]; then
+        echo "-I$VENDORED_INC/perl"
+        return 0
+    fi
     if command -v perl >/dev/null 2>&1; then
         perl -MExtUtils::Embed -e ccopts 2>/dev/null && return 0
     fi
@@ -87,6 +117,12 @@ probe_perl() {
 }
 
 probe_tcl() {
+    # tcl is not in the current hosted-language-headers repo, so
+    # vendored-fallback only kicks in if a future revision adds it.
+    if [ -f "$VENDORED_INC/tcl/tcl.h" ]; then
+        echo "-I$VENDORED_INC/tcl"
+        return 0
+    fi
     if pkg-config --exists tcl 2>/dev/null; then
         pkg-config --cflags-only-I tcl
         return 0
@@ -100,6 +136,11 @@ probe_tcl() {
 }
 
 probe_js() {
+    # The aether-build image vendors duktape.h flat in /opt/aether/include/.
+    if [ -f "$VENDORED_INC/duktape.h" ]; then
+        echo "-I$VENDORED_INC"
+        return 0
+    fi
     if pkg-config --exists duktape 2>/dev/null; then
         pkg-config --cflags-only-I duktape
         return 0

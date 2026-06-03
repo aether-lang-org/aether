@@ -282,11 +282,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 # rendered.
 ${SOURCE_STAGE}
 
-# Build & install Aether from the staged source.
+# Build & install Aether from the staged source. Do NOT remove /src
+# yet — install-contrib (below) builds the contrib bridge .a files
+# from the source tree, so it needs the source still present.
 RUN cd /src \\
  && make \\
- && make install \\
- && rm -rf /src
+ && make install
 
 # Vendor C-bridge host headers from a pinned commit of the
 # hosted-language-headers repo. These let user programs that
@@ -313,6 +314,25 @@ RUN git clone \\
  && cp -r /opt/hdr/ruby-arch  /opt/aether/include/ruby-arch \\
  && cp    /opt/hdr/js/*.h     /opt/aether/include/ \\
  && rm -rf /opt/hdr
+
+# Build & install the contrib host-bridge static archives (libaether_host_<lang>.a
+# for python/lua/perl/ruby/js + libaether_sqlite.a). These are required by
+# `ae build` (auto-linked when a program imports contrib.host.<lang>;
+# v0.208.0+ — without the .a, build fails loudly).
+#
+# Crucially this runs with the vendored headers in place (copied above),
+# so contrib_build.sh's probes find /opt/aether/include/<lang>/ and
+# compile each bridge against THOSE headers. No distro -dev packages
+# are installed in this image — the bridges are dlopen-based, so the
+# resulting .a files have no link-time runtime-lib dependency, and
+# work against any matching host runtime on the deploy box.
+#
+# /src is removed AFTER this; it was kept around past `make install`
+# specifically so `make contrib` (which install-contrib depends on)
+# could compile from source.
+RUN cd /src \\
+ && make install-contrib \\
+ && rm -rf /src
 
 # Bind-mount points: source comes in at /work, products land at /out.
 RUN mkdir -p /work /out
