@@ -77,6 +77,76 @@ next version number before tagging the release.
   NOT expanded; shell `$(...)` command substitution is NOT supported
   (would let any `aether.toml` exec arbitrary commands at build time).
 
+### Fixed
+
+- **`tools/docker/aether-build` headers-clone failure on Bazzite** (PR
+  #600): the `hosted-language-headers` clone used `git clone --depth 1`
+  then `git fetch --depth 1 origin <SHA>`, which requires the remote
+  to honour `uploadpack.allowAnySHA1InWant`. GitHub usually does but
+  not reliably for arbitrary commits that aren't ref tips. Symptom on
+  Bazzite: `fatal: reference is not a tree: <sha>` during
+  `--rebuild-image`. Fix: drop `--depth 1` from the clone; full-history
+  clone (~14 MB) then `git checkout <SHA>`. Applied to both the
+  embedded Containerfile heredoc in `tools/docker/aether-build` and
+  the modular helper `tools/docker/scripts/clone-host-headers.sh`.
+
+## [0.206.0]
+
+### Fixed
+
+- **`tools/docker/aether-build` Bazzite follow-up — SELinux+crun
+  auto-detect, mount-option separator** (PR #598).
+  - The `--userns=keep-id` flag (in any form, bare or explicit
+    uid/gid) crashes Bazzite's crun with `readlink ``: No such file
+    or directory`. Both forms fail identically. v0.205.0 added an
+    `AETHER_USERNS=` escape hatch but defaulted to keep-id, so the
+    headline Bazzite target was still broken out of the box. This
+    release auto-detects SELinux+crun hosts and drops the userns
+    flag by default; explicit override still works.
+  - The `:Z` SELinux mount label was built with a leading comma
+    (`SELABEL_SUFFIX=",$SELABEL"`), producing `-v "$OUT:/out,Z"`
+    which podman parsed as container path `/out,Z` rather than
+    `/out` with label `Z`. Build wrote into the image's ephemeral
+    `/out` and `~/aebuild/out/` stayed empty. Fix: `mount_opts()`
+    helper that emits colon-first then comma-subsequent
+    (`:ro,Z` / `:Z` correctly per case).
+
+## [0.205.0]
+
+### Fixed
+
+- **`tools/docker/aether-build` Bazzite SELinux + crun keep-id, plus
+  `--aeb` signpost** (PR #596).
+  - On Bazzite (rootless podman + SELinux enforcing + crun), bare
+    bind mounts hit `SELinux denies the read` (surface: misleading
+    `not found`); add `:Z` to relabel. Refuses to relabel `$HOME`
+    so `$WORK == $HOME` now emits a clear "use a subdir" message.
+  - `--userns=keep-id` crashes Bazzite's crun; introduced
+    `AETHER_USERNS=` env var to opt out (defaulted to keep-id; the
+    follow-up in v0.206.0 flipped the default for Bazzite).
+  - `--aeb` mode now emits a signpost message instead of dead-ending
+    when aeb isn't installed: points at aeb's own
+    `Containerfile.aeb-toolchain` layer, where the seam gets filled.
+
+## [0.204.0]
+
+### Added
+
+- **`tools/docker/aether-build` — single-file bootstrap script for
+  immutable-host development** (PR #594,
+  `tools/docker/aether-build`).
+  Curl-installable shell script that bootstraps a slim
+  `aether-builder` container image (Containerfile is heredoc'd
+  inline), then dispatches `aether-build app.ae` /
+  `aether-build --aeb <target>` into it. Target use case: Bazzite
+  and other immutable-by-design Linux hosts where you can't `apt
+  install gcc` but can run rootless podman. Image carries
+  vendored `contrib/host/{python,lua,perl,ruby,js}` headers from
+  the pinned `hosted-language-headers` repo, so end-user programs
+  using `import contrib.host.<lang>` compile without per-language
+  install toggles. Runtime libraries (libpython, libruby, etc.)
+  stay on the deploy host (the binary `dlopen`s them lazily).
+
 ## [0.203.0]
 
 ### Added
