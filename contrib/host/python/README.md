@@ -4,107 +4,118 @@
 in-process: `python.run_sandboxed(perms, "<source>")` evaluates Python
 inside the calling process, with permission-checked access controls.
 
-The build needs CPython's headers at compile time and `libpython` at
-link time. Two recipes — pick whichever matches how you're building.
+## How it loads CPython
+
+The bridge `dlopen`s `libpython` at the **deploy host's** runtime
+— there is no `-lpython` on the link line. This means:
+
+- The build environment doesn't need `python3-dev` (or any libpython
+  at all). Only the headers, which are already vendored.
+- The produced binary works against whatever Python minor version the
+  deploy host happens to have — no ABI lock-in.
+- A binary built today on a 3.11 machine and run on a 3.14 machine
+  works as long as the host has a usable libpython.
+
+Discovery order at first call to `python.run`:
+
+1. `${AETHER_PYTHON_SONAME}` env var (orchestrator-supplied exact
+   soname, e.g. `libpython3.14.so.1.0`) — set by your build
+   orchestrator if it probes the deploy host.
+2. `libpython3.so` (unversioned symlink — present in the runtime
+   package on Fedora-likes / Bazzite; typically -dev-only on
+   Debian-likes).
+3. A short fallback list of `libpython3.{10..14}.so.1.0`.
+
+If none load, `python.run*` returns -1 with a clear stderr message
+naming the env-var escape hatch.
+
+## On the deploy host
+
+You need a Python 3 runtime installed. Examples:
+
+| Host | What ships libpython |
+|---|---|
+| Bazzite / Fedora-derived | `python3` (includes `libpython3.so` symlink) |
+| Debian / Ubuntu | `libpython3.X` (versioned only; set `AETHER_PYTHON_SONAME=libpython3.X.so.1.0`) |
+| RHEL / Rocky | `python3-libs` |
+
+The bridge does NOT need `python3-dev` on the deploy host. Headers
+are only needed at build time, and even then only by the bridge .a's
+compile (which `ae build` handles transparently — see below).
 
 ## What `ae build` does for you automatically
 
-When your program has `import contrib.host.python`, `ae build` links
-`libaether_host_python.a` (the in-tree bridge that connects Aether to
-CPython) onto the resulting binary automatically. You do NOT need to
-add `-laether_host_python` to `link_flags` — the import is the trigger.
+When your program has `import contrib.host.python`, `ae build`:
 
-What you DO still need to supply yourself is the path to `libpython`
-itself (CPython's own runtime). That's `${AETHER_PYTHON_LDFLAGS}` in
-the recipes below.
+1. Links `libaether_host_python.a` (the in-tree bridge) onto the
+   resulting binary automatically. You do NOT need to add
+   `-laether_host_python` to `link_flags` — the import is the
+   trigger.
+2. Does NOT add any libpython link flags — none are needed, since
+   the bridge dlopens libpython at runtime.
 
-`ae build` errors with a clear actionable message if you import
-`contrib.host.python` but `libaether_host_python.a` hasn't been built:
-run `make contrib` (dev tree) or `make install-contrib` (installed).
+`ae build` errors with a clear actionable message if the bridge .a
+hasn't been built: run `make contrib` (dev tree) or
+`make install-contrib` (installed).
 
-## Recipe A — single-box dev (Linux with `python3-dev` installed)
+## `aether.toml` — usually empty for python
 
-```bash
-# Debian/Ubuntu
-sudo apt install python3-dev
-
-# Fedora/Rocky
-sudo dnf install python3-devel
-
-# Verify
-python3-config --includes
-```
-
-Then in `aether.toml`, set the env vars **before** invoking `ae`:
-
-```sh
-export AETHER_PYTHON_CFLAGS="$(python3-config --includes) -DAETHER_HAS_PYTHON"
-export AETHER_PYTHON_LDFLAGS="$(python3-config --ldflags --embed)"
-ae build app.ae
-```
+You typically don't need to set `cflags` or `link_flags` for
+`contrib.host.python` at all:
 
 ```toml
-# aether.toml
-[build]
-cflags     = "${AETHER_PYTHON_CFLAGS}"
-link_flags = "${AETHER_PYTHON_LDFLAGS}"
+# aether.toml — nothing required for contrib.host.python
+[[bin]]
+name = "myapp"
+path = "myapp.ae"
+```
+
+If the deploy host's Python isn't discoverable via the default
+order (1)–(3), set `AETHER_PYTHON_SONAME` in the build environment:
+
+```sh
+AETHER_PYTHON_SONAME=libpython3.14.so.1.0 ae build myapp.ae
 ```
 
 `aether.toml` values support `${VAR}` substitution for the
-`AETHER_*` env-var allowlist (other names warn + expand empty).
-Shell `$(...)` is **not** expanded by `ae`; run it in your own
-shell when populating the env var as above.
-
-## Recipe B — split build/deploy (container compile, deploy on host)
-
-This is the aeb-ctr / Bazzite-style flow where the toolchain runs in
-a container that has the vendored headers but no `python3-config`
-or `libpython`, while the produced binary runs on a deploy host that
-has both.
-
-The orchestrator probes the **deploy host** once, then passes the
-flags into the container as env vars. The container's `ae build`
-expands them via `${VAR}` substitution in `aether.toml`.
-
-Host-side probe (works on hosts with `python3` but **without**
-`python3-config`, e.g. Fedora-derived immutable distros):
-
-```sh
-# On the deploy host:
-python3 -c '
-import sysconfig as s
-v = s.get_config_var
-print("-L"+v("LIBDIR"), "-lpython"+v("LDVERSION"),
-      v("LIBS") or "", v("SYSLIBS") or "")
-'
-# → e.g.  -L/usr/lib64 -lpython3.14 -ldl -lm
-```
-
-Capture that and pass it into the container build:
-
-```sh
-AETHER_PYTHON_LDFLAGS="$(python3 -c '...probe above...')" \
-podman run -e AETHER_PYTHON_LDFLAGS ... aether-builder app.ae
-```
-
-The container's `aether.toml`:
-
-```toml
-[build]
-# Headers are vendored in the image at /opt/aether/include/python/,
-# already on the container's include path — no -I needed.
-cflags     = "-DAETHER_HAS_PYTHON"
-link_flags = "${AETHER_PYTHON_LDFLAGS}"
-```
-
-The produced binary `dlopen`s `libpython` lazily, so the deploy
-host needs the python3 runtime package (not python3-dev). On
-Bazzite-derived hosts `libpython3.X.so.1.0` ships in the base
-image already.
+`AETHER_*` env-var allowlist; `AETHER_PYTHON_SONAME` is honoured by
+the bridge directly at runtime, so you don't need to forward it
+through `aether.toml` — it just needs to be set in the environment
+of the produced binary at run time.
 
 ## Usage
 
 ```aether
 import contrib.host.python
-python.run_sandboxed(perms, "print('hello')")
+
+main() {
+    python.run("print('hello from python')")
+}
 ```
+
+Sandboxed:
+
+```aether
+import contrib.host.python
+import std.list
+
+main() {
+    perms = list.new()
+    list.add(perms, "fs_read")
+    list.add(perms, "/etc/*")
+    python.run_sandboxed(perms, "print(open('/etc/hostname').read())")
+}
+```
+
+## Implementation notes
+
+- All CPython C API access goes through a `dlsym` function-pointer
+  table — see `aether_host_python.c`. The bridge .a has NO
+  unresolved `Py_*` symbols at link time (`nm -u` confirms).
+- `RTLD_GLOBAL` is used at `dlopen` so that Python C extensions
+  loaded later (ctypes, native modules) resolve their `Py_*`
+  references against the same libpython instance. Without it they
+  segfault on shared singletons like `_Py_NoneStruct`.
+- The `Py_RETURN_NONE` / `Py_INCREF` macros are replaced with
+  explicit `g_py.Py_IncRef(g_py.py_none); return g_py.py_none;`
+  to avoid the macros' direct struct-field access.

@@ -9,6 +9,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`contrib.host.python` bridge now `dlopen`s libpython at the deploy
+  host's runtime** (`contrib/host/python/aether_host_python.c`,
+  `tests/scripts/contrib_build.sh`, `tools/docker/aether-build`,
+  `contrib/host/python/README.md`).
+  Previously the bridge called CPython's C API directly, so the produced
+  binary had `DT_NEEDED libpython3.X.so.1.0` baked in at build time —
+  ABI-locking it to a specific Python minor version, and requiring
+  `python3-dev` in the build environment. Now all CPython C API access
+  goes through a `dlsym` function-pointer table; the bridge .a has no
+  unresolved `Py_*` symbols (`nm -u` confirms); the produced binary has
+  no libpython in its DT_NEEDED list.
+
+  **Loading order** at first `python.run*` call:
+  1. `${AETHER_PYTHON_SONAME}` env var (orchestrator-supplied exact
+     soname, e.g. `libpython3.14.so.1.0`).
+  2. `libpython3.so` (unversioned symlink — runtime-package on
+     Fedora-likes / Bazzite; -dev-only on Debian-likes).
+  3. Fallback list `libpython3.{10..14}.so.1.0`.
+
+  Clean error to stderr if none load, naming the env-var escape hatch.
+
+  **End-user impact:**
+  - `aether.toml` for a program that imports `contrib.host.python` no
+    longer needs `cflags` / `link_flags` for python — `ae build` adds
+    nothing libpython-related to the link line. README rewritten to
+    drop the `${AETHER_PYTHON_LDFLAGS}` recipe (now obsolete for
+    python specifically; the `${VAR}` mechanism stays for bridges
+    that link real libs).
+  - Binaries built today on Python 3.11 work on a 3.14 host, and vice
+    versa. The deploy host just needs *a* Python 3 runtime; no minor
+    matching needed.
+
+- **`tests/scripts/contrib_build.sh` probes the vendored
+  `/opt/aether/include/<lang>/` headers before falling back to
+  pkg-config / `python3-config`** (the `tools/docker/aether-build`
+  image populates this dir from `hosted-language-headers`).
+  Lets the contrib bridge .a's build in the slim image without
+  installing any distro `-dev` package. Existing dev-tree builds
+  (no vendored dir, pkg-config present) are unaffected — same six
+  bridges built, same behaviour.
+
+- **`tools/docker/aether-build` image now runs `make install-contrib`
+  after vendoring the host headers** (the Containerfile heredoc in
+  `tools/docker/aether-build`).
+  The image ships the bridge `.a` archives at
+  `$PREFIX/lib/aether/libaether_host_<lang>.a`, where `ae build`'s
+  v0.208.0 auto-link expects them. Combined with the dlopen rewrite
+  above, this makes the Bazzite/aeb-ctr "compile in container, run on
+  host with that host's Python" chain end-to-end clean.
+
 ## [0.208.0]
 
 ### Added
