@@ -213,6 +213,20 @@ static bool g_emit_lib = false;
 // gated on dlopen availability); stays empty on Windows.
 static char g_binimport_link[4096] = "";
 
+// Extra link flags accumulated by the host-bridge import prepass: when
+// a program `import`s `contrib.host.<lang>`, the bridge's static lib
+// (libaether_host_<lang>.a) must be on the link line or the produced
+// binary fails at runtime with `undefined symbol: <lang>_run` (the
+// BRIDGE symbol, not the host language's). The user previously had to
+// repeat themselves with `link_flags = "-laether_host_python"` in
+// aether.toml — same information twice. Driven entirely by the import,
+// so a pure-Aether program with no `contrib.host.*` imports does NOT
+// link any bridge .a (critical: blanket-linking would force a
+// hello-world binary to dlopen libpython at runtime). Empty unless
+// `prepare_host_bridge_imports` found a match. POSIX-only (the host
+// bridges aren't built / linked on Windows).
+static char g_host_bridge_link[2048] = "";
+
 // Mirror of runtime/aether_lib_meta.h's catalog structs, kept
 // layout-compatible so `ae` can dlopen a `--emit=lib` artifact and walk
 // its `aether_lib_meta()` without including the runtime header. Used by
@@ -1964,9 +1978,13 @@ static void build_gcc_cmd(char* cmd, size_t size,
          * would dlopen a script.so with RTLD_NOW and the resolver
          * would fail to find any libaether symbol — silently on
          * macOS via dynamic_lookup, hard-failing on Linux. */
+        // Order matters: host-bridge .a files reference symbols in
+        // libaether.a (aether_shared_map_*, etc.), so they must appear
+        // BEFORE -laether on the link line — gcc resolves undefined
+        // references left-to-right through static archives.
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -rdynamic -L%s -laether -o \"%s\" -pthread -lm %s %s %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, link_flags, g_binimport_link);
+            "gcc %s %s \"%s\"%s %s -rdynamic -L%s %s -laether -o \"%s\" -pthread -lm %s %s %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, g_host_bridge_link, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, link_flags, g_binimport_link);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
@@ -1975,9 +1993,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
                 w, size);
         }
     } else {
+        // Order matters: host-bridge .a files reference runtime
+        // symbols defined in tc.runtime_srcs (aether_shared_map_*,
+        // etc.), so they appear BEFORE the runtime source list.
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, link_flags, g_binimport_link);
+            "gcc %s %s \"%s\"%s %s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, g_host_bridge_link, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, link_flags, g_binimport_link);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
@@ -2343,6 +2364,126 @@ static void prepare_binary_imports(const char* main_file) {
 static void prepare_binary_imports(const char* main_file) { (void)main_file; }
 #endif
 
+// Scan `main_file` for `import contrib.host.<lang>` statements and
+// queue the matching bridge static archive onto the link line.
+//
+// The bridge .c (contrib/host/<lang>/aether_host_<lang>.c) compiles
+// to libaether_host_<lang>.a (see Makefile:1324). Linking the .a is
+// what supplies symbols like `python_run` — the BRIDGE's own ABI,
+// distinct from the host language's runtime symbols (Py_Initialize
+// et al.) that the bridge in turn calls. Without this scan, an
+// import like `import contrib.host.python` compiled because the
+// headers resolved, but at runtime failed with `undefined symbol:
+// python_run` because the .a was never linked. Users had to repeat
+// the import as `link_flags = "-laether_host_python"` in
+// aether.toml — busywork easily forgotten (the ctr_notes.md Bug 4
+// trace from 2026-06-03).
+//
+// Entry-file-only: only the top-level .ae passed to `ae build` /
+// `ae run` is scanned. If a library you import in turn imports
+// `contrib.host.python`, you must still write the import yourself
+// in your top-level file. Widening to transitive imports later is
+// purely additive — same predicate, more files to scan.
+//
+// Hard error if the .a is missing (the user opted in via the
+// import; silently dropping it just defers the failure to a more
+// confusing runtime error). The two search paths mirror the two
+// install layouts in tools/ae.c:1013-1017:
+//   - install layout: <lib_dir>/libaether_host_<lang>.a
+//     (Makefile install-contrib target installs here)
+//   - dev layout:     <lib_dir>/contrib/libaether_host_<lang>.a
+//     (`make contrib` builds here, without installing)
+// where `lib_dir` is the directory containing libaether.a, same as
+// build_gcc_cmd derives it from `tc.lib`.
+//
+// POSIX-only — host bridges aren't compiled on the Windows matrix.
+#ifndef _WIN32
+static bool host_bridge_a_path(const char* lang, char* out, size_t outsz) {
+    if (!tc.has_lib) return false;
+    char lib_dir[1024];
+    strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
+    lib_dir[sizeof(lib_dir) - 1] = '\0';
+    char* slash = strrchr(lib_dir, '/');
+    if (slash) *slash = '\0';
+
+    // Install layout: <lib_dir>/libaether_host_<lang>.a
+    snprintf(out, outsz, "%s/libaether_host_%s.a", lib_dir, lang);
+    if (path_exists(out)) return true;
+    // Dev layout: <lib_dir>/contrib/libaether_host_<lang>.a (build/contrib/)
+    snprintf(out, outsz, "%s/contrib/libaether_host_%s.a", lib_dir, lang);
+    if (path_exists(out)) return true;
+    return false;
+}
+
+static void prepare_host_bridge_imports(const char* main_file) {
+    FILE* f = fopen(main_file, "r");
+    if (!f) return;
+
+    // Track which languages we've already queued so the same import
+    // appearing twice doesn't double-link the .a (gcc would tolerate
+    // it but the noise hides real problems).
+    char seen[256] = "";
+
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        const char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "import", 6) != 0 || (p[6] != ' ' && p[6] != '\t')) continue;
+        p += 6;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "contrib.host.", 13) != 0) continue;
+        p += 13;
+        // Extract <lang> — identifier chars only.
+        char lang[64];
+        size_t li = 0;
+        while (*p && (isalnum((unsigned char)*p) || *p == '_') && li < sizeof(lang) - 1) {
+            lang[li++] = *p++;
+        }
+        lang[li] = '\0';
+        if (li == 0) continue;
+
+        // Dedup against `seen` (space-delimited, surrounded by spaces
+        // so "py" doesn't match "python").
+        char needle[80];
+        snprintf(needle, sizeof(needle), " %s ", lang);
+        if (strstr(seen, needle)) continue;
+        size_t soff = strlen(seen);
+        snprintf(seen + soff, sizeof(seen) - soff, "%s%s ",
+                 soff == 0 ? " " : "", lang);
+
+        char a_path[1200];
+        if (!host_bridge_a_path(lang, a_path, sizeof(a_path))) {
+            fclose(f);
+            fprintf(stderr,
+                "ae: cannot find libaether_host_%s.a — required by "
+                "`import contrib.host.%s` in %s.\n"
+                "  Build the contrib bridges with `make contrib` (dev tree)\n"
+                "  or `make install-contrib` (installed layout); the .a is\n"
+                "  expected next to libaether.a or in a sibling contrib/ dir.\n",
+                lang, lang, main_file);
+            exit(1);
+        }
+
+        // Append the .a as a direct file path (more deterministic than
+        // -L+-l in the build-tree case where multiple lib dirs might
+        // shadow each other). gcc treats a bare .a on the command line
+        // as an input archive, the way -laether_host_<lang> would.
+        size_t off = strlen(g_host_bridge_link);
+        snprintf(g_host_bridge_link + off,
+                 sizeof(g_host_bridge_link) - off,
+                 " \"%s\"", a_path);
+
+        if (tc.verbose) {
+            fprintf(stderr, "ae: host bridge 'contrib.host.%s' -> %s\n",
+                    lang, a_path);
+        }
+    }
+    fclose(f);
+}
+#else
+static void prepare_host_bridge_imports(const char* main_file) { (void)main_file; }
+#endif
+
 // --------------------------------------------------------------------------
 // Commands
 // --------------------------------------------------------------------------
@@ -2477,6 +2618,12 @@ static int cmd_run(int argc, char** argv) {
     // `import foo` that resolves to a precompiled libfoo.so, and record
     // it on the link line. No-op for all-source programs.
     prepare_binary_imports(file);
+
+    // Host-bridge prepass: `import contrib.host.<lang>` queues
+    // libaether_host_<lang>.a onto the link line. Import-driven so a
+    // pure-Aether program doesn't gain libpython et al. as runtime
+    // dependencies it doesn't use.
+    prepare_host_bridge_imports(file);
 
     // Step 1: Compile .ae to .c
     if (tc.verbose) printf("Compiling %s...\n", file);
@@ -4556,6 +4703,10 @@ static int cmd_build(int argc, char** argv) {
     // Binary-import prepass: synthesize interface stubs for any
     // `import foo` resolving to a precompiled libfoo.so, link it in.
     prepare_binary_imports(file);
+
+    // Host-bridge prepass: queue libaether_host_<lang>.a for any
+    // `import contrib.host.<lang>` in the entry file. See cmd_run.
+    prepare_host_bridge_imports(file);
 
     // Step 1: .ae to .c
     build_aetherc_cmd(cmd, sizeof(cmd), file, c_file);

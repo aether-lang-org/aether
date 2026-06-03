@@ -7,6 +7,21 @@ inside the calling process, with permission-checked access controls.
 The build needs CPython's headers at compile time and `libpython` at
 link time. Two recipes — pick whichever matches how you're building.
 
+## What `ae build` does for you automatically
+
+When your program has `import contrib.host.python`, `ae build` links
+`libaether_host_python.a` (the in-tree bridge that connects Aether to
+CPython) onto the resulting binary automatically. You do NOT need to
+add `-laether_host_python` to `link_flags` — the import is the trigger.
+
+What you DO still need to supply yourself is the path to `libpython`
+itself (CPython's own runtime). That's `${AETHER_PYTHON_LDFLAGS}` in
+the recipes below.
+
+`ae build` errors with a clear actionable message if you import
+`contrib.host.python` but `libaether_host_python.a` hasn't been built:
+run `make contrib` (dev tree) or `make install-contrib` (installed).
+
 ## Recipe A — single-box dev (Linux with `python3-dev` installed)
 
 ```bash

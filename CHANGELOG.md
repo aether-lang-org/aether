@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`ae build` links `libaether_host_<lang>.a` automatically when a
+  program `import contrib.host.<lang>`**
+  (`tools/ae.c`,
+  `tests/integration/host_bridge_import_link/`,
+  `contrib/host/python/README.md`).
+  Previously the import resolved the bridge headers (so the program
+  compiled), but the bridge static archive was NEVER linked — so the
+  produced binary failed at runtime with `undefined symbol: python_run`
+  (the BRIDGE's own function, not a CPython symbol). Users had to
+  repeat the import as `link_flags = "-laether_host_python"` in
+  `aether.toml` — busywork easily forgotten (ctr_notes.md Bug 4 trace,
+  2026-06-03).
+
+  Now: import-driven. `import contrib.host.python` in the entry .ae
+  queues `libaether_host_python.a` onto the link line in the correct
+  position (before `-laether` / `tc.runtime_srcs` so the bridge's
+  runtime references resolve). A pure-Aether program with NO
+  `contrib.host.*` import does NOT link any bridge — critical, since
+  blanket-linking would force a hello-world to dlopen libpython at
+  runtime even when it doesn't use Python.
+
+  **Scope:** entry-file-only. Only the .ae passed to `ae build` /
+  `ae run` is scanned for `import contrib.host.<lang>`. If your
+  imported module in turn imports a host bridge, you must still write
+  the import in your entry file. Widening to transitive imports later
+  is purely additive.
+
+  **Hard error if `.a` is missing:** `ae: cannot find
+  libaether_host_<lang>.a — required by ` `import contrib.host.<lang>` `…`
+  points at `make contrib` (dev) or `make install-contrib` (installed).
+  Silent fallback was what created Bug 4 in the first place.
+
+  **POSIX-only:** the host bridges aren't compiled on the Windows
+  matrix.
+
 ## [0.207.0]
 
 ### Added
