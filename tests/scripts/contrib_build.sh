@@ -51,22 +51,14 @@ BASE_CFLAGS=(
 # helpers in contrib_host_demos.sh — kept in sync, not sourced, so
 # this script stays runnable even if the demos script is renamed.)
 #
-# Probe order (each probe): the vendored fallback dir
-# (/opt/aether/include/<lang>/) is checked FIRST as an opportunistic
-# escape hatch — useful if a user pre-stages headers there. The
-# DEFAULT path is via pkg-config / language-specific config tools
-# (python3-config / perl -MExtUtils::Embed) which find the REAL
-# distro -dev kit. The vendored fallback used to be the aether-build
-# image's primary mechanism but turned out to be a dead end for
-# distro-generated headers (pyconfig.h / luaconf.h / perl.h are
-# multiarch dispatchers that reference paths only the -dev package
-# provides — ctr_notes.md Bug 6). The aether-build image now uses
-# apt -dev kits via --with=<lang> layers; the vendored-fallback path
-# stays for users with custom pre-staged headers.
-
-# Standard vendored prefix. Override via env if pre-staging custom
-# headers somewhere else.
-VENDORED_INC="${AETHER_CONTRIB_VENDORED_INC:-/opt/aether/include}"
+# Each probe queries the distro's REAL -dev kit via pkg-config or a
+# language-specific config tool (python3-config / perl -MExtUtils::Embed).
+# The earlier vendored-fallback path
+# (`/opt/aether/include/<lang>/` populated from
+# hosted-language-headers) was removed when ctr_notes.md Bug 6 proved
+# pyconfig.h / luaconf.h / perl.h are distro-generated multiarch
+# dispatchers that can't be portably vendored. The aether-build image
+# now apt-installs the matching -dev kit per `--with=<lang>` layer.
 
 probe_sqlite() {
     if pkg-config --exists sqlite3 2>/dev/null; then
@@ -83,10 +75,6 @@ probe_sqlite() {
 }
 
 probe_lua() {
-    if [ -f "$VENDORED_INC/lua5.4/lua.h" ]; then
-        echo "-I$VENDORED_INC/lua5.4"
-        return 0
-    fi
     for v in lua5.4 lua5.3 lua; do
         if pkg-config --exists "$v" 2>/dev/null; then
             pkg-config --cflags-only-I "$v"
@@ -97,10 +85,6 @@ probe_lua() {
 }
 
 probe_python() {
-    if [ -f "$VENDORED_INC/python/Python.h" ]; then
-        echo "-I$VENDORED_INC/python"
-        return 0
-    fi
     if command -v python3-config >/dev/null 2>&1; then
         python3-config --includes
         return 0
@@ -109,14 +93,6 @@ probe_python() {
 }
 
 probe_ruby() {
-    # Ruby has split portable + arch-specific headers in the vendored
-    # layout (the hosted-language-headers repo mirrors what ruby-dev
-    # ships — `ruby.h` includes `ruby/config.h` whose location is
-    # arch-specific, hence the separate ruby-arch dir).
-    if [ -f "$VENDORED_INC/ruby/ruby.h" ]; then
-        echo "-I$VENDORED_INC/ruby -I$VENDORED_INC/ruby-arch"
-        return 0
-    fi
     for v in ruby-3.2 ruby-3.1 ruby-3.0 ruby; do
         if pkg-config --exists "$v" 2>/dev/null; then
             pkg-config --cflags-only-I "$v"
@@ -127,10 +103,6 @@ probe_ruby() {
 }
 
 probe_perl() {
-    if [ -f "$VENDORED_INC/perl/perl.h" ]; then
-        echo "-I$VENDORED_INC/perl"
-        return 0
-    fi
     if command -v perl >/dev/null 2>&1; then
         perl -MExtUtils::Embed -e ccopts 2>/dev/null && return 0
     fi
@@ -138,12 +110,6 @@ probe_perl() {
 }
 
 probe_tcl() {
-    # tcl is not in the current hosted-language-headers repo, so
-    # vendored-fallback only kicks in if a future revision adds it.
-    if [ -f "$VENDORED_INC/tcl/tcl.h" ]; then
-        echo "-I$VENDORED_INC/tcl"
-        return 0
-    fi
     if pkg-config --exists tcl 2>/dev/null; then
         pkg-config --cflags-only-I tcl
         return 0
@@ -157,13 +123,15 @@ probe_tcl() {
 }
 
 probe_js() {
-    # The aether-build image vendors duktape.h flat in /opt/aether/include/.
-    if [ -f "$VENDORED_INC/duktape.h" ]; then
-        echo "-I$VENDORED_INC"
-        return 0
-    fi
     if pkg-config --exists duktape 2>/dev/null; then
         pkg-config --cflags-only-I duktape
+        return 0
+    fi
+    # Fallback: header in default include path (Debian's duktape-dev
+    # installs duktape.h at /usr/include/duktape.h without a .pc file).
+    if printf '#include <duktape.h>\nint main(){return 0;}\n' | \
+        $CC -E -xc - >/dev/null 2>&1; then
+        echo ""
         return 0
     fi
     return 1

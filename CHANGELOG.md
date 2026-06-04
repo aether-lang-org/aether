@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`aether-build --with=<lang>` — additive per-bridge image layers**
+  (`tools/docker/aether-build`, `tests/scripts/contrib_build.sh`,
+  `contrib/host/ruby/aether_host_ruby.c`,
+  `contrib/host/python/README.md`).
+
+  The toolchain image (`aether-builder:slim`) no longer ships hosted
+  language bridges by default. Each `--with=<lang>` adds an additive
+  apt `-dev` kit layer + `make contrib MODULES=<lang>` step, so the
+  image name auto-derives from the alpha-sorted set (e.g.
+  `aether-builder-python-ruby:slim`). Order of `--with=` flags
+  doesn't matter — sorted before name + layer derivation, so podman's
+  layer cache is maximally shared between
+  `--with=python --with=lua` and `--with=lua --with=python`.
+
+  Supported langs: `python`, `lua`, `perl`, `ruby`, `java`, `js`, `tcl`.
+  Image-name override: `--image-name=<custom>`.
+
+- **`make contrib MODULES=<lang>[,<lang>...]` — explicit-mode filter
+  with hard-fail** (`tests/scripts/contrib_build.sh`).
+
+  Default (`MODULES` unset) keeps build-all-tolerate-skip for dev
+  convenience. Explicit (`MODULES=python`) builds ONLY the named
+  modules and FAILS HARD on missing dep / compile / archive errors
+  (exit 1 with named failures). Closes the v0.209.0
+  "3 built, 4 skipped silently" footgun (ctr_notes.md Bug 6).
+
+### Changed
+
+- **Vendored multiarch headers retired** (`tools/docker/aether-build`).
+  The Containerfile no longer clones `hosted-language-headers` into
+  `/opt/aether/include/`. The vendored `pyconfig.h` / `luaconf.h` /
+  `perl.h` turned out to be distro-generated build products that
+  reference paths only the matching `-dev` package supplies
+  (ctr_notes.md Bug 6, 2026-06-04). Each `--with=<lang>` layer
+  now apt-installs the real `-dev` kit and uses ITS headers.
+
+  - `HEADERS_REF` env var is no longer consulted; safe to remove from
+    wrapper scripts that set it.
+  - The vendored-fallback probe branches in `contrib_build.sh`
+    (each `probe_<lang>` had a `[ -f "$VENDORED_INC/<lang>/<header>.h" ]`
+    short-circuit) are removed; probes go straight to
+    pkg-config / `python3-config` / etc.
+
+### Documentation
+
+- **`CONTRIBUTING.md` §8 / §9 narrowed** — distinguishes dlopen
+  bridges (no user-side link flags needed; `${AETHER_<LANG>_SONAME}`
+  fallback) from real-link bridges (still set
+  `${AETHER_<LANG>_LDFLAGS}` per the existing env-var allowlist).
+- **`contrib/host/python/README.md`** stays as the canonical example
+  of the dlopen shape.
+
 ## [0.209.0]
 
 ### Changed

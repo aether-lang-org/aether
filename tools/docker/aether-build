@@ -128,7 +128,13 @@ IMAGE_OVERRIDE="${AETHER_BUILDER_IMAGE:-}"
 WORK="${AETHER_WORK_DIR:-$PWD}"
 OUT="${AETHER_OUT_DIR:-$PWD/out}"
 AETHER_REF="${AETHER_REF:-v0.203.0}"
-HEADERS_REF="${HEADERS_REF:-6872b5df70b3098387a2ca44839e67293c14d54a}"
+
+# HEADERS_REF (`hosted-language-headers` pin) was removed when the
+# --with=<lang> layer model superseded the vendored-multiarch headers
+# approach (ctr_notes.md Bug 6 resolution, 2026-06-04). The env var
+# was a config-only ref; nothing in the new Containerfile generation
+# consults it. If you used to set it via a wrapper, the setting is
+# now a no-op — safe to remove from your wrapper.
 
 # ── --with=<lang> additive per-bridge layers ──────────────────────
 #
@@ -520,7 +526,7 @@ ENTRYPOINT_EOF
 
 case "${1:-}" in
     --rebuild-image)
-        # Force rebuild — useful when bumping AETHER_REF / HEADERS_REF.
+        # Force rebuild — useful when bumping AETHER_REF.
         "$ENGINE" rmi "$IMAGE" 2>/dev/null || true
         bootstrap_image
         echo "aether-build: image rebuilt; run again with your build args." >&2
