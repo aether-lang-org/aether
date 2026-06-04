@@ -1,18 +1,32 @@
 #!/usr/bin/env bash
-# contrib_build.sh — build static libs for each contrib module whose
-# system dependency is present on this machine.
+# contrib_build.sh — build static libs for contrib modules.
 #
-# Probes every contrib module (sqlite + the in-process host bridges).
-# For each available dep, compiles the bridge to build/contrib/<x>.o
-# and archives it as build/contrib/libaether_<x>.a. Skips modules
-# whose dev libraries aren't installed — this is per-machine by
-# design, matching the --with= capability-opt-in philosophy.
+# Two modes:
+#
+# 1. Default (MODULES unset) — best-effort: probe every contrib module
+#    (sqlite + host bridges). For each available dep, compile + archive.
+#    Skip + tally any whose dev libs aren't installed. Same shape as
+#    historical behaviour; convenient for dev boxes.
+#
+# 2. MODULES=<list> (comma-separated) — explicit, fail-hard: build ONLY
+#    the named modules; any requested module that can't compile is a
+#    hard failure (exit 1), not a silent skip. This is the mode the
+#    `aether-build --with=<lang>` path uses, where the caller has already
+#    `apt install`ed the matching -dev kit and expects the bridge to
+#    build. Silent SKIP in that path is the v0.209.0 footgun
+#    (ctr_notes.md Bug 6) we're closing here.
+#
+# Examples:
+#   MODULES=python                    # build only host_python; fail if it can't
+#   MODULES=python,lua                # build python AND lua; fail if either can't
+#   (unset)                           # build-all, tolerate skips
 #
 # Writes build/contrib/MANIFEST listing one line per built module:
 #     <module>\t<archive_path>
 # `make install-contrib` reads this manifest to know what to ship.
 #
-# Called from `make contrib`.
+# Called from `make contrib` (default mode) or
+# `make contrib MODULES=<list>` (explicit mode).
 
 set -u
 
@@ -37,15 +51,14 @@ BASE_CFLAGS=(
 # helpers in contrib_host_demos.sh — kept in sync, not sourced, so
 # this script stays runnable even if the demos script is renamed.)
 #
-# Vendored-headers fallback: each probe checks /opt/aether/include/<lang>/
-# FIRST (populated by tools/docker/aether-build's Containerfile heredoc
-# from the pinned hosted-language-headers repo). Building the bridge .a
-# only needs the headers; the actual runtime lib is dlopen'd by the
-# bridge at end-user runtime, so the toolchain image stays slim — no
-# distro -dev packages need to be installed.
-
-# Standard vendored prefix in the aether-build image. Override for tests.
-VENDORED_INC="${AETHER_CONTRIB_VENDORED_INC:-/opt/aether/include}"
+# Each probe queries the distro's REAL -dev kit via pkg-config or a
+# language-specific config tool (python3-config / perl -MExtUtils::Embed).
+# The earlier vendored-fallback path
+# (`/opt/aether/include/<lang>/` populated from
+# hosted-language-headers) was removed when ctr_notes.md Bug 6 proved
+# pyconfig.h / luaconf.h / perl.h are distro-generated multiarch
+# dispatchers that can't be portably vendored. The aether-build image
+# now apt-installs the matching -dev kit per `--with=<lang>` layer.
 
 probe_sqlite() {
     if pkg-config --exists sqlite3 2>/dev/null; then
@@ -62,10 +75,6 @@ probe_sqlite() {
 }
 
 probe_lua() {
-    if [ -f "$VENDORED_INC/lua5.4/lua.h" ]; then
-        echo "-I$VENDORED_INC/lua5.4"
-        return 0
-    fi
     for v in lua5.4 lua5.3 lua; do
         if pkg-config --exists "$v" 2>/dev/null; then
             pkg-config --cflags-only-I "$v"
@@ -76,10 +85,6 @@ probe_lua() {
 }
 
 probe_python() {
-    if [ -f "$VENDORED_INC/python/Python.h" ]; then
-        echo "-I$VENDORED_INC/python"
-        return 0
-    fi
     if command -v python3-config >/dev/null 2>&1; then
         python3-config --includes
         return 0
@@ -88,14 +93,6 @@ probe_python() {
 }
 
 probe_ruby() {
-    # Ruby has split portable + arch-specific headers in the vendored
-    # layout (the hosted-language-headers repo mirrors what ruby-dev
-    # ships — `ruby.h` includes `ruby/config.h` whose location is
-    # arch-specific, hence the separate ruby-arch dir).
-    if [ -f "$VENDORED_INC/ruby/ruby.h" ]; then
-        echo "-I$VENDORED_INC/ruby -I$VENDORED_INC/ruby-arch"
-        return 0
-    fi
     for v in ruby-3.2 ruby-3.1 ruby-3.0 ruby; do
         if pkg-config --exists "$v" 2>/dev/null; then
             pkg-config --cflags-only-I "$v"
@@ -106,10 +103,6 @@ probe_ruby() {
 }
 
 probe_perl() {
-    if [ -f "$VENDORED_INC/perl/perl.h" ]; then
-        echo "-I$VENDORED_INC/perl"
-        return 0
-    fi
     if command -v perl >/dev/null 2>&1; then
         perl -MExtUtils::Embed -e ccopts 2>/dev/null && return 0
     fi
@@ -117,12 +110,6 @@ probe_perl() {
 }
 
 probe_tcl() {
-    # tcl is not in the current hosted-language-headers repo, so
-    # vendored-fallback only kicks in if a future revision adds it.
-    if [ -f "$VENDORED_INC/tcl/tcl.h" ]; then
-        echo "-I$VENDORED_INC/tcl"
-        return 0
-    fi
     if pkg-config --exists tcl 2>/dev/null; then
         pkg-config --cflags-only-I tcl
         return 0
@@ -136,19 +123,23 @@ probe_tcl() {
 }
 
 probe_js() {
-    # The aether-build image vendors duktape.h flat in /opt/aether/include/.
-    if [ -f "$VENDORED_INC/duktape.h" ]; then
-        echo "-I$VENDORED_INC"
-        return 0
-    fi
     if pkg-config --exists duktape 2>/dev/null; then
         pkg-config --cflags-only-I duktape
+        return 0
+    fi
+    # Fallback: header in default include path (Debian's duktape-dev
+    # installs duktape.h at /usr/include/duktape.h without a .pc file).
+    if printf '#include <duktape.h>\nint main(){return 0;}\n' | \
+        $CC -E -xc - >/dev/null 2>&1; then
+        echo ""
         return 0
     fi
     return 1
 }
 
 # build_module <module_name> <relative_src_path> <AETHER_HAS_FLAG> <probe_fn>
+# Returns: 0 OK, 1 SKIP (probe failed), 2 FAIL (compile/archive failed)
+# Caller decides whether SKIP or FAIL is fatal (depends on MODULES mode).
 build_module() {
     local name="$1"
     local src="$2"
@@ -165,14 +156,14 @@ build_module() {
     if ! $CC "${BASE_CFLAGS[@]}" -D"$flag" $incs \
         -c "$ROOT/$src" -o "$OUT/$name.o" 2>"$OUT/$name.err"; then
         printf "  %-18s FAIL (compile)\n" "$name"
-        sed 's/^/      /' "$OUT/$name.err" | head -5
-        return 1
+        sed 's/^/      /' "$OUT/$name.err" | head -10
+        return 2
     fi
     rm -f "$OUT/$name.err"
 
     if ! ar rcs "$OUT/libaether_$name.a" "$OUT/$name.o"; then
         printf "  %-18s FAIL (archive)\n" "$name"
-        return 1
+        return 2
     fi
 
     printf "  %-18s OK   build/contrib/libaether_%s.a\n" "$name" "$name"
@@ -180,40 +171,114 @@ build_module() {
     return 0
 }
 
+# Catalogue: maps a friendly --with name (or `make contrib MODULES=` entry)
+# to the build_module argv for that module. Add new bridges here.
+#
+# Format (one per line): <short-name>|<build_module args...>
+# `short-name` is what users pass in MODULES= / --with=. The build_module
+# args are exactly what the build loop calls.
+CATALOGUE=(
+    "sqlite|sqlite       contrib/sqlite/aether_sqlite.c           AETHER_HAS_SQLITE  probe_sqlite"
+    "python|host_python  contrib/host/python/aether_host_python.c AETHER_HAS_PYTHON  probe_python"
+    "lua|host_lua        contrib/host/lua/aether_host_lua.c       AETHER_HAS_LUA     probe_lua"
+    "perl|host_perl      contrib/host/perl/aether_host_perl.c     AETHER_HAS_PERL    probe_perl"
+    "ruby|host_ruby      contrib/host/ruby/aether_host_ruby.c     AETHER_HAS_RUBY    probe_ruby"
+    "js|host_js          contrib/host/js/aether_host_js.c         AETHER_HAS_JS      probe_js"
+    "tcl|host_tcl        contrib/host/tcl/aether_host_tcl.c       AETHER_HAS_TCL     probe_tcl"
+)
+
+# Find a catalogue line by short name. Echoes the build_module arg list
+# on stdout, returns 1 if the name isn't in the catalogue.
+catalogue_lookup() {
+    local want="$1"
+    local entry
+    for entry in "${CATALOGUE[@]}"; do
+        local short="${entry%%|*}"
+        if [ "$short" = "$want" ]; then
+            echo "${entry#*|}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Decide what we're building. Two modes:
+MODULES="${MODULES:-}"
+if [ -n "$MODULES" ]; then
+    MODE="explicit"
+    # Comma -> space, dedupe, sort. The aether-build --with= path expects
+    # build order to be deterministic so layer caching stays effective.
+    REQUESTED=$(echo "$MODULES" | tr ',' '\n' | sort -u | xargs)
+else
+    MODE="default"
+    # Default: build everything in the catalogue, skip silently if a dep
+    # is missing. Same as the historical behaviour.
+    REQUESTED=$(printf '%s\n' "${CATALOGUE[@]}" | cut -d'|' -f1 | xargs)
+fi
+
 echo "==================================="
-echo "  Building contrib modules"
+echo "  Building contrib modules ($MODE mode)"
 echo "==================================="
+echo "  Requested: $REQUESTED"
 echo ""
 
 : > "$OUT/MANIFEST.tmp"
 
 built=0
 skipped=0
+failed=0
+hard_failures=""
 
-# sqlite
-if build_module sqlite        contrib/sqlite/aether_sqlite.c           AETHER_HAS_SQLITE  probe_sqlite; then
-    built=$((built + 1)); else skipped=$((skipped + 1)); fi
-
-# In-process host bridges. Each bridge file gates its real body behind
-# AETHER_HAS_<LANG>; without the flag it compiles to a stub. We always
-# compile with the flag (since the probe just succeeded) — that's the
-# whole point of building a per-machine artifact.
-if build_module host_python   contrib/host/python/aether_host_python.c AETHER_HAS_PYTHON  probe_python; then
-    built=$((built + 1)); else skipped=$((skipped + 1)); fi
-if build_module host_lua      contrib/host/lua/aether_host_lua.c       AETHER_HAS_LUA     probe_lua; then
-    built=$((built + 1)); else skipped=$((skipped + 1)); fi
-if build_module host_perl     contrib/host/perl/aether_host_perl.c     AETHER_HAS_PERL    probe_perl; then
-    built=$((built + 1)); else skipped=$((skipped + 1)); fi
-if build_module host_ruby     contrib/host/ruby/aether_host_ruby.c     AETHER_HAS_RUBY    probe_ruby; then
-    built=$((built + 1)); else skipped=$((skipped + 1)); fi
-if build_module host_js       contrib/host/js/aether_host_js.c         AETHER_HAS_JS      probe_js; then
-    built=$((built + 1)); else skipped=$((skipped + 1)); fi
-if build_module host_tcl      contrib/host/tcl/aether_host_tcl.c       AETHER_HAS_TCL     probe_tcl; then
-    built=$((built + 1)); else skipped=$((skipped + 1)); fi
+for short in $REQUESTED; do
+    args=$(catalogue_lookup "$short") || {
+        echo "  $short — unknown module name (not in CATALOGUE)" >&2
+        if [ "$MODE" = "explicit" ]; then
+            hard_failures="$hard_failures $short(unknown)"
+            failed=$((failed + 1))
+        else
+            skipped=$((skipped + 1))
+        fi
+        continue
+    }
+    # shellcheck disable=SC2086
+    build_module $args
+    rc=$?
+    case "$rc" in
+        0) built=$((built + 1)) ;;
+        1)
+            # SKIP — probe said the dep isn't here. In default mode this
+            # is fine. In explicit mode the caller asked for this module,
+            # so a missing dep is a hard failure.
+            if [ "$MODE" = "explicit" ]; then
+                hard_failures="$hard_failures $short(missing dep)"
+                failed=$((failed + 1))
+            else
+                skipped=$((skipped + 1))
+            fi
+            ;;
+        2)
+            # FAIL — compile or archive failed. Always a hard failure
+            # (no env-dependent toggle: the source itself is broken,
+            # not the host's package state).
+            hard_failures="$hard_failures $short(compile/archive)"
+            failed=$((failed + 1))
+            ;;
+    esac
+done
 
 mv "$OUT/MANIFEST.tmp" "$OUT/MANIFEST"
 
 echo ""
+if [ "$MODE" = "explicit" ] && [ "$failed" -gt 0 ]; then
+    echo "  $built built, $failed FAILED, $skipped skipped"
+    echo ""
+    echo "  Failures (explicit mode — these were requested but couldn't build):"
+    echo "   $hard_failures"
+    echo ""
+    echo "  Manifest: $OUT/MANIFEST"
+    exit 1
+fi
+
 echo "  $built built, $skipped skipped"
 echo ""
 echo "  Manifest: $OUT/MANIFEST"
