@@ -392,11 +392,11 @@ bootstrap_image() {
 # The -dev kit lays down REAL platform-specific headers
 # (pyconfig.h / luaconf.h / perl.h etc.) that are generated build
 # products and can't be portably vendored.
-RUN apt-get update \\\\
- && apt-get install -y --no-install-recommends $pkg \\\\
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends $pkg \\
  && rm -rf /var/lib/apt/lists/*
-RUN cd /src \\\\
- && make contrib MODULES=$lang \\\\
+RUN cd /src \\
+ && make contrib MODULES=$lang \\
  && make install-contrib
 "
     done
