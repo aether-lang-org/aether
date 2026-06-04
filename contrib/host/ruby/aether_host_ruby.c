@@ -4,26 +4,31 @@
 // ENV[], Kernel#system etc. go through libc and are intercepted by
 // the LD_PRELOAD sandbox layer.
 //
-// TODO (ctr_notes.md Bug 6 follow-up): convert this bridge from
-// direct calls to dlopen + dlsym (same pattern as
-// contrib/host/python/aether_host_python.c after PR #606). The ruby
-// rewrite is bulkier than python's because Ruby's C API leans
-// heavily on macros that touch VALUE type tags
-// (`NIL_P`, `StringValueCStr`, `Qnil`, `RUBY_INIT_STACK`). Those
-// macros can't be dlsym'd directly — they need to be re-expressed
-// against a function-pointer table that dlsym's the underlying
-// helpers (rb_string_value_cstr, etc.). RUBY_INIT_STACK in
-// particular captures the calling stack pointer inline — it has to
-// be replicated by hand or replaced with a libruby init API that
-// doesn't need it. Worth a focused session, not a rushed bundle.
+// LOADING MODEL: dlopen, not -lruby. Mirrors contrib/host/python's
+// v0.209.0 design — every Ruby C-API symbol resolved via dlsym at
+// first call. The bridge .a has NO unresolved Ruby symbols at link
+// time, so end-user binaries have no DT_NEEDED libruby and are
+// ABI-portable across deploy-host Ruby minor versions.
 //
-// Until then: the v0.209.0 --with=ruby image layer apt-installs
-// ruby-dev, which both supplies the bridge's compile-time headers
-// AND provides libruby that the produced binary links against
-// (DT_NEEDED libruby-3.X.so.X). End-user binaries are ABI-locked to
-// the deploy host's Ruby minor — same constraint the pre-dlopen
-// python bridge had, accepted as a known limitation until the
-// dlopen rewrite lands.
+// RUBY_INIT_STACK macro — Ruby's docs require capturing the
+// calling thread's stack bottom for GC. The macro expands to
+// `ruby_init_stack(&local)` where `local` is a stack-allocated
+// VALUE. Both the function AND the &local capture must happen on
+// the MAIN thread (the thread that calls ruby_init). We handle
+// this by:
+//   - declaring a `volatile VALUE stack_bottom` local in init,
+//   - dlsym'ing `ruby_init_stack` as a regular function pointer,
+//   - calling it with `&stack_bottom` before the first ruby_init().
+// This is the same effect as `RUBY_INIT_STACK; ruby_init();` from
+// the original code, just expressed without the macro.
+//
+// Qnil — Ruby's nil singleton VALUE is a compile-time enum constant
+// (RUBY_Qnil = 0x08 on modern Ruby with USE_FLONUM=1, which has
+// been the default since 2.0 in 2013). It's NOT an exported symbol;
+// there's nothing to dlsym. We bake the value directly. If a future
+// Ruby ever flips USE_FLONUM=0 by default (extremely unlikely —
+// would be a deliberate ABI break), Qnil would become 0x04 and
+// NIL_P comparisons would silently miss. Documented assumption.
 
 #include "aether_host_ruby.h"
 #include "../../../runtime/aether_sandbox.h"
@@ -31,25 +36,131 @@
 
 #ifdef AETHER_HAS_RUBY
 #include <ruby.h>
+// Ruby's subst.h `#define snprintf ruby_snprintf` substitutes its
+// own snprintf so Ruby's printf %-extensions work in user format
+// strings. Our scrub-script builder uses snprintf to assemble plain
+// C strings (no Ruby format extensions), so we want libc snprintf
+// — undef the substitution.
+#undef snprintf
+#include <dlfcn.h>
+#include <stdio.h>
 #include <string.h>
+
+// --- libruby dlopen table ---------------------------------------------------
+
+static void* libruby_handle = NULL;
+
+// RUBY_Qnil literal value (USE_FLONUM=1 — modern Ruby default).
+// See header comment for the ABI assumption.
+#define BRIDGE_QNIL ((VALUE)0x08)
+
+static struct {
+    // Lifecycle.
+    void (*ruby_init)(void);
+    void (*ruby_init_loadpath)(void);
+    void (*ruby_init_stack)(volatile VALUE* addr);
+    void (*ruby_finalize)(void);
+    // Eval + error introspection.
+    VALUE (*rb_eval_string_protect)(const char*, int*);
+    VALUE (*rb_errinfo)(void);
+    void  (*rb_set_errinfo)(VALUE);
+    // String + symbol helpers.
+    //
+    // NOTE: `rb_intern` and `rb_funcall` are #define'd as macros in
+    // ruby/ruby.h (rb_intern → rb_intern2-ish dispatcher,
+    // rb_funcall → __extension__({...}) GCC statement-expr block).
+    // A bare struct field named `rb_intern` or `rb_funcall` gets
+    // textually rewritten by the preprocessor and breaks the build.
+    // Same trap as `Py_None` in the python bridge — field names are
+    // prefixed `f_` to avoid the macro collision.
+    ID    (*f_rb_intern)(const char*);
+    char* (*rb_string_value_cstr)(volatile VALUE*);
+    // Method dispatch — varargs; dlsym handles it.
+    VALUE (*f_rb_funcall)(VALUE, ID, int, ...);
+} g_rb;
+
+static int resolve_ruby_symbols(void* h) {
+#define RESOLVE(field, sym) do {                                       \
+        *(void**)(&g_rb.field) = dlsym(h, sym);                        \
+        if (!g_rb.field) {                                             \
+            fprintf(stderr,                                            \
+                "aether host_ruby: libruby missing symbol %s\n", sym); \
+            return -1;                                                 \
+        }                                                              \
+    } while (0)
+
+    RESOLVE(ruby_init,              "ruby_init");
+    RESOLVE(ruby_init_loadpath,     "ruby_init_loadpath");
+    RESOLVE(ruby_init_stack,        "ruby_init_stack");
+    RESOLVE(ruby_finalize,          "ruby_finalize");
+    RESOLVE(rb_eval_string_protect, "rb_eval_string_protect");
+    RESOLVE(rb_errinfo,             "rb_errinfo");
+    RESOLVE(rb_set_errinfo,         "rb_set_errinfo");
+    RESOLVE(f_rb_intern,            "rb_intern");
+    RESOLVE(rb_string_value_cstr,   "rb_string_value_cstr");
+    RESOLVE(f_rb_funcall,           "rb_funcall");
+    return 0;
+#undef RESOLVE
+}
+
+static void* try_dlopen(const char* name) {
+    if (!name || !*name) return NULL;
+    return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+}
+
+// Load libruby on first use.
+//   1. ${AETHER_RUBY_SONAME} env var (orchestrator-supplied exact).
+//   2. libruby.so (Fedora-like unversioned symlink).
+//   3. libruby-3.X.so (Debian's dash-versioned soname; X=4..0 newer-first).
+//   4. libruby.so.3.X (Fedora/Bazzite versioned).
+static int load_libruby(void) {
+    if (libruby_handle) return 0;
+
+    void* h = try_dlopen(getenv("AETHER_RUBY_SONAME"));
+    if (!h) h = try_dlopen("libruby.so");
+    if (!h) {
+        static const char* fallbacks[] = {
+            "libruby-3.4.so", "libruby-3.3.so", "libruby-3.2.so",
+            "libruby-3.1.so", "libruby-3.0.so",
+            "libruby.so.3.4", "libruby.so.3.3", "libruby.so.3.2",
+            "libruby.so.3.1", "libruby.so.3.0",
+            NULL
+        };
+        for (int i = 0; fallbacks[i]; i++) {
+            h = try_dlopen(fallbacks[i]);
+            if (h) break;
+        }
+    }
+    if (!h) {
+        fprintf(stderr,
+            "aether host_ruby: cannot dlopen libruby "
+            "(tried $AETHER_RUBY_SONAME, libruby.so, libruby-3.{0..4}.so, "
+            "libruby.so.3.{0..4}).\n"
+            "  Install a ruby3 runtime on the host, or set "
+            "AETHER_RUBY_SONAME explicitly.\n  dlerror: %s\n",
+            dlerror() ? dlerror() : "(none)");
+        return -1;
+    }
+
+    if (resolve_ruby_symbols(h) != 0) {
+        dlclose(h);
+        return -1;
+    }
+    libruby_handle = h;
+    return 0;
+}
+
+// --- sandbox / permission stack (unchanged from pre-dlopen) ----------------
 
 static int ruby_initialized = 0;
 
-// Bridge-owned permission stack. Self-contained — see comment in
-// contrib/host/tcl/aether_host_tcl.c for rationale.
 static void* ruby_perms_stack[64];
 static int   ruby_perms_depth = 0;
 
-// Permission checker — shared pattern with other host modules
 extern int list_size(void*);
 extern void* list_get_raw(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
-    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
-    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
-    // vice versa). Safe for non-TCP categories because "::ffff:"
-    // doesn't appear in filesystem paths, env var names, or exec
-    // command strings.
     if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
     if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
@@ -89,33 +200,40 @@ static int host_ruby_checker(const char* category, const char* resource) {
 
 int ruby_init_host(void) {
     if (ruby_initialized) return 0;
+    if (load_libruby() != 0) return -1;
 
-    // Ruby requires RUBY_INIT_STACK on the main thread
-    RUBY_INIT_STACK;
-    ruby_init();
-    ruby_init_loadpath();
+    // Equivalent of the RUBY_INIT_STACK macro: capture this thread's
+    // stack bottom for GC. Must happen on the calling thread, before
+    // ruby_init().
+    volatile VALUE stack_bottom = 0;
+    g_rb.ruby_init_stack(&stack_bottom);
+
+    g_rb.ruby_init();
+    g_rb.ruby_init_loadpath();
     ruby_initialized = 1;
     return 0;
 }
 
 void ruby_finalize_host(void) {
     if (ruby_initialized) {
-        ruby_finalize();
+        g_rb.ruby_finalize();
         ruby_initialized = 0;
     }
 }
 
-// Safe eval — catches exceptions and prints them
+// Safe eval — catches exceptions and prints them.
 static int eval_ruby(const char* code) {
     int state = 0;
-    rb_eval_string_protect(code, &state);
+    g_rb.rb_eval_string_protect(code, &state);
     if (state) {
-        VALUE err = rb_errinfo();
-        if (!NIL_P(err)) {
-            VALUE msg = rb_funcall(err, rb_intern("message"), 0);
-            fprintf(stderr, "[ruby] %s\n", StringValueCStr(msg));
+        VALUE err = g_rb.rb_errinfo();
+        if (err != BRIDGE_QNIL) {
+            VALUE msg = g_rb.f_rb_funcall(err, g_rb.f_rb_intern("message"), 0);
+            // StringValueCStr(msg) macro expands to
+            // rb_string_value_cstr(&msg); call the function directly.
+            fprintf(stderr, "[ruby] %s\n", g_rb.rb_string_value_cstr(&msg));
         }
-        rb_set_errinfo(Qnil);
+        g_rb.rb_set_errinfo(BRIDGE_QNIL);
         return -1;
     }
     return 0;
@@ -123,21 +241,21 @@ static int eval_ruby(const char* code) {
 
 int ruby_run(const char* code) {
     if (!code) return -1;
-    ruby_init_host();
+    if (ruby_init_host() != 0) return -1;
     return eval_ruby(code);
 }
 
 int ruby_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
-    ruby_init_host();
+    if (ruby_init_host() != 0) return -1;
 
     if (ruby_perms_depth >= 64) return -1;
     ruby_perms_stack[ruby_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_ruby_checker;
 
-    // Scrub Ruby's ENV hash — delete vars the sandbox doesn't grant
-    // Ruby caches ENV at startup like Perl
+    // Scrub Ruby's ENV hash — delete vars the sandbox doesn't grant.
+    // Ruby caches ENV at startup like Perl.
     {
         int n = list_size(perms);
         char scrub[4096];
@@ -169,18 +287,16 @@ int ruby_run_sandboxed(void* perms, const char* code) {
     return result;
 }
 
-// --- Shared map for Ruby ---
-// Same approach as Perl: inject $_aether_input hash, provide methods,
-// read $_aether_output hash back.
+// --- Shared map for Ruby ---------------------------------------------------
 
 int ruby_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token) {
     if (!code) return -1;
-    ruby_init_host();
+    if (ruby_init_host() != 0) return -1;
 
     extern void aether_shared_map_freeze_inputs_by_token(uint64_t);
     aether_shared_map_freeze_inputs_by_token(map_token);
 
-    // Inject inputs as $_aether_input hash
+    // Inject inputs as $_aether_input hash.
     {
         int n = aether_shared_map_count_by_token(map_token);
         char inject[8192];
@@ -200,7 +316,7 @@ int ruby_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_toke
         eval_ruby(inject);
     }
 
-    // Env scrub
+    // Env scrub.
     {
         int n = list_size(perms);
         char scrub[4096];

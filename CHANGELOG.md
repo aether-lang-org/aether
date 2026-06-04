@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`contrib.host.ruby` bridge converted to dlopen** (`contrib/host/ruby/aether_host_ruby.c`,
+  `contrib/host/ruby/README.md`).
+
+  Mirrors the v0.209.0 python bridge work — every Ruby C-API symbol
+  now resolved via `dlsym` at first call. The bridge .a has NO
+  unresolved Ruby symbols (`nm -u` confirms); produced binaries have
+  NO `DT_NEEDED libruby-3.X.so`. End-user binaries are ABI-portable
+  across deploy-host Ruby minor versions.
+
+  **Loading order** at first `ruby.run*` call:
+  1. `${AETHER_RUBY_SONAME}` env var (orchestrator-supplied exact).
+  2. `libruby.so` (Fedora/Bazzite-style flat symlink).
+  3. Fallback `libruby-3.{4..0}.so` (Debian) + `libruby.so.3.{4..0}`
+     (Fedora versioned).
+
+  **Macro re-expression details:**
+  - `RUBY_INIT_STACK` → explicit `ruby_init_stack(&local_VALUE)`
+    call (`ruby_init_stack` is a real exported function; the macro
+    just captured the stack-bottom local for us).
+  - `Qnil` → baked `(VALUE)0x08` (`RUBY_Qnil` is a compile-time
+    enum constant under `USE_FLONUM=1`, the default since Ruby 2.0;
+    not an exported symbol — nothing to dlsym).
+  - `NIL_P(v)` → direct `v != BRIDGE_QNIL` compare.
+  - `StringValueCStr(v)` → `rb_string_value_cstr(&v)` direct call
+    (the function the macro wraps).
+  - `rb_intern` and `rb_funcall` field names prefixed `f_` —
+    Ruby `#define`s these as macros (`rb_funcall` expands to a GCC
+    `__extension__({…})` statement-expr block), so unprefixed
+    struct field names would get textually rewritten and break the
+    build. Same trap as `Py_None` in the python bridge.
+  - `snprintf` from `ruby/subst.h` is undef'd; the bridge's scrub-
+    string builder uses libc snprintf (plain `%s` format, no Ruby
+    `%-extensions`).
+
+  **End-user impact:**
+  - `aether.toml` for a program that imports `contrib.host.ruby` no
+    longer needs `cflags` / `link_flags` for ruby — `ae build` adds
+    nothing libruby-related to the link line.
+  - Binaries built on Ruby 3.1 work on a 3.2 deploy host and vice
+    versa.
+  - README rewritten to document the dlopen contract + the
+    `${AETHER_RUBY_SONAME}` fallback.
+
 ## [0.210.0]
 
 ### Added
