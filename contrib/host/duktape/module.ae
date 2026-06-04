@@ -1,0 +1,29 @@
+// contrib.host.duktape — Embedded Duktape JavaScript Host Module
+//
+// Runs JavaScript code inside an Aether sandbox. JS calls to
+// readFile, env, etc. are provided as Duktape bindings that
+// check Aether's sandbox grants before executing.
+//
+// Usage:
+//   import contrib.host.duktape
+//
+//   worker = sandbox("worker") {
+//       grant_env("HOME")
+//       grant_fs_read("/etc/*")
+//   }
+//   duktape.run_sandboxed(worker, "print(env('HOME'))")
+//
+// `contrib.host.js` is kept as a back-compat alias module that
+// re-exports these functions — new code should import this
+// `contrib.host.duktape` module directly.
+
+exports (
+    duktape_run_sandboxed, duktape_run_sandboxed_with_map,
+    duktape_run, duktape_init, duktape_finalize
+)
+
+extern duktape_run_sandboxed(perms: ptr, code: string) -> int
+extern duktape_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
+extern duktape_run(code: string) -> int
+extern duktape_init() -> int
+extern duktape_finalize()

@@ -1,4 +1,4 @@
-// aether_host_js.c — Embedded JavaScript Language Host Module (Duktape)
+// aether_host_duktape.c — Embedded JavaScript Language Host Module (Duktape)
 //
 // Unlike Python/Lua, Duktape has NO built-in filesystem or env access.
 // We provide native bindings (env, readFile, print) that go through
@@ -20,11 +20,11 @@
 // inline static helpers. The DUK_COMPILE_* flag constants are baked
 // directly (public ABI of duktape's compile-flags interface).
 
-#include "aether_host_js.h"
+#include "aether_host_duktape.h"
 #include "../../../runtime/aether_sandbox.h"
 #include "../../../runtime/aether_shared_map.h"
 
-#ifdef AETHER_HAS_JS
+#ifdef AETHER_HAS_DUKTAPE
 #include <duktape.h>
 #include <dlfcn.h>
 #include <stdio.h>
@@ -80,7 +80,7 @@ static int resolve_duktape_symbols(void* h) {
         *(void**)(&g_duk.field) = dlsym(h, sym);                       \
         if (!g_duk.field) {                                            \
             fprintf(stderr,                                            \
-                "aether host_js: libduktape missing symbol %s\n", sym);\
+                "aether host_duktape: libduktape missing symbol %s\n", sym);\
             return -1;                                                 \
         }                                                              \
     } while (0)
@@ -110,7 +110,7 @@ static void* try_dlopen(const char* name) {
 }
 
 // Load libduktape on first use. Strict two-step contract:
-//   1. ${AETHER_JS_SONAME} env var (orchestrator-supplied exact,
+//   1. ${AETHER_DUKTAPE_SONAME} env var (orchestrator-supplied exact,
 //      e.g. "libduktape.so.207"). Duktape is embedded-only (no
 //      `duktape` CLI to probe with), so the orchestrator may need
 //      to find the soname via `ldconfig -p | grep libduktape` or
@@ -120,14 +120,14 @@ static void* try_dlopen(const char* name) {
 static int load_libduktape(void) {
     if (libduktape_handle) return 0;
 
-    const char* env_soname = getenv("AETHER_JS_SONAME");
+    const char* env_soname = getenv("AETHER_DUKTAPE_SONAME");
     void* h = try_dlopen(env_soname);
     if (!h) h = try_dlopen("libduktape.so");
     if (!h) {
         fprintf(stderr,
-            "aether host_js: cannot dlopen libduktape "
-            "(tried $AETHER_JS_SONAME=%s, libduktape.so).\n"
-            "  Install duktape on the host, or set AETHER_JS_SONAME "
+            "aether host_duktape: cannot dlopen libduktape "
+            "(tried $AETHER_DUKTAPE_SONAME=%s, libduktape.so).\n"
+            "  Install duktape on the host, or set AETHER_DUKTAPE_SONAME "
             "to the exact soname.\n"
             "  Hint: $(ldconfig -p | awk '/libduktape\\.so/{print $1; exit}')\n"
             "  dlerror: %s\n",
@@ -162,8 +162,8 @@ static const char* dh_safe_to_string(duk_context* c, duk_idx_t idx) {
 
 static duk_context* ctx = NULL;
 
-static void* js_perms_stack[64];
-static int   js_perms_depth = 0;
+static void* duktape_perms_stack[64];
+static int   duktape_perms_depth = 0;
 
 extern int list_size(void*);
 extern void* list_get_raw(void*, int);
@@ -199,16 +199,16 @@ static int perms_allow(void* perms, const char* category, const char* resource) 
 }
 
 static int check_sandbox(const char* category, const char* resource) {
-    if (js_perms_depth <= 0) return 1;
-    for (int level = 0; level < js_perms_depth; level++) {
-        if (!perms_allow(js_perms_stack[level], category, resource)) return 0;
+    if (duktape_perms_depth <= 0) return 1;
+    for (int level = 0; level < duktape_perms_depth; level++) {
+        if (!perms_allow(duktape_perms_stack[level], category, resource)) return 0;
     }
     return 1;
 }
 
 // --- Duktape native bindings (exposed to JS) -------------------------------
 
-static duk_ret_t js_print(duk_context* c) {
+static duk_ret_t duktape_print(duk_context* c) {
     int n = g_duk.duk_get_top(c);
     for (int i = 0; i < n; i++) {
         if (i > 0) printf(" ");
@@ -218,7 +218,7 @@ static duk_ret_t js_print(duk_context* c) {
     return 0;
 }
 
-static duk_ret_t js_env(duk_context* c) {
+static duk_ret_t duktape_env(duk_context* c) {
     const char* name = g_duk.duk_require_string(c, 0);
     if (!check_sandbox("env", name)) {
         g_duk.duk_push_undefined(c);
@@ -233,7 +233,7 @@ static duk_ret_t js_env(duk_context* c) {
     return 1;
 }
 
-static duk_ret_t js_read_file(duk_context* c) {
+static duk_ret_t duktape_read_file(duk_context* c) {
     const char* path = g_duk.duk_require_string(c, 0);
     if (!check_sandbox("fs_read", path)) {
         g_duk.duk_push_undefined(c);
@@ -257,7 +257,7 @@ static duk_ret_t js_read_file(duk_context* c) {
     return 1;
 }
 
-static duk_ret_t js_file_exists(duk_context* c) {
+static duk_ret_t duktape_file_exists(duk_context* c) {
     const char* path = g_duk.duk_require_string(c, 0);
     if (!check_sandbox("fs_read", path)) {
         g_duk.duk_push_boolean(c, 0);
@@ -269,7 +269,7 @@ static duk_ret_t js_file_exists(duk_context* c) {
     return 1;
 }
 
-static duk_ret_t js_write_file(duk_context* c) {
+static duk_ret_t duktape_write_file(duk_context* c) {
     const char* path = g_duk.duk_require_string(c, 0);
     duk_size_t len = 0;
     const char* content = g_duk.duk_require_lstring(c, 1, &len);
@@ -285,7 +285,7 @@ static duk_ret_t js_write_file(duk_context* c) {
     return 1;
 }
 
-static duk_ret_t js_exec(duk_context* c) {
+static duk_ret_t duktape_exec(duk_context* c) {
     const char* cmd = g_duk.duk_require_string(c, 0);
     if (!check_sandbox("exec", cmd)) {
         g_duk.duk_push_int(c, -1);
@@ -300,26 +300,26 @@ static duk_ret_t js_exec(duk_context* c) {
 }
 
 static void register_bindings(duk_context* c) {
-    g_duk.duk_push_c_function(c, js_print, DUK_VARARGS);
+    g_duk.duk_push_c_function(c, duktape_print, DUK_VARARGS);
     g_duk.duk_put_global_string(c, "print");
 
-    g_duk.duk_push_c_function(c, js_env, 1);
+    g_duk.duk_push_c_function(c, duktape_env, 1);
     g_duk.duk_put_global_string(c, "env");
 
-    g_duk.duk_push_c_function(c, js_read_file, 1);
+    g_duk.duk_push_c_function(c, duktape_read_file, 1);
     g_duk.duk_put_global_string(c, "readFile");
 
-    g_duk.duk_push_c_function(c, js_file_exists, 1);
+    g_duk.duk_push_c_function(c, duktape_file_exists, 1);
     g_duk.duk_put_global_string(c, "fileExists");
 
-    g_duk.duk_push_c_function(c, js_write_file, 2);
+    g_duk.duk_push_c_function(c, duktape_write_file, 2);
     g_duk.duk_put_global_string(c, "writeFile");
 
-    g_duk.duk_push_c_function(c, js_exec, 1);
+    g_duk.duk_push_c_function(c, duktape_exec, 1);
     g_duk.duk_put_global_string(c, "exec");
 }
 
-int js_init(void) {
+int duktape_init(void) {
     if (ctx) return 0;
     if (load_libduktape() != 0) return -1;
     ctx = dh_create_heap_default();
@@ -328,16 +328,16 @@ int js_init(void) {
     return 0;
 }
 
-void js_finalize(void) {
+void duktape_finalize(void) {
     if (ctx) {
         g_duk.duk_destroy_heap(ctx);
         ctx = NULL;
     }
 }
 
-int js_run(const char* code) {
+int duktape_run(const char* code) {
     if (!code) return -1;
-    if (js_init() != 0) return -1;
+    if (duktape_init() != 0) return -1;
     if (dh_peval_string(ctx, code) != 0) {
         fprintf(stderr, "[js] %s\n", dh_safe_to_string(ctx, -1));
         g_duk.duk_pop(ctx);
@@ -347,12 +347,12 @@ int js_run(const char* code) {
     return 0;
 }
 
-int js_run_sandboxed(void* perms, const char* code) {
+int duktape_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
-    if (js_init() != 0) return -1;
+    if (duktape_init() != 0) return -1;
 
-    if (js_perms_depth >= 64) return -1;
-    js_perms_stack[js_perms_depth++] = perms;
+    if (duktape_perms_depth >= 64) return -1;
+    duktape_perms_stack[duktape_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = NULL;  // JS uses direct check_sandbox, not libc interception
 
@@ -366,47 +366,47 @@ int js_run_sandboxed(void* perms, const char* code) {
     }
 
     _aether_sandbox_checker = prev;
-    js_perms_depth--;
+    duktape_perms_depth--;
 
     return result;
 }
 
 // --- Shared map bindings for JS --------------------------------------------
 
-static uint64_t js_current_map_token = 0;
+static uint64_t duktape_current_map_token = 0;
 
-static duk_ret_t js_aether_map_get(duk_context* c) {
+static duk_ret_t duktape_aether_map_get(duk_context* c) {
     const char* key = g_duk.duk_require_string(c, 0);
-    const char* val = aether_shared_map_get_by_token(js_current_map_token, key);
+    const char* val = aether_shared_map_get_by_token(duktape_current_map_token, key);
     if (val) { g_duk.duk_push_string(c, val); } else { g_duk.duk_push_undefined(c); }
     return 1;
 }
 
-static duk_ret_t js_aether_map_put(duk_context* c) {
+static duk_ret_t duktape_aether_map_put(duk_context* c) {
     const char* key = g_duk.duk_require_string(c, 0);
     const char* val = g_duk.duk_require_string(c, 1);
-    aether_shared_map_put_by_token(js_current_map_token, key, val);
+    aether_shared_map_put_by_token(duktape_current_map_token, key, val);
     return 0;
 }
 
 static void register_map_bindings(duk_context* c) {
-    g_duk.duk_push_c_function(c, js_aether_map_get, 1);
+    g_duk.duk_push_c_function(c, duktape_aether_map_get, 1);
     g_duk.duk_put_global_string(c, "aether_map_get");
-    g_duk.duk_push_c_function(c, js_aether_map_put, 2);
+    g_duk.duk_push_c_function(c, duktape_aether_map_put, 2);
     g_duk.duk_put_global_string(c, "aether_map_put");
 }
 
-int js_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token) {
+int duktape_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token) {
     if (!code) return -1;
-    if (js_init() != 0) return -1;
+    if (duktape_init() != 0) return -1;
     register_map_bindings(ctx);
 
     extern void aether_shared_map_freeze_inputs_by_token(uint64_t);
     aether_shared_map_freeze_inputs_by_token(map_token);
-    js_current_map_token = map_token;
+    duktape_current_map_token = map_token;
 
-    if (js_perms_depth >= 64) return -1;
-    js_perms_stack[js_perms_depth++] = perms;
+    if (duktape_perms_depth >= 64) return -1;
+    duktape_perms_stack[duktape_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = NULL;
 
@@ -420,24 +420,24 @@ int js_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token)
     }
 
     _aether_sandbox_checker = prev;
-    js_perms_depth--;
-    js_current_map_token = 0;
+    duktape_perms_depth--;
+    duktape_current_map_token = 0;
 
     return result;
 }
 
 #else
 #include <stdio.h>
-int js_init(void) {
-    fprintf(stderr, "error: contrib.host.js not available (compile with AETHER_HAS_JS)\n");
+int duktape_init(void) {
+    fprintf(stderr, "error: contrib.host.duktape not available (compile with AETHER_HAS_DUKTAPE)\n");
     return -1;
 }
-void js_finalize(void) {}
-int js_run(const char* code) { (void)code; return js_init(); }
-int js_run_sandboxed(void* perms, const char* code) { (void)perms; (void)code; return js_init(); }
-int js_run_sandboxed_with_map(void* perms, const char* code,
+void duktape_finalize(void) {}
+int duktape_run(const char* code) { (void)code; return duktape_init(); }
+int duktape_run_sandboxed(void* perms, const char* code) { (void)perms; (void)code; return duktape_init(); }
+int duktape_run_sandboxed_with_map(void* perms, const char* code,
     uint64_t token) {
   (void)perms; (void)code; (void)token;
-  return js_init();
+  return duktape_init();
 }
 #endif

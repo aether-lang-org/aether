@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`contrib.host.js` renamed to `contrib.host.duktape`; `js` kept
+  as alias** (`contrib/host/duktape/` directory, `tools/docker/aether-build`,
+  `tools/ae.c`, `tests/scripts/contrib_build.sh`, related).
+
+  The bridge is honestly Duktape (the engine), not a generic JS
+  capability. JS is the one slot where the host could in principle
+  be served by multiple runtimes (Duktape / QuickJS / V8-node);
+  naming by engine future-proofs the exact corner that's likeliest.
+  Mirrors what python/ruby/perl/lua/tcl already do (lang == runtime).
+
+  - Directory `contrib/host/js/` → `contrib/host/duktape/`.
+  - C symbols `js_*` → `duktape_*`; `AETHER_HAS_JS` → `AETHER_HAS_DUKTAPE`.
+  - Bridge .a renamed `libaether_host_js.a` → `libaether_host_duktape.a`.
+  - Env var `${AETHER_JS_SONAME}` → `${AETHER_DUKTAPE_SONAME}`.
+  - `aether-build --with=duktape` is canonical; `--with=js` is an
+    alias and produces the same image (alphabetically canonicalised
+    BEFORE the sort/name-derivation, so `aether-builder-duktape:slim`
+    and the same cached layer).
+  - **Back-compat**: `import contrib.host.js` keeps working via a
+    thin shim module (`contrib/host/js/module.ae`) that re-exports
+    the duktape bridge's C symbols under the `js_*` Aether names via
+    `@extern("duktape_*")` annotations.
+    `tools/ae.c`'s import-driven auto-link recognises `js` → links
+    `libaether_host_duktape.a`. No `libaether_host_js.a` is built.
+
+- **`contrib.host.perl` exports `perl.*` dotted shape; matches the
+  other five bridges** (`contrib/host/perl/module.ae`).
+
+  The aeb-side capstone-validation runs surfaced that `perl.run(...)`
+  didn't resolve: the bridge's exports were prefixed `aether_perl_*`
+  (chosen to avoid C-symbol collision with libperl's own `perl_run`/
+  `perl_init`), so callers had to use the bare prefixed form.
+  Every other bridge uses `<lang>.run(...)` — perl was the odd one.
+
+  Fix: the C symbols stay `aether_perl_*` (still load-bearing for
+  avoiding libperl collision at link time), but `module.ae` now uses
+  `@extern("aether_perl_…") perl_…(…)` to expose them under the
+  uniform `perl_*` Aether-side names. Three call shapes all work:
+  - `perl.run(...)` — canonical, matches the other five bridges.
+  - `perl_run(...)` — flat-prefix, same fn under a different surface.
+  - `aether_perl_run(...)` — back-compat, original Aether-side name.
+
+- **Bug 8: `--with=js` apt-pkg fix** (`tools/docker/aether-build`).
+
+  The old `with_dev_pkg` mapped `js → libduktape-dev`, which doesn't
+  exist on Debian bookworm — the correct package is `duktape-dev`.
+  Fixed as part of the duktape rename (the new `duktape` and the
+  legacy `js` alias both map to `duktape-dev`).
+
 ## [0.213.0]
 
 ### Changed

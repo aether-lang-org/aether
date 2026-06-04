@@ -95,7 +95,7 @@ probe_tcl() {
     return 1
 }
 
-probe_js() {
+probe_duktape() {
     # Duktape — either pkg-config or a known header path.
     if pkg-config --exists duktape 2>/dev/null; then
         pkg-config --cflags-only-I duktape
@@ -194,17 +194,17 @@ CC="${CC:-cc}"
 printf "  using CC=%s\n" "$CC"
 printf "\n"
 
-for lang in js lua perl python ruby tcl go tinygo; do
+for lang in duktape lua perl python ruby tcl go tinygo; do
     flag=""
     case "$lang" in
-        js)     flag="AETHER_HAS_JS" ;;
-        lua)    flag="AETHER_HAS_LUA" ;;
-        perl)   flag="AETHER_HAS_PERL" ;;
-        python) flag="AETHER_HAS_PYTHON" ;;
-        ruby)   flag="AETHER_HAS_RUBY" ;;
-        tcl)    flag="AETHER_HAS_TCL" ;;
-        go)     flag="AETHER_HAS_GO" ;;
-        tinygo) flag="AETHER_HAS_TINYGO" ;;
+        duktape) flag="AETHER_HAS_DUKTAPE" ;;
+        lua)     flag="AETHER_HAS_LUA" ;;
+        perl)    flag="AETHER_HAS_PERL" ;;
+        python)  flag="AETHER_HAS_PYTHON" ;;
+        ruby)    flag="AETHER_HAS_RUBY" ;;
+        tcl)     flag="AETHER_HAS_TCL" ;;
+        go)      flag="AETHER_HAS_GO" ;;
+        tinygo)  flag="AETHER_HAS_TINYGO" ;;
     esac
 
     printf "  %-10s " "$lang"

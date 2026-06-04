@@ -2398,6 +2398,16 @@ static void prepare_binary_imports(const char* main_file) { (void)main_file; }
 //
 // POSIX-only — host bridges aren't compiled on the Windows matrix.
 #ifndef _WIN32
+// Back-compat aliases: some bridge directories were renamed for
+// clarity, but old import paths must keep resolving. `js` was
+// renamed to `duktape` (engine name; allows `--with=quickjs` etc.
+// to coexist later); `import contrib.host.js` still works by
+// linking the duktape bridge .a transparently here.
+static const char* host_bridge_lang_alias(const char* lang) {
+    if (strcmp(lang, "js") == 0) return "duktape";
+    return lang;
+}
+
 static bool host_bridge_a_path(const char* lang, char* out, size_t outsz) {
     if (!tc.has_lib) return false;
     char lib_dir[1024];
@@ -2406,11 +2416,13 @@ static bool host_bridge_a_path(const char* lang, char* out, size_t outsz) {
     char* slash = strrchr(lib_dir, '/');
     if (slash) *slash = '\0';
 
+    const char* effective = host_bridge_lang_alias(lang);
+
     // Install layout: <lib_dir>/libaether_host_<lang>.a
-    snprintf(out, outsz, "%s/libaether_host_%s.a", lib_dir, lang);
+    snprintf(out, outsz, "%s/libaether_host_%s.a", lib_dir, effective);
     if (path_exists(out)) return true;
     // Dev layout: <lib_dir>/contrib/libaether_host_<lang>.a (build/contrib/)
-    snprintf(out, outsz, "%s/contrib/libaether_host_%s.a", lib_dir, lang);
+    snprintf(out, outsz, "%s/contrib/libaether_host_%s.a", lib_dir, effective);
     if (path_exists(out)) return true;
     return false;
 }
