@@ -3,6 +3,27 @@
 // Embeds Ruby (CRuby/MRI) in the Aether process. Ruby's File.open,
 // ENV[], Kernel#system etc. go through libc and are intercepted by
 // the LD_PRELOAD sandbox layer.
+//
+// TODO (ctr_notes.md Bug 6 follow-up): convert this bridge from
+// direct calls to dlopen + dlsym (same pattern as
+// contrib/host/python/aether_host_python.c after PR #606). The ruby
+// rewrite is bulkier than python's because Ruby's C API leans
+// heavily on macros that touch VALUE type tags
+// (`NIL_P`, `StringValueCStr`, `Qnil`, `RUBY_INIT_STACK`). Those
+// macros can't be dlsym'd directly — they need to be re-expressed
+// against a function-pointer table that dlsym's the underlying
+// helpers (rb_string_value_cstr, etc.). RUBY_INIT_STACK in
+// particular captures the calling stack pointer inline — it has to
+// be replicated by hand or replaced with a libruby init API that
+// doesn't need it. Worth a focused session, not a rushed bundle.
+//
+// Until then: the v0.209.0 --with=ruby image layer apt-installs
+// ruby-dev, which both supplies the bridge's compile-time headers
+// AND provides libruby that the produced binary links against
+// (DT_NEEDED libruby-3.X.so.X). End-user binaries are ABI-locked to
+// the deploy host's Ruby minor — same constraint the pre-dlopen
+// python bridge had, accepted as a known limitation until the
+// dlopen rewrite lands.
 
 #include "aether_host_ruby.h"
 #include "../../../runtime/aether_sandbox.h"
