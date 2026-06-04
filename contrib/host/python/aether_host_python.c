@@ -107,12 +107,17 @@ static int resolve_python_symbols(void* h) {
 #undef RESOLVE
 }
 
-// Load libpython on first use. Tries in order:
+// Load libpython on first use. Strict two-step contract:
 //   1. ${AETHER_PYTHON_SONAME} env var (orchestrator-supplied exact
-//      soname, e.g. "libpython3.14.so.1.0" — most reliable).
+//      soname, e.g. "libpython3.14.so.1.0"). The orchestrator
+//      (aeb-ctr or equivalent) should probe the host's python via
+//      sysconfig and pass this; aeb-ctr does so.
 //   2. "libpython3.so" (unversioned symlink, present in the runtime
 //      package on Fedora-likes; -dev-only on Debian-likes).
-//   3. A few common versioned fallbacks for robustness.
+// No versioned fallback list — hardcoding `libpython3.X.so.1.0`
+// would be a maintenance treadmill (new minor → silent miss → looks
+// like a runtime bug). If both fail, error out clearly so the
+// orchestrator gets a real signal.
 // Returns 0 on success, -1 on any failure.
 static int load_libpython(void) {
     if (libpython_handle) return 0;
@@ -121,29 +126,16 @@ static int load_libpython(void) {
     void* h = try_dlopen(env_soname);
     if (!h) h = try_dlopen("libpython3.so");
     if (!h) {
-        // Probe a small set of versioned fallbacks. Order: newer first.
-        // Not exhaustive; the env-var override is the supported escape
-        // hatch for hosts whose Python lives outside these.
-        static const char* fallbacks[] = {
-            "libpython3.14.so.1.0",
-            "libpython3.13.so.1.0",
-            "libpython3.12.so.1.0",
-            "libpython3.11.so.1.0",
-            "libpython3.10.so.1.0",
-            NULL
-        };
-        for (int i = 0; fallbacks[i]; i++) {
-            h = try_dlopen(fallbacks[i]);
-            if (h) break;
-        }
-    }
-    if (!h) {
         fprintf(stderr,
             "aether host_python: cannot dlopen libpython "
-            "(tried $AETHER_PYTHON_SONAME, libpython3.so, "
-            "libpython3.{10..14}.so.1.0).\n"
+            "(tried $AETHER_PYTHON_SONAME=%s, libpython3.so).\n"
             "  Install a python3 runtime on the host, or set "
-            "AETHER_PYTHON_SONAME explicitly.\n  dlerror: %s\n",
+            "AETHER_PYTHON_SONAME to the exact soname "
+            "(e.g. libpython3.12.so.1.0).\n"
+            "  Hint: $(python3 -c 'import sysconfig; "
+            "print(sysconfig.get_config_var(\"INSTSONAME\"))')\n"
+            "  dlerror: %s\n",
+            env_soname ? env_soname : "(unset)",
             dlerror() ? dlerror() : "(none)");
         return -1;
     }

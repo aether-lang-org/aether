@@ -84,35 +84,30 @@ static void* try_dlopen(const char* name) {
     return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
 }
 
-// Load libtcl on first use.
-//   1. ${AETHER_TCL_SONAME} env var (orchestrator-supplied exact).
+// Load libtcl on first use. Strict two-step contract:
+//   1. ${AETHER_TCL_SONAME} env var (orchestrator-supplied exact,
+//      e.g. "libtcl8.6.so"). The orchestrator MUST probe via
+//      `echo 'puts $tcl_version' | tclsh` (gives the major.minor)
+//      and derive the soname.
 //   2. libtcl.so (Debian-style unversioned symlink, present with
 //      tcl-dev; not always on bare runtime hosts).
-//   3. libtcl8.6.so.0, libtcl9.0.so.0 fallback (Debian convention).
-//   4. libtcl8.6.so / libtcl9.0.so (Fedora unversioned-symlink form).
+// No hardcoded version-list fallback. Orchestrator owns the probe.
 static int load_libtcl(void) {
     if (libtcl_handle) return 0;
 
-    void* h = try_dlopen(getenv("AETHER_TCL_SONAME"));
+    const char* env_soname = getenv("AETHER_TCL_SONAME");
+    void* h = try_dlopen(env_soname);
     if (!h) h = try_dlopen("libtcl.so");
-    if (!h) {
-        static const char* fallbacks[] = {
-            "libtcl9.0.so.0", "libtcl9.0.so",
-            "libtcl8.6.so.0", "libtcl8.6.so",
-            "libtcl8.5.so.0", "libtcl8.5.so",
-            NULL
-        };
-        for (int i = 0; fallbacks[i]; i++) {
-            h = try_dlopen(fallbacks[i]);
-            if (h) break;
-        }
-    }
     if (!h) {
         fprintf(stderr,
             "aether host_tcl: cannot dlopen libtcl "
-            "(tried $AETHER_TCL_SONAME, libtcl.so, libtcl{8.5,8.6,9.0}.so[.0]).\n"
+            "(tried $AETHER_TCL_SONAME=%s, libtcl.so).\n"
             "  Install a tcl runtime on the host, or set AETHER_TCL_SONAME "
-            "explicitly.\n  dlerror: %s\n",
+            "to the exact soname.\n"
+            "  Hint: tclsh -c 'puts $tcl_library' (gives a dir; soname "
+            "is libtcl<version>.so based on $tcl_version)\n"
+            "  dlerror: %s\n",
+            env_soname ? env_soname : "(unset)",
             dlerror() ? dlerror() : "(none)");
         return -1;
     }

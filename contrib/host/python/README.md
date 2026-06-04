@@ -16,18 +16,24 @@ The bridge `dlopen`s `libpython` at the **deploy host's** runtime
 - A binary built today on a 3.11 machine and run on a 3.14 machine
   works as long as the host has a usable libpython.
 
-Discovery order at first call to `python.run`:
+Discovery order at first call to `python.run` (strict two-step):
 
 1. `${AETHER_PYTHON_SONAME}` env var (orchestrator-supplied exact
-   soname, e.g. `libpython3.14.so.1.0`) — set by your build
-   orchestrator if it probes the deploy host.
+   soname, e.g. `libpython3.14.so.1.0`). The orchestrator probes
+   the host's python via sysconfig and passes this.
 2. `libpython3.so` (unversioned symlink — present in the runtime
    package on Fedora-likes / Bazzite; typically -dev-only on
    Debian-likes).
-3. A short fallback list of `libpython3.{10..14}.so.1.0`.
 
-If none load, `python.run*` returns -1 with a clear stderr message
-naming the env-var escape hatch.
+If both fail, `python.run*` returns -1 with a clear error naming
+the env var. **There is no hardcoded version fallback list** — the
+bridge stays distro-agnostic; the orchestrator owns the probe.
+
+Hint command for orchestrators / users setting the env var manually:
+
+```sh
+AETHER_PYTHON_SONAME=$(python3 -c 'import sysconfig; print(sysconfig.get_config_var("INSTSONAME"))')
+```
 
 ## On the deploy host
 

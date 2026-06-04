@@ -11,14 +11,22 @@ is no `-ltcl` on the link line. The produced binary works against
 whatever Tcl minor version the deploy host has (8.5 / 8.6 / 9.0
 supported).
 
-Discovery order at first call to `tcl.run`:
-1. `${AETHER_TCL_SONAME}` env var (orchestrator-supplied exact).
+Discovery order at first call to `tcl.run` (strict two-step):
+
+1. `${AETHER_TCL_SONAME}` env var (orchestrator-supplied exact,
+   e.g. `libtcl8.6.so`).
 2. `libtcl.so` (Debian-style unversioned symlink, present with
    tcl-dev).
-3. Fallback: `libtcl{9.0,8.6,8.5}.so.0` / `libtcl{9.0,8.6,8.5}.so`.
 
-If none load, `tcl.run*` returns -1 with a clear stderr message
-naming the env-var escape hatch.
+If both fail, `tcl.run*` returns -1 with a clear error naming the
+env var. **There is no hardcoded version fallback list** — the
+bridge stays distro-agnostic; the orchestrator owns the probe.
+
+Orchestrator probe via tclsh:
+
+```sh
+AETHER_TCL_SONAME=$(echo 'puts libtcl$tcl_version.so' | tclsh)
+```
 
 ## What `ae build` does for you automatically
 

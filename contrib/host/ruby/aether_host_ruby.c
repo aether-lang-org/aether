@@ -108,36 +108,32 @@ static void* try_dlopen(const char* name) {
     return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
 }
 
-// Load libruby on first use.
+// Load libruby on first use. Strict two-step contract:
 //   1. ${AETHER_RUBY_SONAME} env var (orchestrator-supplied exact).
-//   2. libruby.so (Fedora-like unversioned symlink).
-//   3. libruby-3.X.so (Debian's dash-versioned soname; X=4..0 newer-first).
-//   4. libruby.so.3.X (Fedora/Bazzite versioned).
+//      Bazzite/Fedora hosts ship NO `libruby.so` symlink — the
+//      orchestrator MUST probe with `ruby -rrbconfig
+//      -e 'print RbConfig::CONFIG["LIBRUBY_SO"]'` (e.g.
+//      "libruby.so.3.4") and pass that env var.
+//   2. libruby.so (Debian-style unversioned symlink, fallback only).
+// No versioned hardcoded fallback list — would be a maintenance
+// treadmill across Ruby minors. Orchestrator owns the probe.
+// Returns 0 on success, -1 on any failure.
 static int load_libruby(void) {
     if (libruby_handle) return 0;
 
-    void* h = try_dlopen(getenv("AETHER_RUBY_SONAME"));
+    const char* env_soname = getenv("AETHER_RUBY_SONAME");
+    void* h = try_dlopen(env_soname);
     if (!h) h = try_dlopen("libruby.so");
-    if (!h) {
-        static const char* fallbacks[] = {
-            "libruby-3.4.so", "libruby-3.3.so", "libruby-3.2.so",
-            "libruby-3.1.so", "libruby-3.0.so",
-            "libruby.so.3.4", "libruby.so.3.3", "libruby.so.3.2",
-            "libruby.so.3.1", "libruby.so.3.0",
-            NULL
-        };
-        for (int i = 0; fallbacks[i]; i++) {
-            h = try_dlopen(fallbacks[i]);
-            if (h) break;
-        }
-    }
     if (!h) {
         fprintf(stderr,
             "aether host_ruby: cannot dlopen libruby "
-            "(tried $AETHER_RUBY_SONAME, libruby.so, libruby-3.{0..4}.so, "
-            "libruby.so.3.{0..4}).\n"
+            "(tried $AETHER_RUBY_SONAME=%s, libruby.so).\n"
             "  Install a ruby3 runtime on the host, or set "
-            "AETHER_RUBY_SONAME explicitly.\n  dlerror: %s\n",
+            "AETHER_RUBY_SONAME to the exact soname.\n"
+            "  Hint: $(ruby -rrbconfig -e "
+            "'print RbConfig::CONFIG[\"LIBRUBY_SO\"]')\n"
+            "  dlerror: %s\n",
+            env_soname ? env_soname : "(unset)",
             dlerror() ? dlerror() : "(none)");
         return -1;
     }

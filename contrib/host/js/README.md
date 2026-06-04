@@ -10,13 +10,23 @@ The bridge `dlopen`s libduktape at the **deploy host's** runtime —
 there is no `-lduktape` on the link line. The produced binary works
 against whatever Duktape minor version the deploy host has.
 
-Discovery order at first call to `js.run`:
-1. `${AETHER_JS_SONAME}` env var (orchestrator-supplied exact).
-2. `libduktape.so` (Debian-style unversioned symlink).
-3. Fallback: `libduktape.so.{206..208}` (Debian numeric soversion).
+Discovery order at first call to `js.run` (strict two-step):
 
-If none load, `js.run*` returns -1 with a clear stderr message
-naming the env-var escape hatch.
+1. `${AETHER_JS_SONAME}` env var (orchestrator-supplied exact,
+   e.g. `libduktape.so.207`).
+2. `libduktape.so` (Debian-style unversioned symlink).
+
+If both fail, `js.run*` returns -1 with a clear error naming the
+env var. **There is no hardcoded version fallback list** — the
+bridge stays distro-agnostic; the orchestrator owns the probe.
+
+Duktape is embedded-only (no `duktape` CLI to probe with). The
+orchestrator can find the soname via `ldconfig` or distro
+package-manager queries:
+
+```sh
+AETHER_JS_SONAME=$(ldconfig -p | awk '/libduktape\.so/{print $1; exit}')
+```
 
 ## What `ae build` does for you automatically
 

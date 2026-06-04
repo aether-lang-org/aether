@@ -109,31 +109,29 @@ static void* try_dlopen(const char* name) {
     return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
 }
 
-// Load libduktape on first use.
-//   1. ${AETHER_JS_SONAME} env var (orchestrator-supplied exact).
+// Load libduktape on first use. Strict two-step contract:
+//   1. ${AETHER_JS_SONAME} env var (orchestrator-supplied exact,
+//      e.g. "libduktape.so.207"). Duktape is embedded-only (no
+//      `duktape` CLI to probe with), so the orchestrator may need
+//      to find the soname via `ldconfig -p | grep libduktape` or
+//      similar package-manager-specific probes.
 //   2. libduktape.so (Debian-style unversioned symlink).
-//   3. libduktape.so.207 / .206 fallback (current major versions).
+// No hardcoded version-list fallback. Orchestrator owns the probe.
 static int load_libduktape(void) {
     if (libduktape_handle) return 0;
 
-    void* h = try_dlopen(getenv("AETHER_JS_SONAME"));
+    const char* env_soname = getenv("AETHER_JS_SONAME");
+    void* h = try_dlopen(env_soname);
     if (!h) h = try_dlopen("libduktape.so");
-    if (!h) {
-        static const char* fallbacks[] = {
-            "libduktape.so.208", "libduktape.so.207", "libduktape.so.206",
-            NULL
-        };
-        for (int i = 0; fallbacks[i]; i++) {
-            h = try_dlopen(fallbacks[i]);
-            if (h) break;
-        }
-    }
     if (!h) {
         fprintf(stderr,
             "aether host_js: cannot dlopen libduktape "
-            "(tried $AETHER_JS_SONAME, libduktape.so, libduktape.so.{206..208}).\n"
-            "  Install duktape on the host, or set AETHER_JS_SONAME explicitly.\n"
+            "(tried $AETHER_JS_SONAME=%s, libduktape.so).\n"
+            "  Install duktape on the host, or set AETHER_JS_SONAME "
+            "to the exact soname.\n"
+            "  Hint: $(ldconfig -p | awk '/libduktape\\.so/{print $1; exit}')\n"
             "  dlerror: %s\n",
+            env_soname ? env_soname : "(unset)",
             dlerror() ? dlerror() : "(none)");
         return -1;
     }

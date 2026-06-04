@@ -101,34 +101,27 @@ static void* try_dlopen(const char* name) {
     return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
 }
 
-// Load libperl on first use.
-//   1. ${AETHER_PERL_SONAME} env var (orchestrator-supplied exact).
-//   2. libperl.so (Debian-style flat symlink — present with libperl-dev
-//      and sometimes with the runtime alone depending on packaging).
-//   3. libperl.so.5.XX fallback list (Debian/Fedora versioned).
+// Load libperl on first use. Strict two-step contract:
+//   1. ${AETHER_PERL_SONAME} env var (orchestrator-supplied exact,
+//      e.g. "libperl.so.5.36"). The orchestrator MUST probe with
+//      `perl -MConfig -e 'print $Config{libperl}'` and pass that.
+//   2. libperl.so (Debian-style flat symlink, when present).
+// No hardcoded version-list fallback. Orchestrator owns the probe.
 static int load_libperl(void) {
     if (libperl_handle) return 0;
 
-    void* h = try_dlopen(getenv("AETHER_PERL_SONAME"));
+    const char* env_soname = getenv("AETHER_PERL_SONAME");
+    void* h = try_dlopen(env_soname);
     if (!h) h = try_dlopen("libperl.so");
-    if (!h) {
-        static const char* fallbacks[] = {
-            "libperl.so.5.40", "libperl.so.5.38",
-            "libperl.so.5.36", "libperl.so.5.34",
-            "libperl.so.5.32", "libperl.so.5.30",
-            NULL
-        };
-        for (int i = 0; fallbacks[i]; i++) {
-            h = try_dlopen(fallbacks[i]);
-            if (h) break;
-        }
-    }
     if (!h) {
         fprintf(stderr,
             "aether host_perl: cannot dlopen libperl "
-            "(tried $AETHER_PERL_SONAME, libperl.so, libperl.so.5.{30..40}).\n"
+            "(tried $AETHER_PERL_SONAME=%s, libperl.so).\n"
             "  Install a perl 5.x runtime on the host, or set "
-            "AETHER_PERL_SONAME explicitly.\n  dlerror: %s\n",
+            "AETHER_PERL_SONAME to the exact soname.\n"
+            "  Hint: $(perl -MConfig -e 'print $Config{libperl}')\n"
+            "  dlerror: %s\n",
+            env_soname ? env_soname : "(unset)",
             dlerror() ? dlerror() : "(none)");
         return -1;
     }
