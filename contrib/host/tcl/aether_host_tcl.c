@@ -4,6 +4,18 @@
 // installs the Aether sandbox checker so Tcl's libc calls (open,
 // getenv, socket, exec) are intercepted and checked against the
 // grant list.
+//
+// LOADING MODEL: dlopen, not -ltcl. Mirrors contrib/host/python,
+// ruby, lua, perl, js — every Tcl C-API symbol resolved via dlsym
+// at first call. The bridge .a has NO unresolved Tcl_* symbols at
+// link time, so end-user binaries have no DT_NEEDED libtcl and are
+// ABI-portable across deploy-host Tcl minor versions (8.6 / 9.0
+// supported).
+//
+// Tcl's C API is conventionally non-macro — the headers expose
+// real exported `Tcl_*` functions, no `pTHX_`-style context
+// passing, no struct-tag bit-twiddling. The bridge just needs a
+// dlsym table; no macro re-expression required.
 
 #include "aether_host_tcl.h"
 #include "../../../runtime/aether_sandbox.h"
@@ -11,17 +23,113 @@
 
 #ifdef AETHER_HAS_TCL
 #include <tcl.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+// --- libtcl dlopen table ----------------------------------------------------
+
+static void* libtcl_handle = NULL;
+
+static struct {
+    // Lifecycle.
+    void         (*Tcl_FindExecutable)(const char* argv0);
+    Tcl_Interp*  (*Tcl_CreateInterp)(void);
+    int          (*Tcl_Init)(Tcl_Interp* interp);
+    void         (*Tcl_DeleteInterp)(Tcl_Interp* interp);
+    void         (*Tcl_Finalize)(void);
+    // Eval + result extraction.
+    int          (*Tcl_Eval)(Tcl_Interp* interp, const char* script);
+    const char*  (*Tcl_GetStringResult)(Tcl_Interp* interp);
+    // Object/string helpers (for the shared-map command callbacks).
+    const char*  (*Tcl_GetString)(Tcl_Obj* objPtr);
+    Tcl_Obj*     (*Tcl_NewStringObj)(const char* bytes, int length);
+    void         (*Tcl_SetObjResult)(Tcl_Interp* interp, Tcl_Obj* resultObjPtr);
+    void         (*Tcl_WrongNumArgs)(Tcl_Interp* interp, int objc,
+                                     Tcl_Obj* const objv[], const char* message);
+    Tcl_Command  (*Tcl_CreateObjCommand)(Tcl_Interp* interp, const char* cmdName,
+                                         Tcl_ObjCmdProc* proc, ClientData clientData,
+                                         Tcl_CmdDeleteProc* deleteProc);
+} g_tcl;
+
+static int resolve_tcl_symbols(void* h) {
+#define RESOLVE(field, sym) do {                                       \
+        *(void**)(&g_tcl.field) = dlsym(h, sym);                       \
+        if (!g_tcl.field) {                                            \
+            fprintf(stderr,                                            \
+                "aether host_tcl: libtcl missing symbol %s\n", sym);   \
+            return -1;                                                 \
+        }                                                              \
+    } while (0)
+
+    RESOLVE(Tcl_FindExecutable,    "Tcl_FindExecutable");
+    RESOLVE(Tcl_CreateInterp,      "Tcl_CreateInterp");
+    RESOLVE(Tcl_Init,              "Tcl_Init");
+    RESOLVE(Tcl_DeleteInterp,      "Tcl_DeleteInterp");
+    RESOLVE(Tcl_Finalize,          "Tcl_Finalize");
+    RESOLVE(Tcl_Eval,              "Tcl_Eval");
+    RESOLVE(Tcl_GetStringResult,   "Tcl_GetStringResult");
+    RESOLVE(Tcl_GetString,         "Tcl_GetString");
+    RESOLVE(Tcl_NewStringObj,      "Tcl_NewStringObj");
+    RESOLVE(Tcl_SetObjResult,      "Tcl_SetObjResult");
+    RESOLVE(Tcl_WrongNumArgs,      "Tcl_WrongNumArgs");
+    RESOLVE(Tcl_CreateObjCommand,  "Tcl_CreateObjCommand");
+    return 0;
+#undef RESOLVE
+}
+
+static void* try_dlopen(const char* name) {
+    if (!name || !*name) return NULL;
+    return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+}
+
+// Load libtcl on first use.
+//   1. ${AETHER_TCL_SONAME} env var (orchestrator-supplied exact).
+//   2. libtcl.so (Debian-style unversioned symlink, present with
+//      tcl-dev; not always on bare runtime hosts).
+//   3. libtcl8.6.so.0, libtcl9.0.so.0 fallback (Debian convention).
+//   4. libtcl8.6.so / libtcl9.0.so (Fedora unversioned-symlink form).
+static int load_libtcl(void) {
+    if (libtcl_handle) return 0;
+
+    void* h = try_dlopen(getenv("AETHER_TCL_SONAME"));
+    if (!h) h = try_dlopen("libtcl.so");
+    if (!h) {
+        static const char* fallbacks[] = {
+            "libtcl9.0.so.0", "libtcl9.0.so",
+            "libtcl8.6.so.0", "libtcl8.6.so",
+            "libtcl8.5.so.0", "libtcl8.5.so",
+            NULL
+        };
+        for (int i = 0; fallbacks[i]; i++) {
+            h = try_dlopen(fallbacks[i]);
+            if (h) break;
+        }
+    }
+    if (!h) {
+        fprintf(stderr,
+            "aether host_tcl: cannot dlopen libtcl "
+            "(tried $AETHER_TCL_SONAME, libtcl.so, libtcl{8.5,8.6,9.0}.so[.0]).\n"
+            "  Install a tcl runtime on the host, or set AETHER_TCL_SONAME "
+            "explicitly.\n  dlerror: %s\n",
+            dlerror() ? dlerror() : "(none)");
+        return -1;
+    }
+
+    if (resolve_tcl_symbols(h) != 0) {
+        dlclose(h);
+        return -1;
+    }
+    libtcl_handle = h;
+    return 0;
+}
+
+// --- bridge state (unchanged) ----------------------------------------------
+
 static Tcl_Interp* T = NULL;
 
-// Bridge-owned permission stack. Each run_sandboxed call pushes its
-// perms list here before installing host_tcl_checker, and pops on
-// exit. Self-contained — does not poke at the compiler-emitted
-// preamble's static _aether_ctx_stack (which is not cross-file
-// visible anyway). Depth 64 matches the preamble's own cap.
+// Bridge-owned permission stack.
 static void* tcl_perms_stack[64];
 static int   tcl_perms_depth = 0;
 
@@ -29,11 +137,6 @@ extern int list_size(void*);
 extern void* list_get_raw(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
-    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
-    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
-    // vice versa). Safe for non-TCP categories because "::ffff:"
-    // doesn't appear in filesystem paths, env var names, or exec
-    // command strings.
     if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
     if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
@@ -73,12 +176,13 @@ static int host_tcl_checker(const char* category, const char* resource) {
 
 int tcl_init(void) {
     if (T) return 0;
-    Tcl_FindExecutable(NULL);
-    T = Tcl_CreateInterp();
+    if (load_libtcl() != 0) return -1;
+    g_tcl.Tcl_FindExecutable(NULL);
+    T = g_tcl.Tcl_CreateInterp();
     if (!T) return -1;
-    if (Tcl_Init(T) != TCL_OK) {
-        fprintf(stderr, "[tcl] init: %s\n", Tcl_GetStringResult(T));
-        Tcl_DeleteInterp(T);
+    if (g_tcl.Tcl_Init(T) != TCL_OK) {
+        fprintf(stderr, "[tcl] init: %s\n", g_tcl.Tcl_GetStringResult(T));
+        g_tcl.Tcl_DeleteInterp(T);
         T = NULL;
         return -1;
     }
@@ -87,17 +191,17 @@ int tcl_init(void) {
 
 void tcl_finalize(void) {
     if (T) {
-        Tcl_DeleteInterp(T);
+        g_tcl.Tcl_DeleteInterp(T);
         T = NULL;
     }
-    Tcl_Finalize();
+    if (g_tcl.Tcl_Finalize) g_tcl.Tcl_Finalize();
 }
 
 int tcl_run(const char* code) {
     if (!code) return -1;
     if (tcl_init() != 0) return -1;
-    if (Tcl_Eval(T, code) != TCL_OK) {
-        fprintf(stderr, "[tcl] %s\n", Tcl_GetStringResult(T));
+    if (g_tcl.Tcl_Eval(T, code) != TCL_OK) {
+        fprintf(stderr, "[tcl] %s\n", g_tcl.Tcl_GetStringResult(T));
         return -1;
     }
     return 0;
@@ -108,63 +212,61 @@ int tcl_run_sandboxed(void* perms, const char* code) {
     if (tcl_init() != 0) return -1;
     if (tcl_perms_depth >= 64) return -1;
 
-    // Push perms and install checker.
     tcl_perms_stack[tcl_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_tcl_checker;
 
     int result = 0;
-    if (Tcl_Eval(T, code) != TCL_OK) {
-        fprintf(stderr, "[tcl] %s\n", Tcl_GetStringResult(T));
+    if (g_tcl.Tcl_Eval(T, code) != TCL_OK) {
+        fprintf(stderr, "[tcl] %s\n", g_tcl.Tcl_GetStringResult(T));
         result = -1;
     }
 
-    // Restore.
     _aether_sandbox_checker = prev;
     tcl_perms_depth--;
 
     return result;
 }
 
-// --- Shared map native bindings for Tcl ---
+// --- Shared map native bindings for Tcl ------------------------------------
 
 static uint64_t current_map_token = 0;
 
-// aether_map_get KEY → value string or empty
 static int tcl_aether_map_get(ClientData cd, Tcl_Interp* interp,
                                int objc, Tcl_Obj* const objv[]) {
     (void)cd;
     if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "key");
+        g_tcl.Tcl_WrongNumArgs(interp, 1, objv, "key");
         return TCL_ERROR;
     }
-    const char* key = Tcl_GetString(objv[1]);
+    const char* key = g_tcl.Tcl_GetString(objv[1]);
     const char* val = aether_shared_map_get_by_token(current_map_token, key);
     if (val) {
-        Tcl_SetObjResult(interp, Tcl_NewStringObj(val, -1));
+        g_tcl.Tcl_SetObjResult(interp, g_tcl.Tcl_NewStringObj(val, -1));
     } else {
-        Tcl_SetObjResult(interp, Tcl_NewStringObj("", 0));
+        g_tcl.Tcl_SetObjResult(interp, g_tcl.Tcl_NewStringObj("", 0));
     }
     return TCL_OK;
 }
 
-// aether_map_put KEY VALUE
 static int tcl_aether_map_put(ClientData cd, Tcl_Interp* interp,
                                int objc, Tcl_Obj* const objv[]) {
     (void)cd;
     if (objc != 3) {
-        Tcl_WrongNumArgs(interp, 1, objv, "key value");
+        g_tcl.Tcl_WrongNumArgs(interp, 1, objv, "key value");
         return TCL_ERROR;
     }
-    const char* key = Tcl_GetString(objv[1]);
-    const char* val = Tcl_GetString(objv[2]);
+    const char* key = g_tcl.Tcl_GetString(objv[1]);
+    const char* val = g_tcl.Tcl_GetString(objv[2]);
     aether_shared_map_put_by_token(current_map_token, key, val);
     return TCL_OK;
 }
 
 static void register_map_bindings(Tcl_Interp* interp) {
-    Tcl_CreateObjCommand(interp, "aether_map_get", tcl_aether_map_get, NULL, NULL);
-    Tcl_CreateObjCommand(interp, "aether_map_put", tcl_aether_map_put, NULL, NULL);
+    g_tcl.Tcl_CreateObjCommand(interp, "aether_map_get",
+                                tcl_aether_map_get, NULL, NULL);
+    g_tcl.Tcl_CreateObjCommand(interp, "aether_map_put",
+                                tcl_aether_map_put, NULL, NULL);
 }
 
 int tcl_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token) {
@@ -183,8 +285,8 @@ int tcl_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token
     _aether_sandbox_checker = host_tcl_checker;
 
     int result = 0;
-    if (Tcl_Eval(T, code) != TCL_OK) {
-        fprintf(stderr, "[tcl] %s\n", Tcl_GetStringResult(T));
+    if (g_tcl.Tcl_Eval(T, code) != TCL_OK) {
+        fprintf(stderr, "[tcl] %s\n", g_tcl.Tcl_GetStringResult(T));
         result = -1;
     }
 

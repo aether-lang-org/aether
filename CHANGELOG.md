@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`contrib.host.{lua,perl,js,tcl}` bridges converted to dlopen**
+  (`contrib/host/lua/aether_host_lua.c`,
+  `contrib/host/perl/aether_host_perl.c`,
+  `contrib/host/js/aether_host_js.c`,
+  `contrib/host/tcl/aether_host_tcl.c`, all four READMEs).
+
+  Completes the dlopen sweep for all six "interpreter" host bridges
+  (python v0.209.0, ruby v0.211.0, now lua + perl + js + tcl). Each
+  bridge .a has NO unresolved lib symbols at link time; end-user
+  binaries have NO `DT_NEEDED libfoo` for the host language; binaries
+  are ABI-portable across deploy-host minor versions.
+
+  **lua dlopen contract:**
+  - Tries `${AETHER_LUA_SONAME}` → `liblua.so` → `liblua5.{4,3}.so.0` /
+    `liblua5.{4,3}.so` / `liblua-5.{4,3}.so` fallback list.
+  - Macros like `luaL_dostring`, `lua_pop`, `lua_tostring`,
+    `lua_pushcfunction`, `luaL_checkstring` re-expressed as inline
+    static helpers over the dlsym'd underlying functions
+    (`luaL_loadstring`, `lua_pcallk`, `lua_settop`, `lua_tolstring`,
+    `lua_pushcclosure`, `luaL_checklstring`). Lua's symbol versioning
+    (`lua_close@@LUA_5.4`) is dlsym-transparent.
+
+  **perl dlopen contract:**
+  - Tries `${AETHER_PERL_SONAME}` → `libperl.so` → `libperl.so.5.{40..30}`.
+  - The bridge avoids SV-struct-layout dependencies entirely by
+    going through `Perl_*` exported accessors instead of bit-tag
+    macros:
+      - `eval_pv(s, croak)`   → `Perl_eval_pv(my_perl, s, croak)`
+      - `ERRSV`               → `Perl_get_sv(my_perl, "@", 0)`
+      - `SvTRUE(sv)`          → `Perl_sv_true(my_perl, sv)`
+      - `SvPV_nolen(sv)`      → `Perl_sv_2pv_flags(my_perl, sv, NULL, SV_GMAGIC)`
+  - `SV_GMAGIC = 2` baked as a literal (stable across Perl 5.x —
+    same shape as Ruby's `Qnil`-as-literal).
+  - `pTHX_` context-passing macro replaced with explicit `my_perl`
+    first argument.
+
+  **js (Duktape) dlopen contract:**
+  - Tries `${AETHER_JS_SONAME}` → `libduktape.so` →
+    `libduktape.so.{206..208}` (Debian numeric soversion).
+  - Three convenience macros re-expressed:
+    - `duk_create_heap_default()` → `duk_create_heap(NULL,…)`
+    - `duk_peval_string(c,s)` → `duk_eval_raw(c, s, 0, FLAGS)`
+      where FLAGS = `DUK_COMPILE_EVAL | SAFE | NOSOURCE | STRLEN | NOFILENAME`
+      (public DUK_COMPILE_* constants baked).
+    - `duk_safe_to_string(c,i)` → `duk_safe_to_lstring(c, i, NULL)`.
+
+  **tcl dlopen contract:**
+  - Tries `${AETHER_TCL_SONAME}` → `libtcl.so` →
+    `libtcl{9.0,8.6,8.5}.so.0` / `libtcl{9.0,8.6,8.5}.so`.
+  - The cleanest of the six rewrites — Tcl's C API is conventionally
+    non-macro, so no macro re-expressions needed. Plain `Tcl_*`
+    function-pointer table.
+
+  **End-user impact (all six bridges):**
+  - `aether.toml` for a program importing any of `contrib.host.*` no
+    longer needs `cflags` / `link_flags`.
+  - Binaries built on one minor work on another (e.g. lua 5.3 → 5.4,
+    perl 5.36 → 5.40, duktape 207 → 208, tcl 8.6 → 9.0).
+  - READMEs rewritten with the dlopen contract + `${AETHER_*_SONAME}`
+    fallback. All mirror `contrib/host/python/README.md` shape.
+
 ## [0.211.0]
 
 ### Changed
