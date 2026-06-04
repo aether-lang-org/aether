@@ -1331,10 +1331,9 @@ install: release ae stdlib
 #
 # Modules covered (v1):
 #   - sqlite                    (-lsqlite3)
-#   - host/{python,lua,perl,ruby,js,tcl}
-# Out of scope for v1: host/{java,go,tinygo} (separate-process or
-# JNI-style bridges, different build shape), tinyweb,
-# climate_http_tests. The widget toolkit (formerly contrib/aether_ui)
+#   - host/{python,lua,perl,ruby,duktape,tcl,tinygo}
+# Out of scope for v1: host/{java,go} (separate-process or JNI-style
+# bridges, different build shape), tinyweb, climate_http_tests. The widget toolkit (formerly contrib/aether_ui)
 # spun out to https://github.com/aether-lang-org/aether-ui and is no
 # longer in this repo.
 # -----------------------------------------------------------------
@@ -1372,14 +1371,13 @@ install-contrib: contrib
 	@# Mirror the contrib source tree for module.ae + headers.
 	@# Trim noise: tests, benchmarks, example .ae, build scripts,
 	@# CI scripts, and the modules we don't ship in v1
-	@# (climate_http_tests, host/{java,go,tinygo}, tinyweb — see
-	@# contrib: target comment).
+	@# (climate_http_tests, host/{java,go}, tinyweb — see
+	@# contrib: target comment). host/tinygo IS shipped (--with=tinygo).
 	@cp -R contrib $(PREFIX)/share/aether/
 	@rm -rf $(PREFIX)/share/aether/contrib/climate_http_tests
 	@rm -rf $(PREFIX)/share/aether/contrib/tinyweb
 	@rm -rf $(PREFIX)/share/aether/contrib/host/java
 	@rm -rf $(PREFIX)/share/aether/contrib/host/go
-	@rm -rf $(PREFIX)/share/aether/contrib/host/tinygo
 	@rm -rf $(PREFIX)/share/aether/contrib/host/aether
 	@find $(PREFIX)/share/aether/contrib -type d -name tests       -exec rm -rf {} + 2>/dev/null || true
 	@find $(PREFIX)/share/aether/contrib -type d -name benchmarks  -exec rm -rf {} + 2>/dev/null || true

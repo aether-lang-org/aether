@@ -26,7 +26,12 @@
 #
 #   Each --with=<lang> adds an apt -dev-kit layer + a `make contrib
 #   MODULES=<lang>` layer to the generated image. Known langs:
-#     python | lua | perl | ruby | java | duktape (alias: js) | tcl
+#     python | lua | perl | ruby | java | duktape (alias: js) | tcl | tinygo
+#
+#   `tinygo` is the odd one out — it's a c-shared sidecar builder, not
+#   a host-interpreter dlopen. Its layer installs the TinyGo .deb from
+#   the upstream GitHub release (+ golang-go for cgo + libffi-dev for
+#   the bridge's call_dynamic path) instead of an apt -dev kit.
 #
 #   The bare image (no --with) contains NO hosted-language bridges.
 #   --with= entries are alpha-sorted before deriving the image name,
@@ -166,6 +171,13 @@ with_dev_pkg() {
         duktape) echo "duktape-dev" ;;
         js)      echo "duktape-dev" ;;  # alias: --with=js maps to duktape
         tcl)     echo "tcl-dev" ;;
+        # tinygo is structurally different from the apt-installed -dev
+        # kits: TinyGo isn't in Debian repos, so the layer fetches the
+        # upstream .deb from the GitHub release. The "apt portion"
+        # below covers golang-go (the cgo host Go), libffi-dev (used by
+        # the bridge's tinygo.call_dynamic path AND by TinyGo's runtime
+        # for c-shared mode), and curl (to fetch the .deb).
+        tinygo)  echo "golang-go libffi-dev curl" ;;
         *)       return 1 ;;
     esac
 }
@@ -179,7 +191,7 @@ while [ $# -gt 0 ]; do
         --with=*)
             lang="${1#--with=}"
             if ! with_dev_pkg "$lang" >/dev/null; then
-                echo "aether-build: --with=$lang: unknown language (known: python lua perl ruby java duktape (alias: js) tcl)" >&2
+                echo "aether-build: --with=$lang: unknown language (known: python lua perl ruby java duktape (alias: js) tcl tinygo)" >&2
                 exit 1
             fi
             # Canonicalise aliases BEFORE the sort/dedupe pass so
@@ -399,7 +411,35 @@ bootstrap_image() {
     WITH_LAYERS=""
     for lang in $WITH_LANGS; do
         pkg=$(with_dev_pkg "$lang")
-        WITH_LAYERS="$WITH_LAYERS
+        if [ "$lang" = "tinygo" ]; then
+            # TinyGo isn't apt-packaged in Debian; fetch the upstream
+            # .deb from the GitHub release. The .deb arch names
+            # (amd64/arm64/armhf) match \`dpkg --print-architecture\`
+            # exactly — no remap. Override the version via
+            # \`--build-arg TINYGO_VERSION=0.X.Y\` on \`podman build\`.
+            WITH_LAYERS="$WITH_LAYERS
+# --- Hosted-language layer: tinygo (custom .deb + apt $pkg) ---
+# Added because aether-build was invoked with --with=tinygo. Unlike
+# the interpreter bridges, tinygo isn't a host-dlopen target — it's
+# a c-shared sidecar builder. The apt portion gives us golang-go
+# (cgo host Go), libffi-dev (bridge call_dynamic + tinygo runtime),
+# and curl (.deb fetch). The .deb step installs TinyGo itself.
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends $pkg \\
+ && rm -rf /var/lib/apt/lists/*
+ARG TINYGO_VERSION=0.34.0
+RUN ARCH=\$(dpkg --print-architecture) \\
+ && curl -fsSL -o /tmp/tinygo.deb \\
+      \"https://github.com/tinygo-org/tinygo/releases/download/v\${TINYGO_VERSION}/tinygo_\${TINYGO_VERSION}_\${ARCH}.deb\" \\
+ && apt-get update \\
+ && apt-get install -y --no-install-recommends /tmp/tinygo.deb \\
+ && rm -rf /var/lib/apt/lists/* /tmp/tinygo.deb
+RUN cd /src \\
+ && make contrib MODULES=tinygo \\
+ && make install-contrib
+"
+        else
+            WITH_LAYERS="$WITH_LAYERS
 # --- Hosted-language layer: $lang (via apt $pkg) ---
 # Added because aether-build was invoked with --with=$lang.
 # The -dev kit lays down REAL platform-specific headers
@@ -412,6 +452,7 @@ RUN cd /src \\
  && make contrib MODULES=$lang \\
  && make install-contrib
 "
+        fi
     done
 
     cat > "$BUILDCTX/Containerfile" <<CONTAINERFILE
