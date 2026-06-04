@@ -20,13 +20,29 @@
 #   aether-build --rebuild-image           # force image rebuild (e.g. after
 #                                          #   bumping AETHER_REF below)
 #
+# Hosted-language additions (repeatable):
+#   aether-build --with=python hello.ae           # ae + CPython bridge
+#   aether-build --with=python --with=ruby h.ae   # ae + CPython + CRuby bridges
+#
+#   Each --with=<lang> adds an apt -dev-kit layer + a `make contrib
+#   MODULES=<lang>` layer to the generated image. Known langs:
+#     python | lua | perl | ruby | java | js | tcl
+#
+#   The bare image (no --with) contains NO hosted-language bridges.
+#   --with= entries are alpha-sorted before deriving the image name,
+#   so `--with=ruby --with=python` and `--with=python --with=ruby`
+#   produce IDENTICAL images (cached together by podman).
+#
+#   --image-name=<custom>                  # override the auto-derived tag
+#                                          #   (default: aether-builder[-langs]:slim)
+#
 # Override via env vars:
-#   AETHER_BUILDER_IMAGE=aether-builder:slim     # image tag (default)
+#   AETHER_BUILDER_IMAGE=aether-builder:slim     # image tag (default; same
+#                                                #   effect as --image-name=)
 #   AETHER_WORK_DIR=/path/to/sources             # default: $PWD
 #   AETHER_OUT_DIR=/path/to/dropoff              # default: $PWD/out
 #   AETHER_REF=v0.203.0                          # Aether release to bake in
 #   AETHER_TARBALL=/path/to/aether-0.203.0.tgz   # skip download, use this
-#   HEADERS_REF=6872b5d...                       # hosted-language-headers pin
 #   AETHER_USERNS=""                             # drop --userns flag entirely
 #                                                #   (auto-detected on Bazzite /
 #                                                #   SELinux+crun hosts; set
@@ -64,20 +80,27 @@
 #     against (libssl, libnghttp2, libpcre2, libexpat, libsqlite3, zlib)
 #   - The Aether toolchain (aetherc, ae, libaether.a, stdlib) installed
 #     from the AETHER_REF release via `make install`
-#   - All five C-bridge host headers (Python, Lua, Perl, Ruby, JS)
-#     pre-vendored from the hosted-language-headers repo at HEADERS_REF
-#     (so end-user programs can `import contrib.host.python` etc.
-#     without per-language toggles)
+#   - libaether_sqlite.a (always — sqlite is a real-link bridge and
+#     libsqlite3-dev is already in the base apt-install)
+#
+# Hosted-language bridges (Python, Lua, Perl, Ruby, JS, Tcl) are added
+# ONLY via --with=<lang> (one layer per bridge — see USAGE). The base
+# image carries NONE of them. This keeps the "just Aether" case slim
+# and avoids the previous v0.209.0 model's footgun where vendored
+# multiarch headers silently failed to build bridges (ctr_notes.md
+# Bug 6). Each --with=<lang> apt-installs the real -dev kit (so the
+# distro's actual generated headers — pyconfig.h etc. — are present)
+# then runs `make contrib MODULES=<lang>` (fail-hard if it can't
+# build, no silent skip).
 #
 # NOT in the image (deliberately):
 #   - Host-language RUNTIMES (libpython3.so, libruby.so, …). The
-#     compile step links lazily; the resulting binary dlopens these
-#     at runtime on the DEPLOY host, not in the toolchain container.
-#     Whoever runs the binary needs the runtime on their box.
-#   - The JDK / JRE. Programs using contrib.host.java need an
-#     additional Java path; not bundled here. See --with-java
-#     (TODO — Java requires JDK 21+ for the contrib.host.java
-#     Foreign Function API; bookworm only has 17. Pending follow-up.)
+#     bridge .a's are dlopen-based (v0.209.0+); the resulting binary
+#     dlopens them at runtime on the DEPLOY host, not in the toolchain
+#     container. Whoever runs the binary needs the runtime on their box.
+#   - The JDK / JRE. --with=java would add it; bookworm's default JDK
+#     is 17 (the contrib.host.java FFA path wants 21+) so that bridge
+#     is pending.
 #
 #
 # ── ON THE DEPLOY HOST ─────────────────────────────────────────────
@@ -101,11 +124,95 @@ set -eu
 
 # ── Configuration ─────────────────────────────────────────────────
 
-IMAGE="${AETHER_BUILDER_IMAGE:-aether-builder:slim}"
+IMAGE_OVERRIDE="${AETHER_BUILDER_IMAGE:-}"
 WORK="${AETHER_WORK_DIR:-$PWD}"
 OUT="${AETHER_OUT_DIR:-$PWD/out}"
 AETHER_REF="${AETHER_REF:-v0.203.0}"
 HEADERS_REF="${HEADERS_REF:-6872b5df70b3098387a2ca44839e67293c14d54a}"
+
+# ── --with=<lang> additive per-bridge layers ──────────────────────
+#
+# Each --with=<lang> adds:
+#   1. an apt-install of that language's -dev kit
+#   2. a `make contrib MODULES=<lang>` + `make install-contrib`
+# to the generated Containerfile, producing
+# /usr/local/lib/aether/libaether_host_<lang>.a in the image. The
+# base image (no --with) ships ZERO hosted-language bridges
+# (sqlite is built unconditionally — it's a real-link bridge with a
+# minimal -dev kit already in the base toolchain).
+#
+# Image name auto-derives from the alpha-sorted --with set so
+# `--with=python --with=lua` and `--with=lua --with=python` produce
+# IDENTICAL image names + IDENTICAL layer hashes (the canonical
+# `--with` order is the layer order). --image-name=<custom>
+# overrides the auto-derivation.
+
+# Map a --with=<name> token to the Debian/Ubuntu apt -dev package name.
+# Keep small and explicit; one distro family for now (the base is
+# debian:bookworm-slim — see Containerfile FROM).
+with_dev_pkg() {
+    case "$1" in
+        python) echo "python3-dev" ;;
+        lua)    echo "liblua5.4-dev" ;;
+        perl)   echo "libperl-dev" ;;
+        ruby)   echo "ruby-dev" ;;
+        java)   echo "default-jdk" ;;
+        js)     echo "libduktape-dev" ;;
+        tcl)    echo "tcl-dev" ;;
+        *)      return 1 ;;
+    esac
+}
+
+# Collect --with= entries (sorted+deduped); record image-name override.
+WITH_LANGS_RAW=""
+IMAGE_NAME_OVERRIDE=""
+PASSTHROUGH_ARGS=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --with=*)
+            lang="${1#--with=}"
+            if ! with_dev_pkg "$lang" >/dev/null; then
+                echo "aether-build: --with=$lang: unknown language (known: python lua perl ruby java js tcl)" >&2
+                exit 1
+            fi
+            WITH_LANGS_RAW="$WITH_LANGS_RAW $lang"
+            shift
+            ;;
+        --image-name=*)
+            IMAGE_NAME_OVERRIDE="${1#--image-name=}"
+            shift
+            ;;
+        *)
+            # Preserve other args (including --aeb, --rebuild-image, the
+            # source file, etc.) in the same order for downstream handling.
+            PASSTHROUGH_ARGS="$PASSTHROUGH_ARGS $1"
+            shift
+            ;;
+    esac
+done
+
+# Canonicalise --with set: sort + dedupe. Empty if no --with given.
+WITH_LANGS="$(printf '%s\n' $WITH_LANGS_RAW | sort -u | xargs)"
+
+# Derive image name.
+#   --image-name=… wins (explicit override).
+#   else AETHER_BUILDER_IMAGE env var (pre-existing override).
+#   else: aether-builder:slim if no --with, or aether-builder-<a>-<b>-…:slim
+#         with the alpha-sorted lang set as the middle segment.
+if [ -n "$IMAGE_NAME_OVERRIDE" ]; then
+    IMAGE="$IMAGE_NAME_OVERRIDE"
+elif [ -n "$IMAGE_OVERRIDE" ]; then
+    IMAGE="$IMAGE_OVERRIDE"
+elif [ -z "$WITH_LANGS" ]; then
+    IMAGE="aether-builder:slim"
+else
+    IMAGE="aether-builder-$(echo "$WITH_LANGS" | tr ' ' '-'):slim"
+fi
+
+# Reinstate the original arg list (minus --with= / --image-name=) so
+# the existing flag-handling case-statements still work as written.
+# shellcheck disable=SC2086
+set -- $PASSTHROUGH_ARGS
 
 # ── Container engine detection ────────────────────────────────────
 
@@ -249,7 +356,10 @@ RUN mkdir -p /src && tar xzf /src.tar.gz -C /src --strip-components=1 && rm /src
 
 bootstrap_image() {
     echo "aether-build: image '$IMAGE' not present locally, building it now." >&2
-    echo "aether-build: this is a one-time setup (~5 minutes, ~330 MB on disk)." >&2
+    if [ -n "$WITH_LANGS" ]; then
+        echo "aether-build: --with set: $WITH_LANGS" >&2
+    fi
+    echo "aether-build: this is a one-time setup (~5 minutes per layer, ~330 MB base)." >&2
 
     BUILDCTX="$(mktemp -d)"
     # The trap fires on script exit so the temp dir is cleaned up
@@ -261,15 +371,52 @@ bootstrap_image() {
     # priority list above.
     acquire_source "$BUILDCTX"
 
+    # Compose the per-language layers from $WITH_LANGS. Each layer:
+    #   1. apt-install <lang>-dev (REAL distro headers; the vendored
+    #      multiarch shims in hosted-language-headers don't work for
+    #      python/lua/perl — they're Debian build products that
+    #      reference paths only -dev kits provide).
+    #   2. cd /src && make contrib MODULES=<lang> && make install-contrib
+    #      (MODULES filter is fail-hard: any requested module that
+    #      can't compile is a HARD error, not a silent SKIP — closes
+    #      the v0.209.0 "3 built 4 skipped" footgun).
+    #
+    # /src is preserved until the last layer; the post-loop cleanup
+    # layer removes it.
+    WITH_LAYERS=""
+    for lang in $WITH_LANGS; do
+        pkg=$(with_dev_pkg "$lang")
+        WITH_LAYERS="$WITH_LAYERS
+# --- Hosted-language layer: $lang (via apt $pkg) ---
+# Added because aether-build was invoked with --with=$lang.
+# The -dev kit lays down REAL platform-specific headers
+# (pyconfig.h / luaconf.h / perl.h etc.) that are generated build
+# products and can't be portably vendored.
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends $pkg \\
+ && rm -rf /var/lib/apt/lists/*
+RUN cd /src \\
+ && make contrib MODULES=$lang \\
+ && make install-contrib
+"
+    done
+
     cat > "$BUILDCTX/Containerfile" <<CONTAINERFILE
 # Auto-generated by aether-build — see the embedded heredoc in that
 # script for the source of truth.
+#
+# Image name: $IMAGE
+# Hosted languages (--with set, alpha-sorted): ${WITH_LANGS:-<none>}
 
 FROM debian:bookworm-slim
 
 # Base toolchain + the -dev packages Aether-emitted C wants at
 # link time. gcc + libc6-dev (not build-essential — we don't need
 # g++ or dpkg-dev).
+#
+# Hosted-language -dev kits (python3-dev, liblua5.4-dev, etc.) are
+# NOT installed here — they're added per layer by --with=<lang>.
+# This keeps the base image slim for the majority "just Aether" case.
 RUN apt-get update && apt-get install -y --no-install-recommends \\
         gcc make libc6-dev ca-certificates git pkg-config \\
         libssl-dev zlib1g-dev libnghttp2-dev libpcre2-dev \\
@@ -283,56 +430,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 ${SOURCE_STAGE}
 
 # Build & install Aether from the staged source. Do NOT remove /src
-# yet — install-contrib (below) builds the contrib bridge .a files
-# from the source tree, so it needs the source still present.
+# yet — any --with=<lang> layers below need it for make contrib.
 RUN cd /src \\
  && make \\
  && make install
 
-# Vendor C-bridge host headers from a pinned commit of the
-# hosted-language-headers repo. These let user programs that
-# import contrib.host.{python,lua,perl,ruby,js} compile cleanly
-# without per-language toggles. Runtime shared libs are NOT
-# installed here — see the script's "ON THE DEPLOY HOST" notes.
-#
-# Full clone (not --depth 1): a shallow clone lands on HEAD only,
-# and a subsequent `git fetch origin <sha>` requires the server
-# to have uploadpack.allowAnySHA1InWant enabled. GitHub supports
-# that for most repos but it can fail with
-# "fatal: reference is not a tree: <sha>". Full-history clone is
-# ~14 MB one-time during image build — small price for
-# deterministic behaviour across GitHub config quirks.
-RUN git clone \\
-        https://github.com/aether-lang-org/hosted-language-headers.git /opt/hdr \\
- && cd /opt/hdr \\
- && git checkout ${HEADERS_REF} \\
- && mkdir -p /opt/aether/include \\
- && cp -r /opt/hdr/python     /opt/aether/include/python \\
- && cp -r /opt/hdr/lua        /opt/aether/include/lua5.4 \\
- && cp -r /opt/hdr/perl       /opt/aether/include/perl \\
- && cp -r /opt/hdr/ruby       /opt/aether/include/ruby \\
- && cp -r /opt/hdr/ruby-arch  /opt/aether/include/ruby-arch \\
- && cp    /opt/hdr/js/*.h     /opt/aether/include/ \\
- && rm -rf /opt/hdr
-
-# Build & install the contrib host-bridge static archives (libaether_host_<lang>.a
-# for python/lua/perl/ruby/js + libaether_sqlite.a). These are required by
-# `ae build` (auto-linked when a program imports contrib.host.<lang>;
-# v0.208.0+ — without the .a, build fails loudly).
-#
-# Crucially this runs with the vendored headers in place (copied above),
-# so contrib_build.sh's probes find /opt/aether/include/<lang>/ and
-# compile each bridge against THOSE headers. No distro -dev packages
-# are installed in this image — the bridges are dlopen-based, so the
-# resulting .a files have no link-time runtime-lib dependency, and
-# work against any matching host runtime on the deploy box.
-#
-# /src is removed AFTER this; it was kept around past `make install`
-# specifically so `make contrib` (which install-contrib depends on)
-# could compile from source.
+# sqlite is unconditional: it's a real-link bridge (libsqlite3 linked
+# at end-user build time, NO dlopen), needs the base libsqlite3-dev
+# already in this image's apt-install above, and is small. Layer
+# stays even in the bare "aether-builder:slim" image.
 RUN cd /src \\
- && make install-contrib \\
- && rm -rf /src
+ && make contrib MODULES=sqlite \\
+ && make install-contrib
+${WITH_LAYERS}
+
+# Cleanup: /src no longer needed after the (possibly empty) per-lang
+# layer set above.
+RUN rm -rf /src
 
 # Bind-mount points: source comes in at /work, products land at /out.
 RUN mkdir -p /work /out
