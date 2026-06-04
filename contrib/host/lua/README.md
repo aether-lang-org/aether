@@ -10,15 +10,19 @@ The bridge `dlopen`s liblua at the **deploy host's** runtime — there
 is no `-llua` on the link line. The produced binary works against
 whatever Lua minor version the deploy host has (5.3 or 5.4 supported).
 
-Discovery order at first call to `lua.run`:
-1. `${AETHER_LUA_SONAME}` env var (orchestrator-supplied exact).
-2. `liblua.so` (Fedora-like unversioned).
-3. Fallback: `liblua5.4.so.0` / `liblua5.3.so.0` (Debian) +
-   `liblua5.4.so` / `liblua5.3.so` (Debian -dev symlinks) +
-   `liblua-5.4.so` / `liblua-5.3.so` (Fedora-versioned).
+Discovery order at first call to `lua.run` (strict two-step):
 
-If none load, `lua.run*` returns -1 with a clear stderr message
-naming the env-var escape hatch.
+1. `${AETHER_LUA_SONAME}` env var (orchestrator-supplied exact,
+   e.g. `liblua5.4.so.0`).
+2. `liblua.so` (unversioned symlink, when present).
+
+If both fail, `lua.run*` returns -1 with a clear error naming the
+env var. **There is no hardcoded version fallback list** — the
+bridge stays distro-agnostic; the orchestrator owns the probe.
+
+Lua doesn't have a standard sysconfig-style probe. The orchestrator
+can read `lua -e 'print(_VERSION)'` (gives `Lua 5.4`) and derive
+the soname (`liblua5.4.so.0` on Debian, `liblua-5.4.so` on Fedora).
 
 ## What `ae build` does for you automatically
 

@@ -17,16 +17,22 @@ is no `-lruby` on the link line. This means:
 - A binary built today on a 3.1 machine and run on a 3.2 machine
   works as long as the host has a usable libruby3.
 
-Discovery order at first call to `ruby.run`:
+Discovery order at first call to `ruby.run` (strict two-step):
 
 1. `${AETHER_RUBY_SONAME}` env var (orchestrator-supplied exact
-   soname, e.g. `libruby-3.1.so` or `libruby.so.3.1`).
-2. `libruby.so` (Fedora/Bazzite-style unversioned symlink).
-3. Fallback list: `libruby-3.{4..0}.so` (Debian dash-versioned) +
-   `libruby.so.3.{4..0}` (Fedora versioned).
+   soname, e.g. `libruby-3.1.so.3.1.2` or `libruby.so.3.4`).
+2. `libruby.so` (unversioned symlink — typically only present with
+   ruby-dev on Debian, sometimes runtime on Fedora-likes).
 
-If none load, `ruby.run*` returns -1 with a clear stderr message
-naming the env-var escape hatch.
+If both fail, `ruby.run*` returns -1 with a clear error naming the
+env var. **There is no hardcoded version fallback list** — the
+bridge stays distro-agnostic; the orchestrator owns the probe.
+
+Hint command for orchestrators / users setting the env var manually:
+
+```sh
+AETHER_RUBY_SONAME=$(ruby -rrbconfig -e 'print RbConfig::CONFIG["LIBRUBY_SO"]')
+```
 
 ## On the deploy host
 

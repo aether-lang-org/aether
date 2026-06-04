@@ -11,15 +11,22 @@ is no `-lperl` on the link line. The produced binary works against
 whatever Perl 5.x minor version the deploy host has (5.30 - 5.40
 supported).
 
-Discovery order at first `aether_perl_*` call:
-1. `${AETHER_PERL_SONAME}` env var (orchestrator-supplied exact).
+Discovery order at first `aether_perl_*` call (strict two-step):
+
+1. `${AETHER_PERL_SONAME}` env var (orchestrator-supplied exact,
+   e.g. `libperl.so.5.36`).
 2. `libperl.so` (Debian-style unversioned symlink; present with
    libperl-dev or sometimes the runtime alone).
-3. Fallback list: `libperl.so.5.40` down to `libperl.so.5.30`
-   (Debian/Fedora versioned soname).
 
-If none load, the bridge prints a clear stderr message naming the
-env-var escape hatch.
+If both fail, the bridge prints a clear error naming the env var.
+**There is no hardcoded version fallback list** — the bridge stays
+distro-agnostic; the orchestrator owns the probe.
+
+Hint command for orchestrators / users setting the env var manually:
+
+```sh
+AETHER_PERL_SONAME=$(perl -MConfig -e 'print $Config{libperl}')
+```
 
 ## What `ae build` does for you automatically
 

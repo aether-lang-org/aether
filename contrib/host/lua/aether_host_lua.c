@@ -99,33 +99,30 @@ static void* try_dlopen(const char* name) {
     return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
 }
 
-// Load liblua on first use.
-//   1. ${AETHER_LUA_SONAME} env var (orchestrator-supplied exact).
-//   2. liblua.so (Fedora-like unversioned).
-//   3. liblua5.4.so.0, liblua5.3.so.0 fallback list (Debian convention).
+// Load liblua on first use. Strict two-step contract:
+//   1. ${AETHER_LUA_SONAME} env var (orchestrator-supplied exact,
+//      e.g. "liblua5.4.so.0"). Lua doesn't have a standard runtime
+//      sysconfig-style probe — the orchestrator can read
+//      `lua -e 'print(_VERSION)'` to learn the major.minor, then
+//      check the distro's actual sonames (or just rely on the
+//      unversioned symlink below).
+//   2. liblua.so (Debian/Fedora unversioned symlink, when present).
+// No hardcoded version-list fallback. The orchestrator owns the
+// probe; the bridge stays distro-agnostic.
 static int load_liblua(void) {
     if (liblua_handle) return 0;
 
-    void* h = try_dlopen(getenv("AETHER_LUA_SONAME"));
+    const char* env_soname = getenv("AETHER_LUA_SONAME");
+    void* h = try_dlopen(env_soname);
     if (!h) h = try_dlopen("liblua.so");
-    if (!h) {
-        static const char* fallbacks[] = {
-            "liblua5.4.so.0", "liblua5.4.so",
-            "liblua5.3.so.0", "liblua5.3.so",
-            "liblua-5.4.so",  "liblua-5.3.so",
-            NULL
-        };
-        for (int i = 0; fallbacks[i]; i++) {
-            h = try_dlopen(fallbacks[i]);
-            if (h) break;
-        }
-    }
     if (!h) {
         fprintf(stderr,
             "aether host_lua: cannot dlopen liblua "
-            "(tried $AETHER_LUA_SONAME, liblua.so, liblua5.{3,4}.so[.0]).\n"
-            "  Install a lua5.3 or lua5.4 runtime on the host, or set "
-            "AETHER_LUA_SONAME explicitly.\n  dlerror: %s\n",
+            "(tried $AETHER_LUA_SONAME=%s, liblua.so).\n"
+            "  Install a lua runtime on the host, or set "
+            "AETHER_LUA_SONAME to the exact soname "
+            "(e.g. liblua5.4.so.0).\n  dlerror: %s\n",
+            env_soname ? env_soname : "(unset)",
             dlerror() ? dlerror() : "(none)");
         return -1;
     }

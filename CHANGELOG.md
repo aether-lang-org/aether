@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **All six `contrib.host.*` dlopen bridges: hardcoded
+  version-fallback lists removed; strict two-step contract**
+  (`contrib/host/{python,ruby,lua,perl,js,tcl}/aether_host_*.c`,
+  matching READMEs).
+
+  The earlier dlopen rewrites carried short hardcoded soname
+  fallback lists (e.g. `libpython3.{10..14}.so.1.0`,
+  `libruby.so.3.{0..4}`) as defence-in-depth. In practice this is a
+  maintenance treadmill — each new minor needs the list extended,
+  and a list-miss looks identical to a runtime bug at the deploy
+  site. Worse, "the fallback caught it" was lucky pattern-matching,
+  not engineering: when a host's lib doesn't match a hardcoded
+  name, the right answer is for the orchestrator to know how to
+  probe.
+
+  **New contract** for every bridge:
+  1. Try `${AETHER_<LANG>_SONAME}` (orchestrator-supplied exact).
+  2. Try `libfoo.so` (unversioned symlink, when present).
+  3. Fail clearly. Error message names the env var AND gives a
+     hint command the orchestrator can use to derive the soname.
+
+  Hint commands per language (now in the bridge's stderr error
+  message AND in each README):
+  - **python**: `python3 -c 'import sysconfig; print(sysconfig.get_config_var("INSTSONAME"))'`
+  - **ruby**: `ruby -rrbconfig -e 'print RbConfig::CONFIG["LIBRUBY_SO"]'`
+  - **perl**: `perl -MConfig -e 'print $Config{libperl}'`
+  - **lua**: `lua -e 'print(_VERSION)'` + derivation (no clean
+    runtime probe; orchestrator's job)
+  - **js (duktape)**: `ldconfig -p | awk '/libduktape\\.so/{print $1; exit}'`
+    (duktape is embedded-only — no CLI to probe with)
+  - **tcl**: `echo 'puts libtcl$tcl_version.so' | tclsh`
+
+  **Verified locally on Debian 12 dev box:**
+  - python + lua: still succeed via step 2 (their `libfoo.so`
+    symlinks are present from `*-dev` packages).
+  - ruby: now fires the new clean error (`AETHER_RUBY_SONAME=(unset)`,
+    `libruby.so` absent — Debian only ships dash-versioned). Setting
+    `AETHER_RUBY_SONAME=$(ruby -rrbconfig -e …)` to
+    `libruby-3.1.so.3.1.2` resolves cleanly; binary prints
+    `ruby 3.1.2`.
+
+  Orchestrator implication: aeb-ctr's `pass_soname` helper should
+  cover all six languages (currently has python/perl/tcl). Adding
+  lua/ruby/js needs probe code in aeb-ctr's helper — see
+  ctr_notes.md for the per-language hint commands. Bazzite NUC's
+  ruby capstone GREEN (2026-06-04) happened to work via the now-
+  removed fallback list; it'll need aeb-ctr's `pass_soname` ruby
+  branch wired up before the next NUC run.
+
 ## [0.212.0]
 
 ### Changed
