@@ -137,6 +137,27 @@ probe_duktape() {
     return 1
 }
 
+probe_tinygo() {
+    # The bridge .c is pure dlopen via std.dl (aether_dl_*) — it does NOT
+    # need the tinygo toolchain at COMPILE time. libffi is the only
+    # build-time dep, and even that's conditional on AETHER_HAS_LIBFFI
+    # for the tinygo.call_dynamic escape hatch. The `tinygo` binary is
+    # only invoked at USER-build time (aeb's tinygo_lib builder shells
+    # `tinygo build -buildmode=c-shared` on the .go source).
+    #
+    # Probe shape: if libffi-dev is present, opt in to the AETHER_HAS_LIBFFI
+    # path and emit its cflags; otherwise the bridge still builds without
+    # the escape hatch.
+    if pkg-config --exists libffi 2>/dev/null; then
+        echo "-DAETHER_HAS_LIBFFI $(pkg-config --cflags libffi 2>/dev/null)"
+        return 0
+    fi
+    # No libffi: the bridge still compiles (the call_dynamic block is
+    # behind #ifdef AETHER_HAS_LIBFFI).
+    echo ""
+    return 0
+}
+
 # build_module <module_name> <relative_src_path> <AETHER_HAS_FLAG> <probe_fn>
 # Returns: 0 OK, 1 SKIP (probe failed), 2 FAIL (compile/archive failed)
 # Caller decides whether SKIP or FAIL is fatal (depends on MODULES mode).
@@ -185,6 +206,7 @@ CATALOGUE=(
     "ruby|host_ruby      contrib/host/ruby/aether_host_ruby.c     AETHER_HAS_RUBY    probe_ruby"
     "duktape|host_duktape  contrib/host/duktape/aether_host_duktape.c  AETHER_HAS_DUKTAPE  probe_duktape"
     "tcl|host_tcl        contrib/host/tcl/aether_host_tcl.c       AETHER_HAS_TCL     probe_tcl"
+    "tinygo|host_tinygo  contrib/host/tinygo/aether_host_tinygo.c AETHER_HAS_TINYGO  probe_tinygo"
 )
 
 # Find a catalogue line by short name. Echoes the build_module arg list

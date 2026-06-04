@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`aether-build --with=tinygo` — TinyGo c-shared sidecar capability**
+  (`tools/docker/aether-build`, `tests/scripts/contrib_build.sh`,
+  `Makefile`). New `--with=tinygo` token builds an
+  `aether-builder-tinygo:slim` image with `libaether_host_tinygo.a` +
+  TinyGo (pinned to 0.34.0 via `--build-arg TINYGO_VERSION=…`) +
+  `golang-go` (cgo host Go) + `libffi-dev`. The bridge `.c` is pure
+  dlopen via `std.dl` — TinyGo isn't needed to build the `.a`; it's
+  needed at user-program build time when `aeb`'s `aether.tinygo_lib`
+  builder shells `tinygo build -buildmode=c-shared` to produce a
+  sidecar `.so`. The capability ships the toolchain in the builder
+  image so the aeb-toolchain layer stays language-agnostic (same
+  property the six interpreter bridges rely on). Closes the
+  capability-set across all host-language bridges (python, ruby, lua,
+  perl, tcl, duktape, tinygo).
+
+### Changed
+
+- **`install-contrib` ships `contrib/host/tinygo/`** (`Makefile`).
+  Was previously stripped under the v1 "out of scope" comment that
+  also nukes `host/java` + `host/go`. tinygo IS in scope — it's
+  the first c-shared sidecar capability and its `module.ae` must be
+  installable so `import contrib.host.tinygo` resolves in
+  `aether-builder-tinygo:slim`.
+
 ## [0.214.0]
 
 ### Changed
