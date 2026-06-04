@@ -4,6 +4,21 @@
 // We provide native bindings (env, readFile, print) that go through
 // the Aether sandbox checker. This is the purest containment model —
 // the guest can ONLY do what we explicitly expose.
+//
+// LOADING MODEL: dlopen, not -lduktape. Mirrors contrib/host/python,
+// ruby, lua, perl — every Duktape C-API symbol resolved via dlsym at
+// first call. The bridge .a has NO unresolved Duktape symbols at
+// link time, so end-user binaries have no DT_NEEDED libduktape and
+// are ABI-portable across deploy-host Duktape minor versions.
+//
+// Duktape's headers `#define` a handful of convenience macros over
+// the real exported functions:
+//   duk_create_heap_default() → duk_create_heap(NULL,NULL,NULL,NULL,NULL)
+//   duk_peval_string(c,s)     → duk_eval_raw(c,s,0,FLAGS)
+//   duk_safe_to_string(c,i)   → duk_safe_to_lstring(c,i,NULL)
+// We dlsym the wrapped functions and re-implement the macros as
+// inline static helpers. The DUK_COMPILE_* flag constants are baked
+// directly (public ABI of duktape's compile-flags interface).
 
 #include "aether_host_js.h"
 #include "../../../runtime/aether_sandbox.h"
@@ -11,28 +26,151 @@
 
 #ifdef AETHER_HAS_JS
 #include <duktape.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 
+// --- libduktape dlopen table ------------------------------------------------
+
+static void* libduktape_handle = NULL;
+
+// duk_peval_string flag set (documented public DUK_COMPILE_* constants):
+//   EVAL (1<<3) | SAFE (1<<7) | NOSOURCE (1<<9) | STRLEN (1<<10) | NOFILENAME (1<<11)
+#define BRIDGE_DUK_PEVAL_FLAGS \
+    (DUK_COMPILE_EVAL | DUK_COMPILE_SAFE | DUK_COMPILE_NOSOURCE | \
+     DUK_COMPILE_STRLEN | DUK_COMPILE_NOFILENAME)
+
+static struct {
+    // Heap lifecycle.
+    duk_context* (*duk_create_heap)(duk_alloc_function alloc_func,
+                                    duk_realloc_function realloc_func,
+                                    duk_free_function free_func,
+                                    void* heap_udata,
+                                    duk_fatal_function fatal_handler);
+    void (*duk_destroy_heap)(duk_context* ctx);
+    // Eval (real fn behind duk_peval_string macro).
+    duk_int_t (*duk_eval_raw)(duk_context* ctx, const char* src_buffer,
+                              duk_size_t src_length, duk_uint_t flags);
+    // String coercion (real fn behind duk_safe_to_string).
+    const char* (*duk_safe_to_lstring)(duk_context* ctx, duk_idx_t idx,
+                                       duk_size_t* out_len);
+    // Stack manipulation.
+    duk_idx_t (*duk_get_top)(duk_context* ctx);
+    void (*duk_pop)(duk_context* ctx);
+    // Value pushers.
+    const char* (*duk_push_string)(duk_context* ctx, const char* str);
+    void (*duk_push_int)(duk_context* ctx, duk_int_t val);
+    void (*duk_push_boolean)(duk_context* ctx, duk_bool_t val);
+    void (*duk_push_undefined)(duk_context* ctx);
+    duk_idx_t (*duk_push_c_function)(duk_context* ctx,
+                                     duk_c_function func, duk_idx_t nargs);
+    // Value getters.
+    const char* (*duk_require_string)(duk_context* ctx, duk_idx_t idx);
+    const char* (*duk_require_lstring)(duk_context* ctx, duk_idx_t idx,
+                                       duk_size_t* out_len);
+    const char* (*duk_to_string)(duk_context* ctx, duk_idx_t idx);
+    // Globals.
+    duk_bool_t (*duk_put_global_string)(duk_context* ctx, const char* key);
+} g_duk;
+
+static int resolve_duktape_symbols(void* h) {
+#define RESOLVE(field, sym) do {                                       \
+        *(void**)(&g_duk.field) = dlsym(h, sym);                       \
+        if (!g_duk.field) {                                            \
+            fprintf(stderr,                                            \
+                "aether host_js: libduktape missing symbol %s\n", sym);\
+            return -1;                                                 \
+        }                                                              \
+    } while (0)
+
+    RESOLVE(duk_create_heap,        "duk_create_heap");
+    RESOLVE(duk_destroy_heap,       "duk_destroy_heap");
+    RESOLVE(duk_eval_raw,           "duk_eval_raw");
+    RESOLVE(duk_safe_to_lstring,    "duk_safe_to_lstring");
+    RESOLVE(duk_get_top,            "duk_get_top");
+    RESOLVE(duk_pop,                "duk_pop");
+    RESOLVE(duk_push_string,        "duk_push_string");
+    RESOLVE(duk_push_int,           "duk_push_int");
+    RESOLVE(duk_push_boolean,       "duk_push_boolean");
+    RESOLVE(duk_push_undefined,     "duk_push_undefined");
+    RESOLVE(duk_push_c_function,    "duk_push_c_function");
+    RESOLVE(duk_require_string,     "duk_require_string");
+    RESOLVE(duk_require_lstring,    "duk_require_lstring");
+    RESOLVE(duk_to_string,          "duk_to_string");
+    RESOLVE(duk_put_global_string,  "duk_put_global_string");
+    return 0;
+#undef RESOLVE
+}
+
+static void* try_dlopen(const char* name) {
+    if (!name || !*name) return NULL;
+    return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+}
+
+// Load libduktape on first use.
+//   1. ${AETHER_JS_SONAME} env var (orchestrator-supplied exact).
+//   2. libduktape.so (Debian-style unversioned symlink).
+//   3. libduktape.so.207 / .206 fallback (current major versions).
+static int load_libduktape(void) {
+    if (libduktape_handle) return 0;
+
+    void* h = try_dlopen(getenv("AETHER_JS_SONAME"));
+    if (!h) h = try_dlopen("libduktape.so");
+    if (!h) {
+        static const char* fallbacks[] = {
+            "libduktape.so.208", "libduktape.so.207", "libduktape.so.206",
+            NULL
+        };
+        for (int i = 0; fallbacks[i]; i++) {
+            h = try_dlopen(fallbacks[i]);
+            if (h) break;
+        }
+    }
+    if (!h) {
+        fprintf(stderr,
+            "aether host_js: cannot dlopen libduktape "
+            "(tried $AETHER_JS_SONAME, libduktape.so, libduktape.so.{206..208}).\n"
+            "  Install duktape on the host, or set AETHER_JS_SONAME explicitly.\n"
+            "  dlerror: %s\n",
+            dlerror() ? dlerror() : "(none)");
+        return -1;
+    }
+
+    if (resolve_duktape_symbols(h) != 0) {
+        dlclose(h);
+        return -1;
+    }
+    libduktape_handle = h;
+    return 0;
+}
+
+// --- macro re-expressions --------------------------------------------------
+
+static duk_context* dh_create_heap_default(void) {
+    return g_duk.duk_create_heap(NULL, NULL, NULL, NULL, NULL);
+}
+
+static duk_int_t dh_peval_string(duk_context* c, const char* src) {
+    return g_duk.duk_eval_raw(c, src, 0, BRIDGE_DUK_PEVAL_FLAGS);
+}
+
+static const char* dh_safe_to_string(duk_context* c, duk_idx_t idx) {
+    return g_duk.duk_safe_to_lstring(c, idx, NULL);
+}
+
+// --- bridge state (unchanged) ----------------------------------------------
+
 static duk_context* ctx = NULL;
 
-// Bridge-owned permission stack. Self-contained — see comment in
-// contrib/host/tcl/aether_host_tcl.c for rationale.
 static void* js_perms_stack[64];
 static int   js_perms_depth = 0;
 
-// Permission checker — shared with Python/Lua host modules
 extern int list_size(void*);
 extern void* list_get_raw(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
-    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
-    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
-    // vice versa). Safe for non-TCP categories because "::ffff:"
-    // doesn't appear in filesystem paths, env var names, or exec
-    // command strings.
     if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
     if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
@@ -70,137 +208,123 @@ static int check_sandbox(const char* category, const char* resource) {
     return 1;
 }
 
-// --- Duktape native bindings (exposed to JS) ---
+// --- Duktape native bindings (exposed to JS) -------------------------------
 
-// print(...) — always available
 static duk_ret_t js_print(duk_context* c) {
-    int n = duk_get_top(c);
+    int n = g_duk.duk_get_top(c);
     for (int i = 0; i < n; i++) {
         if (i > 0) printf(" ");
-        printf("%s", duk_to_string(c, i));
+        printf("%s", g_duk.duk_to_string(c, i));
     }
     printf("\n");
     return 0;
 }
 
-// env(name) — returns string or undefined, checked by sandbox
 static duk_ret_t js_env(duk_context* c) {
-    const char* name = duk_require_string(c, 0);
+    const char* name = g_duk.duk_require_string(c, 0);
     if (!check_sandbox("env", name)) {
-        duk_push_undefined(c);
+        g_duk.duk_push_undefined(c);
         return 1;
     }
     const char* val = getenv(name);
     if (val) {
-        duk_push_string(c, val);
+        g_duk.duk_push_string(c, val);
     } else {
-        duk_push_undefined(c);
+        g_duk.duk_push_undefined(c);
     }
     return 1;
 }
 
-// readFile(path) — returns string or undefined, checked by sandbox
 static duk_ret_t js_read_file(duk_context* c) {
-    const char* path = duk_require_string(c, 0);
+    const char* path = g_duk.duk_require_string(c, 0);
     if (!check_sandbox("fs_read", path)) {
-        duk_push_undefined(c);
+        g_duk.duk_push_undefined(c);
         return 1;
     }
     FILE* f = fopen(path, "r");
     if (!f) {
-        duk_push_undefined(c);
+        g_duk.duk_push_undefined(c);
         return 1;
     }
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
     char* buf = malloc(len + 1);
-    if (!buf) { fclose(f); duk_push_undefined(c); return 1; }
+    if (!buf) { fclose(f); g_duk.duk_push_undefined(c); return 1; }
     fread(buf, 1, len, f);
     buf[len] = '\0';
     fclose(f);
-    duk_push_string(c, buf);
+    g_duk.duk_push_string(c, buf);
     free(buf);
     return 1;
 }
 
-// fileExists(path) — returns boolean, checked by sandbox
 static duk_ret_t js_file_exists(duk_context* c) {
-    const char* path = duk_require_string(c, 0);
+    const char* path = g_duk.duk_require_string(c, 0);
     if (!check_sandbox("fs_read", path)) {
-        duk_push_boolean(c, 0);
+        g_duk.duk_push_boolean(c, 0);
         return 1;
     }
     FILE* f = fopen(path, "r");
-    if (f) { fclose(f); duk_push_boolean(c, 1); }
-    else { duk_push_boolean(c, 0); }
+    if (f) { fclose(f); g_duk.duk_push_boolean(c, 1); }
+    else { g_duk.duk_push_boolean(c, 0); }
     return 1;
 }
 
-// writeFile(path, content) — returns boolean success, checked by sandbox
-// Creates or truncates. Returns false if the grant is denied or the
-// write fails. The grant category is "fs_write" — separate from
-// "fs_read", so scripts must be explicitly granted write permission.
 static duk_ret_t js_write_file(duk_context* c) {
-    const char* path = duk_require_string(c, 0);
+    const char* path = g_duk.duk_require_string(c, 0);
     duk_size_t len = 0;
-    const char* content = duk_require_lstring(c, 1, &len);
+    const char* content = g_duk.duk_require_lstring(c, 1, &len);
     if (!check_sandbox("fs_write", path)) {
-        duk_push_boolean(c, 0);
+        g_duk.duk_push_boolean(c, 0);
         return 1;
     }
     FILE* f = fopen(path, "w");
-    if (!f) { duk_push_boolean(c, 0); return 1; }
+    if (!f) { g_duk.duk_push_boolean(c, 0); return 1; }
     size_t written = fwrite(content, 1, len, f);
     fclose(f);
-    duk_push_boolean(c, written == len);
+    g_duk.duk_push_boolean(c, written == len);
     return 1;
 }
 
-// exec(cmd) — runs the shell command, returns the exit code.
-// Sandbox-checked against the "exec" category with the command
-// string as resource. Uses libc's system() which goes through
-// /bin/sh -c; the child inherits any LD_PRELOAD so spawned tools
-// are also sandbox-checked. Returns -1 if denied.
 static duk_ret_t js_exec(duk_context* c) {
-    const char* cmd = duk_require_string(c, 0);
+    const char* cmd = g_duk.duk_require_string(c, 0);
     if (!check_sandbox("exec", cmd)) {
-        duk_push_int(c, -1);
+        g_duk.duk_push_int(c, -1);
         return 1;
     }
     int rc = system(cmd);
-    // Unwrap WEXITSTATUS so the JS side sees the shell's exit code,
-    // not the raw status word.
 #ifdef WEXITSTATUS
     if (rc >= 0) rc = WEXITSTATUS(rc);
 #endif
-    duk_push_int(c, rc);
+    g_duk.duk_push_int(c, rc);
     return 1;
 }
 
 static void register_bindings(duk_context* c) {
-    duk_push_c_function(c, js_print, DUK_VARARGS);
-    duk_put_global_string(c, "print");
+    g_duk.duk_push_c_function(c, js_print, DUK_VARARGS);
+    g_duk.duk_put_global_string(c, "print");
 
-    duk_push_c_function(c, js_env, 1);
-    duk_put_global_string(c, "env");
+    g_duk.duk_push_c_function(c, js_env, 1);
+    g_duk.duk_put_global_string(c, "env");
 
-    duk_push_c_function(c, js_read_file, 1);
-    duk_put_global_string(c, "readFile");
+    g_duk.duk_push_c_function(c, js_read_file, 1);
+    g_duk.duk_put_global_string(c, "readFile");
 
-    duk_push_c_function(c, js_file_exists, 1);
-    duk_put_global_string(c, "fileExists");
+    g_duk.duk_push_c_function(c, js_file_exists, 1);
+    g_duk.duk_put_global_string(c, "fileExists");
 
-    duk_push_c_function(c, js_write_file, 2);
-    duk_put_global_string(c, "writeFile");
+    g_duk.duk_push_c_function(c, js_write_file, 2);
+    g_duk.duk_put_global_string(c, "writeFile");
 
-    duk_push_c_function(c, js_exec, 1);
-    duk_put_global_string(c, "exec");
+    g_duk.duk_push_c_function(c, js_exec, 1);
+    g_duk.duk_put_global_string(c, "exec");
 }
 
 int js_init(void) {
     if (ctx) return 0;
-    ctx = duk_create_heap_default();
+    if (load_libduktape() != 0) return -1;
+    ctx = dh_create_heap_default();
     if (!ctx) return -1;
     register_bindings(ctx);
     return 0;
@@ -208,26 +332,26 @@ int js_init(void) {
 
 void js_finalize(void) {
     if (ctx) {
-        duk_destroy_heap(ctx);
+        g_duk.duk_destroy_heap(ctx);
         ctx = NULL;
     }
 }
 
 int js_run(const char* code) {
     if (!code) return -1;
-    js_init();
-    if (duk_peval_string(ctx, code) != 0) {
-        fprintf(stderr, "[js] %s\n", duk_safe_to_string(ctx, -1));
-        duk_pop(ctx);
+    if (js_init() != 0) return -1;
+    if (dh_peval_string(ctx, code) != 0) {
+        fprintf(stderr, "[js] %s\n", dh_safe_to_string(ctx, -1));
+        g_duk.duk_pop(ctx);
         return -1;
     }
-    duk_pop(ctx);
+    g_duk.duk_pop(ctx);
     return 0;
 }
 
 int js_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
-    js_init();
+    if (js_init() != 0) return -1;
 
     if (js_perms_depth >= 64) return -1;
     js_perms_stack[js_perms_depth++] = perms;
@@ -235,12 +359,12 @@ int js_run_sandboxed(void* perms, const char* code) {
     _aether_sandbox_checker = NULL;  // JS uses direct check_sandbox, not libc interception
 
     int result = 0;
-    if (duk_peval_string(ctx, code) != 0) {
-        fprintf(stderr, "[js] %s\n", duk_safe_to_string(ctx, -1));
-        duk_pop(ctx);
+    if (dh_peval_string(ctx, code) != 0) {
+        fprintf(stderr, "[js] %s\n", dh_safe_to_string(ctx, -1));
+        g_duk.duk_pop(ctx);
         result = -1;
     } else {
-        duk_pop(ctx);
+        g_duk.duk_pop(ctx);
     }
 
     _aether_sandbox_checker = prev;
@@ -249,34 +373,34 @@ int js_run_sandboxed(void* perms, const char* code) {
     return result;
 }
 
-// --- Shared map bindings for JS ---
+// --- Shared map bindings for JS --------------------------------------------
 
 static uint64_t js_current_map_token = 0;
 
 static duk_ret_t js_aether_map_get(duk_context* c) {
-    const char* key = duk_require_string(c, 0);
+    const char* key = g_duk.duk_require_string(c, 0);
     const char* val = aether_shared_map_get_by_token(js_current_map_token, key);
-    if (val) { duk_push_string(c, val); } else { duk_push_undefined(c); }
+    if (val) { g_duk.duk_push_string(c, val); } else { g_duk.duk_push_undefined(c); }
     return 1;
 }
 
 static duk_ret_t js_aether_map_put(duk_context* c) {
-    const char* key = duk_require_string(c, 0);
-    const char* val = duk_require_string(c, 1);
+    const char* key = g_duk.duk_require_string(c, 0);
+    const char* val = g_duk.duk_require_string(c, 1);
     aether_shared_map_put_by_token(js_current_map_token, key, val);
     return 0;
 }
 
 static void register_map_bindings(duk_context* c) {
-    duk_push_c_function(c, js_aether_map_get, 1);
-    duk_put_global_string(c, "aether_map_get");
-    duk_push_c_function(c, js_aether_map_put, 2);
-    duk_put_global_string(c, "aether_map_put");
+    g_duk.duk_push_c_function(c, js_aether_map_get, 1);
+    g_duk.duk_put_global_string(c, "aether_map_get");
+    g_duk.duk_push_c_function(c, js_aether_map_put, 2);
+    g_duk.duk_put_global_string(c, "aether_map_put");
 }
 
 int js_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token) {
     if (!code) return -1;
-    js_init();
+    if (js_init() != 0) return -1;
     register_map_bindings(ctx);
 
     extern void aether_shared_map_freeze_inputs_by_token(uint64_t);
@@ -289,12 +413,12 @@ int js_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token)
     _aether_sandbox_checker = NULL;
 
     int result = 0;
-    if (duk_peval_string(ctx, code) != 0) {
-        fprintf(stderr, "[js] %s\n", duk_safe_to_string(ctx, -1));
-        duk_pop(ctx);
+    if (dh_peval_string(ctx, code) != 0) {
+        fprintf(stderr, "[js] %s\n", dh_safe_to_string(ctx, -1));
+        g_duk.duk_pop(ctx);
         result = -1;
     } else {
-        duk_pop(ctx);
+        g_duk.duk_pop(ctx);
     }
 
     _aether_sandbox_checker = prev;

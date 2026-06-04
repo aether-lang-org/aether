@@ -1,30 +1,73 @@
 # contrib.host.tcl — Embedded Tcl
 
-## Prerequisites
+`import contrib.host.tcl` lets an Aether program embed Tcl in-process:
+`tcl.run_sandboxed(perms, "<source>")` evaluates Tcl with
+permission-checked access controls.
 
-```bash
-# Debian/Ubuntu
-sudo apt install tcl-dev
+## How it loads libtcl
 
-# macOS
-brew install tcl-tk
+The bridge `dlopen`s libtcl at the **deploy host's** runtime — there
+is no `-ltcl` on the link line. The produced binary works against
+whatever Tcl minor version the deploy host has (8.5 / 8.6 / 9.0
+supported).
 
-# Verify
-pkg-config --cflags tcl    # or tcl8.6, tcl9.0
-```
+Discovery order at first call to `tcl.run`:
+1. `${AETHER_TCL_SONAME}` env var (orchestrator-supplied exact).
+2. `libtcl.so` (Debian-style unversioned symlink, present with
+   tcl-dev).
+3. Fallback: `libtcl{9.0,8.6,8.5}.so.0` / `libtcl{9.0,8.6,8.5}.so`.
 
-## Build flags
+If none load, `tcl.run*` returns -1 with a clear stderr message
+naming the env-var escape hatch.
+
+## What `ae build` does for you automatically
+
+When your program has `import contrib.host.tcl`, `ae build`:
+1. Links `libaether_host_tcl.a` (the in-tree bridge) automatically.
+2. Does NOT add any libtcl link flags — the bridge dlopens libtcl
+   at runtime.
+
+`ae build` errors with a clear actionable message if the bridge .a
+hasn't been built: build the image with
+`aether-build --with=tcl --rebuild-image` or
+`make contrib MODULES=tcl && make install-contrib`.
+
+## `aether.toml` — usually empty for tcl
 
 ```toml
-# aether.toml
-[build]
-cflags = "-DAETHER_HAS_TCL $(pkg-config --cflags tcl)"
-link_flags = "$(pkg-config --libs tcl)"
+# nothing required for contrib.host.tcl
+[[bin]]
+name = "myapp"
+path = "myapp.ae"
+```
+
+If the deploy host's Tcl isn't discoverable via the default order,
+set `AETHER_TCL_SONAME`:
+
+```sh
+AETHER_TCL_SONAME=libtcl8.6.so.0 ae build myapp.ae
 ```
 
 ## Usage
 
 ```aether
 import contrib.host.tcl
-tcl.run_sandboxed(perms, "puts \"hello\"")
+
+main() {
+    tcl.run("puts \"hello from tcl\"")
+}
 ```
+
+## Implementation notes
+
+- All Tcl C-API access goes through a `dlsym` function-pointer
+  table — see `aether_host_tcl.c`. The bridge .a has NO unresolved
+  Tcl symbols (`nm -u` confirms).
+- Tcl's C API is conventionally non-macro — the headers expose
+  real exported `Tcl_*` functions, no `pTHX_`-style context
+  passing, no struct-tag bit-twiddling. **No macro re-expressions
+  needed** (unlike python's `Py_INCREF` / perl's `SvTRUE` /
+  duktape's `duk_peval_string`). The cleanest of the dlopen
+  rewrites.
+- `TCL_OK = 0` / `TCL_ERROR = 1` constants are stable across Tcl
+  8.x and 9.x.

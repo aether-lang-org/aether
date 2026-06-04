@@ -3,33 +3,155 @@
 // Embeds Perl in the Aether process. Perl's open(), $ENV{},
 // system() etc. go through libc and are intercepted by the
 // LD_PRELOAD sandbox layer.
+//
+// LOADING MODEL: dlopen, not -lperl. Mirrors contrib/host/python,
+// contrib/host/ruby, contrib/host/lua — every Perl C-API symbol
+// resolved via dlsym at first call. The bridge .a has NO unresolved
+// Perl symbols at link time, so end-user binaries have no
+// DT_NEEDED libperl and are ABI-portable across deploy-host Perl
+// versions (5.34 / 5.36 / 5.38 / …).
+//
+// The Perl bridge is the most macro-heavy of the four:
+//
+//   eval_pv(s, croak)       → Perl_eval_pv(my_perl, s, croak)
+//   ERRSV                   → Perl_get_sv(my_perl, "@", 0)
+//   SvTRUE(sv)              → Perl_sv_true(my_perl, sv)
+//   SvPV_nolen(sv)          → Perl_sv_2pv_flags(my_perl, sv, NULL, SV_GMAGIC)
+//
+// All the macros expand to context-passing (pTHX_) wrappers around
+// real Perl_* exported functions. We dlsym those Perl_* functions
+// directly and pass `my_perl` (the per-interpreter context) as the
+// first argument explicitly. SV_GMAGIC's value (= 2) is a stable
+// public constant baked into the bridge — same shape as Ruby's
+// Qnil-as-literal.
+//
+// What we DON'T do: dlsym SV-struct-field accessors (SvFLAGS,
+// SvPVX, …). Those would bake the SV layout into the bridge .a,
+// which differs across Perl versions. Calling Perl_* functions
+// instead is the layout-agnostic path.
 
 #include "aether_host_perl.h"
 #include "../../../runtime/aether_sandbox.h"
 #include "../../../runtime/aether_shared_map.h"
 
 #ifdef AETHER_HAS_PERL
+// Perl headers pull in EXTERN.h's pTHX_ machinery; we just need the
+// PerlInterpreter / SV typedefs and the FALSE/TRUE / SV_GMAGIC
+// constants. Including EXTERN.h + perl.h gets us those without
+// causing Perl_* macros to bind to inline definitions (we'll use
+// the dlsym'd versions exclusively).
 #include <EXTERN.h>
 #include <perl.h>
+#include <dlfcn.h>
+#include <stdio.h>
 #include <string.h>
+
+// --- libperl dlopen table ---------------------------------------------------
+
+static void* libperl_handle = NULL;
+
+// SV_GMAGIC flag value (2 — defined in perl/sv.h). The bridge bakes
+// it directly to avoid pulling in more of the SV macro machinery.
+// This is part of Perl's public ABI (5.x has been stable for years
+// on this point).
+#define BRIDGE_SV_GMAGIC 2
+
+static struct {
+    // Lifecycle (un-prefixed, real exports).
+    PerlInterpreter* (*perl_alloc)(void);
+    void  (*perl_construct)(PerlInterpreter*);
+    int   (*perl_parse)(PerlInterpreter*, XSINIT_t xsinit, int argc, char** argv, char** env);
+    int   (*perl_run)(PerlInterpreter*);
+    int   (*perl_destruct)(PerlInterpreter*);
+    void  (*perl_free)(PerlInterpreter*);
+    // Eval + error introspection (Perl_*-prefixed; we pass my_perl
+    // as first arg explicitly instead of via pTHX_ macro).
+    SV*   (*Perl_eval_pv)(PerlInterpreter*, const char*, I32 croak_on_error);
+    SV*   (*Perl_get_sv)(PerlInterpreter*, const char* name, I32 flags);
+    I32   (*Perl_sv_true)(PerlInterpreter*, SV*);
+    char* (*Perl_sv_2pv_flags)(PerlInterpreter*, SV*, STRLEN* lp, U32 flags);
+} g_pl;
+
+static int resolve_perl_symbols(void* h) {
+#define RESOLVE(field, sym) do {                                       \
+        *(void**)(&g_pl.field) = dlsym(h, sym);                        \
+        if (!g_pl.field) {                                             \
+            fprintf(stderr,                                            \
+                "aether host_perl: libperl missing symbol %s\n", sym); \
+            return -1;                                                 \
+        }                                                              \
+    } while (0)
+
+    RESOLVE(perl_alloc,        "perl_alloc");
+    RESOLVE(perl_construct,    "perl_construct");
+    RESOLVE(perl_parse,        "perl_parse");
+    RESOLVE(perl_run,          "perl_run");
+    RESOLVE(perl_destruct,     "perl_destruct");
+    RESOLVE(perl_free,         "perl_free");
+    RESOLVE(Perl_eval_pv,      "Perl_eval_pv");
+    RESOLVE(Perl_get_sv,       "Perl_get_sv");
+    RESOLVE(Perl_sv_true,      "Perl_sv_true");
+    RESOLVE(Perl_sv_2pv_flags, "Perl_sv_2pv_flags");
+    return 0;
+#undef RESOLVE
+}
+
+static void* try_dlopen(const char* name) {
+    if (!name || !*name) return NULL;
+    return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+}
+
+// Load libperl on first use.
+//   1. ${AETHER_PERL_SONAME} env var (orchestrator-supplied exact).
+//   2. libperl.so (Debian-style flat symlink — present with libperl-dev
+//      and sometimes with the runtime alone depending on packaging).
+//   3. libperl.so.5.XX fallback list (Debian/Fedora versioned).
+static int load_libperl(void) {
+    if (libperl_handle) return 0;
+
+    void* h = try_dlopen(getenv("AETHER_PERL_SONAME"));
+    if (!h) h = try_dlopen("libperl.so");
+    if (!h) {
+        static const char* fallbacks[] = {
+            "libperl.so.5.40", "libperl.so.5.38",
+            "libperl.so.5.36", "libperl.so.5.34",
+            "libperl.so.5.32", "libperl.so.5.30",
+            NULL
+        };
+        for (int i = 0; fallbacks[i]; i++) {
+            h = try_dlopen(fallbacks[i]);
+            if (h) break;
+        }
+    }
+    if (!h) {
+        fprintf(stderr,
+            "aether host_perl: cannot dlopen libperl "
+            "(tried $AETHER_PERL_SONAME, libperl.so, libperl.so.5.{30..40}).\n"
+            "  Install a perl 5.x runtime on the host, or set "
+            "AETHER_PERL_SONAME explicitly.\n  dlerror: %s\n",
+            dlerror() ? dlerror() : "(none)");
+        return -1;
+    }
+
+    if (resolve_perl_symbols(h) != 0) {
+        dlclose(h);
+        return -1;
+    }
+    libperl_handle = h;
+    return 0;
+}
+
+// --- bridge state (unchanged from pre-dlopen) ------------------------------
 
 static PerlInterpreter* my_perl = NULL;
 
-// Bridge-owned permission stack. Self-contained — see comment in
-// contrib/host/tcl/aether_host_tcl.c for rationale.
 static void* perl_perms_stack[64];
 static int   perl_perms_depth = 0;
 
-// Permission checker — same as other host modules
 extern int list_size(void*);
 extern void* list_get_raw(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
-    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
-    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
-    // vice versa). Safe for non-TCP categories because "::ffff:"
-    // doesn't appear in filesystem paths, env var names, or exec
-    // command strings.
     if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
     if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
@@ -69,44 +191,52 @@ static int host_perl_checker(const char* category, const char* resource) {
 
 int aether_perl_init(void) {
     if (my_perl) return 0;
-    my_perl = perl_alloc();
+    if (load_libperl() != 0) return -1;
+    my_perl = g_pl.perl_alloc();
     if (!my_perl) return -1;
-    perl_construct(my_perl);
+    g_pl.perl_construct(my_perl);
 
     char* embedding[] = { "", "-e", "0" };
-    perl_parse(my_perl, NULL, 3, embedding, NULL);
-    perl_run(my_perl);
+    g_pl.perl_parse(my_perl, NULL, 3, embedding, NULL);
+    g_pl.perl_run(my_perl);
     return 0;
 }
 
 void aether_perl_finalize(void) {
     if (my_perl) {
-        perl_destruct(my_perl);
-        perl_free(my_perl);
+        g_pl.perl_destruct(my_perl);
+        g_pl.perl_free(my_perl);
         my_perl = NULL;
     }
 }
 
+// Safe eval — catches exceptions and prints them.
+//
+// Replaces the original `eval_pv` + `SvTRUE(ERRSV)` + `SvPV_nolen(ERRSV)`
+// macros with explicit Perl_* calls passing my_perl.
+//   ERRSV          → Perl_get_sv(my_perl, "@", 0)  (returns $@ SV)
+//   SvTRUE(sv)     → Perl_sv_true(my_perl, sv)
+//   SvPV_nolen(sv) → Perl_sv_2pv_flags(my_perl, sv, NULL, SV_GMAGIC)
 static int run_perl_code(const char* code) {
-    // eval_pv runs a Perl string and returns the result
-    SV* result = eval_pv(code, FALSE);
-    if (SvTRUE(ERRSV)) {
-        fprintf(stderr, "[perl] %s\n", SvPV_nolen(ERRSV));
+    (void)g_pl.Perl_eval_pv(my_perl, code, 0 /* croak_on_error=FALSE */);
+    SV* errsv = g_pl.Perl_get_sv(my_perl, "@", 0);
+    if (errsv && g_pl.Perl_sv_true(my_perl, errsv)) {
+        char* msg = g_pl.Perl_sv_2pv_flags(my_perl, errsv, NULL, BRIDGE_SV_GMAGIC);
+        fprintf(stderr, "[perl] %s\n", msg ? msg : "(no message)");
         return -1;
     }
-    (void)result;
     return 0;
 }
 
 int aether_perl_run(const char* code) {
     if (!code) return -1;
-    aether_perl_init();
+    if (aether_perl_init() != 0) return -1;
     return run_perl_code(code);
 }
 
 int aether_perl_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
-    aether_perl_init();
+    if (aether_perl_init() != 0) return -1;
 
     if (perl_perms_depth >= 64) return -1;
     perl_perms_stack[perl_perms_depth++] = perms;
@@ -117,7 +247,6 @@ int aether_perl_run_sandboxed(void* perms, const char* code) {
     // Perl populates %ENV at startup before the sandbox is active.
     {
         int n = list_size(perms);
-        // Build a Perl snippet that deletes non-granted env vars
         char scrub[4096];
         int pos = snprintf(scrub, sizeof(scrub),
             "my %%keep; ");
@@ -147,18 +276,16 @@ int aether_perl_run_sandboxed(void* perms, const char* code) {
     return result;
 }
 
-// --- Shared map for Perl ---
-// Inject %_aether_input from C map, provide aether_map_get/put subs,
-// read %_aether_output back into C map after return.
+// --- Shared map for Perl ---------------------------------------------------
 
 int aether_perl_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token) {
     if (!code) return -1;
-    aether_perl_init();
+    if (aether_perl_init() != 0) return -1;
 
     extern void aether_shared_map_freeze_inputs_by_token(uint64_t);
     aether_shared_map_freeze_inputs_by_token(map_token);
 
-    // Inject frozen inputs as %_aether_input
+    // Inject frozen inputs as %_aether_input.
     {
         int n = aether_shared_map_count_by_token(map_token);
         char inject[8192];
