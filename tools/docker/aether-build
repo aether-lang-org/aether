@@ -26,7 +26,7 @@
 #
 #   Each --with=<lang> adds an apt -dev-kit layer + a `make contrib
 #   MODULES=<lang>` layer to the generated image. Known langs:
-#     python | lua | perl | ruby | java | js | tcl
+#     python | lua | perl | ruby | java | duktape (alias: js) | tcl
 #
 #   The bare image (no --with) contains NO hosted-language bridges.
 #   --with= entries are alpha-sorted before deriving the image name,
@@ -158,14 +158,15 @@ AETHER_REF="${AETHER_REF:-v0.203.0}"
 # debian:bookworm-slim — see Containerfile FROM).
 with_dev_pkg() {
     case "$1" in
-        python) echo "python3-dev" ;;
-        lua)    echo "liblua5.4-dev" ;;
-        perl)   echo "libperl-dev" ;;
-        ruby)   echo "ruby-dev" ;;
-        java)   echo "default-jdk" ;;
-        js)     echo "libduktape-dev" ;;
-        tcl)    echo "tcl-dev" ;;
-        *)      return 1 ;;
+        python)  echo "python3-dev" ;;
+        lua)     echo "liblua5.4-dev" ;;
+        perl)    echo "libperl-dev" ;;
+        ruby)    echo "ruby-dev" ;;
+        java)    echo "default-jdk" ;;
+        duktape) echo "duktape-dev" ;;
+        js)      echo "duktape-dev" ;;  # alias: --with=js maps to duktape
+        tcl)     echo "tcl-dev" ;;
+        *)       return 1 ;;
     esac
 }
 
@@ -178,9 +179,15 @@ while [ $# -gt 0 ]; do
         --with=*)
             lang="${1#--with=}"
             if ! with_dev_pkg "$lang" >/dev/null; then
-                echo "aether-build: --with=$lang: unknown language (known: python lua perl ruby java js tcl)" >&2
+                echo "aether-build: --with=$lang: unknown language (known: python lua perl ruby java duktape (alias: js) tcl)" >&2
                 exit 1
             fi
+            # Canonicalise aliases BEFORE the sort/dedupe pass so
+            # `--with=js` and `--with=duktape` collapse to the same
+            # image name + the same cached layer.
+            case "$lang" in
+                js) lang="duktape" ;;
+            esac
             WITH_LANGS_RAW="$WITH_LANGS_RAW $lang"
             shift
             ;;

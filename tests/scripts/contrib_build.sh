@@ -122,7 +122,7 @@ probe_tcl() {
     return 1
 }
 
-probe_js() {
+probe_duktape() {
     if pkg-config --exists duktape 2>/dev/null; then
         pkg-config --cflags-only-I duktape
         return 0
@@ -183,7 +183,7 @@ CATALOGUE=(
     "lua|host_lua        contrib/host/lua/aether_host_lua.c       AETHER_HAS_LUA     probe_lua"
     "perl|host_perl      contrib/host/perl/aether_host_perl.c     AETHER_HAS_PERL    probe_perl"
     "ruby|host_ruby      contrib/host/ruby/aether_host_ruby.c     AETHER_HAS_RUBY    probe_ruby"
-    "js|host_js          contrib/host/js/aether_host_js.c         AETHER_HAS_JS      probe_js"
+    "duktape|host_duktape  contrib/host/duktape/aether_host_duktape.c  AETHER_HAS_DUKTAPE  probe_duktape"
     "tcl|host_tcl        contrib/host/tcl/aether_host_tcl.c       AETHER_HAS_TCL     probe_tcl"
 )
 

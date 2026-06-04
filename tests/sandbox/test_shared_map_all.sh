@@ -81,10 +81,10 @@ echo ""
 echo "=== JS (Duktape) ==="
 if [ $JS_AVAILABLE -eq 0 ]; then skip "JS"; else
 JS_OUT=$(gcc -o /tmp/test_map_js \
-    "$ROOT/contrib/host/js/aether_host_js.c" \
+    "$ROOT/contrib/host/duktape/aether_host_duktape.c" \
     "$ROOT/runtime/aether_sandbox.c" \
     "$ROOT/runtime/aether_shared_map.c" \
-    $JS_CFLAGS -I"$ROOT/runtime" -DAETHER_HAS_JS \
+    $JS_CFLAGS -I"$ROOT/runtime" -DAETHER_HAS_DUKTAPE \
     -L"$ROOT/build" -laether $JS_LIBS -ldl -lm -lrt \
     -Wno-discarded-qualifiers \
     -xc - 2>/dev/null << 'CEOF'
@@ -92,8 +92,8 @@ JS_OUT=$(gcc -o /tmp/test_map_js \
 #include <stdint.h>
 #include "aether_shared_map.h"
 extern void* list_new(void); extern void list_add(void*, void*); extern void list_free(void*);
-extern int js_run_sandboxed_with_map(void*, const char*, uint64_t);
-extern void js_finalize(void);
+extern int duktape_run_sandboxed_with_map(void*, const char*, uint64_t);
+extern void duktape_finalize(void);
 void aether_args_init(int a, char** v){(void)a;(void)v;}
 void* _aether_ctx_stack[64]; int _aether_ctx_depth = 0;
 int main() {
@@ -102,7 +102,7 @@ int main() {
     uint64_t t; AetherSharedMap* m = aether_shared_map_new(&t);
     aether_shared_map_put(m, "name", "Bob");
     aether_shared_map_put(m, "count", "7");
-    js_run_sandboxed_with_map(p,
+    duktape_run_sandboxed_with_map(p,
         "var n = aether_map_get('name');\n"
         "var c = aether_map_get('count');\n"
         "var s = aether_map_get('secret');\n"
@@ -113,7 +113,7 @@ int main() {
     aether_shared_map_revoke_token(t);
     printf("js:result=%s\n", aether_shared_map_get(m, "doubled"));
     printf("js:untampered=%s\n", aether_shared_map_get(m, "name"));
-    aether_shared_map_free(m); js_finalize(); list_free(p);
+    aether_shared_map_free(m); duktape_finalize(); list_free(p);
     return 0;
 }
 CEOF

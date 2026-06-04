@@ -1,25 +1,29 @@
-// contrib.host.js — Embedded JavaScript Language Host Module (Duktape)
+// contrib.host.js — BACK-COMPAT ALIAS for contrib.host.duktape
 //
-// Runs JavaScript code inside an Aether sandbox. JS calls to
-// readFile, env, etc. are provided as Duktape bindings that
-// check Aether's sandbox grants before executing.
+// This module is a thin re-export shim. The bridge was renamed
+// `js` → `duktape` (the engine name is the honest one, and
+// `--with=quickjs` / `--with=v8` etc. can coexist later without
+// ambiguity). New code should `import contrib.host.duktape`
+// directly.
 //
-// Usage:
-//   import contrib.host.js
+// Old code with `import contrib.host.js` keeps working:
+//   - `js.run(...)`, `js.init()`, etc. delegate to the duktape
+//     bridge's same C functions.
+//   - `ae build`'s import-driven auto-link recognises `js` as an
+//     alias and links `libaether_host_duktape.a` (no separate
+//     `libaether_host_js.a` is built).
 //
-//   worker = sandbox("worker") {
-//       grant_env("HOME")
-//       grant_fs_read("/etc/*")
-//   }
-//   js.run_sandboxed(worker, "print(env('HOME'))")
+// This shim has NO C-side artifacts of its own. The `@extern("...")`
+// annotations bind the Aether-side `js_*` names to the renamed C
+// symbols (`duktape_*`) in libaether_host_duktape.a.
 
 exports (
     js_run_sandboxed, js_run_sandboxed_with_map,
     js_run, js_init, js_finalize
 )
 
-extern js_run_sandboxed(perms: ptr, code: string) -> int
-extern js_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
-extern js_run(code: string) -> int
-extern js_init() -> int
-extern js_finalize()
+@extern("duktape_run_sandboxed") js_run_sandboxed(perms: ptr, code: string) -> int
+@extern("duktape_run_sandboxed_with_map") js_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
+@extern("duktape_run") js_run(code: string) -> int
+@extern("duktape_init") js_init() -> int
+@extern("duktape_finalize") js_finalize()
