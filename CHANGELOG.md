@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`--with=tinygo` layer — install upstream Go 1.23.4, not bookworm's
+  Go 1.19** (`tools/docker/aether-build`). The original v0.215.0
+  layer used `apt install golang-go`, which on debian:bookworm-slim
+  installs Go 1.19. TinyGo 0.34.0's build-time Go-version gate
+  requires ≥1.22; the image built green but `tinygo build` in
+  user-program Phase 1 would fail with a version-rejection error.
+  Layer now fetches a pinned Go tarball from go.dev
+  (`--build-arg GO_VERSION=1.23.4`) and includes a `tinygo version`
+  sanity-check RUN step so a broken Go/TinyGo pairing fails at
+  IMAGE build time rather than at first user `tinygo build`.
+
 ## [0.215.0]
 
 ### Added
@@ -27,6 +42,10 @@ next version number before tagging the release.
   property the six interpreter bridges rely on). Closes the
   capability-set across all host-language bridges (python, ruby, lua,
   perl, tcl, duktape, tinygo).
+
+  **Note**: the `golang-go` choice here was wrong (Go 1.19, rejected
+  by TinyGo 0.34); see the `[current]` section above for the followup
+  fix that switched to a pinned go.dev tarball.
 
 ### Changed
 

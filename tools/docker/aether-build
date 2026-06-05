@@ -172,12 +172,15 @@ with_dev_pkg() {
         js)      echo "duktape-dev" ;;  # alias: --with=js maps to duktape
         tcl)     echo "tcl-dev" ;;
         # tinygo is structurally different from the apt-installed -dev
-        # kits: TinyGo isn't in Debian repos, so the layer fetches the
-        # upstream .deb from the GitHub release. The "apt portion"
-        # below covers golang-go (the cgo host Go), libffi-dev (used by
+        # kits: neither TinyGo nor a new-enough Go is in bookworm. The
+        # tinygo layer below fetches BOTH from upstream — Go from
+        # go.dev (tarball, pinnable) and TinyGo from the GitHub release
+        # (.deb). The "apt portion" here is just libffi-dev (used by
         # the bridge's tinygo.call_dynamic path AND by TinyGo's runtime
-        # for c-shared mode), and curl (to fetch the .deb).
-        tinygo)  echo "golang-go libffi-dev curl" ;;
+        # for c-shared mode) + curl + ca-certificates for the fetches.
+        # bookworm's `golang-go` is Go 1.19 — TinyGo 0.34 rejects it
+        # (its build-time Go-version gate wants ≥1.22).
+        tinygo)  echo "libffi-dev curl ca-certificates" ;;
         *)       return 1 ;;
     esac
 }
@@ -412,21 +415,32 @@ bootstrap_image() {
     for lang in $WITH_LANGS; do
         pkg=$(with_dev_pkg "$lang")
         if [ "$lang" = "tinygo" ]; then
-            # TinyGo isn't apt-packaged in Debian; fetch the upstream
-            # .deb from the GitHub release. The .deb arch names
-            # (amd64/arm64/armhf) match \`dpkg --print-architecture\`
-            # exactly — no remap. Override the version via
-            # \`--build-arg TINYGO_VERSION=0.X.Y\` on \`podman build\`.
+            # Neither TinyGo nor a new-enough Go is in bookworm — fetch
+            # both from upstream. Go from go.dev (tarball, version
+            # pinned via --build-arg GO_VERSION). TinyGo from the
+            # GitHub release .deb (version pinned via --build-arg
+            # TINYGO_VERSION). Both arch maps use \`dpkg
+            # --print-architecture\` directly (amd64/arm64).
+            #
+            # bookworm's \`golang-go\` is Go 1.19; TinyGo 0.34.0 rejects
+            # it via its build-time Go-version gate. So we ignore the
+            # apt-packaged Go entirely and install a current one.
             WITH_LAYERS="$WITH_LAYERS
-# --- Hosted-language layer: tinygo (custom .deb + apt $pkg) ---
+# --- Hosted-language layer: tinygo (Go + TinyGo from upstream + apt $pkg) ---
 # Added because aether-build was invoked with --with=tinygo. Unlike
 # the interpreter bridges, tinygo isn't a host-dlopen target — it's
-# a c-shared sidecar builder. The apt portion gives us golang-go
-# (cgo host Go), libffi-dev (bridge call_dynamic + tinygo runtime),
-# and curl (.deb fetch). The .deb step installs TinyGo itself.
+# a c-shared sidecar builder. The apt portion gives us libffi-dev
+# (bridge call_dynamic + tinygo runtime), curl + ca-certificates
+# (upstream fetches). The two RUN steps below install the cgo host
+# Go and TinyGo itself.
 RUN apt-get update \\
  && apt-get install -y --no-install-recommends $pkg \\
  && rm -rf /var/lib/apt/lists/*
+ARG GO_VERSION=1.23.4
+RUN ARCH=\$(dpkg --print-architecture) \\
+ && curl -fsSL \"https://go.dev/dl/go\${GO_VERSION}.linux-\${ARCH}.tar.gz\" \\
+      | tar -C /usr/local -xz
+ENV PATH=\"/usr/local/go/bin:\${PATH}\"
 ARG TINYGO_VERSION=0.34.0
 RUN ARCH=\$(dpkg --print-architecture) \\
  && curl -fsSL -o /tmp/tinygo.deb \\
@@ -434,6 +448,10 @@ RUN ARCH=\$(dpkg --print-architecture) \\
  && apt-get update \\
  && apt-get install -y --no-install-recommends /tmp/tinygo.deb \\
  && rm -rf /var/lib/apt/lists/* /tmp/tinygo.deb
+# Sanity-check at IMAGE build time: \`tinygo version\` must succeed.
+# If either Go or TinyGo were installed wrong, fail HERE (loud) rather
+# than at first \`tinygo build\` in aeb-ctr Phase 1 (silent until then).
+RUN tinygo version
 RUN cd /src \\
  && make contrib MODULES=tinygo \\
  && make install-contrib
