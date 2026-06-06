@@ -388,6 +388,38 @@ The general rule: if a cast names a typedef, check whether MinGW's
 explicit-width type from `<stdint.h>` or the plain integer type the
 struct field declares it as.
 
+**5c. In shell tests, BSD `sed -i` needs an explicit backup suffix;
+GNU `sed -i` does not.** Linux ships GNU sed, macOS ships BSD sed.
+`sed -i 's/a/b/' file.txt` works fine on Linux and **fails on
+macOS** with `sed: 1: "…": invalid command code f` — BSD sed reads
+the next argument as the backup-suffix and parses the s-expression
+as the file path. The portable shapes:
+
+```bash
+# BAD — Linux-only
+sed -i 's/v1/v2/' "$file"
+
+# GOOD — works on both BSD and GNU sed (the '' is the empty
+# backup-suffix BSD sed wants; GNU sed treats it as a no-op file)
+sed -i '' 's/v1/v2/' "$file"   # NB: only correct on BSD!
+
+# BETTER — works everywhere because both seds accept -i<suffix>
+sed -i.bak 's/v1/v2/' "$file" && rm "$file.bak"
+
+# BEST when you don't actually need a regex — just rewrite the file
+cat > "$file" <<'EOF'
+new content
+EOF
+```
+
+`sed -i ''` is BSD-only; GNU sed treats the empty string as a file
+argument and errors. There is no single `sed -i` invocation that
+parses identically under both. When the test only needs to swap a
+literal value (the common shape in regression tests), prefer
+rewriting the file with `cat > file <<EOF` — fewer moving parts,
+no backup file to clean up, and identical behaviour on every
+platform.
+
 **6. Prefer existing portable helpers over re-rolling your own path
 handling.** `std/fs/aether_fs.c` provides `path_join`, `path_dirname`,
 `path_basename`, `path_normalize`, `path_is_absolute`. These already

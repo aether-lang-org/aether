@@ -5,7 +5,7 @@
 # Pre-fix bug: compute_cache_key only mtime'd the lib dir itself.
 # A dir's mtime only bumps on create/delete/rename of an entry, NOT
 # on an in-place edit of a file behind a symlink that points outside
-# the dir. So `sed -i` of the symlink target left the dir mtime
+# the dir. So editing the symlink target left the dir mtime
 # unchanged, the cache key stayed stable, `ae run` served the
 # previously-compiled binary, and edits looked like no-ops until
 # `rm -rf ~/.aether/cache`.
@@ -82,7 +82,14 @@ sleep 1.1
 # Edit the REAL file behind the symlink. Pre-fix bug: this didn't
 # invalidate the cache because the symlink's mtime, the lib dir's
 # mtime, and the cache key stayed unchanged.
-sed -i 's/v1/v2/' "$TMP/mod_real.ae"
+# (Rewrite instead of `sed -i` — BSD `sed -i` requires an explicit
+# empty backup-suffix `sed -i ''`, GNU sed doesn't take one. No
+# portable single form. See CONTRIBUTING.md "Coding for
+# portability" §5c.)
+cat > "$TMP/mod_real.ae" <<'AE'
+exports (greet)
+greet() -> string { return "v2" }
+AE
 
 OUT2=$(AETHER_LIB_DIR="$TMP/lib" "$AE" run main.ae 2>&1 | tail -1)
 if [ "$OUT2" != "got=v2" ]; then
@@ -108,7 +115,10 @@ OUT3=$(AETHER_LIB_DIR="$TMP/lib" "$AE" run main2.ae 2>&1 | tail -1)
     exit 1
 }
 sleep 1.1
-sed -i 's/direct-v1/direct-v2/' "$TMP/lib/direct_mod.ae"
+cat > "$TMP/lib/direct_mod.ae" <<'AE'
+exports (val)
+val() -> string { return "direct-v2" }
+AE
 OUT4=$(AETHER_LIB_DIR="$TMP/lib" "$AE" run main2.ae 2>&1 | tail -1)
 [ "$OUT4" = "d=direct-v2" ] || {
     echo "  [FAIL] direct-mod edit: expected 'd=direct-v2', got '$OUT4'"
