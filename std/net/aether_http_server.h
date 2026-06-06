@@ -21,6 +21,16 @@ typedef struct {
     char** param_keys;      // From /users/:id
     char** param_values;
     int param_count;
+
+    // Lazily parsed from query_string on first http_get_query_param() call.
+    // query_parsed=0 means "not yet attempted"; ?0 is also the sentinel for
+    // a NULL query_string (then count stays 0). Each value is its own
+    // strdup so http_get_query_param can hand out a stable borrowed pointer
+    // across the request's lifetime without a static-buffer collision.
+    char** query_keys;
+    char** query_values;
+    int query_count;
+    int query_parsed;
 } HttpRequest;
 
 // HTTP Response

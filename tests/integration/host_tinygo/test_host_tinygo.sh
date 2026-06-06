@@ -1,11 +1,21 @@
 #!/bin/sh
 # Issue #261: contrib/host/tinygo end-to-end smoke test.
 #
-# Skips cleanly when tinygo is not on PATH (matches contrib/host/go's
-# pattern — host bridges should never break CI on machines that don't
-# have the toolchain installed). When tinygo IS available, the test
-# builds a c-shared .so, loads it via contrib.host.tinygo, and exercises
-# every wrapper signature.
+# Skips cleanly when the Go toolchain is not on PATH (matches
+# contrib/host/go's pattern — host bridges should never break CI on
+# machines that don't have the toolchain installed). When `go` IS
+# available, the test builds a c-shared .so, loads it via
+# contrib.host.tinygo, and exercises every wrapper signature.
+#
+# NOTE on the build command: this used `tinygo build -buildmode=c-shared`
+# historically, but TinyGo 0.34.0 restricts that buildmode to wasm
+# targets ("buildmode c-shared is only supported on wasm at the moment").
+# The bridge is a runtime dlopen — it doesn't care which compiler
+# produced the .so, only that it's a valid c-shared with the exported
+# symbols. We use standard `go build -buildmode=c-shared`, which works
+# natively on linux/darwin and produces a binary-compatible .so. The
+# "tinygo" name on the bridge is retained as the brand; the toolchain
+# choice is a build-time detail.
 
 set -e
 
@@ -13,8 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 
-if ! command -v tinygo >/dev/null 2>&1; then
-    echo "  [SKIP] tinygo not on PATH — install via https://tinygo.org/getting-started/install/"
+if ! command -v go >/dev/null 2>&1; then
+    echo "  [SKIP] go not on PATH — install via https://go.dev/dl/"
     exit 0
 fi
 
@@ -31,16 +41,26 @@ esac
 LIB_PATH="$TMPDIR/libgreet.$LIB_EXT"
 GO_SRC="$ROOT/contrib/host/tinygo/examples/greet.go"
 
-if ! tinygo build -buildmode=c-shared -o "$LIB_PATH" "$GO_SRC" 2>"$TMPDIR/tinygo.err"; then
-    echo "  [SKIP] tinygo c-shared build failed (likely target/version mismatch):"
-    head -5 "$TMPDIR/tinygo.err"
-    exit 0
+# `go build -buildmode=c-shared` requires CGO (the source uses `import "C"`)
+# and writes the source's directory into the binary, so build from a
+# fresh tmpdir copy to keep the source tree clean.
+cp "$GO_SRC" "$TMPDIR/greet.go"
+if ! (cd "$TMPDIR" && CGO_ENABLED=1 go build -buildmode=c-shared -o "$LIB_PATH" greet.go) 2>"$TMPDIR/go.err"; then
+    echo "  [FAIL] go build -buildmode=c-shared failed:"
+    head -10 "$TMPDIR/go.err"
+    exit 1
 fi
 
+# The `import contrib.host.tinygo` triggers `ae build`'s auto-link
+# of libaether_host_tinygo.a — AND, as of this PR, its transitive
+# `-lffi` when the bridge .a was compiled with AETHER_HAS_LIBFFI
+# (the call_dynamic escape hatch). No aether.toml workaround
+# required here any more (previously needed link_flags = "-lffi").
 ACTUAL="$TMPDIR/actual.txt"
-if ! AETHER_HOME="$ROOT" TINYGO_LIB="$LIB_PATH" "$AE" run "$SCRIPT_DIR/uses_tinygo.ae" >"$ACTUAL" 2>"$TMPDIR/err.log"; then
+if ! AETHER_HOME="$ROOT" TINYGO_LIB="$LIB_PATH" \
+        "$AE" run "$SCRIPT_DIR/uses_tinygo.ae" >"$ACTUAL" 2>"$TMPDIR/err.log"; then
     echo "  [FAIL] ae run exited non-zero"
-    cat "$TMPDIR/err.log" | head -10
+    cat "$TMPDIR/err.log" | head -20
     cat "$ACTUAL" | head -10
     exit 1
 fi

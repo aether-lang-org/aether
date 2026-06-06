@@ -139,11 +139,12 @@ probe_duktape() {
 
 probe_tinygo() {
     # The bridge .c is pure dlopen via std.dl (aether_dl_*) — it does NOT
-    # need the tinygo toolchain at COMPILE time. libffi is the only
+    # need the Go toolchain at COMPILE time. libffi is the only
     # build-time dep, and even that's conditional on AETHER_HAS_LIBFFI
-    # for the tinygo.call_dynamic escape hatch. The `tinygo` binary is
-    # only invoked at USER-build time (aeb's tinygo_lib builder shells
-    # `tinygo build -buildmode=c-shared` on the .go source).
+    # for the tinygo.call_dynamic escape hatch. The `go` / `tinygo`
+    # binaries are only invoked at USER-build time (aeb's tinygo_lib
+    # builder shells `go build -buildmode=c-shared` — or `tinygo build
+    # -buildmode=c-shared -target=wasm` for wasm — on the .go source).
     #
     # Probe shape: if libffi-dev is present, opt in to the AETHER_HAS_LIBFFI
     # path and emit its cflags; otherwise the bridge still builds without

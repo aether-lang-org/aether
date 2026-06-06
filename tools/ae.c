@@ -364,12 +364,26 @@ static unsigned long long fnv64_file(const char* path) {
 // Hashing extra-file *content* (not just mtime) closes a real correctness
 // gap: editing an FFI shim like `--extra renderer.c` would otherwise let
 // a stale cache entry mask the change.
+/* Fold AETHER_LIB_DIR into tc.lib_dirs[] if no `--lib` flags were
+ * passed. Matches the resolution priority documented in `ae lib-path`
+ * (CLI flags win; env var seeds; default = `lib`). Without this, an
+ * `ae run` invoked with `AETHER_LIB_DIR=...` would see lib_dir_count=0
+ * and compute_cache_key couldn't include the env-resolved modules'
+ * mtimes — so an edit to a vendored module behind that env var would
+ * never invalidate the cache. Idempotent: skips if already populated. */
+static void tc_seed_lib_dirs_from_env(void) {
+    if (tc.lib_dir_count > 0) return;
+    const char* env = getenv("AETHER_LIB_DIR");
+    if (env && *env) tc_lib_dir_append(env);
+}
+
 static unsigned long long compute_cache_key(const char* ae_file,
                                             const char* extra_files,
                                             const char* opt_level,
                                             const char* extra_salt) {
     unsigned long long src_hash = fnv64_file(ae_file);
     if (src_hash == 0) return 0;
+    tc_seed_lib_dirs_from_env();
 
     char key_buf[2048];
     int pos = 0;
@@ -396,9 +410,20 @@ static unsigned long long compute_cache_key(const char* ae_file,
      * resolve different imports — they're materially different
      * outputs and need distinct cache slots. Walk the array
      * directly (no separator-string round-trip) so order and
-     * dedup are reflected in the key. mtime each entry so a change
-     * to a vendored module under the path invalidates the cache
-     * the way a stdlib edit already does. */
+     * dedup are reflected in the key.
+     *
+     * Per-directory mtime alone (#623): the dir's mtime only bumps
+     * on create/delete/rename of an entry — NOT on an edit-in-place
+     * to an existing file inside it (and NOT on `sed -i` of a file
+     * *behind* a symlink that points outside the dir). For correct
+     * cache invalidation on module edits, we ALSO fold in the mtime
+     * of every top-level `.ae` entry in each lib dir, resolved
+     * through symlinks via `stat` (which follows; `lstat` would not).
+     * `stat` is the right call here precisely because the symlink
+     * case (#623) needs the target's mtime, not the link's. We cap
+     * the entry count per dir (256) so a runaway lib dir can't
+     * blow the cache-key buffer; the cap is well above any realistic
+     * stdlib/vendored-modules count. */
     if (tc.lib_dir_count == 0) {
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=(default)");
     }
@@ -410,6 +435,48 @@ static unsigned long long compute_cache_key(const char* ae_file,
             pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
                             ":lmt=%lld", (long long)lst.st_mtime);
         }
+#ifndef _WIN32
+        DIR* d = opendir(tc.lib_dirs[i]);
+        if (d) {
+            unsigned long long entry_hash = 0;
+            int n = 0;
+            struct dirent* de;
+            while ((de = readdir(d)) != NULL && n < 256) {
+                const char* name = de->d_name;
+                if (name[0] == '.') continue;  // skip . / .. / dotfiles
+                /* We care about source files the compiler will read.
+                 * .ae is the common case (modules + entry points);
+                 * include common header-shape extensions too so a
+                 * vendored C shim edit also invalidates. */
+                size_t nlen = strlen(name);
+                int interesting = 0;
+                if (nlen > 3 && strcmp(name + nlen - 3, ".ae") == 0) interesting = 1;
+                else if (nlen > 2 && (strcmp(name + nlen - 2, ".c") == 0 ||
+                                      strcmp(name + nlen - 2, ".h") == 0)) interesting = 1;
+                if (!interesting) continue;
+                char full[1024];
+                snprintf(full, sizeof(full), "%s/%s", tc.lib_dirs[i], name);
+                struct stat est;
+                if (stat(full, &est) == 0) {
+                    /* Hash name + resolved-target mtime + size into a
+                     * single rolling FNV. Hashing keeps the key_buf
+                     * bounded regardless of entry count; mtime + size
+                     * together catch the same-second edit case. */
+                    entry_hash ^= fnv64_str(name);
+                    entry_hash = (entry_hash * 1099511628211ULL)
+                                 ^ (unsigned long long)est.st_mtime;
+                    entry_hash = (entry_hash * 1099511628211ULL)
+                                 ^ (unsigned long long)est.st_size;
+                    n++;
+                }
+            }
+            closedir(d);
+            if (n > 0) {
+                pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
+                                ":lent=%d:lh=%016llx", n, entry_hash);
+            }
+        }
+#endif
     }
 
     snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%s:%s",
@@ -2485,9 +2552,48 @@ static void prepare_host_bridge_imports(const char* main_file) {
                  sizeof(g_host_bridge_link) - off,
                  " \"%s\"", a_path);
 
+        // Per-bridge transitive link deps. The six interpreter bridges
+        // dlopen their host language at runtime and need nothing extra
+        // at link time. tinygo is the first bridge with its OWN
+        // link-time dep — `tinygo_call_dynamic` calls into libffi when
+        // the bridge .a was built with AETHER_HAS_LIBFFI. Without this
+        // append, the link fails with `undefined reference to
+        // ffi_prep_cif` whenever the bridge was compiled with libffi
+        // available (ctr_notes.md Finding 2). Users would otherwise
+        // have to add `link_flags = "-lffi"` to their aether.toml
+        // manually — exactly the kind of "import is the trigger"
+        // footgun that contrib/host/python/README.md §8 promises
+        // bridges should avoid.
+        //
+        // The probe is by-symbol, not by-language: when libffi-dev
+        // wasn't present at bridge-build time the AETHER_HAS_LIBFFI
+        // block is #ifdef-out, the .a has no undefined ffi_* symbols,
+        // and we MUST NOT pass `-lffi` (the host's link would fail
+        // with "cannot find -lffi"). `nm -u` lists only undefined
+        // symbols; one popen per build, no measurable cost. Skip on
+        // platforms without nm — the link error is then the same
+        // diagnostic users had before this fix and the manual
+        // aether.toml workaround still applies.
+        const char* effective_alias = host_bridge_lang_alias(lang);
+        const char* trans_flags = NULL;
+        if (strcmp(effective_alias, "tinygo") == 0) {
+            char nm_cmd[1300];
+            snprintf(nm_cmd, sizeof(nm_cmd),
+                     "nm -u \"%s\" 2>/dev/null | grep -q ffi_prep_cif",
+                     a_path);
+            if (system(nm_cmd) == 0) {
+                trans_flags = " -lffi";
+            }
+        }
+        if (trans_flags) {
+            off = strlen(g_host_bridge_link);
+            snprintf(g_host_bridge_link + off,
+                     sizeof(g_host_bridge_link) - off, "%s", trans_flags);
+        }
+
         if (tc.verbose) {
-            fprintf(stderr, "ae: host bridge 'contrib.host.%s' -> %s\n",
-                    lang, a_path);
+            fprintf(stderr, "ae: host bridge 'contrib.host.%s' -> %s%s\n",
+                    lang, a_path, trans_flags ? trans_flags : "");
         }
     }
     fclose(f);

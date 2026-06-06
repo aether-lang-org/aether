@@ -130,7 +130,34 @@ extern string_to_upper(str: string) -> string
 extern string_to_lower(str: string) -> string
 extern string_trim(str: string) -> string
 
-// String array operations
+// String array operations.
+//
+// LIFETIME WARNING — `string_array_get` returns a *borrowed* pointer
+// into the array's internal storage, NOT an owned copy. After
+// `string_array_free(arr)` every pointer previously handed out by
+// `string_array_get(arr, ...)` is dangling. The natural-looking
+// pattern below silently use-after-frees:
+//
+//     v = string.array_get(parts, idx)
+//     string.array_free(parts)
+//     return v                 // <- v dangles
+//
+// Symptom is garbage bytes / random crashes downstream — the array's
+// backing storage is gone but the pointer still reads.
+//
+// Safe options when you need a value to outlive the array:
+//   1. Copy first:  v = string.concat(string.array_get(parts, idx), "")
+//                   then string.array_free(parts) — the concat made
+//                   an owned, refcounted copy.
+//   2. Use `string_split_to_seq` (declared further down) — returns a
+//      refcounted `*StringSeq` whose cells own their data
+//      independently of any backing array, so there's no
+//      array-wide free to worry about.
+//
+// If your access pattern is "build, walk once, free" within a single
+// scope, the borrowed-pointer form is fine and the cheapest. Reach
+// for option 1/2 only when a piece needs to escape the array's
+// lifetime.
 extern string_split(str: string, delimiter: string) -> ptr
 extern string_array_size(arr: ptr) -> int
 extern string_array_get(arr: ptr, index: int) -> ptr

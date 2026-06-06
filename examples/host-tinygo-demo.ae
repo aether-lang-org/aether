@@ -1,13 +1,17 @@
-// examples/host-tinygo-demo.ae - in-process Go from Aether via TinyGo
+// examples/host-tinygo-demo.ae - in-process Go from Aether via c-shared
 //
-// Prerequisite: tinygo on PATH, then build the demo lib:
+// Prerequisite: a Go toolchain on PATH, then build the demo lib.
+// Use standard `go` — TinyGo's -buildmode=c-shared is wasm-only on
+// current releases. See contrib/host/tinygo/README.md "Toolchain
+// note" for the full story.
 //
-//   tinygo build -buildmode=c-shared \
+//   CGO_ENABLED=1 go build -buildmode=c-shared \
 //       -o /tmp/libgreet.so contrib/host/tinygo/examples/greet.go
 //
 // Then run:
 //
-//   AETHER_HOME=$(pwd) ./build/ae run examples/host-tinygo-demo.ae
+//   AETHER_HOME=$(pwd) TINYGO_LIB=/tmp/libgreet.so \
+//       ./build/ae run examples/host-tinygo-demo.ae
 //
 // On macOS use libgreet.dylib; on Windows libgreet.dll. See
 // contrib/host/tinygo/README.md for the full cookbook.
