@@ -11,6 +11,25 @@ next version number before tagging the release.
 
 ## [current]
 
+### Changed
+
+- **`string.split` / `string.array_get` — lifetime warning added to
+  module.ae and C source** (`std/string/module.ae`,
+  `std/string/aether_string.c`). `string_array_get` returns a
+  pointer that *borrows* from the array's storage; the natural
+  pattern `v = string.array_get(parts, idx); string.array_free(parts);
+  return v` silently use-after-frees. The externs in `std/string/
+  module.ae` previously had zero lifetime documentation (the
+  sibling `*StringSeq` API right below got a generous docblock).
+  Added an explicit warning at the extern declarations, listed two
+  safe escape patterns (`string.concat(v, "")` to make an owned
+  copy, or `string_split_to_seq` for refcounted cells), and
+  mirrored the warning at the C definition. No behaviour change —
+  the existing pattern is still cheap when access is "build, walk
+  once, free" within one scope; the doc clarifies when that's
+  unsafe. Caught downstream by the aeb-side validator parsing
+  tab-joined rule rows (ctr_notes.md OPEN #3).
+
 ### Fixed
 
 - **`contrib.host.tinygo` docs and integration test now use

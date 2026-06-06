@@ -519,6 +519,12 @@ int string_array_size(AetherStringArray* arr) {
 // Returns the raw C string data (const char*) for the element at index.
 // Aether treats strings as const char* — returning AetherString* would cause
 // printf("%s", ...) to print garbage (struct pointer instead of char data).
+//
+// LIFETIME: returned pointer is BORROWED — it aliases arr->strings[index]->data
+// and is invalidated by string_array_free(arr). Aether-side callers that need
+// the value to outlive the array must copy first (e.g. string.concat(v, ""))
+// or use string_split_to_seq which returns refcounted cells. The module.ae
+// extern carries the same warning for the Aether-side reader.
 const char* string_array_get(AetherStringArray* arr, int index) {
     if (!arr || index < 0 || (size_t)index >= arr->count) return NULL;
     AetherString* s = arr->strings[index];
