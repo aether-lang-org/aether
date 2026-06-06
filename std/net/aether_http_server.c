@@ -130,6 +130,7 @@ const char* http_request_header_value(HttpRequest* r, int i) { (void)r; (void)i;
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
+    #include <sys/stat.h>          /* MinGW: stat / struct stat for #641 Range. */
     #ifdef _MSC_VER
         #pragma comment(lib, "ws2_32.lib")
     #endif
