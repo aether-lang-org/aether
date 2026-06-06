@@ -593,6 +593,18 @@ const char* http_request_body(HttpRequest* req);
 // gzip-compressed bodies) without strlen() truncating at the first
 // embedded zero. Returns 0 if req is NULL or has no body.
 int         http_request_body_length(HttpRequest* req);
+
+// #626 — Chunked-read request body. TLS split-accessor: the bytes
+// live in a per-thread buffer until the next call or explicit release.
+// CURRENT IMPLEMENTATION reads from the already-buffered req->body;
+// the streaming-parse reshape (handler runs before body finishes
+// arriving) is a follow-up. The API shape is stable so porter code
+// is ready for the day the internals stream.
+int         http_request_body_read_raw(HttpRequest* req, int offset, int max);
+const char* http_get_request_body_read(void);
+int         http_get_request_body_read_length(void);
+void        http_release_request_body_read(void);
+
 const char* http_request_query(HttpRequest* req);
 // Request-header iteration — enumerate every received header (named
 // http_get_header only does a single lookup). Wire order, duplicates

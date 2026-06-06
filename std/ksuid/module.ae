@@ -17,7 +17,7 @@
 // Use KSUID when interop with the Segment ecosystem matters;
 // otherwise ULID or UUIDv7 are usually the better choice.
 
-import std.crypto
+import std.cryptography
 import std.os
 import std.string
 import std.bytes
@@ -31,7 +31,7 @@ const ALPHA = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 // Generate a 27-char KSUID. Returns (ksuid, "") on success,
 // ("", error) on CSPRNG failure.
 generate() -> {
-    raw, n, err = crypto.random_bytes(16)
+    raw, n, err = cryptography.random_bytes(16)
     if err != "" {
         return "", err
     }

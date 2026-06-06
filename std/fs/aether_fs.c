@@ -78,6 +78,16 @@ char* path_dirname(const char* p) { (void)p; return NULL; }
 char* path_basename(const char* p) { (void)p; return NULL; }
 char* path_extension(const char* p) { (void)p; return NULL; }
 int path_is_absolute(const char* p) { (void)p; return 0; }
+char* path_clean(const char* p) { (void)p; return NULL; }
+int path_is_within_base(const char* base, const char* target) { (void)base; (void)target; return 0; }
+char* path_rel(const char* base, const char* target) { (void)base; (void)target; return NULL; }
+long fs_pwrite_raw(File* f, const char* d, int l, long o) { (void)f; (void)d; (void)l; (void)o; return -1; }
+int fs_pread_raw(File* f, int l, long o) { (void)f; (void)l; (void)o; return 0; }
+const char* fs_get_pread(void) { return ""; }
+int fs_get_pread_length(void) { return 0; }
+void fs_release_pread(void) {}
+const char* fs_ftruncate_raw(File* f, long l) { (void)f; (void)l; return "fs unavailable"; }
+const char* fs_fsync_raw(File* f) { (void)f; return "fs unavailable"; }
 DirList* dir_list_raw(const char* p) { (void)p; return NULL; }
 int dir_list_count(DirList* l) { (void)l; return 0; }
 const char* dir_list_get(DirList* l, int i) { (void)l; (void)i; return NULL; }
@@ -215,6 +225,160 @@ int file_close(File* file) {
     free((void*)file->path);
     free(file);
     return 1;
+}
+
+/* ===================================================================
+ * #640 — Positional binary-safe I/O: pwrite, pread, ftruncate, fsync.
+ *
+ * The POSIX positional family — required for any out-of-order writer
+ * (rsync-style reconstruction, sparse-file build, parallel chunk
+ * downloads, block scatter-gather). Wraps fileno(fp) on the FILE*
+ * inside our File wrapper.
+ *
+ * `pwrite` and `pread` loop on short transfers — POSIX permits
+ * returning fewer bytes than requested. EINTR retry is required;
+ * a syscall interrupted by a signal returns -1 with errno=EINTR
+ * and must be re-tried, not failed.
+ *
+ * fflush(fp) before pread/pwrite: the FILE* may have buffered data
+ * not yet flushed to the fd. Without the flush, a pread of recently-
+ * written data via the same handle reads stale-from-fd content.
+ * =================================================================== */
+
+#include <errno.h>
+
+/* Returns bytes written on success, -1 on error. Loops on short
+ * writes. `offset` is a byte position from start-of-file. */
+long fs_pwrite_raw(File* file, const char* data, int length, long offset) {
+    if (!file || !file->is_open || !data || length < 0 || offset < 0) return -1;
+    FILE* fp = (FILE*)file->handle;
+    fflush(fp);
+    int fd = fileno(fp);
+    if (fd < 0) return -1;
+    size_t total = 0;
+    while (total < (size_t)length) {
+#ifdef _WIN32
+        /* Windows has no pwrite — emulate with seek + write. NOT
+         * thread-safe across handles (the seek changes the file
+         * position for the whole handle); fine for the single-
+         * threaded port-server case the issue addresses. */
+        if (fseek(fp, offset + (long)total, SEEK_SET) != 0) return -1;
+        size_t w = fwrite(data + total, 1, (size_t)length - total, fp);
+        if (w == 0) return -1;
+        total += w;
+#else
+        ssize_t w = pwrite(fd, data + total, (size_t)length - total,
+                           (off_t)(offset + (long)total));
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (w == 0) break;
+        total += (size_t)w;
+#endif
+    }
+    return (long)total;
+}
+
+/* TLS slot for the pread split-accessor — mirrors fs_get_read_binary.
+ * Per-thread so concurrent positional reads on different threads
+ * don't clobber. Lifetime is until the next call on the same thread
+ * or an explicit release. */
+static __thread unsigned char* g_pread_buf = NULL;
+static __thread size_t         g_pread_cap = 0;
+static __thread int            g_pread_len = 0;
+
+static void release_pread_locked(void) {
+    if (g_pread_buf) aether_caps_free(g_pread_buf, g_pread_cap);
+    g_pread_buf = NULL;
+    g_pread_cap = 0;
+    g_pread_len = 0;
+}
+
+void fs_release_pread(void) {
+    release_pread_locked();
+}
+
+const char* fs_get_pread(void) {
+    return g_pread_buf ? (const char*)g_pread_buf : "";
+}
+
+int fs_get_pread_length(void) {
+    return g_pread_len;
+}
+
+/* Returns 1 on success (TLS slot has up-to-length bytes; partial
+ * EOF reads are still success), 0 on failure. */
+int fs_pread_raw(File* file, int length, long offset) {
+    release_pread_locked();
+    if (!file || !file->is_open || length < 0 || offset < 0) return 0;
+    FILE* fp = (FILE*)file->handle;
+    fflush(fp);
+    int fd = fileno(fp);
+    if (fd < 0) return 0;
+
+    size_t alloc = length > 0 ? (size_t)length : 1;
+    unsigned char* buf = (unsigned char*)aether_caps_malloc(alloc);
+    if (!buf) return 0;
+
+    size_t total = 0;
+    while (total < (size_t)length) {
+#ifdef _WIN32
+        if (fseek(fp, offset + (long)total, SEEK_SET) != 0) {
+            aether_caps_free(buf, alloc); return 0;
+        }
+        size_t r = fread(buf + total, 1, (size_t)length - total, fp);
+        if (r == 0) break;  /* EOF or error — return what we have. */
+        total += r;
+#else
+        ssize_t r = pread(fd, buf + total, (size_t)length - total,
+                          (off_t)(offset + (long)total));
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            aether_caps_free(buf, alloc); return 0;
+        }
+        if (r == 0) break;  /* EOF — short read is success per the issue's contract. */
+        total += (size_t)r;
+#endif
+    }
+    g_pread_buf = buf;
+    g_pread_cap = alloc;
+    g_pread_len = (int)total;
+    return 1;
+}
+
+/* ftruncate — set file length to `length` bytes. POSIX truncate(2)
+ * extends with zero bytes when length > current size; SHOULD work
+ * the same way on Windows via _chsize_s. Returns "" on success or
+ * an error message. */
+const char* fs_ftruncate_raw(File* file, long length) {
+    if (!file || !file->is_open || length < 0) return "invalid args";
+    FILE* fp = (FILE*)file->handle;
+    fflush(fp);
+    int fd = fileno(fp);
+    if (fd < 0) return "no fd";
+#ifdef _WIN32
+    if (_chsize_s(fd, length) != 0) return "ftruncate failed";
+#else
+    if (ftruncate(fd, (off_t)length) != 0) return "ftruncate failed";
+#endif
+    return "";
+}
+
+/* fsync — flush kernel buffers to disk. Required after pwrite for
+ * durability guarantees. POSIX fsync(2) / Windows _commit. */
+const char* fs_fsync_raw(File* file) {
+    if (!file || !file->is_open) return "invalid args";
+    FILE* fp = (FILE*)file->handle;
+    fflush(fp);
+    int fd = fileno(fp);
+    if (fd < 0) return "no fd";
+#ifdef _WIN32
+    if (_commit(fd) != 0) return "fsync failed";
+#else
+    if (fsync(fd) != 0) return "fsync failed";
+#endif
+    return "";
 }
 
 int file_exists(const char* path) {
@@ -1874,6 +2038,223 @@ DirList* fs_glob_multi_raw(void* pattern_list) {
     }
 
     return result;
+}
+
+/* ===================================================================
+ * #632 — Lexical path ops: path_clean, path_rel, path_is_within_base.
+ *
+ * Pure string operations (no filesystem access). Match Go's
+ * filepath.Clean / Rel semantics — that's the reference every
+ * porter checks against, and a one-byte deviation in `..` resolution
+ * is a directory-traversal CVE.
+ *
+ * POSIX semantics:
+ *   - collapse `//`, `./`
+ *   - resolve `..` against a segment stack (drop the parent)
+ *   - preserve a leading `/`
+ *   - preserve UNRESOLVED leading `..` on a relative path
+ *     (`../../x` cleans to `../../x`, NOT `x`)
+ *   - empty input → "."
+ *   - trailing `/` is dropped except for the root `/` itself
+ * =================================================================== */
+
+/* Walks `path` segment-by-segment using a stack of (start, len) pairs
+ * into `path`. Tracks how many leading `..` we couldn't resolve
+ * (relative paths only). Reconstructs into a freshly-malloc'd
+ * NUL-terminated string the caller frees. */
+char* path_clean(const char* path) {
+    if (!path) return strdup(".");
+
+    size_t in_len = strlen(path);
+    if (in_len == 0) return strdup(".");
+
+    int rooted = (path[0] == '/');
+
+    /* Segment stack — at most one entry per byte of input. */
+    struct seg { size_t start; size_t len; };
+    struct seg* stk = (struct seg*)malloc(sizeof(struct seg) * (in_len + 1));
+    if (!stk) return NULL;
+    size_t sp = 0;
+    /* Count of leading `..` we couldn't resolve (relative paths only). */
+    size_t leading_dotdot = 0;
+
+    size_t i = rooted ? 1 : 0;
+    while (i < in_len) {
+        /* Skip consecutive `/`. */
+        while (i < in_len && path[i] == '/') i++;
+        if (i >= in_len) break;
+        size_t start = i;
+        while (i < in_len && path[i] != '/') i++;
+        size_t len = i - start;
+        /* "." — skip. */
+        if (len == 1 && path[start] == '.') continue;
+        /* ".." — pop or push. */
+        if (len == 2 && path[start] == '.' && path[start + 1] == '.') {
+            if (sp > leading_dotdot) {
+                /* Can pop a real segment. */
+                sp--;
+            } else if (!rooted) {
+                /* Relative path with no resolvable parent: preserve. */
+                stk[sp].start = start;
+                stk[sp].len = 2;
+                sp++;
+                leading_dotdot++;
+            }
+            /* Rooted: ".." at the root is dropped (POSIX). */
+            continue;
+        }
+        /* Regular segment. */
+        stk[sp].start = start;
+        stk[sp].len = len;
+        sp++;
+    }
+
+    /* Total output length: leading "/" or "" + segments joined by "/". */
+    size_t total = rooted ? 1 : 0;
+    for (size_t k = 0; k < sp; k++) {
+        if (k > 0 || (!rooted && k == 0)) {
+            if (k > 0) total += 1;  /* separator */
+        }
+        total += stk[k].len;
+    }
+    /* Empty result → "/" if rooted else "." */
+    if (sp == 0) {
+        free(stk);
+        return strdup(rooted ? "/" : ".");
+    }
+
+    char* out = (char*)malloc(total + 1);
+    if (!out) { free(stk); return NULL; }
+    size_t o = 0;
+    if (rooted) out[o++] = '/';
+    for (size_t k = 0; k < sp; k++) {
+        if (k > 0) out[o++] = '/';
+        memcpy(out + o, path + stk[k].start, stk[k].len);
+        o += stk[k].len;
+    }
+    out[o] = '\0';
+    free(stk);
+    return out;
+}
+
+/* Lexical containment: does the cleaned `target` lie within cleaned
+ * `base`? Returns 1 yes, 0 no. Pure-string — never touches the
+ * filesystem (no realpath, no stat). The right primitive for
+ * pre-validation in a blob store / static-file server / archive
+ * extractor: reject the request BEFORE you open(2) the path.
+ *
+ * Both paths are cleaned via path_clean first. After that:
+ *   - identical → within
+ *   - `target` starts with `base + "/"` → within
+ *   - anything else → not within
+ *
+ * Treats `base == "/"` specially (any absolute target is within).
+ * Symlinks are NOT followed — this is the lexical check. If a
+ * symlink under `base` points outside, that's an open-time concern
+ * separate from this function.
+ */
+int path_is_within_base(const char* base, const char* target) {
+    if (!base || !target) return 0;
+    char* cb = path_clean(base);
+    char* ct = path_clean(target);
+    if (!cb || !ct) { free(cb); free(ct); return 0; }
+    size_t bl = strlen(cb);
+    size_t tl = strlen(ct);
+
+    int within = 0;
+    if (bl == 1 && cb[0] == '/') {
+        within = (ct[0] == '/') ? 1 : 0;
+    } else if (tl == bl && strcmp(cb, ct) == 0) {
+        within = 1;
+    } else if (tl > bl && memcmp(cb, ct, bl) == 0 && ct[bl] == '/') {
+        within = 1;
+    }
+    free(cb);
+    free(ct);
+    return within;
+}
+
+/* path_rel(base, target) — "what's the relative path from base to
+ * target?" Matches Go filepath.Rel: returns a path that, joined onto
+ * base and cleaned, equals target.
+ *
+ * Returns a caller-frees string on success, NULL when there's no
+ * relative path (one is absolute and the other isn't, or target is
+ * outside base on Windows-style drive boundaries — not a concern on
+ * POSIX). For POSIX:
+ *   - both must be absolute, or both relative
+ *   - if base==target → "."
+ *   - shared prefix gets dropped; remaining base segments → "..",
+ *     remaining target segments stay
+ *
+ * Used by porters who want to show a path RELATIVE to a project
+ * root in logs / errors / UI. Less security-critical than
+ * is_within_base; the lexical computation is the same shape.
+ */
+char* path_rel(const char* base, const char* target) {
+    if (!base || !target) return NULL;
+    char* cb = path_clean(base);
+    char* ct = path_clean(target);
+    if (!cb || !ct) { free(cb); free(ct); return NULL; }
+    int b_root = (cb[0] == '/');
+    int t_root = (ct[0] == '/');
+    if (b_root != t_root) {
+        free(cb); free(ct); return NULL;
+    }
+    /* Split each into segments and walk. */
+    size_t bl = strlen(cb);
+    size_t tl = strlen(ct);
+    /* Find shared-prefix segments. */
+    size_t bi = b_root ? 1 : 0;
+    size_t ti = t_root ? 1 : 0;
+    while (bi < bl && ti < tl) {
+        /* Compare next segment in cb vs ct. */
+        size_t bsa = bi, tsa = ti;
+        while (bi < bl && cb[bi] != '/') bi++;
+        while (ti < tl && ct[ti] != '/') ti++;
+        if ((bi - bsa) != (ti - tsa) ||
+            memcmp(cb + bsa, ct + tsa, bi - bsa) != 0) {
+            /* Diverged — rewind to start of this segment. */
+            bi = bsa;
+            ti = tsa;
+            break;
+        }
+        if (bi < bl && cb[bi] == '/') bi++;
+        if (ti < tl && ct[ti] == '/') ti++;
+    }
+    /* `bi` is at the first byte of the unmatched base remainder,
+     * `ti` at the first byte of the unmatched target remainder. */
+    /* Count remaining base segments → that many ".." */
+    size_t up = 0;
+    {
+        size_t p = bi;
+        while (p < bl) {
+            up++;
+            while (p < bl && cb[p] != '/') p++;
+            if (p < bl) p++;
+        }
+    }
+    /* Build output: up * "../" + (target remainder). */
+    size_t out_cap = up * 3 + (tl - ti) + 2;
+    char* out = (char*)malloc(out_cap);
+    if (!out) { free(cb); free(ct); return NULL; }
+    size_t o = 0;
+    for (size_t u = 0; u < up; u++) {
+        out[o++] = '.';
+        out[o++] = '.';
+        if (u + 1 < up || ti < tl) out[o++] = '/';
+    }
+    if (ti < tl) {
+        memcpy(out + o, ct + ti, tl - ti);
+        o += tl - ti;
+    }
+    if (o == 0) {
+        out[o++] = '.';
+    }
+    out[o] = '\0';
+    free(cb);
+    free(ct);
+    return out;
 }
 
 #endif // AETHER_HAS_FILESYSTEM

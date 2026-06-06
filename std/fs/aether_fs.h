@@ -170,6 +170,34 @@ char* path_basename(const char* path);
 char* path_extension(const char* path);
 int path_is_absolute(const char* path);
 
+// Lexical path ops (#632). Pure-string; never touch the filesystem.
+// path_clean: Go filepath.Clean semantics (collapse `//`/`./`,
+//             resolve `..` against a segment stack, preserve a leading
+//             `/`, preserve unresolved leading `..` on relative paths).
+//             Empty input → ".".
+// path_is_within_base: lexical containment check — 1 iff cleaned
+//             `target` lies under cleaned `base`. Security-critical:
+//             the right pre-validation for blob stores / static
+//             servers / archive extractors to reject path traversal
+//             BEFORE open(2). Symlinks NOT followed.
+// path_rel: relative path from `base` to `target` (Go filepath.Rel).
+//             NULL when one is absolute and the other relative.
+char* path_clean(const char* path);
+int   path_is_within_base(const char* base, const char* target);
+char* path_rel(const char* base, const char* target);
+
+// Positional I/O (#640). All operate on a File* obtained via
+// file_open_raw with a mode that admits both read and write ("r+",
+// "w+", "a+"). Loops on short transfers; EINTR-safe on POSIX;
+// _chsize_s / _commit on Windows.
+long        fs_pwrite_raw(File* file, const char* data, int length, long offset);
+int         fs_pread_raw(File* file, int length, long offset);
+const char* fs_get_pread(void);
+int         fs_get_pread_length(void);
+void        fs_release_pread(void);
+const char* fs_ftruncate_raw(File* file, long length);
+const char* fs_fsync_raw(File* file);
+
 // Directory listing
 typedef struct {
     char** entries;

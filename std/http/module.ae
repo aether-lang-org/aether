@@ -53,6 +53,9 @@ exports (
     http_server_set_actor_handler,
     http_request_method, http_request_path, http_request_body,
     http_request_body_length, http_request_query,
+    http_request_body_read_raw, http_get_request_body_read,
+    http_get_request_body_read_length, http_release_request_body_read,
+    request_body_read,
     http_request_header_count, http_request_header_name, http_request_header_value,
     http_serve_static, http_serve_file, http_mime_type,
     serve_file, serve_static,
@@ -617,6 +620,11 @@ extern http_request_body(req: ptr) -> string
 // the body may contain embedded NULs (binary uploads, gzipped JSON,
 // svn PUT) — `string.length` on the body would `strlen` and truncate.
 extern http_request_body_length(req: ptr) -> int
+extern http_request_body_read_raw(req: ptr, offset: int, max: int) -> int
+extern http_get_request_body_read() -> string
+extern http_get_request_body_read_length() -> int
+extern http_release_request_body_read()
+extern string_new_with_length(data: string, length: int) -> ptr
 extern http_request_query(req: ptr) -> string
 
 // Request-header iteration. `http_get_header` only does a named lookup;
@@ -644,6 +652,42 @@ request_body(req: ptr) -> string {
 
 request_body_length(req: ptr) -> int {
     return http_request_body_length(req)
+}
+
+// Chunked-read access to the request body (#626). Reads up to `max`
+// bytes from `offset` into an owned AetherString. Returns
+// (bytes, n, "") on success — `n` may be less than `max` at EOF.
+// Returns ("", 0, error) on failure.
+//
+// This is the SHAPE the fbs-core port asked for, so downstream code
+// can stream-process uploads. CURRENT IMPLEMENTATION reads from the
+// already-buffered body — the RAM-bounded internals (handler runs
+// before body finishes arriving) are a follow-up. Today this gives
+// porters a chunked-iteration loop that works against the buffered
+// body; the day the parse loop streams, the same code keeps working
+// without changes.
+//
+// Pair with `request_body_length` to drive the loop:
+//
+//   total = http.request_body_length(req)
+//   off = 0
+//   while off < total {
+//       chunk, n, err = http.request_body_read(req, off, 65536)
+//       if err != "" { ...handle... break }
+//       if n == 0 { break }
+//       fs.pwrite(out_file, chunk, n, off)   // stream to disk
+//       off = off + n
+//   }
+request_body_read(req: ptr, offset: int, max: int) -> {
+    ok = http_request_body_read_raw(req, offset, max)
+    if ok == 0 {
+        return "", 0, "request_body_read failed"
+    }
+    raw = http_get_request_body_read()
+    n   = http_get_request_body_read_length()
+    owned = string_new_with_length(raw, n)
+    http_release_request_body_read()
+    return owned, n, ""
 }
 
 request_query(req: ptr) -> string {
