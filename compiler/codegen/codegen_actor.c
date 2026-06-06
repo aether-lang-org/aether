@@ -239,6 +239,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                         // identifier errors in the generated C.
                         clear_declared_vars(gen);
                         clear_heap_string_vars(gen);
+    clear_seq_vars(gen);
                         print_line(gen, "%s* _pattern = (%s*)_msg_data;", pattern->value, pattern->value);
                         mark_var_declared(gen, "_pattern");
 

@@ -213,6 +213,14 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->escaped_string_var_count = 0;
     gen->return_escaped_string_vars = NULL;
     gen->return_escaped_string_var_count = 0;
+    // *StringSeq ownership tracking — MUST be zero-initialised here:
+    // the CodeGenerator is field-initialised (not calloc'd), so leaving
+    // these uninitialised made the first clear_seq_vars() free garbage
+    // pointers (glibc abort / SEGV on Linux CI; tolerated on macOS).
+    gen->seq_vars = NULL;
+    gen->seq_var_count = 0;
+    gen->escaped_seq_vars = NULL;
+    gen->escaped_seq_var_count = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -285,6 +293,7 @@ void free_code_generator(CodeGenerator* gen) {
             free(gen->declared_vars);
         }
         clear_heap_string_vars(gen);
+    clear_seq_vars(gen);
         clear_escaped_string_vars(gen);
         clear_try_clobbered_vars(gen);  /* Issue #501 follow-up */
         if (gen->message_registry) {
@@ -429,6 +438,60 @@ void clear_escaped_string_vars(CodeGenerator* gen) {
     }
     gen->return_escaped_string_vars = NULL;
     gen->return_escaped_string_var_count = 0;
+}
+
+/* ---- *StringSeq local registry (parallel to heap_string_vars) ----
+ * A seq var owns a refcounted spine; string_seq_free is a decrement, so
+ * freeing on reassign / scope-exit is refcount-safe even when shared. */
+int is_seq_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->seq_var_count; i++) {
+        if (strcmp(gen->seq_vars[i], var_name) == 0) return 1;
+    }
+    return 0;
+}
+
+void mark_seq_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_seq_var(gen, var_name)) return;
+    char** nv = realloc(gen->seq_vars, sizeof(char*) * (gen->seq_var_count + 1));
+    if (!nv) return;
+    gen->seq_vars = nv;
+    gen->seq_vars[gen->seq_var_count++] = strdup(var_name);
+}
+
+int is_escaped_seq_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->escaped_seq_var_count; i++) {
+        if (strcmp(gen->escaped_seq_vars[i], var_name) == 0) return 1;
+    }
+    return 0;
+}
+
+void mark_escaped_seq_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_escaped_seq_var(gen, var_name)) return;
+    char** nv = realloc(gen->escaped_seq_vars,
+                        sizeof(char*) * (gen->escaped_seq_var_count + 1));
+    if (!nv) return;
+    gen->escaped_seq_vars = nv;
+    gen->escaped_seq_vars[gen->escaped_seq_var_count++] = strdup(var_name);
+}
+
+void clear_seq_vars(CodeGenerator* gen) {
+    if (!gen) return;
+    if (gen->seq_vars) {
+        for (int i = 0; i < gen->seq_var_count; i++) free(gen->seq_vars[i]);
+        free(gen->seq_vars);
+    }
+    gen->seq_vars = NULL;
+    gen->seq_var_count = 0;
+    if (gen->escaped_seq_vars) {
+        for (int i = 0; i < gen->escaped_seq_var_count; i++) free(gen->escaped_seq_vars[i]);
+        free(gen->escaped_seq_vars);
+    }
+    gen->escaped_seq_vars = NULL;
+    gen->escaped_seq_var_count = 0;
 }
 
 /* Return-escape sibling. See the header comment on
@@ -600,6 +663,24 @@ static int try_emit_heap_string_exit_free(CodeGenerator* gen, ASTNode* deferred)
     return 1;
 }
 
+/* *StringSeq scope-exit free carrier. Annotation: "seq_exit_free:<name>".
+ * string_seq_free is a refcount decrement, so this is safe even when the
+ * spine is shared; the flag guard + NULL keep it idempotent against an
+ * explicit string.seq_free that already ran. */
+static int try_emit_seq_exit_free(CodeGenerator* gen, ASTNode* deferred) {
+    if (!deferred || !deferred->annotation) return 0;
+    const char* prefix = "seq_exit_free:";
+    size_t plen = strlen(prefix);
+    if (strncmp(deferred->annotation, prefix, plen) != 0) return 0;
+    const char* name = deferred->annotation + plen;
+    if (!*name) return 0;
+    print_indent(gen);
+    fprintf(gen->output,
+            "/* deferred */ if (_seqheap_%s) { string_seq_free(%s); %s = NULL; _seqheap_%s = 0; }\n",
+            name, name, name, name);
+    return 1;
+}
+
 /* Struct-destructor defer carrier (#465). Annotation:
  *   "struct_destroy:<varname>:<StructName>"
  * Pushed by the struct-local-declaration site in codegen_stmt.c
@@ -642,6 +723,7 @@ void emit_defers_for_scope(CodeGenerator* gen) {
         ASTNode* deferred = gen->defer_stack[i];
         if (deferred) {
             if (try_emit_heap_string_exit_free(gen, deferred)) continue;
+            if (try_emit_seq_exit_free(gen, deferred)) continue;
             if (try_emit_struct_destroy(gen, deferred)) continue;
             print_indent(gen);
             fprintf(gen->output, "/* deferred */ ");
@@ -722,6 +804,7 @@ void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int p
             continue;
         }
         if (try_emit_heap_string_exit_free(gen, deferred)) continue;
+        if (try_emit_seq_exit_free(gen, deferred)) continue;
         if (try_emit_struct_destroy(gen, deferred)) continue;
         print_indent(gen);
         fprintf(gen->output, "/* deferred */ ");
@@ -2323,6 +2406,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     indent(gen);
     clear_declared_vars(gen);  // Reset for main function
     clear_heap_string_vars(gen);
+    clear_seq_vars(gen);
     clear_escaped_string_vars(gen);
     clear_try_clobbered_vars(gen);  /* Issue #501 follow-up */
     // Reset defer state for main function and enter scope
@@ -2391,7 +2475,9 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
              * locals modified inside a try body. */
             mark_try_clobbered_vars(gen, main->children[0]);
             hoist_heap_string_trackers(gen, main->children[0]);
+            hoist_seq_trackers(gen, main->children[0]);
             mark_escaped_heap_string_vars(gen, main->children[0]);
+            mark_escaped_seq_vars(gen, main->children[0]);
             /* Mirror the regular-function path in
              * codegen_func.c::generate_function_definition: push a
              * function-exit defer-free for every non-escaped
@@ -2408,6 +2494,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
              * escaped, so the auto-free here cannot double-free
              * a buffer the user already released manually. */
             push_heap_string_exit_free_defers(gen, main->children[0]);
+            push_seq_exit_free_defers(gen, main->children[0]);
         }
         generate_statement(gen, main->children[0]);
         gen->current_promoted_captures = prev_promoted;

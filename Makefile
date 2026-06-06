@@ -464,6 +464,16 @@ else
 	ASAN_OPTIONS=halt_on_error=1 ./build/test_runner_asan$(EXE_EXT)
 endif
 
+# macOS leaks(1) gate (#468). Builds a curated set of memory-
+# ownership regression programs and runs each under
+# `MallocStackLogging=1 leaks --atExit`. Skips cleanly on non-Darwin
+# (Linux gets leak coverage from test-valgrind + ASan-LSan). NOT
+# folded into `make ci` — MallocStackLogging is ~10x slower; runs as
+# its own macOS-CI step. See tests/run_macos_leaks.sh for the covered
+# set and rationale.
+test-macos-leaks: compiler ae stdlib
+	@sh tests/run_macos_leaks.sh
+
 test-memory: compiler stdlib-memory
 	@echo "==================================="
 	@echo "Running Memory Tracking Tests"
@@ -1848,7 +1858,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-macos-leaks test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
 
 # Cross-language benchmark UI (alias for benchmark)
 benchmark-ui: benchmark

@@ -431,15 +431,22 @@ char* string_trim(const void* str) {
 
 // Helper: free a partially-built array on OOM during split. Used on
 // every early-exit path so no cleanup branch leaks memory.
-static void string_array_partial_free(AetherStringArray* arr, size_t built) {
+//
+// #463: cap-aware. `built` is how many elements were constructed
+// (release each); `capacity` is how many the strings array was
+// ALLOCATED for — distinct from `built` and from `arr->count`
+// (which isn't finalized until split succeeds), so the matching
+// caps_free byte count is `capacity * sizeof(AetherString*)`.
+static void string_array_partial_free(AetherStringArray* arr,
+                                      size_t built, size_t capacity) {
     if (!arr) return;
     if (arr->strings) {
         for (size_t k = 0; k < built; k++) {
             if (arr->strings[k]) string_release(arr->strings[k]);
         }
-        free(arr->strings);
+        aether_caps_free(arr->strings, capacity * sizeof(AetherString*));
     }
-    free(arr);
+    aether_caps_free(arr, sizeof(AetherStringArray));
 }
 
 // String array operations
@@ -449,7 +456,16 @@ AetherStringArray* string_split(const void* str, const char* delimiter) {
     const char* sdata = str_data(str);
     size_t delim_len = strlen(delimiter);
 
-    AetherStringArray* arr = (AetherStringArray*)malloc(sizeof(AetherStringArray));
+    /* #463: cap-aware. AetherStringArray shape is
+     * {AetherString** strings; size_t count;}. The strings array's
+     * allocated element count equals `arr->count` in every success
+     * path, so string_array_free recovers the byte count from
+     * arr->count; the OOM cleanup uses string_array_partial_free
+     * which is passed the allocation capacity explicitly (count
+     * isn't finalized yet). Paired with the string_seq_to_array
+     * conversion in std/collections/aether_stringseq.c, which builds
+     * the same layout and is freed by this same string_array_free. */
+    AetherStringArray* arr = (AetherStringArray*)aether_caps_malloc(sizeof(AetherStringArray));
     if (!arr) return NULL;
     arr->count = 0;
     arr->strings = NULL;
@@ -457,11 +473,11 @@ AetherStringArray* string_split(const void* str, const char* delimiter) {
     // Empty delimiter → one entry per byte.
     if (delim_len == 0) {
         if (slen == 0) return arr;
-        arr->strings = (AetherString**)malloc(sizeof(AetherString*) * slen);
-        if (!arr->strings) { free(arr); return NULL; }
+        arr->strings = (AetherString**)aether_caps_malloc(sizeof(AetherString*) * slen);
+        if (!arr->strings) { aether_caps_free(arr, sizeof(AetherStringArray)); return NULL; }
         for (size_t i = 0; i < slen; i++) {
             AetherString* piece = string_new_with_length(sdata + i, 1);
-            if (!piece) { string_array_partial_free(arr, i); return NULL; }
+            if (!piece) { string_array_partial_free(arr, i, slen); return NULL; }
             arr->strings[i] = piece;
         }
         arr->count = slen;
@@ -470,10 +486,14 @@ AetherStringArray* string_split(const void* str, const char* delimiter) {
 
     // Input shorter than the delimiter → one piece, the whole input.
     if (slen < delim_len) {
-        arr->strings = (AetherString**)malloc(sizeof(AetherString*));
-        if (!arr->strings) { free(arr); return NULL; }
+        arr->strings = (AetherString**)aether_caps_malloc(sizeof(AetherString*));
+        if (!arr->strings) { aether_caps_free(arr, sizeof(AetherStringArray)); return NULL; }
         arr->strings[0] = string_new_with_length(sdata, slen);
-        if (!arr->strings[0]) { free(arr->strings); free(arr); return NULL; }
+        if (!arr->strings[0]) {
+            aether_caps_free(arr->strings, sizeof(AetherString*));
+            aether_caps_free(arr, sizeof(AetherStringArray));
+            return NULL;
+        }
         arr->count = 1;
         return arr;
     }
@@ -489,15 +509,15 @@ AetherStringArray* string_split(const void* str, const char* delimiter) {
         }
     }
 
-    arr->strings = (AetherString**)malloc(sizeof(AetherString*) * count);
-    if (!arr->strings) { free(arr); return NULL; }
+    arr->strings = (AetherString**)aether_caps_malloc(sizeof(AetherString*) * count);
+    if (!arr->strings) { aether_caps_free(arr, sizeof(AetherStringArray)); return NULL; }
 
     size_t start = 0;
     size_t idx = 0;
     for (size_t i = 0; i <= upper; i++) {
         if (memcmp(sdata + i, delimiter, delim_len) == 0) {
             AetherString* piece = string_new_with_length(sdata + start, i - start);
-            if (!piece) { string_array_partial_free(arr, idx); return NULL; }
+            if (!piece) { string_array_partial_free(arr, idx, count); return NULL; }
             arr->strings[idx++] = piece;
             start = i + delim_len;
             i += delim_len - 1;
@@ -505,7 +525,7 @@ AetherStringArray* string_split(const void* str, const char* delimiter) {
     }
     // Tail piece (may be empty if input ends with the delimiter).
     AetherString* tail = string_new_with_length(sdata + start, slen - start);
-    if (!tail) { string_array_partial_free(arr, idx); return NULL; }
+    if (!tail) { string_array_partial_free(arr, idx, count); return NULL; }
     arr->strings[idx] = tail;
     arr->count = count;
 
@@ -523,8 +543,10 @@ int string_array_size(AetherStringArray* arr) {
 // LIFETIME: returned pointer is BORROWED — it aliases arr->strings[index]->data
 // and is invalidated by string_array_free(arr). Aether-side callers that need
 // the value to outlive the array must copy first (e.g. string.concat(v, ""))
-// or use string_split_to_seq which returns refcounted cells. The module.ae
-// extern carries the same warning for the Aether-side reader.
+// or use string_split_to_seq, which returns refcounted cells that the
+// compiler reclaims deterministically at scope exit (the recommended shape;
+// see std/string/module.ae). The module.ae extern carries the same warning
+// for the Aether-side reader.
 const char* string_array_get(AetherStringArray* arr, int index) {
     if (!arr || index < 0 || (size_t)index >= arr->count) return NULL;
     AetherString* s = arr->strings[index];
@@ -536,8 +558,13 @@ void string_array_free(AetherStringArray* arr) {
     for (size_t i = 0; i < arr->count; i++) {
         string_release(arr->strings[i]);
     }
-    free(arr->strings);
-    free(arr);
+    /* #463: the strings array's allocated element count equals
+     * arr->count in every path that produces a fully-built array
+     * (string_split's three branches + string_seq_to_array all set
+     * count to the allocation size). caps_free(NULL, 0) is a no-op
+     * for the empty-delimiter zero-length case (strings == NULL). */
+    aether_caps_free(arr->strings, arr->count * sizeof(AetherString*));
+    aether_caps_free(arr, sizeof(AetherStringArray));
 }
 
 /* string_split_to_seq — sibling of string_split that materialises the

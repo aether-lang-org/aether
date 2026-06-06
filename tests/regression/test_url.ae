@@ -103,5 +103,14 @@ main() {
     }
     print("PASS: leading '?' stripped\n")
 
+    // Reclaim the string_lists handed back by url.parse_query /
+    // url.query_get_all — std.collections lists are caller-owned
+    // (explicit container ownership; only heap-string and *StringSeq
+    // *locals* auto-free). Without these the program leaks the parsed
+    // query storage at exit.
+    string_list_free(all)
+    string_list_free(list)
+    string_list_free(list2)
+
     print("\nAll PASS\n")
 }

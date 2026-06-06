@@ -152,7 +152,14 @@ extern string_trim(str: string) -> string
 //   2. Use `string_split_to_seq` (declared further down) — returns a
 //      refcounted `*StringSeq` whose cells own their data
 //      independently of any backing array, so there's no
-//      array-wide free to worry about.
+//      array-wide free to worry about. This is the RECOMMENDED shape:
+//      a `*StringSeq` local is reclaimed DETERMINISTICALLY by the
+//      compiler — freed automatically at scope exit via the
+//      refcount-decrementing `string_seq_free`, the same way heap
+//      strings are. No manual free, and (because the free is a
+//      decrement) structurally-shared tails stay safe. A piece you
+//      pull from a sequence and let escape transfers ownership
+//      cleanly, with no dangling-into-a-backing-array hazard.
 //
 // If your access pattern is "build, walk once, free" within a single
 // scope, the borrowed-pointer form is fine and the cheapest. Reach

@@ -70,6 +70,21 @@ jobs:
     - name: Run full CI suite
       run: HARDEN=${{ matrix.harden }} CC=${{ matrix.cc }} make ci
 
+    # macOS leaks(1) gate (#468). Runs only on the ARM64 macOS job —
+    # one macOS arch is enough leak coverage, and MallocStackLogging
+    # is ~10x slower so we don't want it on both. Linux gets leak
+    # coverage from test-valgrind + ASan-LSan; this is the only
+    # detector that works on Apple Silicon (Apple clang ships ASan
+    # without LSan; upstream LSan hangs here).
+    - name: macOS leaks gate
+      if: matrix.name == 'macOS / Clang (ARM64)'
+      # Hard step cap as a backstop to the per-test timeouts inside
+      # run_macos_leaks.sh: the gate can never hold a runner indefinitely.
+      # 20 min is generous for 16 instrumented programs (leaks +
+      # MallocStackLogging is ~10x slower than the bare run).
+      timeout-minutes: 20
+      run: make test-macos-leaks
+
   # ============================================================
   # contrib/host bridge check — syntax check of every host bridge
   # in stub mode (always-on), plus end-to-end build+link+run of

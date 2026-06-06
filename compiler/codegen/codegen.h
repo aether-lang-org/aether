@@ -311,6 +311,25 @@ typedef struct {
     char** return_escaped_string_vars;
     int return_escaped_string_var_count;
 
+    // `*StringSeq` (cons-cell sequence) locals whose current value is a
+    // heap-allocated, refcounted seq returned by an OWNING producer
+    // (string_seq_cons / reverse / concat / take / drop / from_array /
+    // split_to_seq / retain / empty — NOT string_seq_tail, which borrows
+    // into an existing spine). Parallel to heap_string_vars: the codegen
+    // frees the prior value on reassignment and at scope exit via
+    // string_seq_free(), which is a refcount DECREMENT — so freeing a
+    // shared spine is safe (it survives while another owner holds a ref).
+    // Because every seq_* op retains or reads (never steals the caller's
+    // ref), the only escapes are `return <name>` and a raw store into a
+    // non-seq container; escaped_seq_vars records those so their
+    // scope-exit free is suppressed. A `_seqheap_<name>` flag tracks
+    // whether the slot currently owns a ref (set from an owning producer,
+    // cleared by an explicit seq_free / borrowed assignment).
+    char** seq_vars;
+    int seq_var_count;
+    char** escaped_seq_vars;
+    int escaped_seq_var_count;
+
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.
     struct ReplyTypeEntry {

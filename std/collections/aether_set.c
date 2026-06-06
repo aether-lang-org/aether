@@ -1,4 +1,5 @@
 #include "aether_set.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 
 #define DUMMY_VALUE ((void*)1)
@@ -9,24 +10,27 @@ Set* set_create(size_t initial_capacity,
                void (*key_free)(void*),
                void* (*key_clone)(const void*)) {
     
-    Set* set = (Set*)malloc(sizeof(Set));
+    /* #463: cap-aware wrapper struct. The backing hashmap is already
+     * caps-aware (aether_hashmap.c, #469); only the Set shell
+     * converts here. */
+    Set* set = (Set*)aether_caps_malloc(sizeof(Set));
     if (!set) return NULL;
-    
+
     set->map = hashmap_create(initial_capacity, hash_func, key_equals,
                              key_free, NULL, key_clone, NULL);
-    
+
     if (!set->map) {
-        free(set);
+        aether_caps_free(set, sizeof(Set));
         return NULL;
     }
-    
+
     return set;
 }
 
 void set_free(Set* set) {
     if (!set) return;
     hashmap_free(set->map);
-    free(set);
+    aether_caps_free(set, sizeof(Set));
 }
 
 bool set_add(Set* set, void* element) {

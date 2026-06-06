@@ -704,6 +704,39 @@ static int extern_returns_heap_string(ASTNode* ext) {
 // hardcoded-stdlib + string-interp fast paths in isolation. When
 // non-NULL, gen->program is consulted for user-defined-fn lookup;
 // when NULL, we fall through to the conservative answer.
+/* Does `expr` produce an OWNED *StringSeq — a fresh refcount the caller
+ * must release — as opposed to a borrowed pointer into an existing
+ * spine? Owned: cons / reverse / concat / take / drop / from_array /
+ * split_to_seq / retain / empty, and any user fn returning *StringSeq
+ * (its return-escape contract hands the caller a ref). Borrowed:
+ * string_seq_tail (returns s->tail with no new ref) — must NOT be
+ * tracked as owned, or freeing it would decrement a cell the parent
+ * spine still owns. The empty producer yields NULL, which string_seq_free
+ * treats as a no-op, so tracking it as owned is harmless. */
+int is_seq_owning_expr(CodeGenerator* gen, ASTNode* expr) {
+    if (!expr || expr->type != AST_FUNCTION_CALL || !expr->value) return 0;
+    if (!expr->node_type || !is_string_seq_ptr_type(expr->node_type)) return 0;
+    char fn_norm[256];
+    const char* fn = codegen_normalise_callee(expr->value, fn_norm, sizeof(fn_norm));
+    if (!fn) return 0;
+    if (strcmp(fn, "string_seq_tail") == 0) return 0;  /* borrowed */
+    if (strcmp(fn, "string_seq_cons") == 0 ||
+        strcmp(fn, "string_seq_empty") == 0 ||
+        strcmp(fn, "string_seq_reverse") == 0 ||
+        strcmp(fn, "string_seq_concat") == 0 ||
+        strcmp(fn, "string_seq_take") == 0 ||
+        strcmp(fn, "string_seq_drop") == 0 ||
+        strcmp(fn, "string_seq_from_array") == 0 ||
+        strcmp(fn, "string_seq_retain") == 0 ||
+        strcmp(fn, "string_split_to_seq") == 0) {
+        return 1;
+    }
+    /* A user-defined function with a *StringSeq return type hands back an
+     * owned ref (its own return-escaped local). */
+    if (gen && find_function_definition_by_name(gen->program, fn)) return 1;
+    return 0;
+}
+
 int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
     if (!expr) return 0;
 
@@ -768,7 +801,24 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
             strcmp(fn, "string_from_int") == 0 ||
             strcmp(fn, "string_from_long") == 0 ||
             strcmp(fn, "string_from_float") == 0 ||
-            strcmp(fn, "string_from_char") == 0) {
+            strcmp(fn, "string_from_char") == 0 ||
+            /* Additional always-fresh-heap string producers (verified
+             * each returns owned heap, never a borrowed/literal pointer):
+             *   string_from_int_radix : string_new / string_empty
+             *   string_pad_start/_end : string_new_with_length / _empty
+             *   string_format_list    : fresh AetherString
+             *   json_stringify_raw    : fresh malloc'd char*
+             * aether_heap_str_free dispatches on the magic header, so
+             * AetherString producers string_release and the plain-char*
+             * json one free()s — both correct, neither ever a literal.
+             * NOT string_to_cstr: it returns a BORROWED pointer into its
+             * argument (the AetherString's ->data, or the input itself),
+             * so auto-freeing it would corrupt the source. */
+            strcmp(fn, "string_from_int_radix") == 0 ||
+            strcmp(fn, "string_pad_start") == 0 ||
+            strcmp(fn, "string_pad_end") == 0 ||
+            strcmp(fn, "string_format_list") == 0 ||
+            strcmp(fn, "json_stringify_raw") == 0) {
             return 1;
         }
         // User-defined function: only heap if its body provably
@@ -1628,6 +1678,70 @@ void hoist_heap_string_trackers(CodeGenerator* gen, ASTNode* body) {
     }
 }
 
+/* Collect `*StringSeq`-typed local declaration names (parallel to
+ * collect_heap_string_var_names). A declaration is seq-typed if its LHS
+ * or initializer carries a *StringSeq type. */
+static void collect_seq_var_names(CodeGenerator* gen, ASTNode* node,
+                                  const char** names, int* count, int cap) {
+    if (!node || *count >= cap) return;
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        strcmp(node->value, "_") != 0) {
+        int is_seq = (node->node_type && is_string_seq_ptr_type(node->node_type));
+        if (!is_seq && node->child_count > 0 && node->children[0] &&
+            node->children[0]->node_type &&
+            is_string_seq_ptr_type(node->children[0]->node_type)) {
+            is_seq = 1;
+        }
+        if (is_seq) {
+            int already = 0;
+            for (int i = 0; i < *count; i++)
+                if (strcmp(names[i], node->value) == 0) { already = 1; break; }
+            if (!already && *count < cap) names[(*count)++] = node->value;
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        collect_seq_var_names(gen, node->children[i], names, count, cap);
+}
+
+/* Hoist `int _seqheap_<name> = 0;` + the function-scope `StringSeq*
+ * <name> = NULL;` declaration for every *StringSeq local, mirroring
+ * hoist_heap_string_trackers. Function-scope hoisting means the
+ * scope-exit defer-free can always reference the slot, and every
+ * assignment (including the first) routes through the reassignment
+ * wrapper that maintains the ownership flag. */
+void hoist_seq_trackers(CodeGenerator* gen, ASTNode* body) {
+    if (!body || !gen) return;
+    const char* names[256];
+    int count = 0;
+    collect_seq_var_names(gen, body, names, &count, 256);
+    for (int i = 0; i < count; i++) {
+        const char* name = names[i];
+        if (!is_seq_var(gen, name)) {
+            print_indent(gen);
+            fprintf(gen->output,
+                    "int _seqheap_%s = 0; (void)_seqheap_%s;\n", name, name);
+            mark_seq_var(gen, name);
+        }
+        if (is_var_declared(gen, name)) continue;
+        if (gen->current_actor) {
+            int is_state = 0;
+            for (int s = 0; s < gen->state_var_count; s++)
+                if (gen->actor_state_vars[s] &&
+                    strcmp(gen->actor_state_vars[s], name) == 0) { is_state = 1; break; }
+            if (is_state) continue;
+        }
+        int is_env_cap = 0;
+        for (int e = 0; e < gen->current_env_capture_count; e++)
+            if (gen->current_env_captures[e] &&
+                strcmp(gen->current_env_captures[e], name) == 0) { is_env_cap = 1; break; }
+        if (is_env_cap) continue;
+        if (is_promoted_capture(gen, name)) continue;
+        print_indent(gen);
+        fprintf(gen->output, "StringSeq* %s = NULL;\n", name);
+        mark_var_declared(gen, name);
+    }
+}
+
 // =====================================================================
 // Escape analysis for heap-string variables
 //
@@ -1825,6 +1939,33 @@ static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
     return 0;
 }
 
+/* Built-in callees that take a string argument but provably never
+ * RETAIN the pointer beyond the call, so the argument does not escape:
+ *   - the print family (print / println / print_char) writes the bytes
+ *     to stdout/stderr and returns;
+ *   - `release` / `string_release` FREE the argument — the opposite of
+ *     stashing it for later — and hand ownership back, not onward.
+ * Their parameter has no registered type, so lookup_callee_param_kind
+ * returns TYPE_UNKNOWN and the conservative call_arg_escapes() would
+ * mark the argument escaped. That false escape suppresses the
+ * reassignment-free wrapper and the function-exit defer-free, leaking
+ * every prior value of a variable printed in a loop (string_leak_loop's
+ * `println(result)`) and — for `release` — withholding the `_heap_X`
+ * tracker the release lowering needs to actually free the value. This
+ * list is sound in the only direction that matters: we assert
+ * non-retention, so we never withhold a free a recipient still depends
+ * on (a UAF) — we only restore a free the heuristic wrongly withheld.
+ * The release lowering (codegen_expr.c) is itself flag-guarded, so the
+ * restored defer-free and the explicit release never double-free. */
+static int is_nonstoring_builtin(const char* fn) {
+    if (!fn) return 0;
+    return strcmp(fn, "print") == 0 ||
+           strcmp(fn, "println") == 0 ||
+           strcmp(fn, "print_char") == 0 ||
+           strcmp(fn, "release") == 0 ||
+           strcmp(fn, "string_release") == 0;
+}
+
 static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
                                       const char* consumed_lhs) {
     if (!call) return;
@@ -1859,7 +2000,11 @@ static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
                 const char* fn = call->value
                     ? codegen_normalise_callee(call->value, fn_norm, sizeof(fn_norm))
                     : NULL;
-                if (fn && is_retain_extern_param(gen, fn, i)) {
+                if (fn && is_nonstoring_builtin(fn)) {
+                    /* Provably non-storing (print family) — not an
+                     * escape; leave the variable freeable so its
+                     * reassignment-free wrapper fires. */
+                } else if (fn && is_retain_extern_param(gen, fn, i)) {
                     mark_escaped_string_var(gen, arg->value);
                 } else {
                     TypeKind k = lookup_callee_param_kind(gen, call->value, i);
@@ -2088,6 +2233,103 @@ void push_heap_string_exit_free_defers(CodeGenerator* gen, ASTNode* body) {
          * into the body. */
         char annot[300];
         snprintf(annot, sizeof(annot), "heap_string_exit_free:%s", name);
+        ASTNode* carrier = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                                            body->line, body->column);
+        if (carrier) {
+            if (carrier->annotation) free(carrier->annotation);
+            carrier->annotation = strdup(annot);
+            push_defer(gen, carrier);
+        }
+    }
+}
+
+/* Escape pre-pass for *StringSeq locals. A seq var escapes (and so its
+ * scope-exit free is suppressed) only when ownership leaves the
+ * function: it is `return`ed, captured by a closure, or passed to a
+ * NON-seq function that may store it raw (list.add, map.put, an actor
+ * message field, a struct constructor). Passing a seq to any
+ * `string_seq_*` op is NOT an escape — those retain (cons, concat,
+ * retain) or read (length, head, is_empty) or consume-and-clear
+ * (seq_free, handled by the explicit-free flag-clear), so the caller
+ * keeps its own ref. The RHS-of-own-assignment exception (`deep =
+ * cons(x, deep)`) keeps the accumulator pattern freeable. */
+static void seq_escape_walk(CodeGenerator* gen, ASTNode* node,
+                            const char* consumed_lhs) {
+    if (!node) return;
+    if (node->type == AST_RETURN_STATEMENT) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* c = node->children[i];
+            if (c && c->type == AST_IDENTIFIER && c->value &&
+                is_seq_var(gen, c->value)) {
+                mark_escaped_seq_var(gen, c->value);
+            } else {
+                seq_escape_walk(gen, c, consumed_lhs);
+            }
+        }
+        return;
+    }
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        node->child_count > 0) {
+        for (int i = 0; i < node->child_count; i++)
+            seq_escape_walk(gen, node->children[i], node->value);
+        return;
+    }
+    if (node->type == AST_CLOSURE) {
+        for (int i = 0; i < node->child_count; i++)
+            seq_escape_walk(gen, node->children[i], NULL);
+        return;
+    }
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        char fn_norm[256];
+        const char* fn = codegen_normalise_callee(node->value, fn_norm, sizeof(fn_norm));
+        int callee_is_seq_op = fn && strncmp(fn, "string_seq_", 11) == 0;
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* a = node->children[i];
+            if (a && a->type == AST_IDENTIFIER && a->value &&
+                is_seq_var(gen, a->value)) {
+                if (consumed_lhs && strcmp(a->value, consumed_lhs) == 0) continue;
+                if (callee_is_seq_op) continue;
+                mark_escaped_seq_var(gen, a->value);
+            } else {
+                seq_escape_walk(gen, a, consumed_lhs);
+            }
+        }
+        return;
+    }
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION) {
+        return;
+    }
+    for (int i = 0; i < node->child_count; i++)
+        seq_escape_walk(gen, node->children[i], consumed_lhs);
+}
+
+void mark_escaped_seq_vars(CodeGenerator* gen, ASTNode* body) {
+    if (!gen || !body) return;
+    seq_escape_walk(gen, body, NULL);
+}
+
+/* Scope-exit defer-free for non-escaped *StringSeq locals (parallel to
+ * push_heap_string_exit_free_defers). The carrier annotation
+ * `seq_exit_free:<name>` is recognised by try_emit_seq_exit_free. */
+void push_seq_exit_free_defers(CodeGenerator* gen, ASTNode* body) {
+    if (!gen || !body) return;
+    if (gen->seq_var_count <= 0) return;
+    for (int i = 0; i < gen->seq_var_count; i++) {
+        const char* name = gen->seq_vars[i];
+        if (!name) continue;
+        if (is_escaped_seq_var(gen, name)) continue;
+        int is_env_cap = 0;
+        for (int e = 0; e < gen->current_env_capture_count; e++) {
+            if (gen->current_env_captures[e] &&
+                strcmp(gen->current_env_captures[e], name) == 0) {
+                is_env_cap = 1; break;
+            }
+        }
+        if (is_env_cap) continue;
+        if (is_promoted_capture(gen, name)) continue;
+        char annot[300];
+        snprintf(annot, sizeof(annot), "seq_exit_free:%s", name);
         ASTNode* carrier = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
                                             body->line, body->column);
         if (carrier) {
@@ -3214,7 +3456,45 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                      * mark_escaped_heap_string_vars in this file for
                      * the analysis. */
                     int var_escaped = is_escaped_string_var(gen, stmt->value);
-                    if (var_is_string && stmt->child_count > 0 && var_escaped) {
+                    /* *StringSeq reassignment. The slot owns a refcounted
+                     * spine; free the prior ref (string_seq_free is a
+                     * decrement, so this is safe even when the spine is
+                     * shared) before overwriting. A bare-identifier alias
+                     * of another owned seq takes an INDEPENDENT ref via
+                     * string_seq_retain so both slots free safely. The
+                     * `_seqheap_<name>` flag records whether the slot
+                     * currently owns a ref; it is suppressed (free skipped)
+                     * for escaped seqs (returned / raw-stored) exactly like
+                     * the heap-string escape gate. */
+                    int var_is_seq = is_seq_var(gen, stmt->value);
+                    if (var_is_seq && stmt->child_count > 0) {
+                        ASTNode* srhs = stmt->children[0];
+                        int srhs_owning = is_seq_owning_expr(gen, srhs);
+                        int srhs_alias = (srhs->type == AST_IDENTIFIER &&
+                                          srhs->value &&
+                                          is_seq_var(gen, srhs->value) &&
+                                          strcmp(srhs->value, stmt->value) != 0);
+                        int seq_escaped = is_escaped_seq_var(gen, stmt->value);
+                        fprintf(gen->output, "{ StringSeq* _tmp_seq = %s; %s = ",
+                                stmt->value, stmt->value);
+                        if (srhs_alias) {
+                            fprintf(gen->output, "string_seq_retain(");
+                            generate_expression(gen, srhs);
+                            fprintf(gen->output, ")");
+                        } else {
+                            generate_expression(gen, srhs);
+                        }
+                        if (!seq_escaped) {
+                            fprintf(gen->output,
+                                    "; if (_seqheap_%s) string_seq_free(_tmp_seq);",
+                                    stmt->value);
+                        } else {
+                            fprintf(gen->output, ";");
+                        }
+                        fprintf(gen->output, " _seqheap_%s = %d; }\n",
+                                stmt->value,
+                                (srhs_owning || srhs_alias) ? 1 : 0);
+                    } else if (var_is_string && stmt->child_count > 0 && var_escaped) {
                         /* Escaped-LHS bare assignment. Wrapper-free is
                          * suppressed because the var's old value is
                          * potentially stored by a recipient (list_add,

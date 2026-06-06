@@ -10,6 +10,7 @@
  * resize on write use std.list. */
 
 #include "aether_collections.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,15 +21,18 @@ struct IntArray {
 
 IntArray* intarr_new_raw(int size) {
     if (size < 0) return NULL;
-    IntArray* arr = (IntArray*)malloc(sizeof(*arr));
+    /* #463: cap-aware. The struct is sizeof(IntArray); the data
+     * array is size×sizeof(int). Both byte counts are recoverable at
+     * free time from `arr->size`. */
+    IntArray* arr = (IntArray*)aether_caps_malloc(sizeof(*arr));
     if (!arr) return NULL;
     arr->size = size;
     if (size == 0) {
         arr->data = NULL;   // legal empty array; intarr_free still OK
         return arr;
     }
-    arr->data = (int*)calloc((size_t)size, sizeof(int));
-    if (!arr->data) { free(arr); return NULL; }
+    arr->data = (int*)aether_caps_calloc((size_t)size, sizeof(int));
+    if (!arr->data) { aether_caps_free(arr, sizeof(*arr)); return NULL; }
     return arr;
 }
 
@@ -68,6 +72,8 @@ void intarr_fill(IntArray* arr, int value) {
 
 void intarr_free(IntArray* arr) {
     if (!arr) return;
-    free(arr->data);
-    free(arr);
+    /* data was calloc'd size×sizeof(int) (NULL for the empty array,
+     * where caps_free is a no-op). */
+    aether_caps_free(arr->data, (size_t)arr->size * sizeof(int));
+    aether_caps_free(arr, sizeof(*arr));
 }

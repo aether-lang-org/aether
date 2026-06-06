@@ -232,6 +232,24 @@ s = "literal end"               // free(prev concat): yes — _heap_s was 1; _he
 
 The wrapper handles all four transitions (heap→heap, heap→literal, literal→heap, literal→literal) uniformly, so heap memory used by string-returning expressions is reclaimed eagerly without any user-visible `defer`.
 
+The same tracker also covers two related cases automatically:
+
+- **`release(s)` / `string.release(s)`** on a heap-tracked local lowers to
+  a flag-guarded free (`if (_heap_s) { aether_heap_str_free(s); s = NULL;
+  _heap_s = 0; }`). It reclaims both a refcounted AetherString
+  (`string.from_int` / `new` / …) *and* a plain malloc'd `char*`
+  (`string.concat` / `substring` / `to_upper` / `to_lower` / `trim`), and
+  clears the tracker so the scope-exit free can't double-free. Safe on a
+  literal — the flag is 0.
+- A heap-returning string expression used directly as a `==`/`!=`
+  comparison operand (`string.substring(s, i, j) == "lit"`) is captured in
+  a temp and freed after the compare — the binary-operator analogue of
+  the call-argument drain.
+
+`*StringSeq` cons-cell locals get an analogous automatic lifecycle (freed
+on reassignment and at scope exit via the refcount-decrementing
+`string_seq_free`); see [sequences.md](sequences.md) § Automatic ownership.
+
 ### Heap-string sources
 
 The compiler treats these expressions as heap-allocated:
