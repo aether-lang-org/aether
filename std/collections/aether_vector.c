@@ -1,4 +1,5 @@
 #include "aether_vector.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -9,16 +10,18 @@ Vector* vector_create(size_t initial_capacity,
                      void (*element_free)(void*),
                      void* (*element_clone)(const void*)) {
     
-    Vector* vec = (Vector*)malloc(sizeof(Vector));
+    /* #463: cap-aware. Backing array byte count recoverable from
+     * `vec->capacity * sizeof(void*)` at free / realloc. */
+    Vector* vec = (Vector*)aether_caps_malloc(sizeof(Vector));
     if (!vec) return NULL;
-    
+
     if (initial_capacity < DEFAULT_CAPACITY) {
         initial_capacity = DEFAULT_CAPACITY;
     }
-    
-    vec->data = (void**)malloc(initial_capacity * sizeof(void*));
+
+    vec->data = (void**)aether_caps_malloc(initial_capacity * sizeof(void*));
     if (!vec->data) {
-        free(vec);
+        aether_caps_free(vec, sizeof(Vector));
         return NULL;
     }
     
@@ -39,10 +42,10 @@ void vector_free(Vector* vec) {
                 vec->element_free(vec->data[i]);
             }
         }
-        free(vec->data);
+        aether_caps_free(vec->data, vec->capacity * sizeof(void*));
     }
-    
-    free(vec);
+
+    aether_caps_free(vec, sizeof(Vector));
 }
 
 // Ensure capacity
@@ -56,11 +59,13 @@ static bool vector_ensure_capacity(Vector* vec, size_t min_capacity) {
         new_capacity = min_capacity;
     }
     
-    void** new_data = (void**)realloc(vec->data, new_capacity * sizeof(void*));
+    void** new_data = (void**)aether_caps_realloc(vec->data,
+                                                  vec->capacity * sizeof(void*),
+                                                  new_capacity * sizeof(void*));
     if (!new_data) {
         return false;
     }
-    
+
     vec->data = new_data;
     vec->capacity = new_capacity;
     return true;
@@ -164,7 +169,9 @@ void vector_shrink_to_fit(Vector* vec) {
     if (!vec || vec->size == 0) return;
     
     if (vec->size < vec->capacity) {
-        void** new_data = (void**)realloc(vec->data, vec->size * sizeof(void*));
+        void** new_data = (void**)aether_caps_realloc(vec->data,
+                                                      vec->capacity * sizeof(void*),
+                                                      vec->size * sizeof(void*));
         if (new_data) {
             vec->data = new_data;
             vec->capacity = vec->size;

@@ -1,6 +1,7 @@
 #include "aether_stringlist.h"
 #include "aether_collections.h"
 #include "../string/aether_string.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 
@@ -15,11 +16,14 @@ struct StringList {
 };
 
 StringList* string_list_new(void) {
-    StringList* sl = (StringList*)malloc(sizeof(StringList));
+    /* #463: cap-aware wrapper struct. The backing ArrayList is
+     * already caps-aware (#471); only the StringList shell
+     * converts here. */
+    StringList* sl = (StringList*)aether_caps_malloc(sizeof(StringList));
     if (!sl) return NULL;
     sl->items = list_new();
     if (!sl->items) {
-        free(sl);
+        aether_caps_free(sl, sizeof(StringList));
         return NULL;
     }
     return sl;
@@ -94,5 +98,5 @@ void string_list_free(StringList* list) {
         }
         list_free(list->items);
     }
-    free(list);
+    aether_caps_free(list, sizeof(StringList));
 }

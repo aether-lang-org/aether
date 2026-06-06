@@ -1477,6 +1477,7 @@ void emit_closure_definitions(CodeGenerator* gen) {
             // Free this closure body's heap-string set and restore the
             // enclosing scope's (see the matching reset above).
             clear_heap_string_vars(gen);
+    clear_seq_vars(gen);
             gen->heap_string_vars = prev_heap;
             gen->heap_string_var_count = prev_heap_count;
             gen->current_function = prev_current_function;
@@ -2050,13 +2051,52 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 }
 
                 if (is_string_cmp) {
-                    if (!skip_parens) fprintf(gen->output, "(");
-                    fprintf(gen->output, "strcmp(_aether_safe_str(");
-                    generate_expression(gen, expr->children[0]);
-                    fprintf(gen->output, "), _aether_safe_str(");
-                    generate_expression(gen, expr->children[1]);
-                    fprintf(gen->output, ")) %s 0", get_c_operator(expr->value));
-                    if (!skip_parens) fprintf(gen->output, ")");
+                    /* Operand drain — the binary-operator analogue of the
+                     * call-argument drain (ArgDrainSub). A heap-returning
+                     * string expression used directly as a comparison
+                     * operand (`string.substring(s, i, j) == "lit"`,
+                     * `a.concat(b) != c`, an interpolation) is an anonymous
+                     * allocation with no owner: evaluated, read by
+                     * _aether_safe_str, then leaked. Inside a loop this is
+                     * one leak per iteration (observed in test_fs_realpath's
+                     * substring-scan). Capture each such operand in a temp,
+                     * run the compare, then free it. Gated exactly like the
+                     * arg-drain: only AST_FUNCTION_CALL / AST_STRING_INTERP
+                     * operands that is_heap_string_expr classifies as
+                     * fresh heap — never a tracked local (it owns its own
+                     * lifetime), a borrowed return (string.to_cstr), or a
+                     * literal. So no double-free is possible. */
+                    ASTNode* cl = expr->children[0];
+                    ASTNode* cr = expr->children[1];
+                    int drain_l = (cl->type == AST_FUNCTION_CALL ||
+                                   cl->type == AST_STRING_INTERP) &&
+                                  is_heap_string_expr(gen, cl);
+                    int drain_r = (cr->type == AST_FUNCTION_CALL ||
+                                   cr->type == AST_STRING_INTERP) &&
+                                  is_heap_string_expr(gen, cr);
+                    if (drain_l || drain_r) {
+                        if (!skip_parens) fprintf(gen->output, "(");
+                        fprintf(gen->output, "({ const char* _se_l = (const char*)(");
+                        generate_expression(gen, cl);
+                        fprintf(gen->output, "); const char* _se_r = (const char*)(");
+                        generate_expression(gen, cr);
+                        fprintf(gen->output,
+                                "); int _se_v = (strcmp(_aether_safe_str(_se_l), "
+                                "_aether_safe_str(_se_r)) %s 0); ",
+                                get_c_operator(expr->value));
+                        if (drain_l) fprintf(gen->output, "aether_heap_str_free(_se_l); ");
+                        if (drain_r) fprintf(gen->output, "aether_heap_str_free(_se_r); ");
+                        fprintf(gen->output, "_se_v; })");
+                        if (!skip_parens) fprintf(gen->output, ")");
+                    } else {
+                        if (!skip_parens) fprintf(gen->output, "(");
+                        fprintf(gen->output, "strcmp(_aether_safe_str(");
+                        generate_expression(gen, expr->children[0]);
+                        fprintf(gen->output, "), _aether_safe_str(");
+                        generate_expression(gen, expr->children[1]);
+                        fprintf(gen->output, ")) %s 0", get_c_operator(expr->value));
+                        if (!skip_parens) fprintf(gen->output, ")");
+                    }
                 } else {
                     if (!skip_parens) fprintf(gen->output, "(");
 
@@ -2479,21 +2519,56 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, ")");
                 }
-                // release(X) — explicit release sugar for refcounted
-                // strings. Emits `string_release(X)` so users can write
-                // `defer release(body)` after `body, err = http.get(url)`
-                // without reaching for the std.string namespace.
-                // Restricted to `string` arguments today; other heap
-                // types use their typed release function (e.g.
-                // string.string_seq_free for *StringSeq, hashmap.free
-                // for *Map). Expanding the dispatch table requires a
-                // stable destructor-vtable convention; out of scope here.
+                // release(X) — explicit release sugar for heap strings,
+                // for `defer release(body)` after `body, err =
+                // http.get(url)` without reaching for std.string.
+                //
+                // Two lowerings, chosen by what the codegen knows about
+                // the argument:
+                //
+                //  1. A heap-tracked local (is_heap_string_var) is freed
+                //     through its runtime ownership flag:
+                //         ({ if (_heap_X) { aether_heap_str_free(X);
+                //              X = NULL; _heap_X = 0; } })
+                //     aether_heap_str_free reclaims BOTH a magic-tagged
+                //     AetherString* (string.from_int / concat_wrapped /
+                //     fs.read_binary) AND a plain malloc'd char*
+                //     (string.concat / substring / to_upper / to_lower /
+                //     trim) — the latter is exactly what string_release
+                //     alone cannot free, because a plain heap char* is
+                //     indistinguishable at runtime from a .rodata
+                //     literal. The `_heap_X` guard is what makes freeing
+                //     a plain char* safe here: a variable currently
+                //     holding a literal has _heap_X == 0, so nothing is
+                //     freed (this is what kept `release("literal")` from
+                //     crashing — the literal arm below — and equally
+                //     protects `s = "lit"` after a heap assignment).
+                //     Clearing the flag means the restored function-exit
+                //     defer-free (release no longer marks its arg
+                //     escaped — see is_nonstoring_builtin) sees _heap_X
+                //     == 0 and does not double-free. The reassignment
+                //     wrapper frees each prior value, so a `defer
+                //     release(s)` accumulator in a loop frees every
+                //     iteration's buffer exactly once.
+                //
+                //  2. A literal / borrowed param / non-tracked
+                //     expression falls back to string_release, which is
+                //     literal-safe (no-ops unless the value carries the
+                //     AetherString magic header).
                 else if (strcmp(func_name, "release") == 0 && expr->child_count == 1) {
                     ASTNode* arg = expr->children[0];
                     if (arg->node_type && arg->node_type->kind == TYPE_STRING) {
-                        fprintf(gen->output, "string_release(");
-                        generate_expression(gen, arg);
-                        fprintf(gen->output, ")");
+                        if (arg->type == AST_IDENTIFIER && arg->value &&
+                            is_heap_string_var(gen, arg->value)) {
+                            fprintf(gen->output,
+                                "({ if (_heap_%s) { aether_heap_str_free((void*)%s); "
+                                "%s = NULL; _heap_%s = 0; } })",
+                                arg->value, arg->value, arg->value, arg->value);
+                        } else {
+                            fprintf(gen->output, "string_release(");
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, ")");
+                        }
                     } else {
                         fprintf(stderr,
                             "error: release() at line %d: only `string` is supported today.\n"
@@ -2502,6 +2577,57 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             "    *Map       -> hashmap.free\n",
                             expr->line);
                         fprintf(gen->output, "0 /* release() type error — see stderr */");
+                    }
+                }
+                // string.release(X) — the namespaced sibling of the bare
+                // release() builtin (resolves to the string_release
+                // extern). When X is a heap-tracked string local, lower it
+                // through the SAME flag-guarded free so it frees once and
+                // clears _heap_X. This is required because string_release
+                // no longer marks its argument escaped (is_nonstoring_
+                // builtin), so X now also receives an automatic
+                // function-exit defer-free — without clearing the flag
+                // here, `defer string.release(s)` on a magic AetherString
+                // would be freed twice (explicit + auto): a double-free.
+                // Non-heap-var arguments (literals, borrowed params) fall
+                // through to the plain, literal-safe string_release call.
+                else if ((strcmp(func_name, "string_release") == 0 ||
+                          strcmp(func_name, "string.release") == 0) &&
+                         expr->child_count == 1 &&
+                         expr->children[0]->type == AST_IDENTIFIER &&
+                         expr->children[0]->value &&
+                         is_heap_string_var(gen, expr->children[0]->value)) {
+                    /* Any heap-tracked local — NOT only string-typed.
+                     * string.from_int / from_long / new return a magic
+                     * AetherString that the classifier tracks but types
+                     * `-> ptr`; those too get an auto defer-free now, so
+                     * `defer string.release(num)` must clear the flag here
+                     * or the magic string is string_release'd twice. The
+                     * _heap_X guard makes aether_heap_str_free safe for
+                     * both the magic and plain-char* representations. */
+                    ASTNode* arg = expr->children[0];
+                    fprintf(gen->output,
+                        "({ if (_heap_%s) { aether_heap_str_free((void*)%s); "
+                        "%s = NULL; _heap_%s = 0; } })",
+                        arg->value, arg->value, arg->value, arg->value);
+                }
+                // string.seq_free(seq) — explicit refcount-decrement on a
+                // *StringSeq. For a tracked seq local, clear the ownership
+                // flag and NULL the slot so the scope-exit defer-free does
+                // not decrement a spine this call already released.
+                // string_seq_free is itself NULL-safe.
+                else if (strcmp(func_name, "string_seq_free") == 0 &&
+                         expr->child_count == 1) {
+                    ASTNode* arg = expr->children[0];
+                    if (arg->type == AST_IDENTIFIER && arg->value &&
+                        is_seq_var(gen, arg->value)) {
+                        fprintf(gen->output,
+                            "({ string_seq_free(%s); %s = NULL; _seqheap_%s = 0; })",
+                            arg->value, arg->value, arg->value);
+                    } else {
+                        fprintf(gen->output, "string_seq_free(");
+                        generate_expression(gen, arg);
+                        fprintf(gen->output, ")");
                     }
                 }
                 // ref(value) — create a heap-allocated mutable cell

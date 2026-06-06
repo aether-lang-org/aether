@@ -196,5 +196,16 @@ main() {
     }
     print("  PASS: 32 keys iterated, insertion-order preserved, values intact\n")
 
+    // Reclaim the parsed/built JSON values — json.parse / json.create_object
+    // hand the caller an owned value to free with json.free (the value
+    // owns its keys, numbers, and nested objects).
+    json.free(j_empty)
+    json.free(j_one)
+    json.free(j_ord)
+    json.free(j_built)
+    json.free(j_arr)
+    json.free(j_nest)
+    json.free(j_big)
+
     print("\n=== All object-iteration tests passed ===\n")
 }

@@ -1,4 +1,5 @@
 #include "aether_pqueue.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -18,16 +19,18 @@ PriorityQueue* aether_pqueue_create(size_t initial_capacity,
     
     if (!compare) return NULL;
     
-    PriorityQueue* pq = (PriorityQueue*)malloc(sizeof(PriorityQueue));
+    /* #463: cap-aware. The backing array's byte count is recoverable
+     * at free / realloc time from `pq->capacity * sizeof(void*)`. */
+    PriorityQueue* pq = (PriorityQueue*)aether_caps_malloc(sizeof(PriorityQueue));
     if (!pq) return NULL;
-    
+
     if (initial_capacity < DEFAULT_CAPACITY) {
         initial_capacity = DEFAULT_CAPACITY;
     }
-    
-    pq->data = (void**)malloc(initial_capacity * sizeof(void*));
+
+    pq->data = (void**)aether_caps_malloc(initial_capacity * sizeof(void*));
     if (!pq->data) {
-        free(pq);
+        aether_caps_free(pq, sizeof(PriorityQueue));
         return NULL;
     }
     
@@ -49,10 +52,10 @@ void aether_pqueue_free(PriorityQueue* pq) {
                 pq->element_free(pq->data[i]);
             }
         }
-        free(pq->data);
+        aether_caps_free(pq->data, pq->capacity * sizeof(void*));
     }
-    
-    free(pq);
+
+    aether_caps_free(pq, sizeof(PriorityQueue));
 }
 
 // Ensure capacity
@@ -66,11 +69,13 @@ static bool aether_pqueue_ensure_capacity(PriorityQueue* pq, size_t min_capacity
         new_capacity = min_capacity;
     }
     
-    void** new_data = (void**)realloc(pq->data, new_capacity * sizeof(void*));
+    void** new_data = (void**)aether_caps_realloc(pq->data,
+                                                  pq->capacity * sizeof(void*),
+                                                  new_capacity * sizeof(void*));
     if (!new_data) {
         return false;
     }
-    
+
     pq->data = new_data;
     pq->capacity = new_capacity;
     return true;

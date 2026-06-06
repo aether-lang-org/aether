@@ -150,11 +150,13 @@ decode(s: string) -> {
         if c == 37 {
             // %XX
             if i + 2 >= n {
+                bytes.free(buf)
                 return "", "malformed encoding"
             }
             h1 = hex_value(string.char_at_n(s, n, i + 1) & 255)
             h2 = hex_value(string.char_at_n(s, n, i + 2) & 255)
             if h1 < 0 || h2 < 0 {
+                bytes.free(buf)
                 return "", "malformed encoding"
             }
             bytes.set(buf, out, (h1 << 4) | h2)

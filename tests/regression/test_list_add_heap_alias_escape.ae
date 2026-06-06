@@ -115,5 +115,11 @@ main() {
     }
     println("  PASS 2: 5-line split with alias-final preserves every item")
 
+    // Reclaim the lists (list.free releases each owned string element
+    // before freeing the backing array — see std/list/module.ae).
+    list.free(out)
+    list.free(out2)
+    list.free(expected_lens)
+
     println("=== all cases passed ===")
 }

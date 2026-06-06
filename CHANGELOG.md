@@ -5,9 +5,108 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.153.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **Deterministic `*StringSeq` ownership** (`compiler/codegen/codegen.c`,
+  `codegen_stmt.c`, `codegen_func.c`). Cons-cell sequence locals are now
+  reclaimed automatically — freed on reassignment and at scope exit via
+  `string_seq_free` — mirroring the heap-string ownership system. Because
+  `string_seq_free` is a refcount *decrement*, this is safe even for
+  structurally-shared spines (the documented `cons(x,t)`/`cons(y,t)`
+  sharing contract is preserved; verified by `string_seq_shared_tail`).
+  An owning-producer classifier distinguishes `cons`/`reverse`/`concat`/
+  `take`/`drop`/`from_array`/`split_to_seq`/`retain`/`empty` (owned) from
+  `string_seq_tail` (borrowed). `test_string_seq`: 5003 leaks → 0.
+
+### Fixed
+
+- **aetherc double-free crash on the `*StringSeq` tracking fields**
+  (`compiler/codegen/codegen.c`). The `CodeGenerator` is field-initialised
+  (not `calloc`'d); the new seq registry fields were left uninitialised,
+  so the first `clear_seq_vars()` freed garbage pointers — a glibc abort
+  on Linux (`aetherc` SIGABRT/SIGSEGV; 335 programs "Compilation failed")
+  that macOS's allocator silently tolerated. Found with an
+  AddressSanitizer-instrumented `aetherc`; root-caused to a missing field
+  init.
+- **`defer string.release(X)` double-free / use-after-free on magic
+  AetherStrings** (`compiler/codegen/codegen_expr.c`). `string.from_int`/
+  `from_long`/`new` return a refcounted AetherString that the heap-string
+  tracker manages, so the value was freed twice — once by the explicit
+  `string_release`, once by the function-exit defer-free. `string.release(X)`
+  now lowers through the same flag-guarded form as the bare `release()`
+  builtin for any heap-tracked local, freeing once and clearing the
+  tracker. Verified leak-free under AddressSanitizer.
+- **Heap-string leaks from `release()`, `print`/`println` arguments, and
+  `==`/`!=` operands** (`compiler/codegen/codegen_expr.c`,
+  `codegen_stmt.c`). `release()` now reclaims plain malloc'd `char*`
+  results (string.concat/substring/to_upper/to_lower/trim) via a
+  flag-guarded free; the print family and `release`/`string_release` no
+  longer mark their argument escaped (they provably never retain it), so
+  loop accumulators printed/released each iteration are reclaimed; and a
+  heap-returning string expression used directly as a comparison operand
+  is drained after the compare (the binary-operator analogue of the
+  call-argument drain). `test_release_builtin` 102→0,
+  `test_string_leak_loop` 1000→0, `test_fs_realpath` 30→0.
+- **macOS `leaks(1)` gate could hang the CI job indefinitely**
+  (`tests/run_macos_leaks.sh`). Two compounding causes: (1) no per-step
+  timeout, and (2) the leaks output was captured with a `$(...)` pipe — a
+  `leaks --atExit` run whose target program didn't exit cleanly orphaned
+  that program still holding the pipe's write end, so the command
+  substitution blocked **even if `leaks` was killed**. Fixed by capturing
+  to a file (no orphan-reader dependency) and bounding every `ae build` +
+  `leaks` step with a perl `alarm` wrapper that kills the whole **process
+  group** (so `leaks` and its target die together), plus a `pkill` reap
+  of any straggler and a 20-minute step cap in CI. A timed-out step now
+  fails fast as `[FAIL] <test>: ... TIMED OUT`, and a per-test progress
+  line makes the in-flight test visible in the live log. The gate can no
+  longer hold a runner.
+- **Regression tests leaked the containers they allocated** — added the
+  missing explicit container frees (the codebase convention is explicit
+  container ownership; only heap-string and `*StringSeq` *locals*
+  auto-free). `test_json_object_iter` (`json.free` ×7, 16→0),
+  `test_list_add_heap_alias_escape` (`list.free` ×3, 16→0),
+  `test_destructure_reassign_over_heap_lhs` (`map.free` ×4, 23→0). Each
+  verified leak-free and double-free-free under AddressSanitizer.
+- **`std.url` working-buffer leak on the decode error paths**
+  (`std/url/module.ae`). `url.decode` allocated a `bytes` working buffer
+  and freed it only on the success path (via `bytes.finish`); the two
+  malformed-percent-encoding error returns leaked it. Both now
+  `bytes.free(buf)` before returning. `test_url` also gained the missing
+  `string_list_free` calls for the lists returned by `url.parse_query` /
+  `url.query_get_all` (caller-owned, per the explicit-container-ownership
+  convention) — together taking `test_url` from 21 leaks to 10. The
+  residual 10 are plain-`char*` query entries stored in a refcounted
+  `string_list` (a `@retain` API): `string.concat` / `string.substring_n`
+  return plain `malloc`'d `char*` that `string_retain` / `string_release`
+  no-op on, so the list can't reclaim them — the same string-ABI boundary
+  tracked for the dedicated magic-tagging follow-up, not closed here to
+  avoid an unverified refcount-contract change.
+- **`test_fs_positional_io` failed the Windows CI job** (`tests/
+  regression/test_fs_positional_io.ae`). The #640 positional-I/O test
+  hardcoded `path = "/tmp/aether_test_pio.bin"`; on Windows a bare
+  `/tmp` resolves through `fopen` to `C:\tmp` (not created), so
+  `fs.open(path, "w+")` failed and the whole CI run went red. Switched
+  to the portable scratch-dir idiom the other `std.fs` tests already use
+  (`io.getenv("TMPDIR")` → `"TEMP"` → `/tmp` fallback). The positional
+  ops themselves were already Windows-correct (`fseek`+`fwrite`/`fread`,
+  `_chsize_s`, `_commit`); only the path was wrong.
+
+### Documentation
+
+- **`string.array_get` borrow-warning now points at deterministic
+  `*StringSeq`** (`std/string/module.ae`, `std/string/aether_string.c`).
+  Following review feedback on the interaction with the #635 lifetime
+  warning: the "make an owned copy" guidance now names `string_split_to_seq`
+  / `*StringSeq` as the recommended shape, reclaimed *deterministically*
+  by the compiler (auto-freed at scope exit, sharing-safe) now that this
+  release lands that ownership — so escaping a split piece no longer risks
+  dangling into a freed backing array.
 
 ## [0.219.0]
 
@@ -2082,8 +2181,6 @@ The same hazard affects any user-defined wrapper whose body is `f(x) -> { return
 ### Tests
 
 - **`tests/regression/test_for_loop_c_style.ae`** pins the C-style `for (init; cond; step) body` form. The parser has accepted it for a long time (`compiler/parser/parser.c:parse_for_loop`) but it was never exercised end-to-end. Now covered: typed init / inferred init / pointer-stride step. The empty-step form `for (init; cond;) { body }` is known-bad — the parser greedily pulls the next body statement into the step slot — and is documented as out-of-scope for this test; tracked separately.
-
-
 
 ### Added
 

@@ -65,7 +65,7 @@ main() {
     println("first=${string.seq_head(s)}")      // a
 
     walk(s)                                     // pattern-match
-    string.seq_free(s)                          // iterative spine walk
+    string.seq_free(s)                          // optional — see below
 }
 
 walk(s: *StringSeq) {
@@ -78,6 +78,34 @@ walk(s: *StringSeq) {
     }
 }
 ```
+
+## Automatic ownership
+
+A `*StringSeq` local is reclaimed **automatically** — the compiler frees
+it on reassignment and at scope exit, so the explicit `string.seq_free(s)`
+above is optional. This mirrors the heap-string ownership model:
+
+```aether
+deep = string.seq_empty()
+i = 0
+while i < 1000 {
+    deep = string.seq_cons("x", deep)   // each prior spine freed on reassign
+    i = i + 1
+}
+// `deep` freed here at scope exit — no leak, no manual free needed
+```
+
+It is safe to *also* call `string.seq_free(s)` yourself: the explicit
+free clears the ownership tracker so the scope-exit free does not run
+twice. Freeing is a refcount **decrement** (`string_seq_free`), so a
+structurally-shared tail survives until its last owner is freed —
+`string.seq_cons(x, t)` and `string.seq_cons(y, t)` share `t` safely, and
+each rooted list can be freed independently.
+
+A sequence that **escapes** the function — returned, captured by a
+closure, or stored raw in a non-seq container (`list.add`, an actor
+message field) — is *not* auto-freed; ownership transfers to the
+recipient, which is responsible for the eventual `string.seq_free`.
 
 ## Pattern match
 

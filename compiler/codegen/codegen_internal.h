@@ -34,6 +34,18 @@ void clear_escaped_string_vars(CodeGenerator* gen);
 int is_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
 void mark_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
 
+/* *StringSeq local registry (parallel to the heap-string set). A seq
+ * var owns a refcounted spine freed by string_seq_free (a decrement). */
+int is_seq_var(CodeGenerator* gen, const char* var_name);
+void mark_seq_var(CodeGenerator* gen, const char* var_name);
+void clear_seq_vars(CodeGenerator* gen);
+int is_escaped_seq_var(CodeGenerator* gen, const char* var_name);
+void mark_escaped_seq_var(CodeGenerator* gen, const char* var_name);
+/* Classifier: does the expression produce an OWNED *StringSeq (a fresh
+ * ref the caller must free), vs a borrowed spine pointer (seq_tail)?
+ * Defined in codegen_stmt.c. */
+int is_seq_owning_expr(CodeGenerator* gen, ASTNode* expr);
+
 /* Classifier: does the expression produce a heap-allocated string?
  * Defined in codegen_stmt.c. Used by the codegen_expr.c argument-
  * temp lifetime wrap (ArgDrainSub) to detect heap-returning
@@ -162,6 +174,11 @@ void mark_escaped_heap_string_vars(CodeGenerator* gen, ASTNode* body);
  * and before body codegen. See codegen_stmt.c for the
  * implementation rationale (issue #420 follow-up). */
 void push_heap_string_exit_free_defers(CodeGenerator* gen, ASTNode* body);
+
+/* *StringSeq local lifecycle (parallel to the heap-string passes). */
+void hoist_seq_trackers(CodeGenerator* gen, ASTNode* body);
+void mark_escaped_seq_vars(CodeGenerator* gen, ASTNode* body);
+void push_seq_exit_free_defers(CodeGenerator* gen, ASTNode* body);
 
 /* Actor generation (codegen_actor.c) */
 void generate_actor_definition(CodeGenerator* gen, ASTNode* actor);

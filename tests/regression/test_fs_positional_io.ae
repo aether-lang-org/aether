@@ -5,11 +5,18 @@
 
 import std.fs
 import std.string
+import std.io
 
 main() {
     print("=== std.fs positional I/O (#640) ===\n\n")
 
-    path = "/tmp/aether_test_pio.bin"
+    // Pick a scratch dir — /tmp on POSIX, TEMP/TMPDIR elsewhere. A bare
+    // "/tmp" resolves to C:\tmp via fopen on Windows and isn't created,
+    // so fs.open(w+) fails there (matches the other std.fs tests' idiom).
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    path = "${tmp}/aether_test_pio.bin"
     fs.delete(path)
     f, ferr = fs.open(path, "w+")
     if ferr != "" {

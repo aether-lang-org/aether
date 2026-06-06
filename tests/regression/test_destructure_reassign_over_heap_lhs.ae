@@ -94,5 +94,11 @@ main() {
     }
     println("  PASS 4: destructure over literal LHS unchanged (no regression)")
 
+    // Reclaim the option maps (explicit container ownership).
+    map.free(opts)
+    map.free(opts2)
+    map.free(opts3)
+    map.free(opts4)
+
     println("=== all cases passed ===")
 }

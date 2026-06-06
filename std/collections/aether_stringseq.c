@@ -1,5 +1,6 @@
 #include "aether_stringseq.h"
 #include "../string/aether_string.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,9 @@ StringSeq* string_seq_empty(void) {
 }
 
 StringSeq* string_seq_cons(const char* head, StringSeq* tail) {
-    StringSeq* cell = (StringSeq*)malloc(sizeof(StringSeq));
+    /* #463: cap-aware cons cell. Fixed sizeof(StringSeq); the
+     * matching free in string_seq_free passes the same size. */
+    StringSeq* cell = (StringSeq*)aether_caps_malloc(sizeof(StringSeq));
     if (!cell) return NULL;
     cell->ref_count = 1;
     cell->length = (tail ? tail->length : 0) + 1;
@@ -74,7 +77,7 @@ void string_seq_free(StringSeq* s) {
         }
         StringSeq* next = s->tail;
         string_release(s->head);
-        free(s);
+        aether_caps_free(s, sizeof(StringSeq));
         s = next;
     }
 }
@@ -214,12 +217,20 @@ StringSeq* string_seq_drop(StringSeq* s, int n) {
 void* string_seq_to_array(StringSeq* s) {
     if (!s) return NULL;
     int n = s->length;
-    AetherStringArrayLayout* arr = (AetherStringArrayLayout*)malloc(
+    /* #463 cross-file T1 pair: this AetherStringArrayLayout is
+     * layout-compatible with std/string's AetherStringArray
+     * {AetherString** strings; size_t count;} and is freed by
+     * string_array_free over there — which now uses aether_caps_free
+     * with `count * sizeof(AetherString*)` for the strings array and
+     * `sizeof(AetherStringArray)` for the struct. Allocate with the
+     * matching caps shapes so the cross-file free accounts correctly
+     * (this is why the two sides convert in the same commit). */
+    AetherStringArrayLayout* arr = (AetherStringArrayLayout*)aether_caps_malloc(
         sizeof(AetherStringArrayLayout));
     if (!arr) return NULL;
-    arr->strings = (AetherString**)malloc(sizeof(AetherString*) * (size_t)n);
+    arr->strings = (AetherString**)aether_caps_malloc(sizeof(AetherString*) * (size_t)n);
     if (!arr->strings) {
-        free(arr);
+        aether_caps_free(arr, sizeof(AetherStringArrayLayout));
         return NULL;
     }
     arr->count = (size_t)n;
