@@ -1,9 +1,21 @@
-# contrib.host.tinygo — In-Process Go via TinyGo c-shared
+# contrib.host.tinygo — In-Process Go via c-shared
 
-Run TinyGo-compiled Go code inside the Aether process — no
-subprocess, no IPC, no marshalling. Just `dlopen` the `.so` /
-`.dll` that `tinygo build -buildmode=c-shared` produces and call
-its exported functions directly.
+Run Go code inside the Aether process — no subprocess, no IPC, no
+marshalling. Just `dlopen` the `.so` / `.dll` that
+`go build -buildmode=c-shared` produces and call its exported
+functions directly.
+
+> **Toolchain note.** The bridge is named `tinygo` (and the
+> `--with=tinygo` capability layer ships TinyGo) for the
+> small-footprint, embedded-friendly story, but
+> `tinygo build -buildmode=c-shared` currently only supports
+> `wasm` targets ("buildmode c-shared is only supported on wasm
+> at the moment"). For **native** linux/darwin/windows c-shared
+> libraries — what this bridge dlopens — use standard
+> `go build -buildmode=c-shared`. The bridge dlopens by symbol;
+> it doesn't care which compiler produced the `.so`. The
+> `--with=tinygo` image ships both `go` and `tinygo` so either
+> path is one command away.
 
 This is the in-process counterpart of [`contrib/host/go`](../go/),
 which spawns the standard `go` toolchain as a sandboxed
@@ -20,16 +32,16 @@ subprocess. Pick the host that matches your containment story:
 
 ## Prerequisites
 
-```bash
-# macOS
-brew install tinygo
+You need a Go toolchain that can build `-buildmode=c-shared`.
+On native linux/darwin/windows that's standard `go` (≥1.21);
+TinyGo is fine for the wasm target only.
 
-# Debian/Ubuntu — see https://tinygo.org/getting-started/install/linux/
-wget https://github.com/tinygo-org/tinygo/releases/download/v0.34.0/tinygo_0.34.0_amd64.deb
-sudo dpkg -i tinygo_0.34.0_amd64.deb
+```bash
+# macOS / Linux / Windows — standard Go
+# https://go.dev/dl/
 
 # Verify
-tinygo version
+go version
 ```
 
 ## Build the Go side
@@ -59,13 +71,17 @@ func Greet(name *C.char) *C.char {
 func main() {}  // c-shared still requires a main() — empty body is fine
 ```
 
-Build:
+Build (native — use standard `go`, not `tinygo`; see toolchain
+note at the top):
 
 ```bash
-tinygo build -buildmode=c-shared -o libgreet.so greet.go     # Linux
-tinygo build -buildmode=c-shared -o libgreet.dylib greet.go  # macOS
-tinygo build -buildmode=c-shared -o libgreet.dll greet.go    # Windows
+CGO_ENABLED=1 go build -buildmode=c-shared -o libgreet.so    greet.go  # Linux
+CGO_ENABLED=1 go build -buildmode=c-shared -o libgreet.dylib greet.go  # macOS
+CGO_ENABLED=1 go build -buildmode=c-shared -o libgreet.dll   greet.go  # Windows
 ```
+
+For the wasm target — and only then — substitute
+`tinygo build -buildmode=c-shared -target=wasm …`.
 
 ## Call from Aether
 
@@ -130,18 +146,20 @@ window.
 ## Limitations
 
 - **Single Go runtime per process.** `dlopen` of two distinct
-  TinyGo c-shared libraries in the same process can collide on
+  c-shared Go libraries in the same process can collide on
   runtime state. Stick to one library per Aether process.
-- **No goroutines that outlive the Aether call.** TinyGo's
-  scheduler runs cooperatively inside the call; spawning a
-  goroutine that blocks on I/O and returns to the Aether caller
-  before the goroutine completes is undefined behaviour.
-- **Standard `go` toolchain produces a different ABI.** Building
-  with `go build -buildmode=c-shared` (not `tinygo`) embeds the
-  full Go runtime, which conflicts with Aether's actor scheduler.
-  Use `contrib/host/go` (subprocess) for full Go.
-- **Symbol export is `//export Name`.** TinyGo does not export
-  package-level `Name` automatically — you must annotate.
+- **No goroutines that outlive the Aether call.** The Go
+  scheduler runs inside the call; spawning a goroutine that
+  blocks on I/O and returns to the Aether caller before the
+  goroutine completes is undefined behaviour.
+- **`tinygo build -buildmode=c-shared` is wasm-only today.**
+  Native linux/darwin/windows c-shared `.so`s come from standard
+  `go build` (see the toolchain note at the top of this file).
+  The Aether-side bridge is purely a `dlopen` + symbol lookup —
+  it loads whatever c-shared the toolchain produced.
+- **Symbol export is `//export Name`.** Neither standard Go nor
+  TinyGo exports package-level `Name` automatically — you must
+  annotate each function you want callable from C / Aether.
 
 ## See also
 

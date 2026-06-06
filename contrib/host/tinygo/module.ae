@@ -1,13 +1,18 @@
-// contrib.host.tinygo — In-process Go via TinyGo c-shared.
+// contrib.host.tinygo — In-process Go via c-shared.
 //
 // Unlike contrib/host/go (subprocess + LD_PRELOAD), this host loads a
-// TinyGo-built .so/.dll into the Aether process via std.dl and calls
+// c-shared Go .so/.dll into the Aether process via std.dl and calls
 // the exported functions directly. No JSON marshalling, no IPC, no
 // fork/exec — same address space, same scheduler.
 //
-// Build the Go side first:
+// Build the Go side first. On native linux/darwin/windows use
+// standard `go build` — TinyGo's -buildmode=c-shared currently only
+// supports the wasm target ("buildmode c-shared is only supported on
+// wasm at the moment" on TinyGo 0.34.0). The bridge dlopens by symbol
+// and doesn't care which compiler produced the .so:
 //
-//   tinygo build -buildmode=c-shared -o libgreet.so contrib/host/tinygo/examples/greet.go
+//   CGO_ENABLED=1 go build -buildmode=c-shared \
+//       -o libgreet.so contrib/host/tinygo/examples/greet.go
 //
 // Then from Aether:
 //

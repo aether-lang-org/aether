@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`contrib.host.tinygo` docs and integration test now use
+  `go build`, not `tinygo build`, for native c-shared**
+  (`contrib/host/tinygo/README.md`,
+  `contrib/host/tinygo/module.ae`,
+  `contrib/host/tinygo/examples/greet.go`,
+  `examples/host-tinygo-demo.ae`,
+  `tests/integration/host_tinygo/test_host_tinygo.sh`,
+  `tests/scripts/contrib_build.sh`). TinyGo 0.34.0's
+  `-buildmode=c-shared` is wasm-only ("buildmode c-shared is only
+  supported on wasm at the moment"); the README, module header,
+  example header, demo and integration test all documented
+  `tinygo build -buildmode=c-shared` for native linux/macOS/Windows,
+  which has never worked. The integration test silently `[SKIP]`ed
+  on the failed `tinygo build` (line 34 — "tinygo c-shared build
+  failed (likely target/version mismatch)"), so the end-to-end
+  smoke test had been a no-op since v0.215.0 landed. Docs now show
+  standard `CGO_ENABLED=1 go build -buildmode=c-shared` for native
+  and reserve TinyGo for the wasm target. The bridge itself is
+  unchanged — it's a runtime `dlopen` of whatever c-shared `.so`
+  the toolchain produced. The integration test now hard-fails on
+  build error instead of skipping (skip is now reserved for "no Go
+  toolchain installed at all"). The `--with=tinygo` builder image
+  already ships both `go` and `tinygo`, so no capability change is
+  needed. The bridge module name `contrib.host.tinygo` is retained
+  as the brand. Caught downstream by the aeb-side validator on the
+  NUC after v0.216.0 image bake (ctr_notes.md "Finding 1").
+
 ## [0.216.0]
 
 ### Fixed

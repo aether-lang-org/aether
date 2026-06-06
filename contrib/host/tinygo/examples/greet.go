@@ -1,5 +1,7 @@
-// Build with:
-//   tinygo build -buildmode=c-shared -o libgreet.so contrib/host/tinygo/examples/greet.go
+// Build with standard `go` (TinyGo's -buildmode=c-shared is wasm-only
+// on current releases; see ../README.md "Toolchain note"):
+//
+//   CGO_ENABLED=1 go build -buildmode=c-shared -o libgreet.so contrib/host/tinygo/examples/greet.go
 //
 // Then load from Aether via contrib.host.tinygo (see ../README.md).
 package main
