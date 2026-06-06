@@ -51,36 +51,14 @@ if ! (cd "$TMPDIR" && CGO_ENABLED=1 go build -buildmode=c-shared -o "$LIB_PATH" 
     exit 1
 fi
 
-# Stage a workspace with its own aether.toml so the -lffi link flag flows
-# into the gcc invocation. libaether_host_tinygo.a has an unresolved
-# ffi_* set when built with AETHER_HAS_LIBFFI (for the call_dynamic
-# escape hatch); the import-driven auto-link adds the bridge .a but
-# not its transitive -lffi yet (ctr_notes.md Finding 2 — separate PR).
-# Workspace also symlinks contrib/ so `import contrib.host.tinygo`
-# resolves the same way `aeb`'s in-container workspace does.
-WORK="$TMPDIR/work"
-mkdir -p "$WORK"
-ln -s "$ROOT/contrib" "$WORK/contrib"
-cp "$SCRIPT_DIR/uses_tinygo.ae" "$WORK/uses_tinygo.ae"
-
-cat > "$WORK/aether.toml" <<EOF
-[project]
-name = "host_tinygo_probe"
-version = "0.0.0"
-
-[[bin]]
-name = "uses_tinygo"
-path = "uses_tinygo.ae"
-
-[build]
-link_flags = "-lffi"
-EOF
-
+# The `import contrib.host.tinygo` triggers `ae build`'s auto-link
+# of libaether_host_tinygo.a — AND, as of this PR, its transitive
+# `-lffi` when the bridge .a was compiled with AETHER_HAS_LIBFFI
+# (the call_dynamic escape hatch). No aether.toml workaround
+# required here any more (previously needed link_flags = "-lffi").
 ACTUAL="$TMPDIR/actual.txt"
-if ! (
-    cd "$WORK" && AETHER_HOME="$ROOT" TINYGO_LIB="$LIB_PATH" \
-        "$AE" run uses_tinygo.ae >"$ACTUAL" 2>"$TMPDIR/err.log"
-); then
+if ! AETHER_HOME="$ROOT" TINYGO_LIB="$LIB_PATH" \
+        "$AE" run "$SCRIPT_DIR/uses_tinygo.ae" >"$ACTUAL" 2>"$TMPDIR/err.log"; then
     echo "  [FAIL] ae run exited non-zero"
     cat "$TMPDIR/err.log" | head -20
     cat "$ACTUAL" | head -10

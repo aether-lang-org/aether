@@ -32,6 +32,72 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **`ae build` auto-links the tinygo bridge's transitive `-lffi`**
+  (`tools/ae.c`, `tests/integration/host_tinygo/test_host_tinygo.sh`).
+  Closes ctr_notes.md Finding 2. The six interpreter bridges
+  (python/ruby/lua/perl/tcl/duktape) dlopen their host language at
+  runtime and have no link-time deps of their own. `tinygo` is the
+  first bridge whose `.a` carries undefined symbols — `ffi_*` from
+  `tinygo_call_dynamic`, compiled in under `AETHER_HAS_LIBFFI`.
+  The import auto-link previously stopped at the `.a` and required
+  every consumer to add `link_flags = "-lffi"` to their
+  `aether.toml`, defeating the "import is the trigger" promise in
+  contrib/host/python/README.md §8. `prepare_host_bridge_imports`
+  now probes the resolved `.a` with `nm -u | grep ffi_prep_cif`
+  and only appends `-lffi` when the symbol is actually undefined.
+  By-symbol (not by-language) so an end-host that received a
+  bridge `.a` built without libffi never tries to link a missing
+  `-lffi`. One `popen` per `ae build`; no measurable cost. The
+  workaround `aether.toml` in this test is removed — the test now
+  exercises the auto-link path it was previously masking.
+
+- **`http.get_query_param` returns the requested key's value, not
+  the last param's value** (`std/net/aether_http_server.c`,
+  `std/net/aether_http_server.h`,
+  `tests/integration/http_query_param_multi/`,
+  `tests/integration/http_external_ptr/shim.c`). Closes #625.
+  The previous implementation parsed `req->query_string` with
+  `strstr` on every call and returned a pointer into a
+  function-local **static** buffer; two sequential
+  `get_query_param` calls overwrote the same buffer, so both
+  returned pointers aliased the second call's value (e.g.
+  `?alpha=AAA&beta=BBB` made `get_query_param("alpha")` and
+  `get_query_param("beta")` both return `"BBB"`). Now lazily parses
+  the query string once into per-key `query_keys`/`query_values`
+  arrays on the request (mirroring how `header_keys`/`param_keys`
+  already work) and looks up via `strcmp`. Each call returns a
+  stable per-request pointer. Substring-of-another-key safety is
+  now structural (exact `strcmp`) instead of leaning on the
+  `&`-boundary check. The lazy-parse arrays are freed in
+  `http_request_free`. Downstream impact: this broke S3 multipart
+  routing in the fbs-core port (`?uploadId=…&partNumber=1` made
+  `get_query_param("uploadId")` return `"1"`).
+
+- **Build cache invalidates on edits to symlinked lib-dir entries**
+  (`tools/ae.c`,
+  `tests/integration/cache_symlinked_lib_edit/`). Closes #623.
+  `compute_cache_key` previously only `stat`ed each `tc.lib_dirs[i]`
+  directory itself — and a directory's mtime only bumps on
+  create/delete/rename, NOT on an in-place edit of an existing
+  entry. When the entry was a symlink to a file *outside* the lib
+  dir (the natural shape when a test harness builds a flat
+  `.ae_test_lib/` of symlinks to vendored modules), `sed -i` of
+  the link target left BOTH the symlink's and the lib dir's mtime
+  unchanged. The cache key stayed stable, `ae run` served a stale
+  binary, and edits looked like no-ops until
+  `rm -rf ~/.aether/cache`. The fix walks each lib dir's top-level
+  `.ae` / `.c` / `.h` entries, `stat`s each (which follows
+  symlinks), and folds the resolved target's mtime + size into a
+  rolling FNV hash that joins the cache key. Per-dir entry count
+  is also capped at 256 — well above any realistic stdlib/vendored
+  count, but bounded so a runaway can't blow the key buffer. `ae`
+  now also seeds `tc.lib_dirs[]` from `AETHER_LIB_DIR` at the top
+  of `compute_cache_key` (matching the documented priority in
+  `ae lib-path`); without that seed the entry walk wouldn't run
+  when only the env var was set. Downstream impact: in the
+  fbs-core port a correct fix to a module read as "did nothing"
+  for ~30 minutes until the cache was cleared.
+
 - **`contrib.host.tinygo` docs and integration test now use
   `go build`, not `tinygo build`, for native c-shared**
   (`contrib/host/tinygo/README.md`,
