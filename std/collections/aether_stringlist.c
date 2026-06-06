@@ -4,6 +4,31 @@
 #include "../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
+#include <string.h>
+
+/* Own an independent NUL-terminated copy of `s`'s bytes, allocated
+ * through the caps accounting so the list's allocations balance.
+ * `aether_string_data` is magic-aware: it unwraps an AetherString to
+ * its .data or passes a plain `char*` straight through, NULL-safe.
+ * The list stores these copies and frees them with sl_free_item; the
+ * caller keeps ownership of its argument. Returns NULL on OOM. */
+static char* sl_dup_item(const void* s) {
+    const char* data = s ? aether_string_data(s) : NULL;
+    if (!data) data = "";
+    size_t n = strlen(data) + 1;
+    char* copy = (char*)aether_caps_malloc(n);
+    if (!copy) return NULL;
+    memcpy(copy, data, n);
+    return copy;
+}
+
+/* Free a copy produced by sl_dup_item. The copy is always a caps-
+ * allocated, NUL-terminated `char*`, so its allocation size is
+ * strlen+1 (it is never mutated after creation). NULL-safe. */
+static void sl_free_item(const void* item) {
+    if (!item) return;
+    aether_caps_free((void*)item, strlen((const char*)item) + 1);
+}
 
 /* StringList is a thin layer over the existing ArrayList. We could
  * have reused ArrayList directly with retain/release sprinkled on
@@ -31,14 +56,18 @@ StringList* string_list_new(void) {
 
 int string_list_add(StringList* list, const void* s) {
     if (!list || !list->items) return 0;
-    /* Take a strong reference before storing. string_retain is
-     * NULL-safe and a no-op on plain `char*` (the magic check
-     * fails), so literals pass through unchanged. */
-    string_retain(s);
-    if (!list_add_raw(list->items, (void*)s)) {
-        /* The list grew but realloc failed — release the ref we
-         * just took so the caller's accounting stays balanced. */
-        string_release(s);
+    /* Store an independent copy the list owns. The caller keeps
+     * ownership of its argument (the `string` param is copied, not
+     * retained) — this is what lets a heap `char*` element
+     * (string.concat / split result) be reclaimed: the caller frees
+     * its value at scope exit, and the list frees its copy in
+     * free/clear/remove. Storing the caller's raw pointer instead
+     * leaked every such element, because string_release is a no-op on
+     * a non-magic `char*`. */
+    char* copy = sl_dup_item(s);
+    if (!copy) return 0;
+    if (!list_add_raw(list->items, copy)) {
+        sl_free_item(copy);
         return 0;
     }
     return 1;
@@ -52,17 +81,16 @@ const void* string_list_get(StringList* list, int index) {
 void string_list_set(StringList* list, int index, const void* s) {
     if (!list || !list->items) return;
     if (index < 0 || index >= list_size(list->items)) return;
-    /* Release the previous occupant, then retain and store the new
-     * one. Releasing first means a self-set
-     * (`string_list_set(L, i, string_list_get(L, i))`) doesn't
-     * accidentally drop the only reference between the release and
-     * retain — string_retain bumps the refcount before string_release
-     * decrements it. Wait, no: that ordering is wrong. We need to
-     * retain first, *then* release the old. */
+    /* Copy the new value FIRST, then swap it in and free the old copy.
+     * Copying first makes a self-set
+     * (`string_list_set(L, i, string_list_get(L, i))`) safe: the
+     * source bytes are duplicated before the old element is freed, so
+     * there is no read-after-free even when `s` aliases the slot. */
+    char* copy = sl_dup_item(s);
+    if (!copy) return;
     const void* old = list_get_raw(list->items, index);
-    string_retain(s);
-    list_set(list->items, index, (void*)s);
-    string_release(old);
+    list_set(list->items, index, copy);
+    sl_free_item(old);
 }
 
 int string_list_size(StringList* list) {
@@ -75,7 +103,7 @@ void string_list_remove(StringList* list, int index) {
     if (index < 0 || index >= list_size(list->items)) return;
     const void* old = list_get_raw(list->items, index);
     list_remove(list->items, index);
-    string_release(old);
+    sl_free_item(old);
 }
 
 void string_list_clear(StringList* list) {
@@ -83,7 +111,7 @@ void string_list_clear(StringList* list) {
     int n = list_size(list->items);
     for (int i = 0; i < n; i++) {
         const void* item = list_get_raw(list->items, i);
-        string_release(item);
+        sl_free_item(item);
     }
     list_clear(list->items);
 }
@@ -94,7 +122,7 @@ void string_list_free(StringList* list) {
         int n = list_size(list->items);
         for (int i = 0; i < n; i++) {
             const void* item = list_get_raw(list->items, i);
-            string_release(item);
+            sl_free_item(item);
         }
         list_free(list->items);
     }

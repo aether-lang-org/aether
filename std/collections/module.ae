@@ -91,16 +91,22 @@ extern intarr_free(arr: ptr)
 // is a no-op on values that don't bear the AetherString magic
 // header. Issue #274.
 extern string_list_new() -> ptr
-// `s` retains: the list stores the AetherString reference so the
-// caller's heap allocation must outlive the call. Without `@retain`
-// the heap-string-tracker's escape walker treats a string-typed
-// param as read-only (correct for string.length etc.) and the
-// function-exit defer-free would free the bytes while the list
-// still holds the pointer — UAF. See #420 follow-up.
-extern string_list_add(list: ptr, s: @retain string) -> int
+// `s` is COPIED, not retained: the list owns an independent NUL-
+// terminated copy of the string's bytes and frees it itself (in
+// remove / clear / free / overwriting set). The caller therefore keeps
+// ownership of its argument — a `string`-typed param is read-only to
+// the escape walker, so the caller's heap value is reclaimed normally
+// at its own scope exit. This is why there is no `@retain` here: an
+// earlier version stored the caller's pointer (needing `@retain` to
+// suppress the caller's free and avoid a UAF), but that leaked every
+// plain `char*` element — `string_retain`/`string_release` are no-ops
+// on non-magic `char*`, so the list could never reclaim a
+// `string.concat`/`split` result. Copy-on-add owns the bytes outright,
+// fixing the leak with no UAF. (#420 / leak-tail follow-up.)
+extern string_list_add(list: ptr, s: string) -> int
 extern string_list_get(list: ptr, index: int) -> string
-// `s` retains: same shape as string_list_add.
-extern string_list_set(list: ptr, index: int, s: @retain string)
+// `s` is copied, same as string_list_add; the overwritten element is freed.
+extern string_list_set(list: ptr, index: int, s: string)
 extern string_list_size(list: ptr) -> int
 extern string_list_remove(list: ptr, index: int)
 extern string_list_clear(list: ptr)
