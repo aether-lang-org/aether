@@ -1,0 +1,67 @@
+// Regression test for #630: std.crypto.random_bytes returns n
+// cryptographically-secure random bytes.
+//
+// Sanity-only — we can't assert specific byte values from a CSPRNG.
+// We CAN assert:
+//   1. The returned length matches the requested length.
+//   2. Two consecutive calls return different bytes (probability of
+//      collision with 32 bytes is 1/2^256 — for practical purposes,
+//      zero).
+//   3. n=0 yields a length-0 result, no error.
+//   4. n<0 is rejected with an error.
+
+import std.crypto
+import std.string
+
+main() {
+    print("=== std.crypto.random_bytes ===\n\n")
+
+    // 32 bytes
+    a, alen, ae = crypto.random_bytes(32)
+    if ae != "" || alen != 32 {
+        print("FAIL: random_bytes(32) len=${alen} err=${ae}\n")
+        exit(1)
+    }
+    print("PASS: random_bytes(32) returns 32 bytes\n")
+
+    // Two consecutive calls differ
+    b, blen, be = crypto.random_bytes(32)
+    if be != "" || blen != 32 {
+        print("FAIL: second random_bytes(32)\n")
+        exit(1)
+    }
+    if string.equals(a, b) == 1 {
+        // 1/2^256 odds — if this fails, the CSPRNG is broken.
+        print("FAIL: two random_bytes(32) calls produced identical output\n")
+        exit(1)
+    }
+    print("PASS: two calls produce different bytes\n")
+
+    // n=0 succeeds with length 0
+    _, zlen, ze = crypto.random_bytes(0)
+    if ze != "" || zlen != 0 {
+        print("FAIL: random_bytes(0) len=${zlen} err=${ze}\n")
+        exit(1)
+    }
+    print("PASS: random_bytes(0)\n")
+
+    // n=-1 fails cleanly
+    _, _, neg_err = crypto.random_bytes(-1)
+    if neg_err == "" {
+        print("FAIL: random_bytes(-1) did not error\n")
+        exit(1)
+    }
+    print("PASS: random_bytes(-1) rejected\n")
+
+    // Large draw — 1024 bytes — to exercise the syscall-loop path
+    // on Linux where getrandom may return fewer bytes than requested
+    // under unusual conditions (signal interruption).
+    _, big_len, big_err = crypto.random_bytes(1024)
+    if big_err != "" || big_len != 1024 {
+        print("FAIL: random_bytes(1024) len=${big_len} err=${big_err}\n")
+        exit(1)
+    }
+    print("PASS: random_bytes(1024)\n")
+
+    print("\nAll PASS\n")
+}

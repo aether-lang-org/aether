@@ -1,0 +1,74 @@
+// std.tsid — TSID (Twitter Snowflake family / Discord-shaped).
+//
+// 64-bit time-sortable identifier, Crockford base32-encoded as 13
+// chars:
+//
+//   0AXSAFTCJBSXR
+//   |--------|--|
+//   |   42   | 22 |
+//   | ms ts  | rand |
+//
+// Different shape from UUID/ULID/KSUID: 64 bits, not 128. Use TSID
+// when you need small wire size (8 bytes vs 16) and don't need the
+// full UUID/ULID entropy space — most application-layer IDs don't.
+// The 42-bit timestamp gives ~139 years from a custom epoch
+// (defaults to 2020-01-01); the 22 random bits give 1-in-4M
+// collision odds within the same ms.
+//
+// Snowflake/Discord traditionally splits the low bits between a
+// machine ID and a counter; this implementation uses pure random
+// for the low 22 bits so no machine coordination is needed.
+// Layered systems that want shard awareness should generate the
+// low 22 bits themselves.
+
+import std.crypto
+import std.os
+import std.string
+import std.bytes
+
+exports (generate)
+
+// Epoch: 2020-01-01T00:00:00Z in unix-ms. Subtracting this keeps the
+// timestamp within 42 bits until ~2160. Same anchor TSID-Java's
+// "TsidCreator" uses.
+const TSID_EPOCH_MS = 1577836800000
+
+const ALPHA = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// Generate a 13-char TSID. Returns (tsid, "") on success,
+// ("", error) on CSPRNG failure.
+generate() -> {
+    raw, n, err = crypto.random_bytes(3)  // 22 bits, rounded up to 3 bytes
+    if err != "" {
+        return "", err
+    }
+    if n != 3 {
+        return "", "random_bytes short read"
+    }
+    ts_ms = os.now_unix_ms() - TSID_EPOCH_MS
+
+    // 22 bits of randomness from the 24 random bits we have.
+    r0 = string.char_at_n(raw, 3, 0) & 255
+    r1 = string.char_at_n(raw, 3, 1) & 255
+    r2 = string.char_at_n(raw, 3, 2) & 255
+    rand22 = ((r0 << 14) | (r1 << 6) | (r2 >> 2)) & 4194303
+
+    // 64-bit value: high 42 bits = timestamp, low 22 = random.
+    value = (ts_ms << 22) | rand22
+
+    // Encode 13 base32 chars MSB-first. 13 × 5 = 65, top 1 bit is
+    // zero-padding.
+    out = bytes.new(13)
+    // Char 0: top 4 bits of the 64-bit value (after the 1 padding bit
+    // at the very top). Bits [63..60] of value.
+    bytes.set(out, 0, string.char_at_n(ALPHA, 32, (value >> 60) & 15))
+    // Chars 1..12: each takes 5 bits starting at bit (55 - 5*(k-1)) of value.
+    k = 1
+    while k < 13 {
+        shift = 60 - 5 * k
+        slice = (value >> shift) & 31
+        bytes.set(out, k, string.char_at_n(ALPHA, 32, slice))
+        k = k + 1
+    }
+    return bytes.finish(out, 13), ""
+}

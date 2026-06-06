@@ -10,12 +10,14 @@ exports (
     os_execv, os_now_utc_iso8601_raw, os_getpid_raw, exit,
     os_wall_seconds_raw, os_wall_micros_raw,
     os_now_monotonic_ms_raw, os_now_monotonic_ns_raw,
+    os_now_unix_ms_raw,
     os_now_local_fill_raw, os_now_local_iso8601_raw,
     os_platform_raw,
     io_setenv_raw, io_unsetenv_raw,
     exec, run_capture, argv0, now_utc_iso8601, getpid,
     wall_seconds, wall_micros,
     now_monotonic_ms, now_monotonic_ns,
+    now_unix_ms,
     now_local, now_local_iso8601, LocalTime,
     platform,
     setenv, unsetenv,
@@ -431,6 +433,7 @@ wall_micros() -> int {
 // truncation hazard PR #562 caught for string_to_long_raw.
 extern os_now_monotonic_ms_raw() -> long
 extern os_now_monotonic_ns_raw() -> long
+extern os_now_unix_ms_raw() -> long
 
 now_monotonic_ms() -> long {
     return os_now_monotonic_ms_raw()
@@ -438,6 +441,14 @@ now_monotonic_ms() -> long {
 
 now_monotonic_ns() -> long {
     return os_now_monotonic_ns_raw()
+}
+
+// Wall-clock Unix epoch ms. NTP-sensitive; use this for time-ordered
+// identifiers (UUIDv7, ULID, KSUID, TSID) and for "when did this
+// happen" timestamps, NOT for measuring durations — use
+// now_monotonic_ms / now_monotonic_ns for that.
+now_unix_ms() -> long {
+    return os_now_unix_ms_raw()
 }
 
 // Set an environment variable. Returns "" on success, error on failure.

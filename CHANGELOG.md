@@ -9,6 +9,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.cryptography.hmac_sha256_hex` + `hmac_sha256_bytes`** — HMAC-SHA256
+  (RFC 2104 / FIPS 198-1), thin veneer over libcrypto's `HMAC()`. Closes
+  #631. Both shapes: hex-string for opaque token signing, raw-bytes for
+  chained key derivation (SigV4, HKDF) where each round's output keys the
+  next and round-tripping through hex would be wasteful. RFC 4231 test
+  vectors verified in `tests/regression/test_cryptography_hmac_md4_md5.ae`.
+  Closes "HMAC documented as out-of-scope" in std.cryptography header — it
+  was a meaningful gap for any AWS-style auth port.
+
+- **`std.cryptography.md4_hex` + `md4_bytes`** — MD4 digest with binary
+  output (#637). Required for zsync's per-block strong checksum. Bound to
+  `EVP_md4()` directly, not `EVP_get_digestbyname("md4")`, because on
+  OpenSSL 3 MD4 lives in the legacy provider and the by-name dispatcher
+  doesn't consult it. The implementation lazily loads BOTH the default and
+  legacy providers on first MD4 use — loading just `legacy` would silently
+  unload the default and break MD5/SHA-*. Documented as legacy (no
+  collision resistance) in the wrapper docstring.
+
+- **`std.cryptography.md5_hex` + `md5_bytes`** — MD5 (#631) as a documented
+  first-class wrapper. Was previously reachable via
+  `hash_hex("md5", ...)` (a "lucky workaround" per the issue); now blessed
+  with its own wrapper for Content-MD5 / ETag interop. Documented as legacy.
+
+- **`std.cryptography.sha1_bytes` / `sha256_bytes` / `md5_bytes` /
+  `md4_bytes` / `hash_bytes`** — length-aware binary (raw-bytes) digest
+  output across the algorithms (#637). Same `(bytes, length, err)` tuple
+  shape as `base64_decode` and `fs.read_binary` so destructuring stays
+  consistent. Required for any wire format that stores a fixed-width
+  digest (zsync's truncated 3–16 byte MD4 per block, binary git object
+  IDs, SigV4 string-to-sign concatenation) — hex doubles size and loses
+  embedded-NUL semantics. TLS-tracked split-accessor pattern, independent
+  buffer from the base64-decode slot so concurrent uses don't clobber.
+
+- **`std.crypto.random_bytes(n)` — cryptographically-secure RNG** (#630).
+  The CSPRNG missing from std (std.math.random is a PRNG, fine for
+  sampling, NOT for secrets). Backed by:
+    - Linux: `getrandom(2)` → `/dev/urandom` fallback
+    - macOS / *BSD: `arc4random_buf(3)`
+    - Windows: `BCryptGenRandom` (CNG)
+  No OpenSSL dependency — the OS CSPRNGs are the right source. Same
+  `(bytes, length, err)` tuple shape as the digest-bytes family.
+  Regression test exercises 32-byte, 1024-byte, n=0, n=-1.
+
+- **`std.uuid` — UUID v4 and v7 (RFC 9562)**. v4 is full-random; v7 is the
+  modern time-sortable variant (48-bit Unix-ms timestamp + 74 bits of
+  randomness) — preferable for primary-key use because it keeps B-tree
+  indexes from fragmenting the way v4 keys do. Both produce the canonical
+  36-char `8-4-4-4-12` hex form with version/variant bits patched per the
+  RFC.
+
+- **`std.ulid`** — ULID (https://github.com/ulid/spec): 128-bit
+  lexicographically-sortable identifier encoded as 26 Crockford base32
+  chars. Smaller wire size than UUID (26 vs 36) and time-sortable like
+  UUIDv7. Use UUIDv7 when downstream systems already speak UUID; ULID
+  when wire size matters and you control both ends.
+
+- **`std.nanoid`** — NanoID: 21-char URL-safe identifier with 126 bits of
+  entropy. No time component. Good fit for URL path / query slots where
+  size and shell-safety matter and you don't want time leakage.
+
+- **`std.ksuid`** — KSUID (Segment): 27-char base62 identifier, second-
+  resolution timestamp + 128-bit payload. Predates ULID; included for
+  Segment-ecosystem interop.
+
+- **`std.tsid`** — TSID (Twitter Snowflake family): 64-bit time-sortable
+  identifier, 13-char Crockford base32. Half the wire size of UUID/ULID
+  (8 vs 16 bytes); use when ID size matters more than the full 128-bit
+  entropy space.
+
+- **`std.url` — RFC 3986 percent-codec + query parser** (#629). Three
+  encoder flavors matching Go's `net/url` semantics for byte-exact
+  parity (load-bearing for SigV4 canonical-request signing where any
+  deviation invalidates the signature):
+    - `url.encode(s)` — query-component (Go: `url.QueryEscape`)
+    - `url.encode_path(s)` — path-segment (Go: `url.PathEscape`)
+    - `url.encode_strict(s)` — strict unreserved-only
+  Plus `url.decode(s)` (with `+` → space), `url.parse_query(s)`,
+  `url.query_get(list, name)`, `url.query_get_all(list, name)` —
+  correct multi-param + repeated-key handling, which is also the proper
+  resolution for the http.get_query_param failure mode (#625): the URL
+  module is the right place for the parser.
+
+- **`std.os.now_unix_ms()`** — wall-clock Unix epoch in milliseconds.
+  Required for time-ordered identifiers (UUIDv7, ULID, KSUID, TSID).
+  CLOCK_REALTIME on POSIX; `GetSystemTimeAsFileTime` with the 1601→1970
+  shift on Windows. Subject to NTP / manual clock adjustments by
+  design — use `now_monotonic_ms` for measuring durations.
+
+### Changed
+
+- **`http.server_get` (and `server_post` / `server_put` /
+  `server_delete` / `server_add_route`) — `user_data` slot documented
+  as usable** (`std/http/module.ae`, `docs/http-handler-context.md`,
+  `tests/integration/http_handler_user_data/`). Closes #633. The C
+  side has always plumbed `user_data` end-to-end (the route remembers
+  it and passes it back to the handler as the 3rd arg), but no
+  example or test showed the struct-ptr → user_data pattern, so
+  downstream porters (fbs-core) concluded the slot was unusable from
+  Aether and dropped to a C shim of process statics. New
+  `docs/http-handler-context.md` walks the
+  `malloc → struct fields → ud as *YourStruct` pattern with a
+  per-route DB-handle worked example. Integration test pins per-route
+  isolation, null-ud compatibility, and re-call stability across
+  handler invocations. No code change — purely docs + example.
+
 ## [0.217.0]
 
 ### Changed

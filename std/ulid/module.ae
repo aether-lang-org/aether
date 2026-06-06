@@ -1,0 +1,96 @@
+// std.ulid — ULID (https://github.com/ulid/spec).
+//
+// 128-bit lexicographically-sortable identifier:
+//
+//   01ARZ3NDEKTSV4RRFFQ69G5FAV
+//   |----------|---------------|
+//   |    48     |       80      |
+//   | timestamp |   randomness   |
+//
+// Encoded as 26 Crockford base32 chars: each char encodes 5 bits, so
+// 130 bits of slot space — the top 2 bits are unused (zeroed). The
+// alphabet excludes ambiguous characters (I, L, O, U) and is
+// case-insensitive on decode.
+//
+// Time-ordered like UUIDv7 but in a different on-the-wire shape;
+// ULIDs are 26 chars (vs 36 for UUID), and sort identically as
+// strings. Prefer UUIDv7 when downstream systems already speak UUID;
+// prefer ULID when wire size matters and you control both ends.
+
+import std.crypto
+import std.os
+import std.string
+import std.bytes
+
+exports (generate)
+
+// Generate a new ULID. Returns (ulid_string, "") on success,
+// ("", error) on CSPRNG failure.
+generate() -> {
+    raw, n, err = crypto.random_bytes(10)
+    if err != "" {
+        return "", err
+    }
+    if n != 10 {
+        return "", "random_bytes short read"
+    }
+    ts = os.now_unix_ms()
+
+    // Build a 16-byte buffer: 6 bytes big-endian timestamp + 10
+    // bytes randomness. The 26-char base32 encoding will read
+    // straight off this.
+    buf = bytes.new(16)
+    bytes.set(buf, 0, (ts >> 40) & 255)
+    bytes.set(buf, 1, (ts >> 32) & 255)
+    bytes.set(buf, 2, (ts >> 24) & 255)
+    bytes.set(buf, 3, (ts >> 16) & 255)
+    bytes.set(buf, 4, (ts >> 8) & 255)
+    bytes.set(buf, 5, ts & 255)
+    i = 0
+    while i < 10 {
+        bytes.set(buf, 6 + i, string.char_at_n(raw, 10, i))
+        i = i + 1
+    }
+
+    // Crockford base32 — excludes I, L, O, U. The canonical and only
+    // alphabet in the ULID spec.
+    const ALPHA = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+    // Encode 128 bits MSB-first as 26 chars × 5 bits. The first char
+    // covers only the top 2 bits of byte 0 (padded with two 0-bits);
+    // subsequent chars cross byte boundaries.
+    out = bytes.new(26)
+
+    // Encode the 128 bits MSB-first into 26 base32 chars. The top
+    // 2 bits of the 130-bit slot space are zero-padding — so char 0
+    // encodes the top 3 bits of byte 0 (in the LOW 3 bits of the
+    // 5-bit slot), and chars 1..25 each encode 5 consecutive bits
+    // starting from bit 125 (= bit 3 of byte 0 from MSB) down.
+    //
+    // Char 0:        (byte_0 >> 5) & 7
+    // Char k>=1:     5 bits starting at bit_off = 3 + 5*(k-1) from MSB
+    b0 = bytes.get(buf, 0)
+    bytes.set(out, 0, string.char_at_n(ALPHA, 32, (b0 >> 5) & 7))
+
+    k = 1
+    while k < 26 {
+        bit_off = 3 + 5 * (k - 1)
+        byte_off = bit_off / 8
+        bit_in_byte = bit_off % 8
+        // 16-bit window covering the 5 bits (always within 2 bytes
+        // because bit_in_byte < 8). The 5-bit slice lives at bits
+        // [bit_in_byte .. bit_in_byte+4] counted from the MSB of the
+        // window (bit 15).
+        b_hi = bytes.get(buf, byte_off) & 255
+        b_lo = 0
+        if byte_off + 1 < 16 {
+            b_lo = bytes.get(buf, byte_off + 1) & 255
+        }
+        window = (b_hi << 8) | b_lo
+        slice = (window >> (11 - bit_in_byte)) & 31
+        bytes.set(out, k, string.char_at_n(ALPHA, 32, slice))
+        k = k + 1
+    }
+
+    return bytes.finish(out, 26), ""
+}

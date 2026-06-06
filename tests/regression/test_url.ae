@@ -1,0 +1,107 @@
+// Regression test for #629: std.url percent-encoding + query parsing.
+//
+// Parity targets (commented inline): Go's net/url where the test
+// vectors come from — SigV4 signing correctness depends on
+// byte-exact matches with Go's url.PathEscape and similar.
+
+import std.url
+import std.collections
+import std.string
+
+main() {
+    print("=== std.url ===\n\n")
+
+    // url.encode — query-component (space → '+', + → %2B).
+    enc1 = url.encode("hello world+/")
+    if string.equals(enc1, "hello+world%2B%2F") != 1 {
+        print("FAIL: encode(\"hello world+/\")=${enc1}\n")
+        exit(1)
+    }
+    print("PASS: encode (query)\n")
+
+    // url.encode_path — Go's url.PathEscape semantics.
+    // Space → %20 (NOT +), + preserved literally, / encoded.
+    enc2 = url.encode_path("path/with spaces+plus")
+    if string.equals(enc2, "path%2Fwith%20spaces+plus") != 1 {
+        print("FAIL: encode_path=${enc2}\n")
+        exit(1)
+    }
+    print("PASS: encode_path\n")
+
+    // url.encode_strict — RFC 3986 unreserved only. Even '+' encoded.
+    enc3 = url.encode_strict("a+b c~d-e.f_g")
+    if string.equals(enc3, "a%2Bb%20c~d-e.f_g") != 1 {
+        print("FAIL: encode_strict=${enc3}\n")
+        exit(1)
+    }
+    print("PASS: encode_strict\n")
+
+    // url.decode — round trip.
+    d1, e1 = url.decode("hello%20world%2B%2F")
+    if e1 != "" || string.equals(d1, "hello world+/") != 1 {
+        print("FAIL: decode=${d1} err=${e1}\n")
+        exit(1)
+    }
+    print("PASS: decode round-trip\n")
+
+    // url.decode — '+' to space (query reading).
+    d2, _ = url.decode("hello+world")
+    if string.equals(d2, "hello world") != 1 {
+        print("FAIL: decode plus=${d2}\n")
+        exit(1)
+    }
+    print("PASS: decode '+' → space\n")
+
+    // url.decode — malformed encoding is reported.
+    _, derr = url.decode("bad%XYbytes")
+    if derr == "" {
+        print("FAIL: decode bad %XY did not error\n")
+        exit(1)
+    }
+    print("PASS: decode malformed reported\n")
+
+    // url.parse_query + query_get on multi-param query (this is the
+    // straight #625-related repro: each key returns its own value).
+    list, perr = url.parse_query("alpha=AAA&beta=BBB&alpha=CCC")
+    if perr != "" {
+        print("FAIL: parse_query err=${perr}\n")
+        exit(1)
+    }
+    a = url.query_get(list, "alpha")
+    b = url.query_get(list, "beta")
+    if string.equals(a, "AAA") != 1 {
+        print("FAIL: alpha=${a}\n")
+        exit(1)
+    }
+    if string.equals(b, "BBB") != 1 {
+        print("FAIL: beta=${b}\n")
+        exit(1)
+    }
+    print("PASS: parse_query + query_get\n")
+
+    // query_get_all returns every value for a repeated key.
+    all = url.query_get_all(list, "alpha")
+    if string_list_size(all) != 2 {
+        cnt = string_list_size(all)
+        print("FAIL: alpha count=${cnt}\n")
+        exit(1)
+    }
+    a0 = string_list_get(all, 0)
+    a1 = string_list_get(all, 1)
+    if string.equals(a0, "AAA") != 1 || string.equals(a1, "CCC") != 1 {
+        print("FAIL: alpha values=${a0},${a1}\n")
+        exit(1)
+    }
+    print("PASS: query_get_all (repeated keys)\n")
+
+    // Leading '?' is tolerated.
+    list2, _ = url.parse_query("?one=1")
+    v = url.query_get(list2, "one")
+    if string.equals(v, "1") != 1 {
+        print("FAIL: leading ? one=${v}\n")
+        exit(1)
+    }
+    print("PASS: leading '?' stripped\n")
+
+    print("\nAll PASS\n")
+}

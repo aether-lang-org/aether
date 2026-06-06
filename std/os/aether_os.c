@@ -68,6 +68,7 @@ int64_t os_wall_seconds_raw(void) { return 0; }
 int os_wall_micros_raw(void) { return 0; }
 int64_t os_now_monotonic_ms_raw(void) { return 0; }
 int64_t os_now_monotonic_ns_raw(void) { return 0; }
+int64_t os_now_unix_ms_raw(void) { return 0; }
 #else
 
 #include <stdio.h>
@@ -471,6 +472,19 @@ int64_t os_now_monotonic_ns_raw(void) {
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
     return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 }
+
+/* Wall-clock unix epoch ms. CLOCK_REALTIME because that's what every
+ * other timestamp-consuming system on the network is using; the
+ * NTP-step caveat is in the header. POSIX guarantees CLOCK_REALTIME;
+ * the fallback to time(2) is for the (vanishingly rare) systems
+ * where clock_gettime is broken but time(2) works. */
+int64_t os_now_unix_ms_raw(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+        return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+    }
+    return (int64_t)time(NULL) * 1000;
+}
 #else
 /* Windows: QueryPerformanceCounter gives a high-resolution monotonic
  * counter; QueryPerformanceFrequency gives its tick rate. Frequency
@@ -514,6 +528,16 @@ int64_t os_now_monotonic_ns_raw(void) {
     int64_t whole_sec = ticks / freq;
     int64_t frac_ticks = ticks % freq;
     return whole_sec * 1000000000 + (frac_ticks * 1000000000) / freq;
+}
+
+/* GetSystemTimeAsFileTime: 100-ns intervals since 1601-01-01 UTC.
+ * Convert to unix-ms by subtracting the 116444736000000000 epoch
+ * offset and dividing by 10000. */
+int64_t os_now_unix_ms_raw(void) {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    int64_t ticks = ((int64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (ticks - 116444736000000000LL) / 10000;
 }
 #endif
 

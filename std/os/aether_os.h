@@ -150,4 +150,12 @@ int     os_wall_micros_raw(void);
 int64_t os_now_monotonic_ms_raw(void);
 int64_t os_now_monotonic_ns_raw(void);
 
+// Wall-clock Unix epoch in milliseconds. Subject to NTP / manual
+// clock adjustments, so NOT suitable for measuring durations — use
+// os_now_monotonic_ms_raw for that. Required for time-ordered
+// identifiers (UUIDv7, ULID, KSUID, TSID) whose timestamp must be
+// reconstructible by other systems. POSIX: gettimeofday()
+// equivalent via clock_gettime(CLOCK_REALTIME).
+int64_t os_now_unix_ms_raw(void);
+
 #endif

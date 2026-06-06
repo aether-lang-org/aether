@@ -1,0 +1,111 @@
+// std.ksuid — KSUID (https://github.com/segmentio/ksuid).
+//
+// 160-bit lexicographically-sortable identifier:
+//
+//   1HCpXwx2EK9oYluWbacgeCnFcLf
+//   |--------|--------|---------|
+//   |   32   |   128  |    27   |
+//   | secs   | random | base62  |
+//
+// 32-bit big-endian timestamp (Unix seconds with epoch shifted to
+// 2014-05-13, so the value stays in 32 bits until year ~2150) + 128
+// bits of randomness. Encoded as 27 base62 chars (no padding,
+// fixed-width — leading zeros preserved via the 160 → 27×log62 fit).
+//
+// KSUID predates ULID and occupies a similar niche — second
+// resolution (vs ULID's millisecond) is the practical difference.
+// Use KSUID when interop with the Segment ecosystem matters;
+// otherwise ULID or UUIDv7 are usually the better choice.
+
+import std.crypto
+import std.os
+import std.string
+import std.bytes
+
+exports (generate)
+
+const KSUID_EPOCH_SECS = 1400000000
+
+const ALPHA = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+// Generate a 27-char KSUID. Returns (ksuid, "") on success,
+// ("", error) on CSPRNG failure.
+generate() -> {
+    raw, n, err = crypto.random_bytes(16)
+    if err != "" {
+        return "", err
+    }
+    if n != 16 {
+        return "", "random_bytes short read"
+    }
+    // Unix seconds, shifted to KSUID's 2014-05-13 epoch.
+    ts_ms = os.now_unix_ms()
+    ts_secs = (ts_ms / 1000) - KSUID_EPOCH_SECS
+
+    // Build 20-byte big-endian value: 4-byte timestamp + 16-byte payload.
+    buf = bytes.new(20)
+    bytes.set(buf, 0, (ts_secs >> 24) & 255)
+    bytes.set(buf, 1, (ts_secs >> 16) & 255)
+    bytes.set(buf, 2, (ts_secs >> 8) & 255)
+    bytes.set(buf, 3, ts_secs & 255)
+    i = 0
+    while i < 16 {
+        bytes.set(buf, 4 + i, string.char_at_n(raw, 16, i))
+        i = i + 1
+    }
+
+    // Base62 encode 20 bytes → 27 chars. Uses repeated long division
+    // by 62 on a 20-byte big-endian bignum; emit chars LSB-first then
+    // reverse. Pad with leading '0' if fewer than 27 chars come out.
+    out = bytes.new(27)
+    digits_count = 0
+
+    // Repeatedly divide buf (mutable, 20-byte big-endian) by 62.
+    // Detect termination when the whole buffer is zero. The loop
+    // runs at most 27 iterations for a 20-byte input.
+    while digits_count < 27 {
+        // Check if buf is all zero — terminates the division early
+        // (saves trailing-zero pad emission).
+        all_zero = 1
+        j = 0
+        while j < 20 {
+            if bytes.get(buf, j) != 0 {
+                all_zero = 0
+            }
+            j = j + 1
+        }
+        if all_zero == 1 && digits_count > 0 {
+            break
+        }
+
+        // Long division: walk bytes 0..19, carry = (carry << 8) | byte,
+        // write carry / 62 back, carry = carry % 62.
+        carry = 0
+        j = 0
+        while j < 20 {
+            carry = (carry << 8) | (bytes.get(buf, j) & 255)
+            bytes.set(buf, j, carry / 62)
+            carry = carry % 62
+            j = j + 1
+        }
+        // `carry` is now the least-significant base-62 digit.
+        bytes.set(out, digits_count, string.char_at_n(ALPHA, 62, carry))
+        digits_count = digits_count + 1
+    }
+
+    // Pad with '0' chars on the right (which become the leading-zero
+    // chars after reversal) until we have exactly 27.
+    while digits_count < 27 {
+        bytes.set(out, digits_count, string.char_at_n(ALPHA, 62, 0))
+        digits_count = digits_count + 1
+    }
+
+    // Reverse out into final order.
+    rev = bytes.new(27)
+    k = 0
+    while k < 27 {
+        bytes.set(rev, k, bytes.get(out, 26 - k))
+        k = k + 1
+    }
+    return bytes.finish(rev, 27), ""
+}

@@ -48,6 +48,56 @@ char* cryptography_hash_hex_raw(const char* algo, const char* data, int length);
  * OpenSSL. */
 int cryptography_hash_supported(const char* algo);
 
+/* MD4 — per-block strong checksum in the .zsync wire format (#637).
+ * Bound to EVP_md4() directly rather than via EVP_get_digestbyname()
+ * so it works on stock OpenSSL 3 where MD4 lives in the legacy
+ * provider that the by-name lookup doesn't consult. Returns
+ * lowercase hex (32 chars). On OpenSSL builds without MD4 at all,
+ * returns NULL. */
+char* cryptography_md4_hex_raw(const char* data, int length);
+
+/* MD5 — Content-MD5 / ETag interop (#631). Same shape and contract
+ * as the sha*_hex_raw siblings; the algorithm is documented as legacy
+ * in module.ae. Returns lowercase hex (32 chars). */
+char* cryptography_md5_hex_raw(const char* data, int length);
+
+/* HMAC-SHA256 (#631). Thin veneer over libcrypto's HMAC(). The
+ * raw variant returns the 32-byte digest via the binary-digest TLS
+ * split-accessor (see below); the hex variant returns
+ * lowercase hex (64 chars) the caller frees. SigV4's key-derivation
+ * chain needs the raw form — each round's output keys the next. */
+char* cryptography_hmac_sha256_hex_raw(const char* key, int key_len,
+                                      const char* msg, int msg_len);
+/* Sets the binary-digest TLS slot. Returns 1 on success, 0 on
+ * failure / no OpenSSL. Bytes available via
+ * cryptography_get_binary_digest() / ..._length(). */
+int   cryptography_hmac_sha256_bytes_raw(const char* key, int key_len,
+                                         const char* msg, int msg_len);
+
+/* Binary (raw-bytes) digest accessors for length-aware, binary-safe
+ * digest output (#637). Same TLS split-accessor shape as base64_decode
+ * — the digest lives in a per-thread buffer that remains valid until
+ * the next bytes-producing call on the same thread. Aether-side
+ * wrappers copy into an AetherString via string_new_with_length.
+ *
+ *   md4_bytes        → 16-byte MD4 digest
+ *   sha1_bytes       → 20-byte SHA-1
+ *   sha256_bytes     → 32-byte SHA-256
+ *   hash_bytes(algo) → algorithm-by-name (same dispatcher rules as
+ *                      hash_hex_raw)
+ *   hmac_sha256_bytes (above) shares the same TLS slot.
+ *
+ * Returns 1 on success, 0 on failure / no OpenSSL / unknown
+ * algorithm. */
+int cryptography_md4_bytes_raw(const char* data, int length);
+int cryptography_md5_bytes_raw(const char* data, int length);
+int cryptography_sha1_bytes_raw(const char* data, int length);
+int cryptography_sha256_bytes_raw(const char* data, int length);
+int cryptography_hash_bytes_raw(const char* algo, const char* data, int length);
+const char* cryptography_get_binary_digest(void);
+int         cryptography_get_binary_digest_length(void);
+void        cryptography_release_binary_digest(void);
+
 /* Base64 encode `length` bytes of `data` using the RFC 4648 §4
  * standard alphabet, unpadded (callers needing `=` padding append
  * `=` themselves to make the length a multiple of 4). Returns a

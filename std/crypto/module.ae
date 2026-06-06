@@ -1,0 +1,55 @@
+// std.crypto — cryptographically-secure RNG.
+//
+// The CSPRNG that's been missing from `std`. `std.math.random_*` is a
+// seedable PRNG — fine for sampling and Monte Carlo, NOT for secrets
+// (bearer tokens, session keys, opaque storage filenames where you
+// need unpredictability). #630.
+//
+// Backed by the OS CSPRNG on every supported platform:
+//   - Linux:    getrandom(2) → /dev/urandom fallback
+//   - macOS/BSD: arc4random_buf(3)
+//   - Windows:  BCryptGenRandom (CNG)
+//
+// Cost is one syscall per call; buffer the result if you draw many
+// small values. The syscall is the price of unpredictability and is
+// not avoidable for security-relevant draws.
+
+import std.string
+
+exports (
+    crypto_random_bytes_raw,
+    crypto_get_random_bytes, crypto_get_random_bytes_length,
+    crypto_release_random_bytes,
+    random_bytes
+)
+
+extern crypto_random_bytes_raw(n: int) -> int
+extern crypto_get_random_bytes() -> string
+extern crypto_get_random_bytes_length() -> int
+extern crypto_release_random_bytes()
+
+extern string_new_with_length(data: string, length: int) -> ptr
+
+// Draw `n` cryptographically-secure random bytes. Returns
+// (bytes, length, "") on success, ("", 0, error) on:
+//   - n < 0
+//   - allocation failure
+//   - getrandom/BCryptGenRandom failure (vanishingly rare)
+//
+// `bytes` is an owned AetherString preserving every byte including
+// embedded NULs. Same tuple shape as cryptography.base64_decode and
+// fs.read_binary so destructuring patterns are consistent.
+//
+// n == 0 is allowed and yields ("", 0, "") — useful for plumbing
+// where the length is computed and may legitimately be zero.
+random_bytes(n: int) -> {
+    ok = crypto_random_bytes_raw(n)
+    if ok == 0 {
+        return "", 0, "random_bytes failed"
+    }
+    raw = crypto_get_random_bytes()
+    out_n = crypto_get_random_bytes_length()
+    owned = string_new_with_length(raw, out_n)
+    crypto_release_random_bytes()
+    return owned, out_n, ""
+}

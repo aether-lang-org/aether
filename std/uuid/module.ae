@@ -1,0 +1,117 @@
+// std.uuid — UUID v4 and v7 (RFC 9562).
+//
+// v4 is full-random 128 bits — what most existing systems expect when
+// they say "UUID". Use it for opaque identifiers where the only
+// requirement is unpredictability and uniqueness.
+//
+// v7 is the modern recommendation: 48-bit Unix-ms timestamp + 74 bits
+// of randomness in the same 36-char hex shape v4 uses. Sortable by
+// insertion time, which keeps B-tree indexes from fragmenting the
+// way v4 keys do — preferable for primary-key use unless you
+// specifically want to hide creation time.
+//
+// Both call into std.crypto.random_bytes for the entropy; v7 also
+// reads std.os.now_unix_ms for the timestamp. Either generator
+// returns a 36-char canonical-form string (8-4-4-4-12 hex with
+// hyphens), and the version + variant bits are set per RFC 9562.
+
+import std.crypto
+import std.os
+import std.string
+import std.bytes
+
+exports (v4, v7)
+
+// Format a 16-byte AetherString as the canonical 8-4-4-4-12 hex
+// form. The version/variant bytes must already be patched by the
+// caller. Walks the bytes via string.char_at_n (binary-safe) and
+// builds the output via bytes.new+set+finish.
+fn format_uuid(b: string) -> string {
+    HEX = "0123456789abcdef"
+    buf = bytes.new(36)
+    out = 0
+    i = 0
+    while i < 16 {
+        v = string.char_at_n(b, 16, i)
+        // High nibble.
+        bytes.set(buf, out, string.char_at_n(HEX, 16, (v >> 4) & 15))
+        bytes.set(buf, out + 1, string.char_at_n(HEX, 16, v & 15))
+        out = out + 2
+        // Hyphens after bytes 3, 5, 7, 9.
+        if i == 3 || i == 5 || i == 7 || i == 9 {
+            bytes.set(buf, out, 45)  // '-'
+            out = out + 1
+        }
+        i = i + 1
+    }
+    return bytes.finish(buf, 36)
+}
+
+// UUIDv4 — 128 bits with six fixed bits (version=0100, variant=10):
+//   xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx   y ∈ {8,9,a,b}
+//
+// Returns (uuid, "") on success, ("", error) on CSPRNG failure.
+v4() -> {
+    raw, n, err = crypto.random_bytes(16)
+    if err != "" {
+        return "", err
+    }
+    if n != 16 {
+        return "", "random_bytes short read"
+    }
+    // Patch the version + variant bits via a 16-byte bytes buffer so
+    // we can rewrite individual bytes; the raw AetherString is
+    // copy-on-write at this layer.
+    buf = bytes.new(16)
+    i = 0
+    while i < 16 {
+        bytes.set(buf, i, string.char_at_n(raw, 16, i))
+        i = i + 1
+    }
+    // Version: high nibble of byte 6 = 0100.
+    bytes.set(buf, 6, (bytes.get(buf, 6) & 15) | 64)
+    // Variant: top two bits of byte 8 = 10.
+    bytes.set(buf, 8, (bytes.get(buf, 8) & 63) | 128)
+    return format_uuid(bytes.finish(buf, 16)), ""
+}
+
+// UUIDv7 (RFC 9562 §5.7) — 48-bit big-endian Unix-ms timestamp in
+// bytes 0..5, then version=0111 in the high nibble of byte 6,
+// variant=10 in the top two bits of byte 8, remaining 74 bits from
+// the CSPRNG. Sortable by issuance time at ms resolution.
+//
+// At very high QPS (>1000 IDs/ms per process) the timestamp can
+// collide with the previous tick; this implementation does NOT add
+// a monotonic counter, so back-to-back same-ms IDs sort
+// arbitrarily within the same millisecond. RFC-allowed and what
+// the fbs-core storage use case wants. Higher-QPS callers should
+// layer a per-process counter on top.
+v7() -> {
+    raw, n, err = crypto.random_bytes(16)
+    if err != "" {
+        return "", err
+    }
+    if n != 16 {
+        return "", "random_bytes short read"
+    }
+    ts = os.now_unix_ms()
+    buf = bytes.new(16)
+    // Big-endian 48-bit timestamp into bytes 0..5.
+    bytes.set(buf, 0, (ts >> 40) & 255)
+    bytes.set(buf, 1, (ts >> 32) & 255)
+    bytes.set(buf, 2, (ts >> 24) & 255)
+    bytes.set(buf, 3, (ts >> 16) & 255)
+    bytes.set(buf, 4, (ts >> 8) & 255)
+    bytes.set(buf, 5, ts & 255)
+    // Remaining bytes 6..15 from the CSPRNG.
+    i = 6
+    while i < 16 {
+        bytes.set(buf, i, string.char_at_n(raw, 16, i))
+        i = i + 1
+    }
+    // Version 7: high nibble of byte 6 = 0111.
+    bytes.set(buf, 6, (bytes.get(buf, 6) & 15) | 112)
+    // Variant 10: top two bits of byte 8.
+    bytes.set(buf, 8, (bytes.get(buf, 8) & 63) | 128)
+    return format_uuid(bytes.finish(buf, 16)), ""
+}
