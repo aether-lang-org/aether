@@ -1,0 +1,57 @@
+// std.nanoid — NanoID (https://github.com/ai/nanoid).
+//
+// 21-char URL-safe identifier:
+//
+//   V1StGXR8_Z5jdHi6B-myT
+//
+// 64-symbol alphabet (A-Z, a-z, 0-9, `_`, `-`), 21 chars → 126 bits
+// of entropy in 21 visible characters (vs UUID's 122 bits in 36
+// characters). No time component — purely random. Designed for URL
+// path / query slots where size and shell-safety matter and you
+// don't want time leakage.
+//
+// Implementation note: NanoID's reference algorithm uses a power-of-2
+// alphabet (here 64) so a single CSPRNG byte maps to one output char
+// via masking — no rejection sampling, no bias. We follow that exact
+// pattern.
+
+import std.crypto
+import std.string
+import std.bytes
+
+exports (generate, generate_n)
+
+const ALPHA = "_-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+// Generate a 21-char NanoID. Returns (id, "") on success,
+// ("", error) on CSPRNG failure.
+generate() -> {
+    return generate_n(21)
+}
+
+// Generate an `n`-char NanoID with the standard URL-safe alphabet.
+// `n` must be >= 1. For collision math: ~2.7 million IDs/sec for
+// ~1000 years to have a 1% collision probability at n=21. Cut `n`
+// only if you understand the birthday-bound implication.
+generate_n(n: int) -> {
+    if n < 1 {
+        return "", "n must be >= 1"
+    }
+    raw, got, err = crypto.random_bytes(n)
+    if err != "" {
+        return "", err
+    }
+    if got != n {
+        return "", "random_bytes short read"
+    }
+    buf = bytes.new(n)
+    i = 0
+    while i < n {
+        // 64-symbol alphabet → 6-bit mask. No rejection sampling
+        // needed: the modulo is exact for a power-of-2 alphabet.
+        b = string.char_at_n(raw, n, i) & 63
+        bytes.set(buf, i, string.char_at_n(ALPHA, 64, b))
+        i = i + 1
+    }
+    return bytes.finish(buf, n), ""
+}

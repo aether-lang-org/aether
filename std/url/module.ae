@@ -1,0 +1,305 @@
+// std.url — RFC 3986 percent-encoding + query-string parsing (#629).
+//
+// Three encoding flavors because RFC 3986 keeps different reserved
+// sets for different URL components:
+//
+//   url.encode(s)        — query-component (Go: url.QueryEscape):
+//                          unreserved kept, space → '+', everything
+//                          else %-encoded.
+//   url.encode_path(s)   — path-segment (Go: url.PathEscape):
+//                          unreserved kept, plus $&+:=@, everything
+//                          else %-encoded INCLUDING '+' (which is
+//                          NOT a space in the path component).
+//   url.encode_strict(s) — strict RFC 3986 unreserved-only: encodes
+//                          everything that isn't [A-Za-z0-9-._~].
+//                          Used for SigV4 canonical-request signing
+//                          where any deviation breaks the signature.
+//
+// url.decode(s) reverses any of the above; '+' is decoded as space
+// (the query-component reading; SigV4-style consumers shouldn't see
+// '+' in their canonical-encoded input anyway).
+//
+// url.parse_query(s) walks a `?`-stripped query string ("a=1&b=2&a=3")
+// and returns a list of (key, value) tuples — supports repeated keys
+// (the form `?a=1&a=2` carries both values; HTTP form spec, JSON
+// API conventions). Closes the parser hole #625 surfaced.
+
+import std.string
+import std.bytes
+import std.collections
+
+exports (
+    encode, encode_path, encode_strict, decode,
+    parse_query, query_get, query_get_all
+)
+
+// ---------- encoders ----------
+
+fn hex_char(nibble: int) -> int {
+    if nibble < 10 {
+        return 48 + nibble
+    }
+    return 55 + nibble  // 'A' + (nibble - 10)
+}
+
+// True for [A-Za-z0-9-._~] — the RFC 3986 "unreserved" set.
+fn is_unreserved(c: int) -> int {
+    if c >= 65 && c <= 90 { return 1 }
+    if c >= 97 && c <= 122 { return 1 }
+    if c >= 48 && c <= 57 { return 1 }
+    if c == 45 || c == 46 || c == 95 || c == 126 { return 1 }
+    return 0
+}
+
+// True for the path-segment "kept" set (Go's url.PathEscape):
+// unreserved + $&+:=@.
+fn is_path_kept(c: int) -> int {
+    if is_unreserved(c) == 1 { return 1 }
+    if c == 36 || c == 38 || c == 43 || c == 58 || c == 61 || c == 64 { return 1 }
+    return 0
+}
+
+// Lower-level encoder. mode:
+//   0 = query (unreserved kept, space → '+', else %-encoded)
+//   1 = path  (path-kept set, '+' encoded)
+//   2 = strict (unreserved only)
+fn encode_mode(s: string, mode: int) -> string {
+    if s == 0 {
+        return ""
+    }
+    n = string_length(s)
+    // Worst case 3x growth (every byte %XX) plus headroom.
+    buf = bytes.new(n * 3 + 1)
+    out = 0
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i) & 255
+        keep = 0
+        if mode == 0 {
+            if is_unreserved(c) == 1 { keep = 1 }
+        }
+        if mode == 1 {
+            if is_path_kept(c) == 1 { keep = 1 }
+        }
+        if mode == 2 {
+            if is_unreserved(c) == 1 { keep = 1 }
+        }
+        if keep == 1 {
+            bytes.set(buf, out, c)
+            out = out + 1
+        } else if mode == 0 && c == 32 {
+            // Query-mode shortcut: space → '+'.
+            bytes.set(buf, out, 43)
+            out = out + 1
+        } else {
+            bytes.set(buf, out, 37)        // '%'
+            bytes.set(buf, out + 1, hex_char((c >> 4) & 15))
+            bytes.set(buf, out + 2, hex_char(c & 15))
+            out = out + 3
+        }
+        i = i + 1
+    }
+    return bytes.finish(buf, out)
+}
+
+// RFC 3986 query-component encoding (Go's url.QueryEscape).
+// Space encoded as '+'.
+encode(s: string) -> string {
+    return encode_mode(s, 0)
+}
+
+// RFC 3986 path-segment encoding (Go's url.PathEscape).
+// Keeps unreserved plus $&+:=@; '+' is preserved literally (it is
+// NOT a space in path-context).
+encode_path(s: string) -> string {
+    return encode_mode(s, 1)
+}
+
+// Strict unreserved-only encoding — encodes everything except
+// [A-Za-z0-9-._~]. Required for AWS SigV4 canonical-request signing
+// where any kept-character deviation invalidates the signature.
+encode_strict(s: string) -> string {
+    return encode_mode(s, 2)
+}
+
+// ---------- decoder ----------
+
+fn hex_value(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48 }
+    if c >= 65 && c <= 70 { return c - 55 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    return -1
+}
+
+// Percent-decode a URL component. '+' is decoded as space (the
+// query-component reading); literal '+' in path components should
+// have been encoded as %2B by a conforming encoder.
+//
+// Returns ("", "malformed encoding") on a stray '%' not followed by
+// two hex chars. Otherwise returns (decoded, "").
+decode(s: string) -> {
+    if s == 0 {
+        return "", ""
+    }
+    n = string_length(s)
+    buf = bytes.new(n + 1)
+    out = 0
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i) & 255
+        if c == 37 {
+            // %XX
+            if i + 2 >= n {
+                return "", "malformed encoding"
+            }
+            h1 = hex_value(string.char_at_n(s, n, i + 1) & 255)
+            h2 = hex_value(string.char_at_n(s, n, i + 2) & 255)
+            if h1 < 0 || h2 < 0 {
+                return "", "malformed encoding"
+            }
+            bytes.set(buf, out, (h1 << 4) | h2)
+            out = out + 1
+            i = i + 3
+        } else if c == 43 {
+            bytes.set(buf, out, 32)
+            out = out + 1
+            i = i + 1
+        } else {
+            bytes.set(buf, out, c)
+            out = out + 1
+            i = i + 1
+        }
+    }
+    return bytes.finish(buf, out), ""
+}
+
+// ---------- query-string parser ----------
+//
+// parse_query takes a `?`-stripped query string and returns a
+// std.collections.string_list of "key=value" entries (decoded). The
+// list is the underlying storage; query_get / query_get_all operate
+// on it. This decoupling lets callers iterate manually too.
+
+// Parse a query string. Returns (list, ""), where list is a
+// std.collections.string_list of decoded "key=value" entries.
+// Returns ("", error) on a malformed percent-encoding inside any
+// key or value.
+//
+// Leading '?' is tolerated (stripped before parsing) so callers can
+// pass the raw `request.query_string` or a string they hand-built
+// with `?` retained.
+parse_query(s: string) -> {
+    list = string_list_new()
+    if s == 0 {
+        return list, ""
+    }
+    n = string_length(s)
+    if n == 0 {
+        return list, ""
+    }
+    start = 0
+    // Strip a leading '?'.
+    if string.char_at_n(s, n, 0) == 63 {
+        start = 1
+    }
+    i = start
+    while i <= n {
+        end = i
+        // Walk to next '&' or end-of-string.
+        while end < n {
+            if (string.char_at_n(s, n, end) & 255) == 38 {
+                break
+            }
+            end = end + 1
+        }
+        if end > i {
+            // Find the '=' inside [i, end).
+            eq = i
+            while eq < end {
+                if (string.char_at_n(s, n, eq) & 255) == 61 {
+                    break
+                }
+                eq = eq + 1
+            }
+            // Decode key and value separately.
+            key_raw = string.substring_n(s, n, i, eq)
+            val_raw = ""
+            if eq < end {
+                val_raw = string.substring_n(s, n, eq + 1, end)
+            }
+            key, k_err = decode(key_raw)
+            if k_err != "" {
+                return list, k_err
+            }
+            val, v_err = decode(val_raw)
+            if v_err != "" {
+                return list, v_err
+            }
+            entry = string.concat(key, "=")
+            entry = string.concat(entry, val)
+            string_list_add(list, entry)
+        }
+        i = end + 1
+    }
+    return list, ""
+}
+
+// Get the first value for `name` from a parsed query list. Returns
+// "" if the key is absent.
+query_get(list: ptr, name: string) -> string {
+    n = string_list_size(list)
+    name_eq = string.concat(name, "=")
+    name_eq_len = string_length(name_eq)
+    i = 0
+    while i < n {
+        entry = string_list_get(list, i)
+        entry_len = string_length(entry)
+        if entry_len >= name_eq_len {
+            // Does entry start with name_eq?
+            ok = 1
+            j = 0
+            while j < name_eq_len {
+                if string.char_at_n(entry, entry_len, j) != string.char_at_n(name_eq, name_eq_len, j) {
+                    ok = 0
+                    break
+                }
+                j = j + 1
+            }
+            if ok == 1 {
+                return string.substring_n(entry, entry_len, name_eq_len, entry_len)
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Get every value for `name` (for repeated-key queries like
+// `?a=1&a=2`). Returns a fresh string_list. Empty list if absent.
+query_get_all(list: ptr, name: string) -> ptr {
+    out = string_list_new()
+    n = string_list_size(list)
+    name_eq = string.concat(name, "=")
+    name_eq_len = string_length(name_eq)
+    i = 0
+    while i < n {
+        entry = string_list_get(list, i)
+        entry_len = string_length(entry)
+        if entry_len >= name_eq_len {
+            ok = 1
+            j = 0
+            while j < name_eq_len {
+                if string.char_at_n(entry, entry_len, j) != string.char_at_n(name_eq, name_eq_len, j) {
+                    ok = 0
+                    break
+                }
+                j = j + 1
+            }
+            if ok == 1 {
+                string_list_add(out, string.substring_n(entry, entry_len, name_eq_len, entry_len))
+            }
+        }
+        i = i + 1
+    }
+    return out
+}

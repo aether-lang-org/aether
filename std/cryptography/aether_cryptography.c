@@ -8,6 +8,11 @@
 
 #ifdef AETHER_HAS_OPENSSL
 #include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/provider.h>
+#endif
 #endif
 
 /* Unwrap the payload from a `data` argument that may be either an
@@ -88,6 +93,178 @@ char* cryptography_hash_hex_raw(const char* algo, const char* data, int length) 
 int cryptography_hash_supported(const char* algo) {
     if (!algo) return 0;
     return EVP_get_digestbyname(algo) != NULL ? 1 : 0;
+}
+
+/* MD4 (#637) and MD5 (#631). EVP_md4() / EVP_md5() bind the algorithm
+ * directly — on OpenSSL 3 MD4 lives in the legacy provider, which
+ * EVP_get_digestbyname("md4") doesn't consult, but EVP_md4() does.
+ *
+ * OpenSSL 3 quirk: EVP_md4() returns a non-NULL handle even when the
+ * legacy provider isn't loaded, but EVP_DigestInit_ex then fails with
+ * "unsupported algorithm" because no actual implementation is wired
+ * up. We load the legacy provider on first MD4 use; the default
+ * provider stays loaded too so SHA-1/256/MD5 keep working. Loading
+ * is one-shot via an atomic flag — the load itself is internally
+ * idempotent, but pthread_once-style gating avoids repeated calls
+ * during a busy hash loop.
+ *
+ * Returns NULL when MD4 is genuinely unavailable (OpenSSL built
+ * without the legacy provider at all — e.g. some hardened-build
+ * options on RHEL/FIPS systems). */
+#if defined(AETHER_HAS_OPENSSL) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+static int md4_provider_attempted = 0;
+static void ensure_legacy_provider(void) {
+    if (md4_provider_attempted) return;
+    md4_provider_attempted = 1;
+    /* CRITICAL: loading just "legacy" implicitly unloads the default
+     * provider, which then takes MD5/SHA-1/SHA-256 with it. We must
+     * load BOTH so the modern algorithms keep working too. The
+     * default provider is loaded automatically at first crypto use
+     * elsewhere in this file, but once we explicitly touch the
+     * provider system that auto-load behavior changes — we have to
+     * be explicit. */
+    OSSL_PROVIDER_load(NULL, "default");
+    OSSL_PROVIDER_load(NULL, "legacy");
+}
+#else
+static void ensure_legacy_provider(void) { /* nothing to do */ }
+#endif
+
+char* cryptography_md4_hex_raw(const char* data, int length) {
+    ensure_legacy_provider();
+    const EVP_MD* md = EVP_md4();
+    if (!md) return NULL;
+    return sha_hex(md, data, length);
+}
+
+char* cryptography_md5_hex_raw(const char* data, int length) {
+    const EVP_MD* md = EVP_md5();
+    if (!md) return NULL;
+    return sha_hex(md, data, length);
+}
+
+/* Binary (raw-bytes) digest TLS split-accessor (#637). Same shape as
+ * the base64-decode TLS slot above. Independent buffer — concurrent
+ * b64 + digest work on the same thread don't clobber each other. */
+static __thread unsigned char* g_dig_buf = NULL;
+static __thread size_t         g_dig_cap = 0;
+static __thread int            g_dig_len = 0;
+
+static void release_dig_locked(void) {
+    if (g_dig_buf) aether_caps_free(g_dig_buf, g_dig_cap);
+    g_dig_buf = NULL;
+    g_dig_cap = 0;
+    g_dig_len = 0;
+}
+
+void cryptography_release_binary_digest(void) {
+    release_dig_locked();
+}
+
+const char* cryptography_get_binary_digest(void) {
+    return g_dig_buf ? (const char*)g_dig_buf : "";
+}
+
+int cryptography_get_binary_digest_length(void) {
+    return g_dig_len;
+}
+
+/* Shared core for the *_bytes_raw family — computes EVP_Digest into
+ * the TLS slot, replacing any previous content. */
+static int digest_into_tls(const EVP_MD* md, const char* data, int length) {
+    if (!md || length < 0) return 0;
+    size_t want;
+    const unsigned char* bytes = cryptography_unwrap_bytes(data, length, &want);
+    if (want > 0 && !bytes) return 0;
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return 0;
+
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int  digest_len = 0;
+    if (EVP_DigestInit_ex(ctx, md, NULL) != 1 ||
+        (want > 0 && EVP_DigestUpdate(ctx, bytes, want) != 1) ||
+        EVP_DigestFinal_ex(ctx, digest, &digest_len) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return 0;
+    }
+    EVP_MD_CTX_free(ctx);
+
+    release_dig_locked();
+    /* Allocate at least 1 byte so the caller can distinguish "empty
+     * digest" (impossible — no real digest is 0 bytes) from "no data
+     * yet" via the accessor. */
+    size_t alloc = digest_len > 0 ? digest_len : 1;
+    g_dig_buf = (unsigned char*)aether_caps_malloc(alloc);
+    if (!g_dig_buf) { g_dig_cap = 0; g_dig_len = 0; return 0; }
+    g_dig_cap = alloc;
+    memcpy(g_dig_buf, digest, digest_len);
+    g_dig_len = (int)digest_len;
+    return 1;
+}
+
+int cryptography_md4_bytes_raw(const char* data, int length) {
+    ensure_legacy_provider();
+    return digest_into_tls(EVP_md4(), data, length);
+}
+int cryptography_md5_bytes_raw(const char* data, int length) {
+    return digest_into_tls(EVP_md5(), data, length);
+}
+int cryptography_sha1_bytes_raw(const char* data, int length) {
+    return digest_into_tls(EVP_sha1(), data, length);
+}
+int cryptography_sha256_bytes_raw(const char* data, int length) {
+    return digest_into_tls(EVP_sha256(), data, length);
+}
+int cryptography_hash_bytes_raw(const char* algo, const char* data, int length) {
+    if (!algo) return 0;
+    return digest_into_tls(EVP_get_digestbyname(algo), data, length);
+}
+
+/* HMAC-SHA256 (#631). Veneer over libcrypto's HMAC() one-shot. The
+ * hex variant returns a caller-frees lowercase-hex string (64 chars);
+ * the bytes variant stashes the 32-byte raw digest in the binary-
+ * digest TLS slot. SigV4's key-derivation chain needs the raw form —
+ * each round's output keys the next, so hex would round-trip through
+ * unhex on every step. */
+char* cryptography_hmac_sha256_hex_raw(const char* key, int key_len,
+                                      const char* msg, int msg_len) {
+    if (key_len < 0 || msg_len < 0) return NULL;
+    size_t key_n, msg_n;
+    const unsigned char* kp = cryptography_unwrap_bytes(key, key_len, &key_n);
+    const unsigned char* mp = cryptography_unwrap_bytes(msg, msg_len, &msg_n);
+    if ((key_n > 0 && !kp) || (msg_n > 0 && !mp)) return NULL;
+
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int  digest_len = 0;
+    unsigned char* rc = HMAC(EVP_sha256(), kp, (int)key_n, mp, msg_n,
+                             digest, &digest_len);
+    if (!rc) return NULL;
+    return hex_encode(digest, digest_len);
+}
+
+int cryptography_hmac_sha256_bytes_raw(const char* key, int key_len,
+                                       const char* msg, int msg_len) {
+    if (key_len < 0 || msg_len < 0) return 0;
+    size_t key_n, msg_n;
+    const unsigned char* kp = cryptography_unwrap_bytes(key, key_len, &key_n);
+    const unsigned char* mp = cryptography_unwrap_bytes(msg, msg_len, &msg_n);
+    if ((key_n > 0 && !kp) || (msg_n > 0 && !mp)) return 0;
+
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int  digest_len = 0;
+    unsigned char* rc = HMAC(EVP_sha256(), kp, (int)key_n, mp, msg_n,
+                             digest, &digest_len);
+    if (!rc) return 0;
+
+    release_dig_locked();
+    size_t alloc = digest_len > 0 ? digest_len : 1;
+    g_dig_buf = (unsigned char*)aether_caps_malloc(alloc);
+    if (!g_dig_buf) { g_dig_cap = 0; g_dig_len = 0; return 0; }
+    g_dig_cap = alloc;
+    memcpy(g_dig_buf, digest, digest_len);
+    g_dig_len = (int)digest_len;
+    return 1;
 }
 
 /* ---- Base64 ----
@@ -265,5 +442,38 @@ int cryptography_base64_decode_raw(const char* b64) {
 const char* cryptography_get_base64_decode(void) { return ""; }
 int cryptography_get_base64_decode_length(void) { return 0; }
 void cryptography_release_base64_decode(void) {}
+
+char* cryptography_md4_hex_raw(const char* data, int length) {
+    (void)data; (void)length; return NULL;
+}
+char* cryptography_md5_hex_raw(const char* data, int length) {
+    (void)data; (void)length; return NULL;
+}
+char* cryptography_hmac_sha256_hex_raw(const char* key, int key_len,
+                                      const char* msg, int msg_len) {
+    (void)key; (void)key_len; (void)msg; (void)msg_len; return NULL;
+}
+int cryptography_hmac_sha256_bytes_raw(const char* key, int key_len,
+                                       const char* msg, int msg_len) {
+    (void)key; (void)key_len; (void)msg; (void)msg_len; return 0;
+}
+int cryptography_md4_bytes_raw(const char* data, int length) {
+    (void)data; (void)length; return 0;
+}
+int cryptography_md5_bytes_raw(const char* data, int length) {
+    (void)data; (void)length; return 0;
+}
+int cryptography_sha1_bytes_raw(const char* data, int length) {
+    (void)data; (void)length; return 0;
+}
+int cryptography_sha256_bytes_raw(const char* data, int length) {
+    (void)data; (void)length; return 0;
+}
+int cryptography_hash_bytes_raw(const char* algo, const char* data, int length) {
+    (void)algo; (void)data; (void)length; return 0;
+}
+const char* cryptography_get_binary_digest(void) { return ""; }
+int cryptography_get_binary_digest_length(void) { return 0; }
+void cryptography_release_binary_digest(void) {}
 
 #endif /* AETHER_HAS_OPENSSL */

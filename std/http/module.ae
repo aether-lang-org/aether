@@ -547,7 +547,20 @@ server_start_background(server: ptr) -> {
     return ""
 }
 
-// HTTP Server - routing
+// HTTP Server - routing.
+//
+// The `user_data` slot is plumbed end-to-end (the C side stores it on
+// the route and passes it back as the 3rd arg of the registered
+// handler). To carry a per-route context — a DB handle, a config
+// struct, an auth scheme — declare a struct, `malloc`+init it, and
+// pass the resulting `ptr` as `user_data`. The handler casts the
+// `ud` arg back via `ud as *YourStruct`. Worked example at
+// `tests/integration/http_handler_user_data/server.ae` and in
+// `docs/http-handler-context.md`. (#633)
+//
+// The slot is per-route, so a server can host routes with distinct
+// contexts without coordination. Passing `0` for `user_data`
+// continues to work — opting in is purely additive.
 extern http_server_add_route(server: ptr, method: string, path: string, handler: ptr, user_data: ptr)
 extern http_server_get(server: ptr, path: string, handler: ptr, user_data: ptr)
 extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
