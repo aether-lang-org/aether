@@ -23,6 +23,15 @@ typedef struct {
     char** param_keys;
     char** param_values;
     int param_count;
+    /* #625: lazily-parsed query-param cache. Tracked at the end of
+     * the struct so existing C consumers stay binary-compatible if
+     * they fail to update — but the calloc below sets everything to
+     * zero (query_parsed=0 = "not yet attempted"), which is what
+     * http_get_query_param's lazy-parse path expects. */
+    char** query_keys;
+    char** query_values;
+    int query_count;
+    int query_parsed;
 } HttpRequest;
 
 typedef struct {
@@ -78,6 +87,13 @@ void probe_free_request(void* p) {
     }
     free(r->header_keys); free(r->header_values);
     free(r->body);
+    /* Mirror http_request_free's query-cache cleanup — set by the
+     * lazy parse path inside http_get_query_param the first time
+     * the test calls it. */
+    for (int i = 0; i < r->query_count; i++) {
+        free(r->query_keys[i]); free(r->query_values[i]);
+    }
+    free(r->query_keys); free(r->query_values);
     free(r);
 }
 

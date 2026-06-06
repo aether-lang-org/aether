@@ -1430,31 +1430,68 @@ const char* http_get_header(HttpRequest* req, const char* key) {
     return NULL;
 }
 
+// Parse req->query_string into req->query_keys / query_values once and
+// cache on the request. Called lazily from http_get_query_param so any
+// request that never asks for a query param pays nothing.
+//
+// The previous implementation walked the raw query_string on every call
+// with strstr and returned a pointer into a function-local static buffer
+// (#625): two sequential calls overwrote the buffer, so the first call's
+// returned pointer aliased the second call's value. With a real per-key
+// array each call returns a stable per-request pointer.
+static void http_parse_query_locked(HttpRequest* req) {
+    req->query_parsed = 1;
+    if (!req->query_string || !*req->query_string) return;
+
+    // First pass: count pairs (one per '&' boundary, plus the tail).
+    int cap = 1;
+    for (const char* p = req->query_string; *p; p++) {
+        if (*p == '&') cap++;
+    }
+    req->query_keys   = (char**)calloc((size_t)cap, sizeof(char*));
+    req->query_values = (char**)calloc((size_t)cap, sizeof(char*));
+    if (!req->query_keys || !req->query_values) {
+        free(req->query_keys);   req->query_keys = NULL;
+        free(req->query_values); req->query_values = NULL;
+        return;
+    }
+
+    const char* cur = req->query_string;
+    while (*cur) {
+        const char* amp = strchr(cur, '&');
+        size_t pair_len = amp ? (size_t)(amp - cur) : strlen(cur);
+        const char* eq = (const char*)memchr(cur, '=', pair_len);
+        if (pair_len > 0 && eq && eq > cur) {
+            size_t klen = (size_t)(eq - cur);
+            size_t vlen = pair_len - klen - 1;
+            char* k = (char*)malloc(klen + 1);
+            char* v = (char*)malloc(vlen + 1);
+            if (k && v) {
+                memcpy(k, cur, klen); k[klen] = '\0';
+                memcpy(v, eq + 1, vlen); v[vlen] = '\0';
+                req->query_keys[req->query_count]   = k;
+                req->query_values[req->query_count] = v;
+                req->query_count++;
+            } else {
+                free(k); free(v);
+            }
+        }
+        // Bare-key form (`?foo&bar=1`) is silently skipped — matches the
+        // previous behaviour where strchr('=') would return NULL on it.
+        if (!amp) break;
+        cur = amp + 1;
+    }
+}
+
 const char* http_get_query_param(HttpRequest* req, const char* key) {
     if (!req || !key) return NULL;
-    if (!req->query_string) return NULL;
-    
-    // Parse query params on demand
-    char* found = strstr(req->query_string, key);
-    if (!found) return NULL;
-    
-    // Check if it's actually the key (not part of another key)
-    if (found != req->query_string && *(found - 1) != '&') {
-        return NULL;
+    if (!req->query_parsed) http_parse_query_locked(req);
+    for (int i = 0; i < req->query_count; i++) {
+        if (strcmp(req->query_keys[i], key) == 0) {
+            return req->query_values[i];
+        }
     }
-    
-    char* equals = strchr(found, '=');
-    if (!equals) return NULL;
-    
-    char* value_start = equals + 1;
-    char* value_end = strchr(value_start, '&');
-    
-    static char value_buf[256];
-    size_t value_len = value_end ? (size_t)(value_end - value_start) : strlen(value_start);
-    strncpy(value_buf, value_start, value_len);
-    value_buf[value_len] = '\0';
-    
-    return value_buf;
+    return NULL;
 }
 
 const char* http_get_path_param(HttpRequest* req, const char* key) {
@@ -1488,7 +1525,14 @@ void http_request_free(HttpRequest* req) {
     }
     free(req->param_keys);
     free(req->param_values);
-    
+
+    for (int i = 0; i < req->query_count; i++) {
+        free(req->query_keys[i]);
+        free(req->query_values[i]);
+    }
+    free(req->query_keys);
+    free(req->query_values);
+
     free(req);
 }
 
