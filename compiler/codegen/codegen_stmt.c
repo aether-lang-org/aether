@@ -838,7 +838,15 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
              * propagates ownership out to their callers too. */
             strcmp(fn, "file_read_all_raw") == 0 ||
             strcmp(fn, "os_exec_raw") == 0 ||
-            strcmp(fn, "os_run_capture_raw") == 0) {
+            strcmp(fn, "os_run_capture_raw") == 0 ||
+            /* StringBuilder finalise: hands the caller a plain libc-
+             * freeable char* and frees the wrapper (std/strbuilder/
+             * aether_strbuilder.c:235). Declared `-> string @heap`, but
+             * classify by name here too so the ownership propagates
+             * through .ae wrapper chains (strbuilder.finish, and any
+             * user fn that returns it) regardless of single-value
+             * @heap-annotation handling. */
+            strcmp(fn, "aether_strbuilder_finish") == 0) {
             return 1;
         }
         // User-defined function: only heap if its body provably

@@ -9,25 +9,36 @@
 // PR. See docs/sequences.md § Combinators for the cut-line.
 
 import std.string
+import std.strbuilder
 
 extern exit(code: int)
 
 // Walk the seq and join with "," for assertions. Same shape as the
 // pattern_match test's walk_join helper.
 walk_join(s: *StringSeq, acc: string) -> string {
-    match s {
-        []      -> {
-            return acc
-        }
-        [h | t] -> {
-            sep = ""
-            if string.length(acc) > 0 {
-                sep = ","
-            }
-            return walk_join(t, string.concat(string.concat(acc, sep), h))
-        }
+    // Iterative join via std.strbuilder: amortised-O(1) append, a single
+    // heap-owned result. The earlier recursive `string.concat` form was
+    // O(n²) AND leaked every intermediate buffer — a plain-`char*` value
+    // passed as a parameter carries no ownership bit, so the callee can't
+    // tell an owned buffer from a borrowed/literal one and can't free it.
+    // A StringBuilder owns its buffer outright; this is the correct,
+    // leak-free, performant shape.
+    sb = strbuilder.new(0)
+    strbuilder.append(sb, acc)
+    first = 1
+    if string.length(acc) > 0 {
+        first = 0
     }
-    return acc
+    cur = s
+    while string.seq_is_empty(cur) == 0 {
+        if first == 0 {
+            strbuilder.append(sb, ",")
+        }
+        strbuilder.append(sb, string.seq_head(cur))
+        cur = string.seq_tail(cur)
+        first = 0
+    }
+    return strbuilder.finish(sb)
 }
 
 main() {
