@@ -1,0 +1,75 @@
+// Regression test for #640: fs.pwrite / pread / ftruncate / fsync.
+//
+// Scatter-write the alphabet out of order, read each chunk back, then
+// truncate and verify the on-disk size.
+
+import std.fs
+import std.string
+
+main() {
+    print("=== std.fs positional I/O (#640) ===\n\n")
+
+    path = "/tmp/aether_test_pio.bin"
+    fs.delete(path)
+    f, ferr = fs.open(path, "w+")
+    if ferr != "" {
+        print("FAIL open: ${ferr}\n"); exit(1)
+    }
+    print("PASS open(w+)\n")
+
+    // Three scattered writes at offsets 0, 100, 50 (out of order).
+    n1, e1 = fs.pwrite(f, "FIRST", 5, 0)
+    if e1 != "" || n1 != 5 {
+        print("FAIL pwrite@0: n=${n1} err=${e1}\n"); exit(1)
+    }
+    n2, e2 = fs.pwrite(f, "THIRD", 5, 100)
+    if e2 != "" || n2 != 5 {
+        print("FAIL pwrite@100: n=${n2} err=${e2}\n"); exit(1)
+    }
+    n3, e3 = fs.pwrite(f, "MIDDL", 5, 50)
+    if e3 != "" || n3 != 5 {
+        print("FAIL pwrite@50: n=${n3} err=${e3}\n"); exit(1)
+    }
+    print("PASS pwrite scattered (0, 100, 50)\n")
+
+    // fsync — must succeed.
+    se = fs.fsync(f)
+    if se != "" {
+        print("FAIL fsync: ${se}\n"); exit(1)
+    }
+    print("PASS fsync\n")
+
+    // Read each back.
+    a, an, ae1 = fs.pread(f, 5, 0)
+    if ae1 != "" || an != 5 || string.equals(a, "FIRST") != 1 {
+        print("FAIL pread@0: '${a}' n=${an} err=${ae1}\n"); exit(1)
+    }
+    b, bn, ae2 = fs.pread(f, 5, 50)
+    if ae2 != "" || bn != 5 || string.equals(b, "MIDDL") != 1 {
+        print("FAIL pread@50: '${b}' n=${bn} err=${ae2}\n"); exit(1)
+    }
+    c, cn, ae3 = fs.pread(f, 5, 100)
+    if ae3 != "" || cn != 5 || string.equals(c, "THIRD") != 1 {
+        print("FAIL pread@100: '${c}' n=${cn} err=${ae3}\n"); exit(1)
+    }
+    print("PASS pread of each chunk in original-write order\n")
+
+    // ftruncate to 55 — keeps FIRST...MIDDL, drops THIRD.
+    te = fs.ftruncate(f, 55)
+    if te != "" {
+        print("FAIL ftruncate: ${te}\n"); exit(1)
+    }
+    print("PASS ftruncate to 55\n")
+
+    // Close so the size check sees flushed state.
+    file_close(f)
+
+    sz, _ = fs.size(path)
+    if sz != 55 {
+        print("FAIL size after truncate: ${sz}\n"); exit(1)
+    }
+    print("PASS size = 55 after truncate\n")
+
+    fs.delete(path)
+    print("\nAll PASS\n")
+}

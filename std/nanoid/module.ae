@@ -15,7 +15,7 @@
 // via masking — no rejection sampling, no bias. We follow that exact
 // pattern.
 
-import std.crypto
+import std.cryptography
 import std.string
 import std.bytes
 
@@ -37,7 +37,7 @@ generate_n(n: int) -> {
     if n < 1 {
         return "", "n must be >= 1"
     }
-    raw, got, err = crypto.random_bytes(n)
+    raw, got, err = cryptography.random_bytes(n)
     if err != "" {
         return "", err
     }

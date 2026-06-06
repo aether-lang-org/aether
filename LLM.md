@@ -103,6 +103,15 @@ plays that role), no interfaces.
 - `std/<module>/module.ae` — the Aether-facing surface. Raw externs
   end in `_raw`; Go-style wrappers return `(value, err)` tuples.
 - `std/<module>/aether_<module>.c` — the C runtime behind the externs.
+- `contrib/<module>/` — opt-in modules NOT in `libaether.a`. Same
+  shape as `std/*` (module.ae + aether_*.c + README), but consumers
+  add `extra_sources` + `link_flags` per the contrib README rather
+  than getting auto-link. **Always check `contrib/` before deciding
+  a stdlib gap is real** — a porter writing a downstream port may
+  not realise the module is there. Today covers: `xml/expat` (SAX
+  XML parser via libexpat), `sqlite`, `host/{python,ruby,lua,perl,
+  tcl,duktape,tinygo,go,java}` for embedded interpreters,
+  `climate_http_tests`, `tinyweb`.
 - `compiler/aetherc.c` — CLI entry. `--emit=lib`, `--with=`, import
   gate lives around line 590.
 - `build/aetherc`, `build/ae` — the compiled binary. `make && make
@@ -184,6 +193,14 @@ plays that role), no interfaces.
   `os_run` (no capture, just exit code), `os_system` (legacy
   `system(3)` shell-out, prefer `run_capture`), `os_execv` (replace
   current process). Don't propose a new `std.process`.
+- **XML parsing lives in `contrib`, not `std`.** `contrib.xml.expat`
+  is a SAX-style libexpat wrapper — start/end/text callbacks,
+  attribute access, entity decoding, multi-chunk streaming. Add
+  `extra_sources = ["contrib/xml/expat/aether_xml_expat.c"]` and
+  `link_flags = "-lexpat"` per the contrib README. Don't hand-roll
+  an `index_of`-based parser — that exact mistake landed in
+  fbs-core's S3 port (#627) because the porter didn't realise
+  `contrib.xml.expat` existed.
 - **HTTP client lives in two tiers, server in one.** `import
   std.http` gives v1 client one-liners (`http.get(url) -> (body,
   err)`, `http.post`, `http.put`, `http.delete`) plus the entire

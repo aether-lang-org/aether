@@ -30,10 +30,14 @@ exports (
     cryptography_hash_bytes_raw,
     cryptography_get_binary_digest, cryptography_get_binary_digest_length,
     cryptography_release_binary_digest,
+    cryptography_random_bytes_raw,
+    cryptography_get_random_bytes, cryptography_get_random_bytes_length,
+    cryptography_release_random_bytes,
     sha1_hex, sha256_hex, hash_hex, hash_supported,
     base64_encode, base64_encode_padded, base64_decode,
     md4_hex, md5_hex, hmac_sha256_hex, hmac_sha256_bytes,
-    md4_bytes, md5_bytes, sha1_bytes, sha256_bytes, hash_bytes
+    md4_bytes, md5_bytes, sha1_bytes, sha256_bytes, hash_bytes,
+    random_bytes
 )
 
 extern cryptography_sha1_hex_raw(data: string, length: int) -> string
@@ -60,6 +64,10 @@ extern cryptography_hash_bytes_raw(algo: string, data: string, length: int) -> i
 extern cryptography_get_binary_digest() -> string
 extern cryptography_get_binary_digest_length() -> int
 extern cryptography_release_binary_digest()
+extern cryptography_random_bytes_raw(n: int) -> int
+extern cryptography_get_random_bytes() -> string
+extern cryptography_get_random_bytes_length() -> int
+extern cryptography_release_random_bytes()
 
 extern string_new_with_length(data: string, length: int) -> ptr
 
@@ -300,4 +308,29 @@ hash_bytes(algo: string, data: string, length: int) -> {
     owned = string_new_with_length(raw, n)
     cryptography_release_binary_digest()
     return owned, n, ""
+}
+
+// Draw `n` cryptographically-secure random bytes from the OS CSPRNG.
+// Returns (bytes, length, "") on success — `bytes` is an owned
+// AetherString preserving every byte including embedded NULs. Returns
+// ("", 0, error) on failure (n < 0, allocation failure, syscall
+// failure). The OS sources are:
+//   - Linux:    getrandom(2) → /dev/urandom fallback
+//   - macOS/BSD: arc4random_buf(3)
+//   - Windows:  BCryptGenRandom (CNG)
+//
+// std.math.random_int / random_float are SEEDABLE PRNGs (fine for
+// sampling, NOT for secrets). When the value is unpredictability —
+// bearer tokens, session keys, opaque storage filenames — this is the
+// right primitive. n == 0 succeeds with a length-0 result.
+random_bytes(n: int) -> {
+    ok = cryptography_random_bytes_raw(n)
+    if ok == 0 {
+        return "", 0, "random_bytes failed"
+    }
+    raw = cryptography_get_random_bytes()
+    out_n = cryptography_get_random_bytes_length()
+    owned = string_new_with_length(raw, out_n)
+    cryptography_release_random_bytes()
+    return owned, out_n, ""
 }

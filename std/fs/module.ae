@@ -34,6 +34,11 @@ exports (
     fs_release_read_binary, fs_read_binary_tuple,
     dir_list_count, dir_list_get, dir_list_free,
     path_join, path_dirname, path_basename, path_extension, path_is_absolute,
+    path_clean, path_is_within_base, path_rel,
+    clean, is_within_base, rel,
+    fs_pwrite_raw, fs_pread_raw, fs_get_pread, fs_get_pread_length,
+    fs_release_pread, fs_ftruncate_raw, fs_fsync_raw,
+    pwrite, pread, ftruncate, fsync,
     fs_glob_raw, fs_glob_multi_raw,
     open, read, write, delete, size, mtime, exists,
     create_dir, create_dir_with_mode, delete_dir, mkdir_p,
@@ -224,6 +229,20 @@ extern path_dirname(path: string) -> string
 extern path_basename(path: string) -> string
 extern path_extension(path: string) -> string
 extern path_is_absolute(path: string) -> int
+
+// Lexical path ops (#632). Pure-string; never touch the filesystem.
+extern path_clean(path: string) -> string
+extern path_is_within_base(base: string, target: string) -> int
+extern path_rel(base: string, target: string) -> string
+
+// Positional I/O (#640).
+extern fs_pwrite_raw(file: ptr, data: string, length: int, offset: long) -> long
+extern fs_pread_raw(file: ptr, length: int, offset: long) -> int
+extern fs_get_pread() -> string
+extern fs_get_pread_length() -> int
+extern fs_release_pread()
+extern fs_ftruncate_raw(file: ptr, length: long) -> string
+extern fs_fsync_raw(file: ptr) -> string
 
 // Glob: match files by pattern. Raw externs return ptr, NULL on failure.
 extern fs_glob_raw(pattern: string) -> ptr
@@ -569,4 +588,106 @@ realpath(path: string) -> {
 // (1, KIND_OK, "") or (0, KIND_*, msg).
 chmod(path: string, mode: int) -> {
     return fs_chmod_raw(path, mode)
+}
+
+// Lexically clean `path` per POSIX filepath.Clean semantics — collapse
+// `//` and `./`, resolve `..` against a segment stack (drop the
+// parent), preserve a leading `/`, preserve unresolved leading `..`
+// on relative paths. Empty input → ".". Pure-string, no filesystem
+// access.
+//
+// Examples:
+//   fs.clean("/a//b/./c/../d") → "/a/b/d"
+//   fs.clean("../../x")        → "../../x"   (relative, unresolved)
+//   fs.clean("/..")            → "/"         (rooted)
+//   fs.clean("")               → "."
+clean(path: string) -> string {
+    return path_clean(path)
+}
+
+// Lexical containment: does cleaned `target` lie under cleaned `base`?
+// Returns 1 yes, 0 no. SECURITY-CRITICAL primitive for any code that
+// resolves a user-supplied path against a data dir / static-asset
+// root / archive extraction prefix — call this BEFORE open(2) to
+// reject `../../etc/passwd` at the door.
+//
+// Pure-string: does NOT follow symlinks. A symlink under `base`
+// pointing outside is an open-time concern this function does not
+// address. For symlink-aware containment, use realpath on both sides
+// first (one extra syscall per request) then call this.
+//
+// Examples:
+//   fs.is_within_base("/data", "/data/x/y")    → 1
+//   fs.is_within_base("/data", "/data")        → 1   (identical)
+//   fs.is_within_base("/data", "/data/../x")   → 0   (cleans to /x)
+//   fs.is_within_base("/data", "/datax/y")     → 0   (prefix but not subdir)
+is_within_base(base: string, target: string) -> int {
+    return path_is_within_base(base, target)
+}
+
+// Relative path from cleaned `base` to cleaned `target` (Go
+// filepath.Rel). Returns the relative path on success, "" when
+// one is absolute and the other relative (no relative path exists).
+// `base == target` returns ".".
+//
+// Useful for showing paths relative to a project root in logs / UI.
+// Less security-critical than is_within_base — same lexical
+// computation in a different shape.
+rel(base: string, target: string) -> string {
+    return path_rel(base, target)
+}
+
+// Positional binary-safe write. Writes `length` bytes from `data` at
+// `offset` bytes from the start of the file. Returns
+// (written, "") on success, (-1, error) on failure. Loops on
+// short writes (POSIX permits returning fewer bytes than asked).
+// The file must be opened in a mode admitting writes — "r+", "w+",
+// "w", "a+", "wb+", etc. — via `fs.open(path, mode)`.
+//
+// This is the "scatter-write" primitive — reconstructing a file from
+// blocks fetched out of order (rsync, zsync, parallel downloads,
+// sparse-file build). For sequential append, `fs.write` is simpler.
+pwrite(file: ptr, data: string, length: int, offset: long) -> {
+    n = fs_pwrite_raw(file, data, length, offset)
+    if n < 0 {
+        return -1, "pwrite failed"
+    }
+    return n, ""
+}
+
+// Positional binary-safe read. Reads up to `length` bytes from
+// `offset` into an owned AetherString. Returns (bytes, n, "") on
+// success — `n` may be less than `length` if EOF was reached (short
+// reads are NOT an error per the POSIX convention for sparse-file
+// I/O). Returns ("", 0, error) on failure.
+//
+// Same tuple shape as fs.read_binary so destructuring stays
+// consistent.
+pread(file: ptr, length: int, offset: long) -> {
+    ok = fs_pread_raw(file, length, offset)
+    if ok == 0 {
+        return "", 0, "pread failed"
+    }
+    raw = fs_get_pread()
+    n   = fs_get_pread_length()
+    owned = string_new_with_length(raw, n)
+    fs_release_pread()
+    return owned, n, ""
+}
+
+// Set the file length to `length` bytes. Extends with zero bytes if
+// the new length is greater than the current size. Returns "" on
+// success, an error message on failure. Required at the end of an
+// out-of-order reconstruction to clip trailing padding.
+ftruncate(file: ptr, length: long) -> string {
+    return fs_ftruncate_raw(file, length)
+}
+
+// Flush kernel buffers for `file` to durable storage (POSIX fsync /
+// Windows _commit). Required AFTER pwrite for the data-survives-crash
+// guarantee — pwrite alone makes the bytes visible to other handles
+// on the same machine but doesn't promise they reach the disk.
+// Returns "" on success.
+fsync(file: ptr) -> string {
+    return fs_fsync_raw(file)
 }

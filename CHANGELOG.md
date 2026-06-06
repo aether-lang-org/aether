@@ -9,6 +9,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.fs.clean` / `is_within_base` / `rel` — lexical path ops** (#632).
+  Pure-string path operations matching Go `filepath.Clean` / `Rel`
+  semantics. `is_within_base` is the **security-critical** primitive
+  every blob store / static-asset server / archive extractor needs to
+  reject `../../etc/passwd` BEFORE `open(2)` — symlinks NOT followed
+  (open-time concern, separate from this check). Implementation uses
+  a segment stack to resolve `..` against the parent set, preserving
+  unresolved leading `..` on relative paths (so `../../x` stays
+  `../../x`). Closes the gap fbs-core hand-wrote 250 lines for in
+  `lib/pathutil`.
+
+- **`std.fs.pwrite` / `pread` / `ftruncate` / `fsync` — positional I/O**
+  (#640). The POSIX positional family for out-of-order writers (rsync /
+  zsync reconstruction, parallel chunk downloads, sparse-file build).
+  Wraps `pwrite(2)` / `pread(2)` / `ftruncate(2)` / `fsync(2)` against
+  the fd behind a `file_open_raw(path, "r+"/"w+")` handle. Loops on
+  short transfers (POSIX permits returning fewer bytes than asked);
+  EINTR-safe. Windows: `_chsize_s` / `_commit` + seek+write emulation
+  (not thread-safe across handles, fine for single-threaded port
+  servers). `pread` uses the same `(bytes, length, err)` tuple shape
+  as `fs.read_binary` so destructuring stays consistent. Removes the
+  zsync port's need for a sidecar `.c` of uniquely-named wrappers
+  (Aether's compiler emits a clashing `pwrite` prototype if you
+  `extern pwrite(...)` directly).
+
+- **`std.http.request_body_read` — chunked-read request body** (#626,
+  half). The fbs-core port asked for streaming HTTP body access; this
+  ships the **API shape** — `request_body_read(req, offset, max) ->
+  (bytes, n, err)` — over the already-buffered body. Lets porters
+  write the chunked-iteration loop they want today, so their code is
+  ready for the day the parse-loop reshape (handler runs before body
+  finishes arriving) lands. The RAM-bounded internals are an open
+  follow-up; the API surface is stable. The **other half** of #626
+  (zero-copy response file serving) already shipped earlier as
+  `http.serve_file(res, path)` — uses `sendfile(2)` when eligible
+  (cleartext + HTTP/1.1 + no Range). Issue closed in full once the
+  porter is pointed at the existing `serve_file` for downloads.
+
+- **`std.cryptography.random_bytes`** (moved from `std.crypto`). The
+  CSPRNG primitive now lives in `std.cryptography` alongside the
+  hashes/HMAC/Base64 surface — single namespace for all
+  cryptographic primitives. Callers update
+  `import std.crypto` → `import std.cryptography` and
+  `crypto.random_bytes` → `cryptography.random_bytes`. The previous
+  `std.crypto` module ships in v0.218.0 only; deleted here.
+
+### Changed
+
+- **HTTP `serve_static` honours the `Range` request header** (#641).
+  Pre-fix, `http.serve_static` / `http.serve_file` always responded
+  `200 OK` with the entire file regardless of `Range` — the only
+  place the server consulted `Range` was `sendfile_eligible()`, which
+  used it to DISABLE the zero-copy fast path while still serializing
+  the whole file on the buffered path. This blocked serving zsync
+  downloads, resumable downloads, and media seeking.
+  Now:
+    - well-formed `Range: bytes=START-END` (or `bytes=START-`,
+      `bytes=-SUFFIX`) → `206 Partial Content` + `Content-Range:
+      bytes start-end/total` + `Content-Length: <slice>`
+    - no Range header → 200 + `Accept-Ranges: bytes` (advertises
+      slicing is supported for follow-up requests)
+    - unsatisfiable / malformed range → `416 Range Not Satisfiable` +
+      `Content-Range: bytes */total`
+    - multi-range (`bytes=0-1,5-6` / multipart/byteranges) explicitly
+      out of scope for v1 — single range covers zsync, resumable
+      downloads, media seeking
+  The sendfile fast path stays disabled for Range requests (the
+  existing `sendfile_eligible` behaviour); the buffered path now
+  honours the offset+length.
+
+### Docs
+
+- **LLM.md — `contrib/` directory called out + XML pointer added**.
+  PR #638 closed five stdlib gaps that the fbs-core port reported, but
+  the porter also hand-wrote XML parsing (#627) because LLM.md
+  surfaced `contrib/host/*` and `contrib/aether_ui/` but never named
+  `contrib/` as a place to look for stdlib-shaped modules.
+  Added: a `contrib/` bullet under "Files/dirs worth knowing" with
+  the always-check-contrib rule + a roster, and a specific XML idiom
+  under "Idioms that keep biting" so a porter searching for "xml" in
+  LLM.md finds `contrib.xml.expat`.
+
 ## [0.218.0]
 
 ### Added

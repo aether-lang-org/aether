@@ -1,0 +1,91 @@
+// Regression test for #632: fs.clean / fs.is_within_base / fs.rel.
+//
+// Parity with Go's filepath.Clean / Rel semantics — the reference
+// every porter checks against. A one-byte deviation in `..`
+// resolution is a directory-traversal CVE.
+
+import std.fs
+import std.string
+
+main() {
+    print("=== std.fs lexical path ops (#632) ===\n\n")
+
+    // ---- fs.clean ----
+
+    a1 = fs.clean("/a//b/./c/../d")
+    if string.equals(a1, "/a/b/d") != 1 {
+        print("FAIL clean abs-resolve: ${a1}\n"); exit(1)
+    }
+    print("PASS clean(\"/a//b/./c/../d\") = ${a1}\n")
+
+    a2 = fs.clean("../../x")
+    if string.equals(a2, "../../x") != 1 {
+        print("FAIL clean rel-unresolved: ${a2}\n"); exit(1)
+    }
+    print("PASS clean(\"../../x\") preserves leading ..\n")
+
+    a3 = fs.clean("/..")
+    if string.equals(a3, "/") != 1 {
+        print("FAIL clean root-..: ${a3}\n"); exit(1)
+    }
+    print("PASS clean(\"/..\") drops .. at root\n")
+
+    a4 = fs.clean("")
+    if string.equals(a4, ".") != 1 {
+        print("FAIL clean empty: ${a4}\n"); exit(1)
+    }
+    print("PASS clean(\"\") = \".\"\n")
+
+    a5 = fs.clean("a/./b/c/..")
+    if string.equals(a5, "a/b") != 1 {
+        print("FAIL clean trail: ${a5}\n"); exit(1)
+    }
+    print("PASS clean(\"a/./b/c/..\") = a/b\n")
+
+    a6 = fs.clean("/a/b/../../c")
+    if string.equals(a6, "/c") != 1 {
+        print("FAIL clean back-to-root: ${a6}\n"); exit(1)
+    }
+    print("PASS clean(\"/a/b/../../c\") = /c\n")
+
+    a7 = fs.clean("./foo")
+    if string.equals(a7, "foo") != 1 {
+        print("FAIL clean leading-dot: ${a7}\n"); exit(1)
+    }
+    print("PASS clean(\"./foo\") = foo\n")
+
+    // ---- fs.is_within_base ----
+
+    w1 = fs.is_within_base("/data", "/data/x/y")
+    w2 = fs.is_within_base("/data", "/data/../x")
+    w3 = fs.is_within_base("/data", "/datax/y")
+    w4 = fs.is_within_base("/data", "/data")
+    w5 = fs.is_within_base("/data", "/data/../../etc/passwd")
+    if w1 != 1 || w2 != 0 || w3 != 0 || w4 != 1 || w5 != 0 {
+        print("FAIL within: ${w1} ${w2} ${w3} ${w4} ${w5} expect 1 0 0 1 0\n")
+        exit(1)
+    }
+    print("PASS is_within_base: subdir / .. / prefix-not-subdir / self / traversal\n")
+
+    // ---- fs.rel ----
+
+    r1 = fs.rel("/a", "/a/b/c")
+    if string.equals(r1, "b/c") != 1 {
+        print("FAIL rel sub: ${r1}\n"); exit(1)
+    }
+    print("PASS rel(/a, /a/b/c) = b/c\n")
+
+    r2 = fs.rel("/a/b", "/a/c")
+    if string.equals(r2, "../c") != 1 {
+        print("FAIL rel sibling: ${r2}\n"); exit(1)
+    }
+    print("PASS rel(/a/b, /a/c) = ../c\n")
+
+    r3 = fs.rel("/a", "/a")
+    if string.equals(r3, ".") != 1 {
+        print("FAIL rel self: ${r3}\n"); exit(1)
+    }
+    print("PASS rel(/a, /a) = .\n")
+
+    print("\nAll PASS\n")
+}

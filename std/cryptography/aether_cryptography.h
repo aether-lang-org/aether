@@ -126,4 +126,20 @@ const char* cryptography_get_base64_decode(void);
 int cryptography_get_base64_decode_length(void);
 void cryptography_release_base64_decode(void);
 
+/* CSPRNG (#630). The cryptographically-secure RNG missing from
+ * std.math (which is a seedable PRNG, fine for sampling, NOT for
+ * secrets). Backed by the OS CSPRNG on every supported platform:
+ *   - Linux:    getrandom(2) → /dev/urandom fallback
+ *   - macOS/BSD: arc4random_buf(3)
+ *   - Windows:  BCryptGenRandom (CNG)
+ *
+ * Same TLS split-accessor shape as the binary digests / base64.
+ * Independent buffer slot — concurrent random_bytes and digest work
+ * on the same thread don't clobber. No OpenSSL dependency: the OS
+ * sources are the right choice and don't need libcrypto init. */
+int cryptography_random_bytes_raw(int n);
+const char* cryptography_get_random_bytes(void);
+int         cryptography_get_random_bytes_length(void);
+void        cryptography_release_random_bytes(void);
+
 #endif /* AETHER_CRYPTOGRAPHY_H */

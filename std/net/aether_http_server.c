@@ -110,6 +110,10 @@ const char* http_request_method(HttpRequest* r) { (void)r; return ""; }
 const char* http_request_path(HttpRequest* r) { (void)r; return ""; }
 const char* http_request_body(HttpRequest* r) { (void)r; return ""; }
 int http_request_body_length(HttpRequest* r) { (void)r; return 0; }
+int http_request_body_read_raw(HttpRequest* r, int o, int m) { (void)r; (void)o; (void)m; return 0; }
+const char* http_get_request_body_read(void) { return ""; }
+int http_get_request_body_read_length(void) { return 0; }
+void http_release_request_body_read(void) {}
 const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
 int http_request_header_count(HttpRequest* r) { (void)r; return 0; }
 const char* http_request_header_name(HttpRequest* r, int i) { (void)r; (void)i; return ""; }
@@ -3853,6 +3857,119 @@ void http_serve_file(HttpServerResponse* res, const char* filepath) {
 #endif
 }
 
+/* #641 — Range / 206 support for static file serving.
+ *
+ * Parses a single Range header of the form:
+ *   bytes=START-END    [START, END] inclusive
+ *   bytes=START-       [START, file_size-1]
+ *   bytes=-SUFFIX      [file_size-SUFFIX, file_size-1]
+ *
+ * Multi-range (bytes=0-1,5-6 / multipart/byteranges) is intentionally
+ * out of scope for v1 — single range covers zsync, resumable
+ * downloads, and media seeking; the issue accepted that scope.
+ *
+ * Returns:
+ *   1  → range parsed; *out_start / *out_end populated
+ *   0  → no Range header; serve the whole file (200)
+ *  -1  → Range present but unparseable / unsatisfiable
+ *
+ * Caller emits 416 on -1, 206 on 1, 200 on 0.
+ */
+static int parse_range_header(const char* range_hdr, long long file_size,
+                              long long* out_start, long long* out_end) {
+    if (!range_hdr) return 0;
+    /* Must start with "bytes=". */
+    if (strncasecmp(range_hdr, "bytes=", 6) != 0) return -1;
+    const char* p = range_hdr + 6;
+    while (*p == ' ') p++;
+    /* Reject multi-range — a comma means more than one slice. */
+    if (strchr(p, ',') != NULL) return -1;
+
+    long long start = -1, end = -1;
+    /* "-SUFFIX" form. */
+    if (*p == '-') {
+        char* endp = NULL;
+        long long suffix = strtoll(p + 1, &endp, 10);
+        if (suffix <= 0 || endp == p + 1) return -1;
+        if (suffix > file_size) suffix = file_size;
+        start = file_size - suffix;
+        end = file_size - 1;
+    } else {
+        char* endp = NULL;
+        start = strtoll(p, &endp, 10);
+        if (endp == p || *endp != '-') return -1;
+        p = endp + 1;
+        if (*p == '\0' || *p == ' ' || *p == '\r' || *p == '\n') {
+            /* "START-" form. */
+            end = file_size - 1;
+        } else {
+            end = strtoll(p, &endp, 10);
+            if (endp == p) return -1;
+        }
+    }
+    if (start < 0 || end < start || start >= file_size) return -1;
+    if (end >= file_size) end = file_size - 1;
+    *out_start = start;
+    *out_end = end;
+    return 1;
+}
+
+/* Buffered Range-aware response. Reads only the requested slice and
+ * emits 206 + Content-Range + Content-Length. Used by serve_static
+ * when Range is present. The sendfile fast-path stays disabled for
+ * Range requests (sendfile_eligible already rejects them); this
+ * function does NOT stash an fd, just reads the slice into the
+ * response body the way the Windows buffered path does. */
+static void http_serve_file_range(HttpServerResponse* res, const char* filepath,
+                                  long long start, long long end,
+                                  long long file_size) {
+    FILE* f = fopen(filepath, "rb");
+    if (!f) {
+        http_response_set_status(res, 404);
+        http_response_set_body(res, "404 - File Not Found");
+        return;
+    }
+    if (fseek(f, (long)start, SEEK_SET) != 0) {
+        fclose(f);
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "500 - Server Error");
+        return;
+    }
+    long long slice_len = end - start + 1;
+    size_t alloc = (size_t)slice_len + 1;
+    char* buf = (char*)aether_caps_malloc(alloc);
+    if (!buf) {
+        fclose(f);
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "500 - Server Error");
+        return;
+    }
+    size_t got = fread(buf, 1, (size_t)slice_len, f);
+    fclose(f);
+    if (got != (size_t)slice_len) {
+        aether_caps_free(buf, alloc);
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "500 - Server Error");
+        return;
+    }
+    buf[got] = '\0';
+
+    char cr_buf[96];
+    snprintf(cr_buf, sizeof(cr_buf), "bytes %lld-%lld/%lld",
+             start, end, file_size);
+    char cl_buf[32];
+    snprintf(cl_buf, sizeof(cl_buf), "%lld", slice_len);
+
+    http_response_set_status(res, 206);
+    http_response_set_header(res, "Content-Type", http_mime_type(filepath));
+    http_response_set_header(res, "Content-Range", cr_buf);
+    http_response_set_header(res, "Content-Length", cl_buf);
+    http_response_set_header(res, "Accept-Ranges", "bytes");
+    http_response_set_header(res, "Access-Control-Allow-Origin", "*");
+    http_response_set_body_n(res, buf, (int)slice_len);
+    aether_caps_free(buf, alloc);
+}
+
 // Static file serving handler (for use with wildcard routes)
 void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir) {
     const char* dir = (const char*)base_dir;
@@ -3899,8 +4016,39 @@ void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir
         http_response_set_body(res, "403 - Forbidden");
         return;
     }
-    // Serve the resolved, validated path
+    // #641: if the request carries a Range header, serve a slice
+    // (206) instead of the whole file (200). Also always advertise
+    // Accept-Ranges on a successful 200 file response so clients
+    // know they can issue Range follow-ups.
+    const char* range_hdr = http_get_header(req, "Range");
+    if (range_hdr) {
+        struct stat st;
+        if (stat(resolved, &st) == 0 && S_ISREG(st.st_mode)) {
+            long long file_size = (long long)st.st_size;
+            long long rs = 0, re = 0;
+            int rv = parse_range_header(range_hdr, file_size, &rs, &re);
+            if (rv > 0) {
+                http_serve_file_range(res, resolved, rs, re, file_size);
+                return;
+            }
+            if (rv < 0) {
+                /* Unsatisfiable / malformed → 416 with
+                 * Content-Range: bytes */ /*total per RFC 7233 §4.4. */
+                char cr_buf[64];
+                snprintf(cr_buf, sizeof(cr_buf), "bytes */%lld", file_size);
+                http_response_set_status(res, 416);
+                http_response_set_header(res, "Content-Range", cr_buf);
+                http_response_set_header(res, "Accept-Ranges", "bytes");
+                http_response_set_body(res, "416 - Range Not Satisfiable");
+                return;
+            }
+        }
+        /* stat failed; fall through to http_serve_file which will
+         * return 404. */
+    }
+    // Serve the resolved, validated path (200 + Accept-Ranges).
     http_serve_file(res, resolved);
+    http_response_set_header(res, "Accept-Ranges", "bytes");
 #else
     // On Windows, use _fullpath for canonicalization
     char resolved[1024];
@@ -3916,7 +4064,31 @@ void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir
         http_response_set_body(res, "403 - Forbidden");
         return;
     }
+    // #641: Range support on Windows too. Same shape as POSIX.
+    const char* range_hdr_w = http_get_header(req, "Range");
+    if (range_hdr_w) {
+        struct stat st;
+        if (stat(resolved, &st) == 0) {
+            long long file_size = (long long)st.st_size;
+            long long rs = 0, re = 0;
+            int rv = parse_range_header(range_hdr_w, file_size, &rs, &re);
+            if (rv > 0) {
+                http_serve_file_range(res, resolved, rs, re, file_size);
+                return;
+            }
+            if (rv < 0) {
+                char cr_buf[64];
+                snprintf(cr_buf, sizeof(cr_buf), "bytes */%lld", file_size);
+                http_response_set_status(res, 416);
+                http_response_set_header(res, "Content-Range", cr_buf);
+                http_response_set_header(res, "Accept-Ranges", "bytes");
+                http_response_set_body(res, "416 - Range Not Satisfiable");
+                return;
+            }
+        }
+    }
     http_serve_file(res, resolved);
+    http_response_set_header(res, "Accept-Ranges", "bytes");
 #endif
 }
 
@@ -3955,6 +4127,72 @@ const char* http_request_body(HttpRequest* req) {
 
 int http_request_body_length(HttpRequest* req) {
     return (req && req->body) ? (int)req->body_length : 0;
+}
+
+/* #626 — chunked-read request body, TLS split-accessor shape.
+ *
+ * This is the API shape the fbs-core port asked for:
+ *
+ *   ok = http_request_body_read_raw(req, offset, max);
+ *   bytes_ptr = http_get_request_body_read();
+ *   n         = http_get_request_body_read_length();
+ *   ...handle the chunk...
+ *   http_release_request_body_read();
+ *
+ * The Aether wrapper bundles this into a (bytes, n, err) tuple that
+ * destructures the same way fs.read_binary does.
+ *
+ * IMPLEMENTATION CAVEAT (be honest with porters): this currently
+ * reads from the ALREADY-BUFFERED req->body. The full RAM win the
+ * issue asks for needs a parse-time reshape (handler runs before
+ * the body finishes arriving) — that's a follow-up issue. Today
+ * the API gives porters the chunked-read SHAPE they want, so their
+ * code is ready for the day the internals stream. */
+static __thread unsigned char* g_rbr_buf = NULL;
+static __thread size_t         g_rbr_cap = 0;
+static __thread int            g_rbr_len = 0;
+
+static void release_rbr_locked(void) {
+    if (g_rbr_buf) free(g_rbr_buf);
+    g_rbr_buf = NULL;
+    g_rbr_cap = 0;
+    g_rbr_len = 0;
+}
+
+void http_release_request_body_read(void) {
+    release_rbr_locked();
+}
+
+const char* http_get_request_body_read(void) {
+    return g_rbr_buf ? (const char*)g_rbr_buf : "";
+}
+
+int http_get_request_body_read_length(void) {
+    return g_rbr_len;
+}
+
+int http_request_body_read_raw(HttpRequest* req, int offset, int max) {
+    release_rbr_locked();
+    if (!req || offset < 0 || max < 0) return 0;
+    int total = (req->body) ? (int)req->body_length : 0;
+    if (offset >= total) {
+        /* EOF: yield a 1-byte buffer with length 0. */
+        g_rbr_buf = (unsigned char*)malloc(1);
+        if (!g_rbr_buf) return 0;
+        g_rbr_cap = 1;
+        g_rbr_buf[0] = 0;
+        g_rbr_len = 0;
+        return 1;
+    }
+    int avail = total - offset;
+    int want = (max < avail) ? max : avail;
+    size_t alloc = want > 0 ? (size_t)want : 1;
+    g_rbr_buf = (unsigned char*)malloc(alloc);
+    if (!g_rbr_buf) return 0;
+    g_rbr_cap = alloc;
+    if (want > 0) memcpy(g_rbr_buf, req->body + offset, (size_t)want);
+    g_rbr_len = want;
+    return 1;
 }
 
 const char* http_request_query(HttpRequest* req) {

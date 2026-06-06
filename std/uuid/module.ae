@@ -10,12 +10,12 @@
 // way v4 keys do — preferable for primary-key use unless you
 // specifically want to hide creation time.
 //
-// Both call into std.crypto.random_bytes for the entropy; v7 also
+// Both call into std.cryptography.random_bytes for the entropy; v7 also
 // reads std.os.now_unix_ms for the timestamp. Either generator
 // returns a 36-char canonical-form string (8-4-4-4-12 hex with
 // hyphens), and the version + variant bits are set per RFC 9562.
 
-import std.crypto
+import std.cryptography
 import std.os
 import std.string
 import std.bytes
@@ -52,7 +52,7 @@ fn format_uuid(b: string) -> string {
 //
 // Returns (uuid, "") on success, ("", error) on CSPRNG failure.
 v4() -> {
-    raw, n, err = crypto.random_bytes(16)
+    raw, n, err = cryptography.random_bytes(16)
     if err != "" {
         return "", err
     }
@@ -87,7 +87,7 @@ v4() -> {
 // the fbs-core storage use case wants. Higher-QPS callers should
 // layer a per-process counter on top.
 v7() -> {
-    raw, n, err = crypto.random_bytes(16)
+    raw, n, err = cryptography.random_bytes(16)
     if err != "" {
         return "", err
     }
