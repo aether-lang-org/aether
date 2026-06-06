@@ -107,5 +107,10 @@ generate() -> {
         bytes.set(rev, k, bytes.get(out, 26 - k))
         k = k + 1
     }
+    // `buf` (the divided-down bignum) and `out` (pre-reversal digits)
+    // were scratch; only `rev` is consumed by bytes.finish. Reclaim the
+    // two intermediates so the generator nets zero allocations.
+    bytes.free(buf)
+    bytes.free(out)
     return bytes.finish(rev, 27), ""
 }
