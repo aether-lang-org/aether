@@ -171,18 +171,17 @@ jobs:
         Write-Host "Windows Defender exclusions applied (best-effort)."
 
     - name: Run CI suite
-      # 30-min backstop. With the per-test build fanned out across NPROC
-      # jobs and Defender exclusions in place the suite finishes well under
-      # this; the cap guarantees a hung step can never hold the runner to
-      # GitHub's 6-hour ceiling (mirrors the macOS leaks-gate cap).
-      timeout-minutes: 30
-      env:
-        # Oversubscribe the 4-vCPU runner. Each .ae test build spends a lot
-        # of its wall time in process spawn / link / I/O rather than pure
-        # CPU, so running more jobs than cores keeps all CPUs busy instead
-        # of idling on those waits. NPROC drives both the `-j` toolchain
-        # build and the `-P` .ae-test fan-out (Makefile defaults to nproc).
-        NPROC: "8"
+      # 45-min backstop — a true safety net, not a tuning knob. The suite
+      # runs ~32-36 min on this runner (a handful of HTTP tests that
+      # statically link openssl/nghttp2/zlib/pcre2 dominate the .ae phase),
+      # so the cap sits above the natural runtime and only fires on a real
+      # hang, never on a slow-but-progressing run. (An earlier 30-min cap
+      # killed a healthy ~32-min run.) NPROC is left at the runner default
+      # (nproc=4): oversubscribing to 8 made it WORSE, because 8 of those
+      # heavy static links running at once thrash the 4-vCPU runner's RAM
+      # (one link ballooned to 11 min). Meaningfully cutting this needs a
+      # faster linker / fewer per-test relinks, tracked separately.
+      timeout-minutes: 45
       # The hardcoded `C:\msys64\...` probe in aether_http.c::load_windows_ca_bundle
       # doesn't match the GitHub runner's MSYS2 path (it's installed under a
       # temp dir, not C:\msys64). Export SSL_CERT_FILE explicitly using
