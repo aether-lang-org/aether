@@ -818,7 +818,27 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
             strcmp(fn, "string_pad_start") == 0 ||
             strcmp(fn, "string_pad_end") == 0 ||
             strcmp(fn, "string_format_list") == 0 ||
-            strcmp(fn, "json_stringify_raw") == 0) {
+            strcmp(fn, "json_stringify_raw") == 0 ||
+            /* std.fs lexical path ops (#632) and std.io whole-file read:
+             * each returns a FRESH malloc'd / caps-allocated string the
+             * caller owns (path_clean / path_rel build a new normalised
+             * path; io_read_file_raw returns the file contents). They are
+             * single-value `-> string` externs, so they can't carry the
+             * tuple-only `@heap` annotation — classify them here. Verified
+             * owned (never a borrowed/literal pointer): the leak each
+             * produced was exactly the caller never freeing this result. */
+            strcmp(fn, "path_clean") == 0 ||
+            strcmp(fn, "path_rel") == 0 ||
+            strcmp(fn, "io_read_file_raw") == 0 ||
+            /* Whole-file / command-capture reads: each call returns a
+             * FRESH malloc'd buffer of the file contents / process output
+             * (NULL on error, which aether_heap_str_free tolerates). Never
+             * a borrowed/static pointer. file_read_all_raw also drives the
+             * std.fs `read` / `read_or_empty` wrappers, so classifying it
+             * propagates ownership out to their callers too. */
+            strcmp(fn, "file_read_all_raw") == 0 ||
+            strcmp(fn, "os_exec_raw") == 0 ||
+            strcmp(fn, "os_run_capture_raw") == 0) {
             return 1;
         }
         // User-defined function: only heap if its body provably
