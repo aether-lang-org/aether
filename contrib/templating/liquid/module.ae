@@ -1070,18 +1070,19 @@ parse_int_arg(s: string, name: string) -> (int, string) {
     return v, ""
 }
 
-// Truncate `s` to `cap` bytes, appending `...` if the string was cut.
+// Truncate `s` to `cap` bytes, appending `ell` if the string was cut.
 // Matches Liquid's default: total length (including the ellipsis) is
-// `cap`. If `cap <= 3` the ellipsis itself is truncated.
-filter_truncate(s: string, cap: int) -> string {
+// `cap`. If `cap <= length(ell)` the ellipsis itself is truncated.
+filter_truncate(s: string, cap: int, ell: string) -> string {
     n = string_length(s)
     if cap < 0 { return "" }
     if n <= cap { return s }
-    if cap <= 3 {
+    eln = string_length(ell)
+    if cap <= eln {
         return string.substring_n(s, n, 0, cap)
     }
-    body = string.substring_n(s, n, 0, cap - 3)
-    return string.concat(body, "...")
+    body = string.substring_n(s, n, 0, cap - eln)
+    return string.concat(body, ell)
 }
 
 // Apply one filter stage to the current value. Returns (new_value, "")
@@ -1135,20 +1136,73 @@ apply_filter(val: string, name: string, args: string) -> (string, string) {
         return string.concat(s, val), ""
     }
     if string.equals(name, "default") == 1 {
-        if argc != 1 { return "", "default needs exactly 1 arg" }
+        // Shopify signature: default: VAL [, allow_false: BOOL]
+        // Aether's filter-arg parser is positional and string-keyed, so
+        // the second arg is whatever the user wrote — typically
+        // `allow_false:"true"` (a quoted "true") or just `"true"`.
+        // Without the typed value model in resolve_atom's filter
+        // pipeline (Phase 2), the fallback set on a legacy string is
+        // {"", "false", "nil", "null"} when allow_false fires, and just
+        // {""} otherwise. With a typed binding the legacy `lookup`
+        // already stringifies via value_to_string, so a typed LV_NIL
+        // lands here as "" and an LV_BOOL(false) as "false".
+        if argc != 1 && argc != 2 { return "", "default needs 1 or 2 args" }
         s, err = unquote_arg(string_list_get(arg_list, 0))
         if err != "" { return "", err }
-        // Liquid's `default` falsy set for strings: empty string.
-        if string_length(val) == 0 { return s, "" }
+        allow_false = 0
+        if argc == 2 {
+            // The second arg may carry a `key:value` shape
+            // (`allow_false:true`) or just a bare value
+            // (`"true"`). We accept either.
+            raw2 = string_list_get(arg_list, 1)
+            // Strip optional `allow_false:` prefix.
+            n2 = string_length(raw2)
+            af_pref = "allow_false:"
+            afn = string_length(af_pref)
+            payload2 = raw2
+            if n2 >= afn {
+                head2 = string.substring_n(raw2, n2, 0, afn)
+                if string.equals(head2, af_pref) == 1 {
+                    payload2 = trim(string.substring_n(raw2, n2, afn, n2))
+                }
+            }
+            // Now payload2 is either a quoted "true"/"false" or a bare
+            // true/false. unquote_arg handles the quoted form; we
+            // accept bare true/false too.
+            unq, uerr = unquote_arg(payload2)
+            if uerr != "" {
+                unq = payload2
+            }
+            if string.equals(unq, "true") == 1 { allow_false = 1 }
+        }
+        // Compute falsy verdict on `val`. With allow_false the
+        // string-only falsy set widens to {"", "false", "nil", "null"};
+        // otherwise just {""}.
+        falsy = 0
+        if string_length(val) == 0 { falsy = 1 }
+        if allow_false == 1 {
+            if string.equals(val, "false") == 1 { falsy = 1 }
+            if string.equals(val, "nil")   == 1 { falsy = 1 }
+            if string.equals(val, "null")  == 1 { falsy = 1 }
+        }
+        if falsy == 1 { return s, "" }
         return val, ""
     }
     if string.equals(name, "truncate") == 1 {
-        if argc != 1 { return "", "truncate needs exactly 1 arg" }
+        // Shopify Liquid signature: truncate: N [, ellipsis]
+        // Both 1-arg (default "...") and 2-arg (custom ellipsis) forms.
+        if argc != 1 && argc != 2 { return "", "truncate needs 1 or 2 args" }
         s, err = unquote_arg(string_list_get(arg_list, 0))
         if err != "" { return "", err }
         cap, ierr = string.to_int(s)
         if ierr != "" { return "", string.concat("truncate arg not an integer: ", s) }
-        return filter_truncate(val, cap), ""
+        ell = "..."
+        if argc == 2 {
+            e2, eerr = unquote_arg(string_list_get(arg_list, 1))
+            if eerr != "" { return "", eerr }
+            ell = e2
+        }
+        return filter_truncate(val, cap, ell), ""
     }
     if string.equals(name, "replace") == 1 {
         if argc != 2 { return "", "replace needs exactly 2 args" }
