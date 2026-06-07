@@ -91,16 +91,16 @@ main() {
     // (14) Single-quoted args.
     expect_eq(render_with_name("{{ s | append:'!' }}", "s", "hi"), "hi!", "14 single-quoted arg")
 
-    // (15) Unknown filter → render error.
+    // (15) Unknown filter → passes value through unchanged (Shopify behaviour).
     t15, _ = liquid.parse_string("{{ s | nosuchfilter }}")
     ctx15 = liquid.context_new()
     liquid.context_put_string(ctx15, "s", "x")
-    _, e15 = liquid.render(t15, ctx15)
-    if string.equals(e15, "") == 1 {
-        println("FAIL 15 unknown filter: expected error")
+    out15, e15 = liquid.render(t15, ctx15)
+    if string.equals(e15, "") == 0 {
+        println("FAIL 15 unknown filter: unexpected error '${e15}'")
         exit(1)
     }
-    println("PASS 15 unknown filter: '${e15}'")
+    expect_eq(out15, "x", "15 unknown filter passes through")
 
     // (16) Wrong arg count → render error.
     t16, _ = liquid.parse_string("{{ s | append }}")

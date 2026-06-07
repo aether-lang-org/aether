@@ -88,7 +88,9 @@ main() {
     println("PASS 9 missing name: '${e9}'")
 
     // (10) Unsupported tag still errors.
-    t10, _ = liquid.parse_string("{% if cond %}b{% endif %}")
+    // `{% if %}` now works in this slice, so use `{% for %}` (still TODO)
+    // as the canonical not-implemented tag.
+    t10, _ = liquid.parse_string("{% for x in coll %}b{% endfor %}")
     _, e10 = liquid.render(t10, liquid.context_new())
     if string.equals(e10, "") == 1 {
         println("FAIL 10 unsupported tag: expected error")
