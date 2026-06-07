@@ -5,9 +5,39 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.221.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`contrib.templating.liquid` — Phase 1 typed value model (scalars)**
+  (`contrib/templating/liquid/module.ae`,
+  `tests/integration/liquid_value_basics/`). First step toward
+  replacing the string-only context with a typed value model. New
+  public setters `context_put_int(ctx, key, n)`,
+  `context_put_float(ctx, key, f)`, `context_put_bool(ctx, key, b)`,
+  `context_put_nil(ctx, key)` bind typed values under an internal
+  `v:<key>` namespace; the legacy `lookup` reads `v:<key>` first
+  (stringified via `value_to_string`) so `{{ x }}` interpolation works
+  transparently against typed bindings without touching any existing
+  filter or tag code. A typed binding shadows a same-named legacy
+  string binding regardless of bind order. Also exports a small set
+  of constructors (`value_nil`, `value_bool`, `value_int`,
+  `value_float`, `value_str`), inspectors (`value_kind`,
+  `value_payload`, `value_get_int`, `value_get_float`), and the
+  canonical stringifier (`value_to_string`) for downstream code that
+  wants to build / inspect packed values directly. **Phase 1 is
+  scalar-only** — array and object bindings (`context_put_array` /
+  `_object`) and the corresponding `items[0]` / `user.name` path
+  walker are deferred to Phase 2 (need a heap-retention story for
+  the std.list backing storage that survives across the
+  `mem.ptr_to_long` round-trip in the packed-value encoding). 13 new
+  integration tests cover int / float / bool / nil round-trip,
+  typed-shadows-legacy ordering, negative + zero ints, and the
+  `value_to_string` round-trip on each kind.
 
 ## [0.221.0]
 

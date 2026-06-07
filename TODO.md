@@ -160,11 +160,32 @@ deterministic rendering, but the next ~3 layers (operator-bearing
 conditions in `{% if %}`, `{% for %}`, dotted attribute access) all
 need the richer value type, so we tackle it before more tags.
 
-That migration includes:
-- Switch `context_put_*` to a json-value setter family
-- Replace `lookup` with a json-aware resolver
-- Rewrite the v0 string-only tests against the new context shape
-  (v0 contract was never frozen — the rewrite is expected)
+**Phase 1 (scalars) landed**:
+- [x] Tagged-union packed-string encoding (`"i:42"`, `"s:..."`,
+      `"b:1"`, `"f:3.14"`, `"n:"` and reserved `"a:<ptr>"`/`"o:<ptr>"`)
+- [x] `context_put_int` / `_float` / `_bool` / `_nil`
+- [x] `value_*` constructors + `value_kind` + `value_payload` +
+      `value_get_int` / `_float` + canonical `value_to_string`
+- [x] `lookup` reads `v:<name>` first and stringifies typed values,
+      so existing `{{ x }}` interpolation works against typed
+      bindings without touching any filter/tag code
+- [x] Typed binding shadows a same-name legacy string binding
+      (`liquid_value_basics/`, 13 tests)
+
+**Phase 2 (composites + path access) still to do**:
+- [ ] `context_put_array` / `_object` with a heap-retention story —
+      the std.list / std.map backing storage must survive the
+      `mem.ptr_to_long`/`long_to_ptr` round-trip used by the packed
+      `"a:<ptr>"` / `"o:<ptr>"` encoding (or move to inline encoding)
+- [ ] `lookup_path` walker: `user.name` / `items[0]` /
+      `items['key']` / `.size` / `.first` / `.last`
+- [ ] `resolve_atom` dispatch for dotted/bracketed atoms
+- [ ] `value_is_truthy` honoured by `{% if %}` (Shopify "0 is truthy"
+      semantics)
+- [ ] Object stringification (Phase-1 emits `"{object}"` placeholder)
+- [ ] Filters that return numbers (`size`, `at_least`, etc.) emit
+      typed values rather than decimal-encoded strings, unlocking
+      `default` on the full falsy set
 
 ### Layers still to build, in dependency order
 

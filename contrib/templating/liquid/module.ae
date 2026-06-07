@@ -34,11 +34,17 @@ import std.collections
 import std.cryptography
 import std.fs
 import std.path
+import std.mem
 
 exports (
     parse_string, parse_file,
-    context_new, context_put_string, context_free,
+    context_new, context_put_string,
+    context_put_int, context_put_float, context_put_bool, context_put_nil,
+    context_free,
     context_set_include_root,
+    value_nil, value_bool, value_int, value_float, value_str,
+    value_kind, value_payload, value_to_string,
+    value_get_int, value_get_float,
     render, render_to_strbuilder
 )
 
@@ -1498,7 +1504,17 @@ context_free(ctx: ptr) {
 
 // Look up `name` in the context. Returns the empty string for an unbound
 // name — Shopify Liquid's documented behaviour for `{{ undefined }}`.
+//
+// Phase-1 typed bindings live under `v:<name>`; a typed binding takes
+// precedence over a legacy one. We stringify the typed value via
+// `value_to_string` so existing call sites — which assume a plain
+// string return — see a consistent stringified form whether the
+// binding was set via `context_put_string` or the typed setters.
 lookup(ctx: ptr, name: string) -> string {
+    typed_key = string.concat("v:", name)
+    if map_has(ctx, typed_key) == 1 {
+        return value_to_string(map_get_raw(ctx, typed_key))
+    }
     if map_has(ctx, name) == 0 {
         return ""
     }
@@ -3207,4 +3223,197 @@ render_to_strbuilder(t: ptr, ctx: ptr, sb: ptr) -> string {
     out, err = render(t, ctx)
     strbuilder.append(sb, out)
     return err
+}
+
+// ---------------------------------------------------------------------------
+// Typed value model (Phase 1)
+// ---------------------------------------------------------------------------
+//
+// Values are packed strings with a 2-byte kind prefix:
+//   "n:"          LV_NIL    nil
+//   "b:1"/"b:0"   LV_BOOL   boolean
+//   "i:42"        LV_INT    int (decimal text payload)
+//   "f:3.14"      LV_FLOAT  float (decimal text payload)
+//   "s:hello"     LV_STR    string
+//   "a:<ptr>"     LV_ARR    string_list of packed values (ptr-as-long)
+//   "o:<ptr>"     LV_OBJ    std.map of string -> packed value (ptr-as-long)
+//
+// Typed bindings live under `v:<key>` in the context map, alongside
+// legacy string bindings under `<key>`. A typed binding takes
+// precedence over a same-named legacy one (see `lookup_path` head
+// resolution). Legacy callers' `lookup(ctx, name)` is unchanged in
+// Phase 1 — they still see the legacy slot directly.
+
+const LV_NIL    = 0
+const LV_BOOL   = 1
+const LV_INT    = 2
+const LV_FLOAT  = 3
+const LV_STR    = 4
+const LV_ARR    = 5
+const LV_OBJ    = 6
+
+// Scalar narrowing/widening — Aether has no C-style cast (`(int)f`),
+// so wrap the implicit narrow/widen as a one-arg call where the
+// declared return type drives the conversion.
+float_to_int(f: float) -> int { return f }
+int_to_float(i: int) -> float { return i }
+
+// Constructors. Each returns a prefix-tagged packed string.
+value_nil() -> string { return "n:" }
+
+value_bool(b: int) -> string {
+    if b != 0 { return "b:1" }
+    return "b:0"
+}
+
+value_int(i: int) -> string {
+    return string.concat("i:", string.from_int(i))
+}
+
+value_float(f: float) -> string {
+    return string.concat("f:", string.from_float(f))
+}
+
+value_str(s: string) -> string {
+    return string.concat("s:", s)
+}
+
+value_arr(lst: ptr) -> string {
+    return string.concat("a:", string.from_long(mem.ptr_to_long(lst)))
+}
+
+value_obj(m: ptr) -> string {
+    return string.concat("o:", string.from_long(mem.ptr_to_long(m)))
+}
+
+// Classify a packed value. Returns LV_STR for bare strings (legacy
+// bindings that lack a prefix) so a context_put_string value still
+// passes through value_to_string as itself.
+value_kind(v: string) -> int {
+    n = string_length(v)
+    if n < 2 { return LV_STR }
+    if string.char_at_n(v, n, 1) != 58 { return LV_STR }
+    c = string.char_at_n(v, n, 0)
+    if c == 110 { return LV_NIL }
+    if c == 98  { return LV_BOOL }
+    if c == 105 { return LV_INT }
+    if c == 102 { return LV_FLOAT }
+    if c == 115 { return LV_STR }
+    if c == 97  { return LV_ARR }
+    if c == 111 { return LV_OBJ }
+    return LV_STR
+}
+
+// Strip the `X:` prefix. Bare-string LV_STR (no prefix) returns the
+// input unchanged — that's the legacy compatibility hatch.
+value_payload(v: string) -> string {
+    n = string_length(v)
+    if n < 2 { return v }
+    if string.char_at_n(v, n, 1) != 58 { return v }
+    return string.substring_n(v, n, 2, n)
+}
+
+value_get_int(v: string) -> int {
+    k = value_kind(v)
+    if k == LV_INT {
+        i, _ = string.to_int(value_payload(v))
+        return i
+    }
+    if k == LV_FLOAT {
+        f, _ = string.to_float(value_payload(v))
+        return float_to_int(f)
+    }
+    if k == LV_BOOL {
+        if string.equals(value_payload(v), "1") == 1 { return 1 }
+        return 0
+    }
+    if k == LV_STR {
+        i, _ = string.to_int(value_payload(v))
+        return i
+    }
+    return 0
+}
+
+value_get_float(v: string) -> float {
+    k = value_kind(v)
+    if k == LV_FLOAT {
+        f, _ = string.to_float(value_payload(v))
+        return f
+    }
+    if k == LV_INT {
+        i, _ = string.to_int(value_payload(v))
+        return int_to_float(i)
+    }
+    if k == LV_BOOL {
+        return int_to_float(value_get_int(v))
+    }
+    if k == LV_STR {
+        f, _ = string.to_float(value_payload(v))
+        return f
+    }
+    return 0.0
+}
+
+value_get_arr(v: string) -> ptr {
+    if value_kind(v) != LV_ARR { return 0 }
+    long_v, _ = string.to_long(value_payload(v))
+    return mem.long_to_ptr(long_v)
+}
+
+value_get_obj(v: string) -> ptr {
+    if value_kind(v) != LV_OBJ { return 0 }
+    long_v, _ = string.to_long(value_payload(v))
+    return mem.long_to_ptr(long_v)
+}
+
+// Canonical stringification. LV_NIL → "", LV_BOOL → "true"/"false",
+// LV_INT/LV_FLOAT/LV_STR → payload, LV_ARR → "[v1, v2, …]" recursive,
+// LV_OBJ → "{object}" placeholder (Phase 2 will iterate keys).
+value_to_string(v: string) -> string {
+    k = value_kind(v)
+    if k == LV_NIL { return "" }
+    if k == LV_BOOL {
+        if string.equals(value_payload(v), "1") == 1 { return "true" }
+        return "false"
+    }
+    if k == LV_INT { return value_payload(v) }
+    if k == LV_FLOAT { return value_payload(v) }
+    if k == LV_STR { return value_payload(v) }
+    if k == LV_ARR {
+        lst = value_get_arr(v)
+        if lst == 0 { return "[]" }
+        len = string_list_size(lst)
+        sb = strbuilder.new(16)
+        strbuilder.append(sb, "[")
+        i = 0
+        while i < len {
+            if i > 0 { strbuilder.append(sb, ", ") }
+            strbuilder.append(sb, value_to_string(string_list_get(lst, i)))
+            i = i + 1
+        }
+        strbuilder.append(sb, "]")
+        return strbuilder.finish(sb)
+    }
+    if k == LV_OBJ { return "{object}" }
+    return v
+}
+
+// ---------------------------------------------------------------------------
+// Typed context setters
+// ---------------------------------------------------------------------------
+
+context_put_int(ctx: ptr, key: string, value: int) {
+    map_put(ctx, string.concat("v:", key), value_int(value))
+}
+
+context_put_float(ctx: ptr, key: string, value: float) {
+    map_put(ctx, string.concat("v:", key), value_float(value))
+}
+
+context_put_bool(ctx: ptr, key: string, value: int) {
+    map_put(ctx, string.concat("v:", key), value_bool(value))
+}
+
+context_put_nil(ctx: ptr, key: string) {
+    map_put(ctx, string.concat("v:", key), value_nil())
 }
