@@ -5,9 +5,31 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.220.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`contrib.templating.liquid` — Shopify Liquid templating engine v0**
+  (`contrib/templating/liquid/module.ae`,
+  `tests/integration/liquid_basics/`,
+  `tests/integration/liquid_tags_simple/`). A pure-Aether port of the
+  [Liquid template language](https://shopify.github.io/liquid/),
+  sandbox-friendly (no reflection, no eval, explicit filter set).
+  Opt-in `contrib/` module — not in `libaether.a`. Initial vertical
+  slice: text passthrough, `{{ name }}` single-segment variable lookup
+  against a string-keyed context, `{% comment %}...{% endcomment %}`
+  (body suppressed), `{% raw %}...{% endraw %}` (body emitted verbatim
+  with no interpolation), and a render-time error for any unsupported
+  `{% xxx %}` tag. Public surface: `parse_string`, `context_new`,
+  `context_put_string`, `context_free`, `render`. 15 integration tests
+  across two directories cover the implemented behaviour; future tags
+  (`if`/`for`/`assign`/...), filters, dotted attribute access,
+  includes, layouts, and the JSON value model are tracked in
+  `TODO.md` and will land with their own tests as each layer is built.
 
 ## [0.220.0]
 
