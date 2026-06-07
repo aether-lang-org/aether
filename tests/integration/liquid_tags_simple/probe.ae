@@ -65,8 +65,10 @@ main() {
     }
     println("PASS 6 unterminated raw: '${e6}'")
 
-    // (7) Unsupported future tag (e.g. {% if %}) gives a render error.
-    t7, e7 = liquid.parse_string("a {% if cond %}b{% endif %} c")
+    // (7) Unsupported future tag (e.g. {% for %}) gives a render error.
+    // `{% if %}` / `{% unless %}` / `{% case %}` now work, so we use
+    // `{% for %}` here as the canonical "still TODO" tag.
+    t7, e7 = liquid.parse_string("a {% for x in coll %}b{% endfor %} c")
     if e7 != "" {
         // The lexer might also reject it — either failure mode is fine
         // as long as it's reported clearly.

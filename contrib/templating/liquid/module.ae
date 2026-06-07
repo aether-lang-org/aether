@@ -31,11 +31,15 @@ import std.string
 import std.strbuilder
 import std.map
 import std.collections
+import std.cryptography
+import std.fs
+import std.path
 
 exports (
-    parse_string,
+    parse_string, parse_file,
     context_new, context_put_string, context_free,
-    render
+    context_set_include_root,
+    render, render_to_strbuilder
 )
 
 // ---------------------------------------------------------------------------
@@ -113,6 +117,64 @@ tag_body_is(body: string, kw: string) -> int {
     return string.equals(body, kw)
 }
 
+// Return 1 if the trimmed tag body's first whitespace-separated word
+// equals `kw`. Used for tags whose body carries arguments after the
+// keyword (e.g. `{% liquid <body> %}` where the body is multi-line
+// content, not a fixed keyword).
+tag_body_is_head(body: string, kw: string) -> int {
+    n = string_length(body)
+    kn = string_length(kw)
+    if n < kn { return 0 }
+    if string.index_of_from_n(body, n, kw, 0) != 0 { return 0 }
+    if n == kn { return 1 }
+    // Boundary: next byte must be whitespace.
+    c = string.char_at_n(body, n, kn)
+    if c == 32 || c == 9 || c == 10 || c == 13 { return 1 }
+    return 0
+}
+
+// Strip the leading `liquid` keyword off a `{% liquid ... %}` body,
+// returning just the inner multi-tag text.
+liquid_block_body(body: string) -> string {
+    n = string_length(body)
+    // Drop the leading "liquid".
+    return trim(string.substring_n(body, n, 6, n))
+}
+
+// Emit synthetic tokens for each non-empty, non-comment line of a
+// `{% liquid ... %}` body. Each line becomes a TAG token (or an OUTPUT
+// token when the line starts with `echo `). Returns "" on success or
+// an error string.
+emit_liquid_lines(kinds: ptr, contents: ptr, body: string) -> string {
+    n = string_length(body)
+    p = 0
+    while p < n {
+        // Find end of this line.
+        eol = p
+        while eol < n {
+            c = string.char_at_n(body, n, eol)
+            if c == 10 { break }
+            eol = eol + 1
+        }
+        line = trim(string.substring_n(body, n, p, eol))
+        p = eol + 1
+        if string_length(line) == 0 { continue }
+        // `#` starts a comment line (Shopify spec).
+        if string.char_at_n(line, string_length(line), 0) == 35 { continue }
+        // `echo EXPR` → OUTPUT token with EXPR.
+        if tag_body_is_head(line, "echo") == 1 {
+            ln = string_length(line)
+            expr = trim(string.substring_n(line, ln, 4, ln))
+            string_list_add(kinds, TOK_OUTPUT)
+            string_list_add(contents, expr)
+        } else {
+            string_list_add(kinds, TOK_TAG)
+            string_list_add(contents, line)
+        }
+    }
+    return ""
+}
+
 // Trim ASCII whitespace from both ends of `s`.
 trim(s: string) -> string {
     n = string_length(s)
@@ -137,26 +199,149 @@ trim(s: string) -> string {
     return string.substring_n(s, n, a, b)
 }
 
+// Strip a leading `-` from `s` if present. Returns (s_without_leading_dash, 1)
+// when stripped, else (s, 0).
+peel_left_dash(s: string) -> (string, int) {
+    n = string_length(s)
+    if n == 0 { return s, 0 }
+    if string.char_at_n(s, n, 0) == 45 {   // '-'
+        return string.substring_n(s, n, 1, n), 1
+    }
+    return s, 0
+}
+
+// Strip a trailing `-` from `s` if present. Returns (s_without_trailing_dash, 1)
+// when stripped, else (s, 0).
+peel_right_dash(s: string) -> (string, int) {
+    n = string_length(s)
+    if n == 0 { return s, 0 }
+    if string.char_at_n(s, n, n - 1) == 45 {   // '-'
+        return string.substring_n(s, n, 0, n - 1), 1
+    }
+    return s, 0
+}
+
+// Same trim as `trim` but record-keeping ASCII whitespace only.
+// `rtrim` strips trailing whitespace from `s`.
+rtrim(s: string) -> string {
+    n = string_length(s)
+    b = n
+    while b > 0 {
+        c = string.char_at_n(s, n, b - 1)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            b = b - 1
+        } else {
+            break
+        }
+    }
+    return string.substring_n(s, n, 0, b)
+}
+
+// `ltrim` strips leading whitespace from `s`.
+ltrim(s: string) -> string {
+    n = string_length(s)
+    a = 0
+    while a < n {
+        c = string.char_at_n(s, n, a)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            a = a + 1
+        } else {
+            break
+        }
+    }
+    return string.substring_n(s, n, a, n)
+}
+
+// Extract a block-closer's left/right dash flags. `close_open` is the
+// byte index of the closer's `{%`; `close_after` is the byte AFTER its
+// `%}`. The body lives at `[close_open + 2, close_after - 2)`.
+closer_dashes(src: string, n: int, close_open: int, close_after: int) -> (int, int) {
+    body_start = close_open + 2
+    body_end   = close_after - 2
+    if body_end <= body_start { return 0, 0 }
+    raw = string.substring_n(src, n, body_start, body_end)
+    _, ls = peel_left_dash(ltrim(raw))
+    _, rs = peel_right_dash(rtrim(raw))
+    return ls, rs
+}
+
+// If the last emitted token is a TEXT, rtrim it in place. Used when an
+// opener carries leading `-` (`{{-` / `{%-`).
+strip_trailing_ws_of_last_text(kinds: ptr, contents: ptr) {
+    sz = string_list_size(kinds)
+    if sz == 0 { return }
+    last_kind = string_list_get(kinds, sz - 1)
+    if string.equals(last_kind, TOK_TEXT) == 0 { return }
+    last_text = string_list_get(contents, sz - 1)
+    string_list_set(contents, sz - 1, rtrim(last_text))
+}
+
 // Lex `src` into the parallel-list token stream described above. Returns
 // (tokens, "") on success or (tokens, error_message) on a syntax problem.
+//
+// Whitespace control:
+//   `{{- x }}`  / `{%- if %}`  — strip trailing whitespace of the
+//                                immediately preceding TEXT token
+//   `{{ x -}}`  / `{% if -%}`  — strip leading whitespace of the next
+//                                TEXT token (carried via `strip_next`)
+//   For `comment` / `raw` blocks, the dashes on the OPENER affect the
+//   preceding TEXT, and the dashes on the CLOSER affect the next TEXT
+//   (the body of a `comment` is dropped; a `raw` body is preserved
+//   verbatim and is itself eligible to have its trailing whitespace
+//   trimmed if the closer has a leading dash).
+// Count `\n` bytes in `src[0..end)`. The line number reported in lex
+// errors is `count + 1` so the first line is 1, not 0.
+count_lines_to(src: string, n: int, end: int) -> int {
+    lim = end
+    if lim > n { lim = n }
+    c = 0
+    i = 0
+    while i < lim {
+        if string.char_at_n(src, n, i) == 10 { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+// `loc_suffix` builds " at line N" — appended to lex error messages so
+// users can find the unterminated delimiter in long templates.
+loc_suffix(src: string, n: int, off: int) -> string {
+    return string.concat(" at line ", string.from_int(count_lines_to(src, n, off) + 1))
+}
+
 lex(src: string) -> (ptr, string) {
     kinds    = string_list_new()
     contents = string_list_new()
     n = string_length(src)
     pos = 0
+    strip_next = 0
     while pos < n {
         open_at, opener = find_next_delim(src, n, pos)
         if open_at < 0 {
             // Trailing text only.
             tail = string.substring_n(src, n, pos, n)
+            if strip_next == 1 {
+                tail = ltrim(tail)
+                strip_next = 0
+            }
             string_list_add(kinds, TOK_TEXT)
             string_list_add(contents, tail)
             pos = n
         } else {
             if open_at > pos {
                 text = string.substring_n(src, n, pos, open_at)
+                if strip_next == 1 {
+                    text = ltrim(text)
+                    strip_next = 0
+                }
                 string_list_add(kinds, TOK_TEXT)
                 string_list_add(contents, text)
+            } else {
+                // Nothing emitted between previous tag and this one;
+                // `strip_next` from the previous closer is consumed
+                // implicitly (there's no text to trim, but it must NOT
+                // carry over to a later TEXT past this tag).
+                strip_next = 0
             }
             if string.equals(opener, "{{") == 1 {
                 // Output tag.
@@ -168,9 +353,14 @@ lex(src: string) -> (ptr, string) {
                     toks = list_new()
                     list_add_raw(toks, kinds)
                     list_add_raw(toks, contents)
-                    return toks, "unterminated `{{`"
+                    return toks, string.concat("unterminated `{{`", loc_suffix(src, n, open_at))
                 }
-                body = trim(string.substring_n(src, n, open_at + 2, close_at))
+                raw_body = string.substring_n(src, n, open_at + 2, close_at)
+                body, ls = peel_left_dash(ltrim(raw_body))
+                body, rs = peel_right_dash(rtrim(body))
+                body = trim(body)
+                if ls == 1 { strip_trailing_ws_of_last_text(kinds, contents) }
+                if rs == 1 { strip_next = 1 }
                 string_list_add(kinds, TOK_OUTPUT)
                 string_list_add(contents, body)
                 pos = close_at + 2
@@ -184,22 +374,47 @@ lex(src: string) -> (ptr, string) {
                     toks = list_new()
                     list_add_raw(toks, kinds)
                     list_add_raw(toks, contents)
-                    return toks, "unterminated `{%`"
+                    return toks, string.concat("unterminated `{%`", loc_suffix(src, n, open_at))
                 }
-                body = trim(string.substring_n(src, n, open_at + 2, close_at))
+                raw_body = string.substring_n(src, n, open_at + 2, close_at)
+                body, ls = peel_left_dash(ltrim(raw_body))
+                body, rs = peel_right_dash(rtrim(body))
+                body = trim(body)
+                if ls == 1 { strip_trailing_ws_of_last_text(kinds, contents) }
                 pos_after = close_at + 2
 
                 // `comment` and `raw` are recognised at lex time: scan
                 // forward to the matching `endcomment`/`endraw` and
                 // either drop or preserve the body in one TEXT token.
+                //
+                // `{%# ... %}` is Shopify's inline (single-tag) comment
+                // form. The body's first non-space byte is `#`; we just
+                // drop the tag entirely. Outer dash strips already
+                // applied to the preceding text (via `ls`); the closer's
+                // right-strip carries to the next TEXT.
+                if string_length(body) > 0
+                   && string.char_at_n(body, string_length(body), 0) == 35 {   // '#'
+                    if rs == 1 { strip_next = 1 }
+                    pos = pos_after
+                    continue
+                }
                 if tag_body_is(body, "comment") == 1 {
                     end_at, end_close = find_block_end(src, n, pos_after, "endcomment")
                     if end_at < 0 {
                         toks = list_new()
                         list_add_raw(toks, kinds)
                         list_add_raw(toks, contents)
-                        return toks, "unterminated `{% comment %}`"
+                        return toks, string.concat("unterminated `{% comment %}`", loc_suffix(src, n, open_at))
                     }
+                    // The opener's right-strip would consume the very
+                    // first TEXT of the comment body — which we drop
+                    // anyway, so just clear it. The closer's left-strip
+                    // is moot for the same reason. The closer's
+                    // right-strip carries past `endcomment` to the
+                    // next TEXT.
+                    strip_next = 0
+                    _, cend_rs = closer_dashes(src, n, end_at, end_close)
+                    if cend_rs == 1 { strip_next = 1 }
                     pos = end_close
                 } else if tag_body_is(body, "raw") == 1 {
                     end_at, end_close = find_block_end(src, n, pos_after, "endraw")
@@ -207,14 +422,42 @@ lex(src: string) -> (ptr, string) {
                         toks = list_new()
                         list_add_raw(toks, kinds)
                         list_add_raw(toks, contents)
-                        return toks, "unterminated `{% raw %}`"
+                        return toks, string.concat("unterminated `{% raw %}`", loc_suffix(src, n, open_at))
                     }
-                    raw_body = string.substring_n(src, n, pos_after, end_at)
+                    raw_text = string.substring_n(src, n, pos_after, end_at)
+                    // The OPENER's right-strip eats leading whitespace
+                    // of the raw body. The CLOSER's left-strip eats
+                    // its trailing whitespace. The CLOSER's right-strip
+                    // carries past `endraw` to the next TEXT.
+                    if rs == 1 { raw_text = ltrim(raw_text) }
+                    cend_ls, cend_rs = closer_dashes(src, n, end_at, end_close)
+                    if cend_ls == 1 { raw_text = rtrim(raw_text) }
+                    strip_next = 0
+                    if cend_rs == 1 { strip_next = 1 }
                     string_list_add(kinds, TOK_TEXT)
-                    string_list_add(contents, raw_body)
+                    string_list_add(contents, raw_text)
                     pos = end_close
+                } else if tag_body_is_head(body, "liquid") == 1 {
+                    // `{% liquid %}` block — the body is a sequence of
+                    // bare tags, one per line. Each non-empty, non-`#`-
+                    // comment line is emitted as a synthetic TAG (or
+                    // OUTPUT for `echo EXPR`). The right-dash on the
+                    // outer `liquid` tag applies to the next TEXT after
+                    // the WHOLE block.
+                    inner_body = liquid_block_body(body)
+                    lerr2 = emit_liquid_lines(kinds, contents, inner_body)
+                    if lerr2 != "" {
+                        toks = list_new()
+                        list_add_raw(toks, kinds)
+                        list_add_raw(toks, contents)
+                        return toks, lerr2
+                    }
+                    if rs == 1 { strip_next = 1 }
+                    pos = pos_after
                 } else {
-                    // Future tag — pass through; renderer will error.
+                    // Future tag — pass through; renderer will error
+                    // or execute (e.g. `assign`).
+                    if rs == 1 { strip_next = 1 }
                     string_list_add(kinds, TOK_TAG)
                     string_list_add(contents, body)
                     pos = pos_after
@@ -244,7 +487,10 @@ find_block_end(src: string, n: int, p: int, endkw: string) -> (int, int) {
             if close_at < 0 {
                 return -1, -1
             }
-            body = trim(string.substring_n(src, n, body_start, close_at))
+            raw_body = string.substring_n(src, n, body_start, close_at)
+            body, _ = peel_left_dash(ltrim(raw_body))
+            body, _ = peel_right_dash(rtrim(body))
+            body = trim(body)
             if string.equals(body, endkw) == 1 {
                 return i, close_at + 2
             }
@@ -450,6 +696,374 @@ filter_replace(hay: string, needle: string, repl: string) -> string {
     return strbuilder.finish(sb)
 }
 
+// Replace only the FIRST occurrence of `needle` in `hay` with `repl`.
+filter_replace_first(hay: string, needle: string, repl: string) -> string {
+    nn = string_length(needle)
+    if nn == 0 { return hay }
+    hn = string_length(hay)
+    if hn == 0 { return hay }
+    hit = string.index_of_from_n(hay, hn, needle, 0)
+    if hit < 0 { return hay }
+    sb = strbuilder.new(hn)
+    strbuilder.append(sb, string.substring_n(hay, hn, 0, hit))
+    strbuilder.append(sb, repl)
+    strbuilder.append(sb, string.substring_n(hay, hn, hit + nn, hn))
+    return strbuilder.finish(sb)
+}
+
+// HTML-escape `&`, `<`, `>`, `"`, `'`. Liquid's `escape` is byte-level —
+// applied repeatedly it double-escapes; `escape_once` is the
+// idempotent version (skip already-escaped entities).
+filter_escape(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c == 38      { strbuilder.append(sb, "&amp;") }      // &
+        else if c == 60 { strbuilder.append(sb, "&lt;") }       // <
+        else if c == 62 { strbuilder.append(sb, "&gt;") }       // >
+        else if c == 34 { strbuilder.append(sb, "&quot;") }     // "
+        else if c == 39 { strbuilder.append(sb, "&#39;") }      // '
+        else            { strbuilder.append(sb, string.from_char(c)) }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// Return 1 if the substring of `s` starting at `i` (length `n`) is an
+// HTML entity reference: `&NAME;` or `&#NUM;` or `&#xHEX;`. Used by
+// `escape_once` to detect already-encoded text.
+is_html_entity_at(s: string, n: int, i: int) -> int {
+    if i >= n { return 0 }
+    if string.char_at_n(s, n, i) != 38 { return 0 }   // '&'
+    // Scan for the terminating `;` within a reasonable distance.
+    // HTML5 caps named entities around 32 chars; numeric refs are short.
+    j = i + 1
+    limit = i + 33
+    if limit > n { limit = n }
+    if j >= limit { return 0 }
+    first = string.char_at_n(s, n, j)
+    // Accept either `#` (numeric) or an ASCII letter (named).
+    is_num = 0
+    if first == 35 {
+        is_num = 1
+        j = j + 1
+    } else if (first >= 65 && first <= 90) || (first >= 97 && first <= 122) {
+        // ASCII letter — fine
+    } else {
+        return 0
+    }
+    while j < limit {
+        c = string.char_at_n(s, n, j)
+        if c == 59 { return 1 }   // ';'
+        if is_num == 1 {
+            // numeric: digits OR `x`/`X` allowed immediately after `#`
+            if (c >= 48 && c <= 57) { j = j + 1 ; continue }
+            if (c == 120 || c == 88) && j == i + 2 { j = j + 1 ; continue }
+            if (c >= 65 && c <= 70) || (c >= 97 && c <= 102) { j = j + 1 ; continue }
+            return 0
+        } else {
+            // named: ASCII alnum
+            if (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+                j = j + 1
+                continue
+            }
+            return 0
+        }
+    }
+    return 0
+}
+
+// `escape_once`: HTML-escape `&` only when it is NOT already starting
+// an entity. `<`, `>`, `"`, `'` always escape.
+filter_escape_once(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c == 38 {
+            if is_html_entity_at(s, n, i) == 1 {
+                strbuilder.append(sb, "&")
+            } else {
+                strbuilder.append(sb, "&amp;")
+            }
+        }
+        else if c == 60 { strbuilder.append(sb, "&lt;") }
+        else if c == 62 { strbuilder.append(sb, "&gt;") }
+        else if c == 34 { strbuilder.append(sb, "&quot;") }
+        else if c == 39 { strbuilder.append(sb, "&#39;") }
+        else            { strbuilder.append(sb, string.from_char(c)) }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// One hex digit (0..15) → ASCII byte ('0'..'9', 'A'..'F').
+hex_digit(v: int) -> int {
+    if v < 10 { return 48 + v }
+    return 55 + v
+}
+
+// `url_encode`: RFC 3986 unreserved kept; space → `+`; everything else
+// `%HH`. This matches Shopify Liquid (form-encoded space → `+`, not
+// percent-encoded).
+filter_url_encode(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        // Unreserved per RFC 3986: A-Z a-z 0-9 - _ . ~
+        if (c >= 48 && c <= 57)
+           || (c >= 65 && c <= 90)
+           || (c >= 97 && c <= 122)
+           || c == 45 || c == 95 || c == 46 || c == 126 {
+            strbuilder.append(sb, string.from_char(c))
+        } else if c == 32 {
+            strbuilder.append(sb, "+")
+        } else {
+            // Keep byte unsigned for the high half.
+            b = c & 255
+            strbuilder.append(sb, "%")
+            strbuilder.append(sb, string.from_char(hex_digit(b >> 4)))
+            strbuilder.append(sb, string.from_char(hex_digit(b & 15)))
+        }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// Parse a single hex digit byte; returns -1 if not a hex digit.
+parse_hex(c: int) -> int {
+    if c >= 48 && c <= 57  { return c - 48 }
+    if c >= 65 && c <= 70  { return c - 55 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    return -1
+}
+
+// `url_decode`: inverse of `url_encode`. `+` → space; `%HH` → byte;
+// malformed `%` is emitted verbatim (Shopify behaviour is forgiving
+// here — does not error).
+filter_url_decode(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c == 43 {
+            strbuilder.append(sb, " ")
+            i = i + 1
+        } else if c == 37 && i + 2 < n {
+            hi = parse_hex(string.char_at_n(s, n, i + 1))
+            lo = parse_hex(string.char_at_n(s, n, i + 2))
+            if hi >= 0 && lo >= 0 {
+                strbuilder.append(sb, string.from_char((hi << 4) | lo))
+                i = i + 3
+            } else {
+                strbuilder.append(sb, "%")
+                i = i + 1
+            }
+        } else {
+            strbuilder.append(sb, string.from_char(c))
+            i = i + 1
+        }
+    }
+    return strbuilder.finish(sb)
+}
+
+// `truncatewords`: keep the first `cap` whitespace-delimited words.
+// If truncation happens, append "...". Multiple spaces between words
+// collapse to a single space in the output (Shopify behaviour).
+filter_truncatewords(s: string, cap: int) -> string {
+    n = string_length(s)
+    if cap <= 0 { return "" }
+    sb = strbuilder.new(n)
+    i = 0
+    words = 0
+    while i < n && words < cap {
+        // Skip leading whitespace.
+        while i < n {
+            c = string.char_at_n(s, n, i)
+            if c == 32 || c == 9 || c == 10 || c == 13 {
+                i = i + 1
+            } else {
+                break
+            }
+        }
+        if i >= n { break }
+        if words > 0 { strbuilder.append(sb, " ") }
+        // Copy one word.
+        while i < n {
+            c = string.char_at_n(s, n, i)
+            if c == 32 || c == 9 || c == 10 || c == 13 { break }
+            strbuilder.append(sb, string.from_char(c))
+            i = i + 1
+        }
+        words = words + 1
+    }
+    // Anything remaining (after stripping leading whitespace) → ellipsis.
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    if i < n {
+        strbuilder.append(sb, "...")
+    }
+    return strbuilder.finish(sb)
+}
+
+// `newline_to_br`: insert `<br />` before each `\n`, preserving the
+// `\n` (Shopify behaviour). `\r\n` and `\r` are treated as plain `\n`.
+filter_newline_to_br(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c == 10 {
+            strbuilder.append(sb, "<br />\n")
+        } else if c == 13 {
+            // \r or \r\n → emit one <br />\n, skip an optional \n
+            strbuilder.append(sb, "<br />\n")
+            if i + 1 < n && string.char_at_n(s, n, i + 1) == 10 {
+                i = i + 1
+            }
+        } else {
+            strbuilder.append(sb, string.from_char(c))
+        }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// `escape_xml`: XML-safe escape. Same as `escape` except `'` becomes
+// `&apos;` (the XML 1.0 reference) rather than `&#39;` (HTML numeric
+// charref). `&` `<` `>` `"` are handled identically to `escape`.
+filter_escape_xml(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c == 38      { strbuilder.append(sb, "&amp;") }
+        else if c == 60 { strbuilder.append(sb, "&lt;") }
+        else if c == 62 { strbuilder.append(sb, "&gt;") }
+        else if c == 34 { strbuilder.append(sb, "&quot;") }
+        else if c == 39 { strbuilder.append(sb, "&apos;") }
+        else            { strbuilder.append(sb, string.from_char(c)) }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// `json_escape`: escape a string for embedding inside a JSON string
+// literal. Quotes are NOT added — caller wraps in `"..."`. Backslash
+// and double-quote are backslash-escaped; control bytes (< 0x20) emit
+// `\uXXXX`; 0x7F passes through verbatim (Shopify's `json_escape` is
+// minimal — it does not touch high-bit bytes either, so a UTF-8 byte
+// sequence stays as-is).
+filter_json_escape(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c == 92      { strbuilder.append(sb, "\\\\") }
+        else if c == 34 { strbuilder.append(sb, "\\\"") }
+        else if c == 8  { strbuilder.append(sb, "\\b") }
+        else if c == 9  { strbuilder.append(sb, "\\t") }
+        else if c == 10 { strbuilder.append(sb, "\\n") }
+        else if c == 12 { strbuilder.append(sb, "\\f") }
+        else if c == 13 { strbuilder.append(sb, "\\r") }
+        else if c < 32 {
+            // Emit `\u00XX`.
+            strbuilder.append(sb, "\\u00")
+            strbuilder.append(sb, string.from_char(hex_digit(c >> 4)))
+            strbuilder.append(sb, string.from_char(hex_digit(c & 15)))
+        }
+        else { strbuilder.append(sb, string.from_char(c)) }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// `strip_html`: drop everything between `<` and `>` (inclusive).
+// Unterminated `<` swallows to end of string. Matches Shopify
+// (regex-free byte scan, no entity decoding).
+filter_strip_html(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    in_tag = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if in_tag == 1 {
+            if c == 62 { in_tag = 0 }   // '>'
+        } else {
+            if c == 60 { in_tag = 1 }   // '<'
+            else       { strbuilder.append(sb, string.from_char(c)) }
+        }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// `strip_newlines`: drop every `\r` and `\n` byte (Shopify behaviour).
+filter_strip_newlines(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    sb = strbuilder.new(n)
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c != 10 && c != 13 {
+            strbuilder.append(sb, string.from_char(c))
+        }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// `slice` on a string: 1-arg form returns one byte starting at `start`;
+// 2-arg form returns `len` bytes starting at `start`. Negative `start`
+// indexes from the end (Shopify); negative `len` is invalid and
+// returns empty.
+filter_slice(s: string, start: int, len: int) -> string {
+    n = string_length(s)
+    a = start
+    if a < 0 { a = n + a }
+    if a < 0 { a = 0 }
+    if a > n { a = n }
+    b = a + len
+    if b < a { return "" }
+    if b > n { b = n }
+    return string.substring_n(s, n, a, b)
+}
+
+// Parse a string-encoded integer. Returns (val, "") or (0, error). Used
+// for math-filter args while a real expression parser is still TODO.
+parse_int_arg(s: string, name: string) -> (int, string) {
+    v, err = string.to_int(s)
+    if err != "" {
+        return 0, string.concat(string.concat(name, " arg not an integer: "), s)
+    }
+    return v, ""
+}
+
 // Truncate `s` to `cap` bytes, appending `...` if the string was cut.
 // Matches Liquid's default: total length (including the ellipsis) is
 // `cap`. If `cap <= 3` the ellipsis itself is truncated.
@@ -538,7 +1152,163 @@ apply_filter(val: string, name: string, args: string) -> (string, string) {
         if e2 != "" { return "", e2 }
         return filter_replace(val, needle, repl), ""
     }
-    return "", string.concat("unknown filter: ", name)
+    if string.equals(name, "replace_first") == 1 {
+        if argc != 2 { return "", "replace_first needs exactly 2 args" }
+        needle, e1 = unquote_arg(string_list_get(arg_list, 0))
+        if e1 != "" { return "", e1 }
+        repl, e2 = unquote_arg(string_list_get(arg_list, 1))
+        if e2 != "" { return "", e2 }
+        return filter_replace_first(val, needle, repl), ""
+    }
+    if string.equals(name, "remove") == 1 {
+        if argc != 1 { return "", "remove needs exactly 1 arg" }
+        needle, e1 = unquote_arg(string_list_get(arg_list, 0))
+        if e1 != "" { return "", e1 }
+        return filter_replace(val, needle, ""), ""
+    }
+    if string.equals(name, "remove_first") == 1 {
+        if argc != 1 { return "", "remove_first needs exactly 1 arg" }
+        needle, e1 = unquote_arg(string_list_get(arg_list, 0))
+        if e1 != "" { return "", e1 }
+        return filter_replace_first(val, needle, ""), ""
+    }
+    if string.equals(name, "escape") == 1 {
+        if argc != 0 { return "", "escape takes no args" }
+        return filter_escape(val), ""
+    }
+    if string.equals(name, "escape_once") == 1 {
+        if argc != 0 { return "", "escape_once takes no args" }
+        return filter_escape_once(val), ""
+    }
+    if string.equals(name, "url_encode") == 1 {
+        if argc != 0 { return "", "url_encode takes no args" }
+        return filter_url_encode(val), ""
+    }
+    if string.equals(name, "url_decode") == 1 {
+        if argc != 0 { return "", "url_decode takes no args" }
+        return filter_url_decode(val), ""
+    }
+    if string.equals(name, "truncatewords") == 1 {
+        if argc != 1 { return "", "truncatewords needs exactly 1 arg" }
+        s, err = unquote_arg(string_list_get(arg_list, 0))
+        if err != "" { return "", err }
+        cap, ierr = string.to_int(s)
+        if ierr != "" { return "", string.concat("truncatewords arg not an integer: ", s) }
+        return filter_truncatewords(val, cap), ""
+    }
+    if string.equals(name, "newline_to_br") == 1 {
+        if argc != 0 { return "", "newline_to_br takes no args" }
+        return filter_newline_to_br(val), ""
+    }
+    if string.equals(name, "strip_html") == 1 {
+        if argc != 0 { return "", "strip_html takes no args" }
+        return filter_strip_html(val), ""
+    }
+    if string.equals(name, "strip_newlines") == 1 {
+        if argc != 0 { return "", "strip_newlines takes no args" }
+        return filter_strip_newlines(val), ""
+    }
+    if string.equals(name, "slice") == 1 {
+        if argc != 1 && argc != 2 {
+            return "", "slice needs 1 or 2 args"
+        }
+        s, e1 = unquote_arg(string_list_get(arg_list, 0))
+        if e1 != "" { return "", e1 }
+        st, ierr = parse_int_arg(s, "slice")
+        if ierr != "" { return "", ierr }
+        ln = 1
+        if argc == 2 {
+            s2, e2 = unquote_arg(string_list_get(arg_list, 1))
+            if e2 != "" { return "", e2 }
+            ln2, jerr = parse_int_arg(s2, "slice")
+            if jerr != "" { return "", jerr }
+            ln = ln2
+        }
+        return filter_slice(val, st, ln), ""
+    }
+    // Integer math on string-encoded ints (returns a string of the
+    // computed int). When val is empty/non-numeric, Liquid coerces to
+    // 0 — we follow.
+    if string.equals(name, "plus") == 1 ||
+       string.equals(name, "minus") == 1 ||
+       string.equals(name, "times") == 1 ||
+       string.equals(name, "divided_by") == 1 ||
+       string.equals(name, "modulo") == 1 ||
+       string.equals(name, "at_least") == 1 ||
+       string.equals(name, "at_most") == 1 {
+        if argc != 1 { return "", string.concat(name, " needs exactly 1 arg") }
+        s, e1 = unquote_arg(string_list_get(arg_list, 0))
+        if e1 != "" { return "", e1 }
+        rhs, ierr = parse_int_arg(s, name)
+        if ierr != "" { return "", ierr }
+        lhs, _ = string.to_int(val)   // coerce empty/garbage to 0
+        result = 0
+        if string.equals(name, "plus") == 1       { result = lhs + rhs }
+        else if string.equals(name, "minus") == 1 { result = lhs - rhs }
+        else if string.equals(name, "times") == 1 { result = lhs * rhs }
+        else if string.equals(name, "divided_by") == 1 {
+            if rhs == 0 { return "", "divided_by: division by zero" }
+            result = lhs / rhs
+        }
+        else if string.equals(name, "modulo") == 1 {
+            if rhs == 0 { return "", "modulo: division by zero" }
+            result = lhs - (lhs / rhs) * rhs
+        }
+        else if string.equals(name, "at_least") == 1 {
+            result = lhs
+            if rhs > lhs { result = rhs }
+        }
+        else if string.equals(name, "at_most") == 1 {
+            result = lhs
+            if rhs < lhs { result = rhs }
+        }
+        return string.from_int(result), ""
+    }
+    if string.equals(name, "escape_xml") == 1 {
+        if argc != 0 { return "", "escape_xml takes no args" }
+        return filter_escape_xml(val), ""
+    }
+    if string.equals(name, "json_escape") == 1 {
+        if argc != 0 { return "", "json_escape takes no args" }
+        return filter_json_escape(val), ""
+    }
+    if string.equals(name, "base64_encode") == 1 {
+        if argc != 0 { return "", "base64_encode takes no args" }
+        // Use the PADDED form to match Shopify's `base64_encode` filter
+        // (RFC 4648 standard alphabet with `=` padding to a multiple of 4).
+        out, b64err = cryptography.base64_encode_padded(val, string_length(val))
+        if b64err != "" { return "", b64err }
+        return out, ""
+    }
+    if string.equals(name, "base64_decode") == 1 {
+        if argc != 0 { return "", "base64_decode takes no args" }
+        out, _, derr = cryptography.base64_decode(val)
+        if derr != "" { return "", derr }
+        return out, ""
+    }
+    if string.equals(name, "md5") == 1 {
+        if argc != 0 { return "", "md5 takes no args" }
+        out, herr = cryptography.md5_hex(val, string_length(val))
+        if herr != "" { return "", herr }
+        return out, ""
+    }
+    if string.equals(name, "sha1") == 1 {
+        if argc != 0 { return "", "sha1 takes no args" }
+        out, herr = cryptography.sha1_hex(val, string_length(val))
+        if herr != "" { return "", herr }
+        return out, ""
+    }
+    if string.equals(name, "sha256") == 1 {
+        if argc != 0 { return "", "sha256 takes no args" }
+        out, herr = cryptography.sha256_hex(val, string_length(val))
+        if herr != "" { return "", herr }
+        return out, ""
+    }
+    // Unknown filter: pass the input through unchanged (Shopify Liquid
+    // behaviour — `{{ x | nope }}` renders `x`, doesn't error). This
+    // keeps templates robust against typos and forward-compatibility
+    // gaps in our filter coverage.
+    return val, ""
 }
 
 // Render an OUTPUT body. `body` is the trimmed contents of `{{ ... }}`.
@@ -548,7 +1318,8 @@ render_output(ctx: ptr, body: string) -> (string, string) {
     stages = split_pipes(body)
     sn = string_list_size(stages)
     if sn == 0 { return "", "" }
-    val = lookup(ctx, string_list_get(stages, 0))
+    head = string_list_get(stages, 0)
+    val, _, _ = resolve_atom(ctx, head)
     i = 1
     while i < sn {
         name, args = split_name_args(string_list_get(stages, i))
@@ -676,12 +1447,46 @@ parse_string(src: string) -> (ptr, string) {
     return toks, ""
 }
 
+// Convenience: read the source from `path` and parse it. The error
+// string distinguishes read failures from parse failures so callers
+// can decide whether to surface a file-not-found vs a Liquid syntax
+// error differently. Returns (template, "") on success or (0, error).
+// Independent of `context_set_include_root` — this is purely a
+// `fs.read + parse_string` shortcut for the outermost template.
+parse_file(path: string) -> (ptr, string) {
+    src, rerr = fs.read(path)
+    if rerr != "" {
+        msg = string.concat("parse_file: cannot read ", path)
+        msg = string.concat(msg, ": ")
+        msg = string.concat(msg, rerr)
+        return 0, msg
+    }
+    t, perr = parse_string(src)
+    if perr != "" {
+        msg = string.concat("parse_file: parse error in ", path)
+        msg = string.concat(msg, ": ")
+        msg = string.concat(msg, perr)
+        return 0, msg
+    }
+    return t, ""
+}
+
 // Build a fresh string→string context.
 context_new() -> ptr {
     return map_new()
 }
 
 // Bind `key` to `value` in the context. Replaces any prior binding for `key`.
+// Configure where `{% include %}` / `{% render %}` look for partials.
+// `root` MUST be set before `render(t, ctx)` if the template uses
+// either of those tags — without it the tag errors at render time
+// (deliberate: avoids accidentally reading from `.` or `$PWD`). Path
+// traversal escapes (e.g. `'../../passwd'`) are rejected via
+// `fs.is_within_base`.
+context_set_include_root(ctx: ptr, root: string) {
+    map_put(ctx, KEY_INCLUDE_ROOT, root)
+}
+
 context_put_string(ctx: ptr, key: string, value: string) {
     map_put(ctx, key, value)
 }
@@ -700,42 +1505,1706 @@ lookup(ctx: ptr, name: string) -> string {
     return map_get_raw(ctx, name)
 }
 
-// Render `t` against `ctx`. Returns (output, "") on success or
-// (partial_output, error) on a render-time problem (currently: unknown
-// tag — anything that lexed as a TAG token but isn't yet supported).
+// `{% increment %}` and `{% decrement %}` share a namespace SEPARATE
+// from `{% assign %}` (Shopify semantics). We prefix the counter key
+// internally so it cannot collide with a user `assign`. `direction` is
+// +1 for increment, -1 for decrement. Returns (emitted_text, error).
+//
+// Shopify behaviour:
+//   - First `increment x` emits "0" and binds x = 1
+//   - First `decrement x` emits "-1" and binds x = -1
+//   - Subsequent ops increment / decrement from the stored count
+bump_counter(ctx: ptr, name: string, direction: int) -> (string, string) {
+    key = string.concat("_inc:", name)
+    if map_has(ctx, key) == 0 {
+        if direction > 0 {
+            map_put(ctx, key, "1")
+            return "0", ""
+        }
+        map_put(ctx, key, "-1")
+        return "-1", ""
+    }
+    cur_s = map_get_raw(ctx, key)
+    cur, err = string.to_int(cur_s)
+    if err != "" {
+        return "", string.concat("counter not an integer: ", cur_s)
+    }
+    if direction > 0 {
+        // emit cur, then store cur + 1
+        emit = string.from_int(cur)
+        map_put(ctx, key, string.from_int(cur + 1))
+        return emit, ""
+    }
+    // decrement: store cur - 1, then emit
+    next = cur - 1
+    map_put(ctx, key, string.from_int(next))
+    return string.from_int(next), ""
+}
+
+// `{% cycle 'a','b','c' %}` — round-robin through the args, keyed by
+// the args string. Optional named group: `{% cycle 'mygroup': 'a','b' %}`
+// (different groups maintain independent positions even with the same
+// arg list). For this slice we accept the args-only form; the
+// `group: args` form falls out by keying on the FULL `body` after the
+// `cycle` head, which is what we receive in `rest`.
+//
+// State key: `_cyc:` + the cycle's identifier (the `rest` body). That
+// keeps two `{% cycle 'a','b' %}` invocations in lock-step (Shopify
+// behaviour for identical arg lists) and lets `{% cycle 'g1': ... %}`
+// vs `{% cycle 'g2': ... %}` advance independently.
+cycle_emit(ctx: ptr, rest: string, full_body: string) -> (string, string) {
+    args_body = trim(rest)
+    if string_length(args_body) == 0 {
+        return "", "cycle: missing args"
+    }
+    // Optional `name: a,b,c` form — split on the first top-level `:`.
+    items_str = args_body
+    abn = string_length(args_body)
+    colon = find_outside_quotes(args_body, abn, 0, 58)   // ':'
+    if colon >= 0 {
+        items_str = trim(string.substring_n(args_body, abn, colon + 1, abn))
+    }
+    items = split_commas(items_str)
+    ic = string_list_size(items)
+    if ic == 0 {
+        return "", "cycle: empty arg list"
+    }
+    key = string.concat("_cyc:", full_body)
+    pos = 0
+    if map_has(ctx, key) == 1 {
+        cur, err = string.to_int(map_get_raw(ctx, key))
+        if err == "" { pos = cur }
+    }
+    if pos >= ic { pos = pos % ic }
+    raw = string_list_get(items, pos)
+    val, uerr = unquote_arg(raw)
+    if uerr != "" { return "", uerr }
+    next = pos + 1
+    if next >= ic { next = 0 }
+    map_put(ctx, key, string.from_int(next))
+    return val, ""
+}
+
+// ---------------------------------------------------------------------------
+// Condition evaluation — `{% if %}`, `{% unless %}`, `{% case %}/{% when %}`
+// ---------------------------------------------------------------------------
+//
+// Liquid's grammar for conditions is FLAT — no parentheses, no
+// precedence. `a and b or c` parses as `((a and b) or c)`.
+// Implementation: split on top-level `or` (quote-aware), then each
+// disjunct on top-level `and`, then each conjunct is `LHS OP RHS` or
+// just an atom (truthy test).
+//
+// Operators (longest match first): `==` `!=` `<=` `>=` `<` `>` `contains`.
+//
+// Truthiness rules (string-only context):
+//   - The keyword `nil` / `null` / `false` is falsy
+//   - The keyword `true` is truthy
+//   - An unbound variable name resolves to "" which is FALSY here
+//     because there's no way to distinguish "missing" from "empty
+//     string" in the v0 ctx. (Shopify's rule "" is truthy applies once
+//     the value model is std.json — we'll relax this then.)
+//   - A bound variable resolves to its string; "" is falsy, all
+//     non-empty strings are truthy.
+//   - A quoted string literal is truthy if non-empty.
+
+// Find the next occurrence of keyword `kw` in `s` (length `n`) at or
+// after `p`, only when the match is a whole word (delimited by
+// whitespace or end-of-string) AND not inside a quoted string. Returns
+// -1 if not found.
+find_word_outside_quotes(s: string, n: int, p: int, kw: string) -> int {
+    kwn = string_length(kw)
+    if kwn == 0 { return -1 }
+    i = p
+    in_s = 0
+    in_d = 0
+    while i <= n - kwn {
+        c = string.char_at_n(s, n, i)
+        if in_s == 1 {
+            if c == 39 { in_s = 0 }
+            i = i + 1
+            continue
+        }
+        if in_d == 1 {
+            if c == 34 { in_d = 0 }
+            i = i + 1
+            continue
+        }
+        if c == 39 { in_s = 1 ; i = i + 1 ; continue }
+        if c == 34 { in_d = 1 ; i = i + 1 ; continue }
+        // Boundary on the left.
+        ok = 0
+        if i == 0 { ok = 1 }
+        else {
+            cp = string.char_at_n(s, n, i - 1)
+            if cp == 32 || cp == 9 || cp == 10 || cp == 13 { ok = 1 }
+        }
+        if ok == 1 && string.index_of_from_n(s, n, kw, i) == i {
+            // Boundary on the right.
+            tail = i + kwn
+            if tail >= n {
+                return i
+            }
+            cn = string.char_at_n(s, n, tail)
+            if cn == 32 || cn == 9 || cn == 10 || cn == 13 {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Resolve an atom (a single condition term that isn't an operator
+// expression) to its string value AND a "is-truthy" hint. The boolean
+// keywords `true` / `false` / `nil` / `null` short-circuit; everything
+// else is either a quoted literal or a variable name. Returns
+// (value, truthy_int, error).
+resolve_atom(ctx: ptr, atom: string) -> (string, int, string) {
+    a = trim(atom)
+    n = string_length(a)
+    if n == 0 { return "", 0, "" }
+    if string.equals(a, "true") == 1 { return "true", 1, "" }
+    if string.equals(a, "false") == 1 { return "false", 0, "" }
+    if string.equals(a, "nil") == 1   { return "", 0, "" }
+    if string.equals(a, "null") == 1  { return "", 0, "" }
+    if string.equals(a, "empty") == 1 { return "", 0, "" }
+    if string.equals(a, "blank") == 1 { return "", 0, "" }
+    // `block.super` inside a layout child block returns the parent's
+    // default content. Outside an override (no `_block_super` key set)
+    // it returns the empty string — matches Shopify's "no super exists"
+    // case rather than erroring.
+    if string.equals(a, "block.super") == 1 {
+        if map_has(ctx, KEY_BLOCK_SUPER) == 1 {
+            v = map_get_raw(ctx, KEY_BLOCK_SUPER)
+            truthy = 0
+            if string_length(v) > 0 { truthy = 1 }
+            return v, truthy, ""
+        }
+        return "", 0, ""
+    }
+    first = string.char_at_n(a, n, 0)
+    // Integer literal (with optional leading `-`). All-digit body.
+    digit_start = 0
+    if first == 45 { digit_start = 1 }   // '-'
+    if digit_start < n {
+        all_digits = 1
+        di = digit_start
+        while di < n {
+            c = string.char_at_n(a, n, di)
+            if c < 48 || c > 57 { all_digits = 0 ; break }
+            di = di + 1
+        }
+        if all_digits == 1 {
+            // Treat the literal text as the value. Truthy if non-zero
+            // (Liquid actually treats 0 as truthy too; here we mark it
+            // truthy because the string "0" is non-empty).
+            return a, 1, ""
+        }
+    }
+    if first == 34 || first == 39 {
+        lit, err = unquote_arg(a)
+        if err != "" { return "", 0, err }
+        if string_length(lit) > 0 { return lit, 1, "" }
+        return "", 0, ""
+    }
+    // Variable lookup. Unbound → "" → falsy (see truthiness rules above).
+    // In the string-only context model we encode booleans as the strings
+    // "true" / "false", so a value of "false" must be treated as falsy
+    // even though it is a non-empty string. Same for "nil" / "null".
+    v = lookup(ctx, a)
+    if string_length(v) == 0 { return "", 0, "" }
+    if string.equals(v, "false") == 1 { return v, 0, "" }
+    if string.equals(v, "nil") == 1   { return v, 0, "" }
+    if string.equals(v, "null") == 1  { return v, 0, "" }
+    return v, 1, ""
+}
+
+// Parse the operator at `[lhs ... rhs]` boundary. Returns (op_token,
+// op_off, op_len) where op_off is the byte offset of the operator inside
+// `s`. op_token is one of: `==` `!=` `<=` `>=` `<` `>` `contains` ``.
+// Empty op_token means no operator found (the whole expression is a
+// truthiness test on the atom).
+find_operator(s: string, n: int) -> (string, int, int) {
+    // Try `contains` first as it is a word, then 2-char ops, then 1-char.
+    p = find_word_outside_quotes(s, n, 0, "contains")
+    co = -1
+    if p >= 0 { co = p }
+    // Find earliest two-char op.
+    candidates_two = string_list_new()
+    string_list_add(candidates_two, "==")
+    string_list_add(candidates_two, "!=")
+    string_list_add(candidates_two, "<=")
+    string_list_add(candidates_two, ">=")
+    best_off = -1
+    best_tok = ""
+    best_len = 0
+    k = 0
+    while k < 4 {
+        tk = string_list_get(candidates_two, k)
+        off = find_outside_quotes_str(s, n, 0, tk)
+        if off >= 0 && (best_off < 0 || off < best_off) {
+            best_off = off
+            best_tok = tk
+            best_len = 2
+        }
+        k = k + 1
+    }
+    // Single-char `<` / `>` — only counted if not part of `<=` / `>=`.
+    off_lt = find_outside_quotes(s, n, 0, 60)   // '<'
+    if off_lt >= 0 {
+        // Skip if it's actually `<=`.
+        if off_lt + 1 < n && string.char_at_n(s, n, off_lt + 1) == 61 {
+            // It's <= — already considered above.
+        } else if best_off < 0 || off_lt < best_off {
+            best_off = off_lt
+            best_tok = "<"
+            best_len = 1
+        }
+    }
+    off_gt = find_outside_quotes(s, n, 0, 62)   // '>'
+    if off_gt >= 0 {
+        if off_gt + 1 < n && string.char_at_n(s, n, off_gt + 1) == 61 {
+            // It's >= — handled above.
+        } else if best_off < 0 || off_gt < best_off {
+            best_off = off_gt
+            best_tok = ">"
+            best_len = 1
+        }
+    }
+    // `contains` wins if it appears before any other op.
+    if co >= 0 && (best_off < 0 || co < best_off) {
+        return "contains", co, 8
+    }
+    if best_off < 0 { return "", -1, 0 }
+    return best_tok, best_off, best_len
+}
+
+// `find_outside_quotes` variant that searches for a multi-byte string,
+// not a single byte. Only used by the operator finder above.
+find_outside_quotes_str(s: string, n: int, p: int, target: string) -> int {
+    tn = string_length(target)
+    if tn == 0 { return -1 }
+    i = p
+    in_s = 0
+    in_d = 0
+    while i <= n - tn {
+        c = string.char_at_n(s, n, i)
+        if in_s == 1 {
+            if c == 39 { in_s = 0 }
+            i = i + 1
+            continue
+        }
+        if in_d == 1 {
+            if c == 34 { in_d = 0 }
+            i = i + 1
+            continue
+        }
+        if c == 39 { in_s = 1 ; i = i + 1 ; continue }
+        if c == 34 { in_d = 1 ; i = i + 1 ; continue }
+        if string.index_of_from_n(s, n, target, i) == i { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Compare two resolved string values under operator `op`. Returns
+// (truthy_int, error). For numeric operators (`<` `>` `<=` `>=`) both
+// sides are int-parsed; non-numeric strings compare as 0.
+compare_values(lhs: string, rhs: string, op: string) -> (int, string) {
+    if string.equals(op, "==") == 1 {
+        if string.equals(lhs, rhs) == 1 { return 1, "" }
+        return 0, ""
+    }
+    if string.equals(op, "!=") == 1 {
+        if string.equals(lhs, rhs) == 1 { return 0, "" }
+        return 1, ""
+    }
+    if string.equals(op, "contains") == 1 {
+        if string_length(rhs) == 0 { return 1, "" }
+        if string.contains(lhs, rhs) == 1 { return 1, "" }
+        return 0, ""
+    }
+    // Ordering ops — parse as ints (Liquid is permissive; non-numeric
+    // strings compare as 0).
+    li, _ = string.to_int(lhs)
+    ri, _ = string.to_int(rhs)
+    if string.equals(op, "<") == 1 {
+        if li < ri  { return 1, "" }
+        return 0, ""
+    }
+    if string.equals(op, ">") == 1 {
+        if li > ri  { return 1, "" }
+        return 0, ""
+    }
+    if string.equals(op, "<=") == 1 {
+        if li <= ri { return 1, "" }
+        return 0, ""
+    }
+    if string.equals(op, ">=") == 1 {
+        if li >= ri { return 1, "" }
+        return 0, ""
+    }
+    return 0, string.concat("unknown comparison op: ", op)
+}
+
+// Evaluate a single conjunct: either `LHS OP RHS` or a bare atom
+// truthy-test. Returns (truthy_int, error).
+eval_term(ctx: ptr, term: string) -> (int, string) {
+    t = trim(term)
+    n = string_length(t)
+    if n == 0 { return 0, "" }
+    op, off, oplen = find_operator(t, n)
+    if string_length(op) == 0 {
+        // Truthy test on a single atom.
+        _, truthy, err = resolve_atom(ctx, t)
+        return truthy, err
+    }
+    lhs_str = trim(string.substring_n(t, n, 0, off))
+    rhs_str = trim(string.substring_n(t, n, off + oplen, n))
+    lhs_val, _, e1 = resolve_atom(ctx, lhs_str)
+    if e1 != "" { return 0, e1 }
+    rhs_val, _, e2 = resolve_atom(ctx, rhs_str)
+    if e2 != "" { return 0, e2 }
+    return compare_values(lhs_val, rhs_val, op)
+}
+
+// Evaluate a full condition expression with Liquid's flat-left
+// `or`-of-`and`-of-terms grammar. Returns (truthy_int, error).
+eval_condition(ctx: ptr, expr: string) -> (int, string) {
+    e = trim(expr)
+    n = string_length(e)
+    if n == 0 { return 0, "" }
+    // Split on top-level `or`, recurse-style by scanning manually.
+    or_segs = string_list_new()
+    p = 0
+    while p <= n {
+        cut = find_word_outside_quotes(e, n, p, "or")
+        if cut < 0 {
+            string_list_add(or_segs, trim(string.substring_n(e, n, p, n)))
+            break
+        }
+        string_list_add(or_segs, trim(string.substring_n(e, n, p, cut)))
+        p = cut + 2
+    }
+    on = string_list_size(or_segs)
+    oi = 0
+    while oi < on {
+        clause = string_list_get(or_segs, oi)
+        cn = string_length(clause)
+        // Split this clause on top-level `and`.
+        all_true = 1
+        q = 0
+        while q <= cn {
+            cut = find_word_outside_quotes(clause, cn, q, "and")
+            term = ""
+            if cut < 0 {
+                term = trim(string.substring_n(clause, cn, q, cn))
+                q = cn + 1
+            } else {
+                term = trim(string.substring_n(clause, cn, q, cut))
+                q = cut + 3
+            }
+            tv, err = eval_term(ctx, term)
+            if err != "" { return 0, err }
+            if tv == 0 {
+                all_true = 0
+                break
+            }
+        }
+        if all_true == 1 { return 1, "" }
+        oi = oi + 1
+    }
+    return 0, ""
+}
+
+// Scan tokens [start, end) for the matching `end_kw` of a block tag,
+// tracking nesting via inner `open_kw` openers. Also stops at top-level
+// `branch_kws` (e.g. `else`, `elsif`, `when`) — returns the token
+// index of whichever match comes first. The result tuple is
+// (token_index, head, ""). Token index is -1 on unterminated.
+//
+// `branch_kws` is passed as a pipe-separated string (e.g. "else|elsif"
+// or "when|else") because we don't have a string-list literal in
+// Aether. Pass "" to disable branching.
+find_block_branch(kinds: ptr, contents: ptr, start: int, end: int,
+                  open_kw: string, end_kw: string, branch_kws: string)
+                  -> (int, string, string) {
+    depth = 1
+    i = start
+    // Pre-split branch_kws on '|'.
+    branches = string_list_new()
+    bn = string_length(branch_kws)
+    if bn > 0 {
+        bp = 0
+        while bp <= bn {
+            bcut = string.index_of_from_n(branch_kws, bn, "|", bp)
+            if bcut < 0 {
+                string_list_add(branches, string.substring_n(branch_kws, bn, bp, bn))
+                break
+            }
+            string_list_add(branches, string.substring_n(branch_kws, bn, bp, bcut))
+            bp = bcut + 1
+        }
+    }
+    bcount = string_list_size(branches)
+    while i < end {
+        kind = string_list_get(kinds, i)
+        if string.equals(kind, TOK_TAG) == 1 {
+            head, _ = tag_head(string_list_get(contents, i))
+            if string.equals(head, open_kw) == 1 {
+                depth = depth + 1
+            } else if string.equals(head, end_kw) == 1 {
+                depth = depth - 1
+                if depth == 0 { return i, end_kw, "" }
+            } else if depth == 1 {
+                k = 0
+                while k < bcount {
+                    if string.equals(head, string_list_get(branches, k)) == 1 {
+                        return i, head, ""
+                    }
+                    k = k + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return -1, "", string.concat("unterminated `{% ", string.concat(open_kw, " %}`"))
+}
+
+// Walk tokens [start, end) into a string. Returns (output, "") or
+// (partial, error). Recursive for tags like `{% capture %}` whose body
+// is itself a template slice that renders into a sub-buffer.
 //
 // `comment` and `raw` were handled at lex time (their body is either
-// dropped or emitted as TEXT), so the renderer never sees a TAG token
-// for them — only the future tags we haven't implemented yet
-// (`if`/`for`/`assign`/...) reach the error path below.
-render(t: ptr, ctx: ptr) -> (string, string) {
-    kinds    = list_get_raw(t, 0)
-    contents = list_get_raw(t, 1)
-    n = string_list_size(kinds)
+// dropped or emitted as TEXT), so this walker never sees a TAG token
+// for them. `capture NAME` is paired with `endcapture` here at render
+// time: we scan forward for the matching endcapture (with nesting),
+// recurse into the inner slice to build the captured string, then
+// bind it. Any other unknown tag goes to exec_tag, which currently
+// dispatches `assign` and errors on everything else.
+render_range(kinds: ptr, contents: ptr, start: int, end: int, ctx: ptr) -> (string, string) {
     sb = strbuilder.new(64)
-    i = 0
-    while i < n {
+    i = start
+    while i < end {
         kind = string_list_get(kinds, i)
         body = string_list_get(contents, i)
         if string.equals(kind, TOK_TEXT) == 1 {
             strbuilder.append(sb, body)
         } else if string.equals(kind, TOK_OUTPUT) == 1 {
-            // OUTPUT: variable name + optional filter pipeline.
             v, err = render_output(ctx, body)
             if err != "" {
                 return strbuilder.finish(sb), err
             }
             strbuilder.append(sb, v)
         } else {
-            // TAG. Currently the only supported tags here are
-            // `assign NAME = EXPR` (mutates ctx, no output) and the
-            // lex-time-handled `comment`/`raw` (never reach this branch).
-            terr = exec_tag(ctx, body)
-            if terr != "" {
-                return strbuilder.finish(sb), terr
+            // TAG. Special-case `capture NAME` here (block tag) since
+            // it needs the token-stream view that exec_tag does not have.
+            head, rest = tag_head(body)
+            if string.equals(head, "capture") == 1 {
+                name = trim(rest)
+                if string_length(name) == 0 {
+                    return strbuilder.finish(sb), "capture: missing name"
+                }
+                end_at, err = find_capture_end(kinds, contents, i + 1, end)
+                if err != "" {
+                    return strbuilder.finish(sb), err
+                }
+                inner, ierr = render_range(kinds, contents, i + 1, end_at, ctx)
+                if ierr != "" {
+                    return strbuilder.finish(sb), ierr
+                }
+                map_put(ctx, name, inner)
+                i = end_at
+            } else if string.equals(head, "endcapture") == 1 {
+                // A stray endcapture at this level is a structural error
+                // — the matching capture should have skipped past it.
+                return strbuilder.finish(sb), "endcapture without matching capture"
+            } else if string.equals(head, "increment") == 1 {
+                name = trim(rest)
+                if string_length(name) == 0 {
+                    return strbuilder.finish(sb), "increment: missing name"
+                }
+                emit, err = bump_counter(ctx, name, 1)
+                if err != "" { return strbuilder.finish(sb), err }
+                strbuilder.append(sb, emit)
+            } else if string.equals(head, "decrement") == 1 {
+                name = trim(rest)
+                if string_length(name) == 0 {
+                    return strbuilder.finish(sb), "decrement: missing name"
+                }
+                emit, err = bump_counter(ctx, name, 0 - 1)
+                if err != "" { return strbuilder.finish(sb), err }
+                strbuilder.append(sb, emit)
+            } else if string.equals(head, "cycle") == 1 {
+                emit, err = cycle_emit(ctx, rest, body)
+                if err != "" { return strbuilder.finish(sb), err }
+                strbuilder.append(sb, emit)
+            } else if string.equals(head, "if") == 1 {
+                ifend, iferr = render_if_block(kinds, contents, i, end, ctx, sb, rest, 0)
+                if iferr != "" { return strbuilder.finish(sb), iferr }
+                i = ifend
+            } else if string.equals(head, "unless") == 1 {
+                // `unless` is `if` with inverted condition: emit body when
+                // condition is FALSY. We reuse render_if_block by passing
+                // invert=1 — it negates the initial test only (Liquid does
+                // not support `elsif` on `unless`).
+                unend, unerr = render_if_block(kinds, contents, i, end, ctx, sb, rest, 1)
+                if unerr != "" { return strbuilder.finish(sb), unerr }
+                i = unend
+            } else if string.equals(head, "case") == 1 {
+                csend, cserr = render_case_block(kinds, contents, i, end, ctx, sb, rest)
+                if cserr != "" { return strbuilder.finish(sb), cserr }
+                i = csend
+            } else if string.equals(head, "for") == 1 {
+                forend, ferr2 = render_for_block(kinds, contents, i, end, ctx, sb, rest)
+                if ferr2 != "" { return strbuilder.finish(sb), ferr2 }
+                i = forend
+            } else if string.equals(head, "tablerow") == 1 {
+                tbend, tberr = render_tablerow_block(kinds, contents, i, end, ctx, sb, rest)
+                if tberr != "" { return strbuilder.finish(sb), tberr }
+                i = tbend
+            } else if string.equals(head, "include") == 1 {
+                inc_out, inc_err = render_include_tag(ctx, rest, 0)
+                if inc_err != "" { return strbuilder.finish(sb), inc_err }
+                strbuilder.append(sb, inc_out)
+            } else if string.equals(head, "render") == 1 {
+                ren_out, ren_err = render_include_tag(ctx, rest, 1)
+                if ren_err != "" { return strbuilder.finish(sb), ren_err }
+                strbuilder.append(sb, ren_out)
+            } else if string.equals(head, "break") == 1 {
+                // Sentinel error string — the enclosing `for` loop
+                // catches it and exits. Anything else propagates the
+                // sentinel up as a real error via the public surface.
+                return strbuilder.finish(sb), "__break__"
+            } else if string.equals(head, "continue") == 1 {
+                return strbuilder.finish(sb), "__continue__"
+            } else if string.equals(head, "elsif") == 1
+                   || string.equals(head, "else") == 1
+                   || string.equals(head, "endif") == 1
+                   || string.equals(head, "endunless") == 1
+                   || string.equals(head, "endcase") == 1
+                   || string.equals(head, "endfor") == 1
+                   || string.equals(head, "endtablerow") == 1
+                   || string.equals(head, "endblock") == 1
+                   || string.equals(head, "block") == 1
+                   || string.equals(head, "layout") == 1
+                   || string.equals(head, "extends") == 1
+                   || string.equals(head, "when") == 1 {
+                return strbuilder.finish(sb),
+                    string.concat("stray `{% ", string.concat(head, " %}` outside its block"))
+            } else {
+                terr = exec_tag(ctx, body)
+                if terr != "" {
+                    return strbuilder.finish(sb), terr
+                }
             }
         }
         i = i + 1
     }
     return strbuilder.finish(sb), ""
+}
+
+// Scan tokens [start, end) for the matching `endcapture` of an outer
+// `capture`. Tracks nesting via inner `capture`/`endcapture` pairs.
+// Returns (endcapture_token_index, "") on success or (-1, error).
+find_capture_end(kinds: ptr, contents: ptr, start: int, end: int) -> (int, string) {
+    depth = 1
+    i = start
+    while i < end {
+        kind = string_list_get(kinds, i)
+        if string.equals(kind, TOK_TAG) == 1 {
+            head, _ = tag_head(string_list_get(contents, i))
+            if string.equals(head, "capture") == 1 {
+                depth = depth + 1
+            } else if string.equals(head, "endcapture") == 1 {
+                depth = depth - 1
+                if depth == 0 { return i, "" }
+            }
+        }
+        i = i + 1
+    }
+    return -1, "unterminated `{% capture %}`"
+}
+
+// Render an `{% if cond %}...{% elsif cond %}...{% else %}...{% endif %}`
+// block starting at token `start` (which is the `{% if %}` tag). When
+// `invert=1` the initial test is negated (this is how `{% unless %}` is
+// implemented; Liquid does not allow `elsif` on `unless`, so when
+// inverting we treat any branch token as an error).
+// Appends the chosen branch's output to `sb`. Returns
+// (after_endif_index, "") on success or (start, error).
+render_if_block(kinds: ptr, contents: ptr, start: int, end: int,
+                ctx: ptr, sb: ptr, first_cond: string, invert: int)
+                -> (int, string) {
+    open_kw = "if"
+    end_kw  = "endif"
+    branch_kws = "elsif|else"
+    if invert == 1 {
+        open_kw = "unless"
+        end_kw  = "endunless"
+        branch_kws = "else"   // unless supports `else` but not `elsif`
+    }
+    // First branch: evaluate `first_cond` (negated when invert).
+    cur_cond = trim(first_cond)
+    cur_invert = invert
+    branch_start = start + 1
+    matched = 0
+    // Loop over branches: at each step, find the next branch/endkw token,
+    // decide whether this branch is the active one.
+    while 1 == 1 {
+        nxt, head, ferr = find_block_branch(kinds, contents, branch_start, end,
+                                            open_kw, end_kw, branch_kws)
+        if ferr != "" { return start, ferr }
+        // Test the current branch's condition (skip the test if a prior
+        // branch already matched — we just need to skip to endif).
+        if matched == 0 {
+            take = 0
+            if string.equals(head, end_kw) == 1 || string.equals(head, "else") == 1
+               || string.equals(head, "elsif") == 1 {
+                tv = 0
+                if string_length(cur_cond) > 0 {
+                    v, cerr = eval_condition(ctx, cur_cond)
+                    if cerr != "" { return start, cerr }
+                    tv = v
+                }
+                if cur_invert == 1 {
+                    if tv == 0 { take = 1 } else { take = 0 }
+                } else {
+                    if tv == 1 { take = 1 } else { take = 0 }
+                }
+            }
+            if take == 1 {
+                inner, ierr = render_range(kinds, contents, branch_start, nxt, ctx)
+                if ierr != "" { return start, ierr }
+                strbuilder.append(sb, inner)
+                matched = 1
+            }
+        }
+        if string.equals(head, end_kw) == 1 {
+            // Return index of the end tag itself; caller's loop will bump.
+            return nxt, ""
+        }
+        // Prepare next branch's condition.
+        if string.equals(head, "else") == 1 {
+            cur_cond = "true"
+            cur_invert = 0
+        } else if string.equals(head, "elsif") == 1 {
+            _, rest = tag_head(string_list_get(contents, nxt))
+            cur_cond = trim(rest)
+            cur_invert = 0
+        } else {
+            return start, string.concat("unexpected branch token: ", head)
+        }
+        branch_start = nxt + 1
+    }
+    return start, "unreachable"
+}
+
+// Render a `{% case x %}{% when v %}...{% when w %}...{% else %}...{% endcase %}`
+// block. `subject_expr` is the body after `case` (a single atom — the
+// thing each `when` value is compared against). Each `when` accepts
+// comma-separated alternatives: `{% when 1, 2, 3 %}` matches if subject
+// equals any of them. `else` is the default branch.
+render_case_block(kinds: ptr, contents: ptr, start: int, end: int,
+                  ctx: ptr, sb: ptr, subject_expr: string)
+                  -> (int, string) {
+    subject_str = trim(subject_expr)
+    if string_length(subject_str) == 0 {
+        return start, "case: missing subject"
+    }
+    subject_val, _, serr = resolve_atom(ctx, subject_str)
+    if serr != "" { return start, serr }
+    branch_start = start + 1
+    matched = 0
+    cur_alts = ""   // "" means "skip until first branch"; "*else*" means else
+    is_else = 0
+    // The first scan finds the first `when` or `else`. We accept TEXT
+    // tokens between `case` and the first `when` as whitespace-only
+    // padding (Shopify is forgiving here).
+    while 1 == 1 {
+        nxt, head, ferr = find_block_branch(kinds, contents, branch_start, end,
+                                            "case", "endcase", "when|else")
+        if ferr != "" { return start, ferr }
+        // If we're currently INSIDE a branch (cur_alts set), render its
+        // body when this branch matched.
+        if matched == 0 && (string_length(cur_alts) > 0 || is_else == 1) {
+            take = 0
+            if is_else == 1 {
+                take = 1
+            } else {
+                // Compare subject against each alternative.
+                cn = string_length(cur_alts)
+                alts = split_commas(cur_alts)
+                ac = string_list_size(alts)
+                k = 0
+                while k < ac {
+                    av, _, aerr = resolve_atom(ctx, string_list_get(alts, k))
+                    if aerr != "" { return start, aerr }
+                    if string.equals(subject_val, av) == 1 {
+                        take = 1
+                        break
+                    }
+                    k = k + 1
+                }
+            }
+            if take == 1 {
+                inner, ierr = render_range(kinds, contents, branch_start, nxt, ctx)
+                if ierr != "" { return start, ierr }
+                strbuilder.append(sb, inner)
+                matched = 1
+            }
+        }
+        if string.equals(head, "endcase") == 1 {
+            return nxt, ""
+        }
+        if string.equals(head, "when") == 1 {
+            _, rest = tag_head(string_list_get(contents, nxt))
+            cur_alts = trim(rest)
+            is_else = 0
+        } else if string.equals(head, "else") == 1 {
+            cur_alts = ""
+            is_else = 1
+        } else {
+            return start, string.concat("unexpected case branch token: ", head)
+        }
+        branch_start = nxt + 1
+    }
+    return start, "unreachable"
+}
+
+// Parse an integer modifier `limit:N` / `offset:N` style from a tag's
+// trailing argument string. `head` is the bare keyword to look for
+// (without the trailing colon). Returns (value, found, error).
+// Accepted forms: `limit:5`, `limit: 5`, `limit:"5"` (quoted).
+parse_int_modifier(rest: string, head: string) -> (int, int, string) {
+    rn = string_length(rest)
+    needle = string.concat(head, ":")
+    nn = string_length(needle)
+    p = string.index_of_from_n(rest, rn, needle, 0)
+    if p < 0 { return 0, 0, "" }
+    // The boundary on the left must be start-of-string or whitespace.
+    if p > 0 {
+        cb = string.char_at_n(rest, rn, p - 1)
+        if cb != 32 && cb != 9 && cb != 10 && cb != 13 {
+            return 0, 0, ""
+        }
+    }
+    q = p + nn
+    // Skip optional whitespace.
+    while q < rn {
+        c = string.char_at_n(rest, rn, q)
+        if c == 32 || c == 9 { q = q + 1 } else { break }
+    }
+    if q >= rn { return 0, 0, string.concat(head, ": missing value") }
+    // Accept a quoted-string form too.
+    first = string.char_at_n(rest, rn, q)
+    if first == 34 || first == 39 {
+        end_q = q + 1
+        while end_q < rn && string.char_at_n(rest, rn, end_q) != first {
+            end_q = end_q + 1
+        }
+        if end_q >= rn { return 0, 0, string.concat(head, ": unterminated quoted arg") }
+        s = string.substring_n(rest, rn, q + 1, end_q)
+        v, ierr = string.to_int(s)
+        if ierr != "" { return 0, 0, string.concat(head, " value not an integer: ${s}") }
+        return v, 1, ""
+    }
+    // Bare digits (with optional leading `-`).
+    r = q
+    if r < rn && string.char_at_n(rest, rn, r) == 45 { r = r + 1 }
+    while r < rn {
+        c = string.char_at_n(rest, rn, r)
+        if c >= 48 && c <= 57 { r = r + 1 } else { break }
+    }
+    if r == q { return 0, 0, string.concat(head, ": value not an integer") }
+    s = string.substring_n(rest, rn, q, r)
+    v, ierr = string.to_int(s)
+    if ierr != "" { return 0, 0, string.concat(head, " value not an integer: ${s}") }
+    return v, 1, ""
+}
+
+// Whether `rest` contains a bare-word `reversed` modifier (outside quotes).
+has_reversed(rest: string) -> int {
+    rn = string_length(rest)
+    p = find_word_outside_quotes(rest, rn, 0, "reversed")
+    if p >= 0 { return 1 }
+    return 0
+}
+
+// Save the current binding of `key` (or empty if unbound) so the for
+// loop can restore it on exit. Returns (prior_value, was_bound).
+save_binding(ctx: ptr, key: string) -> (string, int) {
+    if map_has(ctx, key) == 0 { return "", 0 }
+    return map_get_raw(ctx, key), 1
+}
+
+// Inverse of save_binding.
+restore_binding(ctx: ptr, key: string, prior: string, was_bound: int) {
+    if was_bound == 1 {
+        map_put(ctx, key, prior)
+    } else {
+        // We don't have a `map_remove` exposed via std.collections. The
+        // best we can do is bind to "" — which `lookup` reports the same
+        // as missing. This matches Shopify in that the loop variable
+        // is meaningless after the loop; the only observable difference
+        // is `{% if VAR %}` which goes from "missing → falsy" before to
+        // "empty → falsy" after, both falsy. Acceptable in v0.
+        map_put(ctx, key, "")
+    }
+}
+
+// Render a `{% for VAR in (LO..HI) [limit:N] [offset:N] [reversed] %}
+// ...body...{% endfor %}` block.
+//
+// This slice supports ONLY the range form `(LO..HI)` (inclusive on
+// both ends, per Liquid). Array / list iteration waits for the value
+// model. Inside the body, `VAR`, `forloop.index`, `forloop.index0`,
+// `forloop.first`, `forloop.last`, `forloop.length`, `forloop.rindex`,
+// `forloop.rindex0` are bound in ctx.
+//
+// `break` / `continue` propagate up via sentinel error strings
+// `__break__` and `__continue__`; this function catches them.
+//
+// Returns (index_of_endfor_token, "") on success or (start, error).
+render_for_block(kinds: ptr, contents: ptr, start: int, end: int,
+                 ctx: ptr, sb: ptr, rest: string)
+                 -> (int, string) {
+    // Find matching endfor first so we know the body span.
+    body_start = start + 1
+    end_at, ferr = find_for_end(kinds, contents, body_start, end)
+    if ferr != "" { return start, ferr }
+
+    // Parse the head: `VAR in EXPR [modifiers...]`.
+    rn = string_length(rest)
+    in_off = find_word_outside_quotes(rest, rn, 0, "in")
+    if in_off < 0 {
+        return start, "for: missing `in` keyword"
+    }
+    var_name = trim(string.substring_n(rest, rn, 0, in_off))
+    if string_length(var_name) == 0 {
+        return start, "for: missing loop variable"
+    }
+    after_in = trim(string.substring_n(rest, rn, in_off + 2, rn))
+    an = string_length(after_in)
+    if an == 0 { return start, "for: missing iterable" }
+    // Expect `(LO..HI)` followed by optional modifiers.
+    if string.char_at_n(after_in, an, 0) != 40 {   // '('
+        return start, "for: only `(LO..HI)` range iteration is supported in this slice"
+    }
+    close_paren = string.index_of_from_n(after_in, an, ")", 0)
+    if close_paren < 0 { return start, "for: missing `)` in range" }
+    range_body = string.substring_n(after_in, an, 1, close_paren)
+    rbn = string_length(range_body)
+    dotdot = string.index_of_from_n(range_body, rbn, "..", 0)
+    if dotdot < 0 { return start, "for: range needs `LO..HI`" }
+    lo_str = trim(string.substring_n(range_body, rbn, 0, dotdot))
+    hi_str = trim(string.substring_n(range_body, rbn, dotdot + 2, rbn))
+    lo_val, _, lerr = resolve_atom(ctx, lo_str)
+    if lerr != "" { return start, lerr }
+    hi_val, _, herr = resolve_atom(ctx, hi_str)
+    if herr != "" { return start, herr }
+    lo, lierr = string.to_int(lo_val)
+    if lierr != "" { return start, string.concat("for: LO not an integer: ", lo_str) }
+    hi, hierr = string.to_int(hi_val)
+    if hierr != "" { return start, string.concat("for: HI not an integer: ", hi_str) }
+    // Trailing modifiers.
+    mods = trim(string.substring_n(after_in, an, close_paren + 1, an))
+    limit_n, has_limit, e_lim = parse_int_modifier(mods, "limit")
+    if e_lim != "" { return start, e_lim }
+    offset_n, has_offset, e_off = parse_int_modifier(mods, "offset")
+    if e_off != "" { return start, e_off }
+    reversed = has_reversed(mods)
+
+    // Materialize the iteration list as ints. Range is inclusive at both ends.
+    // If HI < LO, Shopify yields nothing.
+    if hi < lo {
+        return end_at, ""
+    }
+    base_len = hi - lo + 1
+    // Apply offset (drop from the front).
+    off_v = 0
+    if has_offset == 1 {
+        off_v = offset_n
+        if off_v < 0 { off_v = 0 }
+        if off_v > base_len { off_v = base_len }
+    }
+    eff_len = base_len - off_v
+    if has_limit == 1 {
+        if limit_n < 0 { limit_n = 0 }
+        if limit_n < eff_len { eff_len = limit_n }
+    }
+    if eff_len <= 0 {
+        return end_at, ""
+    }
+
+    // Save prior bindings we will overwrite.
+    prior_var, prior_var_bound = save_binding(ctx, var_name)
+    prior_idx,    pb_idx    = save_binding(ctx, "forloop.index")
+    prior_idx0,   pb_idx0   = save_binding(ctx, "forloop.index0")
+    prior_first,  pb_first  = save_binding(ctx, "forloop.first")
+    prior_last,   pb_last   = save_binding(ctx, "forloop.last")
+    prior_len,    pb_len    = save_binding(ctx, "forloop.length")
+    prior_rindex, pb_rindex = save_binding(ctx, "forloop.rindex")
+    prior_rindex0,pb_rindex0= save_binding(ctx, "forloop.rindex0")
+
+    // Length seen INSIDE the body is the post-offset/limit count
+    // (Shopify behaviour).
+    len_s = string.from_int(eff_len)
+    map_put(ctx, "forloop.length", len_s)
+
+    k = 0
+    while k < eff_len {
+        idx0 = k
+        slot = lo + off_v + k
+        if reversed == 1 {
+            slot = lo + off_v + (eff_len - 1 - k)
+        }
+        map_put(ctx, var_name, string.from_int(slot))
+        map_put(ctx, "forloop.index",  string.from_int(idx0 + 1))
+        map_put(ctx, "forloop.index0", string.from_int(idx0))
+        first_s = "false"
+        if idx0 == 0 { first_s = "true" }
+        last_s = "false"
+        if idx0 == eff_len - 1 { last_s = "true" }
+        map_put(ctx, "forloop.first", first_s)
+        map_put(ctx, "forloop.last",  last_s)
+        map_put(ctx, "forloop.rindex",  string.from_int(eff_len - idx0))
+        map_put(ctx, "forloop.rindex0", string.from_int(eff_len - 1 - idx0))
+
+        inner, ierr = render_range(kinds, contents, body_start, end_at, ctx)
+        // Catch break/continue sentinels.
+        if string.equals(ierr, "__break__") == 1 {
+            strbuilder.append(sb, inner)
+            break
+        }
+        if string.equals(ierr, "__continue__") == 1 {
+            strbuilder.append(sb, inner)
+            k = k + 1
+            continue
+        }
+        if ierr != "" {
+            // Real error — restore bindings before bubbling out.
+            restore_binding(ctx, var_name, prior_var, prior_var_bound)
+            restore_binding(ctx, "forloop.index",   prior_idx,    pb_idx)
+            restore_binding(ctx, "forloop.index0",  prior_idx0,   pb_idx0)
+            restore_binding(ctx, "forloop.first",   prior_first,  pb_first)
+            restore_binding(ctx, "forloop.last",    prior_last,   pb_last)
+            restore_binding(ctx, "forloop.length",  prior_len,    pb_len)
+            restore_binding(ctx, "forloop.rindex",  prior_rindex, pb_rindex)
+            restore_binding(ctx, "forloop.rindex0", prior_rindex0,pb_rindex0)
+            return start, ierr
+        }
+        strbuilder.append(sb, inner)
+        k = k + 1
+    }
+
+    // Restore prior bindings.
+    restore_binding(ctx, var_name, prior_var, prior_var_bound)
+    restore_binding(ctx, "forloop.index",   prior_idx,    pb_idx)
+    restore_binding(ctx, "forloop.index0",  prior_idx0,   pb_idx0)
+    restore_binding(ctx, "forloop.first",   prior_first,  pb_first)
+    restore_binding(ctx, "forloop.last",    prior_last,   pb_last)
+    restore_binding(ctx, "forloop.length",  prior_len,    pb_len)
+    restore_binding(ctx, "forloop.rindex",  prior_rindex, pb_rindex)
+    restore_binding(ctx, "forloop.rindex0", prior_rindex0,pb_rindex0)
+    return end_at, ""
+}
+
+// Render a `{% tablerow VAR in (LO..HI) [cols:N] [limit:N] [offset:N]
+// [reversed] %}...{% endtablerow %}` block.
+//
+// Shopify wraps the iteration in HTML rows and cells: each iteration
+// emits `<td class="colN">...body...</td>`, and after every `cols`
+// items a new `<tr class="rowM">` opens (the first opens immediately).
+// With no `cols`, all items go in one row. Inside the body the same
+// `forloop.*` variables that `for` exposes are bound. Range form only
+// (matches `for`).
+render_tablerow_block(kinds: ptr, contents: ptr, start: int, end: int,
+                      ctx: ptr, sb: ptr, rest: string)
+                      -> (int, string) {
+    body_start = start + 1
+    end_at, ferr = find_tablerow_end(kinds, contents, body_start, end)
+    if ferr != "" { return start, ferr }
+
+    rn = string_length(rest)
+    in_off = find_word_outside_quotes(rest, rn, 0, "in")
+    if in_off < 0 {
+        return start, "tablerow: missing `in` keyword"
+    }
+    var_name = trim(string.substring_n(rest, rn, 0, in_off))
+    if string_length(var_name) == 0 {
+        return start, "tablerow: missing loop variable"
+    }
+    after_in = trim(string.substring_n(rest, rn, in_off + 2, rn))
+    an = string_length(after_in)
+    if an == 0 { return start, "tablerow: missing iterable" }
+    if string.char_at_n(after_in, an, 0) != 40 {
+        return start, "tablerow: only `(LO..HI)` range iteration is supported in this slice"
+    }
+    close_paren = string.index_of_from_n(after_in, an, ")", 0)
+    if close_paren < 0 { return start, "tablerow: missing `)` in range" }
+    range_body = string.substring_n(after_in, an, 1, close_paren)
+    rbn = string_length(range_body)
+    dotdot = string.index_of_from_n(range_body, rbn, "..", 0)
+    if dotdot < 0 { return start, "tablerow: range needs `LO..HI`" }
+    lo_str = trim(string.substring_n(range_body, rbn, 0, dotdot))
+    hi_str = trim(string.substring_n(range_body, rbn, dotdot + 2, rbn))
+    lo_val, _, lerr = resolve_atom(ctx, lo_str)
+    if lerr != "" { return start, lerr }
+    hi_val, _, herr = resolve_atom(ctx, hi_str)
+    if herr != "" { return start, herr }
+    lo, lierr = string.to_int(lo_val)
+    if lierr != "" { return start, string.concat("tablerow: LO not an integer: ", lo_str) }
+    hi, hierr = string.to_int(hi_val)
+    if hierr != "" { return start, string.concat("tablerow: HI not an integer: ", hi_str) }
+
+    mods = trim(string.substring_n(after_in, an, close_paren + 1, an))
+    cols_n,  has_cols,   e_cols = parse_int_modifier(mods, "cols")
+    if e_cols != "" { return start, e_cols }
+    limit_n, has_limit,  e_lim  = parse_int_modifier(mods, "limit")
+    if e_lim != "" { return start, e_lim }
+    offset_n, has_offset, e_off = parse_int_modifier(mods, "offset")
+    if e_off != "" { return start, e_off }
+    reversed = has_reversed(mods)
+
+    if hi < lo {
+        // Shopify still emits an empty <tr> row.
+        strbuilder.append(sb, "<tr class=\"row1\">\n</tr>\n")
+        return end_at, ""
+    }
+    base_len = hi - lo + 1
+    off_v = 0
+    if has_offset == 1 {
+        off_v = offset_n
+        if off_v < 0 { off_v = 0 }
+        if off_v > base_len { off_v = base_len }
+    }
+    eff_len = base_len - off_v
+    if has_limit == 1 {
+        if limit_n < 0 { limit_n = 0 }
+        if limit_n < eff_len { eff_len = limit_n }
+    }
+    if eff_len <= 0 {
+        strbuilder.append(sb, "<tr class=\"row1\">\n</tr>\n")
+        return end_at, ""
+    }
+
+    cols = eff_len
+    if has_cols == 1 {
+        if cols_n <= 0 { return start, "tablerow: cols must be > 0" }
+        cols = cols_n
+    }
+
+    // Save prior bindings (same set as `for`).
+    prior_var, prior_var_bound = save_binding(ctx, var_name)
+    prior_idx,    pb_idx    = save_binding(ctx, "forloop.index")
+    prior_idx0,   pb_idx0   = save_binding(ctx, "forloop.index0")
+    prior_first,  pb_first  = save_binding(ctx, "forloop.first")
+    prior_last,   pb_last   = save_binding(ctx, "forloop.last")
+    prior_len,    pb_len    = save_binding(ctx, "forloop.length")
+    prior_rindex, pb_rindex = save_binding(ctx, "forloop.rindex")
+    prior_rindex0,pb_rindex0= save_binding(ctx, "forloop.rindex0")
+
+    map_put(ctx, "forloop.length", string.from_int(eff_len))
+
+    row = 1
+    col = 1
+    strbuilder.append(sb, "<tr class=\"row1\">\n")
+    k = 0
+    while k < eff_len {
+        slot = lo + off_v + k
+        if reversed == 1 { slot = lo + off_v + (eff_len - 1 - k) }
+        map_put(ctx, var_name, string.from_int(slot))
+        map_put(ctx, "forloop.index",  string.from_int(k + 1))
+        map_put(ctx, "forloop.index0", string.from_int(k))
+        first_s = "false"
+        if k == 0 { first_s = "true" }
+        last_s = "false"
+        if k == eff_len - 1 { last_s = "true" }
+        map_put(ctx, "forloop.first", first_s)
+        map_put(ctx, "forloop.last",  last_s)
+        map_put(ctx, "forloop.rindex",  string.from_int(eff_len - k))
+        map_put(ctx, "forloop.rindex0", string.from_int(eff_len - 1 - k))
+
+        // Open the cell.
+        strbuilder.append(sb, "<td class=\"col")
+        strbuilder.append(sb, string.from_int(col))
+        strbuilder.append(sb, "\">")
+        inner, ierr = render_range(kinds, contents, body_start, end_at, ctx)
+        if ierr != "" {
+            restore_binding(ctx, var_name, prior_var, prior_var_bound)
+            restore_binding(ctx, "forloop.index",   prior_idx,    pb_idx)
+            restore_binding(ctx, "forloop.index0",  prior_idx0,   pb_idx0)
+            restore_binding(ctx, "forloop.first",   prior_first,  pb_first)
+            restore_binding(ctx, "forloop.last",    prior_last,   pb_last)
+            restore_binding(ctx, "forloop.length",  prior_len,    pb_len)
+            restore_binding(ctx, "forloop.rindex",  prior_rindex, pb_rindex)
+            restore_binding(ctx, "forloop.rindex0", prior_rindex0,pb_rindex0)
+            return start, ierr
+        }
+        strbuilder.append(sb, inner)
+        strbuilder.append(sb, "</td>")
+
+        col = col + 1
+        // Open a new row if we've filled `cols` and there are more items.
+        if col > cols && k < eff_len - 1 {
+            row = row + 1
+            col = 1
+            strbuilder.append(sb, "</tr>\n<tr class=\"row")
+            strbuilder.append(sb, string.from_int(row))
+            strbuilder.append(sb, "\">\n")
+        }
+        k = k + 1
+    }
+    strbuilder.append(sb, "</tr>\n")
+
+    restore_binding(ctx, var_name, prior_var, prior_var_bound)
+    restore_binding(ctx, "forloop.index",   prior_idx,    pb_idx)
+    restore_binding(ctx, "forloop.index0",  prior_idx0,   pb_idx0)
+    restore_binding(ctx, "forloop.first",   prior_first,  pb_first)
+    restore_binding(ctx, "forloop.last",    prior_last,   pb_last)
+    restore_binding(ctx, "forloop.length",  prior_len,    pb_len)
+    restore_binding(ctx, "forloop.rindex",  prior_rindex, pb_rindex)
+    restore_binding(ctx, "forloop.rindex0", prior_rindex0,pb_rindex0)
+    return end_at, ""
+}
+
+// Scan [start, end) for the matching `endtablerow`, tracking nesting.
+find_tablerow_end(kinds: ptr, contents: ptr, start: int, end: int) -> (int, string) {
+    depth = 1
+    i = start
+    while i < end {
+        kind = string_list_get(kinds, i)
+        if string.equals(kind, TOK_TAG) == 1 {
+            head, _ = tag_head(string_list_get(contents, i))
+            if string.equals(head, "tablerow") == 1 {
+                depth = depth + 1
+            } else if string.equals(head, "endtablerow") == 1 {
+                depth = depth - 1
+                if depth == 0 { return i, "" }
+            }
+        }
+        i = i + 1
+    }
+    return -1, "unterminated `{% tablerow %}`"
+}
+
+// Scan [start, end) for the matching `endfor`, tracking nested `for`s.
+find_for_end(kinds: ptr, contents: ptr, start: int, end: int) -> (int, string) {
+    depth = 1
+    i = start
+    while i < end {
+        kind = string_list_get(kinds, i)
+        if string.equals(kind, TOK_TAG) == 1 {
+            head, _ = tag_head(string_list_get(contents, i))
+            if string.equals(head, "for") == 1 {
+                depth = depth + 1
+            } else if string.equals(head, "endfor") == 1 {
+                depth = depth - 1
+                if depth == 0 { return i, "" }
+            }
+        }
+        i = i + 1
+    }
+    return -1, "unterminated `{% for %}`"
+}
+
+// ---------------------------------------------------------------------------
+// Include / render — fs-gated partial inclusion
+// ---------------------------------------------------------------------------
+//
+// `{% include 'partial' %}` reads `<include_root>/partial.liquid`
+// (or the literal path if it already ends in `.liquid`), parses it,
+// and renders it against the CURRENT context (inclusions see and can
+// mutate outer scope — Shopify's `include` semantics).
+//
+// `{% render 'partial', x: v, y: w %}` is the strict sibling: the
+// partial gets a FRESH context with only the explicitly-passed
+// arguments visible. The outer scope is invisible from inside; the
+// partial cannot reach out and the partial's assignments do not
+// escape. Shopify's modern recommendation.
+//
+// Both forms require the include-root to be set on the context via
+// `context_set_include_root(ctx, root)` BEFORE calling `render`. If
+// the root is missing, the tag errors clearly — never silently
+// fall back to reading from `.` or `$PWD`. Path traversal is rejected:
+// the resolved path must be inside the include-root after `fs.clean`.
+//
+// Recursion depth is capped (default 100, matches Shopify). The depth
+// counter lives in the context under the internal key `_inc_depth`.
+
+const MAX_INCLUDE_DEPTH = 100
+
+// Internal context keys (use a `_` prefix so they cannot collide with
+// user-supplied identifiers).
+const KEY_INCLUDE_ROOT  = "_inc_root"
+const KEY_INCLUDE_DEPTH = "_inc_depth"
+const KEY_BLOCK_SUPER   = "_block_super"
+
+// Read the include-root from ctx. Returns ("", 0) when unset.
+get_include_root(ctx: ptr) -> (string, int) {
+    if map_has(ctx, KEY_INCLUDE_ROOT) == 0 { return "", 0 }
+    return map_get_raw(ctx, KEY_INCLUDE_ROOT), 1
+}
+
+// Read the current include-depth. 0 if unset.
+get_include_depth(ctx: ptr) -> int {
+    if map_has(ctx, KEY_INCLUDE_DEPTH) == 0 { return 0 }
+    v = map_get_raw(ctx, KEY_INCLUDE_DEPTH)
+    n, _ = string.to_int(v)
+    return n
+}
+
+// Resolve a partial name to its absolute path under the include-root.
+// Returns (resolved_path, "") on success or ("", error).
+//
+// Path rules:
+//   - If `name` already ends with `.liquid`, use it verbatim
+//   - Otherwise append `.liquid`
+//   - `fs.clean` collapses `..` segments
+//   - The final path must be `fs.is_within_base(root, ...)` — rejects
+//     traversal escapes
+resolve_partial_path(root: string, name: string) -> (string, string) {
+    n = string_length(name)
+    if n == 0 { return "", "include: empty partial name" }
+    full = name
+    if string.ends_with(name, ".liquid") == 0 {
+        full = string.concat(name, ".liquid")
+    }
+    joined = path_join(root, full)
+    cleaned = fs.clean(joined)
+    if fs.is_within_base(root, cleaned) == 0 {
+        return "", string.concat("include: path escapes include-root: ", name)
+    }
+    return cleaned, ""
+}
+
+// Parse a `render`-style key:value argument list.
+//   `, k1: v1, k2: v2`
+//   `, k: 'lit'`
+//   `, k: outer_var`
+// Returns the populated ctx, or ("", err). Each value is resolved
+// through `resolve_atom` against the OUTER ctx so a caller can pass
+// in a variable's current value: `{% render 'p', name: name %}`.
+parse_render_args(outer_ctx: ptr, body: string, start_after_name: int) -> (ptr, string) {
+    fresh = map_new()
+    n = string_length(body)
+    if start_after_name >= n { return fresh, "" }
+    // Walk pairs of `key: value`, separated by top-level commas
+    // (respecting quotes).
+    p = start_after_name
+    while p < n {
+        // Skip leading whitespace and comma.
+        while p < n {
+            c = string.char_at_n(body, n, p)
+            if c == 32 || c == 9 || c == 44 { p = p + 1 } else { break }
+        }
+        if p >= n { break }
+        // Read until `:` (outside quotes).
+        colon = find_outside_quotes(body, n, p, 58)
+        if colon < 0 { return 0, "render: missing `:` in args" }
+        key = trim(string.substring_n(body, n, p, colon))
+        if string_length(key) == 0 { return 0, "render: missing arg name" }
+        // Read until next top-level comma (or end).
+        comma = find_outside_quotes(body, n, colon + 1, 44)
+        end_off = n
+        if comma >= 0 { end_off = comma }
+        raw_val = trim(string.substring_n(body, n, colon + 1, end_off))
+        val, _, verr = resolve_atom(outer_ctx, raw_val)
+        if verr != "" { return 0, verr }
+        map_put(fresh, key, val)
+        if comma < 0 { break }
+        p = comma + 1
+    }
+    return fresh, ""
+}
+
+// Dispatch `{% include %}` / `{% render %}` body. `strict` is 1 for
+// the `render` form (fresh ctx) or 0 for `include` (inherit ctx).
+render_include_tag(outer_ctx: ptr, rest: string, strict: int) -> (string, string) {
+    tag_name = "include"
+    if strict == 1 { tag_name = "render" }
+    rn = string_length(rest)
+    if rn == 0 {
+        return "", string.concat(tag_name, ": missing partial name")
+    }
+    // First arg is the quoted partial name.
+    first = string.char_at_n(rest, rn, 0)
+    if first != 34 && first != 39 {
+        return "", string.concat(tag_name, ": partial name must be a quoted string")
+    }
+    // Find the matching close quote.
+    close_q = -1
+    j = 1
+    while j < rn {
+        if string.char_at_n(rest, rn, j) == first { close_q = j ; break }
+        j = j + 1
+    }
+    if close_q < 0 {
+        return "", string.concat(tag_name, ": unterminated partial name")
+    }
+    name = string.substring_n(rest, rn, 1, close_q)
+
+    root, has_root = get_include_root(outer_ctx)
+    if has_root == 0 {
+        return "", string.concat(tag_name, ": no include-root set — call context_set_include_root() first")
+    }
+    depth = get_include_depth(outer_ctx)
+    if depth >= MAX_INCLUDE_DEPTH {
+        return "", string.concat(tag_name, ": recursion depth limit (100) exceeded")
+    }
+
+    resolved, perr = resolve_partial_path(root, name)
+    if perr != "" { return "", perr }
+    source, ferr = fs.read(resolved)
+    if ferr != "" {
+        return "", string.concat(string.concat(tag_name, ": cannot read partial: "), name)
+    }
+    t, terr = parse_string(source)
+    if terr != "" {
+        return "", string.concat(string.concat(tag_name, " parse error in "), string.concat(name, string.concat(": ", terr)))
+    }
+
+    // Build the child ctx.
+    child = outer_ctx
+    if strict == 1 {
+        // Fresh ctx with just the named args (resolved against OUTER).
+        // Walk past the closing quote of the name, then expect optional
+        // `, k: v, ...` pairs.
+        args_ctx, aerr = parse_render_args(outer_ctx, rest, close_q + 1)
+        if aerr != "" { return "", aerr }
+        child = args_ctx
+        // Carry the include-root through so `render` inside `render`
+        // works without forcing the caller to set it twice.
+        map_put(child, KEY_INCLUDE_ROOT, root)
+    }
+    // Bump depth on the child ctx for both forms.
+    map_put(child, KEY_INCLUDE_DEPTH, string.from_int(depth + 1))
+
+    out, rerr = render(t, child)
+
+    // Restore outer_ctx's depth (only needed for `include`, since
+    // child==outer_ctx there). For `render` the child ctx is dropped.
+    if strict == 0 {
+        if depth == 0 {
+            map_put(outer_ctx, KEY_INCLUDE_DEPTH, "0")
+        } else {
+            map_put(outer_ctx, KEY_INCLUDE_DEPTH, string.from_int(depth))
+        }
+    }
+
+    if rerr != "" {
+        return out, string.concat(string.concat(tag_name, " of "), string.concat(name, string.concat(" failed: ", rerr)))
+    }
+    return out, ""
+}
+
+// Find the first non-whitespace-TEXT token at or after `start`.
+// Returns the index, or `end` if none exist (the body is all
+// whitespace). TAG tokens and OUTPUT tokens are immediately
+// non-whitespace; TEXT tokens are skipped only if their content is
+// pure ASCII whitespace.
+first_meaningful_token(kinds: ptr, contents: ptr, start: int, end: int) -> int {
+    i = start
+    while i < end {
+        kind = string_list_get(kinds, i)
+        if string.equals(kind, TOK_TEXT) == 1 {
+            body = string_list_get(contents, i)
+            n = string_length(body)
+            j = 0
+            all_ws = 1
+            while j < n {
+                c = string.char_at_n(body, n, j)
+                if c != 32 && c != 9 && c != 10 && c != 13 {
+                    all_ws = 0
+                    break
+                }
+                j = j + 1
+            }
+            if all_ws == 1 { i = i + 1 ; continue }
+            return i
+        }
+        return i
+    }
+    return end
+}
+
+// Scan [start, end) for the matching `endblock`, tracking nesting via
+// inner `block` openers. Returns (endblock_token_index, "") on success
+// or (-1, error).
+find_block_end_tag(kinds: ptr, contents: ptr, start: int, end: int) -> (int, string) {
+    depth = 1
+    i = start
+    while i < end {
+        kind = string_list_get(kinds, i)
+        if string.equals(kind, TOK_TAG) == 1 {
+            head, _ = tag_head(string_list_get(contents, i))
+            if string.equals(head, "block") == 1 {
+                depth = depth + 1
+            } else if string.equals(head, "endblock") == 1 {
+                depth = depth - 1
+                if depth == 0 { return i, "" }
+            }
+        }
+        i = i + 1
+    }
+    return -1, "unterminated `{% block %}`"
+}
+
+// Walk the child template and collect `{% block NAME %}...{% endblock %}`
+// ranges into a map of NAME → packed "start:end" string. (We need int
+// pairs but our map is string-keyed; pack as "start_idx,end_idx".)
+// Other top-level content in the child is silently dropped (Shopify
+// spec for layout-using templates).
+collect_child_blocks(kinds: ptr, contents: ptr, start: int, end: int) -> (ptr, string) {
+    blocks = map_new()
+    i = start
+    while i < end {
+        kind = string_list_get(kinds, i)
+        if string.equals(kind, TOK_TAG) == 1 {
+            head, rest = tag_head(string_list_get(contents, i))
+            if string.equals(head, "block") == 1 {
+                name = trim(rest)
+                if string_length(name) == 0 {
+                    return blocks, "block: missing name"
+                }
+                body_start = i + 1
+                eb, err = find_block_end_tag(kinds, contents, body_start, end)
+                if err != "" { return blocks, err }
+                // Pack as "start,end" (token indices into the CHILD stream).
+                packed = string.concat(string.from_int(body_start), ",")
+                packed = string.concat(packed, string.from_int(eb))
+                map_put(blocks, name, packed)
+                i = eb + 1
+                continue
+            }
+            // Disallow `endblock` outside a block (will be caught later
+            // — we just skip here).
+        }
+        i = i + 1
+    }
+    return blocks, ""
+}
+
+// Render the parent template against `ctx`, substituting child blocks
+// (from `child_blocks`, packed "start,end" referencing CHILD's token
+// streams) wherever the parent declares a matching `{% block %}`.
+// `child_kinds`/`child_contents` are the child's token streams so we
+// can render an overridden block's content in `ctx`.
+render_parent_with_blocks(
+    parent_kinds: ptr, parent_contents: ptr, parent_start: int, parent_end: int,
+    child_kinds: ptr, child_contents: ptr,
+    child_blocks: ptr, ctx: ptr) -> (string, string) {
+    sb = strbuilder.new(64)
+    i = parent_start
+    while i < parent_end {
+        kind = string_list_get(parent_kinds, i)
+        body = string_list_get(parent_contents, i)
+        if string.equals(kind, TOK_TEXT) == 1 {
+            strbuilder.append(sb, body)
+            i = i + 1
+            continue
+        }
+        if string.equals(kind, TOK_OUTPUT) == 1 {
+            v, err = render_output(ctx, body)
+            if err != "" { return strbuilder.finish(sb), err }
+            strbuilder.append(sb, v)
+            i = i + 1
+            continue
+        }
+        // TAG.
+        head, rest = tag_head(body)
+        if string.equals(head, "block") == 1 {
+            name = trim(rest)
+            if string_length(name) == 0 {
+                return strbuilder.finish(sb), "block: missing name"
+            }
+            body_start = i + 1
+            eb, err = find_block_end_tag(parent_kinds, parent_contents, body_start, parent_end)
+            if err != "" { return strbuilder.finish(sb), err }
+            override_packed = ""
+            if map_has(child_blocks, name) == 1 {
+                override_packed = map_get_raw(child_blocks, name)
+            }
+            if string_length(override_packed) > 0 {
+                // Render parent's default first so `{{ block.super }}`
+                // inside the child override has something to emit.
+                super_text, serr = render_range(parent_kinds, parent_contents, body_start, eb, ctx)
+                if serr != "" { return strbuilder.finish(sb), serr }
+                // Save any prior `_block_super` (nested layout case is
+                // currently rejected — see above — but cheap to be tidy
+                // in case future code lifts that restriction).
+                had_prior = map_has(ctx, KEY_BLOCK_SUPER)
+                prior = ""
+                if had_prior == 1 { prior = map_get_raw(ctx, KEY_BLOCK_SUPER) }
+                map_put(ctx, KEY_BLOCK_SUPER, super_text)
+                // Render child's region instead of parent's default.
+                comma = string.index_of_from_n(override_packed, string_length(override_packed), ",", 0)
+                lo_str = string.substring_n(override_packed, string_length(override_packed), 0, comma)
+                hi_str = string.substring_n(override_packed, string_length(override_packed), comma + 1, string_length(override_packed))
+                lo, _ = string.to_int(lo_str)
+                hi, _ = string.to_int(hi_str)
+                inner, rerr = render_range(child_kinds, child_contents, lo, hi, ctx)
+                // Restore prior `_block_super` regardless of error.
+                if had_prior == 1 {
+                    map_put(ctx, KEY_BLOCK_SUPER, prior)
+                } else {
+                    map_remove(ctx, KEY_BLOCK_SUPER)
+                }
+                if rerr != "" { return strbuilder.finish(sb), rerr }
+                strbuilder.append(sb, inner)
+            } else {
+                // Use the parent's default content.
+                inner, rerr = render_range(parent_kinds, parent_contents, body_start, eb, ctx)
+                if rerr != "" { return strbuilder.finish(sb), rerr }
+                strbuilder.append(sb, inner)
+            }
+            i = eb + 1
+            continue
+        }
+        if string.equals(head, "endblock") == 1 {
+            return strbuilder.finish(sb), "endblock without matching block"
+        }
+        if string.equals(head, "layout") == 1 || string.equals(head, "extends") == 1 {
+            return strbuilder.finish(sb), "layout: nested layouts are not supported"
+        }
+        // Any other tag: delegate to the normal renderer for a single
+        // token. Easiest implementation: call render_range over the
+        // singleton window [i, i+1).
+        single, serr = render_range(parent_kinds, parent_contents, i, i + 1, ctx)
+        if serr != "" { return strbuilder.finish(sb), serr }
+        strbuilder.append(sb, single)
+        i = i + 1
+    }
+    return strbuilder.finish(sb), ""
+}
+
+// Render a template that begins with `{% layout 'parent' %}`. The
+// caller has already determined `lay_idx` (the index of the layout
+// tag) and `parent_name` (the quoted-stripped layout target).
+//
+// Mechanics:
+//   - Resolve `parent_name` to a file using the same include-root
+//     plumbing that `{% include %}` uses.
+//   - Collect `{% block %}…{% endblock %}` ranges from the child.
+//   - Render the parent template, substituting child block contents
+//     wherever the parent declares a `{% block %}`.
+//
+// Same security & sandbox story as include: requires
+// `context_set_include_root`; rejects path traversal; depth-100 cap.
+render_layout_template(child_kinds: ptr, child_contents: ptr, child_n: int,
+                       lay_idx: int, parent_name: string, ctx: ptr) -> (string, string) {
+    root, has_root = get_include_root(ctx)
+    if has_root == 0 {
+        return "", "layout: no include-root set — call context_set_include_root() first"
+    }
+    depth = get_include_depth(ctx)
+    if depth >= MAX_INCLUDE_DEPTH {
+        return "", "layout: recursion depth limit (100) exceeded"
+    }
+    resolved, perr = resolve_partial_path(root, parent_name)
+    if perr != "" { return "", perr }
+    src, ferr = fs.read(resolved)
+    if ferr != "" {
+        return "", string.concat("layout: cannot read parent: ", parent_name)
+    }
+    parent_t, terr = parse_string(src)
+    if terr != "" {
+        msg = string.concat("layout parse error in ", parent_name)
+        msg = string.concat(msg, ": ")
+        msg = string.concat(msg, terr)
+        return "", msg
+    }
+    parent_kinds    = list_get_raw(parent_t, 0)
+    parent_contents = list_get_raw(parent_t, 1)
+    parent_n = string_list_size(parent_kinds)
+
+    // Collect child blocks from AFTER the layout tag.
+    child_blocks, cerr = collect_child_blocks(child_kinds, child_contents, lay_idx + 1, child_n)
+    if cerr != "" { return "", cerr }
+
+    // Bump depth so a parent's `{% layout %}` (or any include in
+    // the parent) participates in the same recursion budget.
+    map_put(ctx, KEY_INCLUDE_DEPTH, string.from_int(depth + 1))
+    out, rerr = render_parent_with_blocks(parent_kinds, parent_contents, 0, parent_n,
+                                          child_kinds, child_contents, child_blocks, ctx)
+    // Restore depth.
+    if depth == 0 {
+        map_put(ctx, KEY_INCLUDE_DEPTH, "0")
+    } else {
+        map_put(ctx, KEY_INCLUDE_DEPTH, string.from_int(depth))
+    }
+    if rerr != "" {
+        msg = string.concat("layout render of ", parent_name)
+        msg = string.concat(msg, " failed: ")
+        msg = string.concat(msg, rerr)
+        return out, msg
+    }
+    return out, ""
+}
+
+// Render `t` against `ctx`. Returns (output, "") on success or
+// (partial_output, error) on a render-time problem. Stray `break` /
+// `continue` outside any `for` loop surface as a clear error.
+//
+// If the first meaningful token is `{% layout 'parent' %}`, this
+// dispatches to the layout/block engine; otherwise it walks the
+// stream linearly via `render_range`.
+render(t: ptr, ctx: ptr) -> (string, string) {
+    kinds    = list_get_raw(t, 0)
+    contents = list_get_raw(t, 1)
+    n = string_list_size(kinds)
+
+    // Detect `{% layout 'parent' %}` as the first meaningful token.
+    fm = first_meaningful_token(kinds, contents, 0, n)
+    if fm < n {
+        kind = string_list_get(kinds, fm)
+        if string.equals(kind, TOK_TAG) == 1 {
+            head, rest = tag_head(string_list_get(contents, fm))
+            if string.equals(head, "layout") == 1 || string.equals(head, "extends") == 1 {
+                rn = string_length(rest)
+                if rn == 0 {
+                    return "", "layout: missing parent name"
+                }
+                first = string.char_at_n(rest, rn, 0)
+                if first != 34 && first != 39 {
+                    return "", "layout: parent name must be a quoted string"
+                }
+                close_q = -1
+                j = 1
+                while j < rn {
+                    if string.char_at_n(rest, rn, j) == first { close_q = j ; break }
+                    j = j + 1
+                }
+                if close_q < 0 {
+                    return "", "layout: unterminated parent name"
+                }
+                parent_name = string.substring_n(rest, rn, 1, close_q)
+                return render_layout_template(kinds, contents, n, fm, parent_name, ctx)
+            }
+        }
+    }
+
+    out, err = render_range(kinds, contents, 0, n, ctx)
+    if string.equals(err, "__break__") == 1 {
+        return out, "`{% break %}` outside `{% for %}` loop"
+    }
+    if string.equals(err, "__continue__") == 1 {
+        return out, "`{% continue %}` outside `{% for %}` loop"
+    }
+    return out, err
+}
+
+// Append-into variant of `render`: writes directly to a caller-supplied
+// `strbuilder` and returns just an error string. Useful when stitching
+// together many templates (e.g. a static-site build that walks every
+// page) — avoids the per-call allocate-finish round trip. Returns ""
+// on success or an error string. Partial output written before an
+// error is left in the strbuilder (matches `render`'s "partial output
+// plus error" shape).
+render_to_strbuilder(t: ptr, ctx: ptr, sb: ptr) -> string {
+    out, err = render(t, ctx)
+    strbuilder.append(sb, out)
+    return err
 }
