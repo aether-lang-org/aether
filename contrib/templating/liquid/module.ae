@@ -1,0 +1,336 @@
+// contrib.templating.liquid — Shopify Liquid templating engine for Aether.
+//
+// A faithful pure-Aether port of the Liquid template language
+// (https://shopify.github.io/liquid/). Sandbox-friendly: no reflection,
+// no eval, filter set is explicit.
+//
+// Current scope (incremental build):
+//
+//   - Text passthrough
+//   - `{{ varname }}` single-segment variable lookup against a string map
+//   - `{% comment %}...{% endcomment %}` (body suppressed)
+//   - `{% raw %}...{% endraw %}` (body emitted verbatim — no interpolation)
+//
+// Not yet implemented (see TODO.md): dotted attribute access, filters,
+// most other tags (`if`/`for`/`assign`/`case`/`capture`/...),
+// includes, layouts, JSON-tree value model.
+//
+// Surface:
+//
+//   import contrib.templating.liquid
+//
+//   t, err = liquid.parse_string("Hello {{ name }}!")
+//
+//   ctx = liquid.context_new()
+//   liquid.context_put_string(ctx, "name", "alice")
+//
+//   out, _ = liquid.render(t, ctx)
+//   // → "Hello alice!"
+
+import std.string
+import std.strbuilder
+import std.map
+import std.collections
+
+exports (
+    parse_string,
+    context_new, context_put_string, context_free,
+    render
+)
+
+// ---------------------------------------------------------------------------
+// Lexer — split source into TEXT / OUTPUT / TAG segments
+// ---------------------------------------------------------------------------
+//
+// We store the token stream as parallel string_lists wrapped in a list:
+//   index 0: token-kind strings ("TEXT" / "OUTPUT" / "TAG")
+//   index 1: token-content strings
+//
+// `{% comment %}...{% endcomment %}` and `{% raw %}...{% endraw %}` are
+// recognised at lex time and collapsed:
+//   - comment-body bytes are dropped (no token emitted for the body)
+//   - raw-body bytes are emitted as a single TEXT token verbatim, even
+//     if they contain `{{` or `{%`
+//
+// Any other `{% ... %}` body becomes a TAG token. The renderer treats
+// unknown tags as a render-time error, so the lexer can hand them
+// through without parsing — future tag support is purely renderer-side
+// growth.
+
+const TOK_TEXT   = "TEXT"
+const TOK_OUTPUT = "OUTPUT"
+const TOK_TAG    = "TAG"
+
+// Find the next `{{` OR `{%` starting at `p`. Returns (offset, kind)
+// where kind is "{{" or "{%". Returns (-1, "") if none found.
+find_next_delim(src: string, n: int, p: int) -> (int, string) {
+    i = p
+    while i < n - 1 {
+        if string.char_at_n(src, n, i) == 123 {       // '{'
+            nxt = string.char_at_n(src, n, i + 1)
+            if nxt == 123 { return i, "{{" }
+            if nxt == 37  { return i, "{%" }
+        }
+        i = i + 1
+    }
+    return -1, ""
+}
+
+// Find `}}` starting at `p`. Returns -1 if not found.
+find_output_close(src: string, n: int, p: int) -> int {
+    i = p
+    while i < n - 1 {
+        if string.char_at_n(src, n, i) == 125 {       // '}'
+            if string.char_at_n(src, n, i + 1) == 125 {  // '}'
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Find `%}` starting at `p`. Returns -1 if not found.
+find_tag_close(src: string, n: int, p: int) -> int {
+    i = p
+    while i < n - 1 {
+        if string.char_at_n(src, n, i) == 37 {        // '%'
+            if string.char_at_n(src, n, i + 1) == 125 {  // '}'
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Return 1 if the trimmed tag body is literally the keyword `kw`
+// (allowing for one or more trailing whitespace + extra chars to be
+// rejected — `comment` MUST match exactly so that `commented` doesn't
+// trip it). We currently use this only for the bare opener/closer
+// keywords (`comment`, `endcomment`, `raw`, `endraw`).
+tag_body_is(body: string, kw: string) -> int {
+    return string.equals(body, kw)
+}
+
+// Trim ASCII whitespace from both ends of `s`.
+trim(s: string) -> string {
+    n = string_length(s)
+    a = 0
+    while a < n {
+        c = string.char_at_n(s, n, a)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            a = a + 1
+        } else {
+            break
+        }
+    }
+    b = n
+    while b > a {
+        c = string.char_at_n(s, n, b - 1)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            b = b - 1
+        } else {
+            break
+        }
+    }
+    return string.substring_n(s, n, a, b)
+}
+
+// Lex `src` into the parallel-list token stream described above. Returns
+// (tokens, "") on success or (tokens, error_message) on a syntax problem.
+lex(src: string) -> (ptr, string) {
+    kinds    = string_list_new()
+    contents = string_list_new()
+    n = string_length(src)
+    pos = 0
+    while pos < n {
+        open_at, opener = find_next_delim(src, n, pos)
+        if open_at < 0 {
+            // Trailing text only.
+            tail = string.substring_n(src, n, pos, n)
+            string_list_add(kinds, TOK_TEXT)
+            string_list_add(contents, tail)
+            pos = n
+        } else {
+            if open_at > pos {
+                text = string.substring_n(src, n, pos, open_at)
+                string_list_add(kinds, TOK_TEXT)
+                string_list_add(contents, text)
+            }
+            if string.equals(opener, "{{") == 1 {
+                // Output tag.
+                close_at = find_output_close(src, n, open_at + 2)
+                if close_at < 0 {
+                    tail = string.substring_n(src, n, open_at, n)
+                    string_list_add(kinds, TOK_TEXT)
+                    string_list_add(contents, tail)
+                    toks = list_new()
+                    list_add_raw(toks, kinds)
+                    list_add_raw(toks, contents)
+                    return toks, "unterminated `{{`"
+                }
+                body = trim(string.substring_n(src, n, open_at + 2, close_at))
+                string_list_add(kinds, TOK_OUTPUT)
+                string_list_add(contents, body)
+                pos = close_at + 2
+            } else {
+                // Tag — `{% ... %}`.
+                close_at = find_tag_close(src, n, open_at + 2)
+                if close_at < 0 {
+                    tail = string.substring_n(src, n, open_at, n)
+                    string_list_add(kinds, TOK_TEXT)
+                    string_list_add(contents, tail)
+                    toks = list_new()
+                    list_add_raw(toks, kinds)
+                    list_add_raw(toks, contents)
+                    return toks, "unterminated `{%`"
+                }
+                body = trim(string.substring_n(src, n, open_at + 2, close_at))
+                pos_after = close_at + 2
+
+                // `comment` and `raw` are recognised at lex time: scan
+                // forward to the matching `endcomment`/`endraw` and
+                // either drop or preserve the body in one TEXT token.
+                if tag_body_is(body, "comment") == 1 {
+                    end_at, end_close = find_block_end(src, n, pos_after, "endcomment")
+                    if end_at < 0 {
+                        toks = list_new()
+                        list_add_raw(toks, kinds)
+                        list_add_raw(toks, contents)
+                        return toks, "unterminated `{% comment %}`"
+                    }
+                    pos = end_close
+                } else if tag_body_is(body, "raw") == 1 {
+                    end_at, end_close = find_block_end(src, n, pos_after, "endraw")
+                    if end_at < 0 {
+                        toks = list_new()
+                        list_add_raw(toks, kinds)
+                        list_add_raw(toks, contents)
+                        return toks, "unterminated `{% raw %}`"
+                    }
+                    raw_body = string.substring_n(src, n, pos_after, end_at)
+                    string_list_add(kinds, TOK_TEXT)
+                    string_list_add(contents, raw_body)
+                    pos = end_close
+                } else {
+                    // Future tag — pass through; renderer will error.
+                    string_list_add(kinds, TOK_TAG)
+                    string_list_add(contents, body)
+                    pos = pos_after
+                }
+            }
+        }
+    }
+    toks = list_new()
+    list_add_raw(toks, kinds)
+    list_add_raw(toks, contents)
+    return toks, ""
+}
+
+// Find a `{% endXX %}` block-end starting at `p`. Returns
+//   (body_end_offset, after_close_offset)
+// where `body_end_offset` is the byte just BEFORE the `{%` (i.e. the
+// last byte of the block body), and `after_close_offset` is the byte
+// AFTER the closing `%}`. On failure returns (-1, -1).
+find_block_end(src: string, n: int, p: int, endkw: string) -> (int, int) {
+    i = p
+    while i < n - 1 {
+        if string.char_at_n(src, n, i) == 123 &&
+           string.char_at_n(src, n, i + 1) == 37 {
+            // Found `{%`. Read its body and check for the matching endXX.
+            body_start = i + 2
+            close_at = find_tag_close(src, n, body_start)
+            if close_at < 0 {
+                return -1, -1
+            }
+            body = trim(string.substring_n(src, n, body_start, close_at))
+            if string.equals(body, endkw) == 1 {
+                return i, close_at + 2
+            }
+            // Not the matching close; skip past this inner tag and continue.
+            i = close_at + 2
+        } else {
+            i = i + 1
+        }
+    }
+    return -1, -1
+}
+
+// ---------------------------------------------------------------------------
+// Public surface
+// ---------------------------------------------------------------------------
+//
+// A parsed template is the token list itself — we walk it directly at
+// render time. This keeps v0 small. Once tags arrive, an AST sits between
+// the lexer and renderer.
+//
+// A context is a `std.map` of string → string. Once filters and dotted
+// access land, the value side becomes a std.json value tree (see TODO.md
+// "Value model").
+
+// Parse a Liquid source string. Returns (template_handle, "") on success
+// or (null, error) on a syntax problem.
+parse_string(src: string) -> (ptr, string) {
+    toks, err = lex(src)
+    if err != "" {
+        return 0, err
+    }
+    return toks, ""
+}
+
+// Build a fresh string→string context.
+context_new() -> ptr {
+    return map_new()
+}
+
+// Bind `key` to `value` in the context. Replaces any prior binding for `key`.
+context_put_string(ctx: ptr, key: string, value: string) {
+    map_put(ctx, key, value)
+}
+
+// Free the context's storage.
+context_free(ctx: ptr) {
+    map_free(ctx)
+}
+
+// Look up `name` in the context. Returns the empty string for an unbound
+// name — Shopify Liquid's documented behaviour for `{{ undefined }}`.
+lookup(ctx: ptr, name: string) -> string {
+    if map_has(ctx, name) == 0 {
+        return ""
+    }
+    return map_get_raw(ctx, name)
+}
+
+// Render `t` against `ctx`. Returns (output, "") on success or
+// (partial_output, error) on a render-time problem (currently: unknown
+// tag — anything that lexed as a TAG token but isn't yet supported).
+//
+// `comment` and `raw` were handled at lex time (their body is either
+// dropped or emitted as TEXT), so the renderer never sees a TAG token
+// for them — only the future tags we haven't implemented yet
+// (`if`/`for`/`assign`/...) reach the error path below.
+render(t: ptr, ctx: ptr) -> (string, string) {
+    kinds    = list_get_raw(t, 0)
+    contents = list_get_raw(t, 1)
+    n = string_list_size(kinds)
+    sb = strbuilder.new(64)
+    i = 0
+    while i < n {
+        kind = string_list_get(kinds, i)
+        body = string_list_get(contents, i)
+        if string.equals(kind, TOK_TEXT) == 1 {
+            strbuilder.append(sb, body)
+        } else if string.equals(kind, TOK_OUTPUT) == 1 {
+            // v0 OUTPUT: bare variable names only.
+            strbuilder.append(sb, lookup(ctx, body))
+        } else {
+            // TAG: unsupported in current scope. Return the partial
+            // output we have so the caller can see how far we got.
+            return strbuilder.finish(sb), string.concat("unsupported tag: ", body)
+        }
+        i = i + 1
+    }
+    return strbuilder.finish(sb), ""
+}
