@@ -258,6 +258,403 @@ find_block_end(src: string, n: int, p: int, endkw: string) -> (int, int) {
 }
 
 // ---------------------------------------------------------------------------
+// Filters — pipeline applied at OUTPUT render time
+// ---------------------------------------------------------------------------
+//
+// The OUTPUT body is `expr (| filter[:arg[,arg]*])*`. We split on top-level
+// `|` first (respecting quoted strings so a literal `|` inside `"a|b"`
+// stays intact), then each filter stage on top-level `:` between name and
+// args, then args on top-level `,`. Single- and double-quoted string
+// literals are supported; an unquoted arg is rejected as an error in this
+// slice (variable / number args arrive with Layer 2).
+//
+// Implemented filters (string-only in/out for this slice):
+//
+//   no-arg:  upcase  downcase  capitalize  strip  lstrip  rstrip
+//            reverse size
+//   1 arg:   append:"s"  prepend:"s"  default:"s"  truncate:N
+//   2 args:  replace:"old","new"
+//
+// `truncate:N` parses the int from its single string arg
+// (`truncate:"5"` works; bare `truncate:5` requires Layer 2 expression
+// support and is rejected here). `size` returns a numeric string.
+
+// Find the next byte in `s` (length `n`) at or after `p` that matches
+// `target` AND is not inside a single- or double-quoted string. Returns
+// -1 if not found. The Liquid filter syntax doesn't allow escapes inside
+// quoted strings (Shopify docs are clear on this — a `"` inside a
+// double-quoted literal must use the other quote style), so a simple
+// in-quote flag is enough.
+find_outside_quotes(s: string, n: int, p: int, target: int) -> int {
+    i = p
+    in_s = 0
+    in_d = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if in_s == 1 {
+            if c == 39 { in_s = 0 }   // '\''
+        } else if in_d == 1 {
+            if c == 34 { in_d = 0 }   // '"'
+        } else {
+            if c == 39      { in_s = 1 }
+            else if c == 34 { in_d = 1 }
+            else if c == target { return i }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Split `body` on top-level pipes, respecting quotes. Returns a
+// string_list of trimmed segments. `"x | upcase | append:'!'"` →
+// ["x", "upcase", "append:'!'"].
+split_pipes(body: string) -> ptr {
+    out = string_list_new()
+    n = string_length(body)
+    p = 0
+    while p <= n {
+        cut = find_outside_quotes(body, n, p, 124)   // '|'
+        if cut < 0 {
+            string_list_add(out, trim(string.substring_n(body, n, p, n)))
+            return out
+        }
+        string_list_add(out, trim(string.substring_n(body, n, p, cut)))
+        p = cut + 1
+    }
+    return out
+}
+
+// Split a filter stage `name:arg1,arg2` into (name, args_string). Returns
+// ("name", "") for an arg-less filter.
+split_name_args(stage: string) -> (string, string) {
+    n = string_length(stage)
+    cut = find_outside_quotes(stage, n, 0, 58)   // ':'
+    if cut < 0 {
+        return trim(stage), ""
+    }
+    name = trim(string.substring_n(stage, n, 0, cut))
+    rest = trim(string.substring_n(stage, n, cut + 1, n))
+    return name, rest
+}
+
+// Split an args string `'a',"b",'c'` on top-level commas. Returns a
+// string_list of trimmed segments.
+split_commas(args: string) -> ptr {
+    out = string_list_new()
+    n = string_length(args)
+    if n == 0 { return out }
+    p = 0
+    while p <= n {
+        cut = find_outside_quotes(args, n, p, 44)   // ','
+        if cut < 0 {
+            string_list_add(out, trim(string.substring_n(args, n, p, n)))
+            return out
+        }
+        string_list_add(out, trim(string.substring_n(args, n, p, cut)))
+        p = cut + 1
+    }
+    return out
+}
+
+// Unquote a literal arg. Returns (value, "") on success or ("", error).
+// Rejects unquoted args in this slice — variable / number args land
+// with the Layer 2 expression parser.
+unquote_arg(a: string) -> (string, string) {
+    n = string_length(a)
+    if n < 2 {
+        return "", string.concat("filter arg must be a quoted string: ", a)
+    }
+    first = string.char_at_n(a, n, 0)
+    last  = string.char_at_n(a, n, n - 1)
+    if (first == 34 && last == 34) || (first == 39 && last == 39) {
+        return string.substring_n(a, n, 1, n - 1), ""
+    }
+    return "", string.concat("filter arg must be a quoted string: ", a)
+}
+
+// Capitalize: first byte to upper, rest to lower (Liquid spec).
+filter_capitalize(s: string) -> string {
+    n = string_length(s)
+    if n == 0 { return s }
+    head = string.to_upper(string.substring_n(s, n, 0, 1))
+    if n == 1 { return head }
+    tail = string.to_lower(string.substring_n(s, n, 1, n))
+    return string.concat(head, tail)
+}
+
+// Reverse the bytes of `s`. ASCII-correct; multi-byte UTF-8 is left as
+// a future fix (matches the rest of the byte-level string surface).
+filter_reverse(s: string) -> string {
+    n = string_length(s)
+    if n <= 1 { return s }
+    sb = strbuilder.new(n)
+    i = n - 1
+    while i >= 0 {
+        c = string.char_at_n(s, n, i)
+        strbuilder.append(sb, string.from_char(c))
+        i = i - 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// Strip leading whitespace only.
+filter_lstrip(s: string) -> string {
+    n = string_length(s)
+    a = 0
+    while a < n {
+        c = string.char_at_n(s, n, a)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            a = a + 1
+        } else {
+            break
+        }
+    }
+    return string.substring_n(s, n, a, n)
+}
+
+// Strip trailing whitespace only.
+filter_rstrip(s: string) -> string {
+    n = string_length(s)
+    b = n
+    while b > 0 {
+        c = string.char_at_n(s, n, b - 1)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            b = b - 1
+        } else {
+            break
+        }
+    }
+    return string.substring_n(s, n, 0, b)
+}
+
+// Replace every occurrence of `needle` in `hay` with `repl`. `needle ==
+// ""` is treated as a no-op (Liquid behaviour — Shopify's
+// implementation does not infinitely insert).
+filter_replace(hay: string, needle: string, repl: string) -> string {
+    nn = string_length(needle)
+    if nn == 0 { return hay }
+    hn = string_length(hay)
+    if hn == 0 { return hay }
+    sb = strbuilder.new(hn)
+    p = 0
+    while p < hn {
+        hit = string.index_of_from_n(hay, hn, needle, p)
+        if hit < 0 {
+            strbuilder.append(sb, string.substring_n(hay, hn, p, hn))
+            return strbuilder.finish(sb)
+        }
+        strbuilder.append(sb, string.substring_n(hay, hn, p, hit))
+        strbuilder.append(sb, repl)
+        p = hit + nn
+    }
+    return strbuilder.finish(sb)
+}
+
+// Truncate `s` to `cap` bytes, appending `...` if the string was cut.
+// Matches Liquid's default: total length (including the ellipsis) is
+// `cap`. If `cap <= 3` the ellipsis itself is truncated.
+filter_truncate(s: string, cap: int) -> string {
+    n = string_length(s)
+    if cap < 0 { return "" }
+    if n <= cap { return s }
+    if cap <= 3 {
+        return string.substring_n(s, n, 0, cap)
+    }
+    body = string.substring_n(s, n, 0, cap - 3)
+    return string.concat(body, "...")
+}
+
+// Apply one filter stage to the current value. Returns (new_value, "")
+// or ("", error).
+apply_filter(val: string, name: string, args: string) -> (string, string) {
+    arg_list = split_commas(args)
+    argc = string_list_size(arg_list)
+
+    if string.equals(name, "upcase") == 1 {
+        if argc != 0 { return "", "upcase takes no args" }
+        return string.to_upper(val), ""
+    }
+    if string.equals(name, "downcase") == 1 {
+        if argc != 0 { return "", "downcase takes no args" }
+        return string.to_lower(val), ""
+    }
+    if string.equals(name, "capitalize") == 1 {
+        if argc != 0 { return "", "capitalize takes no args" }
+        return filter_capitalize(val), ""
+    }
+    if string.equals(name, "strip") == 1 {
+        if argc != 0 { return "", "strip takes no args" }
+        return string.trim(val), ""
+    }
+    if string.equals(name, "lstrip") == 1 {
+        if argc != 0 { return "", "lstrip takes no args" }
+        return filter_lstrip(val), ""
+    }
+    if string.equals(name, "rstrip") == 1 {
+        if argc != 0 { return "", "rstrip takes no args" }
+        return filter_rstrip(val), ""
+    }
+    if string.equals(name, "reverse") == 1 {
+        if argc != 0 { return "", "reverse takes no args" }
+        return filter_reverse(val), ""
+    }
+    if string.equals(name, "size") == 1 {
+        if argc != 0 { return "", "size takes no args" }
+        return string.from_int(string_length(val)), ""
+    }
+    if string.equals(name, "append") == 1 {
+        if argc != 1 { return "", "append needs exactly 1 arg" }
+        s, err = unquote_arg(string_list_get(arg_list, 0))
+        if err != "" { return "", err }
+        return string.concat(val, s), ""
+    }
+    if string.equals(name, "prepend") == 1 {
+        if argc != 1 { return "", "prepend needs exactly 1 arg" }
+        s, err = unquote_arg(string_list_get(arg_list, 0))
+        if err != "" { return "", err }
+        return string.concat(s, val), ""
+    }
+    if string.equals(name, "default") == 1 {
+        if argc != 1 { return "", "default needs exactly 1 arg" }
+        s, err = unquote_arg(string_list_get(arg_list, 0))
+        if err != "" { return "", err }
+        // Liquid's `default` falsy set for strings: empty string.
+        if string_length(val) == 0 { return s, "" }
+        return val, ""
+    }
+    if string.equals(name, "truncate") == 1 {
+        if argc != 1 { return "", "truncate needs exactly 1 arg" }
+        s, err = unquote_arg(string_list_get(arg_list, 0))
+        if err != "" { return "", err }
+        cap, ierr = string.to_int(s)
+        if ierr != "" { return "", string.concat("truncate arg not an integer: ", s) }
+        return filter_truncate(val, cap), ""
+    }
+    if string.equals(name, "replace") == 1 {
+        if argc != 2 { return "", "replace needs exactly 2 args" }
+        needle, e1 = unquote_arg(string_list_get(arg_list, 0))
+        if e1 != "" { return "", e1 }
+        repl, e2 = unquote_arg(string_list_get(arg_list, 1))
+        if e2 != "" { return "", e2 }
+        return filter_replace(val, needle, repl), ""
+    }
+    return "", string.concat("unknown filter: ", name)
+}
+
+// Render an OUTPUT body. `body` is the trimmed contents of `{{ ... }}`.
+// Splits on `|`, looks up the variable as the first segment, then
+// applies each filter stage. Returns (value, "") or ("", error).
+render_output(ctx: ptr, body: string) -> (string, string) {
+    stages = split_pipes(body)
+    sn = string_list_size(stages)
+    if sn == 0 { return "", "" }
+    val = lookup(ctx, string_list_get(stages, 0))
+    i = 1
+    while i < sn {
+        name, args = split_name_args(string_list_get(stages, i))
+        v2, err = apply_filter(val, name, args)
+        if err != "" { return "", err }
+        val = v2
+        i = i + 1
+    }
+    return val, ""
+}
+
+// ---------------------------------------------------------------------------
+// Tag execution — currently only `assign`
+// ---------------------------------------------------------------------------
+
+// Match the first whitespace-separated word at the start of `body`.
+// Returns ("", "") if `body` is empty.
+tag_head(body: string) -> (string, string) {
+    n = string_length(body)
+    i = 0
+    while i < n {
+        c = string.char_at_n(body, n, i)
+        if c == 32 || c == 9 || c == 10 || c == 13 { break }
+        i = i + 1
+    }
+    head = string.substring_n(body, n, 0, i)
+    // Skip whitespace between head and rest.
+    while i < n {
+        c = string.char_at_n(body, n, i)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    rest = string.substring_n(body, n, i, n)
+    return head, rest
+}
+
+// `{% assign NAME = EXPR %}` — bind NAME in ctx. EXPR follows the same
+// rules as an OUTPUT expression: a single source (string literal OR
+// variable name) followed by zero or more filter stages. String literals
+// short-circuit the variable lookup; everything else is passed through
+// `render_output` (which treats unquoted bare names as variable
+// lookups).
+exec_assign(ctx: ptr, rest: string) -> string {
+    n = string_length(rest)
+    eq = find_outside_quotes(rest, n, 0, 61)   // '='
+    if eq < 0 { return "assign: missing `=`" }
+    name = trim(string.substring_n(rest, n, 0, eq))
+    expr = trim(string.substring_n(rest, n, eq + 1, n))
+    if string_length(name) == 0 {
+        return "assign: missing name before `=`"
+    }
+    // Split the EXPR into source + filter chain. The source can be a
+    // quoted string literal (which lookup would not find), so detect
+    // and unwrap it before deferring to render_output.
+    en = string_length(expr)
+    pipe = find_outside_quotes(expr, en, 0, 124)   // '|'
+    src_end = en
+    if pipe >= 0 { src_end = pipe }
+    src = trim(string.substring_n(expr, en, 0, src_end))
+    if string_length(src) > 0 {
+        first = string.char_at_n(src, string_length(src), 0)
+        if first == 34 || first == 39 {
+            // Quoted literal — bind it in a temp under a fresh key,
+            // then run render_output via a rewritten expression that
+            // references that key. Simpler: just stage the literal as
+            // the current value and apply remaining filters directly.
+            lit, lerr = unquote_arg(src)
+            if lerr != "" { return lerr }
+            val = lit
+            if pipe >= 0 {
+                // Apply each filter stage after the first pipe.
+                rest_stages = split_pipes(string.substring_n(expr, en, pipe + 1, en))
+                rn = string_list_size(rest_stages)
+                k = 0
+                while k < rn {
+                    fname, fargs = split_name_args(string_list_get(rest_stages, k))
+                    v2, ferr = apply_filter(val, fname, fargs)
+                    if ferr != "" { return ferr }
+                    val = v2
+                    k = k + 1
+                }
+            }
+            map_put(ctx, name, val)
+            return ""
+        }
+    }
+    // Variable source (with optional filter chain) → reuse render_output.
+    v, err = render_output(ctx, expr)
+    if err != "" { return err }
+    map_put(ctx, name, v)
+    return ""
+}
+
+// Dispatch a TAG body. Returns "" on success, or an error message.
+exec_tag(ctx: ptr, body: string) -> string {
+    head, rest = tag_head(body)
+    if string.equals(head, "assign") == 1 {
+        return exec_assign(ctx, rest)
+    }
+    return string.concat("unsupported tag: ", body)
+}
+
+// ---------------------------------------------------------------------------
 // Public surface
 // ---------------------------------------------------------------------------
 //
@@ -323,12 +720,20 @@ render(t: ptr, ctx: ptr) -> (string, string) {
         if string.equals(kind, TOK_TEXT) == 1 {
             strbuilder.append(sb, body)
         } else if string.equals(kind, TOK_OUTPUT) == 1 {
-            // v0 OUTPUT: bare variable names only.
-            strbuilder.append(sb, lookup(ctx, body))
+            // OUTPUT: variable name + optional filter pipeline.
+            v, err = render_output(ctx, body)
+            if err != "" {
+                return strbuilder.finish(sb), err
+            }
+            strbuilder.append(sb, v)
         } else {
-            // TAG: unsupported in current scope. Return the partial
-            // output we have so the caller can see how far we got.
-            return strbuilder.finish(sb), string.concat("unsupported tag: ", body)
+            // TAG. Currently the only supported tags here are
+            // `assign NAME = EXPR` (mutates ctx, no output) and the
+            // lex-time-handled `comment`/`raw` (never reach this branch).
+            terr = exec_tag(ctx, body)
+            if terr != "" {
+                return strbuilder.finish(sb), terr
+            }
         }
         i = i + 1
     }

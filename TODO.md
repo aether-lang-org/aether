@@ -135,30 +135,36 @@ NOT blocking templating work (contrib uses bare-name throughout).
 
 ### Next layer to add — and its tests
 
-The next-up scope, with tests that must arrive in the same commit:
+The string-only filter pipeline + `{% assign %}` landed in the second
+PR (`liquid_filters_basic/` 16 cases + `liquid_assign/` 10 cases). The
+implemented filter set is string-in / string-out:
 
-**Filters chain over the lookup:** `{{ name | upcase }}`,
-`{{ name | downcase }}`, `{{ x | default:"y" }}`, chained
-`{{ name | upcase | reverse }}`. Test cases:
+- 0-arg: `upcase`, `downcase`, `capitalize`, `strip`, `lstrip`,
+  `rstrip`, `reverse`, `size`
+- 1-arg (quoted string): `append`, `prepend`, `default`,
+  `truncate:"N"`
+- 2-arg (quoted strings): `replace`
 
-- Single filter, then another single filter
-- Chained: 2-deep, 3-deep
-- Filter with one positional arg (`default`)
-- Filter with multiple positional args (`replace:"a","b"`)
-- Unknown filter passes through identity (Shopify behaviour)
+`size` returns a numeric string ("5"). `truncate` takes its count as a
+quoted string until the expression parser lands. Unknown filter →
+render-time error (Shopify is identity-pass; we are stricter here
+deliberately for the string-only slice, will relax to identity when the
+value model becomes std.json).
 
-That layer requires:
-- An expression parser (atom + `|` chain)
-- A filter dispatch (`upcase` / `downcase` / `default` / `replace` /
-  `size` to start)
-- The renderer to call the filter chain instead of `lookup`
+The next-up scope is the **value-model migration** — context becomes
+string→json-value so a filter that returns a number (`size`) is
+distinguishable from one returning a string, and `default` can fall
+back on `nil` / `false` / `[]` / `{}` (Liquid's full falsy set), not
+just `""`. The string-only v0 surface is good enough to demo
+deterministic rendering, but the next ~3 layers (operator-bearing
+conditions in `{% if %}`, `{% for %}`, dotted attribute access) all
+need the richer value type, so we tackle it before more tags.
 
-The implementation will use `std.json` for the value type so a filter
-that returns a number (`size`) is distinguishable from one returning a
-string. The current string→string context grows into string→json-value.
-That migration is part of this layer and should NOT preserve the
-v0 string-only context — the v0 tests get rewritten to use the new
-context shape if the API changes.
+That migration includes:
+- Switch `context_put_*` to a json-value setter family
+- Replace `lookup` with a json-aware resolver
+- Rewrite the v0 string-only tests against the new context shape
+  (v0 contract was never frozen — the rewrite is expected)
 
 ### Layers still to build, in dependency order
 
@@ -169,8 +175,9 @@ Don't write the next layer until the previous layer's tests pass.
 **1. Tag parser (`{% ... %}`)** — currently throws `"unsupported tag"`.
 Per-tag work:
 
-- [ ] `{% comment %}...{% endcomment %}` — simplest, just skip body
-- [ ] `{% assign x = expr %}` — bind a name in the current scope
+- [x] `{% comment %}...{% endcomment %}` — landed v0
+- [x] `{% assign x = expr %}` — string-only RHS landed (PR 2);
+      reopens once value model is std.json
 - [ ] `{% if cond %}` / `{% elsif cond %}` / `{% else %}` / `{% endif %}` —
       conditional with else-if chain. Needs:
       - condition evaluator (truthy/falsy, comparison ops `==` `!=` `>` `<` `>=` `<=` `contains`)
