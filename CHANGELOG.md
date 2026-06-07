@@ -31,6 +31,23 @@ next version number before tagging the release.
   includes, layouts, and the JSON value model are tracked in
   `TODO.md` and will land with their own tests as each layer is built.
 
+- **`contrib.templating.liquid` — string-only filter pipeline + `{% assign %}`**
+  (`contrib/templating/liquid/module.ae`,
+  `tests/integration/liquid_filters_basic/`,
+  `tests/integration/liquid_assign/`). OUTPUT bodies now accept
+  `expr | filter[:arg[,arg]*]` chains. Implemented filters
+  (string-in/string-out): no-arg `upcase`, `downcase`, `capitalize`,
+  `strip`, `lstrip`, `rstrip`, `reverse`, `size`; 1-arg `append:"s"`,
+  `prepend:"s"`, `default:"s"`, `truncate:"N"`; 2-arg
+  `replace:"old","new"`. Both `'…'` and `"…"` quote styles work; a
+  literal `|` or `,` inside a quoted arg does not split the pipeline.
+  `{% assign NAME = EXPR %}` binds a name in the current context;
+  EXPR is a string literal OR a variable lookup, optionally followed
+  by a filter chain (`{% assign loud = name | upcase | append:"!" %}`).
+  Unknown filter / bad arg count / malformed `assign` all surface as
+  render-time errors. 26 additional integration tests (16 filter
+  cases, 10 assign cases).
+
 ## [0.220.0]
 
 ### Added
