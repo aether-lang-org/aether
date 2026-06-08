@@ -836,6 +836,18 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
              * produced was exactly the caller never freeing this result. */
             strcmp(fn, "path_clean") == 0 ||
             strcmp(fn, "path_rel") == 0 ||
+            /* Sibling lexical path ops, same ownership contract as
+             * path_clean/path_rel: each returns a FRESH malloc'd/strdup'd
+             * buffer (path_join builds a new joined path; path_dirname,
+             * path_basename, path_extension each strdup or malloc a slice
+             * — never a borrowed pointer into the input, never a literal;
+             * NULL on error, which aether_heap_str_free tolerates). They
+             * leaked at every call site because the caller never freed the
+             * result (std.path/std.fs both expose them). */
+            strcmp(fn, "path_join") == 0 ||
+            strcmp(fn, "path_dirname") == 0 ||
+            strcmp(fn, "path_basename") == 0 ||
+            strcmp(fn, "path_extension") == 0 ||
             strcmp(fn, "io_read_file_raw") == 0 ||
             /* Whole-file / command-capture reads: each call returns a
              * FRESH malloc'd buffer of the file contents / process output
