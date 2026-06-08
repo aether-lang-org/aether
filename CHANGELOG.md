@@ -5,9 +5,39 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.223.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`contrib.templating.liquid` — filter polish + README + LLM.md
+  pointer** (`contrib/templating/liquid/module.ae`,
+  `contrib/templating/liquid/README.md`,
+  `tests/integration/liquid_filter_polish/`, `LLM.md`). Three small
+  slices:
+  (a) **`truncate: N, "ellipsis"`** — second arg overrides the
+  default `"..."` ellipsis (`truncate:"10","…"` → 7 body bytes + the
+  3-byte UTF-8 ellipsis). 1-arg form keeps its existing behaviour;
+  empty-string ellipsis is accepted (= hard cut). When `N <=
+  length(ellipsis)` the ellipsis itself is cut to fit.
+  (b) **`default: VAL, allow_false:"true"`** — Shopify-compat
+  widening of the fallback set. Without `allow_false`, fires only
+  on the empty string (existing). With it, fires on `""`,
+  `"false"`, `"nil"`, `"null"` (the string-encoded Liquid falsy
+  set). Recognises both the bare `default:"alt","true"` 2-arg form
+  and the keyword-prefixed `default:"alt",allow_false:"true"` form.
+  (c) **`contrib/templating/liquid/README.md`** — first user-facing
+  doc. Covers install, supported tags / filters / typed bindings /
+  layouts, public surface, sandbox story, what's NOT supported,
+  performance notes. Closes the "is this ready for downstream"
+  documentation gap.
+  (d) **`LLM.md`** gets a one-line idiom: "Operator-supplied Liquid
+  templates → `contrib.templating.liquid`. Don't hand-roll
+  Mustache." 15 new integration tests in `liquid_filter_polish/`
+  bring the Liquid suite to **312 across 22 directories**.
 
 ## [0.223.0]
 

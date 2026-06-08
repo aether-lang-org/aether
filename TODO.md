@@ -316,14 +316,13 @@ World-touching (gated):
 
 **8. Documentation:**
 
-- [ ] `contrib/templating/liquid/README.md` — install, usage,
-      sandbox-with-`--with=fs` story, mapping from Shopify-Liquid
-      reference docs to what's supported here (clear list of
-      OUT-of-scope features), the struct-binding `to_value` adapter
-      pattern with a worked example
-- [ ] `CHANGELOG.md` entry under `[current]`
-- [ ] `LLM.md` idiom (probably one line: "operator-supplied Liquid
-      templates → `contrib.templating.liquid`")
+- [x] `contrib/templating/liquid/README.md` — landed; install, usage,
+      tags + filters + typed-bindings + layouts, public surface,
+      sandbox story, what's NOT supported, performance notes.
+      Struct-binding `to_value` adapter pattern is Phase-2 (depends
+      on `context_put_object`).
+- [x] `CHANGELOG.md` entry under `[current]`
+- [x] `LLM.md` idiom — one-liner pointer landed.
 
 ### Test plan — cases to cover as each layer lands
 
@@ -396,8 +395,9 @@ minimum:
       false: 0 (Liquid treats 0 as truthy — confirm vs Shopify)
 - [ ] `replace` — multi-occurrence
 - [ ] `append` / `prepend`
-- [ ] `truncate` — boundary at exact length (no ellipsis), boundary at
-      length+1, custom ellipsis arg
+- [x] `truncate` — custom ellipsis arg + boundary cases (cap == ellipsis
+      length, cap == ellipsis length + 1, empty ellipsis as hard cut)
+      landed in `liquid_filter_polish/`
 - [ ] `plus` / `minus` / `times` / `divided_by` / `modulo` — integer
       math; check Shopify's "divide-by-zero returns null" behaviour
 - [ ] Unknown filter passes through (matches Shopify)

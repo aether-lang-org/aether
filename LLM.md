@@ -201,6 +201,17 @@ plays that role), no interfaces.
   an `index_of`-based parser — that exact mistake landed in
   fbs-core's S3 port (#627) because the porter didn't realise
   `contrib.xml.expat` existed.
+- **Operator-supplied Liquid templates → `contrib.templating.liquid`.**
+  Pure-Aether Shopify-Liquid port. Use it for email bodies, dashboards,
+  generated reports — anywhere a trusted-human operator writes a
+  template but you don't want their template to execute arbitrary
+  code. `{% include %}` / `{% render %}` need an explicit
+  `context_set_include_root(ctx, root)` (path traversal blocked via
+  `fs.is_within_base`). Phase 1 ships scalar typed bindings
+  (`context_put_int`/`_float`/`_bool`/`_nil`); array / object / dotted
+  path access is Phase 2. Don't hand-roll a Mustache or own-syntax
+  templater unless you have a specific reason — this is the supported
+  path.
 - **HTTP client lives in two tiers, server in one.** `import
   std.http` gives v1 client one-liners (`http.get(url) -> (body,
   err)`, `http.post`, `http.put`, `http.delete`) plus the entire
