@@ -282,6 +282,7 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     find "$SRC_DIR/contrib" -type d -name tests       -exec rm -rf {} + 2>/dev/null || true
     find "$SRC_DIR/contrib" -type d -name benchmarks  -exec rm -rf {} + 2>/dev/null || true
     find "$SRC_DIR/contrib" -type f -name 'example_*.ae' -delete 2>/dev/null || true
+    find "$SRC_DIR/contrib" -type f -name 'test_*.ae' -delete 2>/dev/null || true
     find "$SRC_DIR/contrib" -type f -name 'test_*.sh' -delete 2>/dev/null || true
     find "$SRC_DIR/contrib" -type f -name 'build.sh'  -delete 2>/dev/null || true
     find "$SRC_DIR/contrib" -type f -name 'ci.sh'     -delete 2>/dev/null || true

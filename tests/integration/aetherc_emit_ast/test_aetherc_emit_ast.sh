@@ -176,6 +176,95 @@ else
 fi
 assert_contains "9b output is a JSON object with nodes key" '"nodes":' "$out9"
 
+# --------------------------------------------------------------
+# Cell 10-15: function_call args[] — literal vs computed.
+# Per veto-emit-ast-args.md (aeb-side ask): each function_call
+# node carries args[], one entry per positional/named arg in
+# source order. Literal args (string/int/float/bool) emit
+# {"literal": "<value>"}; anything else emits
+# {"computed": true}. Trailing closures / DSL bodies are NOT
+# args and are filtered out.
+# --------------------------------------------------------------
+
+# Cell 10: single string literal arg.
+cat > "$TMPDIR/arg_string_literal.ae" <<'EOF'
+extern do_stuff(coord: string) -> int
+main() {
+    rc = do_stuff("org.foo:bar:1.2.3")
+}
+EOF
+out10="$(AETHER_HOME="$ROOT" "$AETHERC" --emit=ast "$TMPDIR/arg_string_literal.ae" 2>/dev/null)"
+assert_contains "10 string literal arg" '"args":[{"literal":"org.foo:bar:1.2.3"}]' "$out10"
+
+# Cell 11: int literal arg.
+cat > "$TMPDIR/arg_int_literal.ae" <<'EOF'
+extern with_port(p: int) -> int
+main() {
+    rc = with_port(8080)
+}
+EOF
+out11="$(AETHER_HOME="$ROOT" "$AETHERC" --emit=ast "$TMPDIR/arg_int_literal.ae" 2>/dev/null)"
+assert_contains "11 int literal arg" '"args":[{"literal":"8080"}]' "$out11"
+
+# Cell 12: multiple positional literals.
+cat > "$TMPDIR/arg_multi_literal.ae" <<'EOF'
+extern multi(a: string, b: int, c: string) -> int
+main() {
+    rc = multi("first", 42, "third")
+}
+EOF
+out12="$(AETHER_HOME="$ROOT" "$AETHERC" --emit=ast "$TMPDIR/arg_multi_literal.ae" 2>/dev/null)"
+assert_contains "12 multi literal args" '"args":[{"literal":"first"},{"literal":"42"},{"literal":"third"}]' "$out12"
+
+# Cell 13: identifier reference is computed, not literal —
+# even when the identifier itself binds a literal value,
+# aeb's "never allow on computed arg" rule requires the
+# distinction. The variable ref is not a literal expression.
+cat > "$TMPDIR/arg_identifier.ae" <<'EOF'
+extern do_stuff(s: string) -> int
+main() {
+    user_input = "static-text"
+    rc = do_stuff(user_input)
+}
+EOF
+out13="$(AETHER_HOME="$ROOT" "$AETHERC" --emit=ast "$TMPDIR/arg_identifier.ae" 2>/dev/null)"
+assert_contains "13 identifier ref is computed" '"args":[{"computed":true}]' "$out13"
+
+# Cell 14: mixed literal + computed args, in source order.
+cat > "$TMPDIR/arg_mixed.ae" <<'EOF'
+extern do_stuff(coord: string, key: string, count: int) -> int
+main() {
+    dyn = "from-env"
+    rc = do_stuff("static-coord", dyn, 5)
+}
+EOF
+out14="$(AETHER_HOME="$ROOT" "$AETHERC" --emit=ast "$TMPDIR/arg_mixed.ae" 2>/dev/null)"
+assert_contains "14 mixed literal+computed in order" \
+    '"args":[{"literal":"static-coord"},{"computed":true},{"literal":"5"}]' "$out14"
+
+# Cell 15: const-folded numeric arg arrives as a literal —
+# `do_stuff(1 + 2)` folds to `do_stuff(3)` before the emit
+# walk runs (post-optimize_ast). Per veto-emit-ast-args.md
+# sub-ask 0.
+cat > "$TMPDIR/arg_fold.ae" <<'EOF'
+extern do_stuff(n: int) -> int
+main() {
+    rc = do_stuff(1 + 2)
+}
+EOF
+out15="$(AETHER_HOME="$ROOT" "$AETHERC" --emit=ast "$TMPDIR/arg_fold.ae" 2>/dev/null)"
+assert_contains "15 const-folded arg arrives as literal" '"args":[{"literal":"3"}]' "$out15"
+
+# Cell 16: zero-arg call still emits an empty args array.
+cat > "$TMPDIR/arg_empty.ae" <<'EOF'
+extern do_stuff() -> int
+main() {
+    rc = do_stuff()
+}
+EOF
+out16="$(AETHER_HOME="$ROOT" "$AETHERC" --emit=ast "$TMPDIR/arg_empty.ae" 2>/dev/null)"
+assert_contains "16 zero-arg call has empty args array" '"args":[]' "$out16"
+
 echo ""
 if [ "$fail" -eq 0 ]; then
     echo "  [PASS] aetherc_emit_ast: $pass/$pass"
