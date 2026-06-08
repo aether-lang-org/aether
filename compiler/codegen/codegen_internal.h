@@ -86,6 +86,11 @@ TypeKind lookup_callee_param_kind(CodeGenerator* gen, const char* func_name, int
  * in codegen_stmt.c. */
 int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name, int param_idx, int depth);
 
+/* True when `func_name` resolves to a user function with a visible body
+ * block; only then may the body-walk override the conservative
+ * call_arg_escapes heuristic. Defined in codegen_stmt.c. */
+int callee_has_visible_body(CodeGenerator* gen, const char* func_name);
+
 /* Normalise a callee name's dots to underscores, writing into `out`
    and returning `out`. The AST stores source-level callees in dotted
    form (`"string.concat"`) but stdlib externs, the generated C call

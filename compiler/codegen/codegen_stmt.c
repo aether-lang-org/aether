@@ -1938,15 +1938,72 @@ int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
     return param_escapes_in_subtree(gen, body, pname, depth);
 }
 
+/* True when `func_name` resolves to a user function with a visible body
+ * block in the merged program AST. Only then is the body-walk
+ * (callee_param_escapes_via_body) authoritative: a proven non-escape can
+ * safely override the conservative call_arg_escapes heuristic. Externs
+ * and unknown callees have no body and stay conservative. */
+int callee_has_visible_body(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !gen->program || !func_name) return 0;
+    char fn_norm[256];
+    const char* fn = codegen_normalise_callee(func_name, fn_norm, sizeof(fn_norm));
+    ASTNode* fn_def = find_function_definition_by_name(gen->program, fn);
+    if (!fn_def) return 0;
+    for (int i = fn_def->child_count - 1; i >= 0; i--) {
+        if (fn_def->children[i] && fn_def->children[i]->type == AST_BLOCK) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Does `pname` appear as an identifier anywhere in this subtree? Used to
+ * detect storage sinks (assignment RHS, aggregate elements, closure
+ * captures) that retain the parameter's pointer past the call. Erring
+ * toward "mentioned" is sound: a false positive only withholds a drain
+ * (a leak), never frees a live pointer (a UAF). */
+static int subtree_mentions_param(ASTNode* node, const char* pname) {
+    if (!node) return 0;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, pname) == 0) return 1;
+    for (int i = 0; i < node->child_count; i++) {
+        if (subtree_mentions_param(node->children[i], pname)) return 1;
+    }
+    return 0;
+}
+
 static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
                                     const char* pname, int depth) {
     if (!node) return 0;
     if (node->type == AST_RETURN_STATEMENT) {
-        for (int i = 0; i < node->child_count; i++) {
-            ASTNode* r = node->children[i];
-            if (r && r->type == AST_IDENTIFIER && r->value &&
-                strcmp(r->value, pname) == 0) return 1;
-        }
+        /* Any mention in a return subtree escapes — the pointer (or an
+         * aggregate carrying it) leaves the function. */
+        if (subtree_mentions_param(node, pname)) return 1;
+    }
+    /* Storage sinks: the parameter's pointer is retained beyond the call
+     * when it flows, as-is, into a binding, a container element, a struct
+     * field, or a closure capture. Each is an escape; missing one would
+     * let the arg-drain free a still-referenced buffer (UAF), so the
+     * body-walk must catch them all before it can be trusted as
+     * authoritative over the conservative call_arg_escapes heuristic. */
+    if (node->type == AST_ASSIGNMENT && node->child_count >= 2) {
+        /* `x = pname`, `obj.field = pname`, `arr[i] = pname` */
+        if (subtree_mentions_param(node->children[1], pname)) return 1;
+    }
+    if (node->type == AST_BINARY_EXPRESSION && node->value &&
+        strcmp(node->value, "=") == 0 && node->child_count >= 2) {
+        if (subtree_mentions_param(node->children[1], pname)) return 1;
+    }
+    if (node->type == AST_VARIABLE_DECLARATION) {
+        /* local initialised from the param (alias): `y = pname` */
+        if (subtree_mentions_param(node, pname)) return 1;
+    }
+    if ((node->type == AST_ARRAY_LITERAL || node->type == AST_FIELD_INIT) &&
+        subtree_mentions_param(node, pname)) {
+        return 1;  /* aggregate captures the pointer */
+    }
+    if (node->type == AST_CLOSURE && subtree_mentions_param(node, pname)) {
+        return 1;  /* closure capture may outlive the call */
     }
     if (node->type == AST_FUNCTION_CALL && node->value) {
         for (int i = 0; i < node->child_count; i++) {
@@ -5402,7 +5459,18 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "_aether_ctx_push((void*)0);\n");
                     }
                 } else {
+                    /* A bare call-statement discards the call's value, so
+                     * heap-returning inline args must still be drained even
+                     * when the callee's declared return type is VOID or
+                     * unknown (e.g. `check(label, string.from_long(n), ...)`).
+                     * Signal that to the call codegen; the flag is captured
+                     * and cleared at the call entry, and reset here too so
+                     * it can never leak past this statement. */
+                    if (inner && inner->type == AST_FUNCTION_CALL) {
+                        gen->discard_call_value = 1;
+                    }
                     generate_expression(gen, inner);
+                    gen->discard_call_value = 0;
                     fprintf(gen->output, ";\n");
                 }
 

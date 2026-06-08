@@ -2196,7 +2196,15 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
         case AST_FUNCTION_CALL:
             if (expr->value) {
                 const char* func_name = expr->value;
-                
+                /* Capture + clear the discarded-value flag at the top of
+                 * the call codegen so it governs THIS call only and never
+                 * leaks into nested argument calls (whose values ARE
+                 * consumed). When set, the arg-temp drain below treats the
+                 * parent as void-yielding so heap inline args still free.
+                 * See discard_call_value in codegen.h. */
+                int ad_call_discarded = gen->discard_call_value;
+                gen->discard_call_value = 0;
+
                 if (strcmp(func_name, "make") == 0 && expr->node_type && expr->node_type->kind == TYPE_ARRAY) {
                     fprintf(gen->output, "(%s)malloc(", get_c_type(expr->node_type));
                     if (expr->child_count > 0) {
@@ -3179,7 +3187,21 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         (ad_ret_type &&
                          ad_ret_type->kind != TYPE_VOID &&
                          ad_ret_type->kind != TYPE_UNKNOWN);
-                    if (ad_have_value) {
+                    /* A VOID parent (e.g. an assert-style helper
+                     * `check(label, string.from_long(n), want)`) yields
+                     * no value, but its heap-returning inline args still
+                     * leak. Drain them via a statement-expression that
+                     * yields void: `({ T t=...; call(...); free(t); })`
+                     * — valid wherever a void call appears (it is always
+                     * a statement, so `({...});` is well-formed C).
+                     * TYPE_UNKNOWN stays excluded UNLESS the call's value
+                     * is being discarded at the statement level
+                     * (ad_call_discarded) — there the wrap yields void and
+                     * is provably safe regardless of the declared type. */
+                    int ad_is_void =
+                        (ad_ret_type && ad_ret_type->kind == TYPE_VOID) ||
+                        ad_call_discarded;
+                    if (ad_have_value || ad_is_void) {
                         for (int ai = 0; ai < expr->child_count && ad_arg_count < 16; ai++) {
                             ASTNode* arg = expr->children[ai];
                             if (!arg) continue;
@@ -3207,23 +3229,34 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                              * copy. Same gate the escape walker uses
                              * at codegen_stmt.c:1339-1346. */
                             if (is_retain_extern_param(gen, func_name, ai)) continue;
-                            /* Storage-shaped callee param (ptr,
-                             * unknown, etc.): conservatively assume
-                             * the callee may stash the pointer
-                             * beyond the call (list_add_raw, struct
-                             * field setters, opaque C externs).
-                             * Same heuristic as the escape walker's
-                             * call_arg_escapes gate — mismatch with
-                             * it would re-create the leak/UAF
-                             * tradeoff that gate exists to manage. */
-                            TypeKind param_kind = lookup_callee_param_kind(gen, func_name, ai);
-                            if (call_arg_escapes(param_kind)) continue;
-                            /* A `string`-typed param of a storing
-                             * wrapper still escapes (it reaches a
-                             * container put / @retain sink in the
-                             * callee body) — don't drain the arg-temp,
-                             * or the map slot dangles. */
-                            if (callee_param_escapes_via_body(gen, func_name, ai, 0)) continue;
+                            /* Escape decision for the arg's heap pointer.
+                             * When the callee has a VISIBLE BODY the
+                             * body-walk is authoritative: it now detects
+                             * every storage sink (return, assignment RHS,
+                             * aggregate element, struct field, closure
+                             * capture, escaping nested call-arg), so a
+                             * "does not escape" verdict is a proof, and a
+                             * ptr-typed param that is only read (e.g. an
+                             * assert helper's `got: ptr` compared via
+                             * string.equals) can be safely drained.
+                             *
+                             * Without a visible body (extern / unknown)
+                             * we fall back to the conservative
+                             * call_arg_escapes heuristic — same gate the
+                             * escape walker uses; a storage-shaped param
+                             * is assumed to stash the pointer.
+                             *
+                             * Soundness: we only ADD a drain where
+                             * non-escape is proven; anything unprovable
+                             * stays "escapes". False-escape = leak (safe);
+                             * false-non-escape = UAF (never introduced). */
+                            if (callee_has_visible_body(gen, func_name)) {
+                                if (callee_param_escapes_via_body(gen, func_name, ai, 0)) continue;
+                            } else {
+                                TypeKind param_kind = lookup_callee_param_kind(gen, func_name, ai);
+                                if (call_arg_escapes(param_kind)) continue;
+                                if (callee_param_escapes_via_body(gen, func_name, ai, 0)) continue;
+                            }
                             ad_arg_idx[ad_arg_count++] = ai;
                         }
                     }
@@ -3261,8 +3294,13 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             arg_drain_bind(arg, ad_names[h]);
                             ad_names[h] = NULL;
                         }
-                        const char* ad_ret_ct = get_c_type(ad_ret_type);
-                        fprintf(gen->output, "%s _ad_r = ", ad_ret_ct);
+                        if (ad_have_value) {
+                            const char* ad_ret_ct = get_c_type(ad_ret_type);
+                            fprintf(gen->output, "%s _ad_r = ", ad_ret_ct);
+                        }
+                        /* void parent: emit the call bare (no _ad_r); the
+                         * statement-expression yields void via the final
+                         * free below. */
                     }
 
                     fprintf(gen->output, "%s(", c_func_name);
@@ -3567,7 +3605,13 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 fprintf(gen->output, "aether_heap_str_free(%s); ", nm);
                             }
                         }
-                        fprintf(gen->output, "_ad_r; })");
+                        if (ad_have_value) {
+                            fprintf(gen->output, "_ad_r; })");
+                        } else {
+                            /* void parent: the trailing free is the last
+                             * statement, so the ({...}) yields void. */
+                            fprintf(gen->output, "})");
+                        }
                         arg_drain_truncate(ad_saved_count);
                     }
                 }

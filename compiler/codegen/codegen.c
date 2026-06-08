@@ -183,6 +183,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->builder_func_count = 0;
     gen->builder_func_capacity = 0;
     gen->in_trailing_block = 0;
+    gen->discard_call_value = 0;
     gen->current_env_captures = NULL;
     gen->current_env_capture_count = 0;
     gen->current_promoted_captures = NULL;
