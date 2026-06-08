@@ -794,6 +794,13 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
         if (strcmp(fn, "string_concat") == 0 ||
             strcmp(fn, "string_substring") == 0 ||
             strcmp(fn, "string_substring_n") == 0 ||
+            /* string.copy returns `string_concat(s, "")` — always a
+             * fresh owned heap buffer (never a borrowed/literal pointer),
+             * the same shape as its sibling string_concat already on this
+             * list. Classify by name so `x = string.copy(s)` gets
+             * _heap_x = 1 and is reclaimed at scope exit / next reassign;
+             * the general user-fn return-heap path misses it. */
+            strcmp(fn, "string_copy") == 0 ||
             strcmp(fn, "string_to_upper") == 0 ||
             strcmp(fn, "string_to_lower") == 0 ||
             strcmp(fn, "string_trim") == 0 ||
@@ -2014,12 +2021,22 @@ static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
         }
     }
     if (node->type == AST_ASSIGNMENT && node->child_count >= 2) {
-        /* `x = pname`, `obj.field = pname`, `arr[i] = pname` */
-        if (value_directly_carries_param(node->children[1], pname)) return 1;
+        /* `x = pname`, `obj.field = pname`, `arr[i] = pname` escape the
+         * pointer into ANOTHER location. Reassigning the param's own slot
+         * (`pname = ...`, including the no-op `pname = pname`) does NOT —
+         * the value is overwritten in place, never aliased elsewhere — so
+         * skip when the LHS is the param itself. */
+        ASTNode* lhs = node->children[0];
+        int lhs_is_self = lhs && lhs->type == AST_IDENTIFIER && lhs->value &&
+                          strcmp(lhs->value, pname) == 0;
+        if (!lhs_is_self && value_directly_carries_param(node->children[1], pname)) return 1;
     }
     if (node->type == AST_BINARY_EXPRESSION && node->value &&
         strcmp(node->value, "=") == 0 && node->child_count >= 2) {
-        if (value_directly_carries_param(node->children[1], pname)) return 1;
+        ASTNode* lhs = node->children[0];
+        int lhs_is_self = lhs && lhs->type == AST_IDENTIFIER && lhs->value &&
+                          strcmp(lhs->value, pname) == 0;
+        if (!lhs_is_self && value_directly_carries_param(node->children[1], pname)) return 1;
     }
     if (node->type == AST_VARIABLE_DECLARATION) {
         /* local initialised directly from the param (alias): `y = pname` */
@@ -2141,15 +2158,25 @@ static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
                      * reassignment-free wrapper fires. */
                 } else if (fn && is_retain_extern_param(gen, fn, i)) {
                     mark_escaped_string_var(gen, arg->value);
+                } else if (callee_has_visible_body(gen, call->value)) {
+                    /* Visible body → the body-walk is authoritative
+                     * (it sees through read-only accessors and ignores
+                     * self-assignment `p = p`). Trust it instead of the
+                     * conservative call_arg_escapes, so a heap local
+                     * passed to a non-storing user shim (a no-op-free
+                     * stub, an assert helper) stays freeable and its
+                     * reassignment-free / scope-exit free fires.
+                     * Mirrors the arg-drain gate in codegen_expr.c. */
+                    if (callee_param_escapes_via_body(gen, call->value, i, 0)) {
+                        mark_escaped_string_var(gen, arg->value);
+                    }
                 } else {
                     TypeKind k = lookup_callee_param_kind(gen, call->value, i);
-                    /* A `string`-typed param looks read-only to
-                     * call_arg_escapes, but a storing wrapper
-                     * (`f(v: string) { map.put(m, k, v) }`) lets it
-                     * escape — look through the callee's body so the
-                     * heap local isn't freed at this scope's exit while
-                     * the callee has stashed its pointer (the map-value
-                     * UAF). */
+                    /* No visible body (extern / unknown): a `string`-typed
+                     * param looks read-only to call_arg_escapes, but a
+                     * storing wrapper lets it escape — keep both the
+                     * conservative kind check and the (no-body → 0) body
+                     * walk so unknown callees stay conservatively escaped. */
                     if (call_arg_escapes(k) ||
                         callee_param_escapes_via_body(gen, call->value, i, 0)) {
                         mark_escaped_string_var(gen, arg->value);
