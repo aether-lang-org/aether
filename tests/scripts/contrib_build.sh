@@ -159,6 +159,14 @@ probe_tinygo() {
     return 0
 }
 
+probe_tinyweb() {
+    # ws_handshake.c needs only libc — implements SHA-1 + base64 inline
+    # for the RFC 6455 Sec-WebSocket-Accept handshake. No system deps,
+    # no pkg-config probes; the build always succeeds.
+    echo ""
+    return 0
+}
+
 # build_module <module_name> <relative_src_path> <AETHER_HAS_FLAG> <probe_fn>
 # Returns: 0 OK, 1 SKIP (probe failed), 2 FAIL (compile/archive failed)
 # Caller decides whether SKIP or FAIL is fatal (depends on MODULES mode).
@@ -208,6 +216,7 @@ CATALOGUE=(
     "duktape|host_duktape  contrib/host/duktape/aether_host_duktape.c  AETHER_HAS_DUKTAPE  probe_duktape"
     "tcl|host_tcl        contrib/host/tcl/aether_host_tcl.c       AETHER_HAS_TCL     probe_tcl"
     "tinygo|host_tinygo  contrib/host/tinygo/aether_host_tinygo.c AETHER_HAS_TINYGO  probe_tinygo"
+    "tinyweb|tinyweb     contrib/tinyweb/ws_handshake.c           AETHER_HAS_TINYWEB probe_tinyweb"
 )
 
 # Find a catalogue line by short name. Echoes the build_module arg list

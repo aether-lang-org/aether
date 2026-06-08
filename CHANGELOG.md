@@ -5,9 +5,67 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.227.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`contrib/tinyweb` ships with `make contrib` / `make
+  install-contrib`** (`Makefile`, `tests/scripts/contrib_build.sh`).
+  Tinyweb is a DSL-style HTTP server library (port of
+  [Tiny](https://github.com/phamm/tiny)) covering routing /
+  filters / WebSocket (RFC 6455 handshake) / SSE / static files /
+  cookies — see `contrib/tinyweb/README.md` for the surface. It was
+  always present in the repo but explicitly excluded from
+  `make install-contrib` (the `rm -rf .../contrib/tinyweb` trim) and
+  from the `contrib_build.sh` catalogue. Now wired up:
+  `probe_tinyweb` is a trivial always-succeed (libc only — SHA-1 +
+  base64 for the WebSocket-Accept handshake live in
+  `ws_handshake.c`); catalogue entry compiles that one .c into
+  `libaether_tinyweb.a`; install path mirrors `module.ae` +
+  `README.md` + `ws_client.ae` (client utility) into
+  `share/aether/contrib/tinyweb/`. `example_*.ae` and `test_*.ae`
+  are trimmed by the standard filter set (the latter now extended
+  to cover `.ae` test files, not just `.sh` drivers — tinyweb is
+  the only contrib module that ships `test_*.ae`).
+
+  Default `make contrib` (no `MODULES=` filter) now builds 9
+  modules instead of 8.
+
+- **`aetherc --emit=ast` carries literal call arguments**
+  (`compiler/aetherc.c`,
+  `tests/integration/aetherc_emit_ast/`). Follow-up to v0.226.0's
+  `--emit=ast` (aeb's supply-chain veto consumer asked for this in
+  `veto-emit-ast-args.md`). Two changes:
+  (a) The emit short-circuit now runs **after** `optimize_ast`
+  rather than before it, so const-foldable numeric args
+  (`do_stuff(1 + 2)` → `do_stuff(3)`) arrive as literals on the
+  wire. String-literal `+` concat isn't valid Aether (the parser
+  rejects it), so the practical impact today is numeric folds;
+  future fold passes for `string.concat(lit, lit)` would be
+  picked up automatically.
+  (b) Each `function_call` node now carries an `args[]` array:
+  one entry per positional/named arg in source order, with
+  `{"literal":"<value>"}` for primitive literals
+  (string/int/int64/float/bool — including `AST_NAMED_ARG`
+  unwrap to the value side) and `{"computed":true}` for
+  anything else (identifier refs, expressions, function calls,
+  interpolations). Trailing closures / DSL builder bodies are
+  filtered out — they're not args in the veto sense. The array
+  is always emitted (even empty) so aeb's policy walker can
+  rely on `obj["args"]` being a defined shape.
+
+  Per the design doc, aeb fail-closes on any `{"computed":true}`
+  arg regardless of contents; no expression-tree provenance is
+  surfaced — the literal-vs-not distinction is the entire
+  requirement, keeping `--emit=ast` from drifting toward a
+  dataflow/taint analyzer. 7 new cells in
+  `tests/integration/aetherc_emit_ast/` cover string/int/multi
+  literals, identifier-ref-is-computed, mixed literal+computed
+  in source order, the const-fold case, and the empty-args edge.
 
 ## [0.227.0]
 
