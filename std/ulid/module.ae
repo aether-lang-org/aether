@@ -92,5 +92,9 @@ generate() -> {
         k = k + 1
     }
 
+    // `buf` was only a read-source for the encoder (its bytes are now
+    // in `out`); `out` is consumed by bytes.finish. Reclaim the
+    // intermediate so the generator allocates nothing net.
+    bytes.free(buf)
     return bytes.finish(out, 26), ""
 }

@@ -64,5 +64,14 @@ main() {
         exit(1)
     }
 
+    // Reclaim the arg lists. list_free releases each element (the
+    // .rodata literals no-op; a5's from_int heap value is freed) and
+    // then frees the list struct + backing array.
+    list_free(a1)
+    list_free(a2)
+    list_free(a3)
+    list_free(a4)
+    list_free(a5)
+
     println("OK")
 }

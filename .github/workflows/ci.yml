@@ -149,7 +149,39 @@ jobs:
         # cert verification fails for lack of a trust anchor on Windows).
         install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib mingw-w64-x86_64-openssl mingw-w64-x86_64-ca-certificates pkg-config make bc
 
+    # Windows Defender real-time scanning of every compiler-produced
+    # file is the dominant Windows-CI tax: `make ci` builds ~585 separate
+    # test executables, and AV-scanning each .c/.o/.exe as it is written
+    # made the .ae test phase ~33 min (vs ~5 min for the same suite on
+    # Linux/macOS, which have no such scanner). Excluding the runner work
+    # tree + temp dirs (and the toolchain processes) from real-time
+    # scanning removes that per-file tax. Best-effort: the job must never
+    # fail because Defender wasn't adjustable on a given runner image.
+    - name: Speed up build — exclude work tree from Windows Defender
+      shell: pwsh
+      continue-on-error: true
+      run: |
+        Add-MpPreference -ExclusionPath "D:\a" -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP" -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionPath "$env:TEMP" -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionPath "$env:TMP" -ErrorAction SilentlyContinue
+        foreach ($p in 'gcc.exe','cc1.exe','collect2.exe','ld.exe','as.exe','aetherc.exe','ae.exe','bash.exe','sh.exe','make.exe') {
+          Add-MpPreference -ExclusionProcess $p -ErrorAction SilentlyContinue
+        }
+        Write-Host "Windows Defender exclusions applied (best-effort)."
+
     - name: Run CI suite
+      # 45-min backstop — a true safety net, not a tuning knob. The suite
+      # runs ~32-36 min on this runner (a handful of HTTP tests that
+      # statically link openssl/nghttp2/zlib/pcre2 dominate the .ae phase),
+      # so the cap sits above the natural runtime and only fires on a real
+      # hang, never on a slow-but-progressing run. (An earlier 30-min cap
+      # killed a healthy ~32-min run.) NPROC is left at the runner default
+      # (nproc=4): oversubscribing to 8 made it WORSE, because 8 of those
+      # heavy static links running at once thrash the 4-vCPU runner's RAM
+      # (one link ballooned to 11 min). Meaningfully cutting this needs a
+      # faster linker / fewer per-test relinks, tracked separately.
+      timeout-minutes: 45
       # The hardcoded `C:\msys64\...` probe in aether_http.c::load_windows_ca_bundle
       # doesn't match the GitHub runner's MSYS2 path (it's installed under a
       # temp dir, not C:\msys64). Export SSL_CERT_FILE explicitly using

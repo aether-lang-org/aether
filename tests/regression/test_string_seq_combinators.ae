@@ -9,25 +9,36 @@
 // PR. See docs/sequences.md § Combinators for the cut-line.
 
 import std.string
+import std.strbuilder
 
 extern exit(code: int)
 
 // Walk the seq and join with "," for assertions. Same shape as the
 // pattern_match test's walk_join helper.
 walk_join(s: *StringSeq, acc: string) -> string {
-    match s {
-        []      -> {
-            return acc
-        }
-        [h | t] -> {
-            sep = ""
-            if string.length(acc) > 0 {
-                sep = ","
-            }
-            return walk_join(t, string.concat(string.concat(acc, sep), h))
-        }
+    // Iterative join via std.strbuilder: amortised-O(1) append, a single
+    // heap-owned result. The earlier recursive `string.concat` form was
+    // O(n²) AND leaked every intermediate buffer — a plain-`char*` value
+    // passed as a parameter carries no ownership bit, so the callee can't
+    // tell an owned buffer from a borrowed/literal one and can't free it.
+    // A StringBuilder owns its buffer outright; this is the correct,
+    // leak-free, performant shape.
+    sb = strbuilder.new(0)
+    strbuilder.append(sb, acc)
+    first = 1
+    if string.length(acc) > 0 {
+        first = 0
     }
-    return acc
+    cur = s
+    while string.seq_is_empty(cur) == 0 {
+        if first == 0 {
+            strbuilder.append(sb, ",")
+        }
+        strbuilder.append(sb, string.seq_head(cur))
+        cur = string.seq_tail(cur)
+        first = 0
+    }
+    return strbuilder.finish(sb)
 }
 
 main() {
@@ -63,6 +74,11 @@ main() {
 
     string.seq_free(r)
     string.seq_free(r2)
+    // `e` (reverse of empty) and `s` (the split source that `r` was the
+    // reverse of) were created but not yet reclaimed — free them too, in
+    // keeping with this test's explicit-ownership convention.
+    string.seq_free(e)
+    string.seq_free(s)
     println("  PASS 1: reverse round-trip + empty edge case")
 
     // ---- concat -----------------------------------------------------
@@ -95,20 +111,26 @@ main() {
     string.seq_free(a)
     string.seq_free(b)
 
-    // Empty edges
-    empty_a = string.seq_concat(string.seq_empty(), string.split_to_seq("p,q", ","))
+    // Empty edges. Capture the split_to_seq operands in locals so their
+    // owning refs are reclaimed — an inline `split_to_seq(...)` argument
+    // is a fresh owned seq with no consumer otherwise.
+    pq = string.split_to_seq("p,q", ",")
+    empty_a = string.seq_concat(string.seq_empty(), pq)
     if string.seq_length(empty_a) != 2 {
         println("FAIL 2e: concat(empty, [p,q]).length=${string.seq_length(empty_a)}")
         exit(1)
     }
     string.seq_free(empty_a)
+    string.seq_free(pq)
 
-    empty_b = string.seq_concat(string.split_to_seq("r,s", ","), string.seq_empty())
+    rs = string.split_to_seq("r,s", ",")
+    empty_b = string.seq_concat(rs, string.seq_empty())
     if string.seq_length(empty_b) != 2 {
         println("FAIL 2f: concat([r,s], empty).length=${string.seq_length(empty_b)}")
         exit(1)
     }
     string.seq_free(empty_b)
+    string.seq_free(rs)
 
     println("  PASS 2: concat with shared tail + empty edges")
 
