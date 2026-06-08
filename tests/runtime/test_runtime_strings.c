@@ -6,14 +6,16 @@
 TEST_CATEGORY(string_concat_basic, TEST_CATEGORY_STDLIB) {
     AetherString* s1 = string_from_cstr("Hello");
     AetherString* s2 = string_from_cstr(" World");
-    char* result = string_concat(s1, s2);
+    /* string_concat now returns a magic AetherString* (unified owned-heap
+     * representation): compare via aether_string_data, free via string_release. */
+    AetherString* result = string_concat(s1, s2);
 
     ASSERT_NOT_NULL(result);
-    ASSERT_STREQ("Hello World", result);
+    ASSERT_STREQ("Hello World", aether_string_data(result));
 
     string_free(s1);
     string_free(s2);
-    free(result);
+    string_release(result);
 }
 
 /* Sibling test for the wrapped variant added under #270. The wrapped
@@ -87,13 +89,13 @@ TEST_CATEGORY(string_reference_counting, TEST_CATEGORY_STDLIB) {
 TEST_CATEGORY(string_concat_empty, TEST_CATEGORY_STDLIB) {
     AetherString* s1 = string_from_cstr("");
     AetherString* s2 = string_from_cstr("Hello");
-    char* result = string_concat(s1, s2);
+    AetherString* result = string_concat(s1, s2);
 
-    ASSERT_STREQ("Hello", result);
+    ASSERT_STREQ("Hello", aether_string_data(result));
 
     string_free(s1);
     string_free(s2);
-    free(result);
+    string_release(result);
 }
 
 TEST_CATEGORY(string_special_chars, TEST_CATEGORY_STDLIB) {

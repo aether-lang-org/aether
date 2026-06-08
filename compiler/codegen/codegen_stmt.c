@@ -4865,10 +4865,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         // Use _match_val (temp) instead of re-evaluating match_expr
                         Type* mexpr_type = match_expr->node_type;
                         if (mexpr_type && mexpr_type->kind == TYPE_STRING) {
-                            // NULL-safe strcmp: guard with _match_val != NULL
-                            fprintf(gen->output, "_match_val && strcmp(_match_val, ");
+                            // NULL-safe, magic-aware: _match_val may be a magic
+                            // AetherString (string ops / concat now return
+                            // magic), so a raw strcmp would compare the struct
+                            // header. string_equals dispatches on the header
+                            // (binary-safe memcmp); keep the NULL guard so a
+                            // NULL scrutinee matches no pattern.
+                            fprintf(gen->output, "_match_val && string_equals(_match_val, ");
                             generate_expression(gen, pattern);
-                            fprintf(gen->output, ") == 0) {\n");
+                            fprintf(gen->output, ")) {\n");
                         } else {
                             fprintf(gen->output, "_match_val == ");
                             generate_expression(gen, pattern);

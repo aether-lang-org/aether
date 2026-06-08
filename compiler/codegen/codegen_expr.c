@@ -2783,25 +2783,31 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 else if (strcmp(func_name, "read_char") == 0 && expr->child_count == 0) {
                     fprintf(gen->output, "getchar()");
                 }
-                // char_at(str, index) — ASCII value of character at position
+                // char_at(str, index) — ASCII value of character at position.
+                // Route through the magic-aware string_char_at: the operand
+                // may now be a magic AetherString (string ops return magic),
+                // so a raw `(const char*)expr[idx]` would index into the
+                // struct header instead of the payload.
                 else if (strcmp(func_name, "char_at") == 0 && expr->child_count >= 1) {
-                    fprintf(gen->output, "((int)((const char*)");
+                    fprintf(gen->output, "((int)string_char_at(");
                     generate_expression(gen, expr->children[0]);
-                    fprintf(gen->output, ")[");
+                    fprintf(gen->output, ", ");
                     if (expr->child_count >= 2) {
                         generate_expression(gen, expr->children[1]);
                     } else {
                         fprintf(gen->output, "0");
                     }
-                    fprintf(gen->output, "])");
+                    fprintf(gen->output, "))");
                 }
-                // str_eq(a, b) — string equality (returns 1 or 0)
+                // str_eq(a, b) — string equality (returns 1 or 0). Route
+                // through magic-aware string_equals: operands may be magic
+                // AetherStrings; raw strcmp would compare header bytes.
                 else if (strcmp(func_name, "str_eq") == 0 && expr->child_count == 2) {
-                    fprintf(gen->output, "(strcmp((const char*)");
+                    fprintf(gen->output, "string_equals(");
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, ", ");
                     generate_expression(gen, expr->children[1]);
-                    fprintf(gen->output, ") == 0)");
+                    fprintf(gen->output, ")");
                 }
                 // raw_mode() / cooked_mode() — terminal mode control
                 else if (strcmp(func_name, "raw_mode") == 0 && expr->child_count == 0) {
@@ -3150,9 +3156,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 } else {
                                     fprintf(gen->output, "map_put_string_owned(");
                                     generate_expression(gen, expr->children[0]);
-                                    fprintf(gen->output, ", (const char*)");
+                                    /* Key may now be a magic AetherString
+                                     * (string ops return magic); route the
+                                     * payload bytes through aether_string_data
+                                     * so the map hashes/compares the content,
+                                     * not the struct header. Safe for plain
+                                     * char-pointer / literal keys too
+                                     * (str_data returns them unchanged). */
+                                    fprintf(gen->output, ", aether_string_data((const void*)");
                                     generate_expression(gen, expr->children[1]);
-                                    fprintf(gen->output, ", (void*)");
+                                    fprintf(gen->output, "), (void*)");
                                     generate_expression(gen, val);
                                     fprintf(gen->output, ")");
                                     if (is_wrapper) {
