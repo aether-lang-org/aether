@@ -5,9 +5,50 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.226.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`aetherc --emit=ast` — post-typecheck AST as JSON for aeb's
+  supply-chain veto** (`compiler/aetherc.c`,
+  `tests/integration/aetherc_emit_ast/`). A third post-typecheck
+  walker beside `--list-functions` and `--diagnose=ownership`,
+  emitting the program's AST in a small filter set
+  (`import_statement`, `extern_function`, `function_call`) as
+  stable JSON on stdout. The compiler holds zero veto policy; it
+  just hands aeb the AST it already built. aeb's `lib/veto`
+  consumes this and applies operator-owned deny rules
+  (`deny extern` / `deny exec` / `deny net` / `deny import`)
+  against an operator policy `.ae`. Designed in
+  `veto-enhancements.md` (cross-repo note from the aeb-side
+  Claude), greenlit in `veto-enhancements-reply2.md`.
+
+  Per-node fields: `kind`, `file` (source-of-origin, NULL for
+  compiler-synthesised nodes), `line`. For
+  `function_call`: `callee` is the resolved binding (post-merge,
+  post-alias-resolution canonicalisation) — `import std.os` plus
+  `os.system(...)` emits `callee: "os_system"`, defeating the
+  alias-spelling tricks a regex would miss. Indirect calls
+  (function-pointer dispatch, no static target) emit
+  `indirect: true` instead of `callee`; aeb fail-closes on those.
+  For `extern_function`: `name` plus `variadic: true` flag on
+  varargs externs. For `import_statement`: `module` path, plus
+  `alias` (for `import X as Y`), `selected[]` (for `import X (a,
+  b)`), `glob: true` (for `import X (*)`).
+
+  Exit codes are conventional: 0 = AST emitted OK, non-zero =
+  parse / typecheck / IO failure. aeb's `--vet` treats non-zero
+  as fail-closed (no AST ⇒ no veto-clearance ⇒ no build).
+
+  20 cells in `tests/integration/aetherc_emit_ast/` cover the
+  qualified-call canonicalisation case, selective imports
+  (`selected[]` + bare-call canonicalisation), glob imports,
+  variadic extern flag, per-node file/line, and the fail-closed
+  exit on parse and typecheck errors.
 
 ## [0.226.0]
 
