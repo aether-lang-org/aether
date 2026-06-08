@@ -112,7 +112,12 @@ int list_add_raw(ArrayList* list, void* item) {
  * its own ownership independently. */
 int list_add_string_owned(ArrayList* list, const void* item) {
     if (!list) return 0;
-    if (item) string_retain(item);
+    /* Ownership transfer, not a share: the codegen routes here only when
+     * `item` is a heap string escaping into the list (caller escape-marked,
+     * does not release), so the list adopts the caller's single reference.
+     * No string_retain — that would leave the value one refcount above what
+     * list_free can reclaim (a per-add leak once values are magic strings).
+     * The matching release is in list_free (owned_flags path). */
     /* Lazy-allocate the flags array on first owned-put. */
     if (!list->owned_flags) {
         if (list->capacity > 0) {
@@ -377,7 +382,15 @@ int map_put_raw(HashMap* map, const char* key, void* value) {
  * returning user-fn). Plain literals stay on map_put_raw. */
 int map_put_string_owned(HashMap* map, const char* key, const void* value) {
     if (!map || !key) return 0;
-    if (value) string_retain(value);
+    /* The codegen routes here only when `value` is a heap string that
+     * ESCAPES into the map — the caller is escape-marked and does NOT
+     * release its reference. So the map adopts the caller's single
+     * reference (ownership transfer); it must NOT string_retain, or the
+     * value would carry one refcount more than the map_free release can
+     * reclaim. Before the magic-string unification this retain was a
+     * silent no-op (values were plain char*); a magic value now makes
+     * the imbalance a per-put leak. The matching release lives in
+     * map_free / map_clear / the replace path below. */
 
     /* Replace path: walk the bucket. If the key exists, release
      * the previous value when it was previously owned, then store
