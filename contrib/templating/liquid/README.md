@@ -190,10 +190,14 @@ an explicit root directory; partials resolved against that root are
 checked with `std.fs.is_within_base` so an attacker-supplied filename
 like `'../../etc/passwd'` is rejected.
 
-The `--with=fs` capability gate for `--emit=lib` is not yet wired up
-(see `TODO.md`). For now, treat the renderer as "safe-by-default for
-`{{ … }}` and `{% if %}` / `{% for %}` etc., but `{% include %}`
-requires explicit caller opt-in via the include root."
+Under `--emit=lib`, `import contrib.templating.liquid` requires
+`--with=fs` — the module transitively imports `std.fs`, and Aether's
+import gate refuses the transitive dependency without explicit
+opt-in. So a host that links your `.so` and embeds Liquid renders
+is making an explicit acknowledgement that its filesystem surface
+is in scope. Without `--with=fs`, the build fails with the standard
+capability-empty error. Verified by
+`tests/integration/liquid_sandbox_gate/`.
 
 ## What's NOT supported
 

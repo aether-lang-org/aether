@@ -5,9 +5,28 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.225.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`contrib.templating.liquid` — sandbox gate verification**
+  (`tests/integration/liquid_sandbox_gate/`,
+  `contrib/templating/liquid/README.md` correction). Pure shell-driver
+  test that asserts the `--emit=lib` capability gate covers the
+  Liquid module transitively. Cases: (1) `--emit=lib` without
+  `--with=fs` rejects `import contrib.templating.liquid` with the
+  standard capability-empty error (because the module imports
+  `std.fs` for `{% include %}` / `parse_file`); (2) `--emit=lib
+  --with=fs` accepts the import; (3) direct `import std.fs` without
+  `--with=fs` still rejected (control); (4) `--emit=exe` (default)
+  accepts the import — only `--emit=lib` applies the gate. The
+  Liquid README earlier claimed the gate was "not yet wired up";
+  this PR's investigation showed the gate IS transitive and works
+  correctly, so the README is corrected and pinned with a test.
 
 ## [0.225.0]
 
