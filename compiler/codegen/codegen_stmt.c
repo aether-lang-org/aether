@@ -858,6 +858,18 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
             strcmp(fn, "file_read_all_raw") == 0 ||
             strcmp(fn, "os_exec_raw") == 0 ||
             strcmp(fn, "os_run_capture_raw") == 0 ||
+            /* std.os string accessors: each returns a FRESH strdup'd buffer
+             * (os_getenv copies the env value; os_which the resolved path;
+             * os_platform_raw strdup's the platform name — NOT a literal;
+             * os_now_utc/local_iso8601_raw strdup the formatted timestamp).
+             * NULL on error (tolerated). Verified owned, never borrowed/
+             * literal — each leaked at every call site because the caller
+             * never freed the copy. */
+            strcmp(fn, "os_getenv") == 0 ||
+            strcmp(fn, "os_which") == 0 ||
+            strcmp(fn, "os_platform_raw") == 0 ||
+            strcmp(fn, "os_now_utc_iso8601_raw") == 0 ||
+            strcmp(fn, "os_now_local_iso8601_raw") == 0 ||
             /* StringBuilder finalise: hands the caller a plain libc-
              * freeable char* and frees the wrapper (std/strbuilder/
              * aether_strbuilder.c:235). Declared `-> string @heap`, but
