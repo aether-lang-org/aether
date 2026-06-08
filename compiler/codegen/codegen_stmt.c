@@ -2039,9 +2039,18 @@ static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
         if (!lhs_is_self && value_directly_carries_param(node->children[1], pname)) return 1;
     }
     if (node->type == AST_VARIABLE_DECLARATION) {
-        /* local initialised directly from the param (alias): `y = pname` */
-        for (int i = 0; i < node->child_count; i++) {
-            if (value_directly_carries_param(node->children[i], pname)) return 1;
+        /* `y = pname` aliases the pointer into a DIFFERENT local y → escape.
+         * But the parser also models a bare param REASSIGNMENT as a decl
+         * node whose `value` IS the param name (e.g. the no-op-free shim's
+         * `p = p`, or `p = concat(p, x)`): that overwrites the param's own
+         * slot, never aliasing the pointer elsewhere, so it is not an
+         * escape. Skip when the declared name is the param itself — the
+         * same lhs-is-self exclusion the AST_ASSIGNMENT sink applies. */
+        int decl_is_self = node->value && strcmp(node->value, pname) == 0;
+        if (!decl_is_self) {
+            for (int i = 0; i < node->child_count; i++) {
+                if (value_directly_carries_param(node->children[i], pname)) return 1;
+            }
         }
     }
     if (node->type == AST_CLOSURE && subtree_mentions_param(node, pname)) {
