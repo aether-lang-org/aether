@@ -272,10 +272,19 @@ World-touching (gated):
 - [ ] Recursion limit (Liquid caps at depth 100 — match that)
 - [ ] Cache parsed partials by absolute path so a partial used N times
       is parsed once
-- [ ] **Gate via `--with=fs` when --emit=lib** — sandbox story: the
-      contrib module imports `std.fs`, so a `--emit=lib` user without
-      `--with=fs` cannot use the include path. `parse_string` /
-      programmatic API stays available without `--with=fs`.
+- [x] **Gate via `--with=fs` when --emit=lib** — verified working
+      transitively (the import gate walks `program->children` after
+      module-merging, so `import contrib.templating.liquid` surfaces
+      the transitive `import std.fs` and the gate fires). Covered by
+      `liquid_sandbox_gate/`. NOTE: this is stricter than the original
+      TODO sketch — `parse_string` / programmatic API is NOT available
+      without `--with=fs` under `--emit=lib` because the module-level
+      `import std.fs` trips the gate regardless of which symbols the
+      consumer actually uses. To relax (e.g. allow `parse_string`-only
+      consumers without fs), the module would need to be split into
+      `contrib.templating.liquid.core` (no fs) and
+      `contrib.templating.liquid.fs` (includes/parse_file). Defer
+      until a downstream user asks.
 
 **5. Layouts** (`{% extends 'parent' %}` + `{% block name %}...{% endblock %}`):
 
@@ -446,10 +455,10 @@ case (no `--with=fs` → engine errors clearly):
 - [ ] `{% extends 'base' %}` + `{% block %}` — child overrides parent
 - [ ] Chain: child → middle → base
 - [ ] Missing parent → error
-- [ ] No `--with=fs` under `--emit=lib` → import gate rejects the
-      contrib module (this falls out of Aether's existing
-      capability-gate machinery; add the test that asserts the error
-      message points at the right opt-in)
+- [x] No `--with=fs` under `--emit=lib` → import gate rejects the
+      contrib module — landed in `liquid_sandbox_gate/` (4 cells:
+      `--emit=lib` reject without `--with=fs`, accept with `--with=fs`,
+      direct `import std.fs` reject control, `--emit=exe` accept).
 
 **Layer 8 — error reporting:**
 
