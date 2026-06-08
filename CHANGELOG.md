@@ -58,6 +58,73 @@ next version number before tagging the release.
   Mustache." 15 new integration tests in `liquid_filter_polish/`
   bring the Liquid suite to **312 across 22 directories**.
 
+## [0.224.0]
+
+This entry is backfilled — the release pipeline tagged 0.224.0
+against an empty `[current]` section, so the substantive work
+landed via PR #648 had no CHANGELOG entry at the time. Reconstructed
+from the commit messages of `perf/windows-ci-and-leak-tail`.
+
+### Fixed
+
+- **`std.collections.string_list` owns copies of its elements** (#622
+  follow-up; `std/collections/aether_stringlist.c`,
+  `std/collections/module.ae`). Previously the list stored the caller's
+  raw pointer with `string_retain` / `string_release` for lifetime —
+  but those are no-ops on a non-magic `char*`, so every plain-`char*`
+  element (a `string.concat` / `split` result) was never reclaimed:
+  the list couldn't free it and the caller's free was suppressed by
+  the `@retain` annotation. The list now owns an independent
+  NUL-terminated copy of each element (`sl_dup_item`, caps-accounted)
+  and frees its own copies on `string_list_free`.
+
+- **`std.fs` / `std.io` / `std.os` owned-heap string returns now
+  classified for auto-free** (`compiler/codegen/codegen_stmt.c`).
+  `@heap` only parses on tuple positions, so these single-value
+  `-> string` externs were missing from the by-name heap classifier
+  and the caller never freed the result. Added: `path_clean`,
+  `path_rel`, `io_read_file_raw`, `file_read_all_raw`, `os_exec_raw`,
+  `os_run_capture_raw`. Leak counts went 10→0 (lexical paths),
+  5→0 (file io), 4→0 (fs_move/copy), 3→0 (atomic rename).
+
+- **`std.ulid` / `std.ksuid` scratch buffer leaks** (`std/ulid/module.ae`,
+  `std/ksuid/module.ae`). The id generators allocated intermediate
+  `bytes` buffers that were only read from (never handed to
+  `bytes.finish`) and so were never reclaimed — a leak per generated
+  id. Both now `bytes.free()` their intermediates. Test leaks 6→0.
+
+- **`test_string_seq_combinators` leak tail** (`tests/regression/
+  test_string_seq_combinators.ae`). Test created seqs that weren't
+  freed and passed `split_to_seq` results inline to `seq_concat` with
+  no owning local to reclaim. Added explicit frees and captured the
+  inline operands. 67→32 leaks; residual 32 are the
+  StringBuilder-finish ownership-through-wrapper-chain gap, under
+  investigation. Also classified `aether_strbuilder_finish` as
+  heap-returning. Rewrote a recursive `string.concat` accumulator
+  as an iterative `std.strbuilder` join (amortised-O(1)).
+
+- **`test_string_format` arg-list leaks** (`tests/regression/
+  test_string_format.ae`). Format-args `std.list` instances `a1..a5`
+  were never freed. Added `list_free` for each. 13→2 leaks; residual
+  2 are a `from_int` value stored into a generic borrowing
+  `std.list` (escape analysis clears its heap flag at the `list_add`
+  sink) — the borrowed-container-holds-a-heap-value class, tracked
+  with the other container-ownership items.
+
+### Changed
+
+- **Windows CI tuning** (`.github/workflows/ci.yml`). Reverted an
+  oversubscription attempt that made the Windows job slower (NPROC=8
+  thrashed the 4-vCPU runner's RAM during the heavy
+  openssl/nghttp2/zlib/pcre2 statically-linked builds — one link
+  ballooned to ~11 min). Use the runner default (nproc=4) and raise
+  the timeout backstop to 45 min (above the natural ~32-36 min
+  runtime, fires only on a real hang). Kept the Defender real-time
+  scan exclusion. Root cause for remaining slowness: `ae build`
+  links the full TLS/HTTP stack into every test exe unconditionally;
+  cutting that needs conditional per-test linking or `lld`, tracked
+  as a follow-up.
+
 ## [0.223.0]
 
 ### Added
