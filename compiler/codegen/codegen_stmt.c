@@ -1911,6 +1911,7 @@ int call_arg_escapes(TypeKind param_kind) {
  * not tracked (rare, and the safe direction would only be a leak). */
 static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
                                      const char* pname, int depth);
+static int is_nonstoring_builtin(const char* fn);
 
 int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
                                   int param_idx, int depth) {
@@ -1972,35 +1973,59 @@ static int subtree_mentions_param(ASTNode* node, const char* pname) {
     return 0;
 }
 
+/* Does evaluating `node` yield a value that IS, or directly aggregates,
+ * the parameter's pointer? This is the "pointer-carrying" test for store
+ * sinks: a bare reference (`pname`) or an array/struct literal element
+ * (`[pname]`, `{f: pname}`) carries the pointer, so storing/returning it
+ * retains the param. A nested CALL does NOT directly carry — `f(pname)`
+ * yields f's result, a distinct value; whether THAT retains the param is
+ * decided precisely by the call-rule in param_escapes_in_subtree (which
+ * sees through read-only accessors). Keeping this test narrow is what
+ * lets `ok = file_delete_raw(path)` NOT count as an escape while
+ * `y = path` still does. */
+static int value_directly_carries_param(ASTNode* node, const char* pname) {
+    if (!node) return 0;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, pname) == 0) return 1;
+    if (node->type == AST_ARRAY_LITERAL || node->type == AST_FIELD_INIT) {
+        for (int i = 0; i < node->child_count; i++) {
+            if (value_directly_carries_param(node->children[i], pname)) return 1;
+        }
+    }
+    return 0;
+}
+
 static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
                                     const char* pname, int depth) {
     if (!node) return 0;
-    if (node->type == AST_RETURN_STATEMENT) {
-        /* Any mention in a return subtree escapes — the pointer (or an
-         * aggregate carrying it) leaves the function. */
-        if (subtree_mentions_param(node, pname)) return 1;
-    }
     /* Storage sinks: the parameter's pointer is retained beyond the call
-     * when it flows, as-is, into a binding, a container element, a struct
-     * field, or a closure capture. Each is an escape; missing one would
-     * let the arg-drain free a still-referenced buffer (UAF), so the
-     * body-walk must catch them all before it can be trusted as
-     * authoritative over the conservative call_arg_escapes heuristic. */
+     * only when it flows, AS A POINTER, into a binding, a container
+     * element, a struct field, a return, or a closure capture. Each is an
+     * escape; missing one would let the arg-drain free a still-referenced
+     * buffer (UAF), so the body-walk catches them all before it can be
+     * trusted as authoritative over the conservative call_arg_escapes
+     * heuristic. The carry-test is deliberately narrow (direct ref /
+     * aggregate element) so that merely READING the param via a nested
+     * call — `f(pname)` whose result is what's stored — is left to the
+     * precise call-rule below rather than blanket-marked as an escape. */
+    if (node->type == AST_RETURN_STATEMENT) {
+        for (int i = 0; i < node->child_count; i++) {
+            if (value_directly_carries_param(node->children[i], pname)) return 1;
+        }
+    }
     if (node->type == AST_ASSIGNMENT && node->child_count >= 2) {
         /* `x = pname`, `obj.field = pname`, `arr[i] = pname` */
-        if (subtree_mentions_param(node->children[1], pname)) return 1;
+        if (value_directly_carries_param(node->children[1], pname)) return 1;
     }
     if (node->type == AST_BINARY_EXPRESSION && node->value &&
         strcmp(node->value, "=") == 0 && node->child_count >= 2) {
-        if (subtree_mentions_param(node->children[1], pname)) return 1;
+        if (value_directly_carries_param(node->children[1], pname)) return 1;
     }
     if (node->type == AST_VARIABLE_DECLARATION) {
-        /* local initialised from the param (alias): `y = pname` */
-        if (subtree_mentions_param(node, pname)) return 1;
-    }
-    if ((node->type == AST_ARRAY_LITERAL || node->type == AST_FIELD_INIT) &&
-        subtree_mentions_param(node, pname)) {
-        return 1;  /* aggregate captures the pointer */
+        /* local initialised directly from the param (alias): `y = pname` */
+        for (int i = 0; i < node->child_count; i++) {
+            if (value_directly_carries_param(node->children[i], pname)) return 1;
+        }
     }
     if (node->type == AST_CLOSURE && subtree_mentions_param(node, pname)) {
         return 1;  /* closure capture may outlive the call */
@@ -2012,9 +2037,21 @@ static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
                 strcmp(a->value, pname) == 0) {
                 char fn_norm[256];
                 const char* fn = codegen_normalise_callee(node->value, fn_norm, sizeof(fn_norm));
-                if (is_retain_extern_param(gen, fn, i)) return 1;
-                if (call_arg_escapes(lookup_callee_param_kind(gen, node->value, i))) return 1;
-                if (callee_param_escapes_via_body(gen, node->value, i, depth + 1)) return 1;
+                /* Read-only accessor (byte/length view, print, free):
+                 * provably does not retain the pointer, so the param does
+                 * not escape via THIS call. If the accessor's RETURN value
+                 * (a view into the param) is later stored, the assignment
+                 * / aggregate / return sinks above catch that mention
+                 * separately — so this is sound. */
+                if (is_nonstoring_builtin(fn)) {
+                    /* not an escape via this call */
+                } else if (is_retain_extern_param(gen, fn, i)) {
+                    return 1;
+                } else if (call_arg_escapes(lookup_callee_param_kind(gen, node->value, i))) {
+                    return 1;
+                } else if (callee_param_escapes_via_body(gen, node->value, i, depth + 1)) {
+                    return 1;
+                }
             }
         }
     }
@@ -2048,7 +2085,20 @@ static int is_nonstoring_builtin(const char* fn) {
            strcmp(fn, "println") == 0 ||
            strcmp(fn, "print_char") == 0 ||
            strcmp(fn, "release") == 0 ||
-           strcmp(fn, "string_release") == 0;
+           strcmp(fn, "string_release") == 0 ||
+           /* Pure read-only views into a string's bytes/length. These
+            * return a non-owning view (or a scalar) and never stash the
+            * argument pointer, so passing a heap string to one is not an
+            * escape. Stdlib wrappers funnel params through these before
+            * handing the raw bytes to a synchronous C extern
+            * (`file_delete_raw(aether_string_data(path))`), which had
+            * falsely marked `path` escaped and leaked every interpolated
+            * argument. If the VIEW is stored, the assignment/return sinks
+            * in param_escapes_in_subtree catch it independently. */
+           strcmp(fn, "aether_string_data") == 0 ||
+           strcmp(fn, "aether_string_len") == 0 ||
+           strcmp(fn, "aether_string_length") == 0 ||
+           strcmp(fn, "_aether_safe_str") == 0;
 }
 
 static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
