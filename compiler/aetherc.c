@@ -110,6 +110,28 @@ static bool list_functions_mode = false;
 // can unmask.
 static bool diagnose_ownership_mode = false;
 
+// --emit=ast: post-typecheck AST emit as JSON to stdout. A third walker
+// beside --list-functions and --diagnose=ownership, runs at the same
+// post-typecheck / pre-codegen point so node->value carries the
+// resolved (namespace-prefixed) binding rather than the as-written
+// spelling (`os.system` → `os_system`, alias-rewrites resolved).
+//
+// Consumer use case: aeb's supply-chain veto walks the emitted JSON
+// to apply operator-owned deny rules (`deny extern`, `deny exec`,
+// `deny net`, `deny import`). The compiler itself contains zero
+// veto policy — that lives in aeb. See aeb's lib/veto and
+// veto-enhancements.md (cross-repo design note).
+//
+// Filter set (intentionally small, additive later):
+//   - import_statement   (module, alias, selected[], glob)
+//   - extern_function    (name, variadic)
+//   - function_call      (callee resolved post-merge, or indirect:true)
+//
+// Exit codes are conventional (no inversion): 0 = emitted OK,
+// non-zero = parse/typecheck/IO failure. See the post-typecheck
+// short-circuit further down for the explicit return-0 path.
+static bool emit_ast_mode = false;
+
 #ifdef _WIN32
     #include <windows.h>
     #include <io.h>
@@ -387,6 +409,278 @@ static void emit_function_list(FILE* out, ASTNode* program) {
             param_count++;
         }
         fputc('\n', out);
+    }
+}
+
+// Helper: write a JSON-escaped string literal (including the surrounding
+// quotes) for an arbitrary C string. NULL is emitted as a JSON null
+// literal (no quotes). Used by emit_ast_json — the strings we surface
+// (file paths, identifier names) are 7-bit printable in practice, but
+// handle the general case so a future caller passing weird input
+// doesn't break the schema.
+static void emit_json_string(FILE* out, const char* s) {
+    if (!s) {
+        fputs("null", out);
+        return;
+    }
+    fputc('"', out);
+    for (const char* p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"') fputs("\\\"", out);
+        else if (c == '\\') fputs("\\\\", out);
+        else if (c == '\n') fputs("\\n", out);
+        else if (c == '\r') fputs("\\r", out);
+        else if (c == '\t') fputs("\\t", out);
+        else if (c < 0x20) fprintf(out, "\\u%04x", c);
+        else fputc((int)c, out);
+    }
+    fputc('"', out);
+}
+
+// Walk one AST node, emit a JSON object on stdout if it falls in the
+// veto filter set, then recurse into children. The `first` flag tracks
+// whether the next emitted object needs a leading comma — passed by
+// pointer so siblings + descendants share the comma cursor.
+//
+// `alias_map` / `alias_count` carry the program's import aliases
+// (`import std.os as o` → "o" → "std.os") so qualified call sites
+// can be canonicalised at emit time. See `resolve_callee_name`.
+typedef struct { const char* alias; const char* module; } EmitAlias;
+static void emit_ast_node_recursive(FILE* out, ASTNode* node, int* first,
+                                     const EmitAlias* alias_map, int alias_count);
+
+// Given a parsed `prefix.suffix` callee spelling, return a malloc'd
+// resolved name `<module>_<suffix>` if `prefix` is a known module
+// alias, otherwise NULL. Caller must free.
+static char* resolve_callee_name(const char* callee,
+                                  const EmitAlias* alias_map, int alias_count) {
+    if (!callee) return NULL;
+    const char* dot = strchr(callee, '.');
+    if (!dot) return NULL;
+
+    size_t prefix_len = (size_t)(dot - callee);
+    char prefix_buf[128];
+    if (prefix_len >= sizeof(prefix_buf)) return NULL;
+    memcpy(prefix_buf, callee, prefix_len);
+    prefix_buf[prefix_len] = '\0';
+    const char* suffix = dot + 1;
+
+    // Try the alias map first (`import X as Y` rewrites Y → X).
+    const char* module = NULL;
+    for (int i = 0; i < alias_count; i++) {
+        if (strcmp(alias_map[i].alias, prefix_buf) == 0) {
+            module = alias_map[i].module;
+            break;
+        }
+    }
+    // If no alias, the prefix IS the module name (`import std.os`
+    // gives `os.system(...)` where prefix=`os` and the module path
+    // is `std.os`; the symbol's namespace is the last dotted
+    // component of the path, which for `std.os` is `os`). So the
+    // callee already canonicalises to `os_system` via prefix_<suffix>.
+    if (!module) module = prefix_buf;
+
+    // Module is dotted (`std.os`) — the symbol's namespace is the
+    // last segment after the final `.`. Match the rule used at
+    // typechecker.c:543: `snprintf(name, "%s_%s", prefix, suffix)`
+    // where prefix is the *short* namespace.
+    const char* short_ns = strrchr(module, '.');
+    short_ns = short_ns ? short_ns + 1 : module;
+
+    size_t out_len = strlen(short_ns) + 1 + strlen(suffix) + 1;
+    char* resolved = malloc(out_len);
+    if (!resolved) return NULL;
+    snprintf(resolved, out_len, "%s_%s", short_ns, suffix);
+    return resolved;
+}
+
+// Walk the program's top-level import statements and populate an
+// alias map. Caller owns the array; the const char* entries borrow
+// from AST nodes (don't free them).
+static int collect_import_aliases(ASTNode* program, EmitAlias* out, int max) {
+    if (!program) return 0;
+    int count = 0;
+    for (int i = 0; i < program->child_count && count < max; i++) {
+        ASTNode* imp = program->children[i];
+        if (!imp || imp->type != AST_IMPORT_STATEMENT || !imp->value) continue;
+        // Look for an AST_IDENTIFIER child with annotation == "module_alias".
+        for (int j = 0; j < imp->child_count; j++) {
+            ASTNode* c = imp->children[j];
+            if (!c || c->type != AST_IDENTIFIER || !c->value) continue;
+            if (c->annotation && strcmp(c->annotation, "module_alias") == 0) {
+                out[count].alias = c->value;
+                out[count].module = imp->value;
+                count++;
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+// --emit=ast: write the post-typecheck AST as JSON to `out`. Emits
+// `{"nodes":[ {...}, {...}, ... ]}` with one object per node in the
+// filter set (import_statement, extern_function, function_call).
+// Other node kinds are walked through but not emitted — we recurse so
+// nested calls inside function bodies are reached.
+//
+// `node->value` on AST_FUNCTION_CALL carries the resolved binding
+// (post-merge, post-alias-resolution) — e.g. `os_system` for what the
+// user wrote as `o.system(...)` after `import std.os as o`. That's the
+// load-bearing field for aeb's veto: it defeats alias-spelling tricks
+// a regex would miss.
+static void emit_ast_json(FILE* out, ASTNode* program) {
+    if (!out || !program) return;
+    // Collect import aliases up-front so qualified call sites can be
+    // canonicalised — `o.system` post `import std.os as o` becomes
+    // `os_system` on the wire (which is what aeb's veto rules match
+    // against). Cap at 128 — pathological programs with more aliases
+    // get the tail dropped; aeb sees the as-written spelling for
+    // those and can decide.
+    EmitAlias aliases[128];
+    int alias_count = collect_import_aliases(program, aliases, 128);
+
+    fputs("{\"nodes\":[", out);
+    int first = 1;
+    emit_ast_node_recursive(out, program, &first, aliases, alias_count);
+    fputs("]}\n", out);
+}
+
+// Returns 1 if the call node's `value` looks like a function-pointer
+// indirect call rather than a static target. Today the parser emits
+// AST_FUNCTION_CALL with `value == NULL` for some indirect-call shapes
+// (the callee expression is the first child rather than baked into
+// value). aeb fail-closes on these per the design doc.
+static int call_is_indirect(ASTNode* call) {
+    if (!call) return 0;
+    if (!call->value || call->value[0] == '\0') return 1;
+    return 0;
+}
+
+static void emit_ast_node_recursive(FILE* out, ASTNode* node, int* first,
+                                     const EmitAlias* alias_map, int alias_count) {
+    if (!node) return;
+
+    int matched = 0;
+    if (node->type == AST_IMPORT_STATEMENT) matched = 1;
+    else if (node->type == AST_EXTERN_FUNCTION) matched = 1;
+    else if (node->type == AST_FUNCTION_CALL) matched = 1;
+
+    if (matched) {
+        if (!*first) fputc(',', out);
+        *first = 0;
+        fputc('{', out);
+
+        // kind
+        fputs("\"kind\":", out);
+        if (node->type == AST_IMPORT_STATEMENT) {
+            emit_json_string(out, "import_statement");
+        } else if (node->type == AST_EXTERN_FUNCTION) {
+            emit_json_string(out, "extern_function");
+        } else {
+            emit_json_string(out, "function_call");
+        }
+
+        // file (origin) — NULL for synthetic compiler-emitted nodes;
+        // aeb treats those as trusted-origin per veto-enhancements.md.
+        fputs(",\"file\":", out);
+        emit_json_string(out, node->source_file);
+
+        // line — 1-based, matches the user's editor.
+        fprintf(out, ",\"line\":%d", node->line);
+
+        if (node->type == AST_IMPORT_STATEMENT) {
+            // module — the import path (`std.os`).
+            fputs(",\"module\":", out);
+            emit_json_string(out, node->value);
+
+            // alias / selected[] / glob — inspect child AST_IDENTIFIER
+            // nodes. `import X as Y` carries one child with
+            // annotation="module_alias". Glob imports carry
+            // annotation="glob_import" on the *statement* (per
+            // aether_module.c:1488). Selective imports
+            // (`import X (a, b)`) carry one AST_IDENTIFIER per name,
+            // un-annotated.
+            int is_glob = (node->annotation
+                           && strcmp(node->annotation, "glob_import") == 0);
+            if (is_glob) {
+                fputs(",\"glob\":true", out);
+            }
+            const char* alias = NULL;
+            int sel_count = 0;
+            for (int i = 0; i < node->child_count; i++) {
+                ASTNode* c = node->children[i];
+                if (!c || c->type != AST_IDENTIFIER || !c->value) continue;
+                if (c->annotation
+                    && strcmp(c->annotation, "module_alias") == 0) {
+                    alias = c->value;
+                } else if (!is_glob) {
+                    sel_count++;
+                }
+            }
+            if (alias) {
+                fputs(",\"alias\":", out);
+                emit_json_string(out, alias);
+            }
+            if (sel_count > 0) {
+                fputs(",\"selected\":[", out);
+                int sel_first = 1;
+                for (int i = 0; i < node->child_count; i++) {
+                    ASTNode* c = node->children[i];
+                    if (!c || c->type != AST_IDENTIFIER || !c->value) continue;
+                    if (c->annotation
+                        && strcmp(c->annotation, "module_alias") == 0) continue;
+                    if (!sel_first) fputc(',', out);
+                    sel_first = 0;
+                    emit_json_string(out, c->value);
+                }
+                fputc(']', out);
+            }
+        } else if (node->type == AST_EXTERN_FUNCTION) {
+            // name — the extern's C symbol.
+            fputs(",\"name\":", out);
+            emit_json_string(out, node->value);
+
+            // variadic — parser stamps `annotation = "varargs"` on
+            // `extern foo(..., ...)` declarations (compiler/parser/
+            // parser.c, the `TOKEN_DOTDOTDOT` path).
+            if (node->annotation && strcmp(node->annotation, "varargs") == 0) {
+                fputs(",\"variadic\":true", out);
+            }
+        } else {
+            // AST_FUNCTION_CALL
+            if (call_is_indirect(node)) {
+                // No static target — aeb fail-closes on this per
+                // veto-enhancements.md (the design doc explicitly
+                // distinguishes "couldn't resolve" from "resolved
+                // to benign").
+                fputs(",\"indirect\":true", out);
+            } else {
+                // Canonicalise the callee. For qualified calls
+                // (`os.system`, `o.system`) the rewriter resolves
+                // the prefix against the program's import-alias
+                // map and produces the post-merge symbol
+                // (`os_system`) — defeating alias-spelling tricks
+                // a regex would miss. Bare-name calls
+                // (intra-module helpers, top-level user
+                // functions) flow through unchanged.
+                char* resolved = resolve_callee_name(node->value,
+                                                     alias_map, alias_count);
+                fputs(",\"callee\":", out);
+                emit_json_string(out, resolved ? resolved : node->value);
+                free(resolved);
+            }
+        }
+
+        fputc('}', out);
+    }
+
+    // Recurse into children regardless of whether this node matched —
+    // calls live inside function bodies, which themselves aren't
+    // emitted but contain the AST_FUNCTION_CALL nodes we care about.
+    for (int i = 0; i < node->child_count; i++) {
+        emit_ast_node_recursive(out, node->children[i], first,
+                                alias_map, alias_count);
     }
 }
 
@@ -757,6 +1051,28 @@ int compile_source(const char* input_path, const char* output_path) {
         for (int i = 0; i < token_count; i++) free_token(tokens[i]);
         free_parser(parser);
         free(source);
+        return 1;
+    }
+
+    // --emit=ast: write the post-typecheck, post-merge program AST as
+    // JSON to stdout (filter set: import_statement, extern_function,
+    // function_call). Conventional exit codes — return 0 here means
+    // process exit 0 ("AST emitted OK"); anything other than 0 means
+    // parse/typecheck/IO failure further up. aeb's supply-chain veto
+    // consumes this; the compiler holds no policy. See
+    // veto-enhancements.md.
+    if (emit_ast_mode) {
+        emit_ast_json(stdout, program);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        // Return value here is `compile_source`'s internal "non-zero =
+        // success" convention; main() translates that to process
+        // exit 0 (see the --check / --dump-ast handlers at the bottom
+        // of main()). Externally observable: process exit 0 = AST
+        // emitted OK, non-zero = parse / typecheck / IO failure.
         return 1;
     }
 
@@ -1193,6 +1509,9 @@ void print_help(const char* program_name) {
     printf("  --no-contracts                   Skip runtime emission of `requires`/`ensures` checks (#348)\n");
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
     printf("  --diagnose=ownership             Print string-ownership verdicts and exit (no code generation)\n");
+    printf("  --emit=ast                       Print post-typecheck AST as JSON to stdout and exit (no code generation).\n");
+    printf("                                   Filter set: import_statement, extern_function, function_call.\n");
+    printf("                                   Used by aeb's supply-chain veto. Compiler holds no policy.\n");
     printf("  --help, -h                       Show this help message\n");
     printf("\n");
     printf("Examples:\n");
@@ -1307,8 +1626,16 @@ int main(int argc, char *argv[]) {
             } else if (strcmp(val, "both") == 0) {
                 emit_exe = true;
                 emit_lib = true;
+            } else if (strcmp(val, "ast") == 0) {
+                // --emit=ast: post-typecheck AST → JSON on stdout. A
+                // peer of --check / --dump-ast / --diagnose=ownership
+                // (no codegen, no output file). Distinct from
+                // --emit=exe / lib / both which control codegen
+                // targets — ast bypasses codegen entirely. See
+                // veto-enhancements.md for the design.
+                emit_ast_mode = true;
             } else {
-                fprintf(stderr, "Error: --emit must be one of: exe, lib, both (got '%s')\n", val);
+                fprintf(stderr, "Error: --emit must be one of: exe, lib, both, ast (got '%s')\n", val);
                 return 1;
             }
             arg_offset++;
@@ -1462,6 +1789,17 @@ int main(int argc, char *argv[]) {
 
     // --check: type-check only, no output file needed
     if (check_only_mode) {
+        if (!compile_source(argv[arg_offset], "/dev/null")) {
+            return 1;
+        }
+        return 0;
+    }
+
+    // --emit=ast: post-typecheck AST → JSON on stdout. Same input-only
+    // shape as --check / --dump-ast / --diagnose=ownership: the file
+    // is read but no .c is written; the short-circuit inside
+    // compile_source returns before codegen.
+    if (emit_ast_mode) {
         if (!compile_source(argv[arg_offset], "/dev/null")) {
             return 1;
         }
