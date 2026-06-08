@@ -199,13 +199,18 @@ find_all_free(fa: ptr) { aether_regex_find_all_free(fa) }
 // replace replaces only the first match; replace_all replaces every
 // non-overlapping match. Returns (out, err); err == "" on success.
 
-replace(re: ptr, s: string, repl: string) -> (string, string) {
+// Inferred return type (`-> {`) so the heap-ownership of `out` (the
+// extern is `-> string @heap`) propagates to the caller's destructured
+// result — an explicit `(string, string)` return marks position 0 as a
+// borrow, so the caller never frees the substituted buffer and it leaks.
+// `e` is the borrowed static last-error buffer (position 1, non-heap).
+replace(re: ptr, s: string, repl: string) -> {
     out = aether_regex_replace(re, s, repl)
     e = aether_regex_last_error()
     return out, e
 }
 
-replace_all(re: ptr, s: string, repl: string) -> (string, string) {
+replace_all(re: ptr, s: string, repl: string) -> {
     out = aether_regex_replace_all(re, s, repl)
     e = aether_regex_last_error()
     return out, e
