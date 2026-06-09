@@ -62,9 +62,19 @@ main() {
     }
     println("  PASS: stored heap reasons survived the storing wrapper")
 
-    // Reclaim the map — it owns the stored heap reason values (the storing
-    // wrapper transferred ownership), so map.free releases them and the
-    // keys. After this r1/r2 dangle, but they are not read again.
+    // The map BORROWS its string values: map.put on a value passed through
+    // a `string` parameter routes to the non-owning map_put_raw, because
+    // the codegen cannot prove a parameter is an owned heap allocation
+    // rather than a borrowed/literal one — and tagging a borrowed value
+    // "owned" would make map.free double-free it (the exact misroute
+    // test_proxy_opts_map_mount guards against). So the PROGRAM owns the
+    // reason strings and frees them here, via the handles read back above,
+    // before tearing the map down. record_fail transferred them in and did
+    // not free them, so r1/r2 are the only live references.
+    string.free(r1)
+    string.free(r2)
+    // Frees the interned keys + the bucket array/struct; the borrowed
+    // (now-freed) values are left untouched (map_put_raw => value_owned=0).
     map.free(m)
     println("=== all cases passed ===")
 }
