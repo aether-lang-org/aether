@@ -496,16 +496,17 @@ long clone3(struct clone_args* args, size_t size) {
     return real_clone3(args, size);
 }
 
-// vfork — same restriction as fork
-static pid_t (*real_vfork)(void) = NULL;
-pid_t vfork(void) {
-    if (!real_vfork) real_vfork = dlsym(RTLD_NEXT, "vfork");
-    if (sandbox_active && !check_grant("fork", "*")) {
-        errno = EPERM;
-        return -1;
-    }
-    return real_vfork();
-}
+// vfork — NOT intercepted. A C-language wrapper around vfork() is unsafe:
+// vfork's contract requires the child to call only _exit() or execve()
+// before returning from the function that called vfork(). Wrapping vfork
+// in our own C function means the child returns from *our* frame on the
+// parent's shared stack, corrupting it — which manifests as the calling
+// program (gcc driver, etc.) segfaulting after the wait4. We rely on the
+// fork() and execve() interceptors to gate process creation: a vfork()
+// without a follow-up execve() is virtually unheard of outside of glibc
+// internals (where it's harmless), and any exec by a vfork'd child is
+// caught by the execve interceptor below. See
+// sandbox-preload-toolchain-segfault.md for the bug this fixes.
 
 // mmap — block PROT_EXEC to prevent shellcode execution from byte arrays
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
