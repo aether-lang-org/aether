@@ -1,0 +1,29 @@
+# tests/leaks_known.txt — known-acceptable leak counts for the macOS
+# leaks(1) gate (tests/run_macos_leaks.sh). Every regression program is
+# expected to report ZERO leaks; the entries below are the audited
+# exceptions, each capped so a regression that grows the count still
+# fails the gate.
+#
+# Two columns: <test_name> <max_leaks>. Lines starting with '#' and
+# blank lines are ignored. Keep the rationale next to each entry.
+#
+# ── ARTIFACT: third-party library process-globals ───────────────────
+# Reclaimed at process exit, NOT reclaimable by us. Proven false
+# positive: leaks(1) --atExit samples the heap BEFORE atexit handlers
+# run, so OpenSSL's OPENSSL_cleanup (registered via atexit) has already
+# been scheduled but not yet executed at sample time. The memory IS
+# returned to the OS at exit. Confirmed: an explicit atexit(OPENSSL_cleanup)
+# changed the leaks count by zero.
+test_cryptography_hmac_md4_md5 122
+#
+# ── KNOWN: real but bounded, tracked for a focused follow-up ─────────
+# A single transient closure env (_AeClosure struct, 32 bytes) for an
+# anonymous capturing closure passed to a non-escaping `fn` parameter
+# (run(cb){ cb() }). The env is malloc'd at closure creation and not
+# reclaimed after the closure's last use. Eliminating it cleanly
+# requires escape-analyzed closure-env lifetime (free the env after the
+# call only when the callee neither stores nor returns the closure) — a
+# closure-lifetime feature, not a localized fix. Capped at 1 so it
+# cannot grow. See docs/memory-management.md "Closure environment
+# lifetime".
+test_closure_captured_libc_name 1
