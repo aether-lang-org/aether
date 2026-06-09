@@ -61,5 +61,10 @@ main() {
         exit(1)
     }
     println("  PASS: stored heap reasons survived the storing wrapper")
+
+    // Reclaim the map — it owns the stored heap reason values (the storing
+    // wrapper transferred ownership), so map.free releases them and the
+    // keys. After this r1/r2 dangle, but they are not read again.
+    map.free(m)
     println("=== all cases passed ===")
 }

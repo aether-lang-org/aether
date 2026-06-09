@@ -24,6 +24,7 @@
 import std.string
 
 extern malloc(size: int) -> ptr
+extern free(p: ptr)
 extern exit(code: int)
 
 struct ErrChain {
@@ -93,6 +94,12 @@ main() {
         exit(1)
     }
     println("  PASS 2: string fields via interpolation through *Self chain")
+
+    // Reclaim the manually-malloc'd chain nodes (the string fields are
+    // borrowed literals; only the struct memory is heap-owned here).
+    free(leaf)
+    free(middle)
+    free(top)
 
     println("OK")
 }
