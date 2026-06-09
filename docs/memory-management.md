@@ -392,12 +392,13 @@ For functions that *store* a string pointer beyond the call (collection adders, 
 
 ```aether
 extern string_list_add(list: ptr, s: @retain string) -> int
-extern map_put_raw(map: ptr, key: @retain string, value: ptr) -> int
 ```
 
 Tells the heap-string-tracker escape walker "this slot stores the pointer; mark the heap-string arg as escaped, skip the function-exit free." Multiple annotations stack (`@aether @retain string` is legal; order doesn't matter). Default for unannotated string parameters remains "read-only" — correct for `string.length` / `string.equals` / `print` / `println` and other consumers that don't outlive the call.
 
-Audited stdlib retainers carrying `@retain` today: `string_list_add`, `string_list_set`, `map_put_raw`'s key. Other functions are added as their callers are audited.
+`@retain` is **only** correct when the callee keeps the *caller's* pointer. A function that copies its argument is **not** a retainer: `map_put_raw` interns its key (`string_new(key)` at put time, released at `map_free`) and never holds the caller's key bytes after the call, so its `key` parameter is a plain `string` (borrowed) — a heap key is reclaimed at the caller's scope exit. Marking such a copy-on-store parameter `@retain` leaks the caller's argument (the callee owns only its copy).
+
+Audited stdlib retainers carrying `@retain` today: `string_list_add`, `string_list_set`. Other functions are added as their callers are audited.
 
 ### Return-ownership contract (uniform-heap return-escape)
 
@@ -456,9 +457,29 @@ A function that calls itself recursively (e.g. a `walk_join`-style accumulator-p
 
 The wrap is suppressed when the corresponding callee parameter is storage-shaped (`ptr`, `@retain` string, or unknown-typed) — the same `call_arg_escapes` gate the escape walker uses. In those cases the recipient takes ownership and freeing here would dangle the stored copy.
 
+### Container value ownership (`map.put` / `list.add`)
+
+A heap string stored as a container *value* is owned by the container and released when the container is freed (`map.free` / `list.free`). The codegen routes the value into the owning variant (`map_put_string_owned` / `list_add_string_owned`, which adopt the caller's single reference — no retain, so the refcount balances at free time) according to what it can prove about the value:
+
+- **Statically heap** (`string.concat(...)`, interpolation, a heap-returning call, or a local proven heap-assigned in the body): routed to the owning put directly.
+- **A `string` parameter** (ownership transferred in by the caller, but heap-vs-literal unknown at the put site): dispatched at runtime on the AetherString magic header — `_aether_is_magic(v) ? owning_put : raw_put`. An owned heap string is adopted and released at `free`; a literal / borrowed `char*` takes the non-owning path and is never freed. This is sound because the routing predicate (a string parameter used directly as a container value) is the same store-sink the escape walker uses to mark the caller's argument escaped — adoption and the caller's suppressed free are always paired, so the value is freed exactly once.
+- **A literal**: stays on the non-owning `*_raw` path; never freed.
+
+The key is always interned by the container (copied via `string_new`), so a heap key is the caller's to reclaim — see the `@retain` note above.
+
+**Boxed closures.** A closure value (`fn`-typed, not a raw fn-pointer) stored into a list is heap-boxed by the `fn -> ptr` coercion (`_aether_box_closure`). The list takes ownership of the box (it is stored owned, and `list_free` reclaims the non-magic box via `free`); a bare function pointer (`is_fnptr`, a code address) is not heap and stays on the raw path.
+
+### Closure environment lifetime
+
+A closure that captures variables carries them in a heap-allocated environment struct (`_aether_box_closure` / `_aether_make_closure_N`). When such a closure *escapes* — stored in a list/map/struct, returned, or otherwise outliving the creating frame — the environment is reachable through the owner and reclaimed with it.
+
+A **transient** capturing closure — one created inline, passed to a function that only calls it and neither stores nor returns it (`run(cb) { cb() }`) — currently leaks its environment struct: there is no reclamation point after the closure's last use. Eliminating this needs escape-analyzed closure-environment lifetime (free the env after the call only when the callee provably does not retain the closure), which is a closure-lifetime feature rather than a localized fix. It is bounded (one small struct per such call site), tracked by `tests/leaks_known.txt` (capped so it cannot grow), and verified non-fatal (no use-after-free) by the ASan suite. Until then, prefer a named closure whose lifetime you control, or pass captured state explicitly.
+
 ### When you DO need explicit cleanup
 
 Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*` without an `@heap` annotation) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments, annotated extern returns, and non-escaped function-scope locals.
+
+Raw-pointer structs reached through a cast (`p as *Slot`, with `malloc`/`free`) are outside the field heap-string tracker — a field write through a raw cast is a plain store with no reassign-free. Manage those fields' strings explicitly (free the old value before overwriting; free fields before the struct), exactly as in C.
 
 ---
 
