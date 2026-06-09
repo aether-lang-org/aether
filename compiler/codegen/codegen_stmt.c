@@ -792,6 +792,12 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
         // AetherString. `aether_heap_str_free` dispatches on the magic
         // header, so both shapes free correctly through the tracker.
         if (strcmp(fn, "string_concat") == 0 ||
+            /* string_concat_wrapped mints a fresh refcounted AetherString
+             * via string_new_with_length and returns it (never a borrowed
+             * or literal pointer) — its `-> string` result is owned heap,
+             * reclaimed via aether_heap_str_free (string_release) at scope
+             * exit. Without this the wrapped-concat result local leaked. */
+            strcmp(fn, "string_concat_wrapped") == 0 ||
             strcmp(fn, "string_substring") == 0 ||
             strcmp(fn, "string_substring_n") == 0 ||
             /* string.copy returns `string_concat(s, "")` — always a

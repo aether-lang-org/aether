@@ -62,7 +62,14 @@ extern string_concat(a: string, b: string) -> string
 // through to strlen() and silently truncating at the first NUL. Use
 // when joining inputs that may contain binary bytes (base64-decoded
 // payloads, fs.read_binary output, …). Issue #270.
-extern string_concat_wrapped(a: string, b: string) -> ptr
+//
+// Returns `string`: the C function yields an owned, refcounted
+// AetherString*, which is exactly the magic `string` representation.
+// Typing it `string` (not `ptr`) lets the codegen track the result as
+// an owned heap string and release it at scope exit, and unwrap it to
+// its payload bytes at naive-C-extern boundaries (#297). The C ABI is
+// unchanged — the header still declares `AetherString*`.
+extern string_concat_wrapped(a: string, b: string) -> string
 extern string_length(str: string) -> int
 extern string_char_at(str: string, index: int) -> int
 extern string_equals(a: string, b: string) -> int
@@ -368,11 +375,16 @@ to_int_radix(s: string, radix: int) -> (long, string) {
 // matching and leaves `s` unchanged — callers can use the 1/0
 // flag to tell "matched and stripped" from "no match".
 strip_prefix(s: string, prefix: string) -> {
+    s_len = string_length(s)
     if string_starts_with(s, prefix) != 1 {
-        return s, 0
+        // No match: return an owned copy of the whole string (not the
+        // borrowed input). Uniform ownership — position 0 is ALWAYS a
+        // fresh owned heap string — lets the caller reclaim the result
+        // unconditionally and keeps `s` from return-escaping this
+        // wrapper (which would otherwise pin the caller's argument).
+        return string_substring(s, 0, s_len), 0
     }
     prefix_len = string_length(prefix)
-    s_len = string_length(s)
     return string_substring(s, prefix_len, s_len), 1
 }
 
