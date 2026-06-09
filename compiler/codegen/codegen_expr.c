@@ -1459,9 +1459,22 @@ void emit_closure_definitions(CodeGenerator* gen) {
             for (int p = 0; p < parent_promoted_count; p++) {
                 if (parent_promoted[p]) mark_var_declared(gen, parent_promoted[p]);
             }
+            /* A closure body is its own C function — it needs the same
+             * heap-string lifecycle as a top-level function, or heap
+             * locals it mints (e.g. `trimmed = string.trim(out)`) leak
+             * when the closure returns. Hoist the `_heap_<name>` trackers,
+             * mark return/store escapes, and push the scope-exit defer-
+             * frees; exit_scope below emits them (and the per-return
+             * emit_all_defers handles explicit returns). Balanced
+             * enter/exit_scope keeps the defer stack closure-local. */
+            enter_scope(gen);
+            hoist_heap_string_trackers(gen, body);
+            mark_escaped_heap_string_vars(gen, body);
+            push_heap_string_exit_free_defers(gen, body);
             for (int i = 0; i < body->child_count; i++) {
                 generate_statement(gen, body->children[i]);
             }
+            exit_scope(gen);
             gen->current_env_captures = prev_env;
             gen->current_env_capture_count = prev_env_count;
             gen->current_promoted_captures = prev_promoted;
@@ -2196,6 +2209,13 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
         case AST_FUNCTION_CALL:
             if (expr->value) {
                 const char* func_name = expr->value;
+                /* Dotted source callees (`string.seq_free`) normalised to
+                 * the underscored C/registry form for handlers that match
+                 * stdlib functions by name. */
+                char func_name_norm_buf[256];
+                const char* func_name_norm =
+                    codegen_normalise_callee(func_name, func_name_norm_buf,
+                                             sizeof(func_name_norm_buf));
                 /* Capture + clear the discarded-value flag at the top of
                  * the call codegen so it governs THIS call only and never
                  * leaks into nested argument calls (whose values ARE
@@ -2622,9 +2642,14 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 // string.seq_free(seq) — explicit refcount-decrement on a
                 // *StringSeq. For a tracked seq local, clear the ownership
                 // flag and NULL the slot so the scope-exit defer-free does
-                // not decrement a spine this call already released.
-                // string_seq_free is itself NULL-safe.
-                else if (strcmp(func_name, "string_seq_free") == 0 &&
+                // not decrement a spine this call already released (a
+                // double-free glibc aborts on — exposed once scope-exit
+                // defers run before exit()). Normalise the callee: the
+                // source form is the dotted `string.seq_free`, not the
+                // underscored C name this handler historically compared
+                // against, so the flag-clear silently never fired.
+                else if ((strcmp(func_name_norm, "string_seq_free") == 0 ||
+                          strcmp(func_name, "string_seq_free") == 0) &&
                          expr->child_count == 1) {
                     ASTNode* arg = expr->children[0];
                     if (arg->type == AST_IDENTIFIER && arg->value &&
