@@ -130,25 +130,32 @@ static int is_fork_granted(void* grant_list) {
 //
 // The filter is multi-arch-aware: it checks seccomp_data.arch and only
 // applies the trap on x86_64; other architectures fall through to
-// SECCOMP_RET_ALLOW so this never breaks ARM/etc. (where the
+// SECCOMP_RET_ALLOW so this never breaks ARM/RISC-V/etc. (where the
 // LD_PRELOAD-level libc wrappers remain the only fence — a known and
 // documented gap). The x86_64 fence is the value-add: that's the only
 // arch where the issue reporter's repro lives (gcc/clone3).
 //
-// One BPF program, four traps. We use the syscall numbers from
-// <sys/syscall.h> so we pick up arch-correct values at compile time
-// (SYS_clone3 is glibc 2.34+; older sysroots may lack it — guarded).
+// Syscall numbers below are **x86_64 ABI literals**, intentionally not
+// the symbolic SYS_* names. Two reasons:
+//   1. We're filtering syscalls *of the x86_64 ABI* (the arch check
+//      above gates this), so the architecturally correct numbers are
+//      x86_64's regardless of what arch we're compiling on.
+//   2. The portable SYS_* macros would resolve to the *build host's*
+//      ABI numbers — broken when cross-compiling for an arch that uses
+//      different numbers, AND on architectures like RISC-V that simply
+//      have no SYS_fork / SYS_vfork (only clone/clone3) the code
+//      doesn't even compile.
+// x86_64 ABI: clone=56, fork=57, vfork=58, clone3=435. These are stable
+// kernel ABI and will not change.
 static int install_clone_fence_seccomp(void) {
     // SECCOMP_RET_ERRNO returns an errno in the low 16 bits.
     #define DENY_EPERM (SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA))
     #define ALLOW      SECCOMP_RET_ALLOW
 
-    // Some sysroots predate SYS_clone3; if so, skip that arm. clone3
-    // is __NR_clone3 = 435 on every Linux arch that has it, but
-    // hard-coding feels wrong — fall back only when the macro's missing.
-    #ifndef SYS_clone3
-    #define SYS_clone3 435
-    #endif
+    #define NR_X86_64_CLONE   56
+    #define NR_X86_64_FORK    57
+    #define NR_X86_64_VFORK   58
+    #define NR_X86_64_CLONE3  435
 
     struct sock_filter filter[] = {
         // Load arch from seccomp_data; if not x86_64, allow.
@@ -162,10 +169,10 @@ static int install_clone_fence_seccomp(void) {
                  (uint32_t)offsetof(struct seccomp_data, nr)),
 
         // Four traps, fall-through allows everything else.
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_clone,  4, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_clone3, 3, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_fork,   2, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_vfork,  1, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NR_X86_64_CLONE,  4, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NR_X86_64_CLONE3, 3, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NR_X86_64_FORK,   2, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NR_X86_64_VFORK,  1, 0),
         BPF_STMT(BPF_RET | BPF_K, ALLOW),
         BPF_STMT(BPF_RET | BPF_K, DENY_EPERM),
     };
