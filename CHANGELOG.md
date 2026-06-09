@@ -5,9 +5,32 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.228.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **`spawn_sandboxed` no longer corrupts the parent stack when the
+  contained child uses `vfork()`** (`runtime/libaether_sandbox_preload.c`,
+  `tests/integration/sandbox_toolchain/`). Removed the LD_PRELOAD `vfork()`
+  wrapper: glibc's `vfork()` has a strict contract (the child must call
+  only `_exit()` or `execve()`, and the calling function must not
+  return) because vfork shares the parent's stack until the child execs.
+  Wrapping the symbol in a regular C function violates that — the child
+  returns *through our wrapper frame* on the shared stack, corrupting
+  the parent. The visible effect was a sandboxed child running the
+  `ae`/`aetherc` → `gcc` → `cc1`/`as`/`ld` toolchain failing (`Build
+  failed`, `rc=-1`) — and, for a deeper aeb orchestrator child, segfaults
+  in the parent after the `wait4`. The `fork()` and `execve()`
+  interceptors continue to gate process creation (`fork()` is safe to
+  wrap; the dangerous follow-up is the `execve` which we still see); a
+  bare `vfork()+_exit()` was never the threat model. Reported by aeb as
+  the upstream blocker for `aeb --sandbox <target>`. New regression test
+  exercises the full `ae build` toolchain under `spawn_sandboxed`;
+  verified pre-fix → FAIL, post-fix → PASS.
 
 ## [0.228.0]
 
