@@ -3202,6 +3202,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             } else {
                                 val_is_heap = val && is_heap_string_expr(gen, val);
                             }
+                            /* A closure value (`fn`-typed, not a raw fn-ptr)
+                             * stored into a container is heap-boxed by the
+                             * arg coercion (_aether_box_closure — mirror of
+                             * the condition at the call-arg fn->ptr path).
+                             * The box is a fresh malloc the container should
+                             * own, or it leaks (the list holds an opaque ptr
+                             * with no owner). Route to the owning add so
+                             * list_free reclaims the box. A bare fn -> ptr
+                             * (is_fnptr) is a code address, not heap — it
+                             * stays on the raw path. */
+                            int val_is_closure =
+                                val && val->node_type &&
+                                val->node_type->kind == TYPE_FUNCTION &&
+                                !val->node_type->is_fnptr;
                             if (val_is_heap) {
                                 if (is_wrapper) {
                                     fprintf(gen->output, "(");
@@ -3270,6 +3284,23 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     if (is_wrapper) fprintf(gen->output, " ? \"\" : \"map.put failed\")");
                                     fprintf(gen->output, "; })");
                                 }
+                                break;
+                            }
+                            /* Closure value -> the container owns the heap
+                             * box. list_add_string_owned just stores the
+                             * pointer and sets owned_flags[i]=1 (no string
+                             * semantics); list_free's owned path frees the
+                             * non-magic box via libc free. (map values are a
+                             * `ptr` slot — closures stored in maps are rare
+                             * and keep the existing raw path.) */
+                            if (val_is_closure && is_list_shape) {
+                                if (is_wrapper) fprintf(gen->output, "(");
+                                fprintf(gen->output, "list_add_string_owned(");
+                                generate_expression(gen, expr->children[0]);
+                                fprintf(gen->output, ", (void*)_aether_box_closure(");
+                                generate_expression(gen, val);
+                                fprintf(gen->output, "))");
+                                if (is_wrapper) fprintf(gen->output, " ? \"\" : \"list.add failed\")");
                                 break;
                             }
                         }

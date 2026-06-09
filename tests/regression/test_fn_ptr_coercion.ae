@@ -91,5 +91,13 @@ main() {
     }
     print("  PASS: two distinct callback boxes via forwarder\n")
 
+    // Reclaim the lists. l1 holds a bare function pointer (a code
+    // address, not heap); l2/l3 hold heap-allocated _AeClosure boxes
+    // (the fn -> ptr coercion at the forwarder's list.add). list.free
+    // releases the backing array + struct and frees any owned boxes.
+    list.free(l1)
+    list.free(l2)
+    list.free(l3)
+
     print("\n=== All fn ↔ ptr coercion tests passed ===\n")
 }
