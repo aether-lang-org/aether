@@ -5632,6 +5632,20 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "_aether_ctx_push((void*)0);\n");
                     }
                 } else {
+                    /* `exit(code)` is noreturn — libc exit() terminates the
+                     * process immediately, so any function-exit defer-frees
+                     * emitted AFTER this call (at the function's natural end)
+                     * never run, leaking every live heap local. Emit all
+                     * pending defers FIRST so the heap is reclaimed before the
+                     * process ends. The defers are flag-guarded (`if(_heap_x)`)
+                     * and emit_all_defers is non-destructive, so other (non-
+                     * exit) paths still get their own scope-exit frees. This
+                     * is what made tests ending in `exit(0)` leak all their
+                     * string/seq locals. */
+                    if (inner && inner->type == AST_FUNCTION_CALL && inner->value &&
+                        strcmp(inner->value, "exit") == 0) {
+                        emit_all_defers(gen);
+                    }
                     /* A bare call-statement discards the call's value, so
                      * heap-returning inline args must still be drained even
                      * when the callee's declared return type is VOID or
