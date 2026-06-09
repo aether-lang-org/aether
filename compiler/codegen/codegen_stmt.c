@@ -2145,7 +2145,14 @@ static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
         return 1;  /* closure capture may outlive the call */
     }
     if (node->type == AST_FUNCTION_CALL && node->value) {
-        for (int i = 0; i < node->child_count; i++) {
+        /* An INDIRECT call `cb(...)` lowers to value=="call" with child[0]
+         * the CALLEE (the closure/fn being invoked) and children[1..] the
+         * arguments. Invoking a parameter reads cb.fn/cb.env and runs it —
+         * it neither stores nor returns cb, so the callee slot is NOT an
+         * escape. Only the actual arguments can escape. For a NAMED call
+         * (value == function name) every child is an argument. */
+        int first_arg = (strcmp(node->value, "call") == 0) ? 1 : 0;
+        for (int i = first_arg; i < node->child_count; i++) {
             ASTNode* a = node->children[i];
             if (a && a->type == AST_IDENTIFIER && a->value &&
                 strcmp(a->value, pname) == 0) {
@@ -5662,9 +5669,34 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     if (inner && inner->type == AST_FUNCTION_CALL) {
                         gen->discard_call_value = 1;
                     }
-                    generate_expression(gen, inner);
+                    /* Transient capturing-closure argument: a closure passed
+                     * to a parameter that neither stores nor returns it
+                     * (callback pattern, run(cb){ cb() }) is dead after the
+                     * call, so its heap env must be freed or it leaks. Find
+                     * the first non-trailing closure arg (trailing blocks are
+                     * inlined below, not passed by value) and, when its
+                     * parameter provably does not escape, emit the env-
+                     * draining call form. */
+                    ASTNode* cclos = NULL; int cclos_idx = -1;
+                    if (inner && inner->type == AST_FUNCTION_CALL && inner->value) {
+                        for (int ai = 0; ai < inner->child_count; ai++) {
+                            ASTNode* a = inner->children[ai];
+                            if (a && a->type == AST_CLOSURE &&
+                                !(a->value && strcmp(a->value, "trailing") == 0)) {
+                                cclos = a; cclos_idx = ai; break;
+                            }
+                        }
+                    }
+                    if (cclos && cclos_idx >= 0 &&
+                        callee_param_escapes_via_body(gen, inner->value,
+                                                      cclos_idx, 0) == 0) {
+                        emit_closure_env_drained_call(gen, inner, cclos);
+                        fprintf(gen->output, "\n");
+                    } else {
+                        generate_expression(gen, inner);
+                        fprintf(gen->output, ";\n");
+                    }
                     gen->discard_call_value = 0;
-                    fprintf(gen->output, ";\n");
                 }
 
                 // Trailing blocks for non-defer: emit closure body as inline statements after the call

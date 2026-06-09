@@ -121,6 +121,12 @@ void exit_scope(CodeGenerator* gen);
 /* Expression generation (codegen_expr.c) */
 void generate_expression(CodeGenerator* gen, ASTNode* expr);
 
+/* Emit `call` so a transient capturing-closure argument's heap env is
+ * freed after the call (codegen_expr.c). Caller must verify the receiving
+ * parameter does not store/return the closure. */
+void emit_closure_env_drained_call(CodeGenerator* gen, ASTNode* call,
+                                   ASTNode* closure_node);
+
 /* Message field helpers (codegen_expr.c) — shared with codegen_stmt.c */
 MessageFieldDef* find_msg_field(MessageDef* msg_def, const char* name);
 void emit_message_field_init(CodeGenerator* gen, MessageFieldDef* fdef, ASTNode* rhs);

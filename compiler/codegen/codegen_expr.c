@@ -84,6 +84,33 @@ static void arg_drain_truncate(int target_count) {
     }
 }
 
+/* Emit `call` as a block that frees the env of a TRANSIENT capturing
+ * closure argument after the call returns. The closure is hoisted into an
+ * `_AeClosure` temp, the call is emitted with the closure substituted by
+ * that temp (so the receiver gets the same value), and the temp's heap
+ * env is freed once the call has run:
+ *
+ *   { _AeClosure _ad_N = <closure>; callee(.., _ad_N, ..);
+ *     if (_ad_N.env) free((void*)_ad_N.env); }
+ *
+ * The env free is conditional, so a zero-capture closure (env == NULL) is
+ * a no-op. SOUNDNESS is the caller's responsibility: it must only invoke
+ * this when the receiving parameter neither stores nor returns the closure
+ * (verified via callee_param_escapes_via_body) — otherwise the receiver
+ * would keep a pointer into the freed env. */
+void emit_closure_env_drained_call(CodeGenerator* gen, ASTNode* call,
+                                   ASTNode* closure_node) {
+    int saved = g_arg_drain_count;
+    char* nm = arg_drain_mint_name();
+    fprintf(gen->output, "{ _AeClosure %s = ", nm);
+    generate_expression(gen, closure_node);   /* unbound here -> real closure */
+    fprintf(gen->output, "; ");
+    arg_drain_bind(closure_node, nm);          /* now substitutes in the call */
+    generate_expression(gen, call);
+    fprintf(gen->output, "; if (%s.env) free((void*)%s.env); }", nm, nm);
+    arg_drain_truncate(saved);                 /* frees nm */
+}
+
 /* Return 1 when `c_func_name` is a stdlib C function that already
  * dispatches on the AetherString magic header internally (via
  * `str_data` / `str_len` in std/string/aether_string.c). Such functions
@@ -1683,7 +1710,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
      * the parent's call site syntactically intact while the temp's
      * lifetime is managed by the wrap. */
     if (expr->type == AST_FUNCTION_CALL ||
-        expr->type == AST_STRING_INTERP) {
+        expr->type == AST_STRING_INTERP ||
+        expr->type == AST_CLOSURE) {
         const char* sub = arg_drain_lookup(expr);
         if (sub) {
             fprintf(gen->output, "%s", sub);
