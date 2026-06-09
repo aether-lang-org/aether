@@ -5,9 +5,46 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.229.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **`spawn_sandboxed`: kernel-level fence for `clone3`/`vfork` —
+  `fork:*` deny is no longer a paper tiger against modern toolchains**
+  (`runtime/aether_spawn_sandboxed.c`,
+  `tests/integration/sandbox_clone_fence/`, issue #668). The LD_PRELOAD
+  libc-symbol fence on `fork`/`vfork`/`clone`/`clone3` was bypassed by
+  any caller that issues the underlying syscall directly — including
+  glibc's own `__vfork` (an inline `syscall` instruction with no libc
+  symbol indirection at all) and any program calling
+  `syscall(SYS_clone3, …)` via raw asm. Modern gcc on Linux uses both
+  paths to spawn `cc1`/`as`/`ld`, so before this fix a
+  `spawn_sandboxed` call denying `fork` happily let gcc spawn its full
+  toolchain anyway. `spawn_sandboxed` now installs a seccomp-bpf
+  filter on the child side (post-fork, pre-exec) that traps
+  clone/clone3/fork/vfork with `EPERM` regardless of how they're
+  invoked, when `fork:*` is not in the grant list. Kernel-level
+  enforcement, immune to call-site games. Uses
+  `prctl(PR_SET_NO_NEW_PRIVS, 1)` + `prctl(PR_SET_SECCOMP,
+  SECCOMP_MODE_FILTER, …)` — required Linux ≥ 3.5 (already an
+  effective constraint for the preload). x86_64-only filter; on other
+  archs the BPF program falls through to ALLOW so the existing
+  libc-level fence remains the only fence there (documented gap).
+  Fail-closed: if the seccomp setup fails (kernel too old, etc.) the
+  child aborts with `exit(126)` and a diagnostic — a `spawn_sandboxed`
+  call that asked for containment we can't deliver must not silently
+  exec. Existing `tests/integration/sandbox_toolchain/` continues to
+  pass because it grants `fork:*` (toolchain builds intentionally
+  spawn cc1/as/ld); the new `sandbox_clone_fence/` covers the
+  no-fork-grant case with two probe binaries — one using libc
+  `vfork()` (inline syscall) and one using `syscall(SYS_clone3, …)` —
+  both denied without the grant, libc `vfork()` allowed when the
+  grant is present. Closes #668; doc updated in
+  `docs/containment-sandbox.md`.
 
 ## [0.229.0]
 
