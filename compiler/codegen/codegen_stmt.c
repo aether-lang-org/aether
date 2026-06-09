@@ -870,6 +870,12 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
             strcmp(fn, "os_platform_raw") == 0 ||
             strcmp(fn, "os_now_utc_iso8601_raw") == 0 ||
             strcmp(fn, "os_now_local_iso8601_raw") == 0 ||
+            /* std.io getenv — sibling of os_getenv, returns a FRESH
+             * strdup'd copy of the env value (NULL on miss). Unclassified
+             * it leaked at every call site; the std.fs/std.io tests all
+             * read io.getenv("TMPDIR"/"TEMP") for a scratch dir, so this
+             * one entry clears the shared 2-leak across the fs/io suite. */
+            strcmp(fn, "io_getenv") == 0 ||
             /* StringBuilder finalise: hands the caller a plain libc-
              * freeable char* and frees the wrapper (std/strbuilder/
              * aether_strbuilder.c:235). Declared `-> string @heap`, but
