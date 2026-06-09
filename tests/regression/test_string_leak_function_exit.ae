@@ -129,6 +129,12 @@ main() {
         println("FAIL 4: map.has reports key absent — was it freed before lookup?")
         exit(1)
     }
+    // Reclaim the map: map_free releases the @retain key and frees the
+    // bucket array + struct. The stored value here is the map itself
+    // (an unowned `ptr` value — map_put_raw does not set value_owned),
+    // so map_free does NOT touch it: no double-free of the self-
+    // reference. A well-behaved program frees what it allocates.
+    map_free(M)
     println("  PASS 4: @retain on map_put_raw key survives caller exit")
 
     // --- Case 5: mixed heap + literal tuple destructure ---
