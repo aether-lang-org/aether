@@ -876,6 +876,18 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
              * read io.getenv("TMPDIR"/"TEMP") for a scratch dir, so this
              * one entry clears the shared 2-leak across the fs/io suite. */
             strcmp(fn, "io_getenv") == 0 ||
+            /* std.cryptography base64 encoders: each returns a FRESH
+             * aether_caps_malloc'd buffer (the caller-owned-return contract,
+             * libc-freeable; NULL on error). The `-> string` externs aren't
+             * @heap-annotated, so the cryptography.base64_encode[_padded]
+             * wrappers' inferred tuple position 0 was non-heap and leaked
+             * the result at every call site. */
+            strcmp(fn, "cryptography_base64_encode_raw") == 0 ||
+            strcmp(fn, "cryptography_base64_encode_padded_raw") == 0 ||
+            /* std.io errno-message: returns a FRESH malloc'd strerror copy
+             * (NULL on no-error). The io.perror / errno_message wrapper
+             * leaked it at every call. */
+            strcmp(fn, "io_errno_message_raw") == 0 ||
             /* StringBuilder finalise: hands the caller a plain libc-
              * freeable char* and frees the wrapper (std/strbuilder/
              * aether_strbuilder.c:235). Declared `-> string @heap`, but
