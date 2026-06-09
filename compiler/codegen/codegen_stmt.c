@@ -1941,13 +1941,16 @@ int call_arg_escapes(TypeKind param_kind) {
  * and param-return; aliasing the param through an intermediate local is
  * not tracked (rare, and the safe direction would only be a leak). */
 static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
-                                     const char* pname, int depth);
+                                     const char* pname, int depth,
+                                     int return_is_escape);
 static int is_nonstoring_builtin(const char* fn);
 
-int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
-                                  int param_idx, int depth) {
+/* Shared resolver: find user-fn `func_name`'s param-name + body block.
+ * Returns 1 and fills out_pname and out_body on success; 0 otherwise. */
+static int resolve_callee_param_body(CodeGenerator* gen, const char* func_name,
+                                     int param_idx, const char** out_pname,
+                                     ASTNode** out_body) {
     if (!gen || !gen->program || !func_name || param_idx < 0) return 0;
-    if (depth > 8) return 1;  /* recursion / mutual-recursion guard */
     char fn_norm[256];
     const char* fn = codegen_normalise_callee(func_name, fn_norm, sizeof(fn_norm));
     ASTNode* fn_def = find_function_definition_by_name(gen->program, fn);
@@ -1958,7 +1961,6 @@ int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
          param->type != AST_PATTERN_VARIABLE)) {
         return 0;
     }
-    const char* pname = param->value;
     ASTNode* body = NULL;
     for (int i = fn_def->child_count - 1; i >= 0; i--) {
         if (fn_def->children[i] && fn_def->children[i]->type == AST_BLOCK) {
@@ -1967,7 +1969,44 @@ int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
         }
     }
     if (!body) return 0;
-    return param_escapes_in_subtree(gen, body, pname, depth);
+    *out_pname = param->value;
+    *out_body = body;
+    return 1;
+}
+
+int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
+                                  int param_idx, int depth) {
+    if (depth > 8) return 1;  /* recursion / mutual-recursion guard */
+    const char* pname; ASTNode* body;
+    if (!resolve_callee_param_body(gen, func_name, param_idx, &pname, &body)) return 0;
+    /* Used by the arg-drain / escape-pre-pass gates: a `return pname`
+     * IS an escape (the value flows out to the caller). */
+    return param_escapes_in_subtree(gen, body, pname, depth, /*return_is_escape=*/1);
+}
+
+/* Does the callee's param STORE-escape (anything except being directly
+ * returned)? Used by the call-site identity-drain to distinguish a param
+ * that is merely return-passed-through (identity-drainable) from one a
+ * container/@retain/struct-field/closure owns (must NOT be freed). */
+int callee_param_store_escapes_via_body(CodeGenerator* gen, const char* func_name,
+                                        int param_idx) {
+    const char* pname; ASTNode* body;
+    if (!resolve_callee_param_body(gen, func_name, param_idx, &pname, &body)) {
+        return 1;  /* unresolved → conservatively assume it stores */
+    }
+    return param_escapes_in_subtree(gen, body, pname, 0, /*return_is_escape=*/0);
+}
+
+/* Does the user function `func_name` declare a `-> string` return? Only
+ * then is the call-site identity-drain meaningful (it compares the call
+ * result pointer against the passed temp). */
+int callee_returns_string(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !gen->program || !func_name) return 0;
+    char fn_norm[256];
+    const char* fn = codegen_normalise_callee(func_name, fn_norm, sizeof(fn_norm));
+    ASTNode* fn_def = find_function_definition_by_name(gen->program, fn);
+    if (!fn_def) return 0;
+    return fn_def->node_type && fn_def->node_type->kind == TYPE_STRING;
 }
 
 /* True when `func_name` resolves to a user function with a visible body
@@ -2027,7 +2066,8 @@ static int value_directly_carries_param(ASTNode* node, const char* pname) {
 }
 
 static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
-                                    const char* pname, int depth) {
+                                    const char* pname, int depth,
+                                    int return_is_escape) {
     if (!node) return 0;
     /* Storage sinks: the parameter's pointer is retained beyond the call
      * only when it flows, AS A POINTER, into a binding, a container
@@ -2039,7 +2079,7 @@ static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
      * aggregate element) so that merely READING the param via a nested
      * call — `f(pname)` whose result is what's stored — is left to the
      * precise call-rule below rather than blanket-marked as an escape. */
-    if (node->type == AST_RETURN_STATEMENT) {
+    if (return_is_escape && node->type == AST_RETURN_STATEMENT) {
         for (int i = 0; i < node->child_count; i++) {
             if (value_directly_carries_param(node->children[i], pname)) return 1;
         }
@@ -2106,7 +2146,7 @@ static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
         }
     }
     for (int i = 0; i < node->child_count; i++) {
-        if (param_escapes_in_subtree(gen, node->children[i], pname, depth)) return 1;
+        if (param_escapes_in_subtree(gen, node->children[i], pname, depth, return_is_escape)) return 1;
     }
     return 0;
 }

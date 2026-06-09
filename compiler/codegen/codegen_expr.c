@@ -3194,6 +3194,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                      * — the registered entry handles the lifetime). */
                     int ad_saved_count = g_arg_drain_count;
                     int ad_arg_idx[16];
+                    int ad_identity[16] = {0};  /* 1 = identity-guarded release (return-escape-only param) */
                     int ad_arg_count = 0;
                     Type* ad_ret_type = expr->node_type;
                     int ad_have_value =
@@ -3263,13 +3264,40 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                              * non-escape is proven; anything unprovable
                              * stays "escapes". False-escape = leak (safe);
                              * false-non-escape = UAF (never introduced). */
+                            int ad_id_guard = 0;  /* identity-guarded release for this arg */
                             if (callee_has_visible_body(gen, func_name)) {
-                                if (callee_param_escapes_via_body(gen, func_name, ai, 0)) continue;
+                                if (callee_param_escapes_via_body(gen, func_name, ai, 0)) {
+                                    /* The param escapes. If it ONLY return-escapes
+                                     * (the callee passes the value through / may
+                                     * return it) and does NOT store-escape, and the
+                                     * callee returns a string, we can still reclaim
+                                     * this FRESH temp at the call site with a pointer-
+                                     * identity guard: free it iff the call did not
+                                     * return it (r != t). This is the sound fix for
+                                     * the recursive accumulator (walk_join(t,
+                                     * concat(acc,sep,h))) — the intermediate concat
+                                     * is freed when consumed, preserved when returned.
+                                     * Only FRESH heap-expr args reach here (the
+                                     * AST_FUNCTION_CALL/INTERP gate above), never a
+                                     * borrowed var, so this can never free a value
+                                     * the caller still holds.
+                                     *
+                                     * Otherwise (store-escape → a container/@retain/
+                                     * field owns it; or non-string / value-less call
+                                     * → no result pointer to compare) leave it. */
+                                    if (!ad_have_value ||
+                                        callee_param_store_escapes_via_body(gen, func_name, ai) ||
+                                        !callee_returns_string(gen, func_name)) {
+                                        continue;
+                                    }
+                                    ad_id_guard = 1;
+                                }
                             } else {
                                 TypeKind param_kind = lookup_callee_param_kind(gen, func_name, ai);
                                 if (call_arg_escapes(param_kind)) continue;
                                 if (callee_param_escapes_via_body(gen, func_name, ai, 0)) continue;
                             }
+                            ad_identity[ad_arg_count] = ad_id_guard;
                             ad_arg_idx[ad_arg_count++] = ai;
                         }
                     }
@@ -3615,7 +3643,17 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             ASTNode* arg = expr->children[ad_arg_idx[h]];
                             const char* nm = arg_drain_lookup(arg);
                             if (nm) {
-                                fprintf(gen->output, "aether_heap_str_free(%s); ", nm);
+                                if (ad_identity[h]) {
+                                    /* Return-escape-only param: free the fresh temp
+                                     * ONLY if the call did not return it (string_release
+                                     * is magic-guarded; the temp is always a magic
+                                     * string-op result here, never a literal). */
+                                    fprintf(gen->output,
+                                            "if ((const char*)_ad_r != %s) string_release(%s); ",
+                                            nm, nm);
+                                } else {
+                                    fprintf(gen->output, "aether_heap_str_free(%s); ", nm);
+                                }
                             }
                         }
                         if (ad_have_value) {
