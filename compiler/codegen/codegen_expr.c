@@ -1673,6 +1673,31 @@ static ASTNode* current_fn_body_block(CodeGenerator* gen) {
     return NULL;
 }
 
+/* True if `name` is a `string`-typed parameter of the function currently
+ * being generated. Parameters are the leading AST_VARIABLE_DECLARATION /
+ * AST_PATTERN_VARIABLE children of the function node, before its body
+ * AST_BLOCK. Used by the container owned-value routing: a string param
+ * handed to map.put / list.add carries ownership the caller transferred
+ * in (the escape walker marks the caller's heap argument escaped for the
+ * same reason), but its heap-ness can't be proven statically here — so
+ * the call site dispatches on the magic header at runtime. */
+static int current_fn_param_is_string(CodeGenerator* gen, const char* name) {
+    if (!gen || !gen->current_function || !name) return 0;
+    ASTNode* fn = gen->current_function;
+    for (int i = 0; i < fn->child_count; i++) {
+        ASTNode* c = fn->children[i];
+        if (!c) continue;
+        if (c->type == AST_BLOCK) break;  /* params precede the body */
+        if ((c->type == AST_VARIABLE_DECLARATION ||
+             c->type == AST_PATTERN_VARIABLE) &&
+            c->value && strcmp(c->value, name) == 0 &&
+            c->node_type && c->node_type->kind == TYPE_STRING) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void generate_expression(CodeGenerator* gen, ASTNode* expr) {
     if (!expr) return;
 
@@ -3159,9 +3184,21 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                              * assigned is left un-rewritten (the
                              * container does not own it). */
                             int val_is_heap;
+                            int val_is_string_param = 0;
                             if (val && val->type == AST_IDENTIFIER && val->value) {
                                 val_is_heap = body_assigns_var_from_heap(
                                     gen, current_fn_body_block(gen), val->value);
+                                /* A string PARAM handed to the container is
+                                 * an owned heap string the caller transferred
+                                 * (the escape walker marks the caller's arg
+                                 * escaped for storing here), but only at
+                                 * runtime can we tell an owned magic string
+                                 * from a literal — dispatch on the magic
+                                 * header below. */
+                                if (!val_is_heap &&
+                                    current_fn_param_is_string(gen, val->value)) {
+                                    val_is_string_param = 1;
+                                }
                             } else {
                                 val_is_heap = val && is_heap_string_expr(gen, val);
                             }
@@ -3196,6 +3233,42 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     if (is_wrapper) {
                                         fprintf(gen->output, " ? \"\" : \"map.put failed\")");
                                     }
+                                }
+                                break;
+                            }
+                            /* Statically-unknown ownership (a `string` param
+                             * carrying an owned heap value the caller
+                             * transferred): dispatch on the magic header at
+                             * runtime. Magic -> owning put (container adopts
+                             * the ref, releases at free). Non-magic literal /
+                             * borrowed -> raw put (never freed). A
+                             * statement-expression evaluates each operand
+                             * exactly once. */
+                            if (val_is_string_param) {
+                                if (is_list_shape) {
+                                    fprintf(gen->output, "({ void* _adl = (void*)");
+                                    generate_expression(gen, expr->children[0]);
+                                    fprintf(gen->output, "; void* _adv = (void*)");
+                                    generate_expression(gen, val);
+                                    fprintf(gen->output, "; ");
+                                    if (is_wrapper) fprintf(gen->output, "(");
+                                    fprintf(gen->output,
+                                        "_aether_is_magic(_adv) ? list_add_string_owned(_adl, _adv) : list_add_raw(_adl, _adv)");
+                                    if (is_wrapper) fprintf(gen->output, " ? \"\" : \"list.add failed\")");
+                                    fprintf(gen->output, "; })");
+                                } else {
+                                    fprintf(gen->output, "({ void* _adm = (void*)");
+                                    generate_expression(gen, expr->children[0]);
+                                    fprintf(gen->output, "; const char* _adk = aether_string_data((const void*)");
+                                    generate_expression(gen, expr->children[1]);
+                                    fprintf(gen->output, "); void* _adv = (void*)");
+                                    generate_expression(gen, val);
+                                    fprintf(gen->output, "; ");
+                                    if (is_wrapper) fprintf(gen->output, "(");
+                                    fprintf(gen->output,
+                                        "_aether_is_magic(_adv) ? map_put_string_owned(_adm, _adk, _adv) : map_put_raw(_adm, _adk, _adv)");
+                                    if (is_wrapper) fprintf(gen->output, " ? \"\" : \"map.put failed\")");
+                                    fprintf(gen->output, "; })");
                                 }
                                 break;
                             }
