@@ -27,3 +27,20 @@ test_cryptography_hmac_md4_md5 122
 # cannot grow. See docs/memory-management.md "Closure environment
 # lifetime".
 test_closure_captured_libc_name 1
+#
+# Owned heap string transferred into a map through a `string` PARAMETER
+# of a storing wrapper (pr(m,k,v){ map.put(m,k,v) }). The escape walker
+# marks the caller's value escaped (so it isn't freed there), but the
+# put site sees only a `string` param — it cannot prove the value is an
+# owned heap allocation rather than a borrowed/literal one, so it uses
+# the non-owning put and the map never releases it. A runtime
+# magic-header dispatch was tried and REVERTED: the magic header proves
+# heap-representation, NOT caller-transferred-ownership, so a borrowed
+# magic string would be double-freed (representation != ownership; a
+# double-free is worse than a leak). The sound fix is an explicit
+# ownership-transfer parameter annotation (e.g. `@owned`/`@consume`)
+# that routes only opt-in transferred values to the owning put — a
+# language feature. Capped at 4 each. See docs/memory-management.md
+# "Container value ownership".
+test_map_value_storing_wrapper 4
+test_proxy_opts_map_mount 4

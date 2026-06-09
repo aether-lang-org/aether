@@ -2788,17 +2788,6 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "        free((void*)s);");
     print_line(gen, "    }");
     print_line(gen, "}");
-    /* Runtime ownership discriminator: 1 iff `s` is a magic refcounted
-     * AetherString (owned heap), 0 for a literal / borrowed char* or
-     * NULL. Used to route a string value of statically-unknown ownership
-     * (e.g. a `string` parameter handed to map.put / list.add) to the
-     * owning container variant only when it is actually an owned heap
-     * string — literals fall to the non-owning put and are never freed. */
-    print_line(gen, "static inline int _aether_is_magic(const void* s) {");
-    print_line(gen, "    if (!s) return 0;");
-    print_line(gen, "    const unsigned char* _mp = (const unsigned char*)s;");
-    print_line(gen, "    return _mp[0] == 0xDE && _mp[1] == 0xC0 && _mp[2] == 0x57 && _mp[3] == 0xAE;");
-    print_line(gen, "}");
     /* Prototypes for the magic-aware string builtins the codegen emits
      * directly (char_at -> string_char_at, str_eq / match-on-string ->
      * string_equals). These are not routed through the normal extern-call
