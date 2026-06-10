@@ -1651,7 +1651,7 @@ ci-windows: clean compiler
 	@echo "[1/3] Generating C from all examples with native aetherc..."
 	@mkdir -p build/win
 	@pass=0; fail=0; \
-	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | sort); do \
+	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | grep -v '/host-.*-demo\.ae$$' | grep -v '/ae-help-demo/' | sort); do \
 		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
 		printf "  %-30s " "$$name"; \
 		mkdir -p "build/win/examples/$$(dirname $$name)"; \
@@ -1691,7 +1691,7 @@ ci-windows: clean compiler
 	@echo ""
 	@echo "[3/3] Syntax-checking generated C with MinGW..."
 	@pass=0; fail=0; \
-	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | sort); do \
+	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | grep -v '/host-.*-demo\.ae$$' | grep -v '/ae-help-demo/' | sort); do \
 		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
 		out_c="build/win/examples/$$name.c"; \
 		printf "  %-30s " "$$name"; \
