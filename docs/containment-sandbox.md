@@ -594,18 +594,56 @@ cat sandbox-config.ae
 | Raw `syscall()` | `syscall` interception |
 | Shellcode via `mmap(PROT_EXEC)` | `mmap`/`mmap64` interception |
 | Shellcode via `mprotect(PROT_EXEC)` | `mprotect` interception |
-| `fork()` / `vfork()` / `clone3()` | Blocked by default, grant with `fork:*` |
+| `fork()` / `vfork()` / `clone3()` | Blocked by default at the **kernel** level (seccomp-bpf in `spawn_sandboxed`, see below). Grant with `fork:*`. |
 
 ### What's NOT blocked (requires kernel enforcement)
 
 | Attack vector | Why |
 |--------------|-----|
-| Statically linked binaries | Don't use libc — bypass LD_PRELOAD entirely |
+| Statically linked binaries | Don't use libc — bypass LD_PRELOAD entirely. Process creation by such binaries is still caught by the seccomp-bpf clone fence (see below). |
 | `ptrace` self | Can modify own process memory to skip checks |
 | Kernel exploits | We're userspace — can't defend against kernel bugs |
 
 For these vectors, combine with OS-level sandboxing (seccomp-bpf,
 Linux namespaces, OpenBSD pledge/unveil) for defence in depth.
+
+### Kernel-level fence for process creation — the clone3 gap, closed
+
+The LD_PRELOAD layer cannot intercept syscalls that don't go through
+exported libc symbols. Two notable bypasses, both common:
+
+- **glibc `__vfork`** on x86_64 is an inline `syscall` instruction in
+  libc's text. LD_PRELOAD never sees it — there's no symbol to interpose.
+- Any program calling `syscall(SYS_clone3, …)` (or issuing the raw
+  syscall instruction directly).
+
+Modern gcc on Linux uses both paths to spawn `cc1`/`as`/`ld`. So a
+purely libc-symbol-level fence on `fork:*` was a paper tiger against
+real toolchains.
+
+`spawn_sandboxed` therefore installs a **seccomp-bpf filter** on the
+child side (post-fork, pre-exec) that traps `clone`, `clone3`, `fork`,
+and `vfork` with `EPERM` regardless of how they're invoked, when
+`fork:*` is not in the grant list. This is true kernel-level
+enforcement, immune to call-site obfuscation. Requires Linux ≥ 3.5
+(`PR_SET_NO_NEW_PRIVS` + `PR_SET_SECCOMP`). x86_64-only filter; on
+other architectures the filter falls through to ALLOW, so the
+existing libc-level fence is the only fence there. The kernel fence
+is automatic and not configurable through the grant grammar: if
+`fork:*` is granted, the filter isn't installed at all; otherwise it
+fires unconditionally. If the kernel doesn't support seccomp, the
+child aborts with `exit(126)` rather than silently running uncontained
+— a `spawn_sandboxed` that asked for containment we can't deliver
+must not exec.
+
+This closes issue #668. The complementary gap — `connect()` and
+`execve()` issued by statically-linked binaries or raw asm — remains.
+Those callers can still skip the LD_PRELOAD layer for network reach
+and exec, since the seccomp filter here targets only the
+process-creation family. Adding seccomp arms for `connect`/`execve`
+is a natural extension but introduces a much wider filter that needs
+its own discussion (an allowlist by host/path becomes a per-call BPF
+program); not done here.
 
 ### Interception surface — what LD_PRELOAD sees and what it doesn't
 

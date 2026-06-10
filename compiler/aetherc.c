@@ -557,6 +557,70 @@ static int call_is_indirect(ASTNode* call) {
     return 0;
 }
 
+// Returns 1 if `arg` is an argument-position child of a function call
+// that aeb would consider "captureable" — positional or named args.
+// The trailing closure / block that the parser attaches as a final
+// FUNCTION_CALL child (DSL builder bodies, `f(x) { ... }`) is NOT an
+// argument in the veto sense; the block IS the function body and the
+// real args precede it. Filtering here keeps the JSON `args` array
+// matching what the user wrote in parens.
+static int arg_is_capturable(ASTNode* arg) {
+    if (!arg) return 0;
+    if (arg->type == AST_BLOCK) return 0;
+    if (arg->type == AST_CLOSURE) return 0;
+    return 1;
+}
+
+// If `arg` resolves to a primitive literal (string / int / float /
+// bool — including a named-arg wrapper around one), write the
+// JSON-encoded literal payload to `out` and return 1. Otherwise
+// return 0 (caller emits `{"computed":true}`).
+//
+// Detection: post-optimize_ast, every primitive literal in the
+// program is an AST_LITERAL node with `node->value` carrying the
+// source text. Strings keep their content verbatim (without
+// surrounding quotes — those were stripped by the lexer); numbers
+// keep their decimal text; booleans surface as "true"/"false".
+// AST_NAMED_ARG wraps the value as its single child, so we unwrap.
+//
+// Edge cases intentionally NOT promoted to literals (caller emits
+// `{"computed":true}`): identifier references (resolved variable
+// vs constant is ambiguous post-fold for our purposes — aeb's
+// "never allow a computed coordinate" rule applies anyway),
+// string interpolations (`"${a}${b}"` — those are
+// AST_STRING_INTERP not AST_LITERAL), array literals, struct
+// literals, function calls, member access. This deliberately
+// matches aeb's "literal vs not — the entire distinction" design
+// per veto-emit-ast-args.md.
+static int emit_literal_arg_payload(FILE* out, ASTNode* arg) {
+    if (!arg) return 0;
+
+    // Unwrap a named-arg: emit only the value side.
+    if (arg->type == AST_NAMED_ARG && arg->child_count > 0) {
+        return emit_literal_arg_payload(out, arg->children[0]);
+    }
+
+    if (arg->type != AST_LITERAL || !arg->value) return 0;
+    if (!arg->node_type) {
+        // Unknown type — be conservative and call it computed.
+        return 0;
+    }
+
+    switch (arg->node_type->kind) {
+        case TYPE_STRING:
+        case TYPE_INT:
+        case TYPE_INT64:
+        case TYPE_FLOAT:
+        case TYPE_BOOL:
+            fputs("{\"literal\":", out);
+            emit_json_string(out, arg->value);
+            fputc('}', out);
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 static void emit_ast_node_recursive(FILE* out, ASTNode* node, int* first,
                                      const EmitAlias* alias_map, int alias_count) {
     if (!node) return;
@@ -670,6 +734,33 @@ static void emit_ast_node_recursive(FILE* out, ASTNode* node, int* first,
                 emit_json_string(out, resolved ? resolved : node->value);
                 free(resolved);
             }
+
+            // Emit args[]: one object per positional/named arg, in
+            // source order. Literal args (string/int/float/bool) get
+            // {"literal":"<value>"}; anything else gets {"computed":
+            // true}. Trailing closures / DSL bodies are NOT args and
+            // are filtered out via arg_is_capturable. Per
+            // veto-emit-ast-args.md sub-ask 1: the literal-vs-not
+            // distinction is the entire requirement; we don't expose
+            // computed-expression provenance — aeb fail-closes on
+            // any `{"computed":true}` regardless of contents.
+            //
+            // Always emit the array (even when empty) so aeb's
+            // policy can rely on `obj["args"]` being a defined
+            // shape; an absent field would require null-coalescing
+            // logic.
+            fputs(",\"args\":[", out);
+            int arg_first = 1;
+            for (int ai = 0; ai < node->child_count; ai++) {
+                ASTNode* arg = node->children[ai];
+                if (!arg_is_capturable(arg)) continue;
+                if (!arg_first) fputc(',', out);
+                arg_first = 0;
+                if (!emit_literal_arg_payload(out, arg)) {
+                    fputs("{\"computed\":true}", out);
+                }
+            }
+            fputc(']', out);
         }
 
         fputc('}', out);
@@ -1054,28 +1145,6 @@ int compile_source(const char* input_path, const char* output_path) {
         return 1;
     }
 
-    // --emit=ast: write the post-typecheck, post-merge program AST as
-    // JSON to stdout (filter set: import_statement, extern_function,
-    // function_call). Conventional exit codes — return 0 here means
-    // process exit 0 ("AST emitted OK"); anything other than 0 means
-    // parse/typecheck/IO failure further up. aeb's supply-chain veto
-    // consumes this; the compiler holds no policy. See
-    // veto-enhancements.md.
-    if (emit_ast_mode) {
-        emit_ast_json(stdout, program);
-        module_registry_shutdown();
-        free_ast_node(program);
-        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
-        free_parser(parser);
-        free(source);
-        // Return value here is `compile_source`'s internal "non-zero =
-        // success" convention; main() translates that to process
-        // exit 0 (see the --check / --dump-ast handlers at the bottom
-        // of main()). Externally observable: process exit 0 = AST
-        // emitted OK, non-zero = parse / typecheck / IO failure.
-        return 1;
-    }
-
     // --check: stop after typecheck + type inference, no codegen
     if (check_only_mode) {
         int warnings = aether_warning_count();
@@ -1097,6 +1166,37 @@ int compile_source(const char* input_path, const char* output_path) {
     // Step 3.5: Optimization (AST-level passes: constant folding, dead code, tail calls)
     if (verbose_mode) printf("Step 3.5: Optimizing...\n");
     program = optimize_ast(program);
+
+    // --emit=ast: write the post-typecheck, post-merge, post-fold
+    // program AST as JSON to stdout (filter set: import_statement,
+    // extern_function, function_call). Conventional exit codes —
+    // return 0 here means process exit 0 ("AST emitted OK"); anything
+    // other than 0 means parse/typecheck/IO failure further up. aeb's
+    // supply-chain veto consumes this; the compiler holds no policy.
+    // See veto-enhancements.md and veto-emit-ast-args.md.
+    //
+    // Emit runs AFTER `optimize_ast` so const-foldable args (numeric
+    // arithmetic — `port(1 + 2)` → `port(3)`) arrive as literals on
+    // the wire. String-literal concatenation isn't a binary `+` in
+    // Aether (the parser rejects `string + string`), so the
+    // "computed concat becomes a literal" case only fires for
+    // numeric folds today; future fold passes (e.g. a
+    // const-`string.concat(lit, lit)` fold) would get picked up
+    // automatically.
+    if (emit_ast_mode) {
+        emit_ast_json(stdout, program);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        // Return value here is `compile_source`'s internal "non-zero =
+        // success" convention; main() translates that to process
+        // exit 0 (see the --check / --dump-ast handlers at the bottom
+        // of main()). Externally observable: process exit 0 = AST
+        // emitted OK, non-zero = parse / typecheck / IO failure.
+        return 1;
+    }
 
     // Step 4: Code Generation
     if (verbose_mode) printf("Step 4: Generating C code...\n");

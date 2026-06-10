@@ -103,4 +103,110 @@ for canary in sqlite tinyweb host/python; do
     fi
 done
 
+# ---------------------------------------------------------------------
+# Second install path: `make install-contrib`. This is the separate
+# installer that ships the prebuilt libaether_<X>.a archives alongside
+# each module's source tree. It uses a DIFFERENT trim policy from
+# install.sh (above) — historically the two diverged (Makefile trimmed
+# tinyweb/ while install.sh shipped it). Pin both shapes so they don't
+# drift apart again.
+#
+# Compared to install.sh's check: this path additionally requires the
+# libaether_<X>.a archive present under lib/aether/ for each module
+# that contrib_build.sh built. We don't require every module to have a
+# .a (system dep absence → SKIP, not FAIL), but the canaries listed
+# above MUST ship both module.ae AND the matching archive.
+#
+# Windows skip: `make install-contrib` shells `contrib_build.sh` which
+# probes for sqlite3/python/lua/perl/ruby/duktape/tcl dev libs — none
+# are available under MSYS2/MinGW on the GitHub runner, and the suite
+# is already 4x slower on Windows (~33 min vs ~8 min on Linux). The
+# install.sh half above provides the layout coverage; the
+# make install-contrib half runs on every Linux/macOS lane and that
+# is sufficient. Skip with a [SKIP-WIN] marker so the .ae-test runner
+# (Makefile:542) records the skip as a pass with a reason.
+# ---------------------------------------------------------------------
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        echo "  [SKIP-WIN] make install-contrib path skipped on Windows"
+        echo "  [PASS] contrib/ resolves system-wide after install (issue #334)"
+        echo "         install.sh path verified; make install-contrib path skipped on Windows"
+        exit 0
+        ;;
+esac
+
+MAKE_TMP="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR" "$MAKE_TMP"' EXIT
+
+# Build + install. This shells `make install-contrib PREFIX=...` which
+# in turn invokes `make contrib` (the contrib_build.sh sweep) and then
+# the install rule. Quiet on success; we'll dump the log on failure.
+if ! make install-contrib PREFIX="$MAKE_TMP" \
+        > "$MAKE_TMP/install.log" 2>&1; then
+    echo "  [FAIL] make install-contrib exited non-zero"
+    tail -30 "$MAKE_TMP/install.log"
+    exit 1
+fi
+
+MAKE_CONTRIB_INSTALL="$MAKE_TMP/share/aether/contrib"
+MAKE_LIB_DIR="$MAKE_TMP/lib/aether"
+
+if [ ! -d "$MAKE_CONTRIB_INSTALL" ]; then
+    echo "  [FAIL] make install-contrib produced no $MAKE_CONTRIB_INSTALL"
+    exit 1
+fi
+
+# Source-tree noise must NOT have been copied (same shape as
+# install.sh, plus test_*.ae which the Makefile install trim now
+# filters too).
+make_unwanted=$( {
+    find "$MAKE_CONTRIB_INSTALL" -type f -name '*.c' \
+        ! -path '*/contrib/host/*/aether_host_*.c' 2>/dev/null
+    find "$MAKE_CONTRIB_INSTALL" -type f -name '*.m'          2>/dev/null
+    find "$MAKE_CONTRIB_INSTALL" -type d -name tests          2>/dev/null
+    find "$MAKE_CONTRIB_INSTALL" -type d -name benchmarks     2>/dev/null
+    find "$MAKE_CONTRIB_INSTALL" -type f -name 'example_*.ae' 2>/dev/null
+    find "$MAKE_CONTRIB_INSTALL" -type f -name 'test_*.ae'    2>/dev/null
+    find "$MAKE_CONTRIB_INSTALL" -type f -name 'test_*.sh'    2>/dev/null
+    find "$MAKE_CONTRIB_INSTALL" -type f -name 'build.sh'     2>/dev/null
+    find "$MAKE_CONTRIB_INSTALL" -type f -name 'ci.sh'        2>/dev/null
+} | wc -l | tr -d ' ')
+
+if [ "$make_unwanted" -ne 0 ]; then
+    echo "  [FAIL] make install-contrib layout still contains source-tree noise:"
+    {
+        find "$MAKE_CONTRIB_INSTALL" -type f -name '*.c' \
+            ! -path '*/contrib/host/*/aether_host_*.c'
+        find "$MAKE_CONTRIB_INSTALL" -type f -name '*.m'
+        find "$MAKE_CONTRIB_INSTALL" -type d -name tests
+        find "$MAKE_CONTRIB_INSTALL" -type d -name benchmarks
+        find "$MAKE_CONTRIB_INSTALL" -type f -name 'example_*.ae'
+        find "$MAKE_CONTRIB_INSTALL" -type f -name 'test_*.ae'
+        find "$MAKE_CONTRIB_INSTALL" -type f -name 'test_*.sh'
+        find "$MAKE_CONTRIB_INSTALL" -type f -name 'build.sh'
+        find "$MAKE_CONTRIB_INSTALL" -type f -name 'ci.sh'
+    } | head -10
+    exit 1
+fi
+
+# Same canary set as install.sh's check above — pinning the two
+# install paths to a matching ship-list defeats the tinyweb-trim
+# class of regressions.
+for canary in sqlite tinyweb host/python; do
+    if [ ! -f "$MAKE_CONTRIB_INSTALL/$canary/module.ae" ]; then
+        echo "  [FAIL] canary $canary missing from make install-contrib"
+        exit 1
+    fi
+done
+
+# Archives — every canary that contrib_build.sh built on this runner
+# must produce a libaether_<X>.a. We skip the check when the system
+# dep was missing on the runner (recorded in MANIFEST: present = built).
+# `host/python` is recorded as `host_python` in the manifest.
+if [ ! -f "$MAKE_LIB_DIR/libaether_tinyweb.a" ]; then
+    echo "  [FAIL] tinyweb's archive missing from make install-contrib"
+    exit 1
+fi
+
 echo "  [PASS] contrib/ resolves system-wide after install (issue #334)"
+echo "         install.sh + make install-contrib both ship the canaries"

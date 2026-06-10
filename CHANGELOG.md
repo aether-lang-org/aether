@@ -79,6 +79,127 @@ rename and drift from the tags (see `changelog-release-drift-note.md`).
   `task_info` / `/proc/self/statm`) instead of `getrusage`'s monotonic
   peak `ru_maxrss`, which captured transient allocator peaks under churn
   and flaked the bound; current RSS drops when memory is freed.
+**Workflow**: New changes go under `## [0.230.0]`. When a PR merges to
+`main`, the release pipeline automatically replaces `[current]` with the
+next version number before tagging the release.
+
+## [0.230.0]
+
+### Fixed
+
+- **`spawn_sandboxed`: kernel-level fence for `clone3`/`vfork` —
+  `fork:*` deny is no longer a paper tiger against modern toolchains**
+  (`runtime/aether_spawn_sandboxed.c`,
+  `tests/integration/sandbox_clone_fence/`, issue #668). The LD_PRELOAD
+  libc-symbol fence on `fork`/`vfork`/`clone`/`clone3` was bypassed by
+  any caller that issues the underlying syscall directly — including
+  glibc's own `__vfork` (an inline `syscall` instruction with no libc
+  symbol indirection at all) and any program calling
+  `syscall(SYS_clone3, …)` via raw asm. Modern gcc on Linux uses both
+  paths to spawn `cc1`/`as`/`ld`, so before this fix a
+  `spawn_sandboxed` call denying `fork` happily let gcc spawn its full
+  toolchain anyway. `spawn_sandboxed` now installs a seccomp-bpf
+  filter on the child side (post-fork, pre-exec) that traps
+  clone/clone3/fork/vfork with `EPERM` regardless of how they're
+  invoked, when `fork:*` is not in the grant list. Kernel-level
+  enforcement, immune to call-site games. Uses
+  `prctl(PR_SET_NO_NEW_PRIVS, 1)` + `prctl(PR_SET_SECCOMP,
+  SECCOMP_MODE_FILTER, …)` — required Linux ≥ 3.5 (already an
+  effective constraint for the preload). x86_64-only filter; on other
+  archs the BPF program falls through to ALLOW so the existing
+  libc-level fence remains the only fence there (documented gap).
+  Fail-closed: if the seccomp setup fails (kernel too old, etc.) the
+  child aborts with `exit(126)` and a diagnostic — a `spawn_sandboxed`
+  call that asked for containment we can't deliver must not silently
+  exec. Existing `tests/integration/sandbox_toolchain/` continues to
+  pass because it grants `fork:*` (toolchain builds intentionally
+  spawn cc1/as/ld); the new `sandbox_clone_fence/` covers the
+  no-fork-grant case with two probe binaries — one using libc
+  `vfork()` (inline syscall) and one using `syscall(SYS_clone3, …)` —
+  both denied without the grant, libc `vfork()` allowed when the
+  grant is present. Closes #668; doc updated in
+  `docs/containment-sandbox.md`.
+
+## [0.229.0]
+
+### Fixed
+
+- **`spawn_sandboxed` no longer corrupts the parent stack when the
+  contained child uses `vfork()`** (`runtime/libaether_sandbox_preload.c`,
+  `tests/integration/sandbox_toolchain/`). Removed the LD_PRELOAD `vfork()`
+  wrapper: glibc's `vfork()` has a strict contract (the child must call
+  only `_exit()` or `execve()`, and the calling function must not
+  return) because vfork shares the parent's stack until the child execs.
+  Wrapping the symbol in a regular C function violates that — the child
+  returns *through our wrapper frame* on the shared stack, corrupting
+  the parent. The visible effect was a sandboxed child running the
+  `ae`/`aetherc` → `gcc` → `cc1`/`as`/`ld` toolchain failing (`Build
+  failed`, `rc=-1`) — and, for a deeper aeb orchestrator child, segfaults
+  in the parent after the `wait4`. The `fork()` and `execve()`
+  interceptors continue to gate process creation (`fork()` is safe to
+  wrap; the dangerous follow-up is the `execve` which we still see); a
+  bare `vfork()+_exit()` was never the threat model. Reported by aeb as
+  the upstream blocker for `aeb --sandbox <target>`. New regression test
+  exercises the full `ae build` toolchain under `spawn_sandboxed`;
+  verified pre-fix → FAIL, post-fix → PASS.
+
+## [0.228.0]
+
+### Added
+
+- **`contrib/tinyweb` ships with `make contrib` / `make
+  install-contrib`** (`Makefile`, `tests/scripts/contrib_build.sh`).
+  Tinyweb is a DSL-style HTTP server library (port of
+  [Tiny](https://github.com/phamm/tiny)) covering routing /
+  filters / WebSocket (RFC 6455 handshake) / SSE / static files /
+  cookies — see `contrib/tinyweb/README.md` for the surface. It was
+  always present in the repo but explicitly excluded from
+  `make install-contrib` (the `rm -rf .../contrib/tinyweb` trim) and
+  from the `contrib_build.sh` catalogue. Now wired up:
+  `probe_tinyweb` is a trivial always-succeed (libc only — SHA-1 +
+  base64 for the WebSocket-Accept handshake live in
+  `ws_handshake.c`); catalogue entry compiles that one .c into
+  `libaether_tinyweb.a`; install path mirrors `module.ae` +
+  `README.md` + `ws_client.ae` (client utility) into
+  `share/aether/contrib/tinyweb/`. `example_*.ae` and `test_*.ae`
+  are trimmed by the standard filter set (the latter now extended
+  to cover `.ae` test files, not just `.sh` drivers — tinyweb is
+  the only contrib module that ships `test_*.ae`).
+
+  Default `make contrib` (no `MODULES=` filter) now builds 9
+  modules instead of 8.
+
+- **`aetherc --emit=ast` carries literal call arguments**
+  (`compiler/aetherc.c`,
+  `tests/integration/aetherc_emit_ast/`). Follow-up to v0.226.0's
+  `--emit=ast` (aeb's supply-chain veto consumer asked for this in
+  `veto-emit-ast-args.md`). Two changes:
+  (a) The emit short-circuit now runs **after** `optimize_ast`
+  rather than before it, so const-foldable numeric args
+  (`do_stuff(1 + 2)` → `do_stuff(3)`) arrive as literals on the
+  wire. String-literal `+` concat isn't valid Aether (the parser
+  rejects it), so the practical impact today is numeric folds;
+  future fold passes for `string.concat(lit, lit)` would be
+  picked up automatically.
+  (b) Each `function_call` node now carries an `args[]` array:
+  one entry per positional/named arg in source order, with
+  `{"literal":"<value>"}` for primitive literals
+  (string/int/int64/float/bool — including `AST_NAMED_ARG`
+  unwrap to the value side) and `{"computed":true}` for
+  anything else (identifier refs, expressions, function calls,
+  interpolations). Trailing closures / DSL builder bodies are
+  filtered out — they're not args in the veto sense. The array
+  is always emitted (even empty) so aeb's policy walker can
+  rely on `obj["args"]` being a defined shape.
+
+  Per the design doc, aeb fail-closes on any `{"computed":true}`
+  arg regardless of contents; no expression-tree provenance is
+  surfaced — the literal-vs-not distinction is the entire
+  requirement, keeping `--emit=ast` from drifting toward a
+  dataflow/taint analyzer. 7 new cells in
+  `tests/integration/aetherc_emit_ast/` cover string/int/multi
+  literals, identifier-ref-is-computed, mixed literal+computed
+  in source order, the const-fold case, and the empty-args edge.
 
 ## [0.227.0]
 
