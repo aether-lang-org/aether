@@ -5,9 +5,80 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.227.0]`. When a PR merges to
-`main`, the release pipeline automatically replaces `[current]` with the
-next version number before tagging the release.
+**Workflow**: New changes go under `## [current]` (create it at the top if
+absent). When a PR merges to `main`, the release pipeline automatically
+replaces `## [current]` with the next version number before tagging the
+release — so a hardcoded version header here would be skipped by the
+rename and drift from the tags (see `changelog-release-drift-note.md`).
+
+## [current]
+
+### Fixed
+
+- **Memory-leak hardening across the compiler and stdlib.** Every
+  detectable memory leak in the regression suite is eliminated (and the
+  integration suite is clean under ASan + LSan), verified on macOS
+  `leaks(1)` and Linux glibc ASan+LSan. The only remaining allowed
+  entry is an OpenSSL process-global reclaimed at process exit — a proven
+  `leaks(1)` false positive, not a real leak.
+  - **String-ABI unification**: the plain-`char*` string ops
+    (`concat`/`substring`/`to_upper`/`to_lower`/`trim`/`copy`, plus the
+    length-bearing `concat_wrapped`) now return a magic refcounted
+    `AetherString` adopted zero-copy, and the raw-cast sites (`char_at`,
+    `==`/`!=`, `map.put` key, match-on-string) route through magic-aware
+    accessors. A missed migration becomes a detectable leak, never a
+    crash/UAF.
+  - **Escape-analysis precision** (codegen): see-through read-only string
+    accessors, an authoritative body-walk over the conservative heuristic
+    for visible-body callees, self-reassignment is not an escape,
+    discarded/void-call argument draining, a call-site pointer-identity
+    drain for recursive accumulators, and recognising that invoking a
+    closure parameter (`cb()`) does not escape it.
+  - **Container ownership**: owned-puts adopt the caller's single
+    reference (no double-retain); `map_put_raw` interns its key, so a
+    heap key is the caller's to reclaim (the `@retain` was incorrect); a
+    map *borrows* string values passed through a `string` parameter (the
+    program owns and frees them — tagging a borrowed value owned would
+    double-free it); a list owns a stored closure box **and** reclaims its
+    captured environment.
+  - **Closure-environment lifetime**: a transient capturing closure passed
+    to a parameter that neither stores nor returns it (`run(cb){ cb() }`)
+    has its heap environment freed after the call, gated on a proven
+    non-escape so a stored/returned closure is untouched.
+  - **`exit()` epilogue**: scope-exit defer-frees are emitted before a
+    noreturn `exit(...)`, so programs ending in `exit(0)` reclaim their
+    live heap locals instead of leaking them.
+  - **stdlib**: `std.json` `object_set`/`array_add` reclaim the value on a
+    type-mismatch error; `std.io` `fd_read_n`/`fd_read_line` buffers are
+    `@heap` so callers reclaim them; `std.regex` `replace`/`replace_all`
+    own their result; ~a dozen owned-heap stdlib returns (`path_*`,
+    `os_*`, `io.getenv`, base64 encoders, …) are classified so callers
+    reclaim them.
+
+### Added
+
+- **Full-suite macOS `leaks(1)` gate** (`tests/run_macos_leaks.sh`,
+  `tests/leaks_known.txt`, `tests/leaks_exclude.txt`): the gate now sweeps
+  the entire `tests/regression` suite (previously 16 curated programs),
+  with an audited per-test allow-list (only the OpenSSL artifact) and a
+  subprocess-spawning exclude-list (those are leak-checked on Linux CI,
+  where `leaks(1)` would hang on the forked child). A test absent from the
+  allow-list must report zero, so a new leak fails the gate locally
+  instead of slipping to CI.
+
+### Changed
+
+- **CI image** (`docker/Dockerfile.ci`): install `pkg-config`,
+  `libssl-dev`, `zlib1g-dev`, and `libpcre2-dev` so `make docker-ci`
+  actually links and exercises crypto / compression / regex — previously
+  those modules compiled to stubs (`pkg-config --libs` resolved empty),
+  so the base64/hash/regex tests silently failed with "openssl
+  unavailable".
+- **No-leak RSS probes** (`heap_tracker_return_escape_no_leak`,
+  `bytes_finish_return_no_leak`): measure current resident RSS (mach
+  `task_info` / `/proc/self/statm`) instead of `getrusage`'s monotonic
+  peak `ru_maxrss`, which captured transient allocator peaks under churn
+  and flaked the bound; current RSS drops when memory is freed.
 
 ## [0.227.0]
 
