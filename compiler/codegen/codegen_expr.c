@@ -3263,7 +3263,11 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                              * and keep the existing raw path.) */
                             if (val_is_closure && is_list_shape) {
                                 if (is_wrapper) fprintf(gen->output, "(");
-                                fprintf(gen->output, "list_add_string_owned(");
+                                /* list_add_closure_owned tags the slot as an
+                                 * owned closure box (owned_flags == 2) so
+                                 * list_free reclaims the box AND its captured
+                                 * env — not just the box. */
+                                fprintf(gen->output, "list_add_closure_owned(");
                                 generate_expression(gen, expr->children[0]);
                                 fprintf(gen->output, ", (void*)_aether_box_closure(");
                                 generate_expression(gen, val);

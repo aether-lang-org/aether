@@ -1,0 +1,61 @@
+// Regression: a CAPTURING closure stored into a list must have its
+// heap-allocated environment reclaimed at list.free — not just the box.
+//
+// The fn -> ptr coercion boxes a closure value (_aether_box_closure) into
+// a heap _AeClosure { fn, env }. A capturing closure's `env` is itself a
+// heap allocation. The list owns the box (owned_flags == 2 via
+// list_add_closure_owned), so list_free frees the captured env AND the
+// box. A non-capturing closure (env == NULL) is the no-op case and must
+// still work (free(NULL)).
+//
+// Companion to test_fn_ptr_coercion.ae, which covers the bare-function
+// (env == NULL) path; this one pins the capturing (env != NULL) path so
+// the environment is not leaked under leaks(1) / ASan-LSan.
+
+import std.string
+import std.list
+
+extern exit(code: int)
+
+// Store a callback into the list without invoking it — the closure (and
+// its env) escapes into the list, which becomes its owner.
+stash(l: ptr, cb: fn) {
+    _ = list.add(l, cb)
+}
+
+main() {
+    println("=== test_closure_capture_stored_in_list ===")
+
+    tag = "captured-environment-payload"
+    n = 7
+
+    l = list.new()
+
+    // Two distinct CAPTURING closures (each captures `tag` / `n`): each
+    // heap-allocates its own environment, both adopted by the list.
+    stash(l) callback {
+        if string.equals(tag, "captured-environment-payload") == 0 {
+            println("  FAIL: first closure lost its capture")
+            exit(1)
+        }
+    }
+    stash(l) callback {
+        if n != 7 {
+            println("  FAIL: second closure lost its capture")
+            exit(1)
+        }
+    }
+
+    if list.size(l) != 2 {
+        println("  FAIL: expected 2 stored closures, got ${list.size(l)}")
+        exit(1)
+    }
+    println("  PASS: two capturing closures stored")
+
+    // Reclaim the list: frees each owned closure box AND its captured
+    // environment. No leak (env reclaimed), no double-free.
+    list.free(l)
+
+    println("  PASS: list.free reclaimed boxes + captured envs")
+    println("=== test_closure_capture_stored_in_list passed ===")
+}

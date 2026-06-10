@@ -2799,6 +2799,10 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
      * declarations. */
     print_line(gen, "int string_char_at(const char*, int);");
     print_line(gen, "int string_equals(const char*, const char*);");
+    /* Codegen-internal: a `fn`-typed closure value stored into a list is
+     * boxed and routed here so list_free reclaims the box + its env. Not
+     * a std.collections extern, so declare it directly. */
+    print_line(gen, "int list_add_closure_owned(void*, void*);");
     /* String interpolation helper — portable, always available */
     print_line(gen, "#include <stdarg.h>");
     print_line(gen, "static void* _aether_interp(const char* fmt, ...) {");

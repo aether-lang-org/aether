@@ -146,6 +146,36 @@ int list_add_string_owned(ArrayList* list, const void* item) {
     return 1;
 }
 
+/* Layout-compatible view of the codegen's `_AeClosure` box (a
+ * heap-allocated { fn, env } pair from _aether_box_closure). Used so
+ * list_free can reclaim a boxed closure's captured environment as well
+ * as the box itself. The field order/types mirror the prologue typedef
+ * exactly; a function pointer and a data pointer are the same width on
+ * every target we build for. */
+typedef struct { void (*fn)(void); void* env; } AeClosureBox;
+
+/* Add a heap-allocated closure BOX the list owns (owned_flags == 2).
+ * Unlike a string value, the box also owns its captured `env`, so
+ * list_free frees env first, then the box. Routed from codegen when a
+ * `fn`-typed closure value is stored into a list (the fn -> ptr box
+ * coercion). */
+int list_add_closure_owned(ArrayList* list, void* box) {
+    if (!list) return 0;
+    if (!list->owned_flags && list->capacity > 0) {
+        list->owned_flags = (int*)aether_caps_calloc(
+            (size_t)list->capacity, sizeof(int));
+    }
+    int slot = list->size;
+    int ok = list_add_raw(list, box);
+    if (!ok) return 0;
+    if (!list->owned_flags && list->capacity > 0) {
+        list->owned_flags = (int*)aether_caps_calloc(
+            (size_t)list->capacity, sizeof(int));
+    }
+    if (list->owned_flags) list->owned_flags[slot] = 2;
+    return 1;
+}
+
 void* list_get_raw(ArrayList* list, int index) {
     if (!list || index < 0 || index >= list->size) return NULL;
     return list->items[index];
@@ -187,7 +217,13 @@ void list_free(ArrayList* list) {
             if (!list->owned_flags[i]) continue;
             void* it = list->items[i];
             if (!it) continue;
-            if (is_aether_string(it)) {
+            if (list->owned_flags[i] == 2) {
+                /* Owned closure box: reclaim the captured env, then the
+                 * box. env is NULL for a non-capturing closure (no-op). */
+                void* env = ((AeClosureBox*)it)->env;
+                if (env) free(env);
+                free(it);
+            } else if (is_aether_string(it)) {
                 string_release(it);
             } else {
                 free(it);
