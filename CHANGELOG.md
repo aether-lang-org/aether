@@ -5,11 +5,39 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.231.0]` (create it at the top if
-absent). When a PR merges to `main`, the release pipeline automatically
-replaces `## [0.231.0]` with the next version number before tagging the
-release — so a hardcoded version header here would be skipped by the
-rename and drift from the tags (see `changelog-release-drift-note.md`).
+**Workflow**: New changes go under `## [current]` (create it at the top if
+absent). When a release PR merges to `main`, the release pipeline
+(`.github/workflows/release.yml`) automatically replaces `## [current]`
+with the next version number before tagging. Always use the literal
+`[current]` placeholder — a hardcoded version header here is *not*
+renamed, so it drifts from the tags and can cause the next release's
+notes to be skipped or clobbered (the failure modes documented in
+`changelog-release-drift-note.md`).
+
+## [current]
+
+### Fixed
+
+- **Codegen: returning a struct from a tuple-returning function now
+  compiles** (#634). A function whose tuple return embeds a user struct
+  (e.g. `(Point, string)` — the idiomatic `(record, err)` shape) emitted
+  the synthesised `_tuple_…` typedef *before* the struct body, so the
+  generated C failed with `unknown type name 'Point'`. Tuple typedef
+  emission is now deferred until after the user struct bodies are
+  written (the return-type merge pre-scan still runs first); a tuple
+  embeds each element by value, so the struct must be fully defined
+  first.
+- **Lexer: source columns are counted per character, not per byte**
+  (#645). A multibyte UTF-8 codepoint (e.g. an em-dash `—`, 3 bytes)
+  advanced the column counter by its byte count, so every token after a
+  non-ASCII character on the same line reported a column offset by
+  `bytes − chars` and diagnostic carets landed right of the real token.
+  `advance()` now skips UTF-8 continuation bytes when advancing the
+  column; tokenization is unchanged.
+- **Closure capturing both a `ptr` and a `string`** is verified working
+  and guarded by a regression test (#624). The mixed-capture case was
+  resolved by the closure-environment rework in the 0.231.0 leak
+  hardening; the test pins it so it cannot regress.
 
 ## [0.231.0]
 

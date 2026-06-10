@@ -3037,42 +3037,21 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     }
     print_line(gen, "");
 
-    // Pre-scan: merge tuple return types across all returns in each function,
-    // then emit tuple typedefs. Must happen before forward declarations.
+    // Pre-scan: merge tuple return types across all returns in each
+    // function. This only mutates the AST (resolving UNKNOWN tuple
+    // element types); the actual `typedef struct { ... } _tuple_...`
+    // EMISSION is deferred until after the user struct bodies are
+    // emitted below — a tuple whose element is a user struct (e.g.
+    // `(Point, string)`) embeds that struct BY VALUE and so needs its
+    // full definition visible first, else the generated C errors with
+    // "unknown type name 'Point'" (issue #634). The merge must still
+    // run here, before propagate_tuple_type_to_calls below.
     extern void merge_return_tuple_types(ASTNode* node, Type* merged);
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
         if (child && (child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) && child->node_type &&
             child->node_type->kind == TYPE_TUPLE) {
             merge_return_tuple_types(child, child->node_type);
-            ensure_tuple_typedef(gen, child->node_type);
-        }
-        // Externs with `-> (T1, T2, ...)` need the same typedef. The
-        // return type is parsed directly (no inference from a body), so
-        // no merge step is needed. Issue #271.
-        if (child && child->type == AST_EXTERN_FUNCTION && child->node_type &&
-            child->node_type->kind == TYPE_TUPLE) {
-            ensure_tuple_typedef(gen, child->node_type);
-        }
-        // Imported modules' externs that have tuple return types also
-        // need the typedef synthesised here, even when the user didn't
-        // selectively import them — the import-handling path below
-        // forward-declares every extern in the module, which would
-        // otherwise reference an undeclared `_tuple_T1_T2` typedef.
-        // See `case AST_IMPORT_STATEMENT` in the main loop. Issue #289.
-        if (child && child->type == AST_IMPORT_STATEMENT && child->value) {
-            AetherModule* mod_entry = module_find(child->value);
-            ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
-            if (mod_ast) {
-                for (int j = 0; j < mod_ast->child_count; j++) {
-                    ASTNode* decl = mod_ast->children[j];
-                    if (decl && decl->type == AST_EXTERN_FUNCTION &&
-                        decl->node_type &&
-                        decl->node_type->kind == TYPE_TUPLE) {
-                        ensure_tuple_typedef(gen, decl->node_type);
-                    }
-                }
-            }
         }
     }
     // Propagate merged return types to all function call sites in the program
@@ -3215,6 +3194,44 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         ASTNode* sd = program->children[i];
         if (sd && sd->type == AST_STRUCT_DEFINITION) {
             generate_struct_definition(gen, sd);
+        }
+    }
+
+    // Now that every user struct's full body is visible, emit the
+    // synthesised tuple typedefs (deferred from the merge pre-scan
+    // above). A tuple type embeds each element BY VALUE, so a
+    // `(Point, string)` return needs `Point`'s definition first —
+    // emitting the typedef here, after the struct bodies, fixes the
+    // "unknown type name" errors (issue #634). Still before the
+    // function forward declarations, which reference these typedefs.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (!child) continue;
+        if ((child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) &&
+            child->node_type && child->node_type->kind == TYPE_TUPLE) {
+            ensure_tuple_typedef(gen, child->node_type);
+        }
+        // Externs with `-> (T1, T2, ...)` need the same typedef (#271).
+        if (child->type == AST_EXTERN_FUNCTION && child->node_type &&
+            child->node_type->kind == TYPE_TUPLE) {
+            ensure_tuple_typedef(gen, child->node_type);
+        }
+        // Imported modules' externs with tuple returns — the import
+        // pass forward-declares them and would otherwise reference an
+        // undeclared `_tuple_T1_T2` typedef (#289).
+        if (child->type == AST_IMPORT_STATEMENT && child->value) {
+            AetherModule* mod_entry = module_find(child->value);
+            ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
+            if (mod_ast) {
+                for (int j = 0; j < mod_ast->child_count; j++) {
+                    ASTNode* decl = mod_ast->children[j];
+                    if (decl && decl->type == AST_EXTERN_FUNCTION &&
+                        decl->node_type &&
+                        decl->node_type->kind == TYPE_TUPLE) {
+                        ensure_tuple_typedef(gen, decl->node_type);
+                    }
+                }
+            }
         }
     }
 

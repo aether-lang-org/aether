@@ -1,0 +1,41 @@
+// Regression (#634): a function returning a tuple whose element is a
+// user `struct` must emit compilable C.
+//
+// Pre-fix, the synthesised `_tuple_<T>_<U>` typedef was emitted during
+// the return-type merge pre-scan, BEFORE the user struct bodies. A
+// tuple embeds each element BY VALUE, so
+//   typedef struct { Point _0; const char* _1; } _tuple_Point_string;
+// referenced `Point` before its definition was visible — the generated
+// C failed with "unknown type name 'Point'". The fix defers tuple
+// typedef emission until after the struct bodies are written.
+//
+// Building IS the assertion (pre-fix it would not compile); the field
+// reads guard the tuple-pack lowering (the first slot must stay typed
+// `Point`, not be mistyped as `int`).
+
+extern exit(code: int)
+
+struct Point {
+    int x
+    int y
+}
+
+make_point() -> {
+    p = Point { x: 1, y: 2 }
+    return p, ""
+}
+
+main() {
+    println("=== test_struct_in_tuple_return ===")
+    pt, err = make_point()
+    if pt.x != 1 {
+        println("  FAIL: pt.x=${pt.x} expected 1")
+        exit(1)
+    }
+    if pt.y != 2 {
+        println("  FAIL: pt.y=${pt.y} expected 2")
+        exit(1)
+    }
+    println("  PASS: struct-in-tuple return x=${pt.x} y=${pt.y} err=${err}")
+    println("=== test_struct_in_tuple_return passed ===")
+}
