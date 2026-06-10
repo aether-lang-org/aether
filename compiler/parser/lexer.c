@@ -49,7 +49,13 @@ char advance() {
     if (c == '\n') {
         current_line++;
         current_column = 1;
-    } else {
+    } else if (((unsigned char)c & 0xC0) != 0x80) {
+        /* Advance the column once per CHARACTER, not per byte. A UTF-8
+         * continuation byte (0b10xxxxxx) is the 2nd+ byte of a multibyte
+         * codepoint and must not bump the column, or the source-snippet
+         * caret drifts right of any token following a multibyte char on
+         * the same line (issue #645). Leading bytes (ASCII or the first
+         * byte of a sequence) still count. */
         current_column++;
     }
     return c;
