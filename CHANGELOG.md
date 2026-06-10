@@ -18,6 +18,16 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ### Fixed
 
+- **Diagnostics: parse errors in an imported module are now attributed
+  to that module** (#646). A syntax error inside an imported module was
+  labeled with the *importing* file's name and rendered a source snippet
+  from the importing file (indexing the imported file's line number into
+  the wrong buffer), pointing the caret at unrelated, valid code. The
+  module parser now re-points the diagnostic source context (filename +
+  buffer) at the module for the duration of its parse and restores the
+  caller's context afterward, so the location header and snippet name the
+  real file. Nested imports save/restore correctly, and the error/warning
+  running totals are preserved across the swap.
 - **Codegen: returning a struct from a tuple-returning function now
   compiles** (#634). A function whose tuple return embeds a user struct
   (e.g. `(Point, string)` — the idiomatic `(record, err)` shape) emitted

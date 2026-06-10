@@ -1,0 +1,14 @@
+// Importer for the #646 regression. This file is entirely VALID — the
+// only syntax error is in the imported module m/module.ae. The marker
+// identifier `importer_valid_marker` below must NEVER appear in the
+// diagnostic snippet: if it does, the renderer indexed the import's line
+// number into THIS file's buffer (the bug).
+import m
+
+importer_valid_marker() -> int {
+    return 0
+}
+
+main() {
+    println("unreachable — the import fails to parse")
+}
