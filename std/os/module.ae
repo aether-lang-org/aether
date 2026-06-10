@@ -21,7 +21,11 @@ exports (
     now_local, now_local_iso8601, LocalTime,
     platform,
     setenv, unsetenv,
-    run_pipe, wait_pid, run_pipe_drain_and_wait
+    run_pipe, wait_pid, run_pipe_drain_and_wait,
+    os_kill_raw, os_wait_pid_timeout_raw, os_run_supervised_raw,
+    kill, wait_pid_timeout, run_supervised,
+    os_run_full_raw, run_full,
+    os_chdir_raw, os_getcwd_raw, chdir, getcwd
 )
 
 // Run a shell command, returns exit code (0 = success)
@@ -251,6 +255,160 @@ wait_pid(pid: int) -> {
 // "unsupported on Windows").
 run_pipe_drain_and_wait(prog: string, argv: ptr, env: ptr) -> {
     return os_run_pipe_drain_and_wait_raw(prog, argv, env)
+}
+
+// --- Process-supervision primitives -----------------------------------
+//
+// The floor any build/test orchestrator hits: run a child as its own
+// process group, forward interactive signals to it, enforce a
+// wall-clock timeout, then group-reap anything the child leaked. The
+// hard part — fork/exec, waitpid — was already here (os.run_pipe,
+// os.wait_pid); these add the missing process-*group* lifecycle.
+//
+// Cross-platform. POSIX uses fork + setpgid + killpg + waitpid; Windows
+// maps the same shape onto Job Objects (group kill / kill-on-close
+// reap), WaitForSingleObject (timeout), TerminateProcess (kill), and a
+// console control handler (signal forwarding). The platform deltas are
+// called out per function; the broad ones are: Windows has no graceful
+// signal (kill is always a forced terminate), no "signalled" outcome,
+// and no negative-pid group signalling via os.kill (the grouping lives
+// in the Job Object that run_supervised manages internally).
+
+// Send signal `sig` to `pid` — POSIX kill(2). Returns 0 on success,
+// -1 on failure. Two conventions are deliberately exposed:
+//   - a NEGATIVE pid signals the whole process group abs(pid), the
+//     building block for tearing down a build and all it spawned;
+//   - `sig == 0` delivers nothing but still runs the existence /
+//     permission checks — the canonical "is this pid/group alive?"
+//     probe (0 = alive, -1 = gone).
+// Signal numbers live in `std.signal` (SIGINT / SIGTERM / SIGKILL …)
+// so callers needn't hard-code 2 / 15 / 9.
+// Windows: `sig == 0` probes via OpenProcess; any other signal maps to
+// a forced TerminateProcess (no catchable SIGTERM); a negative pid
+// (group signalling) returns -1 — there is no pgid-by-negative-pid.
+extern os_kill_raw(pid: int, sig: int) -> int
+
+// Bounded wait for one child. Returns (status, timed_out, err):
+//   - status:    WEXITSTATUS on normal exit, 128+signo when signalled,
+//                -1 on timeout or error.
+//   - timed_out: 1 if `secs` elapsed before exit (the child is left
+//                RUNNING — caller decides whether to os.kill it), else 0.
+//   - err:       "" on a clean reap or clean timeout; non-empty on a
+//                waitpid error / invalid pid.
+// `secs <= 0` blocks indefinitely (like os.wait_pid, timed_out always 0).
+// Lets a supervisor bound a wait without a separate watchdog process.
+// Windows: OpenProcess + WaitForSingleObject(secs); status is the
+// process exit code (no signal concept).
+extern os_wait_pid_timeout_raw(pid: int, secs: int) -> (int, int, string)
+
+// One-call supervised run — the whole job-control pattern in one
+// primitive. Returns (exit_code, outcome). Options are int flags
+// (1 = on, 0 = off) rather than a stringly-typed map, matching the
+// rest of std.os.
+//   - new_process_group: child runs in its own group (POSIX pgid == pid;
+//     Windows: its own Job Object + CREATE_NEW_PROCESS_GROUP) so signals
+//     and reaping address the whole subtree.
+//   - forward_signals:   POSIX — parent SIGINT/SIGTERM forward to the
+//     child's group; Windows — a console Ctrl-C/Ctrl-Break handler
+//     terminates the job tree. Needs new_process_group; one supervised
+//     run at a time.
+//   - timeout_secs > 0:  POSIX — TERM the group on deadline, 5s grace,
+//     then KILL; Windows — TerminateJobObject. Reports exit_code 124
+//     (GNU `timeout` convention).
+//   - reap_group:        after the child exits, clean up anything it
+//     leaked into the group (POSIX TERM→grace→KILL + reap; Windows
+//     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE). Needs new_process_group.
+// outcome ∈ {"exited","signalled","timeout","error"}. Windows never
+// reports "signalled" (no signal concept) — a killed child reads as
+// "exited" with its terminate code.
+extern os_run_supervised_raw(prog: string, argv: ptr, env: ptr,
+                             new_process_group: int, forward_signals: int,
+                             timeout_secs: int, reap_group: int) -> (int, string)
+
+// Send `sig` to `pid` (POSIX kill(2)). 0 = success, -1 = failure.
+// Negative pid = whole group; sig 0 = existence probe. See
+// os_kill_raw for the full contract; signal numbers are in std.signal.
+kill(pid: int, sig: int) -> int {
+    return os_kill_raw(pid, sig)
+}
+
+// Bounded wait — (status, timed_out, err). See os_wait_pid_timeout_raw.
+wait_pid_timeout(pid: int, secs: int) -> {
+    return os_wait_pid_timeout_raw(pid, secs)
+}
+
+// Supervised run — (exit_code, outcome). See os_run_supervised_raw for
+// the per-flag semantics. The common build-orchestrator shape is
+// `run_supervised(prog, argv, env, 1, 1, timeout, 1)`: own group,
+// forward Ctrl-C, enforce a timeout, group-reap leaks.
+run_supervised(prog: string, argv: ptr, env: ptr,
+               new_process_group: int, forward_signals: int,
+               timeout_secs: int, reap_group: int) -> {
+    return os_run_supervised_raw(prog, argv, env,
+                                 new_process_group, forward_signals,
+                                 timeout_secs, reap_group)
+}
+
+// Length of a (length-aware) Aether string, used to feed stdin to a
+// child binary-safely. Declared here so run_full needn't take a
+// separate length argument from callers.
+extern string_length(str: string) -> int
+
+// Full three-way child stdio — the gap os.run_capture leaves open.
+// Feeds `stdin_data` to the child's stdin (binary-safe: exactly its
+// stored length is written, embedded NULs included) and captures
+// stdout and stderr SEPARATELY. Returns (stdout, stderr, exit_code,
+// err):
+//   - stdout / stderr: the child's two streams, captured independently
+//     (the `2>&1`-merged shape is not this call). "" when empty. Like
+//     os.run_capture they are NUL-terminated, so a capture holding an
+//     embedded NUL reads as truncated through the string ops — the
+//     stdin direction has no such limit.
+//   - exit_code: WEXITSTATUS on normal exit, 128+signo if signalled,
+//     127 on exec failure, -1 on spawn/IO error.
+//   - err: "" on a successful spawn (regardless of exit code);
+//     non-empty only when the fork/exec/pipe itself failed.
+// No pipe-buffer deadlock regardless of stream sizes: POSIX pumps all
+// three fds in one poll(2) loop; Windows drains stdout/stderr on reader
+// threads while the main thread writes stdin (Win32 anonymous pipes
+// aren't pollable). An empty `stdin_data` gives the child an
+// immediately-closed stdin (it can't block on the terminal).
+extern os_run_full_raw(prog: string, argv: ptr, env: ptr,
+                       stdin_data: string, stdin_len: int) -> (string @heap, string @heap, int, string)
+
+// (stdout, stderr, exit_code, err) — feed `stdin_data` and capture both
+// streams. Pass "" for stdin_data when the child reads no input. See
+// os_run_full_raw for the full contract.
+run_full(prog: string, argv: ptr, env: ptr, stdin_data: string) -> {
+    return os_run_full_raw(prog, argv, env, stdin_data, string_length(stdin_data))
+}
+
+// --- Working directory -----------------------------------------------
+// Cross-platform: POSIX chdir(2)/getcwd(3), Windows
+// SetCurrentDirectory/GetCurrentDirectory. An orchestrator entry point
+// needs these to run build steps relative to a project root.
+
+extern os_chdir_raw(path: string) -> int
+extern os_getcwd_raw() -> string
+
+// Change the process working directory. Returns "" on success, an error
+// message on failure (e.g. directory missing or not a directory).
+chdir(path: string) -> string {
+    if os_chdir_raw(path) == 0 {
+        return ""
+    }
+    return "cannot change directory"
+}
+
+// Current working directory, or "" on failure. Returns a fresh
+// refcounted string the caller owns (the raw strdup is reclaimed by the
+// heap-string tracker — os_getcwd_raw is classified owned-heap in codegen).
+getcwd() -> string {
+    s = os_getcwd_raw()
+    if s == null {
+        return ""
+    }
+    return string_concat(s, "")
 }
 
 // argv[0] — path the OS launched the current process with. Returns "" if

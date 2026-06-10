@@ -15,6 +15,14 @@ rename and drift from the tags (see `changelog-release-drift-note.md`).
 
 ### Fixed
 
+- **`make ci-windows` example sweep now matches the canonical filter.**
+  The Windows cross-compile target swept *every* `examples/**/*.ae`,
+  including the intentionally-broken `ae-help-demo/broken_dsl.ae` (and the
+  `host-*-demo.ae` files that need host runtimes), so step [1/3] aborted
+  before ever MinGW-compiling anything. Aligned both `find` invocations
+  with the main example-build sweep (`grep -v '/ae-help-demo/'` +
+  `grep -v '/host-.*-demo\.ae$'`).
+
 - **Memory-leak hardening across the compiler and stdlib.** Every
   detectable memory leak in the regression suite is eliminated (and the
   integration suite is clean under ASan + LSan), verified on macOS
@@ -57,6 +65,74 @@ rename and drift from the tags (see `changelog-release-drift-note.md`).
 
 ### Added
 
+- **`std.os` process-supervision primitives** — the floor any build/test
+  orchestrator hits, so a supervisor can be written in Aether instead of a
+  bash job-control trampoline. Filed by aeb. **Cross-platform**: POSIX
+  uses fork + setpgid + killpg + waitpid; Windows maps the same shape onto
+  Job Objects, `WaitForSingleObject`, `TerminateProcess`, and a console
+  control handler.
+  - `os.run_supervised(prog, argv, env, new_process_group, forward_signals,
+    timeout_secs, reap_group) -> (exit_code, outcome)` — one call that
+    runs a child in its own process group, forwards interactive
+    SIGINT/SIGTERM (Windows: Ctrl-C/Ctrl-Break) to that group, enforces a
+    wall-clock timeout (POSIX TERM → 5s grace → KILL; Windows
+    `TerminateJobObject`; reporting exit_code 124 the way GNU `timeout`
+    does), and group-reaps anything the child leaked — a stray test
+    server, a backgrounded helper (Windows:
+    `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`). `outcome` ∈ {`"exited"`,
+    `"signalled"`, `"timeout"`, `"error"`} (Windows never reports
+    `"signalled"`). Options are explicit `int` flags (1/0) rather than a
+    map — Aether maps hold `ptr` values, and explicit params match the
+    rest of `std.os`.
+  - `os.kill(pid, sig) -> int` — POSIX `kill(2)`. A negative pid signals
+    the whole process group; `sig == 0` is the existence/permission probe
+    (the `kill -0` reap-loop check). Previously there was no `kill` in the
+    public surface at all. Windows: `sig == 0` probes via `OpenProcess`,
+    any other signal forces `TerminateProcess` (no graceful SIGTERM),
+    negative-pid group signalling returns -1.
+  - `os.wait_pid_timeout(pid, secs) -> (status, timed_out, err)` — bounded
+    wait on a child, so a timeout needs no separate watchdog process
+    (`secs <= 0` blocks indefinitely). Windows: `OpenProcess` +
+    `WaitForSingleObject`.
+  - `os.run_full(prog, argv, env, stdin_data) -> (stdout, stderr,
+    exit_code, err)` — the three-way child-stdio primitive `os.run_capture`
+    leaves open: feeds `stdin_data` to the child (binary-safe — exactly its
+    stored length, embedded NULs included) and captures stdout and stderr
+    on **separate** channels with no pipe-buffer deadlock regardless of
+    stream sizes (regression-tested with a 512 KB round-trip). POSIX pumps
+    all three fds in one `poll(2)` loop; Windows drains stdout/stderr on
+    reader threads while writing stdin. The `2>&1`-merged shape and
+    binary-safe (length-bearing) capture of the *output* streams are out
+    of scope for v1.
+- **`os.chdir` / `os.getcwd`** — process working-directory accessors,
+  previously absent entirely. `chdir(path) -> string` ("" on success,
+  error message on failure); `getcwd() -> string` ("" on failure).
+  Cross-platform (POSIX `chdir(2)`/`getcwd(3)`, Windows
+  `SetCurrentDirectory`/`GetCurrentDirectory` with UTF-8↔UTF-16
+  conversion). An orchestrator entry point needs these to run build
+  steps relative to a project root.
+- **`ae run <file.ae> -- <args>` now forwards `<args>` to the program.**
+  Previously `ae run` dropped everything after the script name, so a
+  config-is-code entry point couldn't receive arguments; now everything
+  after a literal `--` reaches the program's `argv` (like `cargo run --`),
+  each token double-quoted so a spaces-containing argument stays one
+  token through the launcher. This is what makes
+  `ae run supervisor.ae -- make -j8` work.
+- **`examples/applications/build-supervisor.ae`** — a runnable
+  build-supervision entry point that composes the new primitives
+  (`os.getcwd` + `os.run_supervised`) into the exact shape of aeb's bash
+  job-control trampoline (own process group, forward Ctrl-C, wall-clock
+  timeout, group-reap of leaked children) — in one `run_supervised`
+  call. Demonstrates the "config IS code" pattern: the file is the
+  supervisor config and the entry point.
+- **`std.signal`** — POSIX signal-number constants (`SIGHUP`, `SIGINT`,
+  `SIGQUIT`, `SIGILL`, `SIGABRT`, `SIGFPE`, `SIGKILL`, `SIGSEGV`,
+  `SIGPIPE`, `SIGALRM`, `SIGTERM`) as zero-arg functions, so callers pass
+  `signal.SIGTERM()` to `os.kill` instead of hard-coding 15. Limited to
+  the signals whose numbers are stable across every POSIX target;
+  platform-divergent ones (SIGUSR1/2 etc.) are intentionally omitted.
+  (On Windows most have no effect — `os.kill` forces termination
+  regardless of the number.)
 - **Full-suite macOS `leaks(1)` gate** (`tests/run_macos_leaks.sh`,
   `tests/leaks_known.txt`, `tests/leaks_exclude.txt`): the gate now sweeps
   the entire `tests/regression` suite (previously 16 curated programs),
