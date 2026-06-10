@@ -2613,8 +2613,18 @@ static int cmd_run(int argc, char** argv) {
      * the full TOML extra_sources concatenated. */
     char extra_files[8192] = "";
 
+    /* Index in argv where the program's own arguments begin — everything
+     * after a literal `--`. These are forwarded verbatim to the running
+     * program (like `cargo run -- args`), so a config-is-code entry point
+     * can do `ae run supervisor.ae -- make -j8` and see make/-j8 in its
+     * own argv. -1 = no `--` seen, nothing to forward. */
+    int prog_args_start = -1;
+
     for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--") == 0) {
+            prog_args_start = i + 1;  /* rest are the program's args */
+            break;                    /* stop flag parsing at the separator */
+        } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
@@ -2775,8 +2785,21 @@ static int cmd_run(int argc, char** argv) {
     // Clean up temp .c file (exe stays in cache if caching, else clean up too)
     remove(c_file);
 
-    // Step 3: Run
+    // Step 3: Run, forwarding any post-`--` args to the program. Each is
+    // wrapped in double quotes so a single arg with spaces stays one
+    // token through run_cmd's tokenizer (posix_run / win_run). Args
+    // containing a literal double-quote aren't representable through this
+    // path — rare for a build command line; build the binary and invoke
+    // it directly if you need that.
     snprintf(cmd, sizeof(cmd), "\"%s\"", exe_file);
+    if (prog_args_start >= 0) {
+        size_t off = strlen(cmd);
+        for (int i = prog_args_start; i < argc && off < sizeof(cmd) - 1; i++) {
+            int w = snprintf(cmd + off, sizeof(cmd) - off, " \"%s\"", argv[i]);
+            if (w < 0 || (size_t)w >= sizeof(cmd) - off) break;  /* truncated — stop cleanly */
+            off += (size_t)w;
+        }
+    }
     int rc = run_cmd(cmd);
 
     if (rc < 0) {
