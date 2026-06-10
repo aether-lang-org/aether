@@ -86,6 +86,20 @@ TypeKind lookup_callee_param_kind(CodeGenerator* gen, const char* func_name, int
  * in codegen_stmt.c. */
 int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name, int param_idx, int depth);
 
+/* For the call-site identity-drain (codegen_expr.c). `_store_escapes`:
+ * does the callee's param escape via a STORE (anything but being directly
+ * returned)? If so the value is owned by a sink and must NOT be freed.
+ * `_returns_string`: does the callee declare `-> string` (so the result
+ * pointer can be identity-compared against the passed temp)? Defined in
+ * codegen_stmt.c. */
+int callee_param_store_escapes_via_body(CodeGenerator* gen, const char* func_name, int param_idx);
+int callee_returns_string(CodeGenerator* gen, const char* func_name);
+
+/* True when `func_name` resolves to a user function with a visible body
+ * block; only then may the body-walk override the conservative
+ * call_arg_escapes heuristic. Defined in codegen_stmt.c. */
+int callee_has_visible_body(CodeGenerator* gen, const char* func_name);
+
 /* Normalise a callee name's dots to underscores, writing into `out`
    and returning `out`. The AST stores source-level callees in dotted
    form (`"string.concat"`) but stdlib externs, the generated C call
@@ -106,6 +120,12 @@ void exit_scope(CodeGenerator* gen);
 
 /* Expression generation (codegen_expr.c) */
 void generate_expression(CodeGenerator* gen, ASTNode* expr);
+
+/* Emit `call` so a transient capturing-closure argument's heap env is
+ * freed after the call (codegen_expr.c). Caller must verify the receiving
+ * parameter does not store/return the closure. */
+void emit_closure_env_drained_call(CodeGenerator* gen, ASTNode* call,
+                                   ASTNode* closure_node);
 
 /* Message field helpers (codegen_expr.c) — shared with codegen_stmt.c */
 MessageFieldDef* find_msg_field(MessageDef* msg_def, const char* name);

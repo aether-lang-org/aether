@@ -161,6 +161,30 @@ Nearly all changes are in the codegen layer. The typechecker is unchanged.
 | Small additions to `CodeGenerator` state | `compiler/codegen/codegen.h` |
 | New helpers on the public header | `compiler/codegen/codegen_internal.h` |
 
+## Environment reclamation
+
+A capturing closure's environment is a heap allocation; two common
+lifetimes now reclaim it automatically (the canonical reference is
+[`docs/memory-management.md`](memory-management.md) → "Closure environment
+lifetime"):
+
+- **Transient callback.** A capturing closure created inline and passed to
+  a parameter that only *calls* it and neither stores nor returns it
+  (`run(cb) { cb() }`) is dead once the call returns, so its env is freed
+  right after the call. This is gated on a proven non-escape — invoking a
+  closure parameter (`cb()`, an indirect-`call` node whose first child is
+  the callee) is not an escape, whereas a stored or returned closure
+  suppresses the drain so its env follows the owner.
+
+- **Stored in a list.** A closure value stored into a list is heap-boxed
+  (the `fn → ptr` coercion) and the list owns the box; `list.free` now
+  reclaims the captured env as well as the box (`owned_flags == 2`).
+
+Still a leak (the safe side of the leak-vs-UAF trade): **L5 below** —
+reassigning a closure *variable* drops the previous env, because without
+whole-program escape analysis the codegen can't prove the old env is
+unreachable (it may be aliased through a `box_closure` copy).
+
 ## Closure patterns and workarounds
 
 L1–L3 are ergonomic patterns with known workarounds you can apply today.

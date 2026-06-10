@@ -183,6 +183,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->builder_func_count = 0;
     gen->builder_func_capacity = 0;
     gen->in_trailing_block = 0;
+    gen->discard_call_value = 0;
     gen->current_env_captures = NULL;
     gen->current_env_capture_count = 0;
     gen->current_promoted_captures = NULL;
@@ -1533,7 +1534,13 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
 
     fprintf(gen->output, "\n/* --- aether_<name> alias stubs (--emit=lib) --- */\n");
     fprintf(gen->output, "#include <stdint.h>\n");
-    fprintf(gen->output, "typedef struct AetherValue AetherValue;  /* opaque */\n\n");
+    fprintf(gen->output, "typedef struct AetherValue AetherValue;  /* opaque */\n");
+    /* A `string`-returning exported function now yields a magic
+     * AetherString internally; the C ABI contract is a plain `const char*`,
+     * so unwrap to the payload at the boundary (matches the pre-magic
+     * plain-char* return the C consumer expects). aether_string_data is
+     * magic-aware and NULL-safe. */
+    fprintf(gen->output, "extern const char* aether_string_data(const void*);\n\n");
 
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
@@ -1635,13 +1642,20 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
             }
         }
         fprintf(gen->output, ") {\n    ");
+        int ret_is_string = (fn->node_type && fn->node_type->kind == TYPE_STRING);
         if (strcmp(ret_abi, "void") != 0) fprintf(gen->output, "return ");
+        /* Unwrap a magic AetherString return to its C `char*` payload so
+         * C callers (dlsym'd function pointers, etc.) read the bytes, not
+         * the struct header. */
+        if (ret_is_string) fprintf(gen->output, "aether_string_data((const void*)(");
         fprintf(gen->output, "%s(", fn->value);
         for (int k = 0; k < param_count; k++) {
             if (k > 0) fprintf(gen->output, ", ");
             fprintf(gen->output, "%s", param_names[k]);
         }
-        fprintf(gen->output, ");\n}\n");
+        fprintf(gen->output, ")");
+        if (ret_is_string) fprintf(gen->output, "))");
+        fprintf(gen->output, ";\n}\n");
     }
 }
 
@@ -2774,6 +2788,21 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "        free((void*)s);");
     print_line(gen, "    }");
     print_line(gen, "}");
+    /* Prototypes for the magic-aware string builtins the codegen emits
+     * directly (char_at -> string_char_at, str_eq / match-on-string ->
+     * string_equals). These are not routed through the normal extern-call
+     * path, so their prototypes would otherwise be missing — an implicit-
+     * declaration error under C99/-Werror. Declared unconditionally;
+     * harmless if unused. */
+    /* Signatures MUST match the extern-registry forms (emitted when
+     * std.string is imported) verbatim, or C sees conflicting
+     * declarations. */
+    print_line(gen, "int string_char_at(const char*, int);");
+    print_line(gen, "int string_equals(const char*, const char*);");
+    /* Codegen-internal: a `fn`-typed closure value stored into a list is
+     * boxed and routed here so list_free reclaims the box + its env. Not
+     * a std.collections extern, so declare it directly. */
+    print_line(gen, "int list_add_closure_owned(void*, void*);");
     /* String interpolation helper — portable, always available */
     print_line(gen, "#include <stdarg.h>");
     print_line(gen, "static void* _aether_interp(const char* fmt, ...) {");

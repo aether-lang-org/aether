@@ -392,12 +392,13 @@ For functions that *store* a string pointer beyond the call (collection adders, 
 
 ```aether
 extern string_list_add(list: ptr, s: @retain string) -> int
-extern map_put_raw(map: ptr, key: @retain string, value: ptr) -> int
 ```
 
 Tells the heap-string-tracker escape walker "this slot stores the pointer; mark the heap-string arg as escaped, skip the function-exit free." Multiple annotations stack (`@aether @retain string` is legal; order doesn't matter). Default for unannotated string parameters remains "read-only" — correct for `string.length` / `string.equals` / `print` / `println` and other consumers that don't outlive the call.
 
-Audited stdlib retainers carrying `@retain` today: `string_list_add`, `string_list_set`, `map_put_raw`'s key. Other functions are added as their callers are audited.
+`@retain` is **only** correct when the callee keeps the *caller's* pointer. A function that copies its argument is **not** a retainer: `map_put_raw` interns its key (`string_new(key)` at put time, released at `map_free`) and never holds the caller's key bytes after the call, so its `key` parameter is a plain `string` (borrowed) — a heap key is reclaimed at the caller's scope exit. Marking such a copy-on-store parameter `@retain` leaks the caller's argument (the callee owns only its copy).
+
+Audited stdlib retainers carrying `@retain` today: `string_list_add`, `string_list_set`. Other functions are added as their callers are audited.
 
 ### Return-ownership contract (uniform-heap return-escape)
 
@@ -456,9 +457,36 @@ A function that calls itself recursively (e.g. a `walk_join`-style accumulator-p
 
 The wrap is suppressed when the corresponding callee parameter is storage-shaped (`ptr`, `@retain` string, or unknown-typed) — the same `call_arg_escapes` gate the escape walker uses. In those cases the recipient takes ownership and freeing here would dangle the stored copy.
 
+### Container value ownership (`map.put` / `list.add`)
+
+A heap string stored as a container *value* is owned by the container and released when the container is freed (`map.free` / `list.free`) **only when the codegen can prove, at the put site, that the value is a fresh owned heap allocation**:
+
+- **Statically heap** (`string.concat(...)`, interpolation, a heap-returning call, or a local proven heap-assigned in the enclosing body): routed to the owning variant (`map_put_string_owned` / `list_add_string_owned`, which adopt the caller's single reference — no retain, so the refcount balances at free time). The escape walker marks the same value escaped, so the caller doesn't also free it; the value is freed exactly once, by the container.
+- **A literal**, or a value whose ownership can't be proven at the put site, stays on the non-owning `*_raw` path; the container never frees it.
+
+**Ownership through a `string` parameter — the container borrows.** A value reaching a container *through a `string` parameter* of a storing wrapper (`pr(m, k, v) { map.put(m, k, v) }`) is left on the **non-owning** path: the put site sees only a `string` param, which can hold either an owned heap string the caller minted *or* a borrowed/literal one, and the two are indistinguishable there. The container therefore **borrows** such a value — it does not free it at teardown — and the **program** owns and frees it. (Dispatching at runtime on the AetherString magic header is *not* a sound shortcut: the magic header proves heap *representation*, not caller-transferred *ownership*, so a borrowed magic string still owned by another scope would be double-freed. Representation is not ownership — and a double-free is worse than a leak.) This matches the proxy/opts-map idiom (`std.map` holding both owned and borrowed values): retrieve the heap values via their owning handles and `string.free` them before `map.free`.
+
+The key is always interned by the container (copied via `string_new`), so a heap key is the caller's to reclaim — see the `@retain` note above.
+
+**Boxed closures.** A closure value (`fn`-typed, not a raw fn-pointer) stored into a list is heap-boxed by the `fn -> ptr` coercion (`_aether_box_closure`). The list takes ownership of the box (it is stored owned, and `list_free` reclaims the non-magic box via `free`); a bare function pointer (`is_fnptr`, a code address) is not heap and stays on the raw path.
+
+### Closure environment lifetime
+
+A closure that captures variables carries them in a heap-allocated environment struct (`_aether_box_closure` / `_aether_make_closure_N`). When such a closure *escapes* — stored in a list/map/struct, returned, or otherwise outliving the creating frame — the environment is reachable through the owner and reclaimed with it.
+
+A **transient** capturing closure — created inline and passed to a function that only calls it and neither stores nor returns it (the callback shape `run(cb) { cb() }`) — is dead once that call returns, so its environment is freed right after the call. The codegen emits the call in an env-draining form:
+
+```c
+{ _AeClosure _ad_0 = <closure>; run(_ad_0); if (_ad_0.env) free((void*)_ad_0.env); }
+```
+
+This fires only when the receiving parameter is proven not to escape the closure (`callee_param_escapes_via_body`): invoking a closure parameter (`cb()`, which lowers to an indirect-`call` node whose first child is the *callee*, not an argument) reads `cb.fn`/`cb.env` and runs it — it neither stores nor returns `cb` — so the callee slot is not an escape. If the callee *does* store or return the closure, the drain is suppressed and the environment's lifetime follows the owner. The `if (_ad_0.env)` guard makes a zero-capture closure (NULL env) a no-op.
+
 ### When you DO need explicit cleanup
 
 Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*` without an `@heap` annotation) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments, annotated extern returns, and non-escaped function-scope locals.
+
+Raw-pointer structs reached through a cast (`p as *Slot`, with `malloc`/`free`) are outside the field heap-string tracker — a field write through a raw cast is a plain store with no reassign-free. Manage those fields' strings explicitly (free the old value before overwriting; free fields before the struct), exactly as in C.
 
 ---
 

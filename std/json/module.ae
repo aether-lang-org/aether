@@ -195,6 +195,11 @@ object_get(obj: ptr, key: string) -> {
 object_set(obj: ptr, key: string, value: ptr) -> {
     ok = json_object_set_raw(obj, key, value)
     if ok == 0 {
+        // `obj` was not a JSON_OBJECT, so the raw call did NOT take
+        // ownership of `value`. Reclaim it here — the caller built it
+        // inline (json.create_*) and has no other reference, so it would
+        // otherwise leak. On success the object owns it (don't free).
+        json_free(value)
         return "not an object"
     }
     return ""
@@ -258,6 +263,10 @@ array_get(arr: ptr, index: int) -> {
 array_add(arr: ptr, value: ptr) -> {
     ok = json_array_add_raw(arr, value)
     if ok == 0 {
+        // `arr` was not a JSON_ARRAY: the raw call did not take ownership
+        // of `value`, so reclaim it (caller built it inline, no other
+        // reference). On success the array owns it (don't free).
+        json_free(value)
         return "not an array"
     }
     return ""

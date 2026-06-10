@@ -23,6 +23,10 @@ int list_add_raw(ArrayList* list, void* item);
  * literals stay on `list_add_raw` (no retain, list won't release
  * at free). */
 int list_add_string_owned(ArrayList* list, const void* item);
+/* Add a heap closure box the list owns (owned_flags == 2): list_free
+ * reclaims the box AND its captured env. Routed when a `fn`-typed closure
+ * value is stored into a list. */
+int list_add_closure_owned(ArrayList* list, void* box);
 // Return element at `index`, or NULL for out-of-bounds / null list. The
 // Aether wrapper `list.get` in std/collections/module.ae turns these into
 // Go-style `(value, err)` returns.

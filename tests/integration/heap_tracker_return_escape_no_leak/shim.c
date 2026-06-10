@@ -3,23 +3,24 @@
  * its own RSS before and after a tight loop of heap-accumulator
  * calls. Pre-fix the loop leaks ~770 KB; post-fix it stays flat.
  *
- * Unit normalisation: `ru_maxrss` is in KB on Linux/BSD but in BYTES
- * on macOS. The probe and the function name both treat the value as
- * KB, so we divide by 1024 on Apple platforms to make the cross-
- * platform `growth > 256` (KB) threshold comparison mean the same
- * thing everywhere. Without this normalisation, macOS readings of
- * 32-128 KB of allocator-zone bookkeeping noise compare as 32768-
- * 131072 "KB" and trip the threshold spuriously.
+ * IMPORTANT — current RSS, not peak. The name is historical; this
+ * reports CURRENT resident set size, not `getrusage`'s `ru_maxrss`.
+ * `ru_maxrss` is a monotonic high-water mark: under a tight
+ * malloc/free churn loop it captures transient allocator peaks (and
+ * pages the allocator keeps mapped after free), so a leak-free run
+ * can still show hundreds of KB of "growth" — run-to-run noise that
+ * overlaps a real leak's magnitude and makes the bound flaky. Current
+ * RSS, by contrast, DROPS when memory is freed: with the heap-string
+ * tracker reclaiming each accumulator, post-loop residency returns to
+ * baseline (~0 KB growth), while a genuine return-escape leak shows as
+ * sustained growth proportional to the leaked bytes. So the bound
+ * discriminates leak from noise on every allocator.
  *
- * Portability: `<sys/resource.h>` is POSIX-only. On Windows the
- * equivalent is `GetProcessMemoryInfo` via `<psapi.h>` — not wired
- * here because (a) the regression closed by this test is in the
- * heap-string-tracker codegen, which runs identically on every
- * platform, and (b) CONTRIBUTING.md §"Coding for portability"
- * pattern #2 prescribes a graceful skip when a per-platform syscall
- * surface isn't reachable. The Aether-side probe treats a -1 return
- * here as "RSS unavailable" and exits with a PASS message rather
- * than asserting the heap-growth bound. */
+ * Portability: macOS via mach task_info, Linux/BSD via /proc/self/statm,
+ * Windows returns the -1 sentinel (the probe then skips the growth
+ * assertion — the heap-string-tracker codegen under test runs
+ * identically on every platform; CONTRIBUTING.md §"Coding for
+ * portability" pattern #2). */
 
 #if defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
 
@@ -28,18 +29,36 @@ long getrusage_max_rss_kb(void) {
     return -1;
 }
 
-#else
+#elif defined(__APPLE__) || defined(__MACH__)
 
-#include <sys/resource.h>
+#include <mach/mach.h>
 
 long getrusage_max_rss_kb(void) {
-    struct rusage r;
-    if (getrusage(RUSAGE_SELF, &r) != 0) return -1;
-#if defined(__APPLE__) || defined(__MACH__)
-    return r.ru_maxrss / 1024;
-#else
-    return r.ru_maxrss;
-#endif
+    mach_task_basic_info_data_t info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                  (task_info_t)&info, &count) != KERN_SUCCESS) {
+        return -1;
+    }
+    return (long)(info.resident_size / 1024);  /* bytes -> KB */
+}
+
+#else  /* Linux / other POSIX with /proc */
+
+#include <stdio.h>
+#include <unistd.h>
+
+long getrusage_max_rss_kb(void) {
+    FILE* f = fopen("/proc/self/statm", "r");
+    if (!f) return -1;
+    long total_pages = 0, resident_pages = 0;
+    if (fscanf(f, "%ld %ld", &total_pages, &resident_pages) != 2) {
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    long page_kb = sysconf(_SC_PAGESIZE) / 1024;
+    return resident_pages * page_kb;
 }
 
 #endif

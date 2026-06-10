@@ -103,15 +103,22 @@ main() {
     println("  PASS: opts-map -> proxy pools -> mount_match/mount_methods clean")
 
     // Teardown: opts_free releases each opts' retained pool ref; our own
-    // pool refs are released by upstream_pool_free; map.free releases the
-    // owned (from_int) values and leaves the borrowed URLs / pool ptrs.
-    // Balanced refcounts, no double-free.
+    // pool refs are released by upstream_pool_free. The map BORROWS its
+    // string/pointer values (map_put_raw — non-owning, the borrowed-value
+    // contract this test guards), so map.free leaves them and the PROGRAM
+    // frees the heap URLs it created. The URLs escaped through build_pool's
+    // `url` parameter into the map, so they were not freed at scope exit;
+    // primary_url/replica_url are the live owning references. The pools
+    // copied the URL bytes at upstream_add time, so freeing them now (after
+    // all mounts) cannot dangle the proxy.
     proxy.opts_free(opts_info)
     proxy.opts_free(opts_read)
     proxy.opts_free(opts_write)
     proxy.upstream_pool_free(primary_pool)
     proxy.upstream_pool_free(replica_pool)
     http_server_free(server)
+    string.free(primary_url)
+    string.free(replica_url)
     map.free(opts_map)
 
     println("  PASS: teardown clean")

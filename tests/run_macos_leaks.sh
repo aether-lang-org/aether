@@ -11,23 +11,31 @@
 # is the one detector that works here: it inspects the heap at exit
 # with no rebuild and no sanitizer flag.
 #
-# Scope: a CURATED set of memory-exercising regression programs — the
-# return-escape / struct-field / actor-message / list-map ownership
-# tests from #459/#465/#466/#467, plus the collections edge-case
-# probes. This is deliberately NOT every integration test:
-# MallocStackLogging adds ~10x runtime, so gating the whole suite
-# would balloon CI wall-clock for little marginal coverage (the
-# ownership machinery is what regresses; plain logic tests don't
-# leak). The covered set is printed below so the subset choice is
-# visible, never mistaken for "all tests".
+# Scope: the FULL tests/regression suite. Every regression program is
+# built with `ae build` (release -O2) and run under
+# `MallocStackLogging=1 leaks --atExit`; a non-zero leak count fails the
+# gate. Two audited side-lists qualify this:
 #
-# Each program is built with `ae build` (release -O2) and run under
-# `MallocStackLogging=1 leaks --atExit`. Non-zero leak count on any
-# program fails the gate.
+#   tests/leaks_known.txt    — per-test MAX allowed leak count (third-
+#                              party library process-globals + tracked
+#                              known leaks). A test absent here must
+#                              report 0; a test present may report up to
+#                              its cap. Exceeding the cap fails.
+#   tests/leaks_exclude.txt  — programs leaks(1) cannot run (they fork
+#                              child processes; leaks --atExit hangs).
+#                              Leak-checked on Linux CI instead.
+#
+# MallocStackLogging adds ~10x runtime, so the full sweep is slower than
+# the old curated subset — but it is the only way a new leak in an
+# un-curated program fails locally rather than slipping to CI.
 #
 # Skips cleanly (exit 0) on non-Darwin hosts.
 
-set -e
+# NOTE: deliberately no `set -e`. Every build / leaks invocation has its
+# exit code captured and handled explicitly below, and leaks(1) itself
+# exits non-zero whenever it reports leaks — including the audited
+# allowed counts in leaks_known.txt — so `set -e` would abort the whole
+# gate on the first allowed leak.
 
 if [ "$(uname -s)" != "Darwin" ]; then
     echo "[SKIP] test-macos-leaks: leaks(1) is macOS-only (Linux uses Valgrind/ASan)"
@@ -43,29 +51,26 @@ if [ ! -x "$AE" ]; then
     exit 0
 fi
 
-# Curated memory-exercising programs (leak-detector gate).
-# Add new ownership/allocation regressions here when they land.
-TESTS="
-test_return_escape_bare_local
-test_return_escape_loop
-test_return_escape_mixed
-test_return_escape_recursive
-test_return_escape_user_chain
-test_return_escape_dup_arg
-test_return_escape_return_in_loop
-test_return_escape_self_reassign
-test_struct_field_heap_tracking
-test_struct_field_heap_multi
-test_actor_message_heap_string
-test_list_heap_string_ownership
-test_map_heap_string_value
-test_collections_edge_cases
-test_collections_hashmap_edge
-test_collections_wrappers
-"
+# Full regression suite, discovered from disk (sorted for stable order).
+TESTS="$(for f in "$REG"/test_*.ae; do basename "$f" .ae; done | sort)"
+
+KNOWN_FILE="$ROOT/tests/leaks_known.txt"
+EXCLUDE_FILE="$ROOT/tests/leaks_exclude.txt"
+
+# Max allowed leaks for $1 (0 if not listed in leaks_known.txt).
+allowed_leaks() {
+    [ -f "$KNOWN_FILE" ] || { echo 0; return; }
+    awk -v t="$1" '!/^#/ && NF>=2 && $1==t { print $2; found=1 } END { if (!found) print 0 }' "$KNOWN_FILE" | head -1
+}
+
+# True if $1 is listed in leaks_exclude.txt.
+is_excluded() {
+    [ -f "$EXCLUDE_FILE" ] || return 1
+    grep -qE "^[[:space:]]*$1[[:space:]]*$" "$EXCLUDE_FILE"
+}
 
 echo "=================================================="
-echo "macOS leaks(1) gate — curated memory-ownership set"
+echo "macOS leaks(1) gate — full regression suite"
 echo "=================================================="
 
 tmpdir="$(mktemp -d)"
@@ -106,10 +111,16 @@ LEAKS_TIMEOUT=120
 
 fails=0
 covered=0
+excluded=0
 for t in $TESTS; do
     src="$REG/$t.ae"
     if [ ! -f "$src" ]; then
         echo "  [MISS] $t.ae not found — skipping"
+        continue
+    fi
+    if is_excluded "$t"; then
+        echo "  [SKIP] $t: excluded (forks subprocesses — leak-checked on Linux CI)"
+        excluded=$((excluded + 1))
         continue
     fi
     bin="$tmpdir/$t"
@@ -150,19 +161,25 @@ for t in $TESTS; do
     fi
     # `leaks` prints "Process N: K leaks for B total leaked bytes."
     count="$(sed -nE 's/.*: ([0-9]+) leaks for [0-9]+ total.*/\1/p' "$lk_out" | head -1)"
-    if [ "$count" = "0" ]; then
-        echo "  [PASS] $t: 0 leaks"
+    count="${count:-0}"
+    allow="$(allowed_leaks "$t")"
+    if [ "$count" -le "$allow" ]; then
+        if [ "$allow" -gt 0 ]; then
+            echo "  [PASS] $t: $count leaks (allowed ≤ $allow — see tests/leaks_known.txt)"
+        else
+            echo "  [PASS] $t: 0 leaks"
+        fi
     else
-        echo "  [FAIL] $t: ${count:-?} leaks"
+        echo "  [FAIL] $t: $count leaks (allowed ≤ $allow)"
         grep -E "ROOT LEAK|leaks for" "$lk_out" | head -12 | sed 's/^/      /'
         fails=$((fails + 1))
     fi
 done
 
 echo "--------------------------------------------------"
-echo "covered $covered programs, $fails leaking"
+echo "covered $covered programs, $excluded excluded, $fails over budget"
 if [ "$fails" -ne 0 ]; then
-    echo "FAIL: macOS leaks gate found leaks"
+    echo "FAIL: macOS leaks gate found leaks above the audited budget"
     exit 1
 fi
-echo "PASS: macOS leaks gate clean"
+echo "PASS: macOS leaks gate clean (within tests/leaks_known.txt budget)"

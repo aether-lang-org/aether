@@ -42,12 +42,14 @@ extern list_free(list: ptr)
 
 // ---- HashMap raw externs ----
 extern map_new() -> ptr
-// `key` retains: the map stores its own copy / reference of the key
-// across the call. Tells the heap-string-tracker escape walker to
-// treat a heap-string `key` argument here as escaped — without the
-// annotation, the function-exit defer-free would free the bytes
-// while the map still holds a reference. See #420 follow-up.
-extern map_put_raw(map: ptr, key: @retain string, value: ptr) -> int
+// `key` is BORROWED: map_put_raw copies the key into the map's own
+// AetherString (string_new at put time, released at map_free), so it
+// never holds a reference to the caller's key bytes after the call.
+// A heap-string `key` argument is therefore the caller's to reclaim —
+// it must NOT be @retain-marked, or the caller's key leaks (the map
+// only ever owns its copy). The map_clear/map_free path releases the
+// COPY, not the caller's original.
+extern map_put_raw(map: ptr, key: string, value: ptr) -> int
 // Heap-string-aware put (#467). Retains the value and tags the
 // map so map_free releases each string value before freeing.
 extern map_put_string_owned(map: ptr, key: @retain string, value: ptr) -> int

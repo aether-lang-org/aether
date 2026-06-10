@@ -92,9 +92,20 @@ main() {
     println("  PASS 3: from_array round-trip with split")
 
     // ---- Case 4: structural sharing — free one, other survives ----
-    shared = string.seq_cons("y", string.seq_cons("z", string.seq_empty()))
-    a = string.seq_cons("a", string.seq_retain(shared))
-    b = string.seq_cons("b", string.seq_retain(shared))
+    //
+    // cons retains its tail (see aether_stringseq.h), so plain cons is
+    // the sharing primitive: `cons("a", shared)` and `cons("b", shared)`
+    // each take their own reference to `shared`. No explicit seq_retain
+    // is needed (and adding one would double-count — cons already
+    // retained — leaking the shared spine). Build `shared` via the
+    // reassignment idiom rather than a nested cons so the consumed
+    // intermediate cell isn't orphaned: each `x = cons(.., x)` drops the
+    // prior local's reference after cons has taken its own.
+    shared = string.seq_empty()
+    shared = string.seq_cons("z", shared)
+    shared = string.seq_cons("y", shared)
+    a = string.seq_cons("a", shared)
+    b = string.seq_cons("b", shared)
     string.seq_free(shared)  // drop our local; a and b each still own one ref
 
     if string.seq_length(a) != 3 {
@@ -119,6 +130,19 @@ main() {
     }
     string.seq_free(b)
     println("  PASS 4: structural sharing — free one, other survives")
+
+    // ---- Case 4b: explicit seq_retain — an extra reference balanced
+    // by an extra free. retain bumps the refcount; the seq survives the
+    // first free and is reclaimed by the second.
+    base = string.seq_cons("p", string.seq_empty())
+    kept = string.seq_retain(base)   // refcount 1 -> 2 (base and kept alias)
+    string.seq_free(base)            // -> 1; kept still valid
+    if string.seq_length(kept) != 1 {
+        println("FAIL 4b-retain: kept.length=${string.seq_length(kept)}, want 1")
+        exit(1)
+    }
+    string.seq_free(kept)            // -> 0; reclaimed
+    println("  PASS 4b: seq_retain extra reference balanced by extra free")
 
     // ---- Case 5: deep list (5000 cells), iterative free ----
     deep = string.seq_empty()

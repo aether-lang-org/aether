@@ -792,8 +792,21 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
         // AetherString. `aether_heap_str_free` dispatches on the magic
         // header, so both shapes free correctly through the tracker.
         if (strcmp(fn, "string_concat") == 0 ||
+            /* string_concat_wrapped mints a fresh refcounted AetherString
+             * via string_new_with_length and returns it (never a borrowed
+             * or literal pointer) — its `-> string` result is owned heap,
+             * reclaimed via aether_heap_str_free (string_release) at scope
+             * exit. Without this the wrapped-concat result local leaked. */
+            strcmp(fn, "string_concat_wrapped") == 0 ||
             strcmp(fn, "string_substring") == 0 ||
             strcmp(fn, "string_substring_n") == 0 ||
+            /* string.copy returns `string_concat(s, "")` — always a
+             * fresh owned heap buffer (never a borrowed/literal pointer),
+             * the same shape as its sibling string_concat already on this
+             * list. Classify by name so `x = string.copy(s)` gets
+             * _heap_x = 1 and is reclaimed at scope exit / next reassign;
+             * the general user-fn return-heap path misses it. */
+            strcmp(fn, "string_copy") == 0 ||
             strcmp(fn, "string_to_upper") == 0 ||
             strcmp(fn, "string_to_lower") == 0 ||
             strcmp(fn, "string_trim") == 0 ||
@@ -829,6 +842,18 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
              * produced was exactly the caller never freeing this result. */
             strcmp(fn, "path_clean") == 0 ||
             strcmp(fn, "path_rel") == 0 ||
+            /* Sibling lexical path ops, same ownership contract as
+             * path_clean/path_rel: each returns a FRESH malloc'd/strdup'd
+             * buffer (path_join builds a new joined path; path_dirname,
+             * path_basename, path_extension each strdup or malloc a slice
+             * — never a borrowed pointer into the input, never a literal;
+             * NULL on error, which aether_heap_str_free tolerates). They
+             * leaked at every call site because the caller never freed the
+             * result (std.path/std.fs both expose them). */
+            strcmp(fn, "path_join") == 0 ||
+            strcmp(fn, "path_dirname") == 0 ||
+            strcmp(fn, "path_basename") == 0 ||
+            strcmp(fn, "path_extension") == 0 ||
             strcmp(fn, "io_read_file_raw") == 0 ||
             /* Whole-file / command-capture reads: each call returns a
              * FRESH malloc'd buffer of the file contents / process output
@@ -839,6 +864,36 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
             strcmp(fn, "file_read_all_raw") == 0 ||
             strcmp(fn, "os_exec_raw") == 0 ||
             strcmp(fn, "os_run_capture_raw") == 0 ||
+            /* std.os string accessors: each returns a FRESH strdup'd buffer
+             * (os_getenv copies the env value; os_which the resolved path;
+             * os_platform_raw strdup's the platform name — NOT a literal;
+             * os_now_utc/local_iso8601_raw strdup the formatted timestamp).
+             * NULL on error (tolerated). Verified owned, never borrowed/
+             * literal — each leaked at every call site because the caller
+             * never freed the copy. */
+            strcmp(fn, "os_getenv") == 0 ||
+            strcmp(fn, "os_which") == 0 ||
+            strcmp(fn, "os_platform_raw") == 0 ||
+            strcmp(fn, "os_now_utc_iso8601_raw") == 0 ||
+            strcmp(fn, "os_now_local_iso8601_raw") == 0 ||
+            /* std.io getenv — sibling of os_getenv, returns a FRESH
+             * strdup'd copy of the env value (NULL on miss). Unclassified
+             * it leaked at every call site; the std.fs/std.io tests all
+             * read io.getenv("TMPDIR"/"TEMP") for a scratch dir, so this
+             * one entry clears the shared 2-leak across the fs/io suite. */
+            strcmp(fn, "io_getenv") == 0 ||
+            /* std.cryptography base64 encoders: each returns a FRESH
+             * aether_caps_malloc'd buffer (the caller-owned-return contract,
+             * libc-freeable; NULL on error). The `-> string` externs aren't
+             * @heap-annotated, so the cryptography.base64_encode[_padded]
+             * wrappers' inferred tuple position 0 was non-heap and leaked
+             * the result at every call site. */
+            strcmp(fn, "cryptography_base64_encode_raw") == 0 ||
+            strcmp(fn, "cryptography_base64_encode_padded_raw") == 0 ||
+            /* std.io errno-message: returns a FRESH malloc'd strerror copy
+             * (NULL on no-error). The io.perror / errno_message wrapper
+             * leaked it at every call. */
+            strcmp(fn, "io_errno_message_raw") == 0 ||
             /* StringBuilder finalise: hands the caller a plain libc-
              * freeable char* and frees the wrapper (std/strbuilder/
              * aether_strbuilder.c:235). Declared `-> string @heap`, but
@@ -1910,12 +1965,16 @@ int call_arg_escapes(TypeKind param_kind) {
  * and param-return; aliasing the param through an intermediate local is
  * not tracked (rare, and the safe direction would only be a leak). */
 static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
-                                     const char* pname, int depth);
+                                     const char* pname, int depth,
+                                     int return_is_escape);
+static int is_nonstoring_builtin(const char* fn);
 
-int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
-                                  int param_idx, int depth) {
+/* Shared resolver: find user-fn `func_name`'s param-name + body block.
+ * Returns 1 and fills out_pname and out_body on success; 0 otherwise. */
+static int resolve_callee_param_body(CodeGenerator* gen, const char* func_name,
+                                     int param_idx, const char** out_pname,
+                                     ASTNode** out_body) {
     if (!gen || !gen->program || !func_name || param_idx < 0) return 0;
-    if (depth > 8) return 1;  /* recursion / mutual-recursion guard */
     char fn_norm[256];
     const char* fn = codegen_normalise_callee(func_name, fn_norm, sizeof(fn_norm));
     ASTNode* fn_def = find_function_definition_by_name(gen->program, fn);
@@ -1926,7 +1985,6 @@ int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
          param->type != AST_PATTERN_VARIABLE)) {
         return 0;
     }
-    const char* pname = param->value;
     ASTNode* body = NULL;
     for (int i = fn_def->child_count - 1; i >= 0; i--) {
         if (fn_def->children[i] && fn_def->children[i]->type == AST_BLOCK) {
@@ -1935,34 +1993,191 @@ int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
         }
     }
     if (!body) return 0;
-    return param_escapes_in_subtree(gen, body, pname, depth);
+    *out_pname = param->value;
+    *out_body = body;
+    return 1;
+}
+
+int callee_param_escapes_via_body(CodeGenerator* gen, const char* func_name,
+                                  int param_idx, int depth) {
+    if (depth > 8) return 1;  /* recursion / mutual-recursion guard */
+    const char* pname; ASTNode* body;
+    if (!resolve_callee_param_body(gen, func_name, param_idx, &pname, &body)) return 0;
+    /* Used by the arg-drain / escape-pre-pass gates: a `return pname`
+     * IS an escape (the value flows out to the caller). */
+    return param_escapes_in_subtree(gen, body, pname, depth, /*return_is_escape=*/1);
+}
+
+/* Does the callee's param STORE-escape (anything except being directly
+ * returned)? Used by the call-site identity-drain to distinguish a param
+ * that is merely return-passed-through (identity-drainable) from one a
+ * container/@retain/struct-field/closure owns (must NOT be freed). */
+int callee_param_store_escapes_via_body(CodeGenerator* gen, const char* func_name,
+                                        int param_idx) {
+    const char* pname; ASTNode* body;
+    if (!resolve_callee_param_body(gen, func_name, param_idx, &pname, &body)) {
+        return 1;  /* unresolved → conservatively assume it stores */
+    }
+    return param_escapes_in_subtree(gen, body, pname, 0, /*return_is_escape=*/0);
+}
+
+/* Does the user function `func_name` declare a `-> string` return? Only
+ * then is the call-site identity-drain meaningful (it compares the call
+ * result pointer against the passed temp). */
+int callee_returns_string(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !gen->program || !func_name) return 0;
+    char fn_norm[256];
+    const char* fn = codegen_normalise_callee(func_name, fn_norm, sizeof(fn_norm));
+    ASTNode* fn_def = find_function_definition_by_name(gen->program, fn);
+    if (!fn_def) return 0;
+    return fn_def->node_type && fn_def->node_type->kind == TYPE_STRING;
+}
+
+/* True when `func_name` resolves to a user function with a visible body
+ * block in the merged program AST. Only then is the body-walk
+ * (callee_param_escapes_via_body) authoritative: a proven non-escape can
+ * safely override the conservative call_arg_escapes heuristic. Externs
+ * and unknown callees have no body and stay conservative. */
+int callee_has_visible_body(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !gen->program || !func_name) return 0;
+    char fn_norm[256];
+    const char* fn = codegen_normalise_callee(func_name, fn_norm, sizeof(fn_norm));
+    ASTNode* fn_def = find_function_definition_by_name(gen->program, fn);
+    if (!fn_def) return 0;
+    for (int i = fn_def->child_count - 1; i >= 0; i--) {
+        if (fn_def->children[i] && fn_def->children[i]->type == AST_BLOCK) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Does `pname` appear as an identifier anywhere in this subtree? Used to
+ * detect storage sinks (assignment RHS, aggregate elements, closure
+ * captures) that retain the parameter's pointer past the call. Erring
+ * toward "mentioned" is sound: a false positive only withholds a drain
+ * (a leak), never frees a live pointer (a UAF). */
+static int subtree_mentions_param(ASTNode* node, const char* pname) {
+    if (!node) return 0;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, pname) == 0) return 1;
+    for (int i = 0; i < node->child_count; i++) {
+        if (subtree_mentions_param(node->children[i], pname)) return 1;
+    }
+    return 0;
+}
+
+/* Does evaluating `node` yield a value that IS, or directly aggregates,
+ * the parameter's pointer? This is the "pointer-carrying" test for store
+ * sinks: a bare reference (`pname`) or an array/struct literal element
+ * (`[pname]`, `{f: pname}`) carries the pointer, so storing/returning it
+ * retains the param. A nested CALL does NOT directly carry — `f(pname)`
+ * yields f's result, a distinct value; whether THAT retains the param is
+ * decided precisely by the call-rule in param_escapes_in_subtree (which
+ * sees through read-only accessors). Keeping this test narrow is what
+ * lets `ok = file_delete_raw(path)` NOT count as an escape while
+ * `y = path` still does. */
+static int value_directly_carries_param(ASTNode* node, const char* pname) {
+    if (!node) return 0;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, pname) == 0) return 1;
+    if (node->type == AST_ARRAY_LITERAL || node->type == AST_FIELD_INIT) {
+        for (int i = 0; i < node->child_count; i++) {
+            if (value_directly_carries_param(node->children[i], pname)) return 1;
+        }
+    }
+    return 0;
 }
 
 static int param_escapes_in_subtree(CodeGenerator* gen, ASTNode* node,
-                                    const char* pname, int depth) {
+                                    const char* pname, int depth,
+                                    int return_is_escape) {
     if (!node) return 0;
-    if (node->type == AST_RETURN_STATEMENT) {
+    /* Storage sinks: the parameter's pointer is retained beyond the call
+     * only when it flows, AS A POINTER, into a binding, a container
+     * element, a struct field, a return, or a closure capture. Each is an
+     * escape; missing one would let the arg-drain free a still-referenced
+     * buffer (UAF), so the body-walk catches them all before it can be
+     * trusted as authoritative over the conservative call_arg_escapes
+     * heuristic. The carry-test is deliberately narrow (direct ref /
+     * aggregate element) so that merely READING the param via a nested
+     * call — `f(pname)` whose result is what's stored — is left to the
+     * precise call-rule below rather than blanket-marked as an escape. */
+    if (return_is_escape && node->type == AST_RETURN_STATEMENT) {
         for (int i = 0; i < node->child_count; i++) {
-            ASTNode* r = node->children[i];
-            if (r && r->type == AST_IDENTIFIER && r->value &&
-                strcmp(r->value, pname) == 0) return 1;
+            if (value_directly_carries_param(node->children[i], pname)) return 1;
         }
     }
+    if (node->type == AST_ASSIGNMENT && node->child_count >= 2) {
+        /* `x = pname`, `obj.field = pname`, `arr[i] = pname` escape the
+         * pointer into ANOTHER location. Reassigning the param's own slot
+         * (`pname = ...`, including the no-op `pname = pname`) does NOT —
+         * the value is overwritten in place, never aliased elsewhere — so
+         * skip when the LHS is the param itself. */
+        ASTNode* lhs = node->children[0];
+        int lhs_is_self = lhs && lhs->type == AST_IDENTIFIER && lhs->value &&
+                          strcmp(lhs->value, pname) == 0;
+        if (!lhs_is_self && value_directly_carries_param(node->children[1], pname)) return 1;
+    }
+    if (node->type == AST_BINARY_EXPRESSION && node->value &&
+        strcmp(node->value, "=") == 0 && node->child_count >= 2) {
+        ASTNode* lhs = node->children[0];
+        int lhs_is_self = lhs && lhs->type == AST_IDENTIFIER && lhs->value &&
+                          strcmp(lhs->value, pname) == 0;
+        if (!lhs_is_self && value_directly_carries_param(node->children[1], pname)) return 1;
+    }
+    if (node->type == AST_VARIABLE_DECLARATION) {
+        /* `y = pname` aliases the pointer into a DIFFERENT local y → escape.
+         * But the parser also models a bare param REASSIGNMENT as a decl
+         * node whose `value` IS the param name (e.g. the no-op-free shim's
+         * `p = p`, or `p = concat(p, x)`): that overwrites the param's own
+         * slot, never aliasing the pointer elsewhere, so it is not an
+         * escape. Skip when the declared name is the param itself — the
+         * same lhs-is-self exclusion the AST_ASSIGNMENT sink applies. */
+        int decl_is_self = node->value && strcmp(node->value, pname) == 0;
+        if (!decl_is_self) {
+            for (int i = 0; i < node->child_count; i++) {
+                if (value_directly_carries_param(node->children[i], pname)) return 1;
+            }
+        }
+    }
+    if (node->type == AST_CLOSURE && subtree_mentions_param(node, pname)) {
+        return 1;  /* closure capture may outlive the call */
+    }
     if (node->type == AST_FUNCTION_CALL && node->value) {
-        for (int i = 0; i < node->child_count; i++) {
+        /* An INDIRECT call `cb(...)` lowers to value=="call" with child[0]
+         * the CALLEE (the closure/fn being invoked) and children[1..] the
+         * arguments. Invoking a parameter reads cb.fn/cb.env and runs it —
+         * it neither stores nor returns cb, so the callee slot is NOT an
+         * escape. Only the actual arguments can escape. For a NAMED call
+         * (value == function name) every child is an argument. */
+        int first_arg = (strcmp(node->value, "call") == 0) ? 1 : 0;
+        for (int i = first_arg; i < node->child_count; i++) {
             ASTNode* a = node->children[i];
             if (a && a->type == AST_IDENTIFIER && a->value &&
                 strcmp(a->value, pname) == 0) {
                 char fn_norm[256];
                 const char* fn = codegen_normalise_callee(node->value, fn_norm, sizeof(fn_norm));
-                if (is_retain_extern_param(gen, fn, i)) return 1;
-                if (call_arg_escapes(lookup_callee_param_kind(gen, node->value, i))) return 1;
-                if (callee_param_escapes_via_body(gen, node->value, i, depth + 1)) return 1;
+                /* Read-only accessor (byte/length view, print, free):
+                 * provably does not retain the pointer, so the param does
+                 * not escape via THIS call. If the accessor's RETURN value
+                 * (a view into the param) is later stored, the assignment
+                 * / aggregate / return sinks above catch that mention
+                 * separately — so this is sound. */
+                if (is_nonstoring_builtin(fn)) {
+                    /* not an escape via this call */
+                } else if (is_retain_extern_param(gen, fn, i)) {
+                    return 1;
+                } else if (call_arg_escapes(lookup_callee_param_kind(gen, node->value, i))) {
+                    return 1;
+                } else if (callee_param_escapes_via_body(gen, node->value, i, depth + 1)) {
+                    return 1;
+                }
             }
         }
     }
     for (int i = 0; i < node->child_count; i++) {
-        if (param_escapes_in_subtree(gen, node->children[i], pname, depth)) return 1;
+        if (param_escapes_in_subtree(gen, node->children[i], pname, depth, return_is_escape)) return 1;
     }
     return 0;
 }
@@ -1991,7 +2206,20 @@ static int is_nonstoring_builtin(const char* fn) {
            strcmp(fn, "println") == 0 ||
            strcmp(fn, "print_char") == 0 ||
            strcmp(fn, "release") == 0 ||
-           strcmp(fn, "string_release") == 0;
+           strcmp(fn, "string_release") == 0 ||
+           /* Pure read-only views into a string's bytes/length. These
+            * return a non-owning view (or a scalar) and never stash the
+            * argument pointer, so passing a heap string to one is not an
+            * escape. Stdlib wrappers funnel params through these before
+            * handing the raw bytes to a synchronous C extern
+            * (`file_delete_raw(aether_string_data(path))`), which had
+            * falsely marked `path` escaped and leaked every interpolated
+            * argument. If the VIEW is stored, the assignment/return sinks
+            * in param_escapes_in_subtree catch it independently. */
+           strcmp(fn, "aether_string_data") == 0 ||
+           strcmp(fn, "aether_string_len") == 0 ||
+           strcmp(fn, "aether_string_length") == 0 ||
+           strcmp(fn, "_aether_safe_str") == 0;
 }
 
 static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
@@ -2034,15 +2262,25 @@ static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
                      * reassignment-free wrapper fires. */
                 } else if (fn && is_retain_extern_param(gen, fn, i)) {
                     mark_escaped_string_var(gen, arg->value);
+                } else if (callee_has_visible_body(gen, call->value)) {
+                    /* Visible body → the body-walk is authoritative
+                     * (it sees through read-only accessors and ignores
+                     * self-assignment `p = p`). Trust it instead of the
+                     * conservative call_arg_escapes, so a heap local
+                     * passed to a non-storing user shim (a no-op-free
+                     * stub, an assert helper) stays freeable and its
+                     * reassignment-free / scope-exit free fires.
+                     * Mirrors the arg-drain gate in codegen_expr.c. */
+                    if (callee_param_escapes_via_body(gen, call->value, i, 0)) {
+                        mark_escaped_string_var(gen, arg->value);
+                    }
                 } else {
                     TypeKind k = lookup_callee_param_kind(gen, call->value, i);
-                    /* A `string`-typed param looks read-only to
-                     * call_arg_escapes, but a storing wrapper
-                     * (`f(v: string) { map.put(m, k, v) }`) lets it
-                     * escape — look through the callee's body so the
-                     * heap local isn't freed at this scope's exit while
-                     * the callee has stashed its pointer (the map-value
-                     * UAF). */
+                    /* No visible body (extern / unknown): a `string`-typed
+                     * param looks read-only to call_arg_escapes, but a
+                     * storing wrapper lets it escape — keep both the
+                     * conservative kind check and the (no-body → 0) body
+                     * walk so unknown callees stay conservatively escaped. */
                     if (call_arg_escapes(k) ||
                         callee_param_escapes_via_body(gen, call->value, i, 0)) {
                         mark_escaped_string_var(gen, arg->value);
@@ -4698,10 +4936,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         // Use _match_val (temp) instead of re-evaluating match_expr
                         Type* mexpr_type = match_expr->node_type;
                         if (mexpr_type && mexpr_type->kind == TYPE_STRING) {
-                            // NULL-safe strcmp: guard with _match_val != NULL
-                            fprintf(gen->output, "_match_val && strcmp(_match_val, ");
+                            // NULL-safe, magic-aware: _match_val may be a magic
+                            // AetherString (string ops / concat now return
+                            // magic), so a raw strcmp would compare the struct
+                            // header. string_equals dispatches on the header
+                            // (binary-safe memcmp); keep the NULL guard so a
+                            // NULL scrutinee matches no pattern.
+                            fprintf(gen->output, "_match_val && string_equals(_match_val, ");
                             generate_expression(gen, pattern);
-                            fprintf(gen->output, ") == 0) {\n");
+                            fprintf(gen->output, ")) {\n");
                         } else {
                             fprintf(gen->output, "_match_val == ");
                             generate_expression(gen, pattern);
@@ -5402,8 +5645,58 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "_aether_ctx_push((void*)0);\n");
                     }
                 } else {
-                    generate_expression(gen, inner);
-                    fprintf(gen->output, ";\n");
+                    /* `exit(code)` is noreturn — libc exit() terminates the
+                     * process immediately, so any function-exit defer-frees
+                     * emitted AFTER this call (at the function's natural end)
+                     * never run, leaking every live heap local. Emit all
+                     * pending defers FIRST so the heap is reclaimed before the
+                     * process ends. The defers are flag-guarded (`if(_heap_x)`)
+                     * and emit_all_defers is non-destructive, so other (non-
+                     * exit) paths still get their own scope-exit frees. This
+                     * is what made tests ending in `exit(0)` leak all their
+                     * string/seq locals. */
+                    if (inner && inner->type == AST_FUNCTION_CALL && inner->value &&
+                        strcmp(inner->value, "exit") == 0) {
+                        emit_all_defers(gen);
+                    }
+                    /* A bare call-statement discards the call's value, so
+                     * heap-returning inline args must still be drained even
+                     * when the callee's declared return type is VOID or
+                     * unknown (e.g. `check(label, string.from_long(n), ...)`).
+                     * Signal that to the call codegen; the flag is captured
+                     * and cleared at the call entry, and reset here too so
+                     * it can never leak past this statement. */
+                    if (inner && inner->type == AST_FUNCTION_CALL) {
+                        gen->discard_call_value = 1;
+                    }
+                    /* Transient capturing-closure argument: a closure passed
+                     * to a parameter that neither stores nor returns it
+                     * (callback pattern, run(cb){ cb() }) is dead after the
+                     * call, so its heap env must be freed or it leaks. Find
+                     * the first non-trailing closure arg (trailing blocks are
+                     * inlined below, not passed by value) and, when its
+                     * parameter provably does not escape, emit the env-
+                     * draining call form. */
+                    ASTNode* cclos = NULL; int cclos_idx = -1;
+                    if (inner && inner->type == AST_FUNCTION_CALL && inner->value) {
+                        for (int ai = 0; ai < inner->child_count; ai++) {
+                            ASTNode* a = inner->children[ai];
+                            if (a && a->type == AST_CLOSURE &&
+                                !(a->value && strcmp(a->value, "trailing") == 0)) {
+                                cclos = a; cclos_idx = ai; break;
+                            }
+                        }
+                    }
+                    if (cclos && cclos_idx >= 0 &&
+                        callee_param_escapes_via_body(gen, inner->value,
+                                                      cclos_idx, 0) == 0) {
+                        emit_closure_env_drained_call(gen, inner, cclos);
+                        fprintf(gen->output, "\n");
+                    } else {
+                        generate_expression(gen, inner);
+                        fprintf(gen->output, ";\n");
+                    }
+                    gen->discard_call_value = 0;
                 }
 
                 // Trailing blocks for non-defer: emit closure body as inline statements after the call

@@ -3,8 +3,10 @@
 //
 //   string.strip_prefix(s, prefix) -> (rest, stripped)
 //       If `s` starts with `prefix`, returns the remainder and 1.
-//       Otherwise returns the original `s` and 0. No allocation
-//       when the prefix is not present.
+//       Otherwise returns a copy of `s` and 0. `rest` is ALWAYS an
+//       independently-owned heap string (the no-match path copies
+//       rather than borrowing `s`), so the caller can reclaim it
+//       unconditionally and `s` is never pinned by the wrapper.
 //
 //   string.copy(s) -> string
 //       Produces an independently-owned copy of `s`. Equivalent to

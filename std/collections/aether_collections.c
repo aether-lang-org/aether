@@ -112,7 +112,12 @@ int list_add_raw(ArrayList* list, void* item) {
  * its own ownership independently. */
 int list_add_string_owned(ArrayList* list, const void* item) {
     if (!list) return 0;
-    if (item) string_retain(item);
+    /* Ownership transfer, not a share: the codegen routes here only when
+     * `item` is a heap string escaping into the list (caller escape-marked,
+     * does not release), so the list adopts the caller's single reference.
+     * No string_retain — that would leave the value one refcount above what
+     * list_free can reclaim (a per-add leak once values are magic strings).
+     * The matching release is in list_free (owned_flags path). */
     /* Lazy-allocate the flags array on first owned-put. */
     if (!list->owned_flags) {
         if (list->capacity > 0) {
@@ -138,6 +143,36 @@ int list_add_string_owned(ArrayList* list, const void* item) {
             (size_t)list->capacity, sizeof(int));
     }
     if (list->owned_flags) list->owned_flags[slot] = 1;
+    return 1;
+}
+
+/* Layout-compatible view of the codegen's `_AeClosure` box (a
+ * heap-allocated { fn, env } pair from _aether_box_closure). Used so
+ * list_free can reclaim a boxed closure's captured environment as well
+ * as the box itself. The field order/types mirror the prologue typedef
+ * exactly; a function pointer and a data pointer are the same width on
+ * every target we build for. */
+typedef struct { void (*fn)(void); void* env; } AeClosureBox;
+
+/* Add a heap-allocated closure BOX the list owns (owned_flags == 2).
+ * Unlike a string value, the box also owns its captured `env`, so
+ * list_free frees env first, then the box. Routed from codegen when a
+ * `fn`-typed closure value is stored into a list (the fn -> ptr box
+ * coercion). */
+int list_add_closure_owned(ArrayList* list, void* box) {
+    if (!list) return 0;
+    if (!list->owned_flags && list->capacity > 0) {
+        list->owned_flags = (int*)aether_caps_calloc(
+            (size_t)list->capacity, sizeof(int));
+    }
+    int slot = list->size;
+    int ok = list_add_raw(list, box);
+    if (!ok) return 0;
+    if (!list->owned_flags && list->capacity > 0) {
+        list->owned_flags = (int*)aether_caps_calloc(
+            (size_t)list->capacity, sizeof(int));
+    }
+    if (list->owned_flags) list->owned_flags[slot] = 2;
     return 1;
 }
 
@@ -182,7 +217,13 @@ void list_free(ArrayList* list) {
             if (!list->owned_flags[i]) continue;
             void* it = list->items[i];
             if (!it) continue;
-            if (is_aether_string(it)) {
+            if (list->owned_flags[i] == 2) {
+                /* Owned closure box: reclaim the captured env, then the
+                 * box. env is NULL for a non-capturing closure (no-op). */
+                void* env = ((AeClosureBox*)it)->env;
+                if (env) free(env);
+                free(it);
+            } else if (is_aether_string(it)) {
                 string_release(it);
             } else {
                 free(it);
@@ -377,7 +418,15 @@ int map_put_raw(HashMap* map, const char* key, void* value) {
  * returning user-fn). Plain literals stay on map_put_raw. */
 int map_put_string_owned(HashMap* map, const char* key, const void* value) {
     if (!map || !key) return 0;
-    if (value) string_retain(value);
+    /* The codegen routes here only when `value` is a heap string that
+     * ESCAPES into the map — the caller is escape-marked and does NOT
+     * release its reference. So the map adopts the caller's single
+     * reference (ownership transfer); it must NOT string_retain, or the
+     * value would carry one refcount more than the map_free release can
+     * reclaim. Before the magic-string unification this retain was a
+     * silent no-op (values were plain char*); a magic value now makes
+     * the imbalance a per-put leak. The matching release lives in
+     * map_free / map_clear / the replace path below. */
 
     /* Replace path: walk the bucket. If the key exists, release
      * the previous value when it was previously owned, then store

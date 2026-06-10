@@ -60,12 +60,13 @@ void string_release(const void* str);
 void string_free(const void* str);  // Alias for release
 
 // String operations — accept both AetherString* and plain char*.
-// `string_concat` returns a plain char* payload (no AetherString
-// header). Use `string_concat_wrapped` instead when the inputs may
-// contain embedded NULs and you need length-aware downstream
-// behaviour — see #270 and docs/c-interop.md § AetherString
+// `string_concat` returns a magic AetherString* (refcounted,
+// length-aware, binary-safe) — the unified owned-heap representation.
+// Freed via string_release (dispatched by aether_heap_str_free on the
+// magic header). `string_concat_wrapped` is retained as an explicit
+// alias for the same contract. See docs/c-interop.md § AetherString
 // return-type contract.
-char* string_concat(const void* a, const void* b);
+AetherString* string_concat(const void* a, const void* b);
 AetherString* string_concat_wrapped(const void* a, const void* b);
 int string_length(const void* str);
 char string_char_at(const void* str, int index);
@@ -84,7 +85,7 @@ int string_index_of(const void* str, const char* substring);
 // is data-aware (handles AetherString with embedded NULs), the
 // needle is strlen-based.
 int string_index_of_from(const void* str, const char* substring, int start);
-char* string_substring(const void* str, int start, int end);
+AetherString* string_substring(const void* str, int start, int end);
 
 /* Length-aware sibling — caller supplies the source length explicitly.
  * Use when `str` arrives as a `string`-typed parameter at a function
@@ -92,7 +93,7 @@ char* string_substring(const void* str, int start, int end);
  * AetherString header) AND the content may contain embedded NULs.
  * The plain string_substring would call str_len() on the unwrapped
  * data and fall through to strlen, truncating at the first NUL. */
-char* string_substring_n(const void* str, int str_len_bytes, int start, int end);
+AetherString* string_substring_n(const void* str, int str_len_bytes, int start, int end);
 
 /* Identity helper documenting intent: in code that receives a
  * `string` parameter plus an explicit length, the explicit length
@@ -126,9 +127,9 @@ int string_index_of_from_n(const void* str, int known_length,
 // into packed-string record formats without routing through a
 // NUL-terminated literal. Always length 1, even for code=0.
 AetherString* string_from_char(int code);
-char* string_to_upper(const void* str);
-char* string_to_lower(const void* str);
-char* string_trim(const void* str);
+AetherString* string_to_upper(const void* str);
+AetherString* string_to_lower(const void* str);
+AetherString* string_trim(const void* str);
 
 // String array operations (for split)
 typedef struct {

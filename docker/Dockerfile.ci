@@ -21,6 +21,10 @@ RUN apt-get update && apt-get install -y \
     libreadline-dev \
     bc \
     mingw-w64 \
+    pkg-config \
+    libssl-dev \
+    zlib1g-dev \
+    libpcre2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /aether

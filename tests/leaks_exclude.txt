@@ -1,0 +1,10 @@
+# tests/leaks_exclude.txt — regression programs the macOS leaks(1) gate
+# cannot run, listed one per line ('#' and blank lines ignored).
+#
+# leaks(1) --atExit forks the target into its own process group and waits
+# for it to exit. A target that itself fork/exec's a child (os.run_capture
+# et al.) leaves leaks(1) waiting on the child group, so the run hangs
+# until the gate's per-test timeout fires. These programs are leak-checked
+# on Linux CI under Valgrind / ASan-LSan instead, which handle subprocess
+# spawns correctly.
+test_run_capture_status

@@ -47,9 +47,24 @@ slot_new() -> ptr {
 
 slot_set(p: ptr, str: string) {
     s = p as *Slot
+    // Raw-pointer (`p as *Slot`) struct fields are outside the codegen's
+    // heap-string field tracking — the program owns their lifetime. Free
+    // the previous packed value before overwriting, or the prior heap
+    // string leaks. string.free is magic-aware (a refcount release) and a
+    // safe no-op on a non-heap pointer.
+    string.free(s.packed)
     cp = string.copy(str)
     s.packed = cp
     s.n = 1
+}
+
+// Destructor for a raw-pointer Slot: free the owned packed string, then
+// the struct itself. Mirrors what a hand-written C teardown would do —
+// the codegen cannot auto-free fields reached through a raw cast.
+slot_free(p: ptr) {
+    s = p as *Slot
+    string.free(s.packed)
+    free(p)
 }
 
 slot_get(p: ptr) -> string {
@@ -106,7 +121,7 @@ main() {
     }
     println("  PASS 1: 21-byte cross-function setter/getter survives")
 
-    free(p)
+    slot_free(p)
 
     // Case 2: contents-match check — every byte in `got` should
     // equal the corresponding byte in `expected`. Confirms the
@@ -135,7 +150,7 @@ main() {
         i = i + 1
     }
     println("  PASS 2: 16-byte payload byte-for-byte preserved")
-    free(p2)
+    slot_free(p2)
 
     println("=== all cases passed ===")
 }

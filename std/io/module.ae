@@ -72,8 +72,13 @@ extern io_fd_open_read_tuple(path: string)  -> (int, string)
 extern io_fd_open_write_tuple(path: string) -> (int, string)
 extern io_fd_close_raw(fd: int) -> string
 extern io_fd_write_n(fd: int, data: string, length: int) -> int
-extern io_fd_read_n_tuple(fd: int, n: int) -> (ptr, int, string)
-extern io_fd_read_line_tuple(fd: int) -> (ptr, string)
+// Position 0 (the read buffer) is `@heap`: the C side returns a fresh
+// AetherString (string_new_with_length, "" on EOF/error) that the caller
+// owns and must release — without the annotation the destructured local
+// was never reclaimed, leaking one buffer per read. aether_heap_str_free
+// dispatches on the magic header (string_release here); never a literal.
+extern io_fd_read_n_tuple(fd: int, n: int) -> (string @heap, int, string)
+extern io_fd_read_line_tuple(fd: int) -> (string @heap, string)
 
 // string_concat for owned-copy duplication
 extern string_concat(a: string, b: string) -> string
@@ -235,7 +240,11 @@ fd_write_n(fd: int, data: string, length: int) -> int {
 //   - On error: ("", 0, "<reason>").
 // `bytes` is a refcounted AetherString carrying the explicit byte
 // count, so embedded NULs survive (binary-safe).
-fd_read_n(fd: int, n: int) -> (ptr, int, string) {
+// Inferred return type (`-> {`) so the extern's `@heap` tuple flag on
+// position 0 propagates to callers' destructure sites — an explicit
+// tuple type can't carry the per-position annotation. Mirrors std.fs's
+// read_binary / realpath wrappers.
+fd_read_n(fd: int, n: int) -> {
     return io_fd_read_n_tuple(fd, n)
 }
 
@@ -246,6 +255,6 @@ fd_read_n(fd: int, n: int) -> (ptr, int, string) {
 //   - EOF mid-line: returns the partial line and ("", "") — server-
 //     side dump streams sometimes end without a trailing '\n'.
 //   - Read error: ("", "<reason>").
-fd_read_line(fd: int) -> (ptr, string) {
+fd_read_line(fd: int) -> {
     return io_fd_read_line_tuple(fd)
 }
