@@ -570,20 +570,66 @@ static int win_run(const char* cmd_str, int quiet) {
     strncpy(buf, cmd_str, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
 
+    // Tokenize the command string into argv tokens for _spawnvp. Quoted
+    // segments map to ONE token even when they contain spaces.
+    //
+    // toks[0] (the program name) is unquoted: _spawnvp wants a bare path.
+    // toks[1..] are passed to the child verbatim — but MSVCRT's _spawnvp
+    // joins them with single spaces to build the child's command line
+    // WITHOUT any quoting of its own (documented MS behaviour). So a
+    // token containing a space, if left bare in toks[], reaches the
+    // child as multiple argv entries.  Wrap each non-program token that
+    // contains a space in literal `"..."` so the child's CRT
+    // command-line parser re-fuses it into one arg.  (Args that
+    // themselves contain a `"` are not handled — the caller's quoting
+    // convention at the cmd_str layer already doesn't support those.)
     char* toks[512];
     int n = 0;
+    // Backing store for re-quoted tokens. Sized 2× the input buffer so a
+    // worst-case input where every byte is part of a quoted token still
+    // fits (each token grows by 2 bytes of `"..."` wrapper).
+    char qbuf[32768];
+    int qoff = 0;
     for (char* p = buf; *p && n < 511; ) {
         while (*p == ' ') p++;
         if (!*p) break;
+        char* tok_start;
+        int had_quotes = 0;
         if (*p == '"') {
+            had_quotes = 1;
             p++;
-            toks[n++] = p;
+            tok_start = p;
             while (*p && *p != '"') p++;
             if (*p) *p++ = '\0';
         } else {
-            toks[n++] = p;
+            tok_start = p;
             while (*p && *p != ' ') p++;
             if (*p) *p++ = '\0';
+        }
+        // For the program name (toks[0]) and tokens with no spaces,
+        // pass-through. For other tokens, store a re-quoted copy so
+        // _spawnvp's space-join produces a cmdline the child can re-
+        // tokenize correctly.
+        int needs_quoting = 0;
+        if (n > 0 && (had_quotes || strchr(tok_start, ' ') != NULL)) {
+            needs_quoting = 1;
+        }
+        if (needs_quoting) {
+            int len = (int)strlen(tok_start);
+            if (qoff + len + 3 > (int)sizeof(qbuf)) {
+                // Out of re-quote space — pass through and hope for the best.
+                toks[n++] = tok_start;
+            } else {
+                char* dst = qbuf + qoff;
+                dst[0] = '"';
+                memcpy(dst + 1, tok_start, len);
+                dst[len + 1] = '"';
+                dst[len + 2] = '\0';
+                toks[n++] = dst;
+                qoff += len + 3;
+            }
+        } else {
+            toks[n++] = tok_start;
         }
     }
     toks[n] = NULL;
