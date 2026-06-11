@@ -51,6 +51,10 @@
 extern char** environ;
 #endif
 
+/* ae_stat_t / ae_stat — UCRT-static-link-safe stat wrapper. Shared with
+ * tools/ae_help.c so both translation units use the same shim. */
+#include "ae_compat.h"
+
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -389,10 +393,10 @@ static unsigned long long compute_cache_key(const char* ae_file,
     int pos = 0;
     pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, "%016llx", src_hash);
 
-    struct stat st;
-    if (stat(tc.compiler, &st) == 0)
+    ae_stat_t st;
+    if (ae_stat(tc.compiler, &st) == 0)
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
-    if (tc.has_lib && stat(tc.lib, &st) == 0)
+    if (tc.has_lib && ae_stat(tc.lib, &st) == 0)
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
 
     if (extra_files && extra_files[0]) {
@@ -430,8 +434,8 @@ static unsigned long long compute_cache_key(const char* ae_file,
     for (int i = 0; i < tc.lib_dir_count; i++) {
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
                         ":lib[%d]=%s", i, tc.lib_dirs[i]);
-        struct stat lst;
-        if (stat(tc.lib_dirs[i], &lst) == 0) {
+        ae_stat_t lst;
+        if (ae_stat(tc.lib_dirs[i], &lst) == 0) {
             pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
                             ":lmt=%lld", (long long)lst.st_mtime);
         }
@@ -456,8 +460,8 @@ static unsigned long long compute_cache_key(const char* ae_file,
                 if (!interesting) continue;
                 char full[1024];
                 snprintf(full, sizeof(full), "%s/%s", tc.lib_dirs[i], name);
-                struct stat est;
-                if (stat(full, &est) == 0) {
+                ae_stat_t est;
+                if (ae_stat(full, &est) == 0) {
                     /* Hash name + resolved-target mtime + size into a
                      * single rolling FNV. Hashing keeps the key_buf
                      * bounded regardless of entry count; mtime + size
@@ -678,8 +682,8 @@ static bool is_safe_shell_arg(const char* s) {
 }
 
 static bool dir_exists(const char* path) {
-    struct stat st;
-    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+    ae_stat_t st;
+    return ae_stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 static void mkdirs(const char* path) {
@@ -717,8 +721,8 @@ static int copy_file(const char* src, const char* dst) {
     fclose(out);
 #ifndef _WIN32
     if (ok) {
-        struct stat src_st;
-        if (stat(src, &src_st) == 0) {
+        ae_stat_t src_st;
+        if (ae_stat(src, &src_st) == 0) {
             chmod(dst, src_st.st_mode & 07777);
         }
     }
@@ -844,8 +848,8 @@ static int walk_dirs_emit_includes(const char* root, char* out, size_t out_size,
             (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) continue;
         char child[1024];
         snprintf(child, sizeof(child), "%s/%s", root, name);
-        struct stat st;
-        if (stat(child, &st) != 0) continue;
+        ae_stat_t st;
+        if (ae_stat(child, &st) != 0) continue;
         if (!S_ISDIR(st.st_mode)) continue;
         if (!walk_dirs_emit_includes(child, out, out_size, pos)) {
             closedir(d);
@@ -871,12 +875,12 @@ static void discover_toolchain(void) {
     // Path-construction note: we compose the runtime probe as
     // `<parent_dir>/runtime` (where parent_dir = exe_dir with the last
     // component stripped), NOT `<exe_dir>/../runtime`. Windows native
-    // stat() does NOT canonicalise mid-path `..` reliably on MSYS2's
+    // ae_stat() does NOT canonicalise mid-path `..` reliably on MSYS2's
     // mingw-w64 build — `D:\a\aether\aether\build\..\runtime` was
-    // failing stat() in CI even though the directory exists, because
+    // failing ae_stat() in CI even though the directory exists, because
     // the kernel was being handed a literal path with `..` in the
     // middle and mixed slashes. Same fix for `tc.root`. POSIX
-    // tolerates mid-path `..` in stat(), so this is a no-op there.
+    // tolerates mid-path `..` in ae_stat(), so this is a no-op there.
     if (found_exe_dir) {
         char candidate[1024];
         snprintf(candidate, sizeof(candidate), "%s/aetherc" EXE_EXT, exe_dir);
@@ -908,6 +912,20 @@ static void discover_toolchain(void) {
         size_t len = strlen(home_clean);
         while (len > 0 && (home_clean[len-1] == '\r' || home_clean[len-1] == '\n' || home_clean[len-1] == ' '))
             home_clean[--len] = '\0';
+#ifdef _WIN32
+        // Normalize Windows backslash separators to forward slashes. The
+        // rest of this function concatenates "%s/..." onto AETHER_HOME,
+        // producing mixed-separator paths like
+        // `C:\Users\foo\.aether\v0.232.0/bin/aetherc.exe` when the env
+        // var uses native backslashes. Windows native _stat64 accepts
+        // mixed separators in most cases, but some deeper probe paths
+        // (current/, share/aether/, lib/aether/libaether.a) silently
+        // fail in ways that drop AETHER_HOME without surfacing a hint.
+        // Normalising up front means every downstream path is uniform.
+        for (char* p = home_clean; *p; p++) {
+            if (*p == '\\') *p = '/';
+        }
+#endif
         home = home_clean;
     }
     if (home && home[0] && dir_exists(home)) {
@@ -980,7 +998,16 @@ static void discover_toolchain(void) {
             if (dir_exists(share_check) || path_exists(lib_check)) {
                 goto found_root;
             }
-            // AETHER_HOME is incomplete — fall through to other strategies
+            fprintf(stderr,
+                "Warning: AETHER_HOME=%s has bin/aetherc%s but neither share/aether/ nor lib/aether/libaether.a — installation is incomplete.\n",
+                home, EXE_EXT);
+            fprintf(stderr, "Fix with: ae version install <version> or ./install.sh\n");
+            // Fall through to try other strategies
+        } else {
+            fprintf(stderr,
+                "Warning: AETHER_HOME=%s set, but no bin/aetherc%s found there — falling through to other strategies.\n",
+                home, EXE_EXT);
+            fprintf(stderr, "  (Check the path, including separators; on Windows, AETHER_HOME must point at the install root.)\n");
         }
     }
 
@@ -1172,7 +1199,6 @@ found_root:
                 "%s/runtime/scheduler/multicore_scheduler.c "
                 "%s/runtime/scheduler/scheduler_optimizations.c "
                 "%s/runtime/config/aether_optimization_config.c "
-                "%s/runtime/memory/memory.c "
                 "%s/runtime/memory/aether_arena.c "
                 "%s/runtime/memory/aether_pool.c "
                 "%s/runtime/memory/aether_memory_stats.c "
@@ -1214,7 +1240,7 @@ found_root:
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
-                tc.root, tc.root, tc.root);
+                tc.root, tc.root);
         }
     } else {
         // Installed layout: headers in include/aether/, source in
@@ -1247,7 +1273,6 @@ found_root:
                 "%s/runtime/scheduler/multicore_scheduler.c "
                 "%s/runtime/scheduler/scheduler_optimizations.c "
                 "%s/runtime/config/aether_optimization_config.c "
-                "%s/runtime/memory/memory.c "
                 "%s/runtime/memory/aether_arena.c "
                 "%s/runtime/memory/aether_pool.c "
                 "%s/runtime/memory/aether_memory_stats.c "
@@ -1289,7 +1314,7 @@ found_root:
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
-                src, src, src);
+                src, src);
         }
     }
 }
@@ -1447,8 +1472,8 @@ static bool ensure_gcc_windows(void) {
     snprintf(tools_bin, sizeof(tools_bin), "%s\\mingw64\\bin",             tools_dir);
     snprintf(tools_gcc, sizeof(tools_gcc), "%s\\mingw64\\bin\\gcc.exe",    tools_dir);
 
-    struct stat st;
-    if (stat(tools_gcc, &st) == 0) goto found;
+    ae_stat_t st;
+    if (ae_stat(tools_gcc, &st) == 0) goto found;
 
     // 3. Auto-download (one-time, ~250 MB).
     printf("[ae] GCC not found. Downloading MinGW-w64 GCC (~250 MB) -- one-time setup...\n");
@@ -1483,7 +1508,7 @@ static bool ensure_gcc_windows(void) {
             "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\"", ps_path);
         int ret = system(run_ps);
         remove(ps_path);
-        if (ret != 0 || stat(tools_gcc, &st) != 0) goto fail;
+        if (ret != 0 || ae_stat(tools_gcc, &st) != 0) goto fail;
     }
 
 found:
@@ -2104,7 +2129,6 @@ static int build_wasm_cmd(char* cmd, size_t size,
         "runtime/scheduler/aether_scheduler_coop.c",
         "runtime/scheduler/scheduler_optimizations.c",
         "runtime/config/aether_optimization_config.c",
-        "runtime/memory/memory.c",
         "runtime/memory/aether_arena.c",
         "runtime/memory/aether_pool.c",
         "runtime/memory/aether_memory_stats.c",
@@ -6658,8 +6682,8 @@ static int cmd_cache(int argc, char** argv) {
             if (fd.cFileName[0] == '.') continue;
             char full[1024];
             snprintf(full, sizeof(full), "%s\\%s", cache_path, fd.cFileName);
-            struct stat st;
-            if (stat(full, &st) == 0) { total_bytes += st.st_size; count++; }
+            ae_stat_t st;
+            if (ae_stat(full, &st) == 0) { total_bytes += st.st_size; count++; }
         } while (FindNextFileA(h, &fd));
         FindClose(h);
         printf("Cache: %d build(s), %.1f MB\nLocation: %s\n",
@@ -6679,8 +6703,8 @@ static int cmd_cache(int argc, char** argv) {
             if (entry->d_name[0] == '.') continue;
             char full[1024];
             snprintf(full, sizeof(full), "%s/%s", cache_path, entry->d_name);
-            struct stat st;
-            if (stat(full, &st) == 0) { total_bytes += st.st_size; count++; }
+            ae_stat_t st;
+            if (ae_stat(full, &st) == 0) { total_bytes += st.st_size; count++; }
         }
         closedir(d);
         printf("Cache: %d build(s), %.1f MB\nLocation: %s\n",

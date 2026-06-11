@@ -14,6 +14,18 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Three Windows source-build regressions in `tools/ae.c`** that combined to break a clean MSYS2 / WinLibs UCRT build from source on Windows. All three surfaced while installing the toolchain into an aetrade downstream project; the workarounds previously required (empty `runtime/memory/memory.c` stub, `stat_shim.c` forwarder, forward-slash-only `AETHER_HOME`) are no longer needed.
+
+  1. **Dangling `runtime/memory/memory.c` in the runtime-source list.** When the allocator was split into `aether_arena.c` / `aether_pool.c` / `aether_batch.c` / `aether_memory_stats.c` / `aether_arena_optimized.c`, the original `runtime/memory/memory.c` was removed but three entries in `tools/ae.c` still referenced it: the build path (≈ line 1175), the run path (≈ line 1250), and the `wasm_runtime_files` array (≈ line 2107). On a clean install every `ae build` failed with `cc1.exe: fatal error: <prefix>/share/aether/runtime/memory/memory.c: No such file or directory`. Fix: dropped the dangling entry from all three lists and removed one matching `%s` arg from each `snprintf` to keep format and args in sync.
+
+  2. **`ae` failed to static-link on WinLibs UCRT with `undefined reference to stat64i32`.** UCRT's `<sys/stat.h>` redirects POSIX `stat()` to the asm symbol `stat64i32` (via `__MINGW_ASM_CALL`), which no shipped static library provides — `gcc -static tools/ae.c …` fails at link. The runtime sidesteps this by calling `_stat64` directly on `_WIN32`; `tools/ae.c` was using bare `stat()` and `struct stat`. Fix: introduced `ae_stat_t` + `ae_stat()` typedef pair — `struct _stat64` / `_stat64` on `_WIN32`, identity on POSIX — and ported every call site in the file to use them. Field names (`st_mode` / `st_size` / `st_mtime`) match across both backends; the `(long long)st_mtime` casts already in place absorb the `__time64_t` widening on Windows.
+
+  3. **`AETHER_HOME` with backslash separators was silently ignored on Windows**, falling through to whichever older install was on `PATH`. The downstream code concatenates `"%s/..."` onto the env-var value, so a native-Windows `C:\Users\...\\.aether\\v0.232.0` became `C:\Users\...\\.aether\\v0.232.0/bin/aetherc.exe` — a mixed-separator path that one of the existence probes silently rejected, dropping the user-specified toolchain without explanation. Fix: on `_WIN32`, normalise `\` to `/` in `AETHER_HOME` immediately after the existing trailing-whitespace strip, so every downstream path is uniformly forward-slashed. Also added an explicit `Warning: AETHER_HOME=… set, but no bin/aetherc found there — falling through to other strategies.` for any future case where the variable points somewhere the toolchain can't be found, so the silent-fallback failure mode the user originally hit becomes visible.
+
 ## [0.233.0]
 
 ### Fixed

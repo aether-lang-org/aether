@@ -33,6 +33,7 @@
  */
 
 #include "ae_help.h"
+#include "ae_compat.h"   /* ae_stat_t / ae_stat — UCRT-static-link-safe stat. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -283,8 +284,8 @@ int ae_help_is_script_target(const char* arg) {
     size_t n = strlen(arg);
     if (n < 4) return 0;
     if (strcmp(arg + n - 3, ".ae") != 0) return 0;
-    struct stat st;
-    if (stat(arg, &st) != 0) return 0;
+    ae_stat_t st;
+    if (ae_stat(arg, &st) != 0) return 0;
     return S_ISREG(st.st_mode) ? 1 : 0;
 }
 
@@ -602,8 +603,8 @@ static int resolve_std_root(char* out, size_t out_size) {
                 /* Truncated — `cur` is too long to be a real repo root. */
                 break;
             }
-            struct stat st;
-            if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
+            ae_stat_t st;
+            if (ae_stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
                 safe_strncpy(out, cur, out_size);
                 return 0;
             }
@@ -689,8 +690,8 @@ static int load_stdlib_export_catalog(ExportEntry* out, int max) {
         char mod_path[AE_HELP_PATH_LEN];
         if (path_format(mod_path, sizeof(mod_path), "%s%c%s%cmodule.ae",
                         std_dir, PATH_SEP, entry->d_name, PATH_SEP) != 0) continue;
-        struct stat st;
-        if (stat(mod_path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        ae_stat_t st;
+        if (ae_stat(mod_path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
 
         char mod_name[AE_HELP_NAME_LEN];
         /* mod_name is small (64 bytes) and d_name can be NAME_MAX (255).
@@ -724,8 +725,8 @@ static int load_lib_export_catalog(ExportEntry* out, int max, int already) {
             if (path_format(mod_path, sizeof(mod_path), "%s%c%s%cmodule.ae",
                             g_lib_dirs[li], PATH_SEP, entry->d_name,
                             PATH_SEP) != 0) continue;
-            struct stat st;
-            if (stat(mod_path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            ae_stat_t st;
+            if (ae_stat(mod_path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
             n = parse_module_exports(mod_path, entry->d_name, out, max, n);
         }
         closedir(d);
@@ -760,7 +761,7 @@ static int load_lib_export_catalog(ExportEntry* out, int max, int already) {
  *   6. Bare `aetherc` for $PATH resolution as a final fallback.
  *
  * On Windows the `.exe` variant is checked BEFORE the no-suffix one
- * for every candidate. Some MSYS2 stat() implementations accept
+ * for every candidate. Some MSYS2 ae_stat() implementations accept
  * either form, but popen() invokes the literal name and Windows
  * requires `.exe`; checking `.exe` first is the only reliable shape. */
 static int find_aetherc(char* out, size_t out_size) {
@@ -773,8 +774,8 @@ static int find_aetherc(char* out, size_t out_size) {
     /* 1. Caller-explicit override. */
     const char* env_aetherc = getenv("AETHERC");
     if (env_aetherc && *env_aetherc) {
-        struct stat st;
-        if (stat(env_aetherc, &st) == 0) {
+        ae_stat_t st;
+        if (ae_stat(env_aetherc, &st) == 0) {
             safe_strncpy(out, env_aetherc, out_size);
             return 0;
         }
@@ -787,8 +788,8 @@ static int find_aetherc(char* out, size_t out_size) {
             char probe[AE_HELP_PATH_LEN];
             int w = snprintf(probe, sizeof(probe), "%s/bin/aetherc%s", aether_home, exts[e]);
             if (w < 0 || (size_t)w >= sizeof(probe)) continue;
-            struct stat st;
-            if (stat(probe, &st) == 0) {
+            ae_stat_t st;
+            if (ae_stat(probe, &st) == 0) {
                 safe_strncpy(out, probe, out_size);
                 return 0;
             }
@@ -836,8 +837,8 @@ static int find_aetherc(char* out, size_t out_size) {
             char probe[AE_HELP_PATH_LEN];
             int w = snprintf(probe, sizeof(probe), "%s/aetherc%s", ae_dir, exts[e]);
             if (w < 0 || (size_t)w >= sizeof(probe)) continue;
-            struct stat st;
-            if (stat(probe, &st) == 0) {
+            ae_stat_t st;
+            if (ae_stat(probe, &st) == 0) {
                 safe_strncpy(out, probe, out_size);
                 return 0;
             }
@@ -849,8 +850,8 @@ static int find_aetherc(char* out, size_t out_size) {
         char probe[AE_HELP_PATH_LEN];
         int w = snprintf(probe, sizeof(probe), "./build/aetherc%s", exts[e]);
         if (w < 0 || (size_t)w >= sizeof(probe)) continue;
-        struct stat st;
-        if (stat(probe, &st) == 0) {
+        ae_stat_t st;
+        if (ae_stat(probe, &st) == 0) {
             safe_strncpy(out, probe, out_size);
             return 0;
         }
@@ -859,8 +860,8 @@ static int find_aetherc(char* out, size_t out_size) {
     /* 5. POSIX install dirs. */
     const char* posix_dirs[] = { "/usr/local/bin/aetherc", "/usr/bin/aetherc", NULL };
     for (int i = 0; posix_dirs[i]; i++) {
-        struct stat st;
-        if (stat(posix_dirs[i], &st) == 0) {
+        ae_stat_t st;
+        if (ae_stat(posix_dirs[i], &st) == 0) {
             safe_strncpy(out, posix_dirs[i], out_size);
             return 0;
         }
@@ -1675,8 +1676,8 @@ static int find_help_md_path(const char* import_name, char* out, size_t out_size
                     root, PATH_SEP, dir, PATH_SEP, basename) != 0) {
         return -1;
     }
-    struct stat st;
-    if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
+    ae_stat_t st;
+    if (ae_stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
         safe_strncpy(out, probe, out_size);
         return 0;
     }
@@ -1691,7 +1692,7 @@ static int find_help_md_path(const char* import_name, char* out, size_t out_size
                         basename) != 0) {
             continue;
         }
-        if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
+        if (ae_stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
             safe_strncpy(out, probe, out_size);
             return 0;
         }
@@ -2040,8 +2041,8 @@ static int llm_escalate(const Finding* findings, int count,
                          const SourceFile* sf, const char* weights) {
 #ifdef AETHER_ENABLE_LLM
     /* Validate weights file exists before we spend any cycles. */
-    struct stat st;
-    if (stat(weights, &st) != 0 || !S_ISREG(st.st_mode)) {
+    ae_stat_t st;
+    if (ae_stat(weights, &st) != 0 || !S_ISREG(st.st_mode)) {
         fprintf(stderr, "ae help --llm: weights file not found: %s\n", weights);
         return 1;
     }
