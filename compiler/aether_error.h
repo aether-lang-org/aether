@@ -35,6 +35,11 @@ typedef struct {
 
 // Error reporting functions
 void aether_error_init(const char* filename, const char* source);
+// Save/restore the active source context (filename + buffer) without
+// touching the error/warning counts — used to render an imported
+// module's parse errors against the module's own file and source (#646).
+void aether_error_get_source(const char** out_filename, const char** out_source);
+void aether_error_set_source(const char* filename, const char* source);
 void aether_error_report(AetherError* error);
 void aether_warning_report(AetherError* warning);
 

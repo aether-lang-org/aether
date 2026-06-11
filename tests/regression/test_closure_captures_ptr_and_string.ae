@@ -1,0 +1,45 @@
+// Regression (#624): a closure capturing BOTH a `ptr`-typed and a
+// `string`-typed variable from the enclosing scope, and using both
+// (including string operations) inside the body, must run correctly.
+//
+// Historically this segfaulted before producing any output (the
+// generated closure-env handling mishandled the mixed ptr+string
+// capture set). The closure-env rework done during leak hardening
+// resolved it; this test pins the behaviour so it can't regress.
+//
+// Covered shapes: a string op on the captured string, the captured
+// ptr, and a heap-allocating string op (concat) all inside one closure
+// body. Reaching the final PASS line (no crash) IS the assertion.
+
+import std.string
+
+extern exit(code: int)
+
+make_ptr() -> ptr { return 0 }
+run(cb: fn) { cb() }
+
+main() {
+    println("=== test_closure_captures_ptr_and_string ===")
+
+    srv = make_ptr()       // ptr capture
+    msg = "ok"             // string capture
+
+    run() callback {
+        if srv != 0 {
+            println("  FAIL: captured ptr corrupted")
+            exit(1)
+        }
+        if string.equals(msg, "ok") != 1 {
+            println("  FAIL: captured string corrupted")
+            exit(1)
+        }
+        combined = string.concat(msg, "-tail")   // heap op on captured string
+        if string.equals(combined, "ok-tail") != 1 {
+            println("  FAIL: concat on captured string=${combined}")
+            exit(1)
+        }
+    }
+
+    println("  PASS: closure captured ptr + string together")
+    println("=== test_closure_captures_ptr_and_string passed ===")
+}

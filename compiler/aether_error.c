@@ -81,6 +81,25 @@ void aether_error_init(const char* filename, const char* source) {
     warning_count_global = 0;
 }
 
+// Read the active source context (filename + buffer) without disturbing
+// it or the error/warning counts. Paired with aether_error_set_source to
+// save/restore the context across a nested parse — e.g. parsing an
+// imported module, whose diagnostics must name the module's own file and
+// render from its own source buffer, not the importing file's (#646).
+void aether_error_get_source(const char** out_filename, const char** out_source) {
+    if (out_filename) *out_filename = current_filename;
+    if (out_source)   *out_source   = current_source;
+}
+
+// Re-point the active source context. Unlike aether_error_init this does
+// NOT reset the error/warning counts, so swapping in a module's source
+// for the duration of its parse and swapping the caller's back afterward
+// preserves the running totals across the whole compilation (#646).
+void aether_error_set_source(const char* filename, const char* source) {
+    current_filename = filename;
+    current_source = source;
+}
+
 // Get a specific line from source code
 static const char* get_line(const char* source, int line_num, int* line_length) {
     if (!source) return NULL;
