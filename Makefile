@@ -93,6 +93,19 @@ else
     endif
 endif
 
+# MinGW / MSYS2 (native Windows): bind the printf family to the
+# C99-conformant __mingw_* implementations instead of legacy MSVCRT.
+# MSVCRT mishandles the C99 conversions we emit (%lld / %llu / %zu / %g)
+# and makes vsnprintf(NULL, 0, ...) return -1 instead of the would-be
+# length — the latter breaks the two-pass sizing in the generated
+# string-interpolation helper, yielding empty interpolated strings
+# (#681). The generated `.c` also self-defines this before <stdio.h>;
+# setting it here additionally covers the compiler, runtime, and stdlib
+# translation units (which use snprintf/vsnprintf in os/json/etc.).
+ifdef IS_WINDOWS
+EXTRA_CFLAGS += -D__USE_MINGW_ANSI_STDIO=1
+endif
+
 # Optional OpenSSL detection (enables HTTPS client). Probes pkg-config;
 # falls back silently if OpenSSL isn't installed — the HTTP client still
 # works for `http://` URLs and returns a clean error for `https://`.

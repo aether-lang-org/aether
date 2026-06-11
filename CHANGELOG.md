@@ -29,6 +29,35 @@ notes to be skipped or clobbered (the failure modes documented in
   post-typecheck AST (no code generation), peer to `--emit=ast`. Makes
   the config-IS-code pitch concrete: operators can ask the compiler what
   their script declares without reading generated C.
+
+## [0.238.0]
+
+### Fixed
+
+- **Native Windows (MinGW64): `${...}` string interpolation no longer
+  prints empty** (#681). On MINGW64 the C runtime's printf family bound
+  to the legacy MSVCRT implementations, which (a) make
+  `vsnprintf(NULL, 0, …)` return `-1` instead of the would-be length —
+  collapsing the two-pass sizing in the generated `_aether_interp`
+  helper to a zero-byte buffer — and (b) mishandle the C99 conversions
+  Aether emits (`%lld`/`%llu`/`%zu`/`%g`). Both the generated translation
+  unit (as its first line, before any header) and the Makefile now define
+  `__USE_MINGW_ANSI_STDIO=1`, binding the printf family to the
+  C99-conformant `__mingw_*` implementations. No-op off MinGW.
+
+### Added
+
+- **`std.json`: terse value builder + encoder** (#628). The value
+  constructors, object/array mutators, and serializer already existed but
+  composing them was verbose; `json.obj()`, `json.arr()`, `json.str()`,
+  `json.num()`, `json.boolean()`, `json.null_value()`, `json.set()`,
+  `json.push()`, and `json.encode()` give the Go-style
+  build-a-tree-then-encode shape so JSON responses no longer have to be
+  hand-concatenated (with the attendant missing-comma / unescaped-quote
+  hazards — escaping is handled by the encoder). Thin aliases over the
+  existing API; the `create_*` / `object_set` / `array_add` / `stringify`
+  names remain.
+
 ## [0.237.0]
 
 ### Added
