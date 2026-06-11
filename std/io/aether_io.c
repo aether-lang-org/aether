@@ -203,7 +203,16 @@ char* io_getenv(const char* name) {
     if (!name) return NULL;
     const char* value = getenv(name);
     if (!value) return NULL;
-    return strdup(value);
+    /* Cap-aware (#462): gate the allocation against the memory cap, same
+     * caller-owned-return contract as file_read_all_raw above — the
+     * caller frees with plain libc free(), so the counter drifts up on
+     * this cold path. The gate is fail-safe: a plugin accumulating env
+     * copies is denied once it would cross the cap, never allowed past. */
+    size_t n = strlen(value);
+    char* out = (char*)aether_caps_malloc(n + 1);
+    if (!out) return NULL;
+    memcpy(out, value, n + 1);
+    return out;
 }
 
 int io_setenv_raw(const char* name, const char* value) {
@@ -277,7 +286,9 @@ char* io_errno_message_raw(void) {
     const char* m = strerror(errno);
     if (!m) m = "unknown error";
     size_t n = strlen(m);
-    char* out = (char*)malloc(n + 1);
+    /* Cap-aware (#462): gate via the resource cap, caller-owned-return
+     * contract (libc free, fail-safe upward drift) — same as io_getenv. */
+    char* out = (char*)aether_caps_malloc(n + 1);
     if (out) memcpy(out, m, n + 1);
     return out;
 }

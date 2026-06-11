@@ -19,21 +19,29 @@ notes to be skipped or clobbered (the failure modes documented in
 ### Changed
 
 - **Resource-cap accounting extended to `std.bytes`, `std.config`, and
-  `std.io`'s `FileInfo`** (#462, T2 caps audit). Their internal-lifetime
-  allocations now route through `aether_caps_malloc/realloc/free` so a
-  sandboxed plugin can't inflate them past the configured memory cap —
-  most importantly `std.bytes`, whose growable buffer is driven by a
-  caller-chosen index. Each conversion is drift-free: the matching free
-  always knows the exact size (the bytes buffer's `capacity` field, a
-  `dup_str`'d config string's `strlen+1`, or `sizeof` a struct), so the
-  cap counter returns exactly to baseline after create + grow + free —
-  locked in by a new `caps_bytes_accounting_balances` unit test. The
-  caller-owned-return strings (`io.getenv`, errno messages, fs/os path
-  and env results) are deliberately left on libc allocation: they are
-  freed in Aether-land via a non-cap-aware path, so cap-routing their
-  alloc without a matching credited free would drift the counter;
-  correct handling is a migration to cap-accounted `AetherString`
-  returns, tracked as the remaining tail of #462.
+  `std.io`** (#462, T2 caps audit), following the cap-gating pattern
+  established in #343/#463. Plugin-reachable allocations now route through
+  `aether_caps_malloc` so a sandboxed plugin can't allocate past the
+  configured memory cap.
+  - **Internal-lifetime** allocations (`std.bytes`' growable buffer +
+    struct — most important, since its size is driven by a caller-chosen
+    index; `std.config` entries/strings; `std.io`'s `FileInfo`) are
+    drift-free: the matching `aether_caps_free` always knows the exact
+    size (the bytes buffer's `capacity` field, a `dup_str`'d string's
+    `strlen+1`, or `sizeof`), so the counter returns exactly to baseline
+    after create + grow + free — locked in by a new
+    `caps_bytes_accounting_balances` unit test.
+  - **Caller-owned-return** allocations (`io.getenv`, errno messages) are
+    cap-*gated* at allocation but freed via libc in Aether-land, so the
+    counter drifts up on that cold path — the same documented,
+    intentional trade-off as `file_read_all_raw` (#343). The drift is
+    fail-safe: a plugin is denied once it would cross the cap, never
+    allowed past it.
+  - The fs/os `wchar_t`/path sweep is **intentionally not** part of this
+    change: those are bounded-size, defense-in-depth, and largely
+    Windows-only (untestable off-Windows), so the effort/risk outweighs
+    the value now that the unbounded (#463) and attacker-inflatable
+    (`std.bytes`) sites are covered.
 
 ## [0.233.0]
 
