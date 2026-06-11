@@ -75,16 +75,19 @@ int string_compare(const void* a, const void* b);
 
 // String methods — accept both AetherString* and plain char*
 // Return plain char* (caller owns memory, free with free())
-int string_starts_with(const void* str, const char* prefix);
-int string_ends_with(const void* str, const char* suffix);
-int string_contains(const void* str, const char* substring);
-int string_index_of(const void* str, const char* substring);
+// `prefix` / `suffix` accept either AetherString* or plain const char*
+// (binary-safe + handles the mixed-representation hazard at the extern
+// boundary — the #297 auto-unwrap skips `string_*`-prefixed externs).
+int string_starts_with(const void* str, const void* prefix);
+int string_ends_with(const void* str, const void* suffix);
+int string_contains(const void* str, const void* substring);
+int string_index_of(const void* str, const void* substring);
 // Like string_index_of but starts scanning at byte offset `start`.
 // Returns the absolute offset of the hit (not relative to `start`),
 // or -1. Same binary-safety split as string_index_of: the haystack
 // is data-aware (handles AetherString with embedded NULs), the
 // needle is strlen-based.
-int string_index_of_from(const void* str, const char* substring, int start);
+int string_index_of_from(const void* str, const void* substring, int start);
 AetherString* string_substring(const void* str, int start, int end);
 
 /* Length-aware sibling — caller supplies the source length explicitly.
@@ -137,7 +140,7 @@ typedef struct {
     size_t count;
 } AetherStringArray;
 
-AetherStringArray* string_split(const void* str, const char* delimiter);
+AetherStringArray* string_split(const void* str, const void* delimiter);
 int string_array_size(AetherStringArray* arr);
 const char* string_array_get(AetherStringArray* arr, int index);
 void string_array_free(AetherStringArray* arr);
@@ -154,7 +157,7 @@ void string_array_free(AetherStringArray* arr);
  * to keep this header free of a layering dependency on
  * aether_stringseq.h; callers cast to `StringSeq*` (or Aether-side
  * declared as `*StringSeq`). NULL on OOM or NULL inputs. */
-void* string_split_to_seq(const void* str, const char* delimiter);
+void* string_split_to_seq(const void* str, const void* delimiter);
 
 // Conversion
 const char* string_to_cstr(const void* str);
@@ -257,6 +260,11 @@ AetherString* string_format_list(const char* fmt, void* args);
 // `*` / `?` / `[…]` do not match `/`. Returns 1 on match, 0 on
 // no-match, -1 on glob-syntax error (unmatched bracket).
 // Section A.2 of aether_changes_needed.md.
-int string_glob_match_raw(const char* pattern, const char* s, int flags);
+// `pattern` and `s` accept either a magic AetherString* or a plain
+// const char* — dispatched internally via str_data, matching the
+// rest of the string_* family. Required because the call-site #297
+// auto-unwrap skips string_*-prefixed externs, so the args arrive
+// in their native representation.
+int string_glob_match_raw(const void* pattern, const void* s, int flags);
 
 #endif // AETHER_STRING_H

@@ -185,28 +185,35 @@ int string_compare(const void* a, const void* b) {
 }
 
 // String methods
-int string_starts_with(const void* str, const char* prefix) {
+//
+// `prefix`/`suffix` accept either a magic AetherString* or a plain
+// `const char*` — like `str`, dispatched through str_data/str_len.
+// A naive strlen(prefix) would read 16 bytes of struct header from a
+// magic AetherString and return the wrong length (or NUL-truncate at
+// the first zero byte in the header). Same hazard as
+// string_glob_match_raw; same fix.
+int string_starts_with(const void* str, const void* prefix) {
     if (!str || !prefix) return 0;
-    size_t prefix_len = strlen(prefix);
+    size_t prefix_len = str_len(prefix);
     size_t slen = str_len(str);
     if (prefix_len > slen) return 0;
-    return memcmp(str_data(str), prefix, prefix_len) == 0;
+    return memcmp(str_data(str), str_data(prefix), prefix_len) == 0;
 }
 
-int string_ends_with(const void* str, const char* suffix) {
+int string_ends_with(const void* str, const void* suffix) {
     if (!str || !suffix) return 0;
-    size_t suffix_len = strlen(suffix);
+    size_t suffix_len = str_len(suffix);
     size_t slen = str_len(str);
     if (suffix_len > slen) return 0;
     return memcmp(str_data(str) + (slen - suffix_len),
-                  suffix, suffix_len) == 0;
+                  str_data(suffix), suffix_len) == 0;
 }
 
-int string_contains(const void* str, const char* substring) {
+int string_contains(const void* str, const void* substring) {
     return string_index_of(str, substring) >= 0;
 }
 
-int string_index_of(const void* str, const char* substring) {
+int string_index_of(const void* str, const void* substring) {
     if (!str || !substring) return -1;
     // Needle is binary-aware too: accepts AetherString* (for
     // embedded NULs) or plain char*. Before this, passing an
@@ -237,7 +244,7 @@ int string_index_of(const void* str, const char* substring) {
 // separator in a multi-record packed string. Before this API,
 // callers did `substring(s, start, length) + index_of(tail, needle)
 // + start` which allocates a fresh copy of the tail on each step.
-int string_index_of_from(const void* str, const char* substring, int start) {
+int string_index_of_from(const void* str, const void* substring, int start) {
     if (!str || !substring) return -1;
     size_t sub_len = str_len(substring);
     const char* sub_data = str_data(substring);
@@ -453,11 +460,12 @@ static void string_array_partial_free(AetherStringArray* arr,
 }
 
 // String array operations
-AetherStringArray* string_split(const void* str, const char* delimiter) {
+AetherStringArray* string_split(const void* str, const void* delimiter) {
     if (!str || !delimiter) return NULL;
     size_t slen = str_len(str);
     const char* sdata = str_data(str);
-    size_t delim_len = strlen(delimiter);
+    size_t delim_len = str_len(delimiter);
+    const char* delim_data = str_data(delimiter);
 
     /* #463: cap-aware. AetherStringArray shape is
      * {AetherString** strings; size_t count;}. The strings array's
@@ -506,7 +514,7 @@ AetherStringArray* string_split(const void* str, const char* delimiter) {
     size_t count = 1;
     size_t upper = slen - delim_len;
     for (size_t i = 0; i <= upper; i++) {
-        if (memcmp(sdata + i, delimiter, delim_len) == 0) {
+        if (memcmp(sdata + i, delim_data, delim_len) == 0) {
             count++;
             i += delim_len - 1;
         }
@@ -518,7 +526,7 @@ AetherStringArray* string_split(const void* str, const char* delimiter) {
     size_t start = 0;
     size_t idx = 0;
     for (size_t i = 0; i <= upper; i++) {
-        if (memcmp(sdata + i, delimiter, delim_len) == 0) {
+        if (memcmp(sdata + i, delim_data, delim_len) == 0) {
             AetherString* piece = string_new_with_length(sdata + start, i - start);
             if (!piece) { string_array_partial_free(arr, idx, count); return NULL; }
             arr->strings[idx++] = piece;
@@ -589,7 +597,7 @@ struct StringSeq;  /* forward decl — full def in std/collections/aether_string
 extern struct StringSeq* string_seq_cons(const char* head, struct StringSeq* tail);
 extern void string_seq_free(struct StringSeq* s);
 
-void* string_split_to_seq(const void* str, const char* delimiter) {
+void* string_split_to_seq(const void* str, const void* delimiter) {
     AetherStringArray* arr = string_split(str, delimiter);
     if (!arr) return NULL;
     /* Build back-to-front so each cons is O(1). cons retains its
@@ -1139,13 +1147,23 @@ static int win_glob_match(const char* p, const char* s, int pathname_flag) {
 }
 #endif
 
-int string_glob_match_raw(const char* pattern, const char* s, int flags) {
+int string_glob_match_raw(const void* pattern, const void* s, int flags) {
     if (!pattern || !s) return 0;
+    /* Mixed-representation hazard: the call-site #297 auto-unwrap
+     * skips `string_*`-prefixed externs (presumed string-aware), so
+     * we receive `const void*` that may be either a magic
+     * AetherString* or a bare char*, independently per arg. Dispatch
+     * through str_data on both — fnmatch/win_glob_match would
+     * otherwise read a 16-byte struct header as the first bytes of
+     * pattern/s, returning wrong results when one arg is heap-magic
+     * and the other a literal. */
+    const char* p = str_data(pattern);
+    const char* ss = str_data(s);
 #ifdef _WIN32
     /* On Windows, treat any non-zero flag as the pathname-aware form.
      * The plain (flags=0) and path (flags=1) forms are the only two
      * we expose Aether-side, so this collapses correctly. */
-    return win_glob_match(pattern, s, flags ? 1 : 0);
+    return win_glob_match(p, ss, flags ? 1 : 0);
 #else
     /* Translate the Aether-side sentinel (0 = plain, non-zero =
      * pathname-aware) into the platform's actual FNM_PATHNAME bit.
@@ -1154,7 +1172,7 @@ int string_glob_match_raw(const char* pattern, const char* s, int flags) {
      * 0x01) and `*` is allowed to cross `/` in pathname mode —
      * the symptom that surfaced on the Mac/Clang CI lane. */
     int libc_flags = (flags != 0) ? FNM_PATHNAME : 0;
-    int r = fnmatch(pattern, s, libc_flags);
+    int r = fnmatch(p, ss, libc_flags);
     if (r == 0)            return 1;
     if (r == FNM_NOMATCH)  return 0;
     return -1;  /* any other libc error code maps to syntax-error */
