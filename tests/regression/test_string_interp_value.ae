@@ -1,0 +1,49 @@
+// Regression (#681): `${...}` string interpolation must emit the
+// interpolated VALUE, not drop it.
+//
+// On native Windows / MINGW64 the literal segments survived but every
+// `${...}` substitution came out empty, because the printf family bound
+// to legacy MSVCRT: `vsnprintf(NULL, 0, ...)` returns -1 there (not the
+// would-be length), which collapses the two-pass sizing in the
+// generated `_aether_interp` heap-interpolation helper to a zero-byte
+// buffer; and MSVCRT mishandles the C99 conversions (%lld/%llu/%g).
+// Forcing the C99-conformant __mingw_* family fixes both.
+//
+// This exercises BOTH lowering modes: the heap path (assignment →
+// `_aether_interp`) and the direct-printf path (`println`). Values are
+// asserted, so the test fails loudly if a substitution comes out empty
+// on any platform.
+
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== test_string_interp_value ===")
+
+    // Heap-interpolation path (Mode 2: `_aether_interp` two-pass sizing).
+    s = "world"
+    msg = "before ${s} after"
+    if string.equals(msg, "before world after") != 1 {
+        println("  FAIL: string interp -> '${msg}'")
+        exit(1)
+    }
+
+    x = 42
+    nmsg = "n=${x}"
+    if string.equals(nmsg, "n=42") != 1 {
+        println("  FAIL: int interp -> '${nmsg}'")
+        exit(1)
+    }
+
+    // A 64-bit value: lowered as %lld, which legacy MSVCRT mishandles.
+    big = 9000000000
+    bmsg = "big=${big}"
+    if string.equals(bmsg, "big=9000000000") != 1 {
+        println("  FAIL: int64 interp -> '${bmsg}'")
+        exit(1)
+    }
+
+    println("  PASS: ${msg} | ${nmsg} | ${bmsg}")
+    println("=== test_string_interp_value passed ===")
+}

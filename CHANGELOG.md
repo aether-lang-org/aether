@@ -14,6 +14,21 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Native Windows (MinGW64): `${...}` string interpolation no longer
+  prints empty** (#681). On MINGW64 the C runtime's printf family bound
+  to the legacy MSVCRT implementations, which (a) make
+  `vsnprintf(NULL, 0, …)` return `-1` instead of the would-be length —
+  collapsing the two-pass sizing in the generated `_aether_interp`
+  helper to a zero-byte buffer — and (b) mishandle the C99 conversions
+  Aether emits (`%lld`/`%llu`/`%zu`/`%g`). Both the generated translation
+  unit (as its first line, before any header) and the Makefile now define
+  `__USE_MINGW_ANSI_STDIO=1`, binding the printf family to the
+  C99-conformant `__mingw_*` implementations. No-op off MinGW.
+
 ## [0.233.0]
 
 ### Fixed
