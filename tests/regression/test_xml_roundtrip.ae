@@ -1,0 +1,84 @@
+// Regression (#627): std.xml pull reader + escaping builder.
+//
+// Reader: entity decoding (named + the `&lt;`/`&gt;`/`&amp;` set), nested
+// elements, attributes, self-closing tags, and CDATA (passed through raw).
+// Builder: correct escaping of text and attribute content so callers
+// can't forget it. Both halves are asserted; reaching the PASS line
+// (exit 0) is the contract.
+
+import std.xml
+
+extern exit(code: int)
+extern string_equals(a: string, b: string) -> int
+
+main() {
+    println("=== test_xml_roundtrip ===")
+
+    // ---- reader ----
+    body = "<Root attr=\"a&amp;b\"><Name>my&amp;bucket</Name><K>a &lt;x&gt;.txt</K><Empty/><Raw><![CDATA[<not>parsed</not>]]></Raw></Root>"
+    p = xml.parser(body)
+
+    starts = 0
+    ends = 0
+    saw_amp = 0
+    saw_angle = 0
+    saw_cdata = 0
+    saw_attr = 0
+    saw_selfclose = 0
+
+    done = 0
+    while done == 0 {
+        ev = xml.next(p)
+        if ev == xml.EVENT_EOF {
+            done = 1
+        } else if ev == xml.EVENT_ERROR {
+            println("  FAIL: parse error: ${xml.error(p)}")
+            exit(1)
+        } else if ev == xml.EVENT_START {
+            starts = starts + 1
+            if string_equals(xml.name(p), "Root") == 1 {
+                if string_equals(xml.attr(p, "attr"), "a&b") == 1 { saw_attr = 1 }
+            }
+            if string_equals(xml.name(p), "Empty") == 1 { saw_selfclose = 1 }
+        } else if ev == xml.EVENT_END {
+            ends = ends + 1
+        } else if ev == xml.EVENT_TEXT {
+            t = xml.text(p)
+            if string_equals(t, "my&bucket") == 1 { saw_amp = 1 }
+            if string_equals(t, "a <x>.txt") == 1 { saw_angle = 1 }
+            if string_equals(t, "<not>parsed</not>") == 1 { saw_cdata = 1 }
+        }
+    }
+    xml.free(p)
+
+    // Root, Name, K, Empty, Raw = 5 starts; matching 5 ends (Empty's
+    // self-close emits a synthetic END too).
+    if starts != 5 { println("  FAIL: starts=${starts} (want 5)"); exit(1) }
+    if ends != 5 { println("  FAIL: ends=${ends} (want 5)"); exit(1) }
+    if saw_amp != 1 { println("  FAIL: '&amp;' not decoded in text"); exit(1) }
+    if saw_angle != 1 { println("  FAIL: '&lt;/&gt;' not decoded"); exit(1) }
+    if saw_cdata != 1 { println("  FAIL: CDATA not passed through raw"); exit(1) }
+    if saw_attr != 1 { println("  FAIL: attribute not decoded"); exit(1) }
+    if saw_selfclose != 1 { println("  FAIL: self-closing tag missed"); exit(1) }
+
+    // ---- builder (escaping is the builder's job, not the caller's) ----
+    b = xml.writer()
+    xml.declaration(b)
+    xml.start(b, "Error")
+    xml.attribute(b, "code", "a\"b")
+    xml.element(b, "Message", "x & <y> 'z'")
+    xml.end(b, "Error")
+    out = xml.finish(b)
+    xml.free_builder(b)
+
+    expected = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error code=\"a&quot;b\"><Message>x &amp; &lt;y&gt; &apos;z&apos;</Message></Error>"
+    if string_equals(out, expected) != 1 {
+        println("  FAIL: builder output mismatch")
+        println("    got:      ${out}")
+        println("    expected: ${expected}")
+        exit(1)
+    }
+
+    println("  PASS: reader (${starts} elems) + builder + escaping")
+    println("=== test_xml_roundtrip passed ===")
+}

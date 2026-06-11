@@ -14,6 +14,22 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`std.xml`: a pull/SAX reader and an escaping builder** (#627). S3,
+  SOAP-ish, and config XML no longer need hand-rolled `index_of`-scanning
+  parsers or string-concatenated response builders. The reader
+  (`xml.parser` / `xml.next` → `EVENT_*`, with `xml.name` / `xml.text` /
+  `xml.attr`) decodes the five predefined entities + numeric character
+  references, handles attributes, self-closing tags, and CDATA, and skips
+  the prolog / comments / PIs. The builder (`xml.writer`, `xml.start` /
+  `xml.attribute` / `xml.text_node` / `xml.element` / `xml.end` /
+  `xml.finish`) escapes text and attribute content so callers can't
+  forget to. Deliberately omits XSD, XPath, namespaces, and DTD
+  validation. New module `std/xml/` (C core + wrappers), regression test,
+  and stdlib-reference docs.
 ## [0.236.0]
 
 ### Fixed
