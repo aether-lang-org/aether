@@ -11,6 +11,25 @@ replaces `## [0.231.0]` with the next version number before tagging the
 release — so a hardcoded version header here would be skipped by the
 rename and drift from the tags (see `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Top-level `ae install`, `ae upgrade`, and `ae use` commands.** The
+  version-management functionality was only reachable through the longer
+  `ae version install` / `ae version use` forms, so the intuitive
+  `ae install` / `ae upgrade` (the muscle-memory from rustup/nvm/pyenv)
+  returned "Unknown command" — making the toolchain feel broken. Now:
+  - `ae install [<version>]` installs a release into
+    `~/.aether/versions/` (the latest release if no version is given).
+  - `ae upgrade` (alias `ae update`) installs the latest release and
+    switches to it — a no-op with a notice when already current.
+  - `ae use <version>` switches the active version.
+
+  These delegate to the existing install/switch logic; `ae version
+  install <v>` / `ae version use <v>` are unchanged and equivalent.
+  `ae help` lists the new top-level forms.
+
 ## [0.231.0]
 
 ### Fixed
