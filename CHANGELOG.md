@@ -14,6 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Changed
+
+- **Resource-cap accounting extended to `std.bytes`, `std.config`, and
+  `std.io`'s `FileInfo`** (#462, T2 caps audit). Their internal-lifetime
+  allocations now route through `aether_caps_malloc/realloc/free` so a
+  sandboxed plugin can't inflate them past the configured memory cap —
+  most importantly `std.bytes`, whose growable buffer is driven by a
+  caller-chosen index. Each conversion is drift-free: the matching free
+  always knows the exact size (the bytes buffer's `capacity` field, a
+  `dup_str`'d config string's `strlen+1`, or `sizeof` a struct), so the
+  cap counter returns exactly to baseline after create + grow + free —
+  locked in by a new `caps_bytes_accounting_balances` unit test. The
+  caller-owned-return strings (`io.getenv`, errno messages, fs/os path
+  and env results) are deliberately left on libc allocation: they are
+  freed in Aether-land via a non-cap-aware path, so cap-routing their
+  alloc without a matching credited free would drift the counter;
+  correct handling is a migration to cap-accounted `AetherString`
+  returns, tracked as the remaining tail of #462.
+
 ## [0.233.0]
 
 ### Fixed
