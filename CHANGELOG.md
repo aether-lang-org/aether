@@ -11,7 +11,7 @@ replaces `## [0.231.0]` with the next version number before tagging the
 release — so a hardcoded version header here would be skipped by the
 rename and drift from the tags (see `changelog-release-drift-note.md`).
 
-## [current]
+## [0.232.0]
 
 ### Added
 
