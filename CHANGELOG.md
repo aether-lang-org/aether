@@ -14,6 +14,22 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`ae inspect <file.ae>`: operator-facing view of what a script
+  declares** (#473). Prints the artifact shape (executable entry point
+  vs library export surface), the capability posture (which `--with=`
+  capabilities the gated imports require), the resolved import list
+  (classified stdlib / contrib / local), and the top-level declarations
+  (functions with signatures, structs, constants, actors) — scoped to
+  what *this* file declares, excluding decls merged in from imported
+  modules. Backed by a new `aetherc --emit=inspect` mode that walks the
+  post-typecheck AST (no code generation), peer to `--emit=ast`. Makes
+  the config-IS-code pitch concrete: operators can ask the compiler what
+  their script declares without reading generated C.
+
 ## [0.238.0]
 
 ### Fixed
@@ -41,6 +57,7 @@ notes to be skipped or clobbered (the failure modes documented in
   hazards — escaping is handled by the encoder). Thin aliases over the
   existing API; the `create_*` / `object_set` / `array_add` / `stringify`
   names remain.
+
 ## [0.237.0]
 
 ### Added
