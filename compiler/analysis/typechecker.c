@@ -1524,6 +1524,18 @@ static void collect_references(ASTNode* node, TrackedVar* vars, int var_count) {
         }
     }
 
+    // A call through a local is a use of that local: `g(p)` where `g` was
+    // assigned via `f as fn(ptr) -> int` parses as AST_FUNCTION_CALL with
+    // the callee name in node->value (no AST_IDENTIFIER child), so match
+    // the call name against tracked variables too.
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        for (int i = 0; i < var_count; i++) {
+            if (strcmp(vars[i].name, node->value) == 0) {
+                vars[i].used = 1;
+            }
+        }
+    }
+
     // Match statements with list patterns implicitly reference <expr>_len variables
     // (the codegen generates: int _match_len = <expr>_len;)
     if (node->type == AST_MATCH_STATEMENT && node->child_count > 0) {
