@@ -1,0 +1,198 @@
+// std.xml - XML Module
+// Import with: import std.xml
+//
+// A deliberately small XML surface (issue #627): a pull/SAX reader and an
+// escaping element builder. Enough for S3 / SOAP-ish / config XML. NOT in
+// scope: XSD, XPath, namespaces, DTD validation, custom entity definitions
+// (the five predefined entities + numeric character references are decoded).
+//
+// Reader — pull one event at a time:
+//   p = xml.parser(body)
+//   loop {
+//       ev = xml.next(p)
+//       if ev == xml.EVENT_EOF { break }
+//       if ev == xml.EVENT_ERROR { println(xml.error(p))  break }
+//       if ev == xml.EVENT_START { ... xml.name(p), xml.attr(p, "k") ... }
+//       if ev == xml.EVENT_TEXT  { ... xml.text(p) ... }
+//       if ev == xml.EVENT_END   { ... xml.name(p) ... }
+//   }
+//   xml.free(p)
+//
+// Builder — emit, escaping handled for you:
+//   b = xml.writer()
+//   xml.declaration(b)
+//   xml.start(b, "Error")
+//   xml.attribute(b, "code", "NoSuchKey")
+//   xml.element(b, "Message", "the key \"x\" & <y> are gone")
+//   xml.end(b, "Error")
+//   out = xml.finish(b)          // owned string; escaping already applied
+//   xml.free_builder(b)
+
+exports (
+    EVENT_START, EVENT_END, EVENT_TEXT, EVENT_EOF, EVENT_ERROR,
+    xml_parser_new_str, xml_next, xml_event_name, xml_event_text,
+    xml_event_attr_count, xml_event_attr_name, xml_event_attr_value,
+    xml_event_attr_str, xml_parser_error, xml_parser_free,
+    xml_builder_new, xml_builder_declaration, xml_builder_start,
+    xml_builder_attr, xml_builder_text, xml_builder_end,
+    xml_builder_element, xml_builder_finish, xml_builder_free,
+    xml_escape,
+    parser, next, name, text, attr, attr_count, attr_name, attr_value,
+    error, free, writer, declaration, start, attribute, text_node,
+    end, element, finish, free_builder, escape
+)
+
+// Event kinds returned by `next` — match the C `XML_EVENT_*` values.
+const EVENT_START = 1
+const EVENT_END   = 2
+const EVENT_TEXT  = 3
+const EVENT_EOF   = 4
+const EVENT_ERROR = 5
+
+// ---- raw externs (C core) ----
+extern xml_parser_new_str(data: string) -> ptr
+extern xml_next(p: ptr) -> int
+extern xml_event_name(p: ptr) -> string
+extern xml_event_text(p: ptr) -> string
+extern xml_event_attr_count(p: ptr) -> int
+extern xml_event_attr_name(p: ptr, i: int) -> string
+extern xml_event_attr_value(p: ptr, i: int) -> string
+extern xml_event_attr_str(p: ptr, name: string) -> string
+extern xml_parser_error(p: ptr) -> string
+extern xml_parser_free(p: ptr)
+
+extern xml_builder_new() -> ptr
+extern xml_builder_declaration(b: ptr)
+extern xml_builder_start(b: ptr, name: string)
+extern xml_builder_attr(b: ptr, name: string, value: string)
+extern xml_builder_text(b: ptr, text: string)
+extern xml_builder_end(b: ptr, name: string)
+extern xml_builder_element(b: ptr, name: string, text: string)
+extern xml_builder_finish(b: ptr) -> string
+extern xml_builder_free(b: ptr)
+
+extern xml_escape(s: string) -> string
+
+// Copy a borrowed C string into an owned Aether string. The reader's
+// name/text/attr accessors return pointers into the parser's scratch
+// that are only valid until the next `next` call; copying makes the
+// value safe to hold across iterations (same pattern as std.json).
+extern string_concat(a: string, b: string) -> string
+
+// ============================================================
+// Reader wrappers
+// ============================================================
+
+// Build a pull reader over an XML document. Free with `xml.free`.
+parser(data: string) -> ptr {
+    return xml_parser_new_str(data)
+}
+
+// Advance to the next event; returns one of the EVENT_* constants.
+next(p: ptr) -> int {
+    return xml_next(p)
+}
+
+// Element name for the current START/END event (owned copy; "" otherwise).
+name(p: ptr) -> string {
+    return string_concat(xml_event_name(p), "")
+}
+
+// Decoded character data for the current TEXT event (owned copy).
+text(p: ptr) -> string {
+    return string_concat(xml_event_text(p), "")
+}
+
+// Value of attribute `key` on the current START element, or "" if absent
+// (owned copy). Use `attr_count` + `attr_name`/`attr_value` to iterate.
+attr(p: ptr, key: string) -> string {
+    return string_concat(xml_event_attr_str(p, key), "")
+}
+
+// Number of attributes on the current START element.
+attr_count(p: ptr) -> int {
+    return xml_event_attr_count(p)
+}
+
+// Name / value of the i-th attribute on the current START element
+// (owned copies; "" if i is out of range).
+attr_name(p: ptr, i: int) -> string {
+    return string_concat(xml_event_attr_name(p, i), "")
+}
+attr_value(p: ptr, i: int) -> string {
+    return string_concat(xml_event_attr_value(p, i), "")
+}
+
+// Human-readable message after an EVENT_ERROR (owned copy; "" if none).
+error(p: ptr) -> string {
+    return string_concat(xml_parser_error(p), "")
+}
+
+// Release a reader.
+free(p: ptr) {
+    xml_parser_free(p)
+}
+
+// ============================================================
+// Builder wrappers
+// ============================================================
+
+// New XML builder/writer. Free with `xml.free_builder` after `finish`.
+// (Named `writer` because `builder` is a reserved keyword in Aether.)
+writer() -> ptr {
+    return xml_builder_new()
+}
+
+// Emit the `<?xml version="1.0" encoding="UTF-8"?>` declaration.
+declaration(b: ptr) {
+    xml_builder_declaration(b)
+}
+
+// Open a start tag `<name`; follow with `attribute` calls, then `text` /
+// `element` / `start` / `end` (which close the tag's `>` automatically).
+start(b: ptr, name: string) {
+    xml_builder_start(b, name)
+}
+
+// Add `name="value"` to the currently-open start tag (value escaped).
+attribute(b: ptr, name: string, value: string) {
+    xml_builder_attr(b, name, value)
+}
+
+// Append escaped character data.
+text_node(b: ptr, content: string) {
+    xml_builder_text(b, content)
+}
+
+// Close element `name` (`</name>`).
+end(b: ptr, name: string) {
+    xml_builder_end(b, name)
+}
+
+// `<name>escaped-text</name>` in one call.
+element(b: ptr, name: string, content: string) {
+    xml_builder_element(b, name, content)
+}
+
+// Finish the document and return it as an owned string (escaping already
+// applied throughout). The builder is still alive — call `free_builder`.
+// The string_concat copies the C buffer into an owned Aether string and
+// lets the codegen reclaim the malloc'd original at scope exit (the same
+// handoff std.json's `stringify` uses).
+finish(b: ptr) -> string {
+    raw = xml_builder_finish(b)
+    return string_concat(raw, "")
+}
+
+// Release a builder.
+free_builder(b: ptr) {
+    xml_builder_free(b)
+}
+
+// Escape the five predefined entities (& < > " ') in `s`; returns an owned
+// string. Rarely needed directly — `text` / `attribute` / `element` escape
+// for you — but available for assembling markup by hand.
+escape(s: string) -> string {
+    raw = xml_escape(s)
+    return string_concat(raw, "")
+}

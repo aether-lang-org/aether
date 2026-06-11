@@ -902,7 +902,18 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
              * through .ae wrapper chains (strbuilder.finish, and any
              * user fn that returns it) regardless of single-value
              * @heap-annotation handling. */
-            strcmp(fn, "aether_strbuilder_finish") == 0) {
+            strcmp(fn, "aether_strbuilder_finish") == 0 ||
+            /* std.xml (#627): xml_builder_finish hands the caller the
+             * accumulated document as a FRESH malloc'd char* (detached
+             * from the builder, which is freed separately); xml_escape
+             * returns a FRESH malloc'd escaped copy. Both are single-value
+             * `-> string` externs the std.xml `finish` / `escape` wrappers
+             * copy via string_concat — classify by name so the malloc'd
+             * original is reclaimed at scope exit (same contract as
+             * json_stringify_raw above). NULL on OOM, which
+             * aether_heap_str_free tolerates. */
+            strcmp(fn, "xml_builder_finish") == 0 ||
+            strcmp(fn, "xml_escape") == 0) {
             return 1;
         }
         // User-defined function: only heap if its body provably
