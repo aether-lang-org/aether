@@ -30,6 +30,22 @@ notes to be skipped or clobbered (the failure modes documented in
   forget to. Deliberately omits XSD, XPath, namespaces, and DTD
   validation. New module `std/xml/` (C core + wrappers), regression test,
   and stdlib-reference docs.
+## [0.236.0]
+
+### Fixed
+
+- **VS Code / Cursor extension: highlighting and the `.ae` file icon
+  vanished after `install.sh`.** The installer copied the extension
+  folder but then *removed* the extension from the editor's
+  `extensions.json`, expecting the editor to re-scan the directory and
+  re-register it on startup. Current VS Code / Cursor treat
+  `extensions.json` as the authoritative registry and don't reliably
+  re-scan for manually-dropped folders, so the extension sat
+  present-but-unloaded — no syntax highlighting, no module icon. The
+  installer now writes a proper `aether.aether-language` registration
+  entry pointing at the installed folder (and still clears stale
+  `aether*` rows and `.obsolete` keys). Fully quit and reopen the editor
+  after installing.
 
 ## [0.233.0]
 
