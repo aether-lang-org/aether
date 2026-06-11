@@ -1,4 +1,5 @@
 #include "aether_config.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +66,7 @@ static uint32_t fnv1a(const char* s) {
 static char* dup_str(const char* s) {
     if (!s) return NULL;
     size_t n = strlen(s);
-    char* d = (char*)malloc(n + 1);
+    char* d = (char*)aether_caps_malloc(n + 1);
     if (!d) return NULL;
     memcpy(d, s, n + 1);
     return d;
@@ -92,23 +93,23 @@ void aether_config_put(const char* key, const char* value) {
     ae_cfg_rwlock_wrlock(&g_lock);
     ae_cfg_entry* existing = find_in_bucket(g_buckets[idx], key);
     if (existing) {
-        free(existing->value);
+        aether_caps_free(existing->value, strlen(existing->value) + 1);
         existing->value = new_value;
         ae_cfg_rwlock_wrunlock(&g_lock);
         return;
     }
     /* New entry. Allocate under the write lock to keep insertion
      * atomic with the bucket-head update. */
-    ae_cfg_entry* e = (ae_cfg_entry*)malloc(sizeof(ae_cfg_entry));
+    ae_cfg_entry* e = (ae_cfg_entry*)aether_caps_malloc(sizeof(ae_cfg_entry));
     if (!e) {
-        free(new_value);
+        aether_caps_free(new_value, strlen(new_value) + 1);
         ae_cfg_rwlock_wrunlock(&g_lock);
         return;
     }
     e->key = dup_str(key);
     if (!e->key) {
-        free(new_value);
-        free(e);
+        aether_caps_free(new_value, strlen(new_value) + 1);
+        aether_caps_free(e, sizeof(ae_cfg_entry));
         ae_cfg_rwlock_wrunlock(&g_lock);
         return;
     }
@@ -175,9 +176,9 @@ void aether_config_clear(void) {
         ae_cfg_entry* e = g_buckets[i];
         while (e) {
             ae_cfg_entry* next = e->next;
-            free(e->key);
-            free(e->value);
-            free(e);
+            aether_caps_free(e->key, strlen(e->key) + 1);
+            aether_caps_free(e->value, strlen(e->value) + 1);
+            aether_caps_free(e, sizeof(ae_cfg_entry));
             e = next;
         }
         g_buckets[i] = NULL;
