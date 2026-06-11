@@ -184,7 +184,9 @@ FileInfo* io_file_info_raw(const char* path) {
     struct stat st;
     if (stat(path, &st) != 0) return NULL;
 
-    FileInfo* info = (FileInfo*)malloc(sizeof(FileInfo));
+    /* Cap-aware (#462): internal-lifetime struct (freed by
+     * io_file_info_free), so the matching free knows the exact size. */
+    FileInfo* info = (FileInfo*)aether_caps_malloc(sizeof(FileInfo));
     if (!info) return NULL;
     info->size = st.st_size;
     info->is_directory = S_ISDIR(st.st_mode) ? 1 : 0;
@@ -193,7 +195,7 @@ FileInfo* io_file_info_raw(const char* path) {
 }
 
 void io_file_info_free(FileInfo* info) {
-    if (info) free(info);
+    if (info) aether_caps_free(info, sizeof(FileInfo));
 }
 
 // Environment variables
