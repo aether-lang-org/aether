@@ -5,16 +5,16 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [current]` (create it at the top if
+**Workflow**: New changes go under `## [0.233.0]` (create it at the top if
 absent). When a release PR merges to `main`, the release pipeline
-(`.github/workflows/release.yml`) automatically replaces `## [current]`
+(`.github/workflows/release.yml`) automatically replaces `## [0.233.0]`
 with the next version number before tagging. Always use the literal
 `[current]` placeholder — a hardcoded version header here is *not*
 renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
-## [current]
+## [0.233.0]
 
 ### Fixed
 
