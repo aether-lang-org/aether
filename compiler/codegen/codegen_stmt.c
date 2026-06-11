@@ -874,6 +874,7 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
             strcmp(fn, "os_getenv") == 0 ||
             strcmp(fn, "os_which") == 0 ||
             strcmp(fn, "os_platform_raw") == 0 ||
+            strcmp(fn, "os_getcwd_raw") == 0 ||
             strcmp(fn, "os_now_utc_iso8601_raw") == 0 ||
             strcmp(fn, "os_now_local_iso8601_raw") == 0 ||
             /* std.io getenv — sibling of os_getenv, returns a FRESH

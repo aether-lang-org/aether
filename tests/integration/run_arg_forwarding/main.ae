@@ -1,0 +1,15 @@
+// Driver for the `ae run … -- <args>` forwarding integration test.
+// Prints argc and each forwarded argument on its own line so the shell
+// test can assert both the count and that a spaces-containing arg stays
+// a single token.
+import std.os
+
+main() {
+    n = aether_args_count()
+    println("argc=${n}")
+    i = 1
+    while i < n {
+        println("ARG:${aether_args_get(i)}")
+        i = i + 1
+    }
+}

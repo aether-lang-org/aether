@@ -22,6 +22,29 @@ char* os_getenv(const char* name);
 // Not available on Windows (returns -1).
 int os_execv(const char* prog, void* argv_list);
 
+// Send signal `sig` to `pid` (POSIX kill(2)). Returns 0 on success,
+// -1 on failure (errno set by kill). Two POSIX conventions are
+// deliberately exposed:
+//   - A NEGATIVE pid signals the whole process *group* whose pgid is
+//     abs(pid) — the building block for "tear down the build and
+//     everything it spawned."
+//   - sig == 0 performs no delivery but still runs the permission /
+//     existence checks, so it is the canonical "is this pid/group
+//     still alive?" probe (returns 0 if it exists, -1/ESRCH if not).
+// Not available on Windows (returns -1). POSIX-only.
+int os_kill_raw(int pid, int sig);
+
+// Change the current process's working directory to `path`. Returns 0
+// on success, -1 on failure. POSIX chdir(2) / Windows
+// SetCurrentDirectoryW (UTF-8 path converted to UTF-16). Not available
+// on no-filesystem builds (returns -1).
+int os_chdir_raw(const char* path);
+
+// Current working directory as a fresh heap-allocated string the caller
+// owns (NULL on failure). POSIX getcwd(3) / Windows GetCurrentDirectoryW
+// (UTF-16 result converted to UTF-8).
+char* os_getcwd_raw(void);
+
 // Search PATH for an executable named `name`. Returns the absolute
 // path to the first executable hit, or NULL if not found. If `name`
 // already contains '/', it's returned as-is when it's executable

@@ -1,0 +1,143 @@
+// Regression test for os.run_full — the three-way child-stdio primitive:
+// feed stdin (binary-safe) and capture stdout and stderr SEPARATELY,
+// the gap os.run_capture (stdout-only) leaves open.
+//
+// POSIX-only — on Windows the raw extern reports "unsupported on
+// Windows" (Win32 anonymous pipes aren't pollable). /bin/sh and cat are
+// POSIX-guaranteed.
+
+import std.os
+import std.list
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== os.run_full ===")
+
+    if os_getenv("OS") == "Windows_NT" {
+        println("  SKIP: os.run_full is POSIX-only")
+        return
+    }
+
+    // --- stdin feed + stdout capture ---------------------------------
+    // cat echoes its stdin to stdout. Proves stdin is fed and stdout
+    // captured; stderr must be empty.
+    av0 = list_new()
+    out0, err0, code0, spawn0 = os.run_full("/bin/cat", av0, null, "hello\nworld\n")
+    if spawn0 != "" {
+        println("  FAIL: cat spawn err=${spawn0}")
+        exit(1)
+    }
+    if out0 != "hello\nworld\n" {
+        println("  FAIL: cat stdout=[${out0}], expected the fed input")
+        exit(1)
+    }
+    if err0 != "" {
+        println("  FAIL: cat stderr=[${err0}], expected empty")
+        exit(1)
+    }
+    if code0 != 0 {
+        println("  FAIL: cat exit=${code0}, expected 0")
+        exit(1)
+    }
+    list_free(av0)
+    println("  PASS: stdin fed, stdout captured, stderr empty, exit 0")
+
+    // --- stdout and stderr captured SEPARATELY -----------------------
+    av1 = list_new()
+    list_add(av1, "-c")
+    list_add(av1, "printf OUT; printf ERR >&2; exit 0")
+    out1, err1, code1, spawn1 = os.run_full("/bin/sh", av1, null, "")
+    if spawn1 != "" {
+        println("  FAIL: sh spawn err=${spawn1}")
+        exit(1)
+    }
+    if out1 != "OUT" {
+        println("  FAIL: stdout=[${out1}], expected OUT")
+        exit(1)
+    }
+    if err1 != "ERR" {
+        println("  FAIL: stderr=[${err1}], expected ERR (not merged into stdout)")
+        exit(1)
+    }
+    if code1 != 0 {
+        println("  FAIL: exit=${code1}, expected 0")
+        exit(1)
+    }
+    list_free(av1)
+    println("  PASS: stdout and stderr captured on separate channels")
+
+    // --- exit code ----------------------------------------------------
+    av2 = list_new()
+    list_add(av2, "-c")
+    list_add(av2, "exit 7")
+    out2, err2, code2, spawn2 = os.run_full("/bin/sh", av2, null, "")
+    if code2 != 7 {
+        println("  FAIL: sh -c 'exit 7' exit=${code2}, expected 7")
+        exit(1)
+    }
+    if out2 != "" || err2 != "" {
+        println("  FAIL: expected empty output for exit-7 case")
+        exit(1)
+    }
+    list_free(av2)
+    println("  PASS: exit code surfaced (7)")
+
+    // --- empty stdin → immediate EOF (child must not block) ----------
+    av3 = list_new()
+    list_add(av3, "-c")
+    list_add(av3, "cat; printf done")
+    out3, err3, code3, spawn3 = os.run_full("/bin/sh", av3, null, "")
+    if out3 != "done" || code3 != 0 {
+        println("  FAIL: empty-stdin case out=[${out3}] code=${code3}, expected done/0")
+        exit(1)
+    }
+    list_free(av3)
+    println("  PASS: empty stdin closes immediately (cat saw EOF)")
+
+    // --- large round-trip: NO pipe-buffer deadlock -------------------
+    // Build a ~512 KB payload (far past the ~64 KB OS pipe buffer in
+    // BOTH directions) and round-trip it through cat. A naive
+    // write-all-then-read implementation would deadlock here; the
+    // poll(2) pump must drain stdout while it writes stdin.
+    big = "0123456789ABCDEF"
+    i = 0
+    while i < 15 {
+        big = string.concat(big, big)
+        i = i + 1
+    }
+    big_len = string.length(big)
+    av4 = list_new()
+    out4, err4, code4, spawn4 = os.run_full("/bin/cat", av4, null, big)
+    if spawn4 != "" {
+        println("  FAIL: large cat spawn err=${spawn4}")
+        exit(1)
+    }
+    if string.length(out4) != big_len {
+        println("  FAIL: large round-trip stdout len=${string.length(out4)}, expected ${big_len}")
+        exit(1)
+    }
+    if !string.equals(out4, big) {
+        println("  FAIL: large round-trip content mismatch")
+        exit(1)
+    }
+    if code4 != 0 {
+        println("  FAIL: large cat exit=${code4}, expected 0")
+        exit(1)
+    }
+    list_free(av4)
+    println("  PASS: ${big_len}-byte round-trip, no deadlock")
+
+    // --- spawn failure: missing binary -------------------------------
+    av5 = list_new()
+    out5, err5, code5, spawn5 = os.run_full("/no/such/binary", av5, null, "")
+    if code5 != 127 {
+        println("  FAIL: missing binary exit=${code5}, expected 127 (exec-in-child)")
+        exit(1)
+    }
+    list_free(av5)
+    println("  PASS: missing binary → exit 127")
+
+    println("=== All cases passed ===")
+}

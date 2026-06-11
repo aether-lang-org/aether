@@ -1,0 +1,85 @@
+// build-supervisor — the bash build-supervision trampoline, in Aether.
+//
+// This is the shape aeb's CLI entry point keeps in bash because POSIX
+// job control hands it over for free. The bash original (from
+// aeb-process-supervision-primitives.md):
+//
+//     set -m                                  # build in its OWN group
+//     "${AEB_LAUNCH[@]}" "$@" &               # background it
+//     trap 'kill -INT -$pid' INT              # forward Ctrl-C to group
+//     ( sleep "$TIMEOUT"; kill -TERM -$pid )& # watchdog
+//     wait "$pid"; rc=$?
+//     kill -TERM -$pid                        # reap anything LEAKED
+//     while kill -0 -$pid; do sleep 0.1; done
+//     kill -KILL -$pid
+//
+// …collapses to a single os.run_supervised() call here — own process
+// group, forward interactive signals to it, enforce a wall-clock
+// timeout, then group-reap any process the build leaked (a stray test
+// server, a backgrounded helper). Cross-platform: the same call maps
+// onto POSIX process groups and onto Windows Job Objects.
+//
+// Run a built-in demo:        ae run examples/applications/build-supervisor.ae
+// Supervise your own command: ae run examples/applications/build-supervisor.ae -- make -j8
+// "config IS code": this file is the supervisor config AND the entry point.
+
+import std.os
+import std.list
+import std.string
+import std.signal
+
+// Wall-clock ceiling for the supervised build, in seconds. Edit this —
+// it's ordinary code, not a YAML key.
+TIMEOUT_SECS() -> int { return 600 }
+
+main() {
+    // An orchestrator runs steps relative to a project root.
+    root = os.getcwd()
+    println("build-supervisor: root = ${root}")
+
+    // Assemble the command to supervise: either the user's (everything
+    // after `--`) or a built-in demo that prints, sleeps briefly, exits 0.
+    n = aether_args_count()
+    argv = list.new()
+    prog = ""
+    if n > 1 {
+        prog = aether_args_get(1)
+        i = 2
+        while i < n {
+            list.add(argv, aether_args_get(i))
+            i = i + 1
+        }
+    } else {
+        prog = "/bin/sh"
+        list.add(argv, "-c")
+        list.add(argv, "echo '[build] compiling...'; sleep 1; echo '[build] done'")
+    }
+
+    timeout = TIMEOUT_SECS()
+    println("build-supervisor: launching ${prog} (timeout ${timeout}s)")
+
+    // The entire trampoline tail, in one call:
+    //   new_process_group = 1  → child leads its own group
+    //   forward_signals   = 1  → Ctrl-C / SIGTERM reach the whole group
+    //   timeout_secs      = N  → TERM → 5s grace → KILL on deadline (code 124)
+    //   reap_group        = 1  → tear down anything the build leaked
+    code, outcome = os.run_supervised(prog, argv, null, 1, 1, timeout, 1)
+    list.free(argv)
+
+    if outcome == "timeout" {
+        println("build-supervisor: TIMED OUT after ${timeout}s — group torn down")
+    } else if outcome == "signalled" {
+        println("build-supervisor: build killed by a signal (exit ${code})")
+    } else if outcome == "exited" {
+        if code == 0 {
+            println("build-supervisor: build succeeded")
+        } else {
+            println("build-supervisor: build failed (exit ${code})")
+        }
+    } else {
+        println("build-supervisor: could not supervise ${prog}")
+    }
+
+    // Propagate the build's exit code, exactly like the bash `exit "$rc"`.
+    exit(code)
+}
