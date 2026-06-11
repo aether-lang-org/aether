@@ -935,6 +935,33 @@ The `parse_strict` shape is the std.fs pilot from issue #392 extended to a secon
 - `json.create_null()`, `json.create_bool(value)`, `json.create_number(value)`
 - `json.create_string(value)`, `json.create_array()`, `json.create_object()`
 
+**Terse builder / encoder** (issue #628) — thin aliases over the above for
+assembling a value tree and serializing it without hand-concatenating
+strings (escaping is handled by the encoder):
+- `json.obj()` / `json.arr()` — new empty object / array
+- `json.str(s)` / `json.num(f)` / `json.boolean(0|1)` / `json.null_value()` — scalars
+- `json.set(obj, key, value)` / `json.push(arr, value)` — `""` on success, error
+  string on wrong-kind target (the orphaned value is reclaimed); the parent
+  takes ownership of `value`
+- `json.encode(value)` → `(string, string)` — `(json, "")` on success
+
+```aether
+import std.json
+
+main() {
+    root = json.obj()
+    json.set(root, "name", json.str("aether"))
+    json.set(root, "ok", json.boolean(1))
+    tags = json.arr()
+    json.push(tags, json.str("lang"))
+    json.set(root, "tags", tags)
+
+    out, err = json.encode(root)   // {"name":"aether","ok":true,"tags":["lang"]}
+    println(out)
+    json.free(root)                // frees the whole tree
+}
+```
+
 ### What `std.json` doesn't do
 
 Coming from Go's `json.Unmarshal`, Java's Jackson, Python's `json.load` + dataclasses, or C#'s `JsonSerializer`, expect to do more by hand:

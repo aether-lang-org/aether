@@ -1,0 +1,54 @@
+// Regression (#628): build a JSON value tree from scratch with the
+// terse builder API and encode it. Before this, std.json could parse +
+// mutate + stringify, but the value constructors weren't exposed under
+// ergonomic names, so callers hand-concatenated response JSON (with the
+// classic missing-comma / unescaped-quote hazards). json.obj/arr/str/
+// num/boolean/null_value/set/push/encode close that.
+//
+// Asserts the exact encoded output (insertion order is preserved) and
+// that internal escaping is applied to a value containing a quote.
+
+import std.json
+
+extern exit(code: int)
+
+main() {
+    println("=== test_json_builder ===")
+
+    root = json.obj()
+    _ = json.set(root, "name", json.str("aether"))
+    _ = json.set(root, "ok", json.boolean(1))
+    _ = json.set(root, "nil", json.null_value())
+    _ = json.set(root, "n", json.num(235.0))
+
+    tags = json.arr()
+    _ = json.push(tags, json.str("lang"))
+    _ = json.push(tags, json.str("actor"))
+    _ = json.set(root, "tags", tags)
+
+    // A value that must be escaped by the encoder, not the caller.
+    _ = json.set(root, "quote", json.str("a\"b"))
+
+    out, err = json.encode(root)
+    if err != "" {
+        println("  FAIL: encode error '${err}'")
+        exit(1)
+    }
+
+    expected = "{\"name\":\"aether\",\"ok\":true,\"nil\":null,\"n\":235,\"tags\":[\"lang\",\"actor\"],\"quote\":\"a\\\"b\"}"
+    if string_equals(out, expected) != 1 {
+        println("  FAIL: encoded mismatch")
+        println("    got:      ${out}")
+        println("    expected: ${expected}")
+        exit(1)
+    }
+
+    json.free(root)
+
+    println("  PASS: ${out}")
+    println("=== test_json_builder passed ===")
+}
+
+// std.json doesn't re-export string.equals; declare the runtime symbol
+// directly (binary-safe compare, magic-aware).
+extern string_equals(a: string, b: string) -> int

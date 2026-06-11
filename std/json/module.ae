@@ -25,6 +25,7 @@ exports (
     parse, stringify, get_string,
     object_get, object_set, object_size, object_entry,
     array_get, array_add,
+    obj, arr, str, num, boolean, null_value, set, push, encode,
     parse_strict, last_error_kind, last_error_line, last_error_col,
     KIND_OK, KIND_PARSE_ERROR, KIND_OUT_OF_MEMORY, KIND_INVALID_INPUT
 )
@@ -270,4 +271,56 @@ array_add(arr: ptr, value: ptr) -> {
         return "not an array"
     }
     return ""
+}
+
+// ---- terse builder/encoder (issue #628) ----
+//
+// A compact constructor surface for assembling a JSON value tree from
+// scratch and encoding it — the Go `json.NewEncoder(w).Encode(...)`
+// shape, so management/setup responses stop being hand-concatenated
+// strings with their missing-comma / unescaped-quote hazards. These are
+// thin aliases over the value constructors + `object_set` / `array_add`
+// / `stringify` already in this module; all string-escaping is handled
+// internally by the encoder. Build, then `encode`:
+//
+//   root = json.obj()
+//   json.set(root, "name", json.str("aether"))
+//   json.set(root, "ok", json.boolean(1))
+//   tags = json.arr()
+//   json.push(tags, json.str("lang"))
+//   json.set(root, "tags", tags)
+//   out, err = json.encode(root)        // {"name":"aether","ok":true,"tags":["lang"]}
+//   json.free(root)
+//
+// Ownership: `set` / `push` hand the child value to the parent (which
+// frees it at json.free); freeing the root frees the whole tree. Don't
+// json.free a child you've already set/pushed.
+
+// New empty JSON object / array.
+obj() -> ptr { return json_create_object() }
+arr() -> ptr { return json_create_array() }
+
+// Scalar value constructors. `num` takes a float (JSON has one numeric
+// type); pass `1.0` etc. `boolean` takes 0/1; `null_value` is JSON null.
+str(value: string) -> ptr { return json_create_string(value) }
+num(value: float) -> ptr  { return json_create_number(value) }
+boolean(value: int) -> ptr { return json_create_bool(value) }
+null_value() -> ptr { return json_create_null() }
+
+// Set a key on an object / append to an array. Aliases for `object_set`
+// / `array_add` (same ownership + error contract): "" on success, an
+// error string if the target is the wrong kind (and the orphaned value
+// is reclaimed so it can't leak).
+set(obj: ptr, key: string, value: ptr) -> string {
+    return object_set(obj, key, value)
+}
+push(arr: ptr, value: ptr) -> string {
+    return array_add(arr, value)
+}
+
+// Encode a JSON value tree to a compact string with all escaping
+// handled internally. Returns (string, "") on success, ("", error) on
+// failure — an alias for `stringify`.
+encode(value: ptr) -> (string, string) {
+    return stringify(value)
 }

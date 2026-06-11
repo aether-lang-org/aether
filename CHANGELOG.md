@@ -29,6 +29,19 @@ notes to be skipped or clobbered (the failure modes documented in
   `__USE_MINGW_ANSI_STDIO=1`, binding the printf family to the
   C99-conformant `__mingw_*` implementations. No-op off MinGW.
 
+### Added
+
+- **`std.json`: terse value builder + encoder** (#628). The value
+  constructors, object/array mutators, and serializer already existed but
+  composing them was verbose; `json.obj()`, `json.arr()`, `json.str()`,
+  `json.num()`, `json.boolean()`, `json.null_value()`, `json.set()`,
+  `json.push()`, and `json.encode()` give the Go-style
+  build-a-tree-then-encode shape so JSON responses no longer have to be
+  hand-concatenated (with the attendant missing-comma / unescaped-quote
+  hazards — escaping is handled by the encoder). Thin aliases over the
+  existing API; the `create_*` / `object_set` / `array_add` / `stringify`
+  names remain.
+
 ## [0.233.0]
 
 ### Fixed
