@@ -42,6 +42,82 @@ notes to be skipped or clobbered (the failure modes documented in
     Windows-only (untestable off-Windows), so the effort/risk outweighs
     the value now that the unbounded (#463) and attacker-inflatable
     (`std.bytes`) sites are covered.
+## [0.239.0]
+
+### Added
+
+- **`ae inspect <file.ae>`: operator-facing view of what a script
+  declares** (#473). Prints the artifact shape (executable entry point
+  vs library export surface), the capability posture (which `--with=`
+  capabilities the gated imports require), the resolved import list
+  (classified stdlib / contrib / local), and the top-level declarations
+  (functions with signatures, structs, constants, actors) — scoped to
+  what *this* file declares, excluding decls merged in from imported
+  modules. Backed by a new `aetherc --emit=inspect` mode that walks the
+  post-typecheck AST (no code generation), peer to `--emit=ast`. Makes
+  the config-IS-code pitch concrete: operators can ask the compiler what
+  their script declares without reading generated C.
+
+## [0.238.0]
+
+### Fixed
+
+- **Native Windows (MinGW64): `${...}` string interpolation no longer
+  prints empty** (#681). On MINGW64 the C runtime's printf family bound
+  to the legacy MSVCRT implementations, which (a) make
+  `vsnprintf(NULL, 0, …)` return `-1` instead of the would-be length —
+  collapsing the two-pass sizing in the generated `_aether_interp`
+  helper to a zero-byte buffer — and (b) mishandle the C99 conversions
+  Aether emits (`%lld`/`%llu`/`%zu`/`%g`). Both the generated translation
+  unit (as its first line, before any header) and the Makefile now define
+  `__USE_MINGW_ANSI_STDIO=1`, binding the printf family to the
+  C99-conformant `__mingw_*` implementations. No-op off MinGW.
+
+### Added
+
+- **`std.json`: terse value builder + encoder** (#628). The value
+  constructors, object/array mutators, and serializer already existed but
+  composing them was verbose; `json.obj()`, `json.arr()`, `json.str()`,
+  `json.num()`, `json.boolean()`, `json.null_value()`, `json.set()`,
+  `json.push()`, and `json.encode()` give the Go-style
+  build-a-tree-then-encode shape so JSON responses no longer have to be
+  hand-concatenated (with the attendant missing-comma / unescaped-quote
+  hazards — escaping is handled by the encoder). Thin aliases over the
+  existing API; the `create_*` / `object_set` / `array_add` / `stringify`
+  names remain.
+
+## [0.237.0]
+
+### Added
+
+- **`std.xml`: a pull/SAX reader and an escaping builder** (#627). S3,
+  SOAP-ish, and config XML no longer need hand-rolled `index_of`-scanning
+  parsers or string-concatenated response builders. The reader
+  (`xml.parser` / `xml.next` → `EVENT_*`, with `xml.name` / `xml.text` /
+  `xml.attr`) decodes the five predefined entities + numeric character
+  references, handles attributes, self-closing tags, and CDATA, and skips
+  the prolog / comments / PIs. The builder (`xml.writer`, `xml.start` /
+  `xml.attribute` / `xml.text_node` / `xml.element` / `xml.end` /
+  `xml.finish`) escapes text and attribute content so callers can't
+  forget to. Deliberately omits XSD, XPath, namespaces, and DTD
+  validation. New module `std/xml/` (C core + wrappers), regression test,
+  and stdlib-reference docs.
+## [0.236.0]
+
+### Fixed
+
+- **VS Code / Cursor extension: highlighting and the `.ae` file icon
+  vanished after `install.sh`.** The installer copied the extension
+  folder but then *removed* the extension from the editor's
+  `extensions.json`, expecting the editor to re-scan the directory and
+  re-register it on startup. Current VS Code / Cursor treat
+  `extensions.json` as the authoritative registry and don't reliably
+  re-scan for manually-dropped folders, so the extension sat
+  present-but-unloaded — no syntax highlighting, no module icon. The
+  installer now writes a proper `aether.aether-language` registration
+  entry pointing at the installed folder (and still clears stale
+  `aether*` rows and `.obsolete` keys). Fully quit and reopen the editor
+  after installing.
 
 ## [0.233.0]
 
