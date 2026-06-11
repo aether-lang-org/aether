@@ -131,6 +131,10 @@ static bool diagnose_ownership_mode = false;
 // non-zero = parse/typecheck/IO failure. See the post-typecheck
 // short-circuit further down for the explicit return-0 path.
 static bool emit_ast_mode = false;
+// --emit=inspect: operator-facing summary of what a .ae declares
+// (imports, capabilities, exports/entry, declarations) to stdout, then
+// exit. No codegen. Drives `ae inspect` (issue #473).
+static bool emit_inspect_mode = false;
 
 #ifdef _WIN32
     #include <windows.h>
@@ -775,6 +779,259 @@ static void emit_ast_node_recursive(FILE* out, ASTNode* node, int* first,
     }
 }
 
+// ---- `ae inspect` (--emit=inspect, issue #473) -------------------
+//
+// An operator-facing view of what a .ae script declares — imports
+// (resolved + capability-flagged), capability posture, exports / entry
+// point, top-level declarations, and the builder-DSL vocabulary it
+// defines. Reads the post-typecheck AST so signatures carry resolved
+// types. No codegen, no output file (peer of --emit=ast); prints to
+// stdout and exits. Out of scope (per the issue): full type dumps
+// (that's aether_describe) and raw AST printing (that's --emit=ast).
+
+// Aether-facing spelling of a resolved type, for signature display.
+static const char* inspect_type_name(Type* t) {
+    if (!t) return "?";
+    if (t->c_alias) return t->c_alias;
+    switch (t->kind) {
+        case TYPE_INT:       return "int";
+        case TYPE_INT64:     return "int64";
+        case TYPE_UINT64:    return "uint64";
+        case TYPE_UINT32:    return "uint32";
+        case TYPE_UINT16:    return "uint16";
+        case TYPE_UINT8:     return "uint8";
+        case TYPE_DURATION:  return "Duration";
+        case TYPE_FLOAT:     return "float";
+        case TYPE_BOOL:      return "bool";
+        case TYPE_BYTE:      return "byte";
+        case TYPE_STRING:    return "string";
+        case TYPE_PTR:       return "ptr";
+        case TYPE_VOID:      return "void";
+        case TYPE_ACTOR_REF: return "actor";
+        case TYPE_ARRAY:     return "array";
+        case TYPE_STRUCT:    return t->struct_name ? t->struct_name : "struct";
+        case TYPE_TUPLE:     return "tuple";
+        default:             return "?";
+    }
+}
+
+// Render a function/extern return type, expanding a tuple into
+// "(T1, T2, ...)". Writes into `buf`.
+static void inspect_return_type(Type* t, char* buf, size_t cap) {
+    if (t && t->kind == TYPE_TUPLE && t->tuple_count > 0) {
+        size_t pos = 0;
+        pos += (size_t)snprintf(buf + pos, cap - pos, "(");
+        for (int i = 0; i < t->tuple_count && pos < cap; i++) {
+            pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s",
+                                    i ? ", " : "",
+                                    inspect_type_name(t->tuple_types[i]));
+        }
+        snprintf(buf + pos, cap - pos, ")");
+    } else {
+        snprintf(buf, cap, "%s", inspect_type_name(t));
+    }
+}
+
+// True for the AST node kinds that represent a function/extern parameter.
+static int inspect_is_param(ASTNode* n) {
+    if (!n) return 0;
+    return n->type == AST_VARIABLE_DECLARATION ||
+           n->type == AST_PATTERN_VARIABLE ||
+           n->type == AST_IDENTIFIER;
+}
+
+// Print a function's parameter list: `(name: type, ...)`.
+static void inspect_print_params(FILE* out, ASTNode* fn) {
+    fputc('(', out);
+    int n = 0;
+    for (int i = 0; i < fn->child_count; i++) {
+        ASTNode* p = fn->children[i];
+        if (!p || p->type == AST_GUARD_CLAUSE || p->type == AST_BLOCK) continue;
+        if (!inspect_is_param(p)) continue;
+        if (n++) fputs(", ", out);
+        if (p->value) fprintf(out, "%s: ", p->value);
+        fputs(inspect_type_name(p->node_type), out);
+    }
+    fputc(')', out);
+}
+
+// Classify an import path into its source bucket.
+static const char* inspect_import_origin(const char* mod) {
+    if (!mod) return "local";
+    if (strncmp(mod, "std.", 4) == 0)     return "stdlib";
+    if (strncmp(mod, "contrib.", 8) == 0) return "contrib";
+    return "local";
+}
+
+// The --with capability a gated module needs, or NULL if ungated.
+static const char* inspect_module_capability(const char* mod) {
+    if (!mod) return NULL;
+    if (strcmp(mod, "std.fs") == 0)   return "fs";
+    if (strcmp(mod, "std.net") == 0)  return "net";
+    if (strcmp(mod, "std.http") == 0) return "net";
+    if (strcmp(mod, "std.tcp") == 0)  return "net";
+    if (strcmp(mod, "std.os") == 0)   return "os";
+    return NULL;
+}
+
+// True iff `c` is a declaration from THIS file (not merged in from an
+// imported module). `is_imported` covers most merged nodes, but some —
+// e.g. an imported module's top-level constants — aren't flagged, so we
+// also confirm the node's stamped origin matches the file under
+// inspection. A NULL source_file is a synthetic node the parser invented
+// for this file (e.g. main's scaffolding) — treat as local.
+static int inspect_is_local(ASTNode* c, const char* path) {
+    if (!c || c->is_imported) return 0;
+    if (c->source_file && path && strcmp(c->source_file, path) != 0) return 0;
+    return 1;
+}
+
+static void emit_inspect_report(FILE* out, ASTNode* program, const char* path) {
+    if (!out || !program) return;
+
+    // First pass: tallies + artifact shape.
+    int n_import = 0, n_fn = 0, n_actor = 0, n_struct = 0, n_const = 0,
+        n_extern = 0, n_builder = 0, n_export = 0, has_main = 0;
+    int need_fs = 0, need_net = 0, need_os = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        // Skip declarations merged in from imported modules — inspect
+        // reports what THIS file declares, not its dependencies' internals.
+        if (!inspect_is_local(c, path)) continue;
+        switch (c->type) {
+            case AST_IMPORT_STATEMENT: {
+                n_import++;
+                const char* cap = inspect_module_capability(c->value);
+                if (cap) {
+                    if (strcmp(cap, "fs") == 0) need_fs = 1;
+                    else if (strcmp(cap, "net") == 0) need_net = 1;
+                    else if (strcmp(cap, "os") == 0) need_os = 1;
+                }
+                break;
+            }
+            case AST_MAIN_FUNCTION:
+                has_main = 1;
+                break;
+            case AST_FUNCTION_DEFINITION:
+                n_fn++;
+                if (c->value && strcmp(c->value, "main") == 0) has_main = 1;
+                break;
+            case AST_BUILDER_FUNCTION:   n_builder++; break;
+            case AST_ACTOR_DEFINITION:   n_actor++;  break;
+            case AST_STRUCT_DEFINITION:  n_struct++; break;
+            case AST_CONST_DECLARATION:  n_const++;  break;
+            case AST_EXTERN_FUNCTION:    n_extern++; break;
+            case AST_EXPORTS_LIST:       n_export += c->child_count; break;
+            default: break;
+        }
+    }
+
+    fprintf(out, "inspect: %s\n", path ? path : "<stdin>");
+
+    // Artifact shape: a module if it has an exports() list, otherwise an
+    // executable if it defines main(), otherwise a plain source unit.
+    if (n_export > 0)
+        fprintf(out, "  artifact:  library / module (%d export%s)\n",
+                n_export, n_export == 1 ? "" : "s");
+    else if (has_main)
+        fprintf(out, "  artifact:  executable (entry: main)\n");
+    else
+        fprintf(out, "  artifact:  source unit (no main, no exports)\n");
+
+    // Capability posture: what the gated imports require, and whether the
+    // current --with flags would grant it.
+    if (need_fs || need_net || need_os) {
+        fprintf(out, "  capabilities required (gated imports):");
+        if (need_fs)  fprintf(out, " fs%s",  with_fs  ? "(granted)" : "");
+        if (need_net) fprintf(out, " net%s", with_net ? "(granted)" : "");
+        if (need_os)  fprintf(out, " os%s",  with_os  ? "(granted)" : "");
+        fputc('\n', out);
+        if ((need_fs && !with_fs) || (need_net && !with_net) || (need_os && !with_os))
+            fprintf(out, "             (pass --with=<cap,...> to grant under --emit=lib)\n");
+    } else {
+        fprintf(out, "  capabilities required: none (capability-empty)\n");
+    }
+
+    // Imports.
+    if (n_import) {
+        fprintf(out, "  imports (%d):\n", n_import);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (!inspect_is_local(c, path) || c->type != AST_IMPORT_STATEMENT || !c->value) continue;
+            const char* cap = inspect_module_capability(c->value);
+            fprintf(out, "    %-28s [%s%s%s]\n", c->value,
+                    inspect_import_origin(c->value),
+                    cap ? ", capability: " : "", cap ? cap : "");
+        }
+    }
+
+    // Exports (module ABI surface).
+    if (n_export) {
+        fprintf(out, "  exports (%d):\n", n_export);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (!inspect_is_local(c, path) || c->type != AST_EXPORTS_LIST) continue;
+            for (int j = 0; j < c->child_count; j++) {
+                ASTNode* e = c->children[j];
+                if (e && e->value) fprintf(out, "    %s\n", e->value);
+            }
+        }
+    }
+
+    // Declarations.
+    if (n_fn) {
+        fprintf(out, "  functions (%d):\n", n_fn);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (!inspect_is_local(c, path) || c->type != AST_FUNCTION_DEFINITION || !c->value) continue;
+            char ret[256];
+            inspect_return_type(c->node_type, ret, sizeof(ret));
+            fprintf(out, "    %s", c->value);
+            inspect_print_params(out, c);
+            fprintf(out, " -> %s\n", ret);
+        }
+    }
+    if (n_builder) {
+        fprintf(out, "  builder-DSL functions (%d):\n", n_builder);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (!inspect_is_local(c, path) || c->type != AST_BUILDER_FUNCTION || !c->value) continue;
+            fprintf(out, "    %s", c->value);
+            inspect_print_params(out, c);
+            fputc('\n', out);
+        }
+    }
+    if (n_actor) {
+        fprintf(out, "  actors (%d):", n_actor);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (inspect_is_local(c, path) && c->type == AST_ACTOR_DEFINITION && c->value)
+                fprintf(out, " %s", c->value);
+        }
+        fputc('\n', out);
+    }
+    if (n_struct) {
+        fprintf(out, "  structs (%d):", n_struct);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (inspect_is_local(c, path) && c->type == AST_STRUCT_DEFINITION && c->value)
+                fprintf(out, " %s", c->value);
+        }
+        fputc('\n', out);
+    }
+    if (n_const) {
+        fprintf(out, "  constants (%d):", n_const);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (inspect_is_local(c, path) && c->type == AST_CONST_DECLARATION && c->value)
+                fprintf(out, " %s", c->value);
+        }
+        fputc('\n', out);
+    }
+    if (n_extern)
+        fprintf(out, "  extern C declarations: %d\n", n_extern);
+}
+
 // Emit a self-contained C source file declaring a static const
 // AetherNamespaceManifest populated from the parsed manifest AST,
 // plus an aether_describe() exported function. This file is linked
@@ -1183,6 +1440,17 @@ int compile_source(const char* input_path, const char* output_path) {
     // numeric folds today; future fold passes (e.g. a
     // const-`string.concat(lit, lit)` fold) would get picked up
     // automatically.
+    if (emit_inspect_mode) {
+        emit_inspect_report(stdout, program, input_path);
+        fflush(stdout);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        return 1;  // process exit 0 (see --emit=ast note below)
+    }
+
     if (emit_ast_mode) {
         emit_ast_json(stdout, program);
         module_registry_shutdown();
@@ -1610,6 +1878,7 @@ void print_help(const char* program_name) {
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
     printf("  --diagnose=ownership             Print string-ownership verdicts and exit (no code generation)\n");
     printf("  --emit=ast                       Print post-typecheck AST as JSON to stdout and exit (no code generation).\n");
+    printf("  --emit=inspect                   Print an operator-facing summary of what the script declares and exit (drives `ae inspect`).\n");
     printf("                                   Filter set: import_statement, extern_function, function_call.\n");
     printf("                                   Used by aeb's supply-chain veto. Compiler holds no policy.\n");
     printf("  --help, -h                       Show this help message\n");
@@ -1734,8 +2003,12 @@ int main(int argc, char *argv[]) {
                 // targets — ast bypasses codegen entirely. See
                 // veto-enhancements.md for the design.
                 emit_ast_mode = true;
+            } else if (strcmp(val, "inspect") == 0) {
+                // --emit=inspect: operator-facing declaration summary on
+                // stdout (issue #473). Like --emit=ast, bypasses codegen.
+                emit_inspect_mode = true;
             } else {
-                fprintf(stderr, "Error: --emit must be one of: exe, lib, both, ast (got '%s')\n", val);
+                fprintf(stderr, "Error: --emit must be one of: exe, lib, both, ast, inspect (got '%s')\n", val);
                 return 1;
             }
             arg_offset++;
@@ -1900,6 +2173,17 @@ int main(int argc, char *argv[]) {
     // is read but no .c is written; the short-circuit inside
     // compile_source returns before codegen.
     if (emit_ast_mode) {
+        if (!compile_source(argv[arg_offset], "/dev/null")) {
+            return 1;
+        }
+        return 0;
+    }
+
+    // --emit=inspect: operator-facing declaration summary on stdout
+    // (issue #473). Input-only, like --check / --emit=ast — no .c is
+    // written; the short-circuit inside compile_source returns before
+    // codegen, so the "/dev/null" output is never opened.
+    if (emit_inspect_mode) {
         if (!compile_source(argv[arg_offset], "/dev/null")) {
             return 1;
         }
