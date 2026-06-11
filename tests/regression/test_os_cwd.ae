@@ -1,0 +1,61 @@
+// Regression test for os.chdir / os.getcwd — process working-directory
+// accessors (POSIX chdir(2)/getcwd(3); Windows Set/GetCurrentDirectory).
+
+import std.os
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== os.chdir / os.getcwd ===")
+
+    if os_getenv("OS") == "Windows_NT" {
+        println("  SKIP: paths in this test are POSIX-shaped")
+        return
+    }
+
+    // getcwd returns something non-empty.
+    start = os.getcwd()
+    if start == "" {
+        println("  FAIL: getcwd() returned empty")
+        exit(1)
+    }
+    println("  PASS: getcwd() = ${start}")
+
+    // chdir to root (no symlink indirection, stable across Unix) and
+    // confirm getcwd reflects it.
+    err = os.chdir("/")
+    if err != "" {
+        println("  FAIL: chdir('/') err=${err}")
+        exit(1)
+    }
+    here = os.getcwd()
+    if here != "/" {
+        println("  FAIL: after chdir('/'), getcwd()=${here}, expected /")
+        exit(1)
+    }
+    println("  PASS: chdir('/') then getcwd() == /")
+
+    // chdir back to where we started, confirm round-trip.
+    err2 = os.chdir(start)
+    if err2 != "" {
+        println("  FAIL: chdir back err=${err2}")
+        exit(1)
+    }
+    back = os.getcwd()
+    if !string.equals(back, start) {
+        println("  FAIL: round-trip cwd=${back}, expected ${start}")
+        exit(1)
+    }
+    println("  PASS: chdir round-trip restores cwd")
+
+    // chdir to a path that doesn't exist → non-empty error.
+    bad = os.chdir("/no/such/directory/anywhere")
+    if bad == "" {
+        println("  FAIL: chdir to missing dir should return an error")
+        exit(1)
+    }
+    println("  PASS: chdir to missing dir → error (${bad})")
+
+    println("=== All cases passed ===")
+}

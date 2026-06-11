@@ -130,13 +130,17 @@ Installs to `~/.aether` and adds `ae` to your PATH. Restart your terminal or run
 
 GCC is downloaded automatically the first time you run a program (~80 MB, one-time) — no MSYS2 or manual toolchain setup required.
 
-**All platforms — manage versions with `ae version`:**
+**All platforms — install, upgrade, and switch versions:**
 
 ```bash
+ae upgrade                   # install the latest release and switch to it
+ae install v0.25.0           # install a specific release (latest if omitted)
+ae use v0.25.0               # switch to an installed version
 ae version list              # see all available releases
-ae version install v0.25.0   # download and install a specific version
-ae version use v0.25.0       # switch to that version
 ```
+
+(The longer `ae version install <v>` / `ae version use <v>` forms still
+work and are equivalent to `ae install` / `ae use`.)
 
 ### Your First Program
 
@@ -194,9 +198,10 @@ ae repl                  # Start interactive REPL
 ae cache                 # Show build cache info
 ae cache clear           # Clear the build cache
 ae version               # Show current version
+ae upgrade               # Install the latest release and switch to it
+ae install <v>           # Install a specific release (latest if omitted)
+ae use <v>               # Switch to an installed version
 ae version list          # List all available releases
-ae version install <v>   # Install a specific version
-ae version use <v>       # Switch to an installed version
 ae help                  # Show all commands
 ```
 

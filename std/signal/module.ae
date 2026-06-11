@@ -1,0 +1,56 @@
+// std.signal — POSIX signal-number constants.
+// Import with: import std.signal
+//
+// Pairs with std.os's process-supervision primitives so callers pass
+// `signal.SIGTERM()` to `os.kill(pid, signal.SIGTERM())` instead of
+// hard-coding 15 (or 2, or 9). Pure-Aether: these are the standard
+// POSIX signal numbers, identical across Linux, macOS, and the BSDs.
+//
+// Exposed as zero-arg functions because Aether has no top-level `const`
+// (same shape as std.math's `math_pi` etc.). The set is limited to the
+// signals whose numbers are stable across every POSIX target — the
+// real-time and job-control signals (SIGUSR1/2, SIGCHLD, SIGSTOP…)
+// differ by platform (e.g. SIGUSR1 is 10 on Linux but 30 on macOS), so
+// they are intentionally omitted rather than shipped wrong; read them
+// from the platform header on the C side if you need them.
+
+exports (
+    SIGHUP, SIGINT, SIGQUIT, SIGILL, SIGABRT,
+    SIGFPE, SIGKILL, SIGSEGV, SIGPIPE, SIGALRM, SIGTERM
+)
+
+// Hangup — controlling terminal closed / daemon reload convention.
+SIGHUP() -> int { return 1 }
+
+// Interrupt — what Ctrl-C raises. Forwarded to the build group by
+// os.run_supervised when forward_signals is on.
+SIGINT() -> int { return 2 }
+
+// Quit — Ctrl-\, like SIGINT but with a core dump.
+SIGQUIT() -> int { return 3 }
+
+// Illegal instruction.
+SIGILL() -> int { return 4 }
+
+// Abort — what abort(3) / assert(3) raise.
+SIGABRT() -> int { return 6 }
+
+// Floating-point exception (also integer divide-by-zero).
+SIGFPE() -> int { return 8 }
+
+// Kill — cannot be caught, blocked, or ignored. The "grace expired,
+// take it down now" signal os.run_supervised sends after SIGTERM.
+SIGKILL() -> int { return 9 }
+
+// Invalid memory reference.
+SIGSEGV() -> int { return 11 }
+
+// Write to a pipe with no reader.
+SIGPIPE() -> int { return 13 }
+
+// Timer signal from alarm(2).
+SIGALRM() -> int { return 14 }
+
+// Termination — the polite "please shut down" request. The default
+// signal os.run_supervised sends first on timeout / group teardown.
+SIGTERM() -> int { return 15 }

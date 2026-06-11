@@ -599,18 +599,23 @@ Left-most entry wins on a name collision; each `import` walks the chain independ
 - Explore [Standard Library Documentation](stdlib-reference.md)
 - See [Architecture](architecture.md) for compiler and runtime internals
 - See [Runtime Optimizations](runtime-optimizations.md) for performance details
-- Use `ae version list` to see available releases and `ae version install <v>` to switch versions
+- Use `ae upgrade` to get the latest release, or `ae version list` to see and switch between releases
 
 ## Version Management
 
-Switch between Aether releases without reinstalling:
+Install, upgrade, and switch between Aether releases without reinstalling:
 
 ```bash
+ae upgrade              # Install the latest release and switch to it
+ae install v0.25.0      # Install a specific release (latest if omitted)
+ae use v0.25.0          # Switch to an installed version
 ae version              # Show current version
 ae version list         # List all available releases (marks installed/active)
-ae version install v0.25.0  # Download and install a specific version
-ae version use v0.25.0      # Switch to an installed version
 ```
+
+`ae install` / `ae use` are the short forms of `ae version install` /
+`ae version use`, which still work. `ae upgrade` (alias `ae update`) is a
+no-op when you are already on the latest release.
 
 Versions are stored in `~/.aether/versions/`. The active version is symlinked to `~/.aether/current` (Linux/macOS) or copied to `~/.aether/bin/` (Windows).
 

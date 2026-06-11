@@ -32,6 +32,8 @@ char* os_exec_raw(const char* c) { (void)c; return NULL; }
 char* os_getenv(const char* n) { (void)n; return NULL; }
 int os_execv(const char* p, void* a) { (void)p; (void)a; return -1; }
 char* os_which(const char* n) { (void)n; return NULL; }
+int os_chdir_raw(const char* p) { (void)p; return -1; }
+char* os_getcwd_raw(void) { return NULL; }
 int os_run(const char* p, void* a, void* e) { (void)p; (void)a; (void)e; return -1; }
 char* os_run_capture_raw(const char* p, void* a, void* e) { (void)p; (void)a; (void)e; return NULL; }
 typedef struct { const char* _0; int _1; const char* _2; } _tuple_string_int_string;
@@ -50,6 +52,26 @@ _tuple_int_int_string os_run_pipe_raw(const char* p, void* a, void* e) {
 _tuple_int_string os_wait_pid_raw(int pid) {
     (void)pid;
     _tuple_int_string out = { -1, "os.wait_pid unavailable" };
+    return out;
+}
+int os_kill_raw(int pid, int sig) { (void)pid; (void)sig; return -1; }
+_tuple_int_int_string os_wait_pid_timeout_raw(int pid, int secs) {
+    (void)pid; (void)secs;
+    _tuple_int_int_string out = { -1, 0, "os.wait_pid_timeout unavailable" };
+    return out;
+}
+_tuple_int_string os_run_supervised_raw(const char* p, void* a, void* e,
+                                        int g, int f, int t, int r) {
+    (void)p; (void)a; (void)e; (void)g; (void)f; (void)t; (void)r;
+    _tuple_int_string out = { -1, "os.run_supervised unavailable" };
+    return out;
+}
+typedef struct { const char* _0; const char* _1; int _2; const char* _3; } _tuple_string_string_int_string;
+_tuple_string_string_int_string os_run_full_raw(const char* p, void* a, void* e,
+                                                const char* in, int in_len) {
+    (void)p; (void)a; (void)e; (void)in; (void)in_len;
+    _tuple_string_string_int_string out = {
+        aether_os_empty_heap(), aether_os_empty_heap(), -1, "os.run_full unavailable" };
     return out;
 }
 _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* p, void* a, void* e) {
@@ -93,6 +115,9 @@ extern void* list_get_raw(void* list, int index);
 #include <sys/wait.h>
 #include <errno.h>
 #include <fcntl.h>  /* fcntl, F_GETFD — used by ipc_parent_channel_raw */
+#include <signal.h> /* kill, sigaction — process-supervision primitives */
+#include <time.h>   /* nanosleep, struct timespec — bounded waits */
+#include <poll.h>   /* poll — deadlock-free 3-way stdio pump in os_run_full_raw */
 #else
 #include <windows.h>
 #include <wchar.h>
@@ -785,6 +810,31 @@ char* os_which(const char* name) {
 
 #ifndef _WIN32
 
+/* Change the process working directory. POSIX chdir(2). Gated under the
+ * "fs" capability bucket: it repositions every subsequent relative path
+ * the process touches, so it's a filesystem-scoped action. */
+int os_chdir_raw(const char* path) {
+    if (!path) return -1;
+    if (!aether_sandbox_check("fs", path)) return -1;
+    return chdir(path) == 0 ? 0 : -1;
+}
+
+/* Current working directory as a fresh strdup'd buffer (caller owns).
+ * Grows the buffer until getcwd(3) stops reporting ERANGE so deep paths
+ * past PATH_MAX still resolve. NULL on any other error. */
+char* os_getcwd_raw(void) {
+    size_t cap = 4096;
+    for (;;) {
+        char* buf = (char*)malloc(cap);
+        if (!buf) return NULL;
+        if (getcwd(buf, cap)) return buf;
+        free(buf);
+        if (errno != ERANGE) return NULL;
+        if (cap > (size_t)1 << 20) return NULL; /* 1 MiB sanity ceiling */
+        cap *= 2;
+    }
+}
+
 // Build a NULL-terminated argv array from an Aether list. The first
 // entry in argv[] is `prog`. Caller must free the returned array (the
 // strings inside are pointers into the Aether list and must NOT be
@@ -1300,6 +1350,438 @@ _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* 
     return out;
 }
 
+/* ============================================================
+ * Process-supervision primitives — process groups, killpg, bounded
+ * waits, and a one-call supervised run. Filed by aeb
+ * (aeb-process-supervision-primitives.md): the floor any build/test
+ * orchestrator hits — run a child as its own process group, forward
+ * interactive signals to it, enforce a wall-clock timeout, then
+ * group-reap anything the child leaked. POSIX-only; the Windows
+ * branch stubs these as "unsupported".
+ * ============================================================ */
+
+/* Send `sig` to `pid`. Thin POSIX kill(2) wrapper, returning 0 on
+ * success and -1 on failure. The two non-obvious conventions are
+ * intentional and documented in the header / module.ae:
+ *   - negative pid → signal the whole group abs(pid);
+ *   - sig == 0     → existence/permission probe, no delivery.
+ * Gated under the "exec" capability bucket: sending a signal is a
+ * process-control action of the same blast radius as spawning one. */
+int os_kill_raw(int pid, int sig) {
+    if (!aether_sandbox_check("exec", "kill")) return -1;
+    return kill((pid_t)pid, sig) == 0 ? 0 : -1;
+}
+
+/* Bounded wait for a single child. Returns (status, timed_out, err):
+ *   - status:    WEXITSTATUS on normal exit, 128+signo when killed by
+ *                a signal, -1 on timeout or error.
+ *   - timed_out: 1 if `secs` elapsed before the child exited (the
+ *                child is left running — the caller decides whether to
+ *                kill it), 0 otherwise.
+ *   - err:       "" on a clean reap or a clean timeout; non-empty on a
+ *                waitpid error / invalid pid.
+ * secs <= 0 means "block indefinitely" (equivalent to os_wait_pid_raw
+ * but with the timed_out slot always 0). Poll cadence is 20ms against
+ * a CLOCK_MONOTONIC deadline so a wall-clock jump can't distort it. */
+_tuple_int_int_string os_wait_pid_timeout_raw(int pid, int secs) {
+    _tuple_int_int_string out = { -1, 0, "" };
+    if (pid <= 0) { out._2 = "invalid pid"; return out; }
+
+    int st = 0;
+    if (secs <= 0) {
+        while (waitpid((pid_t)pid, &st, 0) < 0) {
+            if (errno != EINTR) { out._2 = "waitpid failed"; return out; }
+        }
+    } else {
+        int64_t deadline = os_now_monotonic_ms_raw() + (int64_t)secs * 1000;
+        int reaped = 0;
+        for (;;) {
+            pid_t r = waitpid((pid_t)pid, &st, WNOHANG);
+            if (r == (pid_t)pid) { reaped = 1; break; }
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                out._2 = "waitpid failed";
+                return out;
+            }
+            if (os_now_monotonic_ms_raw() >= deadline) { out._1 = 1; return out; }
+            struct timespec ts = { 0, 20 * 1000 * 1000 }; /* 20ms */
+            nanosleep(&ts, NULL);
+        }
+        (void)reaped;
+    }
+
+    if (WIFEXITED(st)) {
+        out._0 = WEXITSTATUS(st);
+    } else if (WIFSIGNALED(st)) {
+        out._0 = 128 + WTERMSIG(st);
+    } else {
+        out._0 = -1;
+        out._2 = "child terminated abnormally";
+    }
+    return out;
+}
+
+/* Signal-forwarding state for os_run_supervised_raw. A supervised run
+ * installs SIGINT/SIGTERM handlers that forward the signal to the
+ * child's process group, so a Ctrl-C at the controlling terminal tears
+ * down the whole build rather than orphaning the parent's children.
+ * Single-slot global: v1 supports one supervised run forwarding at a
+ * time (nested/concurrent supervised runs in threads would race this).
+ * The handler does nothing but kill(2), which is async-signal-safe. */
+static volatile sig_atomic_t g_supervised_pgid = 0;
+
+static void aether_os_forward_signal(int sig) {
+    pid_t pg = (pid_t)g_supervised_pgid;
+    if (pg > 0) kill(-pg, sig);
+}
+
+/* One-call supervised run. Encodes the bash job-control pattern that
+ * every build/test orchestrator reinvents:
+ *
+ *   - new_process_group: run the child in its own process group
+ *     (pgid == child pid) so signals and reaping can target the whole
+ *     subtree, not just the immediate child.
+ *   - forward_signals: install parent SIGINT/SIGTERM handlers that
+ *     forward to the child's group (requires new_process_group).
+ *   - timeout_secs > 0: TERM the group on deadline, grace 5s, then
+ *     KILL; report exit_code 124 (GNU `timeout` convention).
+ *   - reap_group: after the child exits, TERM→grace→KILL the group to
+ *     clean up anything the build leaked (a stray test server, a
+ *     backgrounded helper), then reap the now-dead members (requires
+ *     new_process_group).
+ *
+ * Returns (exit_code, outcome) where outcome is one of:
+ *   "exited"    — child exited normally; exit_code is its status.
+ *   "signalled" — child was killed by a signal; exit_code is 128+signo.
+ *   "timeout"   — deadline hit, group torn down; exit_code is 124.
+ *   "error"     — spawn / wait failure; exit_code is -1.
+ */
+_tuple_int_string os_run_supervised_raw(const char* prog, void* argv_list, void* env_list,
+                                        int new_process_group, int forward_signals,
+                                        int timeout_secs, int reap_group) {
+    _tuple_int_string out = { -1, "error" };
+    if (!prog) { out._1 = "null prog"; return out; }
+    if (!aether_sandbox_check("exec", prog)) { out._1 = "denied by sandbox"; return out; }
+
+    char** av = build_argv_array(prog, argv_list);
+    if (!av) { out._1 = "argv build failed"; return out; }
+    char** envp = build_envp_array(env_list);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        free(av); free(envp);
+        out._1 = "fork failed";
+        return out;
+    }
+    if (pid == 0) {
+        /* Child: become our own process-group leader before exec so the
+         * parent can address the whole subtree as -pid. Setting it in
+         * both child and parent (below) closes the fork/exec race. */
+        if (new_process_group) setpgid(0, 0);
+        if (envp) execve(prog, av, envp);
+        else      execvp(prog, av);
+        _exit(127);
+    }
+    /* Parent. */
+    if (new_process_group) setpgid(pid, pid); /* harmless if child won the race */
+    free(av); free(envp);
+
+    /* The group we can address with a negative pid. 0 means "no group"
+     * (new_process_group was off) — signal/reap-group steps are skipped. */
+    pid_t group = new_process_group ? pid : 0;
+
+    struct sigaction old_int, old_term, sa;
+    int installed = 0;
+    if (forward_signals && group) {
+        g_supervised_pgid = pid;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = aether_os_forward_signal;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0; /* no SA_RESTART: let waitpid return EINTR so we re-loop */
+        sigaction(SIGINT, &sa, &old_int);
+        sigaction(SIGTERM, &sa, &old_term);
+        installed = 1;
+    }
+
+    int st = 0;
+    const char* outcome = "exited";
+    int exit_code = -1;
+    int handled = 0; /* 1 once outcome/exit_code are final (timeout path) */
+
+    if (timeout_secs > 0) {
+        int64_t deadline = os_now_monotonic_ms_raw() + (int64_t)timeout_secs * 1000;
+        int reaped = 0;
+        for (;;) {
+            pid_t r = waitpid(pid, &st, WNOHANG);
+            if (r == pid) { reaped = 1; break; }
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                break; /* ECHILD or similar — fall through to status decode */
+            }
+            if (os_now_monotonic_ms_raw() >= deadline) break;
+            struct timespec ts = { 0, 20 * 1000 * 1000 };
+            nanosleep(&ts, NULL);
+        }
+        if (!reaped) {
+            /* Deadline hit: TERM the group (or the lone child), give it
+             * 5s to unwind, then KILL and definitely reap. */
+            pid_t target = group ? -group : pid;
+            kill(target, SIGTERM);
+            int64_t grace = os_now_monotonic_ms_raw() + 5000;
+            while (os_now_monotonic_ms_raw() < grace) {
+                if (waitpid(pid, &st, WNOHANG) == pid) { reaped = 1; break; }
+                struct timespec ts = { 0, 20 * 1000 * 1000 };
+                nanosleep(&ts, NULL);
+            }
+            if (!reaped) {
+                kill(target, SIGKILL);
+                waitpid(pid, &st, 0);
+            }
+            outcome = "timeout";
+            exit_code = 124;
+            handled = 1;
+        }
+    } else {
+        while (waitpid(pid, &st, 0) < 0) {
+            if (errno != EINTR) { outcome = "error"; exit_code = -1; handled = 1; break; }
+        }
+    }
+
+    if (!handled) {
+        if (WIFEXITED(st)) {
+            exit_code = WEXITSTATUS(st);
+            outcome = "exited";
+        } else if (WIFSIGNALED(st)) {
+            exit_code = 128 + WTERMSIG(st);
+            outcome = "signalled";
+        } else {
+            exit_code = -1;
+            outcome = "error";
+        }
+    }
+
+    /* Group-reap anything the build leaked into the group. The child
+     * itself is already reaped; these waitpid(-group) calls collect any
+     * other group members we just signalled so they don't linger as
+     * zombies. */
+    if (reap_group && group) {
+        kill(-group, SIGTERM);
+        struct timespec ts = { 0, 100 * 1000 * 1000 }; /* 100ms grace */
+        nanosleep(&ts, NULL);
+        kill(-group, SIGKILL);
+        for (;;) {
+            int st2 = 0;
+            pid_t r = waitpid(-group, &st2, WNOHANG);
+            if (r <= 0) break;
+        }
+    }
+
+    if (installed) {
+        sigaction(SIGINT, &old_int, NULL);
+        sigaction(SIGTERM, &old_term, NULL);
+        g_supervised_pgid = 0;
+    }
+
+    out._0 = exit_code;
+    out._1 = outcome;
+    return out;
+}
+
+typedef struct { const char* _0; const char* _1; int _2; const char* _3; } _tuple_string_string_int_string;
+
+/* Append `n` bytes to a doubling buffer, keeping room for a trailing
+ * NUL. Returns 1 on success, 0 on allocation failure (buffer left
+ * intact for the caller to free). Used by os_run_full_raw's poll
+ * loop to accumulate stdout and stderr independently. */
+static int aether_os_buf_append(char** buf, size_t* len, size_t* cap,
+                                const char* data, size_t n) {
+    if (*len + n + 1 > *cap) {
+        size_t nc = *cap ? *cap : 4096;
+        while (*len + n + 1 > nc) nc *= 2;
+        char* bigger = (char*)realloc(*buf, nc);
+        if (!bigger) return 0;
+        *buf = bigger;
+        *cap = nc;
+    }
+    memcpy(*buf + *len, data, n);
+    *len += n;
+    return 1;
+}
+
+static void aether_os_set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+/* Full three-way child stdio: feed `stdin_data` (exactly `stdin_len`
+ * bytes — binary-safe, NUL bytes included) to the child's stdin, and
+ * capture its stdout and stderr SEPARATELY. Returns
+ * (stdout, stderr, exit_code, err):
+ *   - stdout / stderr: @heap captures the caller owns; "" if empty.
+ *     Like os.run_capture they are NUL-terminated C strings, so a
+ *     capture containing an embedded NUL reads as truncated through
+ *     the string wrappers (the stdin direction has no such limit —
+ *     it is written by explicit length).
+ *   - exit_code: WEXITSTATUS on normal exit, 128+signo if the child
+ *     was killed by a signal, 127 on exec failure, -1 on spawn/IO
+ *     error (err non-empty in that last case).
+ *   - err: "" on a successful spawn (regardless of exit code);
+ *     non-empty only when the fork/exec/pipe couldn't run.
+ *
+ * A poll(2) loop pumps all three fds at once, so the child can write
+ * unbounded stdout/stderr while we stream its stdin — no classic
+ * "fill the pipe buffer and deadlock" hazard. `stdin_len <= 0` gives
+ * the child an immediately-closed (empty) stdin rather than the
+ * parent's, so it can't block reading a terminal. */
+_tuple_string_string_int_string os_run_full_raw(const char* prog, void* argv_list, void* env_list,
+                                                const char* stdin_data, int stdin_len) {
+    _tuple_string_string_int_string out = {
+        aether_os_empty_heap(), aether_os_empty_heap(), -1, "" };
+    if (!prog) { out._3 = "null prog"; return out; }
+    if (!aether_sandbox_check("exec", prog)) { out._3 = "denied by sandbox"; return out; }
+
+    int in_pipe[2]  = { -1, -1 };
+    int out_pipe[2] = { -1, -1 };
+    int err_pipe[2] = { -1, -1 };
+    if (pipe(in_pipe) != 0) { out._3 = "pipe failed"; return out; }
+    if (pipe(out_pipe) != 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        out._3 = "pipe failed"; return out;
+    }
+    if (pipe(err_pipe) != 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        out._3 = "pipe failed"; return out;
+    }
+
+    char** av = build_argv_array(prog, argv_list);
+    if (!av) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        out._3 = "argv build failed"; return out;
+    }
+    char** envp = build_envp_array(env_list);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        free(av); free(envp);
+        out._3 = "fork failed"; return out;
+    }
+    if (pid == 0) {
+        /* Child: wire stdin/stdout/stderr to the pipes, close the rest. */
+        close(in_pipe[1]); close(out_pipe[0]); close(err_pipe[0]);
+        if (dup2(in_pipe[0], 0) < 0)  _exit(127);
+        if (dup2(out_pipe[1], 1) < 0) _exit(127);
+        if (dup2(err_pipe[1], 2) < 0) _exit(127);
+        close(in_pipe[0]); close(out_pipe[1]); close(err_pipe[1]);
+        if (envp) execve(prog, av, envp);
+        else      execvp(prog, av);
+        _exit(127);
+    }
+    /* Parent. */
+    free(av); free(envp);
+    close(in_pipe[0]); close(out_pipe[1]); close(err_pipe[1]);
+    int in_fd = in_pipe[1], o_fd = out_pipe[0], e_fd = err_pipe[0];
+
+    size_t in_total = (stdin_data && stdin_len > 0) ? (size_t)stdin_len : 0;
+    size_t in_off = 0;
+    int in_open = 1;
+    if (in_total == 0) { close(in_fd); in_open = 0; } /* empty stdin → immediate EOF */
+
+    aether_os_set_nonblock(o_fd);
+    aether_os_set_nonblock(e_fd);
+    if (in_open) aether_os_set_nonblock(in_fd);
+
+    char* obuf = NULL; size_t olen = 0, ocap = 0;
+    char* ebuf = NULL; size_t elen = 0, ecap = 0;
+    int o_open = 1, e_open = 1, oom = 0;
+    char tmp[4096];
+
+    while (o_open || e_open || in_open) {
+        struct pollfd pfds[3];
+        int nf = 0, oi = -1, ei = -1, ii = -1;
+        if (o_open)  { pfds[nf].fd = o_fd;  pfds[nf].events = POLLIN;  pfds[nf].revents = 0; oi = nf++; }
+        if (e_open)  { pfds[nf].fd = e_fd;  pfds[nf].events = POLLIN;  pfds[nf].revents = 0; ei = nf++; }
+        if (in_open) { pfds[nf].fd = in_fd; pfds[nf].events = POLLOUT; pfds[nf].revents = 0; ii = nf++; }
+
+        if (poll(pfds, nf, -1) < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        if (oi >= 0 && pfds[oi].revents) {
+            for (;;) {
+                ssize_t n = read(o_fd, tmp, sizeof tmp);
+                if (n > 0) { if (!aether_os_buf_append(&obuf, &olen, &ocap, tmp, (size_t)n)) { oom = 1; o_open = 0; break; } continue; }
+                if (n == 0) { o_open = 0; break; }
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) { if (pfds[oi].revents & (POLLHUP | POLLERR)) o_open = 0; break; }
+                o_open = 0; break;
+            }
+        }
+        if (ei >= 0 && pfds[ei].revents) {
+            for (;;) {
+                ssize_t n = read(e_fd, tmp, sizeof tmp);
+                if (n > 0) { if (!aether_os_buf_append(&ebuf, &elen, &ecap, tmp, (size_t)n)) { oom = 1; e_open = 0; break; } continue; }
+                if (n == 0) { e_open = 0; break; }
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) { if (pfds[ei].revents & (POLLHUP | POLLERR)) e_open = 0; break; }
+                e_open = 0; break;
+            }
+        }
+        if (ii >= 0 && pfds[ii].revents) {
+            size_t remain = in_total - in_off;
+            size_t chunk = remain > 65536 ? 65536 : remain;
+            ssize_t w = write(in_fd, stdin_data + in_off, chunk);
+            if (w > 0) {
+                in_off += (size_t)w;
+                if (in_off >= in_total) { close(in_fd); in_open = 0; }
+            } else if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                /* EPIPE etc — child closed stdin early. Stop feeding. */
+                close(in_fd); in_open = 0;
+            }
+            if (oom) break;
+        }
+        if (oom) break;
+    }
+
+    close(o_fd);
+    close(e_fd);
+    if (in_open) close(in_fd);
+
+    int st = 0;
+    while (waitpid(pid, &st, 0) < 0) {
+        if (errno != EINTR) {
+            free(obuf); free(ebuf);
+            out._2 = -1;
+            out._3 = "waitpid failed";
+            return out;
+        }
+    }
+
+    if (oom) {
+        free(obuf); free(ebuf);
+        out._2 = -1;
+        out._3 = "alloc failed";
+        return out;
+    }
+
+    /* NUL-terminate the captures and hand ownership to the caller,
+     * freeing the empty-heap placeholders first (same #420 v2 contract
+     * the other @heap returns follow). */
+    if (obuf) { obuf[olen] = '\0'; free((void*)out._0); out._0 = obuf; }
+    if (ebuf) { ebuf[elen] = '\0'; free((void*)out._1); out._1 = ebuf; }
+
+    if (WIFEXITED(st))        out._2 = WEXITSTATUS(st);
+    else if (WIFSIGNALED(st)) out._2 = 128 + WTERMSIG(st);
+    else                      out._2 = -1;
+    return out;
+}
+
 /* Child side: returns the parent-channel fd if the parent spawned
  * us via os_run_pipe* (i.e. AETHER_IPC_FD is set and the named fd
  * is open writable); -1 otherwise.
@@ -1608,6 +2090,31 @@ static int win_launch(const char* prog, void* argv_list, void* env_list,
     return 0;
 }
 
+/* Working-directory accessors — Windows. UTF-8 path in / UTF-8 path out,
+ * converted through the wide-char helpers so non-ASCII paths survive. */
+int os_chdir_raw(const char* path) {
+    if (!path) return -1;
+    if (!aether_sandbox_check("fs", path)) return -1;
+    wchar_t* w = utf8_to_wide(path);
+    if (!w) return -1;
+    BOOL ok = SetCurrentDirectoryW(w);
+    free(w);
+    return ok ? 0 : -1;
+}
+
+char* os_getcwd_raw(void) {
+    /* GetCurrentDirectoryW(0, NULL) returns the buffer size (incl. NUL). */
+    DWORD need = GetCurrentDirectoryW(0, NULL);
+    if (need == 0) return NULL;
+    wchar_t* w = (wchar_t*)malloc(sizeof(wchar_t) * need);
+    if (!w) return NULL;
+    DWORD got = GetCurrentDirectoryW(need, w);
+    if (got == 0 || got >= need) { free(w); return NULL; }
+    char* utf8 = wide_to_utf8(w);
+    free(w);
+    return utf8;
+}
+
 int os_run(const char* prog, void* argv_list, void* env_list) {
     if (!prog) return -1;
     if (!aether_sandbox_check("exec", prog)) return -1;
@@ -1688,6 +2195,279 @@ _tuple_int_string os_wait_pid_raw(int pid) {
 _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* argv_list, void* env_list) {
     (void)prog; (void)argv_list; (void)env_list;
     _tuple_string_int_string out = { aether_os_empty_heap(), -1, "unsupported on Windows" };
+    return out;
+}
+
+/* Process-supervision primitives on Windows.
+ *
+ * POSIX process groups + killpg + sigaction don't exist here; the clean
+ * Win32 mapping is:
+ *   - process *group* lifecycle (timeout, group-reap of leaked children)
+ *     → a Job Object. JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE makes closing
+ *     the job tear down the whole tree, which IS group-reap;
+ *     TerminateJobObject is the group kill;
+ *   - signal forwarding → a console control handler that terminates the
+ *     job on Ctrl-C / Ctrl-Break (console apps only; there are no
+ *     catchable POSIX signals to forward);
+ *   - waiting / timeout → WaitForSingleObject on the process handle.
+ * There is no "killed by signal" outcome on Windows, so run_supervised
+ * reports "exited" (or "timeout"); os.kill maps any non-zero signal to a
+ * forced TerminateProcess (no graceful SIGTERM) and rejects negative-pid
+ * group signalling (no pgid-by-negative-pid concept). */
+
+int os_kill_raw(int pid, int sig) {
+    if (!aether_sandbox_check("exec", "kill")) return -1;
+    /* Negative pid = signal a whole group: no Win32 equivalent. */
+    if (pid < 0) return -1;
+    if (sig == 0) {
+        /* Existence probe: open + a zero-timeout wait. WAIT_TIMEOUT means
+         * the process is still running (alive); WAIT_OBJECT_0 means it has
+         * already exited (gone) — matches POSIX kill -0 semantics. */
+        HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+        if (!h) return -1;
+        DWORD w = WaitForSingleObject(h, 0);
+        CloseHandle(h);
+        return (w == WAIT_TIMEOUT) ? 0 : -1;
+    }
+    HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+    if (!h) return -1;
+    /* Exit code mirrors POSIX 128+signo so a waiter can tell it was a kill. */
+    BOOL ok = TerminateProcess(h, (UINT)(128 + sig));
+    CloseHandle(h);
+    return ok ? 0 : -1;
+}
+
+_tuple_int_int_string os_wait_pid_timeout_raw(int pid, int secs) {
+    _tuple_int_int_string out = { -1, 0, "" };
+    if (pid <= 0) { out._2 = "invalid pid"; return out; }
+    HANDLE h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid);
+    if (!h) { out._2 = "no such process"; return out; }
+    DWORD ms = (secs <= 0) ? INFINITE : (DWORD)secs * 1000;
+    DWORD w = WaitForSingleObject(h, ms);
+    if (w == WAIT_TIMEOUT) { out._1 = 1; CloseHandle(h); return out; }
+    if (w != WAIT_OBJECT_0) { out._2 = "wait failed"; CloseHandle(h); return out; }
+    DWORD code = 0;
+    GetExitCodeProcess(h, &code);
+    CloseHandle(h);
+    out._0 = (int)code;
+    return out;
+}
+
+/* Forward-signals state: the job to tear down on Ctrl-C / Ctrl-Break.
+ * Single supervised run at a time (mirrors the POSIX g_supervised_pgid). */
+static HANDLE g_supervised_job = NULL;
+
+static BOOL WINAPI aether_os_ctrl_handler(DWORD ctrl) {
+    if ((ctrl == CTRL_C_EVENT || ctrl == CTRL_BREAK_EVENT) && g_supervised_job) {
+        TerminateJobObject(g_supervised_job, (UINT)(128 + 2)); /* SIGINT-ish */
+        return TRUE;
+    }
+    return FALSE;
+}
+
+_tuple_int_string os_run_supervised_raw(const char* prog, void* argv_list, void* env_list,
+                                        int new_process_group, int forward_signals,
+                                        int timeout_secs, int reap_group) {
+    _tuple_int_string out = { -1, "error" };
+    if (!prog) { out._1 = "null prog"; return out; }
+    if (!aether_sandbox_check("exec", prog)) { out._1 = "denied by sandbox"; return out; }
+
+    wchar_t* cmdline = build_command_line(prog, argv_list);
+    if (!cmdline) { out._1 = "argv build failed"; return out; }
+    wchar_t* wprog = utf8_to_wide(prog);
+    if (!wprog) { free(cmdline); out._1 = "argv build failed"; return out; }
+    wchar_t* wenv = build_environ_block(env_list); /* NULL = inherit */
+
+    HANDLE job = CreateJobObjectW(NULL, NULL);
+    if (!job) { free(cmdline); free(wprog); free(wenv); out._1 = "job create failed"; return out; }
+
+    /* Arm kill-on-close only when reap_group is set: closing the job then
+     * tears down the whole tree (the Windows group-reap). Without it,
+     * leaked children outlive the job-handle close. */
+    if (reap_group) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli;
+        memset(&jeli, 0, sizeof jeli);
+        jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &jeli, sizeof jeli);
+    }
+
+    STARTUPINFOW si; memset(&si, 0, sizeof si); si.cb = sizeof si;
+    PROCESS_INFORMATION pi; memset(&pi, 0, sizeof pi);
+
+    /* CREATE_SUSPENDED so we can assign to the job before the child runs —
+     * otherwise a fast child could spawn grandchildren that escape it. */
+    DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
+    if (new_process_group) flags |= CREATE_NEW_PROCESS_GROUP;
+
+    BOOL ok = CreateProcessW(wprog, cmdline, NULL, NULL, FALSE, flags, wenv, NULL, &si, &pi);
+    free(cmdline); free(wprog); free(wenv);
+    if (!ok) { CloseHandle(job); out._1 = "spawn failed"; return out; }
+
+    AssignProcessToJobObject(job, pi.hProcess);
+
+    HANDLE old_job = g_supervised_job;
+    int installed = 0;
+    if (forward_signals) {
+        g_supervised_job = job;
+        SetConsoleCtrlHandler(aether_os_ctrl_handler, TRUE);
+        installed = 1;
+    }
+
+    ResumeThread(pi.hThread);
+
+    const char* outcome = "exited";
+    int exit_code = -1;
+    DWORD ms = (timeout_secs > 0) ? (DWORD)timeout_secs * 1000 : INFINITE;
+    DWORD w = WaitForSingleObject(pi.hProcess, ms);
+    if (w == WAIT_TIMEOUT) {
+        TerminateJobObject(job, 124);             /* GNU timeout convention */
+        WaitForSingleObject(pi.hProcess, 5000);
+        outcome = "timeout";
+        exit_code = 124;
+    } else if (w == WAIT_OBJECT_0) {
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        exit_code = (int)code;
+        outcome = "exited";
+    } else {
+        outcome = "error";
+        exit_code = -1;
+    }
+
+    if (installed) {
+        SetConsoleCtrlHandler(aether_os_ctrl_handler, FALSE);
+        g_supervised_job = old_job;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(job); /* fires KILL_ON_JOB_CLOSE when reap_group was set */
+
+    out._0 = exit_code;
+    out._1 = outcome;
+    return out;
+}
+
+/* os.run_full on Windows. The POSIX side uses a poll(2) loop over the
+ * three pipes; Win32 anonymous pipes aren't pollable, so we drain stdout
+ * and stderr on dedicated reader threads while the main thread writes
+ * stdin — same deadlock-free guarantee, different mechanism. */
+typedef struct { const char* _0; const char* _1; int _2; const char* _3; } _tuple_string_string_int_string;
+
+typedef struct {
+    HANDLE pipe;
+    char*  buf;
+    size_t len;
+    size_t cap;
+    int    oom;
+} aether_win_drain_ctx;
+
+/* Read `pipe` to EOF into a doubling buffer. EOF on a Win32 pipe surfaces
+ * as ReadFile returning FALSE with ERROR_BROKEN_PIPE once the child's
+ * write end is closed — treated as a clean end-of-stream. */
+static unsigned __stdcall aether_win_drain_thread(void* arg) {
+    aether_win_drain_ctx* c = (aether_win_drain_ctx*)arg;
+    char tmp[4096];
+    DWORD got = 0;
+    for (;;) {
+        if (!ReadFile(c->pipe, tmp, sizeof tmp, &got, NULL)) break;
+        if (got == 0) break;
+        if (c->len + got + 1 > c->cap) {
+            size_t nc = c->cap ? c->cap : 4096;
+            while (c->len + got + 1 > nc) nc *= 2;
+            char* b = (char*)realloc(c->buf, nc);
+            if (!b) { c->oom = 1; break; }
+            c->buf = b; c->cap = nc;
+        }
+        memcpy(c->buf + c->len, tmp, got);
+        c->len += got;
+    }
+    return 0;
+}
+
+_tuple_string_string_int_string os_run_full_raw(const char* prog, void* argv_list, void* env_list,
+                                                const char* stdin_data, int stdin_len) {
+    _tuple_string_string_int_string out = {
+        aether_os_empty_heap(), aether_os_empty_heap(), -1, "" };
+    if (!prog) { out._3 = "null prog"; return out; }
+    if (!aether_sandbox_check("exec", prog)) { out._3 = "denied by sandbox"; return out; }
+
+    SECURITY_ATTRIBUTES sa; memset(&sa, 0, sizeof sa);
+    sa.nLength = sizeof sa; sa.bInheritHandle = TRUE; sa.lpSecurityDescriptor = NULL;
+
+    HANDLE in_r = NULL, in_w = NULL, out_r = NULL, out_w = NULL, err_r = NULL, err_w = NULL;
+    if (!CreatePipe(&in_r, &in_w, &sa, 0)) { out._3 = "pipe failed"; return out; }
+    if (!CreatePipe(&out_r, &out_w, &sa, 0)) {
+        CloseHandle(in_r); CloseHandle(in_w);
+        out._3 = "pipe failed"; return out;
+    }
+    if (!CreatePipe(&err_r, &err_w, &sa, 0)) {
+        CloseHandle(in_r); CloseHandle(in_w); CloseHandle(out_r); CloseHandle(out_w);
+        out._3 = "pipe failed"; return out;
+    }
+    /* Parent-side ends must not be inherited by the child. */
+    SetHandleInformation(in_w,  HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
+
+    wchar_t* cmdline = build_command_line(prog, argv_list);
+    wchar_t* wprog = utf8_to_wide(prog);
+    wchar_t* wenv = build_environ_block(env_list); /* NULL = inherit */
+    if (!cmdline || !wprog) {
+        free(cmdline); free(wprog); free(wenv);
+        CloseHandle(in_r); CloseHandle(in_w); CloseHandle(out_r);
+        CloseHandle(out_w); CloseHandle(err_r); CloseHandle(err_w);
+        out._3 = "argv build failed"; return out;
+    }
+
+    STARTUPINFOW si; memset(&si, 0, sizeof si); si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput  = in_r;
+    si.hStdOutput = out_w;
+    si.hStdError  = err_w;
+    PROCESS_INFORMATION pi; memset(&pi, 0, sizeof pi);
+
+    BOOL ok = CreateProcessW(wprog, cmdline, NULL, NULL, TRUE,
+                             CREATE_UNICODE_ENVIRONMENT, wenv, NULL, &si, &pi);
+    free(cmdline); free(wprog); free(wenv);
+    /* Close the child-side ends in the parent so EOF propagates correctly. */
+    CloseHandle(in_r); CloseHandle(out_w); CloseHandle(err_w);
+    if (!ok) {
+        CloseHandle(in_w); CloseHandle(out_r); CloseHandle(err_r);
+        out._3 = "spawn failed"; return out;
+    }
+
+    aether_win_drain_ctx octx; memset(&octx, 0, sizeof octx); octx.pipe = out_r;
+    aether_win_drain_ctx ectx; memset(&ectx, 0, sizeof ectx); ectx.pipe = err_r;
+    HANDLE ot = (HANDLE)_beginthreadex(NULL, 0, aether_win_drain_thread, &octx, 0, NULL);
+    HANDLE et = (HANDLE)_beginthreadex(NULL, 0, aether_win_drain_thread, &ectx, 0, NULL);
+
+    size_t total = (stdin_data && stdin_len > 0) ? (size_t)stdin_len : 0;
+    size_t off = 0;
+    while (off < total) {
+        DWORD chunk = (DWORD)((total - off) > 65536 ? 65536 : (total - off));
+        DWORD wrote = 0;
+        if (!WriteFile(in_w, stdin_data + off, chunk, &wrote, NULL)) break; /* child closed stdin */
+        off += wrote;
+    }
+    CloseHandle(in_w); /* deliver EOF to the child's stdin */
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    if (ot) { WaitForSingleObject(ot, INFINITE); CloseHandle(ot); }
+    if (et) { WaitForSingleObject(et, INFINITE); CloseHandle(et); }
+    CloseHandle(out_r); CloseHandle(err_r);
+
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+
+    if (octx.oom || ectx.oom) {
+        free(octx.buf); free(ectx.buf);
+        out._3 = "alloc failed"; return out;
+    }
+    if (octx.buf) { octx.buf[octx.len] = '\0'; free((void*)out._0); out._0 = octx.buf; }
+    if (ectx.buf) { ectx.buf[ectx.len] = '\0'; free((void*)out._1); out._1 = ectx.buf; }
+    out._2 = (int)code;
     return out;
 }
 

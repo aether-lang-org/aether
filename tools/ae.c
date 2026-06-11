@@ -570,20 +570,66 @@ static int win_run(const char* cmd_str, int quiet) {
     strncpy(buf, cmd_str, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
 
+    // Tokenize the command string into argv tokens for _spawnvp. Quoted
+    // segments map to ONE token even when they contain spaces.
+    //
+    // toks[0] (the program name) is unquoted: _spawnvp wants a bare path.
+    // toks[1..] are passed to the child verbatim — but MSVCRT's _spawnvp
+    // joins them with single spaces to build the child's command line
+    // WITHOUT any quoting of its own (documented MS behaviour). So a
+    // token containing a space, if left bare in toks[], reaches the
+    // child as multiple argv entries.  Wrap each non-program token that
+    // contains a space in literal `"..."` so the child's CRT
+    // command-line parser re-fuses it into one arg.  (Args that
+    // themselves contain a `"` are not handled — the caller's quoting
+    // convention at the cmd_str layer already doesn't support those.)
     char* toks[512];
     int n = 0;
+    // Backing store for re-quoted tokens. Sized 2× the input buffer so a
+    // worst-case input where every byte is part of a quoted token still
+    // fits (each token grows by 2 bytes of `"..."` wrapper).
+    char qbuf[32768];
+    int qoff = 0;
     for (char* p = buf; *p && n < 511; ) {
         while (*p == ' ') p++;
         if (!*p) break;
+        char* tok_start;
+        int had_quotes = 0;
         if (*p == '"') {
+            had_quotes = 1;
             p++;
-            toks[n++] = p;
+            tok_start = p;
             while (*p && *p != '"') p++;
             if (*p) *p++ = '\0';
         } else {
-            toks[n++] = p;
+            tok_start = p;
             while (*p && *p != ' ') p++;
             if (*p) *p++ = '\0';
+        }
+        // For the program name (toks[0]) and tokens with no spaces,
+        // pass-through. For other tokens, store a re-quoted copy so
+        // _spawnvp's space-join produces a cmdline the child can re-
+        // tokenize correctly.
+        int needs_quoting = 0;
+        if (n > 0 && (had_quotes || strchr(tok_start, ' ') != NULL)) {
+            needs_quoting = 1;
+        }
+        if (needs_quoting) {
+            int len = (int)strlen(tok_start);
+            if (qoff + len + 3 > (int)sizeof(qbuf)) {
+                // Out of re-quote space — pass through and hope for the best.
+                toks[n++] = tok_start;
+            } else {
+                char* dst = qbuf + qoff;
+                dst[0] = '"';
+                memcpy(dst + 1, tok_start, len);
+                dst[len + 1] = '"';
+                dst[len + 2] = '\0';
+                toks[n++] = dst;
+                qoff += len + 3;
+            }
+        } else {
+            toks[n++] = tok_start;
         }
     }
     toks[n] = NULL;
@@ -2613,8 +2659,18 @@ static int cmd_run(int argc, char** argv) {
      * the full TOML extra_sources concatenated. */
     char extra_files[8192] = "";
 
+    /* Index in argv where the program's own arguments begin — everything
+     * after a literal `--`. These are forwarded verbatim to the running
+     * program (like `cargo run -- args`), so a config-is-code entry point
+     * can do `ae run supervisor.ae -- make -j8` and see make/-j8 in its
+     * own argv. -1 = no `--` seen, nothing to forward. */
+    int prog_args_start = -1;
+
     for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--") == 0) {
+            prog_args_start = i + 1;  /* rest are the program's args */
+            break;                    /* stop flag parsing at the separator */
+        } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
@@ -2775,8 +2831,21 @@ static int cmd_run(int argc, char** argv) {
     // Clean up temp .c file (exe stays in cache if caching, else clean up too)
     remove(c_file);
 
-    // Step 3: Run
+    // Step 3: Run, forwarding any post-`--` args to the program. Each is
+    // wrapped in double quotes so a single arg with spaces stays one
+    // token through run_cmd's tokenizer (posix_run / win_run). Args
+    // containing a literal double-quote aren't representable through this
+    // path — rare for a build command line; build the binary and invoke
+    // it directly if you need that.
     snprintf(cmd, sizeof(cmd), "\"%s\"", exe_file);
+    if (prog_args_start >= 0) {
+        size_t off = strlen(cmd);
+        for (int i = prog_args_start; i < argc && off < sizeof(cmd) - 1; i++) {
+            int w = snprintf(cmd + off, sizeof(cmd) - off, " \"%s\"", argv[i]);
+            if (w < 0 || (size_t)w >= sizeof(cmd) - off) break;  /* truncated — stop cleanly */
+            off += (size_t)w;
+        }
+    }
     int rc = run_cmd(cmd);
 
     if (rc < 0) {
@@ -6470,6 +6539,79 @@ static const char* get_active_version(void) {
     return AE_VERSION;
 }
 
+// Fetch the newest release tag (e.g. "v0.231.0") from GitHub into `out`.
+// Returns 0 on success, non-zero on network/parse failure. GitHub returns
+// releases newest-first, so the first "tag_name" is the latest — same
+// scan cmd_version_list uses.
+static int fetch_latest_release_tag(char* out, size_t outlen) {
+    char json_path[512];
+    snprintf(json_path, sizeof(json_path), "%s/ae_latest_%d.json",
+             get_temp_dir(), (int)getpid());
+    char url[256];
+    snprintf(url, sizeof(url),
+        "https://api.github.com/repos/" AE_GITHUB_REPO "/releases?per_page=5");
+    if (ae_download(url, json_path) != 0) return -1;
+    FILE* f = fopen(json_path, "r");
+    if (!f) { remove(json_path); return -1; }
+    char buf[65536];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    remove(json_path);
+    buf[n] = '\0';
+    char* p = strstr(buf, "\"tag_name\"");
+    if (!p) return -1;
+    p += 10;
+    char* q = strchr(p, '"'); if (!q) return -1; q++;   // opening quote
+    char* e = strchr(q, '"'); if (!e) return -1;         // closing quote
+    size_t len = (size_t)(e - q);
+    if (len == 0 || len >= outlen) return -1;
+    memcpy(out, q, len);
+    out[len] = '\0';
+    return 0;
+}
+
+// "ae install [<version>]" — install a release into ~/.aether/versions/.
+// With no version, resolves and installs the latest. A discoverable
+// top-level alias for "ae version install" (matches rustup/nvm muscle
+// memory). Does NOT switch the active version — that's "ae use <v>" or
+// "ae upgrade".
+static int cmd_install(int argc, char** argv) {
+    if (argc >= 1 && argv[0] && argv[0][0]) {
+        return cmd_version_install(argv[0]);
+    }
+    char latest[64];
+    printf("Resolving latest release...\n");
+    if (fetch_latest_release_tag(latest, sizeof(latest)) != 0) {
+        fprintf(stderr, "Could not determine the latest release.\n");
+        fprintf(stderr, "Check your connection, or name a version: ae install <v>\n");
+        fprintf(stderr, "('ae version list' shows what's available.)\n");
+        return 1;
+    }
+    return cmd_version_install(latest);
+}
+
+// "ae upgrade" / "ae update" — install the latest release and switch to it.
+// The one-shot "get me the newest Aether" command; a no-op (with a notice)
+// when already current.
+static int cmd_upgrade(void) {
+    char latest[64];
+    printf("Checking for the latest release...\n");
+    if (fetch_latest_release_tag(latest, sizeof(latest)) != 0) {
+        fprintf(stderr, "Could not determine the latest release. Check your connection.\n");
+        return 1;
+    }
+    const char* latest_ver = (latest[0] == 'v') ? latest + 1 : latest;
+    const char* active = get_active_version();   // no leading 'v'
+    if (active && strcmp(active, latest_ver) == 0) {
+        printf("Already on the latest version (%s).\n", latest);
+        return 0;
+    }
+    printf("Upgrading %s -> %s\n", (active && active[0]) ? active : "(unknown)", latest);
+    int rc = cmd_version_install(latest);
+    if (rc != 0) return rc;
+    return cmd_version_use(latest);
+}
+
 static int cmd_version(int argc, char** argv) {
     if (argc == 0) {
         printf("ae %s (Aether Language)\n", get_active_version());
@@ -6730,10 +6872,11 @@ static void print_usage(void) {
     printf("  lib-path             Print the resolved module-search chain\n");
     printf("  examples             List and run example programs\n");
     printf("  repl                 Start interactive REPL\n");
-    printf("  version              Show version / manage installed versions\n");
+    printf("  install [<v>]        Install a release (latest if omitted)\n");
+    printf("  upgrade              Install the latest release and switch to it\n");
+    printf("  use <v>              Switch to an installed version\n");
+    printf("  version              Show version / list installed versions\n");
     printf("  version list         List all available releases\n");
-    printf("  version install <v>  Download and install a specific version\n");
-    printf("  version use <v>      Switch to an installed version\n");
     printf("  help                 Show this help\n");
     printf("\nExamples:\n");
     printf("  ae init myproject          Create a new project\n");
@@ -6998,6 +7141,23 @@ int main(int argc, char** argv) {
     }
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) {
         return cmd_version(sub_argc, sub_argv);
+    }
+    // Top-level version-management aliases (no toolchain needed). These
+    // make the intuitive commands work instead of only the longer
+    // "ae version install/use" forms.
+    if (strcmp(cmd, "install") == 0) {
+        return cmd_install(sub_argc, sub_argv);
+    }
+    if (strcmp(cmd, "upgrade") == 0 || strcmp(cmd, "update") == 0) {
+        return cmd_upgrade();
+    }
+    if (strcmp(cmd, "use") == 0) {
+        if (sub_argc < 1) {
+            fprintf(stderr, "Usage: ae use <version>   (e.g. ae use v0.231.0)\n");
+            fprintf(stderr, "Run 'ae version list' to see installed/available versions.\n");
+            return 1;
+        }
+        return cmd_version_use(sub_argv[0]);
     }
     if (strcmp(cmd, "init") == 0) {
         return cmd_init(sub_argc, sub_argv);

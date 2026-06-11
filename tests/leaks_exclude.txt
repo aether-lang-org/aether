@@ -8,3 +8,4 @@
 # on Linux CI under Valgrind / ASan-LSan instead, which handle subprocess
 # spawns correctly.
 test_run_capture_status
+test_os_run_full

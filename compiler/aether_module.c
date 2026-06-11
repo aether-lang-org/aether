@@ -739,6 +739,18 @@ ASTNode* module_parse_file(const char* file_path) {
     LexerState saved;
     lexer_save(&saved);
 
+    // Re-point the diagnostic source context at THIS module for the
+    // duration of its parse, so any parse error names the module's own
+    // file and renders from the module's own buffer — not the importing
+    // file's, which would mislabel the location and print an unrelated
+    // source snippet (#646). Restored before `source` is freed below so
+    // the context never dangles; nested imports save/restore correctly
+    // because each call frame keeps its caller's context on the stack.
+    const char* saved_err_filename = NULL;
+    const char* saved_err_source = NULL;
+    aether_error_get_source(&saved_err_filename, &saved_err_source);
+    aether_error_set_source(file_path, source);
+
     // Tokenize
     lexer_init(source);
     Token* tokens[MAX_MODULE_TOKENS];
@@ -753,6 +765,11 @@ ASTNode* module_parse_file(const char* file_path) {
     // Parse
     Parser* parser = create_parser(tokens, token_count);
     ASTNode* ast = parse_program(parser);
+
+    // Restore the caller's diagnostic source context before freeing this
+    // module's source buffer (which current_source would otherwise point
+    // into).
+    aether_error_set_source(saved_err_filename, saved_err_source);
 
     // Stamp every node with the source path before this AST gets
     // cloned into the merged program. The clone preserves
