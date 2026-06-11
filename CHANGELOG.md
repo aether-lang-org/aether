@@ -18,6 +18,34 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ### Fixed
 
+- **Two-string `string_*` externs with mixed argument representations.**
+  `string.glob_match(pattern, s)` returned the wrong answer (a true
+  match read as no-match) when one argument was a string literal and
+  the other was a heap-allocated `AetherString` (e.g. the result of
+  `string.substring`). `string.starts_with` / `string.ends_with`
+  carried the same hazard for their `prefix` / `suffix` argument; so
+  did `string.split` for its `delimiter`. Root cause: the call-site
+  #297 auto-unwrap intentionally skips `string_*`-prefixed externs
+  on the assumption that they handle both representations
+  internally, but these particular implementations passed the raw
+  pointer straight to `fnmatch(3)` / `strlen` / `memcmp`. When that
+  pointer was actually a magic `AetherString*`, the C code read 16
+  bytes of struct header as the first chars of the payload and
+  produced wrong matches.
+  - Fix: route the second string argument through `str_data` /
+    `str_len`, the magic-aware accessors the first argument already
+    used, so the impl behaves identically regardless of which side
+    carries the wrapped representation
+    (`std/string/aether_string.c`, `std/string/aether_string.h`).
+  - Aether-side wrappers in `std/string/module.ae` are unchanged —
+    the C-ABI shift to `const void*` for the affected parameters is
+    a pointer-width-compatible widening and the generated forward
+    declarations in user programs still compile and link.
+  - Regression coverage in
+    `tests/regression/test_string_extern_mixed_repr.ae`: every
+    combination of (lit, heap) × (lit, heap) for `glob_match`,
+    `glob_match_pathname`, `starts_with`, `ends_with`, `equals`,
+    `contains`, `index_of`.
 - **Diagnostics: parse errors in an imported module are now attributed
   to that module** (#646). A syntax error inside an imported module was
   labeled with the *importing* file's name and rendered a source snippet
@@ -79,7 +107,6 @@ notes to be skipped or clobbered (the failure modes documented in
   before ever MinGW-compiling anything. Aligned both `find` invocations
   with the main example-build sweep (`grep -v '/ae-help-demo/'` +
   `grep -v '/host-.*-demo\.ae$'`).
-
 - **Memory-leak hardening across the compiler and stdlib.** Every
   detectable memory leak in the regression suite is eliminated (and the
   integration suite is clean under ASan + LSan), verified on macOS
