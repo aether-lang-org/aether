@@ -2909,6 +2909,51 @@ static int cmd_check(int argc, char** argv) {
     return run_cmd(cmd);
 }
 
+// `ae inspect <file.ae>` — operator-facing summary of what a script
+// declares (imports, capability posture, exports/entry, declarations).
+// Delegates to `aetherc --emit=inspect`, which walks the post-typecheck
+// AST and prints to stdout; no .c is written. Issue #473.
+static int cmd_inspect(int argc, char** argv) {
+    const char* file = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (argv[i][0] != '-') file = argv[i];
+    }
+
+    // Project mode: default to src/main.ae when run inside a project.
+    if (!file && path_exists("aether.toml")) {
+        if (path_exists("src/main.ae")) {
+            file = "src/main.ae";
+        } else {
+            fprintf(stderr, "Error: aether.toml found but src/main.ae is missing.\n");
+            return 1;
+        }
+    }
+    if (!file) {
+        fprintf(stderr, "Usage: ae inspect <file.ae>\n");
+        return 1;
+    }
+    if (!path_exists(file)) {
+        fprintf(stderr, "Error: File not found: %s\n", file);
+        return 1;
+    }
+
+    /* One `--lib X` per entry, same as cmd_check — keeps import
+     * resolution consistent so the reported imports resolve the way a
+     * build would. Issue #413. */
+    char lib_flags[2304] = "";
+    size_t lf_off = 0;
+    for (int i = 0; i < tc.lib_dir_count; i++) {
+        int w = snprintf(lib_flags + lf_off, sizeof(lib_flags) - lf_off,
+                         " --lib \"%s\"", tc.lib_dirs[i]);
+        if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
+        lf_off += (size_t)w;
+    }
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "\"%s\" --emit=inspect%s \"%s\"",
+             tc.compiler, lib_flags, file);
+    return run_cmd(cmd);
+}
+
 // Forward declaration — cmd_build_namespace delegates to cmd_build for the
 // actual link step, but cmd_build is defined further down.
 static int cmd_build(int argc, char** argv);
@@ -6865,6 +6910,7 @@ static void print_usage(void) {
     printf("  build [file.ae]      Compile to executable\n");
     printf("  build --target wasm  Compile to WebAssembly (.js + .wasm)\n");
     printf("  check [file.ae]      Type-check without compiling\n");
+    printf("  inspect [file.ae]    Show what a script declares (imports, capabilities, exports, decls)\n");
     printf("  test [file|dir]      Discover and run tests\n");
     printf("  add <package>        Add a dependency\n");
     printf("  cache [clear]        Show or clear build cache\n");
@@ -7172,6 +7218,7 @@ int main(int argc, char** argv) {
     if (strcmp(cmd, "run") == 0)      return cmd_run(sub_argc, sub_argv);
     if (strcmp(cmd, "build") == 0)    return cmd_build(sub_argc, sub_argv);
     if (strcmp(cmd, "check") == 0)    return cmd_check(sub_argc, sub_argv);
+    if (strcmp(cmd, "inspect") == 0)  return cmd_inspect(sub_argc, sub_argv);
     if (strcmp(cmd, "test") == 0)     return cmd_test(sub_argc, sub_argv);
     if (strcmp(cmd, "examples") == 0) return cmd_examples(sub_argc, sub_argv);
     if (strcmp(cmd, "add") == 0)      return cmd_add(sub_argc, sub_argv);

@@ -2578,6 +2578,20 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         emit_header_prologue(gen, NULL);
     }
 
+    // MinGW (native Windows): bind printf / vsnprintf / snprintf to the
+    // C99-conformant __mingw_* family instead of the legacy MSVCRT ones.
+    // Without this, on MINGW64 the MSVCRT implementations mishandle the
+    // C99 conversions Aether emits (%lld / %llu / %zu / %g) AND
+    // vsnprintf(NULL, 0, ...) returns -1 rather than the would-be length.
+    // The latter breaks the two-pass sizing in _aether_interp below
+    // (malloc(-1+1) → a 0-byte buffer, then nothing written) — i.e. empty
+    // string interpolation, which is exactly issue #681. This must be set
+    // before any system header is pulled in, so it is the first thing in
+    // the generated translation unit. Compiles to nothing off MinGW.
+    print_line(gen, "#if defined(__MINGW32__) && !defined(__USE_MINGW_ANSI_STDIO)");
+    print_line(gen, "#define __USE_MINGW_ANSI_STDIO 1");
+    print_line(gen, "#endif");
+
     // Generate includes for runtime libraries
     print_line(gen, "#include <stdio.h>");
     print_line(gen, "#include <stdlib.h>");

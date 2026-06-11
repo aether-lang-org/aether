@@ -935,6 +935,33 @@ The `parse_strict` shape is the std.fs pilot from issue #392 extended to a secon
 - `json.create_null()`, `json.create_bool(value)`, `json.create_number(value)`
 - `json.create_string(value)`, `json.create_array()`, `json.create_object()`
 
+**Terse builder / encoder** (issue #628) — thin aliases over the above for
+assembling a value tree and serializing it without hand-concatenating
+strings (escaping is handled by the encoder):
+- `json.obj()` / `json.arr()` — new empty object / array
+- `json.str(s)` / `json.num(f)` / `json.boolean(0|1)` / `json.null_value()` — scalars
+- `json.set(obj, key, value)` / `json.push(arr, value)` — `""` on success, error
+  string on wrong-kind target (the orphaned value is reclaimed); the parent
+  takes ownership of `value`
+- `json.encode(value)` → `(string, string)` — `(json, "")` on success
+
+```aether
+import std.json
+
+main() {
+    root = json.obj()
+    json.set(root, "name", json.str("aether"))
+    json.set(root, "ok", json.boolean(1))
+    tags = json.arr()
+    json.push(tags, json.str("lang"))
+    json.set(root, "tags", tags)
+
+    out, err = json.encode(root)   // {"name":"aether","ok":true,"tags":["lang"]}
+    println(out)
+    json.free(root)                // frees the whole tree
+}
+```
+
 ### What `std.json` doesn't do
 
 Coming from Go's `json.Unmarshal`, Java's Jackson, Python's `json.load` + dataclasses, or C#'s `JsonSerializer`, expect to do more by hand:
@@ -952,7 +979,7 @@ Coming from Go's `json.Unmarshal`, Java's Jackson, Python's `json.load` + datacl
 Beyond JSON, the stdlib has **no built-in support** for:
 
 - **YAML** — no parser. Configuration files for Aether projects use TOML (read by the build tool internally — not a user-facing stdlib module) or hand-rolled formats.
-- **XML** — no parser. The Servirtium climate-API replay tests parse XML by hand from the WorldBank API responses (substring-extract `<double>...</double>` values from a known-shape body), not via a real DOM/SAX surface.
+- **XML** — `std.xml` provides a pull/SAX reader and an escaping builder (see the XML section above). It deliberately omits XSD, XPath, namespaces, and DTD validation; for those a host-language tool is still the answer.
 - **TOML** — there's a parser at `tools/apkg/toml_parser.c` used internally by the `ae` CLI to read `aether.toml` project files. It's not exposed as `std.toml`. If a project needs TOML, copying that parser or shelling out to a host-language tool are the options today.
 - **INI** — no parser. Trivial to implement on top of `string.split` if needed.
 - **Java-style `.properties`** — no parser. Same shape as INI without sections; same advice.
@@ -960,6 +987,73 @@ Beyond JSON, the stdlib has **no built-in support** for:
 - **Protocol Buffers / MessagePack / CBOR / Avro / Thrift** — no codecs. Same reflection-gap reasoning as struct ↔ JSON: without struct introspection there's no automatic encode/decode.
 
 This isn't a hidden roadmap — these are absent because no downstream user has driven the need yet. If you're starting a project that needs YAML config, expect to write a parser, ship a contrib module, or shell out. Structured-data thinking in the stdlib is currently JSON-shaped and HTTP-adjacent; broader format coverage is open territory.
+
+---
+
+## XML (`std.xml`)
+
+A deliberately small XML surface (issue #627): a **pull/SAX reader** and an
+**escaping builder**. Enough for S3 / SOAP-ish / config XML. **Not** in
+scope: XSD, XPath, namespaces, DTD validation, or custom entity
+definitions — the five predefined entities (`&amp; &lt; &gt; &quot;
+&apos;`) and numeric character references (`&#NN;` / `&#xHH;`) are decoded;
+CDATA is passed through raw; the prolog, comments, and processing
+instructions are skipped.
+
+```aether
+import std.xml
+
+main() {
+    // ---- Reader: pull one event at a time ----
+    p = xml.parser("<Result><Key>a &lt;b&gt;.txt</Key><Empty/></Result>")
+    done = 0
+    while done == 0 {
+        ev = xml.next(p)
+        if ev == xml.EVENT_EOF { done = 1 }
+        else if ev == xml.EVENT_ERROR { println(xml.error(p))  done = 1 }
+        else if ev == xml.EVENT_START { println("start ${xml.name(p)}") }
+        else if ev == xml.EVENT_TEXT  { println("text  ${xml.text(p)}") }  // entity-decoded
+        else if ev == xml.EVENT_END   { println("end   ${xml.name(p)}") }
+    }
+    xml.free(p)
+
+    // ---- Builder: escaping handled for you ----
+    b = xml.writer()
+    xml.declaration(b)
+    xml.start(b, "Error")
+    xml.attribute(b, "code", "NoSuchKey")
+    xml.element(b, "Message", "the key \"x\" & <y> are gone")
+    xml.end(b, "Error")
+    out = xml.finish(b)        // <?xml ...?><Error code="NoSuchKey"><Message>...escaped...</Message></Error>
+    xml.free_builder(b)
+    println(out)
+}
+```
+
+**Event kinds** (returned by `xml.next`): `EVENT_START`, `EVENT_END`,
+`EVENT_TEXT`, `EVENT_EOF`, `EVENT_ERROR`.
+
+**Reader:**
+- `xml.parser(data)` → `ptr` — new pull reader (free with `xml.free`)
+- `xml.next(p)` → `int` — advance; returns an `EVENT_*`
+- `xml.name(p)` → `string` — element name for the current START/END
+- `xml.text(p)` → `string` — entity-decoded character data for the current TEXT
+- `xml.attr(p, key)` → `string` — attribute value on the current START (`""` if absent)
+- `xml.attr_count(p)` / `xml.attr_name(p, i)` / `xml.attr_value(p, i)` — iterate attributes
+- `xml.error(p)` → `string` — message after an `EVENT_ERROR`
+- `xml.free(p)` — release the reader
+
+A self-closing `<tag/>` yields a START immediately followed by an END.
+The name/text/attr values are owned copies, safe to hold across `next`.
+
+**Builder:**
+- `xml.writer()` → `ptr` — new builder (named `writer` because `builder` is a keyword; free with `xml.free_builder`)
+- `xml.declaration(b)` — emit `<?xml version="1.0" encoding="UTF-8"?>`
+- `xml.start(b, name)` / `xml.attribute(b, name, value)` / `xml.end(b, name)`
+- `xml.text_node(b, content)` — append escaped character data
+- `xml.element(b, name, content)` — `<name>escaped</name>` in one call
+- `xml.finish(b)` → `string` — the document (escaping already applied)
+- `xml.escape(s)` → `string` — escape the five predefined entities (rarely needed directly)
 
 ---
 

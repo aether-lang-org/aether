@@ -264,6 +264,39 @@ A few things to watch for when designing setters:
   called shouldn't have planted a value. Read with `map.has` +
   fallback; that way every default lives in one place.
 
+## Inspecting a script — `ae inspect`
+
+Config-IS-code only lands with operators if they can ask the compiler
+*"what does my script actually declare?"* without reading generated C.
+`ae inspect <file.ae>` prints that summary:
+
+```
+$ ae inspect deploy.ae
+inspect: deploy.ae
+  artifact:  executable (entry: main)
+  capabilities required (gated imports): fs net
+             (pass --with=<cap,...> to grant under --emit=lib)
+  imports (3):
+    std.string                   [stdlib]
+    std.fs                       [stdlib, capability: fs]
+    std.http                     [stdlib, capability: net]
+  functions (2):
+    greet(name: string) -> string
+    divmod(a: int, b: int) -> (int, int)
+  structs (1): Config
+  constants (1): DEFAULT_PORT
+```
+
+It reports only what *this* file declares (imports resolved and
+classified as stdlib / contrib / local, with the `--with=` capability any
+gated module needs; the artifact shape — executable entry point vs
+library export surface; and the top-level functions, structs, constants,
+and actors with signatures) — declarations merged in from imported
+modules are excluded. No code is generated. For a library
+(`exports (...)`) it lists the exported ABI surface instead of an entry
+point. Out of scope: full type dumps (that's the FFI `aether_describe`
+metadata) and raw AST printing (that's `aetherc --emit=ast`).
+
 ## Cross-references
 
 - [`closures-and-builder-dsl.md`](closures-and-builder-dsl.md) — the
