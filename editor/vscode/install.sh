@@ -109,50 +109,79 @@ install_extension() {
     #                       the editor's UI), the freshly-copied
     #                       extension is invisible.
     #
-    # Stripping every `aether*` entry from BOTH files forces the
-    # editor to re-scan the directory on next startup and re-register
-    # what it actually finds. Targeted to our publisher prefix; never
-    # touches unrelated entries. Python (which both editors ship in
-    # MSYS2 / macOS / typical Linux installs) is the safest cross-
-    # platform JSON editor — `jq` isn't universal, sed-on-JSON is
-    # fragile. Falls back silently if Python isn't present (the
-    # filesystem cleanup above still runs).
+    # `extensions.json` is the editor's AUTHORITATIVE list of installed
+    # extensions — a folder dropped into the extensions dir is not loaded
+    # unless it also appears here. Current VS Code / Cursor do not
+    # reliably re-scan the directory for manually-added folders, so we
+    # must REGISTER our entry, not merely strip stale rows and hope for a
+    # re-scan (that left the folder present-but-unloaded — which reads to
+    # the user as "the extension stopped working: no highlighting, no
+    # `.ae` file icon"). We drop any prior `aether*` rows, then append a
+    # fresh entry pointing at the folder we just copied, and drop any
+    # `aether*` `.obsolete` keys so the install isn't skipped. Targeted to
+    # our publisher prefix; never touches unrelated entries. Python (which
+    # both editors ship in MSYS2 / macOS / typical Linux installs) is the
+    # safest cross-platform JSON editor — `jq` isn't universal, sed-on-
+    # JSON is fragile. Falls back silently if Python isn't present (the
+    # filesystem copy above still happened).
     if command -v python3 >/dev/null 2>&1; then
-        python3 - "$extensions_root" <<'PYEOF'
-import json, sys, pathlib
-root = pathlib.Path(sys.argv[1])
+        python3 - "$extensions_root" "$VERSION" "$EXT_DIR_NAME" <<'PYEOF'
+import json, sys, pathlib, time
+root, version, ext_dir = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+target = str(root / ext_dir)
 
-# extensions.json — drop entries whose id or location mentions
-# 'aether'. Cursor re-discovers the live folder on next startup.
+# extensions.json — drop any prior aether rows (stale paths/versions),
+# then register a fresh entry for the folder we just copied. Publisher
+# `aether` + name `aether-language` -> id `aether.aether-language`; no
+# gallery uuid since this is a local (non-marketplace) install.
 mpath = root / 'extensions.json'
-if mpath.exists():
-    try:
-        data = json.loads(mpath.read_text())
-        if isinstance(data, list):
-            cleaned = [e for e in data
-                       if 'aether' not in e.get('identifier', {}).get('id', '').lower()
-                       and 'aether' not in e.get('location', {}).get('path', '').lower()]
-            if len(cleaned) != len(data):
-                mpath.write_text(json.dumps(cleaned) + '\n')
-    except (json.JSONDecodeError, OSError):
-        pass  # Editor will regenerate it; not our concern.
+try:
+    data = json.loads(mpath.read_text()) if mpath.exists() else []
+    if not isinstance(data, list):
+        data = []
+except (json.JSONDecodeError, OSError):
+    data = []
+data = [e for e in data
+        if 'aether' not in e.get('identifier', {}).get('id', '').lower()
+        and 'aether' not in e.get('location', {}).get('path', '').lower()]
+data.append({
+    "identifier": {"id": "aether.aether-language"},
+    "version": version,
+    "location": {"$mid": 1, "path": target, "scheme": "file"},
+    "relativeLocation": ext_dir,
+    "metadata": {
+        "installedTimestamp": int(time.time() * 1000),
+        "source": "local",
+        "isBuiltin": False,
+        "isMachineScoped": False,
+        "isApplicationScoped": False,
+        "updated": False,
+        "preRelease": False,
+        "targetPlatform": "undefined",
+    },
+})
+try:
+    mpath.write_text(json.dumps(data) + '\n')
+except OSError:
+    pass
 
-# .obsolete — drop aether keys so our fresh install isn't skipped.
+# .obsolete — drop aether keys so the fresh install isn't skipped.
 opath = root / '.obsolete'
 if opath.exists():
     try:
-        data = json.loads(opath.read_text())
-        if isinstance(data, dict):
-            cleaned = {k: v for k, v in data.items() if 'aether' not in k.lower()}
-            if len(cleaned) != len(data):
+        od = json.loads(opath.read_text())
+        if isinstance(od, dict):
+            cleaned = {k: v for k, v in od.items() if 'aether' not in k.lower()}
+            if len(cleaned) != len(od):
                 opath.write_text(json.dumps(cleaned))
     except (json.JSONDecodeError, OSError):
         pass
 PYEOF
     fi
 
-    echo "✓ Extension installed successfully."
-    echo "  Restart ${editor_name} for the language to register."
+    echo "✓ Extension installed and registered."
+    echo "  Fully QUIT ${editor_name} (not just reload the window) and reopen"
+    echo "  it so the editor picks up the registration."
     echo "  .ae files use a fixed palette regardless of your theme;"
     echo "  every other file type still uses your active colour theme."
     echo "  LSP:   ensure 'aether-lsp' is on PATH (or set 'aether.lsp.path')."
