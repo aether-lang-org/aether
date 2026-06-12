@@ -7,6 +7,7 @@
 
 #include "test_harness.h"
 #include "../../runtime/aether_resource_caps.h"
+#include "../../std/bytes/aether_bytes.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,4 +108,29 @@ TEST_CATEGORY(caps_explicit_abort_sticky, TEST_CATEGORY_STDLIB) {
     /* Cleared by re-arming the deadline. */
     aether_caps_set_deadline_ms(0);
     ASSERT_EQ(0, aether_caps_deadline_tripped());
+}
+
+/* #462 caps-audit accounting balance: std.bytes routes its growable
+ * buffer + struct through aether_caps_malloc/realloc/free. The defining
+ * correctness property of a caps conversion (distinct from a leak: a
+ * size-mismatched free corrupts the *accounting*, not the heap) is that
+ * the counter returns to baseline after create + grow + free. Repeatedly
+ * build a bytes object, force several reallocations by writing at a high
+ * index, and free it; used_bytes must land back where it started — no
+ * drift from an over- or under-credited free. */
+TEST_CATEGORY(caps_bytes_accounting_balances, TEST_CATEGORY_STDLIB) {
+    caps_reset();
+    uint64_t base = aether_caps_used_bytes();
+    for (int rep = 0; rep < 4; rep++) {
+        AetherBytes* b = aether_bytes_new(0);
+        ASSERT_TRUE(b != NULL);
+        for (int i = 0; i < 4096; i++) {
+            ASSERT_EQ(1, aether_bytes_set(b, i, i & 0xff));  /* forces grows */
+        }
+        /* Mid-life the counter must have grown above baseline. */
+        ASSERT_TRUE(aether_caps_used_bytes() > base);
+        aether_bytes_free(b);
+        /* ...and return exactly to baseline after the matched frees. */
+        ASSERT_EQ(base, aether_caps_used_bytes());
+    }
 }

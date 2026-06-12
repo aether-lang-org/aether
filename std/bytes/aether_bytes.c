@@ -1,5 +1,6 @@
 #include "aether_bytes.h"
 #include "../string/aether_string.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -27,7 +28,11 @@ static int bytes_reserve(AetherBytes* b, size_t min_capacity) {
         }
         new_cap = doubled;
     }
-    char* new_data = (char*)realloc(b->data, new_cap);
+    /* Cap-aware (#462): the growable byte buffer is plugin-reachable
+     * (bytes.set at an attacker-chosen index drives the capacity), so
+     * route the grow through the resource cap. b->capacity is the
+     * current allocation size — the delta is what's charged. */
+    char* new_data = (char*)aether_caps_realloc(b->data, b->capacity, new_cap);
     if (!new_data) return 0;
     /* Zero the freshly-allocated tail so set() at non-contiguous
      * indices yields zero-filled gaps rather than uninitialised
@@ -42,13 +47,15 @@ static int bytes_reserve(AetherBytes* b, size_t min_capacity) {
 
 AetherBytes* aether_bytes_new(int initial_capacity) {
     if (initial_capacity < 0) return NULL;
-    AetherBytes* b = (AetherBytes*)malloc(sizeof(AetherBytes));
+    AetherBytes* b = (AetherBytes*)aether_caps_malloc(sizeof(AetherBytes));
     if (!b) return NULL;
     b->length = 0;
     b->capacity = 0;
     b->data = NULL;
     if (initial_capacity > 0 && !bytes_reserve(b, (size_t)initial_capacity)) {
-        free(b);
+        /* bytes_reserve failed before allocating b->data (still NULL),
+         * so only the struct needs reclaiming. */
+        aether_caps_free(b, sizeof(AetherBytes));
         return NULL;
     }
     return b;
@@ -218,6 +225,10 @@ void* aether_bytes_finish(AetherBytes* b, int length) {
 
 void aether_bytes_free(AetherBytes* b) {
     if (!b) return;
-    free(b->data);
-    free(b);
+    /* Cap-aware (#462): credit back the data buffer (b->capacity bytes,
+     * the live allocation size; NULL/0 when never grown) and the struct
+     * so the resource accounting balances the aether_caps_malloc /
+     * aether_caps_realloc above. */
+    aether_caps_free(b->data, b->capacity);
+    aether_caps_free(b, sizeof(AetherBytes));
 }
