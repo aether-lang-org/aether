@@ -12,6 +12,10 @@ typedef struct Symbol {
     int is_module_alias;        // Indicates this is a module alias
     char* alias_target;         // The actual module name for aliases
     ASTNode* node;  // Pointer to AST node (for structs, functions, etc.)
+    int type_inferred;          // 1 if this binding's type was inferred
+                                // from a bare `x = expr` declaration (no
+                                // annotation) and is a 32-bit int — drives
+                                // the #698 silent-narrowing guard.
     struct Symbol* next;
 } Symbol;
 

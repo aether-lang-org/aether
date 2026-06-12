@@ -276,6 +276,13 @@ typedef struct ASTNode {
                                // synthetic nodes the parser/typechecker invent
                                // out of thin air; codegen falls back to the last
                                // known file in that case.
+    int type_inferred;         // AST_VARIABLE_DECLARATION only: 1 when the
+                               // declaration had NO explicit type annotation
+                               // (Python-style `x = expr`), so its type is
+                               // inferred from the initializer. Survives the
+                               // pre-typecheck inference that fills node_type,
+                               // unlike a TYPE_UNKNOWN sentinel. Drives the
+                               // #698 silent-narrowing guard.
 } ASTNode;
 
 // Type functions

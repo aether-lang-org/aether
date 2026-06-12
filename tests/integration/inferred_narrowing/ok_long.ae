@@ -1,0 +1,7 @@
+// Explicit `long` keeps 64-bit precision — must build + run clean.
+main() {
+    long parsed = 0
+    long v = 6288338901
+    parsed = v
+    println("${parsed}")
+}
