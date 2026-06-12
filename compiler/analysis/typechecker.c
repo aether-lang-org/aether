@@ -2705,12 +2705,25 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                                           init->type == AST_ARRAY_LITERAL);
                     if (!is_array_const) {
                         char msg[512];
-                        snprintf(msg, sizeof(msg),
-                            "const initializer must be a compile-time constant expression — "
-                            "function calls are inlined at each use site, which would re-evaluate "
-                            "the call (and re-allocate / re-side-effect) on every reference. "
-                            "Use a regular assignment in main() (or std.config / std.actors for "
-                            "process-global state) instead.");
+                        if (stmt->annotation && strcmp(stmt->annotation, "global_var") == 0) {
+                            /* #701: a module-level `var` lowers to a C file-scope
+                             * `static`, whose initializer C requires to be a
+                             * constant expression. Initialize to a constant and
+                             * assign the computed value from a function at
+                             * startup. */
+                            snprintf(msg, sizeof(msg),
+                                "module-level `var` initializer must be a compile-time constant "
+                                "expression — it lowers to a file-scope `static`, which C requires "
+                                "to have a constant initializer. Initialize it to a constant here "
+                                "and assign the computed value from a function at startup instead.");
+                        } else {
+                            snprintf(msg, sizeof(msg),
+                                "const initializer must be a compile-time constant expression — "
+                                "function calls are inlined at each use site, which would re-evaluate "
+                                "the call (and re-allocate / re-side-effect) on every reference. "
+                                "Use a regular assignment in main() (or std.config / std.actors for "
+                                "process-global state) instead.");
+                        }
                         type_error(msg, stmt->line, stmt->column);
                         free_type(init_type);
                         return 0;

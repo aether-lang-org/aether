@@ -134,6 +134,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->message_registry = create_message_registry();
     gen->declared_vars = NULL;
     gen->declared_var_count = 0;
+    gen->module_global_vars = NULL;
+    gen->module_global_var_count = 0;
     gen->generating_lvalue = 0;  // Not generating lvalue by default
     gen->interp_as_printf = 0;  // Default: interp generates _aether_interp() not printf()
     gen->in_condition = 0;  // Not in condition by default
@@ -293,6 +295,12 @@ void free_code_generator(CodeGenerator* gen) {
             }
             free(gen->declared_vars);
         }
+        if (gen->module_global_vars) {
+            for (int i = 0; i < gen->module_global_var_count; i++) {
+                free(gen->module_global_vars[i]);
+            }
+            free(gen->module_global_vars);
+        }
         clear_heap_string_vars(gen);
     clear_seq_vars(gen);
         clear_escaped_string_vars(gen);
@@ -335,6 +343,27 @@ int is_var_declared(CodeGenerator* gen, const char* var_name) {
         }
     }
     return 0;
+}
+
+// #701: is `name` a module-level `var` global (a file-scope static)?
+int is_module_global_var(CodeGenerator* gen, const char* name) {
+    if (!name) return 0;
+    for (int i = 0; i < gen->module_global_var_count; i++) {
+        if (strcmp(gen->module_global_vars[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// #701: record a module-level `var` global name (deduped).
+void register_module_global_var(CodeGenerator* gen, const char* name) {
+    if (!name || is_module_global_var(gen, name)) return;
+    char** grown = realloc(gen->module_global_vars,
+                           sizeof(char*) * (gen->module_global_var_count + 1));
+    if (!grown) return;
+    gen->module_global_vars = grown;
+    gen->module_global_vars[gen->module_global_var_count++] = strdup(name);
 }
 
 // Helper: mark variable as declared in current function
@@ -3269,6 +3298,17 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                                   ? cd->node_type->element_type : NULL;
                 const char* ctype = elem_type ? const_array_elem_c_type(elem_type) : "const char*";
                 fprintf(gen->output, "static const %s %s[] = ", ctype, cd->value);
+                generate_expression(gen, cd->children[0]);
+                fprintf(gen->output, ";\n");
+            } else if (cd->annotation && strcmp(cd->annotation, "global_var") == 0) {
+                // #701: mutable module-level global -> file-scope static.
+                // A real lvalue (not a `#define`), so same-module functions
+                // can read and write it as a plain C identifier. Record the
+                // name so a bare `name = expr` inside a function body lowers
+                // to a write to this static rather than a shadowing local.
+                register_module_global_var(gen, cd->value);
+                const char* ctype = get_c_type(cd->node_type);
+                fprintf(gen->output, "static %s %s = ", ctype, cd->value);
                 generate_expression(gen, cd->children[0]);
                 fprintf(gen->output, ";\n");
             } else {

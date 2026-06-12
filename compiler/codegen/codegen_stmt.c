@@ -3669,6 +3669,27 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     break;
                 }
 
+                // #701: a `name = expr` whose name is a module-level `var`
+                // global is a WRITE to that file-scope static, not a new
+                // local — the global is in scope in every same-module
+                // function (the issue's required semantics: reads and writes
+                // are plain identifier access). Reads already resolve to the
+                // bare identifier, so only the write side needs steering. The
+                // guard on !is_var_declared lets a same-named parameter or an
+                // earlier in-function local legitimately shadow the global.
+                if (stmt->value &&
+                    !is_var_declared(gen, stmt->value) &&
+                    is_module_global_var(gen, stmt->value)) {
+                    print_indent(gen);
+                    fprintf(gen->output, "%s", stmt->value);
+                    if (stmt->child_count > 0) {
+                        fprintf(gen->output, " = ");
+                        generate_expression(gen, stmt->children[0]);
+                    }
+                    fprintf(gen->output, ";\n");
+                    break;
+                }
+
                 // Check if this is a reassignment (Python-style)
                 if (is_var_declared(gen, stmt->value)) {
                     /* Self-assignment peephole. `p = p` is a no-op at

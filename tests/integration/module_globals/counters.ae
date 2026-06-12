@@ -1,0 +1,46 @@
+// #701 — module-level globals: inferred type, cross-function sharing,
+// and reads embedded in expressions (not just bare writes).
+
+import std.string
+
+extern exit(code: int)
+
+var hits = 0                 // inferred int (no annotation)
+var total: long = 0          // explicitly typed 64-bit accumulator
+
+record(n: long) {
+    hits = hits + 1          // read + write of an inferred-int global
+    total = total + n        // read + write of a typed global
+}
+
+average() -> long {
+    if hits == 0 {
+        return 0
+    }
+    return total / hits      // both globals read inside one expression
+}
+
+main() {
+    record(10)
+    record(20)
+    record(30)
+
+    if hits == 3 {
+        print("PASS: hits\n")
+    } else {
+        print("FAIL: hits\n")
+        exit(1)
+    }
+    if total == 60 {
+        print("PASS: total\n")
+    } else {
+        print("FAIL: total\n")
+        exit(1)
+    }
+    if average() == 20 {
+        print("PASS: average\n")
+    } else {
+        print("FAIL: average\n")
+        exit(1)
+    }
+}

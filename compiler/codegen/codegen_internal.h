@@ -25,6 +25,8 @@ void generate_type(CodeGenerator* gen, Type* type);
 int is_var_declared(CodeGenerator* gen, const char* var_name);
 void mark_var_declared(CodeGenerator* gen, const char* var_name);
 void clear_declared_vars(CodeGenerator* gen);
+int is_module_global_var(CodeGenerator* gen, const char* name);
+void register_module_global_var(CodeGenerator* gen, const char* name);
 int is_heap_string_var(CodeGenerator* gen, const char* var_name);
 void mark_heap_string_var(CodeGenerator* gen, const char* var_name);
 void clear_heap_string_vars(CodeGenerator* gen);
