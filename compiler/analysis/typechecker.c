@@ -626,6 +626,43 @@ static TypeKind wider_integer_kind(TypeKind a, TypeKind b) {
     return TYPE_INT;
 }
 
+/* #697: downward integer-width propagation.
+ *
+ * Type inference is bottom-up, so a sub-expression like `byte << 24`
+ * (int << int) is typed 32-bit `int` even when its result is immediately
+ * combined into a 64-bit value (`u | (byte << 24)`). C then evaluates the
+ * shift in 32-bit — overflowing the sign bit and sign-extending into the
+ * high 32 bits of the uint64 — silently corrupting binary-protocol codecs.
+ *
+ * When a binary integer op resolves to a 64-bit type, walk its operands
+ * and re-type any narrower-int arithmetic operand whose VALUE is computed
+ * (a nested arith/bitwise/left-shift binary expression) to the same 64-bit
+ * kind, so codegen widens it before the operation. Leaf operands
+ * (variables, literals, calls) keep their own type and are cast at the use
+ * site by codegen. `>>` is intentionally NOT widened: promoting a signed
+ * right-shift to unsigned would turn an arithmetic shift into a logical
+ * one and change the value of negative operands. Division/modulo are
+ * likewise excluded (their 32-bit result is well-defined and widening
+ * could only change a value the source already committed to). */
+static void propagate_int_width_64(ASTNode* node, TypeKind wide) {
+    if (!node || node->type != AST_BINARY_EXPRESSION || !node->node_type) return;
+    /* Only widen nodes currently typed as 32-bit int — leave anything
+     * already 64-bit (or non-integer) alone. */
+    if (node->node_type->kind != TYPE_INT) return;
+    if (!node->value) return;
+    const char* op = node->value;
+    int width_sensitive =
+        strcmp(op, "<<") == 0 || strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
+        strcmp(op, "*") == 0  || strcmp(op, "|") == 0 || strcmp(op, "&") == 0 ||
+        strcmp(op, "^") == 0;
+    if (!width_sensitive) return;
+    node->node_type->kind = wide;
+    if (node->child_count >= 2) {
+        propagate_int_width_64(node->children[0], wide);
+        propagate_int_width_64(node->children[1], wide);
+    }
+}
+
 // Count the number of formal parameters of a function definition node
 // Skips _ctx parameters (auto-injected by builder context)
 static int count_function_params(ASTNode* func) {
@@ -1135,9 +1172,9 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         }
         
         case AST_BINARY_EXPRESSION:
-            return infer_binary_type(expr->children[0], expr->children[1], 
+            return infer_binary_type(expr->children[0], expr->children[1],
                                    get_token_type_from_string(expr->value));
-            
+
         case AST_UNARY_EXPRESSION:
             return infer_unary_type(expr->children[0], 
                                   get_token_type_from_string(expr->value));
@@ -2726,6 +2763,14 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     type_error("Type mismatch in variable initialization", stmt->line, stmt->column);
                     return 0;
                 }
+                /* #697: declared 64-bit but the initializer is a 32-bit-int
+                 * arithmetic expression (e.g. `uint64 x = byte << 24`) —
+                 * widen it so the computation happens in 64 bits, not C int. */
+                if (stmt->node_type &&
+                    (stmt->node_type->kind == TYPE_INT64 ||
+                     stmt->node_type->kind == TYPE_UINT64)) {
+                    propagate_int_width_64(init, stmt->node_type->kind);
+                }
                 /* `byte b = <int literal>` — fresh declaration with explicit
                  * `byte` type. Reject out-of-range literals at compile time
                  * (literal-range check). Non-literal int is accepted (runtime
@@ -3792,6 +3837,13 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
             return 0;
         }
         expr->node_type = result_type;
+        /* #697: this op is 64-bit — widen any 32-bit-int arithmetic
+         * operands so the computation happens in 64 bits, not in C int. */
+        if (result_type && (result_type->kind == TYPE_INT64 ||
+                            result_type->kind == TYPE_UINT64)) {
+            propagate_int_width_64(left, result_type->kind);
+            propagate_int_width_64(right, result_type->kind);
+        }
     }
 
     free_type(left_type);
