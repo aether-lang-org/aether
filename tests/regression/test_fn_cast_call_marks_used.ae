@@ -1,0 +1,47 @@
+// Regression: calling through a local that holds a typed-fn-cast value
+// must count as a *use* of that local in the unused-variable analysis.
+//
+// `g = f as fn(ptr) -> int` followed by `g(p)` parses the call as
+// AST_FUNCTION_CALL with the callee name in node->value — there is no
+// AST_IDENTIFIER child for `g` — so the W1001 reference walk never saw
+// it.
+//
+// Pre-fix: compiling this file emitted `warning[W1001]: unused variable
+// 'g'` even though `g` is called on the very next line (the generated C
+// was already correct: `((int(*)(void*))(g))(p)`).
+// Post-fix: no W1001 for fn-cast locals that are only used as callees.
+//
+// Exercises: cast-then-call inside a nested block (the original report's
+// shape — `free_fn = lst.free as fn(ptr) -> void; free_fn(node.value)`),
+// and confirms the call still dispatches correctly end to end.
+
+import std.mem
+
+extern exit(code: int)
+extern malloc(n: long) -> ptr
+extern free(p: ptr)
+
+double_it(p: ptr) -> int {
+    return mem.get_int(p, 0) * 2
+}
+
+call_it(f: ptr, p: ptr) -> int {
+    if p != null {
+        // `g` is only ever used as a callee — pre-fix this tripped W1001.
+        g = f as fn(ptr) -> int
+        return g(p)
+    }
+    return -1
+}
+
+main() {
+    buf = malloc(4)
+    mem.set_int(buf, 0, 21)
+
+    fp = double_it as fn(ptr) -> int
+    if call_it(fp, buf) != 42 { exit(1) }
+    if call_it(fp, null) != -1 { exit(2) }
+
+    free(buf)
+    exit(0)
+}

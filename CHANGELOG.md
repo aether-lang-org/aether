@@ -14,6 +14,19 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Spurious W1001 "unused variable" for fn-cast locals only used as
+  callees.** `g = f as fn(ptr) -> int` followed by `g(p)` warned that
+  `g` was unused: the call parses as `AST_FUNCTION_CALL` with the callee
+  name in `node->value` (no `AST_IDENTIFIER` child), so the reference
+  walk in the unused-variable analysis never saw it. The walk now also
+  matches function-call names against tracked locals. Generated C was
+  always correct (`((int(*)(void*))(g))(p)`); this was warning noise
+  only. Regression: `tests/regression/test_fn_cast_call_marks_used.ae`.
+
 ## [0.241.0]
 
 ### Changed
@@ -42,6 +55,7 @@ notes to be skipped or clobbered (the failure modes documented in
     Windows-only (untestable off-Windows), so the effort/risk outweighs
     the value now that the unbounded (#463) and attacker-inflatable
     (`std.bytes`) sites are covered.
+
 ## [0.240.0]
 
 ### Fixed
