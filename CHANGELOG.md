@@ -14,6 +14,34 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Changed
+
+- **Resource-cap accounting extended to `std.bytes`, `std.config`, and
+  `std.io`** (#462, T2 caps audit), following the cap-gating pattern
+  established in #343/#463. Plugin-reachable allocations now route through
+  `aether_caps_malloc` so a sandboxed plugin can't allocate past the
+  configured memory cap.
+  - **Internal-lifetime** allocations (`std.bytes`' growable buffer +
+    struct — most important, since its size is driven by a caller-chosen
+    index; `std.config` entries/strings; `std.io`'s `FileInfo`) are
+    drift-free: the matching `aether_caps_free` always knows the exact
+    size (the bytes buffer's `capacity` field, a `dup_str`'d string's
+    `strlen+1`, or `sizeof`), so the counter returns exactly to baseline
+    after create + grow + free — locked in by a new
+    `caps_bytes_accounting_balances` unit test.
+  - **Caller-owned-return** allocations (`io.getenv`, errno messages) are
+    cap-*gated* at allocation but freed via libc in Aether-land, so the
+    counter drifts up on that cold path — the same documented,
+    intentional trade-off as `file_read_all_raw` (#343). The drift is
+    fail-safe: a plugin is denied once it would cross the cap, never
+    allowed past it.
+  - The fs/os `wchar_t`/path sweep is **intentionally not** part of this
+    change: those are bounded-size, defense-in-depth, and largely
+    Windows-only (untestable off-Windows), so the effort/risk outweighs
+    the value now that the unbounded (#463) and attacker-inflatable
+    (`std.bytes`) sites are covered.
 ## [0.240.0]
 
 ### Fixed
