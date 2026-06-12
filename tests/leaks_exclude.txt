@@ -9,3 +9,4 @@
 # spawns correctly.
 test_run_capture_status
 test_os_run_full
+test_run_argv_heap_string
