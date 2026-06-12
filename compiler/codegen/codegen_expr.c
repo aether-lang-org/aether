@@ -2161,8 +2161,28 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     }
                     int duration_ratio = expr->value && strcmp(expr->value, "/") == 0 &&
                         ltype && rtype && ltype->kind == TYPE_DURATION && rtype->kind == TYPE_DURATION;
+                    /* #697: a 64-bit integer arithmetic/bitwise/shift op whose
+                     * operand is a narrower 32-bit int must compute in 64-bit,
+                     * or C promotes the operand in 32-bit and sign-extends it
+                     * into the high half (e.g. `byte << 24` polluting a uint64).
+                     * The typechecker (propagate_int_width_64) already re-typed
+                     * computed sub-expressions; here we cast narrow leaf/value
+                     * operands at the use site. Not for assignment (the `=`
+                     * conversion is handled by the LHS type) or comparisons
+                     * (bool result). */
+                    const char* wide_cast = NULL;
+                    if (!is_assignment && expr->node_type &&
+                        (expr->node_type->kind == TYPE_INT64 ||
+                         expr->node_type->kind == TYPE_UINT64)) {
+                        wide_cast = (expr->node_type->kind == TYPE_UINT64)
+                                    ? "(uint64_t)" : "(int64_t)";
+                    }
+                    #define AE_IS_NARROW_INT(t) ((t) && ((t)->kind == TYPE_INT || \
+                        (t)->kind == TYPE_BYTE || (t)->kind == TYPE_UINT32 || \
+                        (t)->kind == TYPE_UINT16 || (t)->kind == TYPE_UINT8))
                     if (duration_ratio) fprintf(gen->output, "(double)");
                     if (ptr_int_cmp && lhs_is_ptr) fprintf(gen->output, "(intptr_t)");
+                    if (wide_cast && AE_IS_NARROW_INT(ltype)) fprintf(gen->output, "%s", wide_cast);
                     generate_expression(gen, expr->children[0]);
                     if (is_assignment) {
                         gen->generating_lvalue = 0;
@@ -2216,8 +2236,10 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 "_aether_box_closure((_AeClosure){ .fn = (void(*)(void))_aether_bare_adapter_%s, .env = NULL })",
                                 bn ? bn : "unknown");
                     } else {
+                        if (wide_cast && AE_IS_NARROW_INT(rtype)) fprintf(gen->output, "%s", wide_cast);
                         generate_expression(gen, expr->children[1]);
                     }
+                    #undef AE_IS_NARROW_INT
                     if (!skip_parens) fprintf(gen->output, ")");
                 }
             }

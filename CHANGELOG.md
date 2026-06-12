@@ -32,6 +32,24 @@ notes to be skipped or clobbered (the failure modes documented in
   are unaffected — the annotation is the user's choice. The inferred-vs-
   annotated distinction is tracked with a parser marker on the
   declaration node, so it survives the pre-typecheck inference pass.
+## [0.245.0]
+
+### Fixed
+
+- **Int-shift sign-extension into 64-bit values** (#697). Shifting a
+  32-bit-`int` operand (e.g. a `std.mem` byte accessor's result) and
+  combining it into a `uint64`/`int64` expression — the canonical
+  `u = u | (byte << 24)` binary-decode pattern — evaluated the shift in C
+  `int`: for a byte >= 0x80 the sign bit overflowed and was sign-extended
+  across the high 32 bits (`0x86000000` became `0xFFFFFFFF86000000`), and
+  counts >= 32 were undefined behaviour. This silently corrupted binary
+  codecs (the aedis Redis listpack/siphash port). The typechecker now
+  propagates a 64-bit result context down into int arithmetic operands
+  (left-shift and the value-combining `+ - * | & ^`; `>>` is excluded so
+  arithmetic-shift signedness is preserved), and codegen casts narrow
+  operands to the 64-bit type at the use site, so the value is built in
+  64 bits. Pure-int arithmetic is unchanged. Covers the OR-combining and
+  `uint64 x = byte << n` declaration forms.
 
 ## [0.244.0]
 
