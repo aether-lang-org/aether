@@ -1944,17 +1944,20 @@ static void append_escaped_arg(WBuf* b, const wchar_t* arg) {
 static wchar_t* build_command_line(const char* prog, void* argv_list) {
     WBuf b; wbuf_init(&b);
 
+    /* Match the POSIX argv convention used by build_argv_array: the program
+     * is always prog, and argv_list holds the caller's arguments starting at
+     * position 0. The earlier shape — treating argv_list[0] as the program
+     * when the list was non-empty — meant os.run("cmd", ["/c","echo","x"])
+     * produced the command line `/c echo x` and tried to spawn a program
+     * named `/c`. Discovered chasing the second half of issue #706 once
+     * lpApplicationName=NULL exposed cmdline[0] to CreateProcessW's parser. */
+    wchar_t* wprog = utf8_to_wide(prog);
+    if (!wprog) { free(b.data); return NULL; }
+    append_escaped_arg(&b, wprog);
+    free(wprog);
+
     int n = argv_list ? list_size(argv_list) : 0;
-
-    const char* arg0_utf8 = (n > 0) ? aether_string_data(list_get_raw(argv_list, 0)) : prog;
-    if (!arg0_utf8) arg0_utf8 = prog;
-    wchar_t* warg0 = utf8_to_wide(arg0_utf8);
-    if (!warg0) { free(b.data); return NULL; }
-    append_escaped_arg(&b, warg0);
-    free(warg0);
-
-    int start_index = (n > 0) ? 1 : 0;
-    for (int i = start_index; i < n; i++) {
+    for (int i = 0; i < n; i++) {
         const char* item = aether_string_data(list_get_raw(argv_list, i));
         if (!item) continue;
         wchar_t* w = utf8_to_wide(item);
@@ -1996,9 +1999,9 @@ static wchar_t* build_environ_block(void* env_list) {
 static int win_launch(const char* prog, void* argv_list, void* env_list,
                       int capture_stdout,
                       int* out_exit_code, char** out_capture) {
-    (void)prog; /* Used only to seed build_command_line's argv[0] when
-                   argv_list is empty; CreateProcessW receives lpApplicationName=NULL
-                   and parses the command line itself (see below). */
+    /* prog seeds build_command_line's argv[0] (matching POSIX
+     * build_argv_array). CreateProcessW receives lpApplicationName=NULL
+     * and PATH-resolves that first token itself (see below). */
     wchar_t* cmdline = build_command_line(prog, argv_list);
     if (!cmdline) return -1;
 
