@@ -14,6 +14,37 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Windows `os.run` / `os.run_capture` / `os.run_supervised` couldn't
+  spawn an argv-specified child** (#706). Two independent bugs in the
+  Windows process-spawn path, both in `std/os/aether_os.c`:
+  1. All three `CreateProcessW` call sites (`win_launch`, the supervised
+     variant, and `os_run_full_raw`) passed the program path as
+     `lpApplicationName`. Per MSDN, a non-NULL `lpApplicationName` must
+     be a full path — `CreateProcessW` does no `execvp`-style PATH
+     search, no `.exe` append, no built-in resolution. A bare `"cmd"`
+     therefore became a literal CWD-relative filename, failed with
+     `ERROR_FILE_NOT_FOUND`, and bubbled up as `rc=-1` /
+     `err="spawn failed"`. Switched all three sites to
+     `lpApplicationName=NULL` so `CreateProcessW` parses and PATH-
+     resolves the first token of `lpCommandLine`.
+  2. `build_command_line` then disagreed with the POSIX `build_argv_array`
+     on the argv convention: POSIX seeds `argv[0]` with `prog` and treats
+     `argv_list` as the *whole* argument vector; the Windows builder
+     treated `argv_list[0]` as the program and dropped `prog`. So
+     `os.run("cmd", ["/c","echo","x"])` — correct on Linux — produced
+     the command line `/c echo x` on Windows and tried to spawn a program
+     named `/c`. Re-aligned `build_command_line` to always seed with
+     `prog` then append the whole `argv_list`. Together with the
+     `lpApplicationName=NULL` flip the whole `os.run*` family now works
+     on Windows. (`os.system()`, the shell-string path, was unaffected
+     all along — it routes through libc `system()` not `CreateProcessW`.)
+     Discriminator: literal-argv calls failed too, so this is distinct
+     from the heap-string issue (#688) already fixed.
+
 ## [0.243.0]
 
 ### Fixed
