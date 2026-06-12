@@ -1996,11 +1996,11 @@ static wchar_t* build_environ_block(void* env_list) {
 static int win_launch(const char* prog, void* argv_list, void* env_list,
                       int capture_stdout,
                       int* out_exit_code, char** out_capture) {
+    (void)prog; /* Used only to seed build_command_line's argv[0] when
+                   argv_list is empty; CreateProcessW receives lpApplicationName=NULL
+                   and parses the command line itself (see below). */
     wchar_t* cmdline = build_command_line(prog, argv_list);
     if (!cmdline) return -1;
-
-    wchar_t* wprog = utf8_to_wide(prog);
-    if (!wprog) { free(cmdline); return -1; }
 
     wchar_t* wenv = build_environ_block(env_list);
     // NULL from build_environ_block when env_list is NULL means "inherit" —
@@ -2019,7 +2019,7 @@ static int win_launch(const char* prog, void* argv_list, void* env_list,
         sa.bInheritHandle = TRUE;
         sa.lpSecurityDescriptor = NULL;
         if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
-            free(cmdline); free(wprog); free(wenv);
+            free(cmdline); free(wenv);
             return -1;
         }
         // The read end must NOT be inherited by the child.
@@ -2035,8 +2035,18 @@ static int win_launch(const char* prog, void* argv_list, void* env_list,
     memset(&pi, 0, sizeof(pi));
 
     DWORD flags = CREATE_UNICODE_ENVIRONMENT;
+    /* lpApplicationName=NULL so CreateProcessW parses the first whitespace-
+     * delimited token of lpCommandLine and runs its own PATH + .exe + .bat
+     * resolution. Passing a bare program name (e.g. "cmd", "gcc") as
+     * lpApplicationName makes Win32 treat it as a literal filename in CWD
+     * — no PATH search, no extension append — and CreateProcessW returns
+     * ERROR_FILE_NOT_FOUND. That broke os.run / os.run_capture /
+     * os.run_supervised on Windows for every PATH-resolved program
+     * (issue #706). The argv[0] in cmdline (built by build_command_line)
+     * already carries the program name, properly quoted by append_escaped_arg,
+     * which is what CreateProcessW will parse. */
     BOOL ok = CreateProcessW(
-        wprog,         // application name
+        NULL,          // application name — let CreateProcessW PATH-resolve cmdline[0]
         cmdline,       // command line (modifiable — CreateProcessW may write)
         NULL, NULL,
         capture_stdout ? TRUE : FALSE,  // inherit handles only when capturing
@@ -2047,7 +2057,6 @@ static int win_launch(const char* prog, void* argv_list, void* env_list,
         &pi);
 
     free(cmdline);
-    free(wprog);
     free(wenv);
 
     if (capture_stdout) {
@@ -2290,12 +2299,10 @@ _tuple_int_string os_run_supervised_raw(const char* prog, void* argv_list, void*
 
     wchar_t* cmdline = build_command_line(prog, argv_list);
     if (!cmdline) { out._1 = "argv build failed"; return out; }
-    wchar_t* wprog = utf8_to_wide(prog);
-    if (!wprog) { free(cmdline); out._1 = "argv build failed"; return out; }
     wchar_t* wenv = build_environ_block(env_list); /* NULL = inherit */
 
     HANDLE job = CreateJobObjectW(NULL, NULL);
-    if (!job) { free(cmdline); free(wprog); free(wenv); out._1 = "job create failed"; return out; }
+    if (!job) { free(cmdline); free(wenv); out._1 = "job create failed"; return out; }
 
     /* Arm kill-on-close only when reap_group is set: closing the job then
      * tears down the whole tree (the Windows group-reap). Without it,
@@ -2315,8 +2322,11 @@ _tuple_int_string os_run_supervised_raw(const char* prog, void* argv_list, void*
     DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
     if (new_process_group) flags |= CREATE_NEW_PROCESS_GROUP;
 
-    BOOL ok = CreateProcessW(wprog, cmdline, NULL, NULL, FALSE, flags, wenv, NULL, &si, &pi);
-    free(cmdline); free(wprog); free(wenv);
+    /* lpApplicationName=NULL — same reason as win_launch (issue #706):
+     * let CreateProcessW PATH-resolve cmdline[0] rather than treating
+     * the bare prog name as a literal CWD filename. */
+    BOOL ok = CreateProcessW(NULL, cmdline, NULL, NULL, FALSE, flags, wenv, NULL, &si, &pi);
+    free(cmdline); free(wenv);
     if (!ok) { CloseHandle(job); out._1 = "spawn failed"; return out; }
 
     AssignProcessToJobObject(job, pi.hProcess);
@@ -2427,10 +2437,9 @@ _tuple_string_string_int_string os_run_full_raw(const char* prog, void* argv_lis
     SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
 
     wchar_t* cmdline = build_command_line(prog, argv_list);
-    wchar_t* wprog = utf8_to_wide(prog);
     wchar_t* wenv = build_environ_block(env_list); /* NULL = inherit */
-    if (!cmdline || !wprog) {
-        free(cmdline); free(wprog); free(wenv);
+    if (!cmdline) {
+        free(cmdline); free(wenv);
         CloseHandle(in_r); CloseHandle(in_w); CloseHandle(out_r);
         CloseHandle(out_w); CloseHandle(err_r); CloseHandle(err_w);
         out._3 = "argv build failed"; return out;
@@ -2443,9 +2452,12 @@ _tuple_string_string_int_string os_run_full_raw(const char* prog, void* argv_lis
     si.hStdError  = err_w;
     PROCESS_INFORMATION pi; memset(&pi, 0, sizeof pi);
 
-    BOOL ok = CreateProcessW(wprog, cmdline, NULL, NULL, TRUE,
+    /* lpApplicationName=NULL — same reason as win_launch (issue #706):
+     * let CreateProcessW PATH-resolve cmdline[0] rather than treating
+     * the bare prog name as a literal CWD filename. */
+    BOOL ok = CreateProcessW(NULL, cmdline, NULL, NULL, TRUE,
                              CREATE_UNICODE_ENVIRONMENT, wenv, NULL, &si, &pi);
-    free(cmdline); free(wprog); free(wenv);
+    free(cmdline); free(wenv);
     /* Close the child-side ends in the parent so EOF propagates correctly. */
     CloseHandle(in_r); CloseHandle(out_w); CloseHandle(err_w);
     if (!ok) {

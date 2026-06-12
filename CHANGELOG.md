@@ -14,6 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Windows `os.run` / `os.run_capture` / `os.run_supervised` couldn't
+  spawn an argv-specified child** (#706). The three `CreateProcessW`
+  call sites in `std/os/aether_os.c` (`win_launch`, the supervised
+  variant, and `os_run_full_raw`) passed the program path as
+  `lpApplicationName`. Per MSDN, when `lpApplicationName` is non-NULL it
+  must be a *full path* — `CreateProcessW` does not do `execvp`-style
+  PATH search, doesn't append `.exe`, and doesn't recognize built-ins
+  like `cmd`. A bare `"cmd"` therefore became a literal CWD-relative
+  filename lookup, failed with `ERROR_FILE_NOT_FOUND`, and bubbled up
+  as `rc=-1` / `err="spawn failed"`. Switched all three sites to
+  `lpApplicationName=NULL` and let `CreateProcessW` parse the first
+  token of `lpCommandLine`, which `build_command_line` already
+  quotes correctly via `append_escaped_arg`. (`os.system()`, the shell
+  string path, was unaffected — it routes through `system()` not
+  `CreateProcessW`.) Discriminator: literal-argv calls failed too, so
+  this is distinct from the heap-string issue (#688) already fixed.
+
 ## [0.243.0]
 
 ### Fixed
