@@ -14,6 +14,22 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Stale reference to deleted `runtime/memory/memory.c` in `tools/ae.c`**
+  (#693). The file was removed in 39446f9 ("delete dead memory.c") on
+  2026-05-12, but three references survived in `tools/ae.c` — two
+  `snprintf` calls in the dev-tree no-lib branch (POSIX + Windows) and
+  one entry in the source-manifest array. Invisible on most setups
+  because `has_lib` is true (a built `libaether.a` is present), so the
+  archive is linked and the raw sources are never compiled — but where
+  the libaether-discovery probe misses (some MinGW layouts, fresh
+  clones), gcc was handed the deleted path and the build failed with a
+  confusing "no such file" pointing at the user's program. Cleaned up;
+  the snprintf `%s`/`tc.root|src` arg balance was adjusted alongside.
+
 ## [0.242.0]
 
 ### Fixed
