@@ -27,6 +27,26 @@ notes to be skipped or clobbered (the failure modes documented in
   always correct (`((int(*)(void*))(g))(p)`); this was warning noise
   only. Regression: `tests/regression/test_fn_cast_call_marks_used.ae`.
 
+## [0.240.0]
+
+### Fixed
+
+- **`os.run` / `os.run_capture` / `os.run_supervised` argv corruption for
+  heap-allocated strings** (#688). The argv (and envp) builders read each
+  list entry with `list_get_raw()` and blind-cast the result to `char*`.
+  String literals and `aether_args_get()` returns happen to be raw
+  `const char*`, so the cast lands on the payload; but heap-built
+  strings (`string.concat`, `substring`, interpolation results, etc.)
+  are magic-wrapped `AetherString*` whose first 16 bytes are the struct
+  header, not the payload — execve(2) then received the header bytes,
+  and the child process saw garbage like `\336\300W\256\1` in place of
+  the intended argv. Routed every `list_get_raw` result destined for a
+  `const char*` consumer through `aether_string_data()`, which unwraps
+  the magic header and passes raw pointers through unchanged. Same fix
+  applied to the sandbox grant-list reader (`aether_spawn_sandboxed.c`
+  serialize_grants / is_fork_granted) and `fs.glob_multi`'s pattern
+  list (`std/fs/aether_fs.c`), which had the same shape.
+
 ## [0.239.0]
 
 ### Added

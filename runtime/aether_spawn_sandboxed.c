@@ -26,6 +26,10 @@
 // From libaether.a — list operations
 extern int list_size(void*);
 extern void* list_get_raw(void*, int);
+// String-ABI accessor: list_get_raw may return a magic AetherString* or
+// a raw const char*; aether_string_data unwraps both to a plain
+// C-string. Required for argv / grant-pattern reads — see issue #688.
+extern const char* aether_string_data(const void*);
 
 // Find libaether_sandbox.so next to the running binary
 static int find_preload_path(char* buf, int bufsize) {
@@ -69,8 +73,8 @@ static int serialize_grants(void* grant_list) {
     char buf[8192];
     int pos = 0;
     for (int i = 0; i < n && pos < 8000; i += 2) {
-        const char* cat = (const char*)list_get_raw(grant_list, i);
-        const char* pat = (const char*)list_get_raw(grant_list, i + 1);
+        const char* cat = aether_string_data(list_get_raw(grant_list, i));
+        const char* pat = aether_string_data(list_get_raw(grant_list, i + 1));
         if (!cat || !pat) continue;
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%s:%s\n", cat, pat);
     }
@@ -111,8 +115,8 @@ static int is_fork_granted(void* grant_list) {
     int n = list_size(grant_list);
     if (n <= 0 || n % 2 != 0) return 0;
     for (int i = 0; i < n; i += 2) {
-        const char* cat = (const char*)list_get_raw(grant_list, i);
-        const char* pat = (const char*)list_get_raw(grant_list, i + 1);
+        const char* cat = aether_string_data(list_get_raw(grant_list, i));
+        const char* pat = aether_string_data(list_get_raw(grant_list, i + 1));
         if (!cat || !pat) continue;
         if (cat[0] == '*' && cat[1] == '\0' &&
             pat[0] == '*' && pat[1] == '\0') {

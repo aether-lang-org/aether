@@ -109,6 +109,15 @@ int64_t os_now_unix_ms_raw(void) { return 0; }
 extern int list_size(void* list);
 extern void* list_get_raw(void* list, int index);
 
+// String-ABI accessor: list_get_raw returns either an AetherString*
+// (heap-built strings — concat, substring, interp, etc.) or a raw
+// const char* (string literals, args_get). aether_string_data dispatches
+// on the magic header and returns a plain C-string in both cases. Argv
+// / envp arrays MUST go through this — the execve(2) family expects
+// const char*, and a blind (char*)cast of a magic AetherString* yields
+// the struct header bytes, not the payload (issue #688).
+extern const char* aether_string_data(const void* s);
+
 #ifndef _WIN32
 #include <unistd.h>
 #include <sys/types.h>
@@ -128,6 +137,7 @@ extern void* list_get_raw(void* list, int index);
 // to include the collections header (which would create a build cycle).
 extern int   list_size(void* list);
 extern void* list_get_raw(void* list, int index);
+extern const char* aether_string_data(const void* s);
 
 #ifdef _WIN32
 // Forward declaration — implementation at the bottom of the file.
@@ -616,7 +626,11 @@ int os_execv(const char* prog, void* argv_list) {
                 free(argv);
                 return -1;
             }
-            argv[ai++] = (char*)item;
+            // aether_string_data unwraps a magic AetherString* to its
+            // payload pointer; for raw const char* it returns the input
+            // verbatim. Required: a blind (char*)cast of a heap-built
+            // string would give execvp the struct header (issue #688).
+            argv[ai++] = (char*)aether_string_data(item);
         }
     }
     argv[ai] = NULL;
@@ -845,7 +859,9 @@ static char** build_argv_array(const char* prog, void* argv_list) {
     if (!av) return NULL;
     av[0] = (char*)prog;
     for (int i = 0; i < n; i++) {
-        av[i + 1] = (char*)list_get_raw(argv_list, i);
+        // Unwrap magic AetherString* to its payload; pass plain char*
+        // through unchanged. See aether_os.c header comment + issue #688.
+        av[i + 1] = (char*)aether_string_data(list_get_raw(argv_list, i));
     }
     av[n + 1] = NULL;
     return av;
@@ -861,7 +877,7 @@ static char** build_envp_array(void* env_list) {
     char** envp = (char**)malloc(sizeof(char*) * (size_t)(n + 1));
     if (!envp) return NULL;
     for (int i = 0; i < n; i++) {
-        envp[i] = (char*)list_get_raw(env_list, i);
+        envp[i] = (char*)aether_string_data(list_get_raw(env_list, i));
     }
     envp[n] = NULL;
     return envp;
@@ -1930,7 +1946,7 @@ static wchar_t* build_command_line(const char* prog, void* argv_list) {
 
     int n = argv_list ? list_size(argv_list) : 0;
 
-    const char* arg0_utf8 = (n > 0) ? (const char*)list_get_raw(argv_list, 0) : prog;
+    const char* arg0_utf8 = (n > 0) ? aether_string_data(list_get_raw(argv_list, 0)) : prog;
     if (!arg0_utf8) arg0_utf8 = prog;
     wchar_t* warg0 = utf8_to_wide(arg0_utf8);
     if (!warg0) { free(b.data); return NULL; }
@@ -1939,7 +1955,7 @@ static wchar_t* build_command_line(const char* prog, void* argv_list) {
 
     int start_index = (n > 0) ? 1 : 0;
     for (int i = start_index; i < n; i++) {
-        const char* item = (const char*)list_get_raw(argv_list, i);
+        const char* item = aether_string_data(list_get_raw(argv_list, i));
         if (!item) continue;
         wchar_t* w = utf8_to_wide(item);
         if (!w) { free(b.data); return NULL; }
@@ -1961,7 +1977,7 @@ static wchar_t* build_environ_block(void* env_list) {
     WBuf b; wbuf_init(&b);
 
     for (int i = 0; i < n; i++) {
-        const char* item = (const char*)list_get_raw(env_list, i);
+        const char* item = aether_string_data(list_get_raw(env_list, i));
         if (!item) continue;
         wchar_t* w = utf8_to_wide(item);
         if (!w) { free(b.data); return NULL; }

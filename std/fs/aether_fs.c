@@ -2014,6 +2014,10 @@ DirList* fs_glob_raw(const char* pattern) {
 // The list is an ArrayList (from std.list) containing string pointers.
 extern int list_size(void*);
 extern void* list_get_raw(void*, int);
+// String-ABI accessor: list_get_raw may return a magic AetherString*
+// (heap-built) or a raw const char* (literal/args_get). Unwrap so we
+// hand fs_glob_raw the payload pointer, not the struct header (#688).
+extern const char* aether_string_data(const void*);
 
 DirList* fs_glob_multi_raw(void* pattern_list) {
     if (!pattern_list) return NULL;
@@ -2025,7 +2029,7 @@ DirList* fs_glob_multi_raw(void* pattern_list) {
 
     int n = list_size(pattern_list);
     for (int i = 0; i < n; i++) {
-        const char* pattern = (const char*)list_get_raw(pattern_list, i);
+        const char* pattern = aether_string_data(list_get_raw(pattern_list, i));
         if (!pattern) continue;
 
         DirList* partial = fs_glob_raw(pattern);
