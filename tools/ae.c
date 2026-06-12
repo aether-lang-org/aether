@@ -1218,7 +1218,6 @@ found_root:
                 "%s/runtime/scheduler/multicore_scheduler.c "
                 "%s/runtime/scheduler/scheduler_optimizations.c "
                 "%s/runtime/config/aether_optimization_config.c "
-                "%s/runtime/memory/memory.c "
                 "%s/runtime/memory/aether_arena.c "
                 "%s/runtime/memory/aether_pool.c "
                 "%s/runtime/memory/aether_memory_stats.c "
@@ -1260,7 +1259,7 @@ found_root:
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
-                tc.root, tc.root, tc.root);
+                tc.root, tc.root);
         }
     } else {
         // Installed layout: headers in include/aether/, source in
@@ -1293,7 +1292,6 @@ found_root:
                 "%s/runtime/scheduler/multicore_scheduler.c "
                 "%s/runtime/scheduler/scheduler_optimizations.c "
                 "%s/runtime/config/aether_optimization_config.c "
-                "%s/runtime/memory/memory.c "
                 "%s/runtime/memory/aether_arena.c "
                 "%s/runtime/memory/aether_pool.c "
                 "%s/runtime/memory/aether_memory_stats.c "
@@ -1335,7 +1333,7 @@ found_root:
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
-                src, src, src);
+                src, src);
         }
     }
 }
@@ -2150,7 +2148,6 @@ static int build_wasm_cmd(char* cmd, size_t size,
         "runtime/scheduler/aether_scheduler_coop.c",
         "runtime/scheduler/scheduler_optimizations.c",
         "runtime/config/aether_optimization_config.c",
-        "runtime/memory/memory.c",
         "runtime/memory/aether_arena.c",
         "runtime/memory/aether_pool.c",
         "runtime/memory/aether_memory_stats.c",
