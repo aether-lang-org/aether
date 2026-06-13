@@ -193,14 +193,14 @@ plays that role), no interfaces.
   `os_run` (no capture, just exit code), `os_system` (legacy
   `system(3)` shell-out, prefer `run_capture`), `os_execv` (replace
   current process). Don't propose a new `std.process`.
-- **XML parsing lives in `contrib`, not `std`.** `contrib.xml.expat`
+- **XML parsing lives in `contrib`, not `std`.** `contrib.parsers.xml_expat`
   is a SAX-style libexpat wrapper — start/end/text callbacks,
   attribute access, entity decoding, multi-chunk streaming. Add
-  `extra_sources = ["contrib/xml/expat/aether_xml_expat.c"]` and
+  `extra_sources = ["contrib/parsers/xml_expat/aether_xml_expat.c"]` and
   `link_flags = "-lexpat"` per the contrib README. Don't hand-roll
   an `index_of`-based parser — that exact mistake landed in
   fbs-core's S3 port (#627) because the porter didn't realise
-  `contrib.xml.expat` existed.
+  `contrib.parsers.xml_expat` existed.
 - **Operator-supplied Liquid templates → `contrib.templating.liquid`.**
   Pure-Aether Shopify-Liquid port. Use it for email bodies, dashboards,
   generated reports — anywhere a trusted-human operator writes a

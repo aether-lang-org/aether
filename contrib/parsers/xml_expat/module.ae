@@ -1,5 +1,5 @@
-// contrib.xml.expat — thin libexpat veneer for Aether.
-// Import with: import contrib.xml.expat
+// contrib.parsers.xml_expat — thin libexpat veneer for Aether.
+// Import with: import contrib.parsers.xml_expat
 //
 // SAX-style streaming XML parser. Mirrors libexpat's native model:
 // caller registers per-event handlers (start element, end element,
@@ -35,7 +35,7 @@
 // libexpat callback fires.
 //
 // Build:
-//   - Drop `contrib/xml/expat/aether_xml_expat.c` into your project's
+//   - Drop `contrib/parsers/xml_expat/aether_xml_expat.c` into your project's
 //     aether.toml [[bin]] `extra_sources`.
 //   - Add `[build] link_flags = "-lexpat"` to your aether.toml.
 //   - If the system doesn't have libexpat-dev, the link fails — this
@@ -217,7 +217,7 @@ attr_value(atts: ptr, i: int) -> string {
 //
 // Usage:
 //
-//   import contrib.xml.expat
+//   import contrib.parsers.xml_expat
 //
 //   main() {
 //       count = 0

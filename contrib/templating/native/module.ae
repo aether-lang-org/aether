@@ -48,7 +48,8 @@ import std.strbuilder
 import std.string
 
 exports (
-    html_text, html_raw, html_tag_open, html_tag_close, html_tag
+    html_text, html_raw, html_tag_open, html_tag_close, html_tag,
+    render_html, tag, text, raw
 )
 
 // HTML-escape one byte into `sb`. Covers the five canonical entities
@@ -113,4 +114,112 @@ html_tag(sb: ptr, name: string, body_text: string) {
     html_tag_open(sb, name)
     html_text(sb, body_text)
     html_tag_close(sb, name)
+}
+
+// ---------------------------------------------------------------------
+// Builder DSL surface — the templates-that-ARE-Aether-code pitch.
+// ---------------------------------------------------------------------
+//
+//   import contrib.templating.native as nt
+//
+//   out = nt.render_html {
+//       tag("p") { text("Hello ${name}") }
+//       if items_size > 0 {
+//           tag("ul") {
+//               for item in items {
+//                   tag("li") { text(item) }
+//               }
+//           }
+//       } else {
+//           tag("p") { text("No items.") }
+//       }
+//   }
+//
+// How it works
+// ------------
+//
+// `render_html` and `tag` are both `builder` functions. Each owns a
+// fresh `std.strbuilder` instance — the `with strbuilder_factory_64`
+// clause supplies the zero-arg factory.
+//
+// The mechanics, walked through for `render_html { tag("p") { text("x") } }`:
+//
+// 1. Caller invokes `render_html { ... }`.
+// 2. Compiler creates a new sb (call it OUT) via `strbuilder_factory_64`,
+//    pushes OUT onto the builder-context stack as the active `_ctx`.
+// 3. The trailing block runs against OUT:
+//    a. `tag("p") { text("x") }` starts. Compiler creates a fresh sb
+//       (BODY), pushes it as the new `_ctx`.
+//    b. Inner block runs against BODY:
+//       - `text("x")` is a regular `_ctx: ptr` function — receives
+//         BODY via auto-injection, HTML-escapes 'x', appends to BODY.
+//    c. Inner block ends. Compiler POPs the context. `_ctx` is now
+//       OUT again.
+//    d. `tag()`'s function body runs (with `_builder == BODY`):
+//       reads BODY's bytes, then calls `text_raw(_ctx, "<p>")`,
+//       `text_raw(_ctx, body_bytes)`, `text_raw(_ctx, "</p>")`. These
+//       resolve `_ctx` to OUT — the parent.
+// 4. Outer block ends. POP.
+// 5. `render_html`'s function body runs: returns the finalised OUT
+//    string.
+//
+// The net result is `text()` always writes to the *innermost* active
+// buffer, and `tag()` wraps that buffer's contents in its own tag and
+// pastes the result into the parent. Same shape works at any depth;
+// `for` and `if` in the block are real Aether and inherit `_ctx`
+// because they're lexical scopes within the block, not separate
+// builders.
+//
+// Trade-off
+// ---------
+//
+// One strbuilder allocated per `tag()`. For a 30-element list that's
+// 30 transient allocations. The plain-function API
+// (`html_tag_open(sb, ...)` etc.) above is the escape hatch for
+// performance-sensitive paths.
+
+// Zero-arg factory the `with` clause needs. 64-byte initial capacity
+// is a reasonable middle ground for typical HTML tag bodies (short
+// strings and small element counts); the strbuilder grows as needed.
+strbuilder_factory_64() -> ptr {
+    return strbuilder.new(64)
+}
+
+// `text(s)` — append `s` to the active emitter, HTML-escaping the five
+// canonical entities. Inside any `tag()` or `render_html` block the
+// compiler auto-injects the active sb as `_ctx`.
+text(_ctx: ptr, s: string) {
+    html_text(_ctx, s)
+}
+
+// `raw(s)` — append `s` verbatim. Use only for trusted markup.
+raw(_ctx: ptr, s: string) {
+    html_raw(_ctx, s)
+}
+
+// `tag(name) { ... }` — emit `<name>BODY</name>` where BODY is the
+// rendered output of the trailing block.
+//
+// At this function's entry: `_builder` is the per-tag sb that the
+// trailing block filled. The compiler has already popped the
+// builder-context stack, so the *current* top — read with
+// `builder_context()` — is the PARENT emitter. We finalise our own
+// `_builder` to a string and write `<name>body</name>` to the parent.
+builder tag(name: string): int with strbuilder_factory_64 {
+    body = strbuilder.finish(_builder)
+    parent = builder_context()
+    strbuilder.append(parent, "<")
+    strbuilder.append(parent, name)
+    strbuilder.append(parent, ">")
+    strbuilder.append(parent, body)
+    strbuilder.append(parent, "</")
+    strbuilder.append(parent, name)
+    strbuilder.append(parent, ">")
+    return 0
+}
+
+// `render_html { ... }` — run the block against a fresh emitter and
+// return the assembled string.
+builder render_html(): string with strbuilder_factory_64 {
+    return strbuilder.finish(_builder)
 }

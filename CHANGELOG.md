@@ -14,6 +14,61 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`contrib.templating.native`: builder DSL.** The walking-skeleton
+  `html_text(sb, s)` / `html_tag_open(sb, s)` API gains a sibling
+  surface that lets you write templates as Aether closures with
+  trailing-block tag emission:
+  ```aether
+  out = native.render_html() {
+      native.tag("ul") {
+          for i in 0..items_size {
+              native.tag("li") { native.text(items[i]) }
+          }
+      }
+  }
+  ```
+  `render_html()` returns the assembled string. `tag(name) { ... }`
+  emits `<name>BODY</name>` where BODY is the rendered output of the
+  trailing block. `text(s)` HTML-escapes the five canonical entities;
+  `raw(s)` bypasses escaping (trusted markup only). The `for` is
+  Aether's own — no template-language reimplementation, no separate
+  expression evaluator — so `if`, `switch`, ref cells, captured
+  closures, and `${...}` interpolation all compose. Implementation:
+  each `tag()` is a `builder` function with a fresh `std.strbuilder`
+  as its per-tag emitter; after the trailing block runs, `tag()` reads
+  the body bytes and writes `<name>body</name>` to the parent emitter
+  via the builder-context stack. Trade-off: one strbuilder allocated
+  per `tag()` call. The plain-function surface
+  (`html_text(sb, ...)` etc.) stays as the escape hatch for
+  performance-sensitive paths. New integration test
+  `native_templating_dsl/` (6 cases — basic wrap, nested tags, escape
+  of all 5 metas, raw bypass, `for` loop inside a tag block, `${...}`
+  interpolation of a captured user value). Note the parens
+  (`render_html()`, `tag("ul")`) — Aether trailing blocks attach only
+  to call sites with parens.
+
+### Changed
+
+- **`contrib.xml.expat` → `contrib.parsers.xml_expat`** (breaking-ish import
+  path move). The directory is now `contrib/parsers/xml_expat/` and the
+  Aether import is `import contrib.parsers.xml_expat`, namespacing calls
+  as `xml_expat.parser_new(...)` etc. Rationale: `contrib/xml/` mixed an
+  *input* (parser) with the natural future home for an *output* (an XML
+  emitter under `contrib/templating/native`'s sibling slot). Splitting by
+  **direction-of-bytes** (`contrib/parsers/` vs `contrib/templating/`)
+  keeps the threat models separate and prevents the "where does this
+  format live?" cycle every time we add a new module. Downstream consumers
+  must update three things: the dotted import path, the namespace prefix
+  on call sites (`expat.foo` → `xml_expat.foo`), and the
+  `extra_sources` path in `aether.toml`
+  (`contrib/parsers/xml_expat/aether_xml_expat.c`). The
+  `aether_xml_expat.c` filename and the `xml_expat_*` C-side externs are
+  unchanged.
+
 ## [0.248.0]
 
 ### Added
