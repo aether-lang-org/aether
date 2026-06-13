@@ -53,6 +53,7 @@ exports (
     http_server_set_actor_handler,
     http_request_method, http_request_path, http_request_body,
     http_request_body_length, http_request_query,
+    http_request_remote_addr,
     http_request_body_read_raw, http_get_request_body_read,
     http_get_request_body_read_length, http_release_request_body_read,
     request_body_read,
@@ -61,6 +62,7 @@ exports (
     serve_file, serve_static,
     request_method, request_path, request_body,
     request_body_length, request_query,
+    request_remote_addr,
     request_header_count, request_header_name, request_header_value,
     ae_io_await, ae_io_cancel, await_io
 )
@@ -627,6 +629,19 @@ extern http_release_request_body_read()
 extern string_new_with_length(data: string, length: int) -> ptr
 extern http_request_query(req: ptr) -> string
 
+// Trusted TCP peer address — the IP `getpeername(2)` reports for the
+// connection that carried this request. Use this (NOT the
+// `X-Forwarded-For` header) when building an in-app source-IP
+// allow/deny list on a directly-exposed listener: clients can put
+// any value they like into the header, but only the kernel's
+// notion of the peer reflects reality. Behind a trusted reverse
+// proxy, `std.http.middleware.use_real_ip` remains the right tool.
+// Returns "" when unavailable (Unix-domain socket, syscall failed,
+// or req is null). Dotted-quad for IPv4 ("203.0.113.7"); the
+// inet_ntop AF_INET6 form for IPv6 ("2001:db8::1") — no brackets,
+// no scope id.
+extern http_request_remote_addr(req: ptr) -> string
+
 // Request-header iteration. `http_get_header` only does a named lookup;
 // these enumerate every received header so a handler can capture an
 // unknown set (e.g. a faithful record/replay recorder). Order is wire
@@ -692,6 +707,10 @@ request_body_read(req: ptr, offset: int, max: int) -> {
 
 request_query(req: ptr) -> string {
     return http_request_query(req)
+}
+
+request_remote_addr(req: ptr) -> string {
+    return http_request_remote_addr(req)
 }
 
 request_header_count(req: ptr) -> int {

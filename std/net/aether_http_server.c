@@ -115,6 +115,7 @@ const char* http_get_request_body_read(void) { return ""; }
 int http_get_request_body_read_length(void) { return 0; }
 void http_release_request_body_read(void) {}
 const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
+const char* http_request_remote_addr(HttpRequest* r) { (void)r; return ""; }
 int http_request_header_count(HttpRequest* r) { (void)r; return 0; }
 const char* http_request_header_name(HttpRequest* r, int i) { (void)r; (void)i; return ""; }
 const char* http_request_header_value(HttpRequest* r, int i) { (void)r; (void)i; return ""; }
@@ -1538,6 +1539,8 @@ void http_request_free(HttpRequest* req) {
     free(req->query_keys);
     free(req->query_values);
 
+    free(req->remote_addr);
+
     free(req);
 }
 
@@ -2527,6 +2530,33 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
      * on the next iteration. */
     conn->read_pos += request_total;
     if (!req) return 0;
+
+    /* Populate the trusted peer address with what the kernel actually
+     * sees on this connection. Used by `http_request_remote_addr`
+     * for in-app source-IP allow/deny lists — the X-Forwarded-For
+     * header is the wrong basis here because it's client-supplied.
+     * Cheap (one cache-warm syscall + an inet_ntop) so it runs per
+     * request; failures (Unix-domain socket, kernel says EBADF on a
+     * just-closed fd) leave the field NULL and the accessor returns
+     * "". IPv4 + IPv6 both supported via sockaddr_storage. */
+    {
+        struct sockaddr_storage ss;
+        socklen_t sslen = sizeof(ss);
+        if (getpeername(conn->fd, (struct sockaddr*)&ss, &sslen) == 0) {
+            char buf[INET6_ADDRSTRLEN];
+            const char* src = NULL;
+            if (ss.ss_family == AF_INET) {
+                src = inet_ntop(AF_INET,
+                                &((struct sockaddr_in*)&ss)->sin_addr,
+                                buf, sizeof(buf));
+            } else if (ss.ss_family == AF_INET6) {
+                src = inet_ntop(AF_INET6,
+                                &((struct sockaddr_in6*)&ss)->sin6_addr,
+                                buf, sizeof(buf));
+            }
+            if (src) req->remote_addr = strdup(src);
+        }
+    }
 
     // Create response
     HttpServerResponse* res = http_response_create();
@@ -4198,6 +4228,22 @@ int http_request_body_read_raw(HttpRequest* req, int offset, int max) {
 
 const char* http_request_query(HttpRequest* req) {
     return (req && req->query_string) ? req->query_string : "";
+}
+
+const char* http_request_remote_addr(HttpRequest* req) {
+    /* Trusted TCP peer address. Populated by the dispatcher after
+     * `http_parse_request_n` via `getpeername(2)` + `inet_ntop`;
+     * stays NULL when the connection has no IP peer (Unix-domain
+     * socket) or when the kernel call failed (the empty string
+     * keeps the FFI shape stable for Aether callers).
+     *
+     * Intentionally separate from the X-Forwarded-For header path:
+     * the header is client-supplied (use the
+     * `std.http.middleware.use_real_ip` middleware behind a trusted
+     * proxy that overwrites it); this accessor is what the kernel
+     * actually sees on the socket, which is the only basis for a
+     * directly-exposed listener's source-IP allow/deny decision. */
+    return (req && req->remote_addr) ? req->remote_addr : "";
 }
 
 // Request-header iteration (vcr_request_header_iteration_wish.md). Unlike

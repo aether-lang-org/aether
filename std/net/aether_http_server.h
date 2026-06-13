@@ -16,6 +16,16 @@ typedef struct {
     int header_count;
     char* body;
     size_t body_length;
+    /* Trusted TCP peer address — what `getpeername(2)` returned for
+     * the connection that carried this request. Set by the dispatcher
+     * just after the request is parsed, NULL when unavailable (e.g.
+     * a Unix-domain or in-memory transport). IPv4 strings are
+     * dotted-quad ("192.0.2.7"); IPv6 strings are the `inet_ntop`
+     * AF_INET6 form ("2001:db8::1") — without a bracketed prefix or
+     * scope id. Exposed to handlers via `http_request_remote_addr`;
+     * the X-Forwarded-For middleware is a separate, header-based
+     * channel and intentionally does NOT touch this field. */
+    char* remote_addr;
 
     // Parsed data
     char** param_keys;      // From /users/:id
@@ -606,6 +616,20 @@ int         http_get_request_body_read_length(void);
 void        http_release_request_body_read(void);
 
 const char* http_request_query(HttpRequest* req);
+
+// Trusted TCP peer address — the IP `getpeername(2)` reports for the
+// connection that carried this request. Use this (not the
+// `X-Forwarded-For` header) for in-app source-IP allow/deny lists on
+// a directly-exposed listener: clients can set any value they like
+// into the header, but only the kernel's view of the peer reflects
+// reality. Returns the dotted-quad form for IPv4 ("203.0.113.7") and
+// the `inet_ntop` AF_INET6 form for IPv6 ("2001:db8::1") — no
+// brackets, no scope id. Returns "" when unavailable (Unix-domain
+// socket, getpeername failed, or req is NULL). The companion
+// X-Forwarded-For middleware remains the right tool when this server
+// sits behind a trusted reverse proxy.
+const char* http_request_remote_addr(HttpRequest* req);
+
 // Request-header iteration — enumerate every received header (named
 // http_get_header only does a single lookup). Wire order, duplicates
 // preserved, no sort/dedup. index in [0, http_request_header_count);

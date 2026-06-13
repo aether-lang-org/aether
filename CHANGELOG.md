@@ -14,6 +14,29 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`http.request_remote_addr(req) -> string` — trusted TCP peer
+  address for in-app source-IP allow/deny lists**
+  (`std/net/aether_http_server.h`, `std/net/aether_http_server.c`,
+  `std/http/module.ae`, `tests/integration/http_request_remote_addr/`).
+  Returns the IP `getpeername(2)` reports for the connection that
+  carried the request — dotted-quad for IPv4 ("203.0.113.7"), the
+  `inet_ntop` form for IPv6 ("2001:db8::1"). Distinct from the
+  `X-Forwarded-For` header (client-supplied, spoofable) used by
+  `std.http.middleware.use_real_ip`: use the new accessor when the
+  server is directly exposed and a header-based allow-list would be
+  a control that *looks* enforced but isn't. Returns `""` when
+  unavailable (Unix-domain socket, syscall failed, null req).
+  Populated once per parsed request next to the conn fd; one cheap
+  syscall + `inet_ntop` per request. Filed by aeb-agent
+  (`aether-http-server-expose-peer-addr.md`): they wanted
+  `--allow-from <cidr>` as defense-in-depth on top of lease/token
+  auth and found `X-Forwarded-For` was the only client-IP signal a
+  handler could read — not a basis for an access-control decision.
+
 ## [0.255.0]
 
 ### Fixed
