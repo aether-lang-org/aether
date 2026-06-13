@@ -3697,6 +3697,19 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             fprintf(gen->output, "(void*)(intptr_t)(");
                             generate_expression(gen, arg);
                             fprintf(gen->output, ")");
+                        } else if ((expected == TYPE_INT || expected == TYPE_BOOL) &&
+                                   arg->node_type && arg->node_type->kind == TYPE_PTR) {
+                            /* Inverse of the ptr-cast above: bridges the injected
+                             * `_builder` (typed `ptr`, lowered to `void*`) and ctx
+                             * values when a callee parameter is declared `int`.
+                             * Without this, the body of a `builder ... with factory`
+                             * function passing `_builder` to an int-handle extern
+                             * emits a bare void*→int conversion that GCC 14+/MinGW64
+                             * reject under default -Werror=int-conversion. See
+                             * builder-ctx-handle-void-ptr-int-conversion.md. */
+                            fprintf(gen->output, "(int)(intptr_t)(");
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, ")");
                         } else if (expected == TYPE_PTR && arg->node_type &&
                                    arg->node_type->kind == TYPE_STRING) {
                             // Cast const char* to void* to silence C's

@@ -1,0 +1,31 @@
+// Regression: `builder ... with <factory>` whose factory returns `int`
+// and whose body passes `_builder` to an `int`-typed extern parameter
+// must emit explicit casts at the two builder/ctx ↔ typed-value
+// boundaries (the factory-return → `void* _bcfg` store, and the
+// `void* _builder` → `int` arg pass). Pre-fix the codegen emitted
+// bare int↔pointer conversions that GCC 14+/MinGW64 reject under
+// default -Werror=int-conversion; this blocked all aether-ui's
+// winbaz/MinGW bring-up. See
+// builder-ctx-handle-void-ptr-int-conversion.md.
+//
+// This test exercises both boundaries: `make_handle_factory() -> int`
+// drives the `_bcfg` store, and `use_handle(_builder)` drives the
+// int-param call. With the fix, the generated C compiles cleanly
+// under -Werror=int-conversion (the build environment runs it under
+// hardened flags); without it, gcc errors and the build fails.
+
+extern make_handle() -> int
+extern use_handle(h: int)
+extern println(s: string)
+
+make_handle_factory() -> int { return make_handle() }
+
+builder thing() with make_handle_factory {
+    if _builder != 0 { use_handle(_builder) }
+}
+
+main() {
+    thing() { }
+    println("ok")
+    return 0
+}
