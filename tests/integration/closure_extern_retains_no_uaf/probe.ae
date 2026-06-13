@@ -1,0 +1,23 @@
+// Regression: closure env freed when passed to an `extern` callee that
+// retains it (UAF).
+//
+// Bug: codegen since 0.231 frees a capturing-closure's heap env after
+// passing it to a call whose param "doesn't escape" (per a body-walk
+// over visible callees). The walk silently defaults to "doesn't
+// escape" for extern callees with no body, which is unsafe for the
+// canonical callback-registry pattern (register a closure now, invoke
+// it later from C).
+//
+// Fix: also require the callee to have a visible body before emitting
+// the env-drain. Extern callees → unknown body → assume escapes →
+// suppress the free. Fail-safe direction (leak ≫ UAF).
+
+extern register_cb(boxed: fn)
+extern fire_cb()
+
+main() {
+    msg = "captured"
+    register_cb(|| { println(msg) })   // closure captures msg → heap env
+    fire_cb()                          // pre-fix: reads freed env (UAF)
+    return 0
+}

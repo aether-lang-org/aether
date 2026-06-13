@@ -5709,7 +5709,20 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                      * the first non-trailing closure arg (trailing blocks are
                      * inlined below, not passed by value) and, when its
                      * parameter provably does not escape, emit the env-
-                     * draining call form. */
+                     * draining call form.
+                     *
+                     * Soundness gate (closure-env-freed-when-passed-to-extern):
+                     * the env-drain is only safe when we have *proof* the
+                     * callee neither stores nor returns the closure. The
+                     * `callee_param_escapes_via_body` walk requires a visible
+                     * body to be authoritative; for an extern callee the
+                     * walk silently defaults to "does not escape", which is
+                     * exactly wrong for the common extern-callback-registry
+                     * pattern (the C side keeps the boxed closure and
+                     * invokes it later). Treat unknown-body callees as
+                     * escaping — fail-safe direction (leak ≫ UAF). When
+                     * the future `@retains` annotation lands, opt-in
+                     * non-escaping externs can re-enable the drain. */
                     ASTNode* cclos = NULL; int cclos_idx = -1;
                     if (inner && inner->type == AST_FUNCTION_CALL && inner->value) {
                         for (int ai = 0; ai < inner->child_count; ai++) {
@@ -5720,9 +5733,45 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             }
                         }
                     }
+                    /* Map AST arg index → function-def param index. When the
+                     * callee is a `_ctx: ptr` builder and the user omitted
+                     * `_ctx`, codegen auto-injects `_aether_ctx_get()` at
+                     * position 0; the AST args are then shifted left by one
+                     * relative to the callee's declared params. Without this
+                     * shift the escape walk checks the wrong param (e.g. the
+                     * label, which provably doesn't escape) and the drain
+                     * fires under a false-non-escape verdict → UAF. */
+                    int param_idx = cclos_idx;
+                    if (cclos && cclos_idx >= 0 && inner && inner->value) {
+                        ASTNode* fdef = find_function_definition_by_name(gen->program, inner->value);
+                        if (fdef) {
+                            int declared_params = 0;
+                            for (int pi = 0; pi < fdef->child_count; pi++) {
+                                ASTNode* p = fdef->children[pi];
+                                if (!p) continue;
+                                if (p->type == AST_GUARD_CLAUSE) continue;
+                                if (p->type == AST_BLOCK) continue;
+                                declared_params++;
+                            }
+                            int user_args = 0;
+                            for (int ai = 0; ai < inner->child_count; ai++) {
+                                ASTNode* a = inner->children[ai];
+                                if (a && a->type == AST_CLOSURE && a->value &&
+                                    strcmp(a->value, "trailing") == 0) continue;
+                                user_args++;
+                            }
+                            if (user_args == declared_params - 1 && declared_params > 0) {
+                                ASTNode* p0 = fdef->children[0];
+                                if (p0 && p0->value && strcmp(p0->value, "_ctx") == 0) {
+                                    param_idx = cclos_idx + 1;
+                                }
+                            }
+                        }
+                    }
                     if (cclos && cclos_idx >= 0 &&
+                        callee_has_visible_body(gen, inner->value) &&
                         callee_param_escapes_via_body(gen, inner->value,
-                                                      cclos_idx, 0) == 0) {
+                                                      param_idx, 0) == 0) {
                         emit_closure_env_drained_call(gen, inner, cclos);
                         fprintf(gen->output, "\n");
                     } else {
