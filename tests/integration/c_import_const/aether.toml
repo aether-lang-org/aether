@@ -1,0 +1,10 @@
+[[bin]]
+name = "probe"
+path = "probe.ae"
+
+[build]
+# Force-include the C header that owns the imported macros into every TU,
+# including the Aether-generated .gen.c. The generated C references MY_FLAG /
+# MY_LIMIT / MY_BUILD / EOF by name and defines none of them, so it relies on
+# this header (and stdio.h for EOF) for the values.
+cflags = "-include consts.h -I."

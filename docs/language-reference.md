@@ -1540,6 +1540,23 @@ When the Aether-side name should differ from the C symbol (for example, to expos
 
 The Aether-side name is what callers write; the annotated C symbol is what the linker sees. No wrapper function is emitted. See [`docs/c-interop.md`](c-interop.md#renaming-a-c-symbol--externc_name) for the full FFI reference.
 
+### `extern const NAME: type @c_import` — import an object-like C macro
+
+Object-like C macros (`EAGAIN`, `O_NONBLOCK`, `LLONG_MAX`, a generated `REDIS_GIT_SHA1`, …) are invisible to Aether — there is no symbol to link against. `extern const … @c_import` makes one usable by **name**:
+
+```aether
+extern const EAGAIN: int @c_import
+extern const O_NONBLOCK: int @c_import
+extern const REDIS_GIT_SHA1: ptr @c_import   // string macro -> const char *
+
+if syncio_errno() == EAGAIN { ... }
+```
+
+- The declaration teaches the typechecker a name and an Aether type; **the type is trusted as declared**, the same model as `extern` functions.
+- Generated C emits the macro name **verbatim** at every use site and emits **nothing** for the declaration itself — no value, no `#define`, no forward declaration. The macro's value is never needed at Aether compile time, so per-platform values come out right by construction: the including translation unit's headers are the sole source of truth. Ensure the owning header is in scope (e.g. `cflags = "-include errno.h"` in `aether.toml`, or a header your build already force-includes).
+- Usable in expression and comparison contexts. `@c_import` is required — it is the marker that selects the emit-verbatim semantics.
+- **Object-like macros only.** Function-like macros (`CPU_SET(i, &set)`) are out of scope; wrap those in a small `extern` C function.
+
 ### `@c_callback` — export an Aether function as a C callback
 
 The inverse of `@extern`. Marks an Aether function as having a stable, externally-visible C symbol so it can be passed across the linkage boundary as a function pointer to C externs that take callbacks (HTTP route handlers, signal handlers, `qsort` comparators, libcurl write callbacks, sqlite hooks):
