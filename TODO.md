@@ -524,7 +524,7 @@ case (no `--with=fs` → engine errors clearly):
   then expand tag-by-tag. After Layer 6 (tags), add Layer 7
   (includes/layouts) in one go.
 - **Build path:** pure Aether, no C source. Contrib install pattern
-  follows `contrib/xml/expat/` — module.ae lives in
+  follows `contrib/parsers/xml_expat/` — module.ae lives in
   `contrib/templating/liquid/`, `import contrib.templating.liquid`
   pulls it in; downstream user adds nothing to their aether.toml
   (because the engine doesn't depend on any C libraries).

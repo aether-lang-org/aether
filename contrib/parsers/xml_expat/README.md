@@ -1,4 +1,4 @@
-# contrib.xml.expat — SAX-style XML parsing via libexpat
+# contrib.parsers.xml_expat — SAX-style XML parsing via libexpat
 
 A thin Aether veneer over [libexpat](https://libexpat.github.io/),
 the C XML pull-parser. Mirrors libexpat's native SAX model: caller
@@ -6,7 +6,7 @@ registers per-event handlers (start element / end element / character
 data), then feeds bytes into the parser; libexpat invokes the
 registered handlers as it walks the input.
 
-The namespace exported by `import contrib.xml.expat` is `expat.*`
+The namespace exported by `import contrib.parsers.xml_expat` is `expat.*`
 (last dotted segment of the module path) — `expat.parser_new()`,
 `expat.on_start(...)`, etc.
 
@@ -31,7 +31,7 @@ See the two example sections below for side-by-side patterns.
 
 ## Build
 
-`contrib/xml/expat` is **not** linked into `libaether.a`. Each
+`contrib/parsers/xml_expat` is **not** linked into `libaether.a`. Each
 consuming project lists the wrapper in its own `aether.toml`:
 
 ```toml
@@ -42,7 +42,7 @@ version = "0.1.0"
 [[bin]]
 name = "your_app"
 path = "src/main.ae"
-extra_sources = ["contrib/xml/expat/aether_xml_expat.c"]
+extra_sources = ["contrib/parsers/xml_expat/aether_xml_expat.c"]
 
 [build]
 link_flags = "-lexpat"
@@ -201,7 +201,7 @@ don't need.
 ### Example — closure builder, one handler
 
 ```aether
-import contrib.xml.expat
+import contrib.parsers.xml_expat
 
 main() {
     count = 0
@@ -221,7 +221,7 @@ from `main`'s scope.
 ### Example — closure builder, all three events
 
 ```aether
-import contrib.xml.expat
+import contrib.parsers.xml_expat
 
 main() {
     starts = 0
@@ -244,7 +244,7 @@ you need long-lived parsers, multi-chunk streaming, or want to share
 one handler function across multiple parses.
 
 ```aether
-import contrib.xml.expat
+import contrib.parsers.xml_expat
 import std.string
 
 extern malloc(n: int) -> ptr

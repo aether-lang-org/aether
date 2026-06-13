@@ -1,5 +1,5 @@
 #!/bin/sh
-# Regression: contrib.xml.expat — SAX-style streaming XML parser
+# Regression: contrib.parsers.xml_expat — SAX-style streaming XML parser
 # veneer over libexpat. See probe.ae for the per-case matrix.
 #
 # libexpat isn't auto-detected by the Aether toolchain. We probe for
@@ -35,7 +35,7 @@ fi
 # -- Build ---------------------------------------------------------------
 # Stage a workspace with its own aether.toml so the -lexpat link flag
 # flows into `ae build`'s gcc invocation via get_link_flags(). The
-# workspace symlinks contrib/ so `import contrib.xml.expat` resolves.
+# workspace symlinks contrib/ so `import contrib.parsers.xml_expat` resolves.
 WORK="$TMPDIR/work"
 mkdir -p "$WORK"
 ln -s "$ROOT/contrib" "$WORK/contrib"
@@ -49,7 +49,7 @@ version = "0.0.0"
 [[bin]]
 name = "probe"
 path = "probe.ae"
-extra_sources = ["contrib/xml/expat/aether_xml_expat.c"]
+extra_sources = ["contrib/parsers/xml_expat/aether_xml_expat.c"]
 
 [build]
 link_flags = "-lexpat"
@@ -77,7 +77,7 @@ if ! "$TMPDIR/probe" >"$TMPDIR/run.log" 2>&1; then
     exit 1
 fi
 
-if ! grep -q "All contrib.xml.expat tests passed" "$TMPDIR/run.log"; then
+if ! grep -q "All contrib.parsers.xml_expat tests passed" "$TMPDIR/run.log"; then
     echo "  [FAIL] contrib_xml_expat: didn't reach final PASS line"
     sed 's/^/    /' "$TMPDIR/run.log" | head -30
     exit 1

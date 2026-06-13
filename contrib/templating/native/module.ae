@@ -48,7 +48,9 @@ import std.strbuilder
 import std.string
 
 exports (
-    html_text, html_raw, html_tag_open, html_tag_close, html_tag
+    html_text, html_raw, html_tag_open, html_tag_close, html_tag,
+    render_html, tag, text, raw,
+    render_xml, xml_tag, xml_self_close, xml_text, xml_raw
 )
 
 // HTML-escape one byte into `sb`. Covers the five canonical entities
@@ -113,4 +115,231 @@ html_tag(sb: ptr, name: string, body_text: string) {
     html_tag_open(sb, name)
     html_text(sb, body_text)
     html_tag_close(sb, name)
+}
+
+// ---------------------------------------------------------------------
+// Builder DSL surface — the templates-that-ARE-Aether-code pitch.
+// ---------------------------------------------------------------------
+//
+//   import contrib.templating.native as nt
+//
+//   out = nt.render_html {
+//       tag("p") { text("Hello ${name}") }
+//       if items_size > 0 {
+//           tag("ul") {
+//               for item in items {
+//                   tag("li") { text(item) }
+//               }
+//           }
+//       } else {
+//           tag("p") { text("No items.") }
+//       }
+//   }
+//
+// How it works
+// ------------
+//
+// `render_html` and `tag` are both `builder` functions. Each owns a
+// fresh `std.strbuilder` instance — the `with strbuilder_factory_64`
+// clause supplies the zero-arg factory.
+//
+// The mechanics, walked through for `render_html { tag("p") { text("x") } }`:
+//
+// 1. Caller invokes `render_html { ... }`.
+// 2. Compiler creates a new sb (call it OUT) via `strbuilder_factory_64`,
+//    pushes OUT onto the builder-context stack as the active `_ctx`.
+// 3. The trailing block runs against OUT:
+//    a. `tag("p") { text("x") }` starts. Compiler creates a fresh sb
+//       (BODY), pushes it as the new `_ctx`.
+//    b. Inner block runs against BODY:
+//       - `text("x")` is a regular `_ctx: ptr` function — receives
+//         BODY via auto-injection, HTML-escapes 'x', appends to BODY.
+//    c. Inner block ends. Compiler POPs the context. `_ctx` is now
+//       OUT again.
+//    d. `tag()`'s function body runs (with `_builder == BODY`):
+//       reads BODY's bytes, then calls `text_raw(_ctx, "<p>")`,
+//       `text_raw(_ctx, body_bytes)`, `text_raw(_ctx, "</p>")`. These
+//       resolve `_ctx` to OUT — the parent.
+// 4. Outer block ends. POP.
+// 5. `render_html`'s function body runs: returns the finalised OUT
+//    string.
+//
+// The net result is `text()` always writes to the *innermost* active
+// buffer, and `tag()` wraps that buffer's contents in its own tag and
+// pastes the result into the parent. Same shape works at any depth;
+// `for` and `if` in the block are real Aether and inherit `_ctx`
+// because they're lexical scopes within the block, not separate
+// builders.
+//
+// Trade-off
+// ---------
+//
+// One strbuilder allocated per `tag()`. For a 30-element list that's
+// 30 transient allocations. The plain-function API
+// (`html_tag_open(sb, ...)` etc.) above is the escape hatch for
+// performance-sensitive paths.
+
+// Zero-arg factory the `with` clause needs. 64-byte initial capacity
+// is a reasonable middle ground for typical HTML tag bodies (short
+// strings and small element counts); the strbuilder grows as needed.
+strbuilder_factory_64() -> ptr {
+    return strbuilder.new(64)
+}
+
+// `text(s)` — append `s` to the active emitter, HTML-escaping the five
+// canonical entities. Inside any `tag()` or `render_html` block the
+// compiler auto-injects the active sb as `_ctx`.
+text(_ctx: ptr, s: string) {
+    html_text(_ctx, s)
+}
+
+// `raw(s)` — append `s` verbatim. Use only for trusted markup.
+raw(_ctx: ptr, s: string) {
+    html_raw(_ctx, s)
+}
+
+// `tag(name) { ... }` — emit `<name>BODY</name>` where BODY is the
+// rendered output of the trailing block.
+//
+// At this function's entry: `_builder` is the per-tag sb that the
+// trailing block filled. The compiler has already popped the
+// builder-context stack, so the *current* top — read with
+// `builder_context()` — is the PARENT emitter. We finalise our own
+// `_builder` to a string and write `<name>body</name>` to the parent.
+builder tag(name: string): int with strbuilder_factory_64 {
+    body = strbuilder.finish(_builder)
+    parent = builder_context()
+    strbuilder.append(parent, "<")
+    strbuilder.append(parent, name)
+    strbuilder.append(parent, ">")
+    strbuilder.append(parent, body)
+    strbuilder.append(parent, "</")
+    strbuilder.append(parent, name)
+    strbuilder.append(parent, ">")
+    return 0
+}
+
+// `render_html { ... }` — run the block against a fresh emitter and
+// return the assembled string.
+builder render_html(): string with strbuilder_factory_64 {
+    return strbuilder.finish(_builder)
+}
+
+// ---------------------------------------------------------------------
+// XML emitter — skinny v1.
+// ---------------------------------------------------------------------
+//
+//   import contrib.templating.native as nt
+//
+//   feed = nt.render_xml() {
+//       nt.xml_tag("rss") {
+//           nt.xml_tag("channel") {
+//               nt.xml_tag("title") { nt.xml_text("Aether news") }
+//               for i in 0..3 {
+//                   nt.xml_tag("item") {
+//                       nt.xml_tag("title") { nt.xml_text(titles[i]) }
+//                   }
+//               }
+//           }
+//       }
+//   }
+//
+// `render_xml()` prefixes the standard XML 1.0 / UTF-8 prolog and
+// then runs the trailing block against a fresh emitter.
+//
+// What this v1 deliberately omits
+// -------------------------------
+//
+//   - **Attributes.** No `xml_attr` helper. Attribute-shaped data must
+//     either be lifted into child elements (`<item><name>x</name></item>`)
+//     or written via `xml_raw` against a tag built by hand. The
+//     attribute design (deferred `>`-flush vs attrs-as-map) needs a
+//     real user to settle the call-site shape; we punt the decision
+//     until that user appears.
+//   - **Namespaces.** Pass the prefixed name verbatim
+//     (`xml_tag("svg:rect")`); we emit it. Declaring `xmlns:svg=...`
+//     happens through the user typing it as raw markup — which we
+//     can't sanely do without attribute support. Real namespace
+//     support waits for the attribute round.
+//   - **Processing instructions other than the prolog**, DOCTYPE, mixed
+//     content, schema-aware emission. Out of scope. Use `xml_raw` for
+//     trusted markup if you need any of these in v1.
+//
+// XML vs HTML escape divergence
+// -----------------------------
+//
+// XML 1.0 escapes `&` `<` `>` `"` (canonical) and `'` to `&apos;`
+// rather than HTML's `&#39;`. The `xml_escape_byte` function below
+// implements XML's rule. We *also* escape `>` even though XML
+// technically only requires it inside `]]>` sequences — being more
+// conservative makes the output safe to embed inside other documents.
+// This matches `std.xml`'s `xml.writer` behaviour.
+
+// One byte XML-escaped into `sb`.
+xml_escape_byte(sb: ptr, c: int) {
+    if c == 38 {                              // '&'
+        strbuilder.append(sb, "&amp;")
+    } else if c == 60 {                       // '<'
+        strbuilder.append(sb, "&lt;")
+    } else if c == 62 {                       // '>'
+        strbuilder.append(sb, "&gt;")
+    } else if c == 34 {                       // '"'
+        strbuilder.append(sb, "&quot;")
+    } else if c == 39 {                       // '\''
+        strbuilder.append(sb, "&apos;")
+    } else {
+        strbuilder.append_byte(sb, c)
+    }
+}
+
+// `xml_text(s)` — append `s` to the active emitter with XML escape
+// applied. Auto-injects the current builder emitter as `_ctx` inside
+// any `xml_tag` / `render_xml` block.
+xml_text(_ctx: ptr, s: string) {
+    n = string_length(s)
+    i = 0
+    while i < n {
+        xml_escape_byte(_ctx, string.char_at_n(s, n, i))
+        i = i + 1
+    }
+}
+
+// `xml_raw(s)` — append `s` verbatim. Use only for trusted markup
+// (CDATA blocks, processing instructions, namespace declarations
+// you've vetted). Anything user-supplied here is a bug.
+xml_raw(_ctx: ptr, s: string) {
+    strbuilder.append(_ctx, s)
+}
+
+// `xml_tag(name) { ... }` — emit `<name>BODY</name>` where BODY is
+// the rendered output of the trailing block. Same shape as the HTML
+// `tag()` but uses XML escape rules.
+builder xml_tag(name: string): int with strbuilder_factory_64 {
+    body = strbuilder.finish(_builder)
+    parent = builder_context()
+    strbuilder.append(parent, "<")
+    strbuilder.append(parent, name)
+    strbuilder.append(parent, ">")
+    strbuilder.append(parent, body)
+    strbuilder.append(parent, "</")
+    strbuilder.append(parent, name)
+    strbuilder.append(parent, ">")
+    return 0
+}
+
+// `xml_self_close(name)` — emit `<name/>` with no body. Plain
+// function rather than builder; no trailing block means no per-call
+// strbuilder alloc.
+xml_self_close(_ctx: ptr, name: string) {
+    strbuilder.append(_ctx, "<")
+    strbuilder.append(_ctx, name)
+    strbuilder.append(_ctx, "/>")
+}
+
+// `render_xml() { ... }` — prefix the standard prolog, run the block
+// against a fresh emitter, return the assembled string.
+builder render_xml(): string with strbuilder_factory_64 {
+    out = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    body = strbuilder.finish(_builder)
+    return string.concat(out, body)
 }

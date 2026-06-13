@@ -1,4 +1,4 @@
-// Integration test for contrib.xml.expat — SAX-style streaming XML
+// Integration test for contrib.parsers.xml_expat — SAX-style streaming XML
 // parser veneer over libexpat.
 //
 // What this exercises:
@@ -16,7 +16,7 @@
 //      ergonomic DX layer that uses captured-state closures instead
 //      of a manual user-data struct.
 
-import contrib.xml.expat
+import contrib.parsers.xml_expat
 import std.mem
 import std.string
 import std.strbuilder
@@ -49,7 +49,7 @@ count_start(ud: ptr, name: string, atts: ptr) {
     // owns the storage.
     c = ud as *ParseCounters
     c.start_count = c.start_count + 1
-    c.last_attrs  = expat.attr_count(atts)
+    c.last_attrs  = xml_expat.attr_count(atts)
 }
 
 count_end(ud: ptr, name: string) {
@@ -81,7 +81,7 @@ new_counters() -> *ParseCounters {
 }
 
 main() {
-    println("=== contrib.xml.expat integration test ===")
+    println("=== contrib.parsers.xml_expat integration test ===")
 
     // Function-scope captures for the closure-based cases 9-16.
     // Heap-promoted strings and strbuilder ptrs captured inside a
@@ -109,21 +109,21 @@ main() {
     // ---- Case 1: simple well-formed doc, count events ----
 
     {
-        p = expat.parser_new()
+        p = xml_expat.parser_new()
         if p == null { fail("parser_new returned null") }
-        defer expat.parser_free(p)
+        defer xml_expat.parser_free(p)
 
         c = new_counters()
         defer free(c)
-        expat.set_user_data(p, c)
-        expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
-        expat.on_end(p,   count_end as fn(ptr, string) -> void)
-        expat.on_text(p,  count_text as fn(ptr, ptr, int) -> void)
+        xml_expat.set_user_data(p, c)
+        xml_expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
+        xml_expat.on_end(p,   count_end as fn(ptr, string) -> void)
+        xml_expat.on_text(p,  count_text as fn(ptr, ptr, int) -> void)
 
         doc = "<root><a/><b>hi</b><c x=\"1\" y=\"two\"/></root>"
-        ok = expat.parse(p, doc, string.length(doc), 1)
+        ok = xml_expat.parse(p, doc, string.length(doc), 1)
         if ok != 1 {
-            fail("parse failed: ${expat.error_string(p)}")
+            fail("parse failed: ${xml_expat.error_string(p)}")
         }
 
         cc = c as *ParseCounters
@@ -143,17 +143,17 @@ main() {
     // start. After parsing <c x=1 y=2/>, last_attrs should be 2.
 
     {
-        p = expat.parser_new()
-        defer expat.parser_free(p)
+        p = xml_expat.parser_new()
+        defer xml_expat.parser_free(p)
         c = new_counters()
         defer free(c)
-        expat.set_user_data(p, c)
-        expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
-        expat.on_end(p,   count_end as fn(ptr, string) -> void)
+        xml_expat.set_user_data(p, c)
+        xml_expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
+        xml_expat.on_end(p,   count_end as fn(ptr, string) -> void)
 
         doc = "<root><c x=\"1\" y=\"two\" z=\"three\"/></root>"
-        ok = expat.parse(p, doc, string.length(doc), 1)
-        if ok != 1 { fail("parse(attrs) failed: ${expat.error_string(p)}") }
+        ok = xml_expat.parse(p, doc, string.length(doc), 1)
+        if ok != 1 { fail("parse(attrs) failed: ${xml_expat.error_string(p)}") }
 
         cc = c as *ParseCounters
         // last_attrs reflects the LAST start element seen — that's `c`
@@ -169,20 +169,20 @@ main() {
     // text (libexpat versions vary), but it must be non-null.
 
     {
-        p = expat.parser_new()
-        defer expat.parser_free(p)
+        p = xml_expat.parser_new()
+        defer xml_expat.parser_free(p)
 
         bad = "<root><unclosed></root>"
-        ok = expat.parse(p, bad, string.length(bad), 1)
+        ok = xml_expat.parse(p, bad, string.length(bad), 1)
         if ok == 1 { fail("parse(bad) unexpectedly succeeded") }
 
-        msg = expat.error_string(p)
+        msg = xml_expat.error_string(p)
         if msg == null { fail("error_string returned null after parse failure") }
         // Line/column should at least be > 0 for the location of the
         // mismatched </root>.
-        if expat.error_line(p) <= 0   { fail("error_line <= 0 after failure") }
-        if expat.error_column(p) < 0  { fail("error_column < 0 after failure") }
-        println("  PASS: parse error surfaced (msg='${msg}' at line ${expat.error_line(p)})")
+        if xml_expat.error_line(p) <= 0   { fail("error_line <= 0 after failure") }
+        if xml_expat.error_column(p) < 0  { fail("error_column < 0 after failure") }
+        println("  PASS: parse error surfaced (msg='${msg}' at line ${xml_expat.error_line(p)})")
     }
 
     // ---- Case 4: multi-chunk parse ----
@@ -193,22 +193,22 @@ main() {
     // single-chunk parse of the concatenated input.
 
     {
-        p = expat.parser_new()
-        defer expat.parser_free(p)
+        p = xml_expat.parser_new()
+        defer xml_expat.parser_free(p)
         c = new_counters()
         defer free(c)
-        expat.set_user_data(p, c)
-        expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
-        expat.on_end(p,   count_end as fn(ptr, string) -> void)
-        expat.on_text(p,  count_text as fn(ptr, ptr, int) -> void)
+        xml_expat.set_user_data(p, c)
+        xml_expat.on_start(p, count_start as fn(ptr, string, ptr) -> void)
+        xml_expat.on_end(p,   count_end as fn(ptr, string) -> void)
+        xml_expat.on_text(p,  count_text as fn(ptr, ptr, int) -> void)
 
         chunk1 = "<root><a>hel"
         chunk2 = "lo</a><b/></root>"
-        if expat.parse(p, chunk1, string.length(chunk1), 0) != 1 {
-            fail("chunk1 parse failed: ${expat.error_string(p)}")
+        if xml_expat.parse(p, chunk1, string.length(chunk1), 0) != 1 {
+            fail("chunk1 parse failed: ${xml_expat.error_string(p)}")
         }
-        if expat.parse(p, chunk2, string.length(chunk2), 1) != 1 {
-            fail("chunk2 parse failed: ${expat.error_string(p)}")
+        if xml_expat.parse(p, chunk2, string.length(chunk2), 1) != 1 {
+            fail("chunk2 parse failed: ${xml_expat.error_string(p)}")
         }
 
         cc = c as *ParseCounters
@@ -230,28 +230,28 @@ main() {
     // registration is per-parser, not global.
 
     {
-        p1 = expat.parser_new()
-        defer expat.parser_free(p1)
+        p1 = xml_expat.parser_new()
+        defer xml_expat.parser_free(p1)
         c1 = new_counters()
         defer free(c1)
-        expat.set_user_data(p1, c1)
-        expat.on_start(p1, count_start as fn(ptr, string, ptr) -> void)
+        xml_expat.set_user_data(p1, c1)
+        xml_expat.on_start(p1, count_start as fn(ptr, string, ptr) -> void)
 
-        p2 = expat.parser_new()
-        defer expat.parser_free(p2)
+        p2 = xml_expat.parser_new()
+        defer xml_expat.parser_free(p2)
         c2 = new_counters()
         defer free(c2)
-        expat.set_user_data(p2, c2)
-        expat.on_start(p2, count_start as fn(ptr, string, ptr) -> void)
+        xml_expat.set_user_data(p2, c2)
+        xml_expat.on_start(p2, count_start as fn(ptr, string, ptr) -> void)
 
         d1 = "<a/><b/>"           // not well-formed standalone — single root needed
         d1_root = "<r><a/><b/></r>"
         d2_root = "<r><x/></r>"
-        if expat.parse(p1, d1_root, string.length(d1_root), 1) != 1 {
-            fail("p1 parse failed: ${expat.error_string(p1)}")
+        if xml_expat.parse(p1, d1_root, string.length(d1_root), 1) != 1 {
+            fail("p1 parse failed: ${xml_expat.error_string(p1)}")
         }
-        if expat.parse(p2, d2_root, string.length(d2_root), 1) != 1 {
-            fail("p2 parse failed: ${expat.error_string(p2)}")
+        if xml_expat.parse(p2, d2_root, string.length(d2_root), 1) != 1 {
+            fail("p2 parse failed: ${xml_expat.error_string(p2)}")
         }
 
         cc1 = c1 as *ParseCounters
@@ -270,7 +270,7 @@ main() {
 
     {
         count = 0
-        ok = expat.parse_with("<root><a/><b/><c/></root>") {
+        ok = xml_expat.parse_with("<root><a/><b/><c/></root>") {
             bind_start(|name: string, atts: ptr| {
                 count = count + 1
             })
@@ -291,7 +291,7 @@ main() {
         starts = 0
         ends   = 0
         bytes  = 0
-        ok = expat.parse_with("<g>hi<inner/>there</g>") {
+        ok = xml_expat.parse_with("<g>hi<inner/>there</g>") {
             bind_start(|name: string, atts: ptr| { starts = starts + 1 })
             bind_end(  |name: string|             { ends   = ends + 1 })
             bind_text( |text: string, len: int|   { bytes  = bytes + len })
@@ -311,7 +311,7 @@ main() {
 
     {
         only_starts = 0
-        ok = expat.parse_with("<root><a><b/></a></root>") {
+        ok = xml_expat.parse_with("<root><a><b/></a></root>") {
             bind_start(|name: string, atts: ptr| {
                 only_starts = only_starts + 1
             })
@@ -339,7 +339,7 @@ main() {
         depth = 0
         max_depth = 0
         doc = "<a><b><c><d><e><f/></e></d></c><c2/></b></a>"
-        ok = expat.parse_with(doc) {
+        ok = xml_expat.parse_with(doc) {
             bind_start(|name: string, atts: ptr| {
                 depth = depth + 1
                 if depth > max_depth { max_depth = depth }
@@ -361,7 +361,7 @@ main() {
     // start + text + end + text in the right interleaving.
 
     {
-        ok = expat.parse_with("<p>Hello <b>bold</b> world.</p>") {
+        ok = xml_expat.parse_with("<p>Hello <b>bold</b> world.</p>") {
             bind_start(|name: string, atts: ptr| {
                 c10_event_log = "${c10_event_log}S(${name})"
             })
@@ -395,7 +395,7 @@ main() {
         ws_text_events = 0
         // Three whitespace runs: "\n  ", "\n  ", "\n" between sibling tags.
         doc = "<r>\n  <a/>\n  <b/>\n</r>"
-        ok = expat.parse_with(doc) {
+        ok = xml_expat.parse_with(doc) {
             bind_text(|text: string, len: int| {
                 ws_text_events = ws_text_events + 1
                 ws_bytes = ws_bytes + len
@@ -420,7 +420,7 @@ main() {
     // the resolved characters, not the entity reference.
 
     {
-        ok = expat.parse_with("<r>&amp;&lt;&gt;&quot;&apos;&#65;&#x42;</r>") {
+        ok = xml_expat.parse_with("<r>&amp;&lt;&gt;&quot;&apos;&#65;&#x42;</r>") {
             bind_text(|text: string, len: int| {
                 strbuilder.append_n(sb_entity, text, len)
             })
@@ -452,11 +452,11 @@ main() {
         // libexpat's attr_value pointer is only valid for the
         // duration of the start callback; storing it directly worked
         // on Linux but the bytes were freed under us on macOS.
-        ok = expat.parse_with("<café leño=\"árbol\">日本語 🎉</café>") {
+        ok = xml_expat.parse_with("<café leño=\"árbol\">日本語 🎉</café>") {
             bind_start(|name: string, atts: ptr| {
                 c13_elem_name_bytes = string.length(name)
-                if expat.attr_count(atts) > 0 {
-                    v = expat.attr_value(atts, 0)
+                if xml_expat.attr_count(atts) > 0 {
+                    v = xml_expat.attr_value(atts, 0)
                     strbuilder.append_n(sb_c13_attr, v, string.length(v))
                 }
             })
@@ -494,7 +494,7 @@ main() {
         // Inside CDATA: literal "<x>" + "&amp;" + "</x>" — should pass
         // through without parsing as markup or entity expansion.
         doc = "<r><![CDATA[<x>&amp;</x>]]></r>"
-        ok = expat.parse_with(doc) {
+        ok = xml_expat.parse_with(doc) {
             bind_text(|text: string, len: int| {
                 strbuilder.append_n(sb_cdata, text, len)
             })
@@ -526,7 +526,7 @@ main() {
         // RSS field names at callback time (not storing the borrowed
         // string ptr — that goes stale by the time bind_text fires).
         rss = "<rss version=\"2.0\"><channel><item><title>Hello World</title><link>https://example.com/post/1</link><description>A short post.</description></item></channel></rss>"
-        ok = expat.parse_with(rss) {
+        ok = xml_expat.parse_with(rss) {
             bind_start(|name: string, atts: ptr| {
                 if name == "title"       { c15_current_field = 1 }
                 if name == "link"        { c15_current_field = 2 }
@@ -561,15 +561,15 @@ main() {
         rect_count = 0
         width_sum = 0
         svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"50\"><rect x=\"0\" y=\"0\" width=\"10\" height=\"10\"/><rect x=\"20\" y=\"0\" width=\"30\" height=\"10\"/><rect x=\"60\" y=\"0\" width=\"40\" height=\"10\"/></svg>"
-        ok = expat.parse_with(svg) {
+        ok = xml_expat.parse_with(svg) {
             bind_start(|name: string, atts: ptr| {
                 if name == "rect" {
                     rect_count = rect_count + 1
-                    n = expat.attr_count(atts)
+                    n = xml_expat.attr_count(atts)
                     i = 0
                     while i < n {
-                        if expat.attr_name(atts, i) == "width" {
-                            w, _ = string.to_int(expat.attr_value(atts, i))
+                        if xml_expat.attr_name(atts, i) == "width" {
+                            w, _ = string.to_int(xml_expat.attr_value(atts, i))
                             width_sum = width_sum + w
                         }
                         i = i + 1
@@ -584,5 +584,5 @@ main() {
         println("  PASS: SVG fragment — 3 rects counted, width sum = 80")
     }
 
-    println("=== All contrib.xml.expat tests passed ===")
+    println("=== All contrib.parsers.xml_expat tests passed ===")
 }

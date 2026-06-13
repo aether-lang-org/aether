@@ -1,4 +1,4 @@
-# `contrib.templating.native` — escape-correct HTML emission (walking skeleton)
+# `contrib.templating.native` — escape-correct HTML emission
 
 Templating as plain Aether code, no template DSL. The output format
 and the escape rules live in the helper functions, not in the
@@ -9,6 +9,105 @@ This is the inverse of [`contrib.templating.liquid`](../liquid/),
 which exists for the "operator brings their own `.liquid` file" case.
 This module is for the case where the library author exposes a
 template-shaped surface where users write *Aether*.
+
+## Two surfaces
+
+### Builder DSL (the templates-that-ARE-Aether-code pitch)
+
+```aether
+import contrib.templating.native
+
+items = ["alpha", "beta", "<gamma>"]
+
+out = native.render_html() {
+    native.tag("ul") {
+        for i in 0..3 {
+            native.tag("li") { native.text(items[i]) }
+        }
+    }
+}
+// out == "<ul><li>alpha</li><li>beta</li><li>&lt;gamma&gt;</li></ul>"
+```
+
+The `for` is a *real Aether `for` loop*, not a re-implementation
+inside a templating engine. Same with `if`, `switch`, `${...}`
+interpolation, ref-cells, closures — everything you'd write
+anywhere else in Aether is in scope and behaves identically. The
+only DSL bits are `render_html`, `tag`, `text`, and `raw`.
+
+Surface:
+
+```aether
+render_html() { ... }            // returns the rendered string
+tag(name) { ... }                // emit <name>BODY</name>; BODY is the block
+text(s)                          // append HTML-escaped (5 entities)
+raw(s)                           // append verbatim — trusted markup only
+```
+
+**Note the parentheses on `render_html()` and `tag(...)`.** Aether's
+trailing-block syntax attaches a block to a call site only when the
+call has parentheses — `render_html { ... }` (no parens) parses as
+"function reference, then unrelated block" and is a silent typing
+error. `render_html() { ... }` parses correctly.
+
+### XML emitter (skinny v1)
+
+```aether
+feed = native.render_xml() {
+    native.xml_tag("rss") {
+        native.xml_tag("channel") {
+            native.xml_tag("title") { native.xml_text("Aether news") }
+            for i in 0..items_n {
+                native.xml_tag("item") {
+                    native.xml_tag("title") { native.xml_text(titles[i]) }
+                }
+            }
+        }
+    }
+}
+// feed == "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss>...</rss>"
+```
+
+`render_xml()` emits the standard XML 1.0 / UTF-8 prolog and then
+runs the trailing block against a fresh emitter. `xml_tag(name)
+{...}` wraps a block in `<name>BODY</name>`. `xml_self_close(name)`
+emits `<name/>`. `xml_text(s)` escapes the five canonical XML
+entities (note: `'` → `&apos;`, NOT `&#39;` like HTML; `>` is also
+escaped, more conservative than the strict spec but matches
+`std.xml`'s writer).
+
+Surface:
+
+```aether
+render_xml() { ... }             // prolog + rendered block
+xml_tag(name) { ... }            // <name>BODY</name>
+xml_self_close(name)             // <name/>
+xml_text(s)                      // append XML-escaped
+xml_raw(s)                       // append verbatim (CDATA, vetted markup)
+```
+
+**Skinny v1 has no attribute helper.** Attribute-shaped data either
+lifts into child elements (`<item><name>x</name></item>` rather than
+`<item name="x"/>`) or uses `xml_raw` to write a hand-built tag.
+Adding `xml_attr` requires either (a) attributes-as-map on the tag
+call (`xml_tag(name, attrs: m) { ... }`) or (b) a "pending tag" state
+machine where `xml_attr` flushes the `>` on first non-attr call —
+each has trade-offs and neither has a real user yet. We'll add it
+once the first downstream user tells us which call-site shape they
+need.
+
+Also skipped in v1: namespaces (pass `xml_tag("svg:rect")` if you
+already have the prefix, but `xmlns:` declaration support waits for
+attributes), processing instructions other than the prolog, DOCTYPE,
+schema-aware emission. Use `xml_raw` for trusted markup if you need
+any of these.
+
+### Plain functions (escape hatch for hot paths)
+
+If you want to avoid the per-tag strbuilder allocation the DSL
+performs (every `tag()` creates a temporary buffer for its body),
+drop down to the function-call surface and pass the strbuilder
+explicitly:
 
 ```aether
 import contrib.templating.native as nt
@@ -22,12 +121,11 @@ render_greeting(name: string) -> string {
     nt.html_tag_close(sb, "b")
     return strbuilder.finish(sb)
 }
-
 // render_greeting("Alice <script>")
 //   == "Hello <b>Alice &lt;script&gt;</b>"
 ```
 
-## v0 surface
+Surface:
 
 ```aether
 html_text(sb: ptr, s: string)             // append, HTML-escaped
@@ -36,6 +134,11 @@ html_tag_open(sb: ptr, name: string)      // <name>
 html_tag_close(sb: ptr, name: string)     // </name>
 html_tag(sb: ptr, name: string, body: string)  // <name>escaped-body</name>
 ```
+
+The DSL is built on top of these — `tag()` ultimately writes
+through `strbuilder.append`, and `text()` calls `html_text`. No
+behavioural divergence between the two surfaces; they're the same
+output, different ergonomic trade-offs.
 
 The five canonical HTML entities (`& < > " '`) are escaped. Tag names
 are NOT escaped — the markup-author writes `<div>`, user-data goes
