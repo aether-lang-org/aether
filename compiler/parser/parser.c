@@ -4530,6 +4530,43 @@ ASTNode* parse_program(Parser* parser) {
                 }
                 break;
             }
+            case TOKEN_VAR: {
+                // Top-level mutable global (#701): var NAME[: type] = const-expr
+                // Lowers to a file-scope `static <ctype> NAME = <value>;` in the
+                // generated TU. Module-private by design (matches the C statics it
+                // replaces — a PRNG seed, a formatted-id cache, etc.); reads and
+                // writes from same-module functions are plain identifier access,
+                // no accessor indirection. Reuses AST_CONST_DECLARATION with a
+                // `global_var` annotation: the node shape is identical (name +
+                // initializer + type); the annotation only flips codegen from a
+                // `#define` to a mutable static and tailors the const-expr
+                // diagnostic. (Same pattern as array constants, which reuse this
+                // node with `array_const`.) The initializer is still required to
+                // be a compile-time constant — C demands it of a static.
+                int vline = token->line, vcol = token->column;
+                advance_token(parser); // consume 'var'
+                Token* vname = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!vname) { advance_token(parser); continue; }
+                Type* vtype = NULL;
+                if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
+                    advance_token(parser); // consume ':'
+                    vtype = parse_type(parser);
+                }
+                if (!expect_token(parser, TOKEN_ASSIGN)) { advance_token(parser); continue; }
+                ASTNode* vval = parse_expression(parser);
+                if (!vval) { advance_token(parser); continue; }
+                node = create_ast_node(AST_CONST_DECLARATION, vname->value, vline, vcol);
+                add_child(node, vval);
+                node->annotation = strdup("global_var");
+                if (vtype) {
+                    node->node_type = vtype;
+                } else if (vval->node_type) {
+                    node->node_type = clone_type(vval->node_type);
+                } else {
+                    node->node_type = create_type(TYPE_UNKNOWN);
+                }
+                break;
+            }
             case TOKEN_CONST: {
                 // Top-level constant: const NAME = value or const arr[] = [1, 2, 3]
                 int cline = token->line, ccol = token->column;

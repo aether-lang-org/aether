@@ -1,0 +1,48 @@
+// #701 — mutable module-level globals (`var` at module scope).
+//
+// The motivating call site: aedis's 48-bit LCG PRNG kept a vestigial
+// C file holding `static uint64_t rand48_x` plus two accessors, with
+// the whole algorithm already in `.ae`. A module-level `var` deletes
+// that file outright — the seed lives in Aether, mutated in place.
+//
+// This exercises the feature end to end:
+//   - a typed module-level `var` with a 48-bit (>32-bit) initializer,
+//   - in-place read-modify-write of that global from a function,
+//   - persistence of the mutation across successive calls.
+
+import std.string
+
+extern exit(code: int)
+
+var rand48_x: uint64 = 0x1234ABCD330E      // module scope, mutable, 48-bit seed
+
+next_rand() -> uint64 {
+    rand48_x = (rand48_x * 0x5DEECE66D + 0xB) & 0xFFFFFFFFFFFF
+    return (rand48_x >> 17) & 0x7FFFFFFF
+}
+
+main() {
+    a = next_rand()
+    b = next_rand()
+    c = next_rand()
+
+    // The seed is one persistent word of state: each draw advances it,
+    // so three successive draws must differ. If the global were re-
+    // initialized on entry (or inlined like a const), they'd collide.
+    if a == b {
+        print("FAIL: global state did not persist across calls\n")
+        exit(1)
+    }
+    if b == c {
+        print("FAIL: global state did not persist across calls\n")
+        exit(1)
+    }
+    print("PASS: module-level var persists and mutates\n")
+
+    print(string.from_long(a))
+    print("\n")
+    print(string.from_long(b))
+    print("\n")
+    print(string.from_long(c))
+    print("\n")
+}

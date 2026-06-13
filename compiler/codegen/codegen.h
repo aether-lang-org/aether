@@ -30,6 +30,12 @@ typedef struct {
     MessageRegistry* message_registry;
     char** declared_vars;  // Track variables declared in current function
     int declared_var_count;
+    // #701: names of module-level `var` globals (file-scope statics).
+    // Populated once before any function body is emitted. A bare
+    // `name = expr` inside a function whose name is in this set is a
+    // WRITE to the global, not a new local declaration.
+    char** module_global_vars;
+    int module_global_var_count;
     int generating_lvalue;  // Track if we're generating an assignment target (lvalue)
     int in_condition;  // Track if we're in a condition (if/while) to avoid double parens
     int in_main_loop;  // Track if we're in main's loop for batch send optimization

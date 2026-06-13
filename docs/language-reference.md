@@ -256,6 +256,24 @@ const G_BUF = malloc(64)        // ERROR: const initializer must be a
 
 The reason is `const`'s substitution-at-each-use semantics: the compiler inlines the RHS at every reference rather than storing the value. For literal RHSs this is fine; for `make_thing()` it would re-call the function on every reference, allocating fresh state. If you need a process-global heap object initialised once and read everywhere, use [`std.config`](stdlib-reference.md#stdconfig--stringstring-kv) for string state or [`std.actors`](stdlib-reference.md#stdactors--name--actor_ref-registry) for actor references — both are described in the stdlib reference.
 
+### Mutable module-level globals
+
+Where a `const` is a fixed value, a module-level `var` is **one persistent, mutable word of state** shared by every function in the module — a PRNG seed, a monotonic counter, a one-slot cache:
+
+```aether
+var rand48_x: uint64 = 0x1234ABCD330E      // module scope, mutable
+
+next_rand() -> uint64 {
+    rand48_x = (rand48_x * 0x5DEECE66D + 0xB) & 0xFFFFFFFFFFFF
+    return (rand48_x >> 17) & 0x7FFFFFFF
+}
+```
+
+- The type annotation is optional: `var hits = 0` infers `int` from the initializer, exactly like a local.
+- A `var` lowers to a **file-scope `static`** in the generated C. Reads and writes from same-module functions are plain identifier access — no accessors, no indirection. A `name = expr` statement whose name is a module `var` always writes that global (the name is in scope everywhere in the module); pick a different name for a function-local.
+- The **initializer must be a compile-time constant expression**, the same restriction as `const` (and for the same underlying reason — C requires a `static`'s initializer to be constant). Initialize to a constant and compute the live value from a function at startup if you need more.
+- Globals are **module-private** and **non-atomic**, matching the C statics they replace. They are not shared across modules and carry no built-in synchronization; guard concurrent access yourself (or keep such state on an [actor](actor-concurrency.md)).
+
 ---
 
 ## Functions
@@ -1664,6 +1682,7 @@ The following identifiers are reserved:
 | `import`, `extern` | Modules and C interop |
 | `as` | Import aliasing (`import std.string as str`) |
 | `const` | Top-level constants |
+| `var` | Mutable module-level globals |
 | `defer` | Scope-exit cleanup |
 | `hide`, `seal`, `except` | Scope-level name denial (see [hide-and-seal.md](hide-and-seal.md)) |
 | `null`, `true`, `false` | Literals |

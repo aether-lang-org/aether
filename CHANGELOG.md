@@ -14,6 +14,23 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Mutable module-level globals** (#701). A `var name[: type] = const-expr`
+  at module scope declares one persistent, mutable word of state shared by
+  every function in the module — a PRNG seed, a counter, a one-slot cache.
+  It lowers to a file-scope C `static`; reads and writes from same-module
+  functions are plain identifier access (no accessors, no indirection). The
+  type annotation is optional (`var hits = 0` infers `int`); the initializer
+  must be a compile-time constant (C requires it of a `static`). Globals are
+  module-private and non-atomic, matching the C statics they replace. This
+  deletes the vestigial C files that ports otherwise keep solely to hold a
+  `static` plus get/set accessors (e.g. aedis's `rand.c`, `mt19937-64.c`).
+  See [docs/language-reference.md](docs/language-reference.md) (Mutable
+  module-level globals).
+
 ## [0.246.0]
 
 ### Fixed
@@ -32,6 +49,7 @@ notes to be skipped or clobbered (the failure modes documented in
   are unaffected — the annotation is the user's choice. The inferred-vs-
   annotated distinction is tracked with a parser marker on the
   declaration node, so it survives the pre-typecheck inference pass.
+
 ## [0.245.0]
 
 ### Fixed
