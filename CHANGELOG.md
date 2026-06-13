@@ -31,6 +31,25 @@ notes to be skipped or clobbered (the failure modes documented in
   See [docs/language-reference.md](docs/language-reference.md) (Mutable
   module-level globals).
 
+## [0.246.0]
+
+### Fixed
+
+- **Silent narrowing of inferred-int locals** (#698). A local declared
+  with a bare 32-bit int initializer (`parsed = 0`) infers `int`; a later
+  assignment of a 64-bit value (`parsed = some_long`) truncated to 32
+  bits with no diagnostic — the generated C narrowing is an ordinary
+  implicit conversion. This silently corrupted data (the aedis Redis
+  port: `lpStringEqualsInt64` parsed a 64-bit field into an inferred
+  `int`, so the equality never matched and `HGET` returned nil; 925 fuzz
+  failures with #697, 0 after both). The compiler now diagnoses a
+  narrowing assignment to an *inferred-type* int local, naming the
+  variable and the fix (annotate `long`/`uint64` to keep precision, or
+  `int` to make the narrowing deliberate). Explicitly-annotated locals
+  are unaffected — the annotation is the user's choice. The inferred-vs-
+  annotated distinction is tracked with a parser marker on the
+  declaration node, so it survives the pre-typecheck inference pass.
+
 ## [0.245.0]
 
 ### Fixed

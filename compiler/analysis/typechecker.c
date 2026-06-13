@@ -143,6 +143,7 @@ void add_symbol(SymbolTable* table, const char* name, Type* type, int is_actor, 
     symbol->is_module_alias = 0;
     symbol->alias_target = NULL;
     symbol->node = NULL;  // Initialize to NULL
+    symbol->type_inferred = 0;
     symbol->next = table->symbols;
     table->symbols = symbol;
 }
@@ -2749,6 +2750,34 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     return 0;
                 }
 
+                /* #698: silent-narrowing guard. Re-binding a local whose
+                 * type was INFERRED as 32-bit int (a bare `x = expr`, not an
+                 * explicit annotation) with a 64-bit value truncates
+                 * silently — is_assignable permits int64->int and codegen
+                 * keeps the int storage. Because the type was inferred, not
+                 * chosen, this is almost certainly unintended (the aedis
+                 * lpStringEqualsInt64 bug: `parsed = 0` then `parsed =
+                 * <int64>`, so the comparison never matched). Diagnose with
+                 * the load-bearing fix; an explicit annotation clears the
+                 * inferred flag and silences it. */
+                if (existing && existing->type_inferred &&
+                    existing->type && existing->type->kind == TYPE_INT &&
+                    init_type && (init_type->kind == TYPE_INT64 ||
+                                  init_type->kind == TYPE_UINT64)) {
+                    const char* nm = stmt->value ? stmt->value : "x";
+                    char msg[420];
+                    snprintf(msg, sizeof(msg),
+                        "narrowing assignment to '%s': its type was inferred "
+                        "as 32-bit int from its initializer, but a 64-bit "
+                        "value is assigned here and would truncate. Annotate "
+                        "the declaration to keep 64 bits (e.g. `long %s = ...` "
+                        "or `uint64 %s = ...`), or write `int %s = ...` to "
+                        "make the narrowing explicit.", nm, nm, nm, nm);
+                    type_error(msg, stmt->line, stmt->column);
+                    free_type(init_type);
+                    return 0;
+                }
+
                 /* Context-sensitive literal: `[a, b, c]` against a
                  * `*StringSeq`-typed variable means "build a cons chain"
                  * rather than "build a static C array". Stamp the
@@ -2809,6 +2838,15 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             // destructure path above.
             if (stmt->value && strcmp(stmt->value, "_") != 0) {
                 add_symbol(table, stmt->value, clone_type(stmt->node_type), 0, 0, 0);
+                /* #698: carry the parser's inferred-type marker onto the
+                 * binding, but only for a 32-bit int (the sole narrowing
+                 * target). A later 64-bit re-bind then triggers the guard
+                 * above / in AST_ASSIGNMENT. */
+                if (stmt->type_inferred && stmt->node_type &&
+                    stmt->node_type->kind == TYPE_INT) {
+                    Symbol* s = lookup_symbol_local(table, stmt->value);
+                    if (s) s->type_inferred = 1;
+                }
             }
             return 1;
         }
@@ -2841,6 +2879,26 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                              type_name(symbol->type), type_name(right_type));
                     free_type(right_type);
                     type_error(error_msg, stmt->line, stmt->column);
+                    return 0;
+                }
+                /* #698: silent-narrowing guard (assignment path) — twin of
+                 * the AST_VARIABLE_DECLARATION guard, for assignment forms
+                 * that take this path. */
+                if (symbol->type_inferred &&
+                    symbol->type && symbol->type->kind == TYPE_INT &&
+                    right_type && (right_type->kind == TYPE_INT64 ||
+                                   right_type->kind == TYPE_UINT64)) {
+                    const char* nm = left->value ? left->value : "x";
+                    char msg[420];
+                    snprintf(msg, sizeof(msg),
+                        "narrowing assignment to '%s': its type was inferred "
+                        "as 32-bit int from its initializer, but a 64-bit "
+                        "value is assigned here and would truncate. Annotate "
+                        "the declaration to keep 64 bits (e.g. `long %s = ...` "
+                        "or `uint64 %s = ...`), or write `int %s = ...` to "
+                        "make the narrowing explicit.", nm, nm, nm, nm);
+                    type_error(msg, stmt->line, stmt->column);
+                    free_type(right_type);
                     return 0;
                 }
                 /* `b = <int literal>` where b: byte — same range check as the

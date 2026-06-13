@@ -1,0 +1,7 @@
+// Explicit `int` makes the narrowing the user's deliberate choice — no error.
+main() {
+    int parsed = 0
+    long v = 6288338901
+    parsed = v
+    println("${parsed}")
+}

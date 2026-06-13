@@ -1,0 +1,7 @@
+// #698: inferred-int local re-bound with a 64-bit value — must ERROR.
+main() {
+    parsed = 0
+    long v = 6288338901
+    parsed = v
+    println("${parsed}")
+}

@@ -2101,6 +2101,9 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
     // Single variable declaration (existing path)
     ASTNode* decl = create_ast_node(AST_VARIABLE_DECLARATION, name->value, name->line, name->column);
     decl->node_type = create_type(TYPE_UNKNOWN);
+    decl->type_inferred = 1;  /* #698: bare `x = expr` — type inferred, no
+                               * explicit annotation. Survives the pre-
+                               * typecheck pass that fills node_type. */
 
     if (match_token(parser, TOKEN_ASSIGN)) {
         // Check for match-as-expression: x = match val { ... }
