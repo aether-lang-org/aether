@@ -53,7 +53,9 @@ exports (
     http_server_set_actor_handler,
     http_request_method, http_request_path, http_request_body,
     http_request_body_length, http_request_query,
-    http_request_remote_addr,
+    http_request_remote_addr, http_request_remote_port,
+    http_request_local_addr, http_request_local_port,
+    http_request_scheme, http_request_is_tls, http_request_http_version,
     http_request_body_read_raw, http_get_request_body_read,
     http_get_request_body_read_length, http_release_request_body_read,
     request_body_read,
@@ -62,7 +64,9 @@ exports (
     serve_file, serve_static,
     request_method, request_path, request_body,
     request_body_length, request_query,
-    request_remote_addr,
+    request_remote_addr, request_remote_port,
+    request_local_addr, request_local_port,
+    request_scheme, request_is_tls, request_http_version,
     request_header_count, request_header_name, request_header_value,
     ae_io_await, ae_io_cancel, await_io
 )
@@ -642,6 +646,32 @@ extern http_request_query(req: ptr) -> string
 // no scope id.
 extern http_request_remote_addr(req: ptr) -> string
 
+// Companion port — 0 when the address is unavailable too.
+extern http_request_remote_port(req: ptr) -> int
+
+// Server-side socket name from `getsockname(2)`. Needed when the
+// listener binds 0.0.0.0 and the handler wants to know which NIC
+// fielded this request (admin-on-loopback, multi-tenant per-IP
+// routing). Same return semantics as the remote-* pair.
+extern http_request_local_addr(req: ptr) -> string
+extern http_request_local_port(req: ptr) -> int
+
+// Transport scheme — "https" when this connection was TLS-wrapped
+// at accept/handshake time, "http" otherwise. Source of truth is
+// the local conn->ssl pointer, not anything in the wire bytes;
+// drives canonical-URL building, redirect targets, and cookie
+// Secure-flag decisions in app code. Behind a TLS-terminating
+// proxy use the X-Forwarded-Proto middleware instead — the value
+// here is what THIS server saw.
+extern http_request_scheme(req: ptr) -> string
+// Same flag as a 0/1 int — saves a string compare for callers
+// that just need a bool.
+extern http_request_is_tls(req: ptr) -> int
+
+// HTTP version on the request line — "HTTP/1.0", "HTTP/1.1", or
+// "HTTP/2.0". Surfaces a field the parser already captured.
+extern http_request_http_version(req: ptr) -> string
+
 // Request-header iteration. `http_get_header` only does a named lookup;
 // these enumerate every received header so a handler can capture an
 // unknown set (e.g. a faithful record/replay recorder). Order is wire
@@ -711,6 +741,30 @@ request_query(req: ptr) -> string {
 
 request_remote_addr(req: ptr) -> string {
     return http_request_remote_addr(req)
+}
+
+request_remote_port(req: ptr) -> int {
+    return http_request_remote_port(req)
+}
+
+request_local_addr(req: ptr) -> string {
+    return http_request_local_addr(req)
+}
+
+request_local_port(req: ptr) -> int {
+    return http_request_local_port(req)
+}
+
+request_scheme(req: ptr) -> string {
+    return http_request_scheme(req)
+}
+
+request_is_tls(req: ptr) -> int {
+    return http_request_is_tls(req)
+}
+
+request_http_version(req: ptr) -> string {
+    return http_request_http_version(req)
 }
 
 request_header_count(req: ptr) -> int {
