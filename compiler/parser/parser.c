@@ -3513,6 +3513,53 @@ ASTNode* parse_extern_declaration(Parser* parser) {
         return sd;
     }
 
+    /* `extern const NAME: type @c_import` (#702) — import an object-like
+     * C macro (EAGAIN, O_NONBLOCK, REDIS_GIT_SHA1, …) as a typed constant.
+     * The declaration teaches the typechecker a name and an Aether type;
+     * codegen emits the macro name VERBATIM at every use site and emits
+     * nothing for the declaration itself — no value, no forward decl. The
+     * including TU's headers are the sole source of truth, so per-platform
+     * values come out right by construction. Modelled on AST_CONST_DECLARATION
+     * with annotation "c_import_const" and NO initializer child: the const
+     * hoist and the statement loop both gate on child_count > 0, so a
+     * childless node is skipped end to end; use sites resolve to the bare
+     * identifier (= the macro name). Type is trusted as declared, same model
+     * as extern functions. Object-like macros only — function-like macros
+     * (`CPU_SET(i, &set)`) are out of scope. */
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_CONST) {
+        advance_token(parser);  // consume 'const'
+        Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!cname) return NULL;
+        if (!expect_token(parser, TOKEN_COLON)) return NULL;
+        Type* ctype = parse_type(parser);
+        if (!ctype) return NULL;
+        /* `@c_import` is required: it is the marker that selects the
+         * emit-verbatim-macro semantics. Without it there is no value to
+         * emit, so the declaration would be meaningless. */
+        int has_c_import = 0;
+        if (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
+            advance_token(parser);  // consume '@'
+            Token* attr = peek_token(parser);
+            if (attr && attr->type == TOKEN_IDENTIFIER && attr->value &&
+                strcmp(attr->value, "c_import") == 0) {
+                advance_token(parser);  // consume 'c_import'
+                has_c_import = 1;
+            }
+        }
+        if (!has_c_import) {
+            parser_error(parser,
+                "extern const requires @c_import — it imports an object-like "
+                "C macro by name (e.g. `extern const EAGAIN: int @c_import`)");
+            free_type(ctype);
+            return NULL;
+        }
+        ASTNode* ec = create_ast_node(AST_CONST_DECLARATION, cname->value,
+                                      extern_token->line, extern_token->column);
+        ec->annotation = strdup("c_import_const");
+        ec->node_type = ctype;
+        return ec;
+    }
+
     Token* name = expect_token(parser, TOKEN_IDENTIFIER);
     if (!name) return NULL;
 
