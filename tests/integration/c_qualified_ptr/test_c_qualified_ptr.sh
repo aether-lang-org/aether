@@ -10,22 +10,26 @@
 # only proves the spellings parse/typecheck/run; it never compiles a
 # prototype against a force-included header. This closes that gap.)
 #
+# Compilation goes through `ae build` so the .gen.c is built with the
+# real toolchain flags (force-include via aether.toml's cflags), rather
+# than a hand-rolled cc line that could drift from how Aether actually
+# compiles (feature-test macros, std level, include paths).
+#
 # Asserts:
-#   1. POSITIVE — aetherc's .gen.c for probe.ae compiles with typed.h
-#      force-included: no conflicting-declaration error.
+#   1. POSITIVE — `ae build probe.ae` succeeds with typed.h force-included:
+#      no conflicting-declaration error.
 #   2. The emitted prototypes use the exact spellings (const void* /
-#      const char* / char*), not bare void*.
-#   3. NEGATIVE — a drifted signature (drift.ae, one param dropped),
-#      compiled with the same header force-included, MUST fail with a
-#      conflicting-types error.
+#      const char* / char*) and aesort's exact qualified form.
+#   3. NEGATIVE — a drifted signature (drift.ae, one param dropped), built
+#      with the same header force-included, MUST fail to compile.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 AETHERC="$ROOT/build/aetherc"
 
-if [ ! -x "$AETHERC" ] || [ ! -x "$AE" ]; then
-    echo "  [SKIP] c_qualified_ptr: aetherc/ae not built"
+if [ ! -x "$AE" ] || [ ! -x "$AETHERC" ]; then
+    echo "  [SKIP] c_qualified_ptr: ae/aetherc not built"
     exit 0
 fi
 
@@ -33,51 +37,41 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 cd "$SCRIPT_DIR" || exit 1
 
-# Portable include paths for compiling a generated .gen.c, straight from
-# the toolchain itself (the dynamic -I walker behind `ae cflags`).
-incs="$("$AE" cflags 2>/dev/null | tr ' ' '\n' | grep '^-I' | tr '\n' ' ')"
-CC="${CC:-cc}"
-warnsoff="-Wno-unused-parameter -Wno-unused-function -Wno-unused-but-set-variable"
-
-# (1)+(2) POSITIVE: emit C, compile with the header force-included.
+# (2) Emit C (no header needed) and assert the exact spellings appear.
 if ! "$AETHERC" probe.ae "$tmpdir/probe.c" >"$tmpdir/emit.log" 2>&1; then
     echo "  [FAIL] c_qualified_ptr: aetherc failed on probe.ae"
     sed 's/^/    /' "$tmpdir/emit.log" | head -20
     exit 1
 fi
-
-# (2) exact spellings must appear in the emitted prototypes.
 for needle in 'const void\*' 'const char\*' 'char\*'; do
     if ! grep -Eq "$needle" "$tmpdir/probe.c"; then
         echo "  [FAIL] c_qualified_ptr: emitted C missing spelling: $needle"
         exit 1
     fi
 done
-# aesort's owned prototype must be the exact qualified form, not bare void*.
 if ! grep -Eq 'void aesort\(void\*, size_t, size_t, const void\*, size_t, size_t\)' "$tmpdir/probe.c"; then
     echo "  [FAIL] c_qualified_ptr: aesort prototype not emitted in exact qualified form"
     grep -n 'aesort' "$tmpdir/probe.c" | head -3 | sed 's/^/    /'
     exit 1
 fi
 
-# (1) compile-only against the force-included header: must be clean.
-if ! "$CC" -std=c11 $incs -I"$SCRIPT_DIR" $warnsoff \
-        -include typed.h -c "$tmpdir/probe.c" -o "$tmpdir/probe.o" \
-        >"$tmpdir/cc.log" 2>&1; then
+# (1) POSITIVE: build with typed.h force-included (via aether.toml). A
+# conflicting prototype would fail this compile.
+if ! "$AE" build probe.ae -o "$tmpdir/probe" >"$tmpdir/build.log" 2>&1; then
     echo "  [FAIL] c_qualified_ptr: .gen.c did NOT compile against its header (conflicting prototype?)"
-    sed 's/^/    /' "$tmpdir/cc.log" | head -20
+    sed 's/^/    /' "$tmpdir/build.log" | head -25
     exit 1
 fi
 
 # (3) NEGATIVE: a drifted signature must be REJECTED by the C compiler.
-if ! "$AETHERC" drift.ae "$tmpdir/drift.c" >"$tmpdir/emit2.log" 2>&1; then
-    echo "  [FAIL] c_qualified_ptr: aetherc failed on drift.ae"
-    sed 's/^/    /' "$tmpdir/emit2.log" | head -20
-    exit 1
-fi
-if "$CC" -std=c11 $incs -I"$SCRIPT_DIR" $warnsoff \
-        -include typed.h -c "$tmpdir/drift.c" -o "$tmpdir/drift.o" \
-        >"$tmpdir/cc2.log" 2>&1; then
+# Build it in an isolated dir that reuses the same aether.toml + header,
+# with drift.ae standing in as `probe.ae` so the [[bin]] entry applies.
+negdir="$tmpdir/neg"
+mkdir -p "$negdir"
+cp drift.ae "$negdir/probe.ae"
+cp typed.h "$negdir/typed.h"
+cp aether.toml "$negdir/aether.toml"
+if ( cd "$negdir" && "$AE" build probe.ae -o "$negdir/probe" ) >"$tmpdir/build2.log" 2>&1; then
     echo "  [FAIL] c_qualified_ptr: a drifted signature compiled clean — the"
     echo "         header cross-check is not catching prototype drift"
     exit 1
