@@ -14,6 +14,24 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Import object-like C macros** via `extern const NAME: type @c_import`
+  (#702). Object-like C macros (`EAGAIN`, `O_NONBLOCK`, `LLONG_MAX`, a
+  build-generated `REDIS_GIT_SHA1`, the errno/`C_OK` families) have no
+  linkable symbol, so they were invisible to Aether — ports inlined the
+  platform's numeric value (wrong on the next platform) or kept a one-line
+  C accessor per macro. This declaration teaches the typechecker a name and
+  an Aether type; generated C emits the macro name **verbatim** at every use
+  site and emits nothing for the declaration itself (no value, no `#define`,
+  no forward decl), so per-platform values come out right by construction —
+  the including TU's headers are the source of truth. The type is trusted as
+  declared, the same model as `extern` functions; `@c_import` is required.
+  Object-like macros only. See
+  [docs/language-reference.md](docs/language-reference.md) (Extern Functions).
+
 ## [0.250.0]
 
 ### Added
