@@ -50,7 +50,8 @@ import std.string
 exports (
     html_text, html_raw, html_tag_open, html_tag_close, html_tag,
     render_html, tag, text, raw,
-    render_xml, xml_tag, xml_self_close, xml_text, xml_raw
+    render_xml, xml_tag, xml_self_close, xml_text, xml_raw,
+    pretty_print_html, pretty_print_xml
 )
 
 // HTML-escape one byte into `sb`. Covers the five canonical entities
@@ -342,4 +343,324 @@ builder render_xml(): string with strbuilder_factory_64 {
     out = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
     body = strbuilder.finish(_builder)
     return string.concat(out, body)
+}
+
+// ---------------------------------------------------------------------
+// Pretty-print — skinny v1.
+// ---------------------------------------------------------------------
+//
+// `pretty_print_html(s, indent_size)` and `pretty_print_xml(s, indent_size)`
+// take output produced by render_html / render_xml (or any externally
+// well-formed HTML / XML string with our escape conventions) and
+// return an indented version with `\n` newlines between elements.
+//
+//   render_html() { tag("div") { tag("p") { text("hi") } } }
+//   // tight: "<div><p>hi</p></div>"
+//   pretty_print_html("<div><p>hi</p></div>", 2)
+//   // pretty:
+//   //   <div>
+//   //     <p>hi</p>
+//   //   </div>
+//
+// Rules
+// -----
+//
+//   - A newline + (indent * depth) is emitted before each opening
+//     tag and before each closing tag whose matching open is on a
+//     different "line" (i.e. that contains nested elements). Tags
+//     wrapping plain text only — like `<p>hi</p>` — stay on one line.
+//   - Self-closing `<tag/>` (XML) is treated like an open+close pair
+//     with no body.
+//   - `\n` line endings only. Pretty-print is for human debugging;
+//     consumers that need CRLF can post-process.
+//   - HTML only: inside `<pre>`, `<textarea>`, `<script>`, and
+//     `<style>`, depth tracking pauses for the subtree's body — the
+//     bytes pass through unchanged so whitespace stays significant.
+//     XML has no equivalent whitelist; if your XML uses mixed content
+//     or CDATA-sensitive data, render the tight version instead.
+//   - The XML prolog (`<?xml ... ?>`) is emitted on its own line at
+//     the top, with no leading newline.
+//
+// Limits
+// ------
+//
+//   - The post-processor only understands tags this module emits:
+//     `<name>` / `</name>` / `<name/>` with no attributes. When the
+//     v2 XML attribute story lands, the parser will need updating to
+//     skip `key="value"` runs inside `<`...`>`.
+//   - It does not pretty-print attributes onto separate lines; once
+//     attributes land they'll stay on the open-tag line.
+//   - It is NOT a general HTML/XML formatter. Use `xmllint --format`,
+//     `tidy`, or your IDE for arbitrary input. This is a "make our
+//     own renderer's output legible" helper.
+
+// HTML elements where whitespace inside the element is significant
+// to rendering or behaviour — we don't insert indentation inside
+// their bodies. Inlined check rather than a const array because
+// Aether's `const` declarations don't accept array initialisers.
+//
+// Return 1 if `name` is in the HTML no-pretty-print whitelist.
+is_no_indent_html_tag(name: string) -> int {
+    n = string_length(name)
+    // Tag names from our emitter are case-sensitive (we emit
+    // exactly what the user passed). We compare case-sensitively;
+    // anyone emitting `<PRE>` won't get the carve-out, which is
+    // fine because we don't emit upper-case HTML.
+    if n == 3 {
+        if string.equals(name, "pre") == 1 { return 1 }
+    }
+    if n == 5 {
+        if string.equals(name, "style") == 1 { return 1 }
+    }
+    if n == 6 {
+        if string.equals(name, "script") == 1 { return 1 }
+    }
+    if n == 8 {
+        if string.equals(name, "textarea") == 1 { return 1 }
+    }
+    return 0
+}
+
+// Internal: append `n` copies of `unit` to `sb`.
+append_repeat(sb: ptr, unit: string, n: int) {
+    i = 0
+    while i < n {
+        strbuilder.append(sb, unit)
+        i = i + 1
+    }
+}
+
+// Internal: validate indent_size; treat anything outside [1..8] as 2.
+clamp_indent(indent_size: int) -> int {
+    if indent_size < 1 { return 2 }
+    if indent_size > 8 { return 2 }
+    return indent_size
+}
+
+// The core walker. `respect_pre_whitelist` is 1 for HTML, 0 for XML.
+pretty_print_impl(s: string, indent_size: int, respect_pre_whitelist: int) -> string {
+    n = string_length(s)
+    indent = clamp_indent(indent_size)
+    indent_unit = ""
+    j = 0
+    while j < indent {
+        indent_unit = string.concat(indent_unit, " ")
+        j = j + 1
+    }
+
+    sb = strbuilder.new(n + 64)
+    depth = 0
+    i = 0
+    // When > 0, we're inside a no-pretty subtree (e.g. <pre>); emit
+    // bytes verbatim until matching </pre> at the same nesting level.
+    // We track the *nesting depth at which the pre opened*, so a
+    // nested <pre> inside a <pre> still pops correctly.
+    pre_depth = -1
+
+    // For knowing whether to put a closing tag on its own line, we
+    // remember if the most recent emission inside the current parent
+    // was another tag (so the parent had children) or text. The
+    // simplest signal is "did we last emit a closing tag?" — if yes,
+    // the next thing (a closing tag or a sibling open) wants a
+    // newline + indent. We track this via `wrote_tag_at_depth`.
+    wrote_tag = 0
+
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c == 60 {     // '<'
+            // Look at the next char to classify.
+            next = 0
+            if i + 1 < n { next = string.char_at_n(s, n, i + 1) }
+
+            // Special-pass-throughs we don't pretty-print:
+            //   - <?... ?>  processing instruction (XML prolog)
+            //   - <!--...--> comment
+            //   - <![CDATA[ ... ]]>
+            // For each, find its end and copy verbatim.
+            if next == 63 {   // '?'
+                // PI: emit verbatim up to '?>'.
+                end = -1
+                k = i + 2
+                while k < n - 1 {
+                    if string.char_at_n(s, n, k) == 63 {
+                        if string.char_at_n(s, n, k + 1) == 62 {
+                            end = k + 1
+                            break
+                        }
+                    }
+                    k = k + 1
+                }
+                if end < 0 { end = n - 1 }
+                strbuilder.append(sb, string.substring_n(s, n, i, end + 1))
+                // No explicit newline — the next tag emission will
+                // add `\n` because the sb is non-empty, putting the
+                // root element on its own line.
+                i = end + 1
+                wrote_tag = 0
+                continue
+            }
+            if next == 33 {   // '!'
+                // Comment or CDATA — find matching '>' (cheap; we
+                // don't currently emit either, but pass-through if
+                // someone hand-built one with raw()/xml_raw()).
+                end = -1
+                k = i + 1
+                while k < n {
+                    if string.char_at_n(s, n, k) == 62 {
+                        end = k
+                        break
+                    }
+                    k = k + 1
+                }
+                if end < 0 { end = n - 1 }
+                strbuilder.append(sb, string.substring_n(s, n, i, end + 1))
+                i = end + 1
+                wrote_tag = 0
+                continue
+            }
+
+            // Regular tag. Find the matching '>'.
+            tag_end = -1
+            k = i + 1
+            while k < n {
+                if string.char_at_n(s, n, k) == 62 {
+                    tag_end = k
+                    break
+                }
+                k = k + 1
+            }
+            if tag_end < 0 {
+                // Malformed; bail by copying the rest verbatim.
+                strbuilder.append(sb, string.substring_n(s, n, i, n))
+                i = n
+                continue
+            }
+            // Tag body is s[i+1 .. tag_end] (exclusive of '>').
+            body_start = i + 1
+            body_end = tag_end
+            is_close = 0
+            is_self_close = 0
+            name_start = body_start
+            if next == 47 {   // '/'
+                is_close = 1
+                name_start = body_start + 1
+            }
+            // Self-close: trailing '/'? (e.g. "<br/>" body == "br/")
+            // Check the char just before '>'.
+            if body_end - 1 >= name_start {
+                if string.char_at_n(s, n, body_end - 1) == 47 {
+                    is_self_close = 1
+                    body_end = body_end - 1   // drop the trailing '/'
+                }
+            }
+            // Tag name runs from name_start to first space-or-end-of-body.
+            // We don't have attributes today; future v2 attrs would
+            // need scanning here.
+            name_end = body_end
+            k = name_start
+            while k < body_end {
+                ch = string.char_at_n(s, n, k)
+                if ch == 32 {                 // ' '
+                    name_end = k
+                    break
+                }
+                k = k + 1
+            }
+            name = string.substring_n(s, n, name_start, name_end)
+
+            if respect_pre_whitelist == 1 {
+                if pre_depth >= 0 {
+                    // We're inside a no-pretty subtree; emit the tag
+                    // verbatim. Track whether this is the closing tag
+                    // that ends our pre region.
+                    strbuilder.append(sb, string.substring_n(s, n, i, tag_end + 1))
+                    if is_close == 1 {
+                        if depth == pre_depth + 1 {
+                            // Match. Exit pre mode.
+                            pre_depth = -1
+                            depth = depth - 1
+                            wrote_tag = 1
+                            i = tag_end + 1
+                            continue
+                        }
+                    }
+                    if is_self_close == 0 {
+                        if is_close == 0 {
+                            depth = depth + 1
+                        } else {
+                            depth = depth - 1
+                        }
+                    }
+                    i = tag_end + 1
+                    continue
+                }
+            }
+
+            // Emit newline + indent before any tag that isn't the
+            // very first thing in the output.
+            //   - Before an opening tag, always.
+            //   - Before a closing tag, only if its matching open
+            //     had children (we proxy this with wrote_tag — if
+            //     the last emission was a closing tag, this close
+            //     belongs on its own line).
+            //   - Before a self-close, always.
+            if is_close == 1 {
+                if wrote_tag == 1 {
+                    strbuilder.append(sb, "\n")
+                    append_repeat(sb, indent_unit, depth - 1)
+                }
+                // Emit the closing tag.
+                strbuilder.append(sb, string.substring_n(s, n, i, tag_end + 1))
+                depth = depth - 1
+                wrote_tag = 1
+                i = tag_end + 1
+                continue
+            }
+            // Opening or self-closing tag — newline + indent first
+            // (unless we're at the very start with empty sb).
+            if strbuilder.length(sb) > 0 {
+                strbuilder.append(sb, "\n")
+            }
+            append_repeat(sb, indent_unit, depth)
+            // Emit the tag.
+            strbuilder.append(sb, string.substring_n(s, n, i, tag_end + 1))
+            if is_self_close == 1 {
+                // No depth change.
+                wrote_tag = 1
+            } else {
+                depth = depth + 1
+                wrote_tag = 1
+                // If HTML and this is a no-pretty tag, enter pre mode.
+                if respect_pre_whitelist == 1 {
+                    if is_no_indent_html_tag(name) == 1 {
+                        pre_depth = depth - 1
+                    }
+                }
+            }
+            i = tag_end + 1
+            continue
+        }
+        // Plain text byte. Append and clear wrote_tag — the next
+        // closing tag should stay on the same line as this text.
+        strbuilder.append_byte(sb, c)
+        wrote_tag = 0
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+// HTML pretty-print. `<pre>`, `<textarea>`, `<script>`, `<style>`
+// pause depth tracking — their bodies stay byte-for-byte. Use 2 or
+// 4 (or any value 1..8); out-of-range falls back to 2.
+pretty_print_html(s: string, indent_size: int) -> string {
+    return pretty_print_impl(s, indent_size, 1)
+}
+
+// XML pretty-print. No element whitelist — every element gets
+// indented. If you need to preserve whitespace inside specific
+// elements, emit those subtrees as `xml_raw(string)` and let the
+// pretty-printer's PI / comment / CDATA fall-throughs do the right
+// thing for `<!CDATA[...]]>` blocks.
+pretty_print_xml(s: string, indent_size: int) -> string {
+    return pretty_print_impl(s, indent_size, 0)
 }
