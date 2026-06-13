@@ -86,6 +86,19 @@ the value-tree + filter-registry shapes, and after at least one
 downstream user has asked for the "templates that ARE Aether
 code" pitch explicitly.
 
+### Walking skeleton landed (`contrib/templating/native/`)
+
+The plain-function-call escape-correct emitter pair landed:
+`html_text`, `html_raw`, `html_tag_open`, `html_tag_close`, `html_tag`,
+all writing into a `std.strbuilder`. Tests in
+`native_templating_skeleton/` (6 cases). This is the foundation the
+eventual builder DSL will layer on top of — the escape rule is in
+the helper functions, so any sugar above can compose without
+relitigating the contract. Still pending from the design above: XML
+/ SQL / JSON emitter triples, attribute helper (`html_attr`), the
+trailing-block builder shape itself, and the `import as nt`
+shorthand pattern.
+
 ---
 
 ## `contrib.templating.liquid` — v0 landed, more layers to come
@@ -251,7 +264,15 @@ Pure (default-on):
 - [ ] `where:"prop","value"` (filter array)
 - [ ] `concat:array2` (array concat — distinct from string append)
 - [ ] `compact` (drop nils)
-- [ ] `round` / `ceil` / `floor` / `abs` / `at_least` / `at_most`
+- [x] `at_least` / `at_most` — landed (string-int filter pipeline)
+- [ ] `round` / `ceil` / `floor` / `abs` — blocked on a typechecker bug
+      that causes `apply_filter` additions calling `math_*` from
+      `std.math` to make forward-references to `value_to_string` /
+      `context_put_int` etc. become unresolvable. Repro: add even a
+      one-line `if name == "abs" { ... math_abs_int(i) ... }` after
+      `import std.math` and the typechecker stops processing the
+      bottom 2000 lines of the module. Worth its own GH issue before
+      retrying this slice.
 
 World-touching (gated):
 - [ ] `date` — full strftime semantics (not just identity). Needs

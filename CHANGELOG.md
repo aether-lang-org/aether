@@ -14,6 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`contrib.templating.native`: walking-skeleton drop.** Escape-correct
+  HTML emission as plain Aether function calls over a `std.strbuilder`,
+  no template DSL: `html_text(sb, s)` (HTML-escapes the five canonical
+  entities), `html_raw(sb, s)` (verbatim, trusted markup), and tag
+  emitters (`html_tag_open` / `html_tag_close` / `html_tag`). The
+  escape rule lives in the *helper function*, not in template syntax —
+  the template author physically cannot produce un-escaped user input
+  in an attribute. This is the inverse pitch to
+  `contrib.templating.liquid` (which is for operator-supplied
+  templates); native is for "library author exposes template-shaped
+  surface where users write Aether". The trailing-block builder DSL
+  (`html { h1 { text(...) } }` with implicit `_ctx`, sketched in
+  `docs/closures-and-builder-dsl.md`) is the eventual sugar; v0 stays
+  with plain function calls so the escape contract is testable first.
+  New module `contrib/templating/native/`, README, integration test
+  `native_templating_skeleton/` (6 cases).
+
 ## [0.247.0]
 
 ### Added
