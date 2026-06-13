@@ -32,6 +32,26 @@ notes to be skipped or clobbered (the failure modes documented in
   Object-like macros only. See
   [docs/language-reference.md](docs/language-reference.md) (Extern Functions).
 
+## [0.252.0]
+
+### Fixed
+
+- **Builder/ctx lowering: emit explicit casts at the int↔void* boundaries
+  that the universal-void*-handle design introduces.** Two missing casts
+  in `compiler/codegen/codegen_stmt.c` (the `_bcfg = factory()` store) and
+  `compiler/codegen/codegen_expr.c` (passing `_builder` to int-typed
+  callee params) emitted bare int↔pointer conversions that GCC ≤13 warned
+  about (`-Wint-conversion`) and GCC 14+/MinGW64 reject by default.
+  Blocked the entire aether-ui Win32 bring-up.
+  - Factory return → `void* _bcfg`: now emits `(void*)(intptr_t)factory()`.
+  - `void* _builder` → int callee param: now emits `(int)(intptr_t)_builder`
+    (mirror of the existing TYPE_INT → TYPE_PTR coercion).
+
+  Regression: `tests/integration/builder_int_factory_void_ptr_cast`
+  compiles the generated C with explicit `-Werror=int-conversion`; pre-fix
+  it errors, with the fix it's clean. See
+  `builder-ctx-handle-void-ptr-int-conversion.md`.
+
 ## [0.251.0]
 
 ### Fixed

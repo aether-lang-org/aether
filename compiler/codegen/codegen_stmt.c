@@ -4015,7 +4015,8 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                             fprintf(gen->output, "{\n");
                                             gen->indent_level++;
                                             print_indent(gen);
-                                            fprintf(gen->output, "void* _bcfg = %s();\n",
+                                            /* (void*)(intptr_t) bridges int-returning factories. */
+                                            fprintf(gen->output, "void* _bcfg = (void*)(intptr_t)%s();\n",
                                                     get_builder_factory(gen, reinit_call->value));
                                             print_indent(gen);
                                             fprintf(gen->output, "_aether_ctx_push(_bcfg);\n");
@@ -4438,7 +4439,8 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                             fprintf(gen->output, "{\n");
                                             gen->indent_level++;
                                             print_indent(gen);
-                                            fprintf(gen->output, "void* _bcfg = %s();\n",
+                                            /* (void*)(intptr_t) bridges int-returning factories. */
+                                            fprintf(gen->output, "void* _bcfg = (void*)(intptr_t)%s();\n",
                                                     get_builder_factory(gen, init_call->value));
                                             print_indent(gen);
                                             fprintf(gen->output, "_aether_ctx_push(_bcfg);\n");
@@ -4580,7 +4582,16 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                         fprintf(gen->output, "{\n");
                                         gen->indent_level++;
                                         print_indent(gen);
-                                        fprintf(gen->output, "void* _bcfg = %s();\n",
+                                        /* Cast the factory's scalar return into void* to keep the ctx
+                                             * slot universally void*-shaped. Without the cast, an
+                                             * int-returning factory (e.g. aether-ui's
+                                             * `_surface_window_factory() -> int`) emits
+                                             * `void* _bcfg = int_fn();` — a bare int→pointer
+                                             * conversion that GCC 14+/MinGW64 reject under
+                                             * default -Werror=int-conversion. The (intptr_t)
+                                             * intermediate is a no-op for ptr factories. See
+                                             * builder-ctx-handle-void-ptr-int-conversion.md. */
+                                            fprintf(gen->output, "void* _bcfg = (void*)(intptr_t)%s();\n",
                                                 get_builder_factory(gen, rhs->value));
                                         print_indent(gen);
                                         fprintf(gen->output, "_aether_ctx_push(_bcfg);\n");
@@ -5584,7 +5595,16 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                     // 1. Create config object and push as context
                     print_indent(gen);
-                    fprintf(gen->output, "void* _bcfg = %s();\n",
+                    /* Cast the factory's scalar return into void* to keep the ctx
+                                             * slot universally void*-shaped. Without the cast, an
+                                             * int-returning factory (e.g. aether-ui's
+                                             * `_surface_window_factory() -> int`) emits
+                                             * `void* _bcfg = int_fn();` — a bare int→pointer
+                                             * conversion that GCC 14+/MinGW64 reject under
+                                             * default -Werror=int-conversion. The (intptr_t)
+                                             * intermediate is a no-op for ptr factories. See
+                                             * builder-ctx-handle-void-ptr-int-conversion.md. */
+                                            fprintf(gen->output, "void* _bcfg = (void*)(intptr_t)%s();\n",
                             get_builder_factory(gen, inner->value));
                     print_indent(gen);
                     fprintf(gen->output, "_aether_ctx_push(_bcfg);\n");
