@@ -1504,6 +1504,31 @@ Externs are useful for:
 - Custom C extensions
 - Platform-specific APIs
 
+### Typed and qualified C pointers
+
+Plain `ptr` lowers to C `void *`. C headers use richer pointer spellings, and when an Aether `extern` (or an Aether-owned public function) must match a header **exactly** — so the generated C compiles with that header force-included, and the C compiler still cross-checks the signature against every caller — use these forms. Each affects only the *emitted C spelling*; the Aether-side `kind` (and so all typechecking) is unchanged.
+
+| Aether spelling | Emitted C | For |
+|---|---|---|
+| `const ptr` | `const void*` | `memcmp(const void *, const void *, size_t)` |
+| `cstring` | `char*` | a mutable C-string parameter |
+| `cstring_const` | `const char*` | `strlen(const char *)` (plain `string` also emits `const char*`) |
+| `*T` | `T*` | a pointer to a header-defined type `T` |
+| `const *T` | `const T*` | a const pointer to `T` |
+| `const string` | `const char*` | qualified string |
+
+```aether
+extern type dictEntry                              // opaque header-defined C type
+extern dictGenHashFunction(key: const ptr, len: size_t) -> uint64_t
+extern strlen(s: cstring_const) -> size_t
+extern dictGetKey(de: *dictEntry) -> ptr
+
+// An Aether-OWNED public symbol whose prototype must match its header:
+pqsort(a: ptr, n: size_t, es: size_t, cmp: const ptr, lr: size_t, rr: size_t) { ... }
+```
+
+Passing a plain `ptr` where the C conversion is safe stays allowed at call sites; only the *emitted prototype* carries the exact spelling. C ABI scalar aliases (`size_t`, `uint64_t`, …) emit their exact C name the same way. `const`-qualification survives into the generated C so the C compiler diagnoses writes; Aether-side write rejection is not (yet) enforced.
+
 ### `@extern("c_name")` — bind to a renamed C symbol
 
 When the Aether-side name should differ from the C symbol (for example, to expose a clean module surface without trailing `_raw` suffixes), prefix the declaration with `@extern("c_symbol")`:

@@ -14,6 +14,26 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Testing & docs
+
+- **Lock in the typed/qualified C-pointer guarantee** (#703). The feature
+  (`extern type`, `const ptr`, `cstring`/`cstring_const`, `*T`, `const *T`)
+  already shipped, but its decisive promise — an Aether-owned or extern
+  prototype matching a C header EXACTLY so the generated TU compiles with
+  that header force-included (no conflicting-declaration error), restoring
+  C's caller/definition cross-check — had no regression test
+  (`tests/regression/test_c_typed_pointers.ae` only proves the spellings
+  parse/typecheck/run; it never compiles a prototype against a force-
+  included header). Adds `tests/integration/c_qualified_ptr`: compiles a
+  generated `.gen.c` with its exact-match header force-included (positive),
+  asserts the emitted prototypes use `const void*` / `const char*` / `char*`,
+  and asserts a drifted signature is rejected at C compile time (negative).
+  Documents the spellings in the user-facing
+  [language reference](docs/language-reference.md) (Typed and qualified C
+  pointers) — previously only in the internal porting-gaps doc.
+
 ## [0.250.0]
 
 ### Added
