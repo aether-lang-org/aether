@@ -14,6 +14,43 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Closure-env UAF: extern callees and `_ctx`-injection builders no
+  longer free a closure's heap env at the call site when the C side
+  retains it.** Two related bugs in the `emit_closure_env_drained_call`
+  gate (`compiler/codegen/codegen_stmt.c`):
+  - **Part 1** — the gate required only "no escape proved" (a verdict
+    the body-walk silently defaults to for callees with no visible
+    body). Extern callbacks-registry sites (`register_cb(|| {...})`)
+    were therefore drained even though the C side keeps the boxed
+    closure and invokes it later. Now also require
+    `callee_has_visible_body`; unknown-body callees stay conservatively
+    escaping (leak ≫ UAF).
+  - **Part 2** — when the callee is a `_ctx: ptr` builder and the user
+    omits `_ctx`, codegen auto-injects `_aether_ctx_get()` at AST arg
+    0, shifting the closure arg's AST position by one relative to the
+    function-def param position. The gate consulted the escape walk
+    with the unmapped AST index, asking about `label` (provably
+    non-escaping) instead of `on_press` (escapes via
+    `box_closure(on_press) → extern store`), got a false-non-escape
+    verdict, and fired the drain. This was aether-ui's calculator UAF:
+    `btn("7") callback { call(digit, 7) }` on a `btn(_ctx, label,
+    on_press)` wrapper. The fix maps AST arg index → function-def
+    param index whenever the callee's first param is `_ctx` and
+    `user_args == declared_params - 1`.
+
+  Two regression tests:
+  `tests/integration/closure_extern_retains_no_uaf` (Part 1, direct
+  extern-callee shape) and
+  `tests/integration/closure_builder_ctx_inject_no_uaf` (Part 2,
+  cross-module visible-body wrapper with `_ctx`-injection — the
+  calculator pattern). Both run under ASan; SEGV on stock 0.250, clean
+  with the fix. See `closure-env-freed-when-passed-to-extern-callee.md`
+  for the full investigation trail.
+
 ## [0.250.0]
 
 ### Added
