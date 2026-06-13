@@ -1,0 +1,17 @@
+// Cross-module btn-shape wrapper. First param `_ctx: ptr` makes this a
+// builder — codegen auto-injects `_aether_ctx_get()` at AST arg 0 when
+// the caller omits _ctx, shifting the closure arg's AST position by 1
+// relative to the function-def param position. The Part 2 fix in the
+// gate at codegen_stmt.c:~5736 maps AST arg index → function-def param
+// index before consulting the escape walk; without that mapping the
+// walk checks the wrong parameter (provably non-escaping `label`),
+// gives a false-non-escape verdict, and the env-drain misfires.
+exports (register_btn)
+
+extern aether_ui_button_create(label: string, boxed: ptr) -> int
+
+register_btn(_ctx: ptr, label: string, on_press: fn) -> int {
+    boxed = box_closure(on_press)
+    handle = aether_ui_button_create(label, boxed)
+    return handle
+}
