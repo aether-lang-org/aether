@@ -26,6 +26,27 @@ typedef struct {
      * the X-Forwarded-For middleware is a separate, header-based
      * channel and intentionally does NOT touch this field. */
     char* remote_addr;
+    /* TCP peer port companion to `remote_addr`. Useful for per-
+     * connection log de-dup (vs per-host), NAT triangulation, and
+     * matching against ephemeral-source firewall rules. 0 when
+     * unavailable (same conditions as `remote_addr`). */
+    int   remote_port;
+    /* Server-side socket name — `getsockname(2)` on the accepted
+     * fd. Needed when the listener binds 0.0.0.0 (the wildcard
+     * accepts on every NIC) and the handler must know which
+     * interface received the request: multi-NIC / multi-tenant
+     * per-IP routing, "admin endpoint from internal NIC only".
+     * Same string format and unavailability semantics as the
+     * `remote_*` pair. */
+    char* local_addr;
+    int   local_port;
+    /* Transport scheme: 1 when this request arrived over a TLS-
+     * wrapped connection (`conn->ssl != NULL`), 0 for cleartext.
+     * Exposed as the string "http" / "https" via
+     * `http_request_scheme` and as a bool via `http_request_is_tls` —
+     * drives canonical-URL building, redirect targets, cookie
+     * Secure-flag decisions. */
+    int   is_tls;
 
     // Parsed data
     char** param_keys;      // From /users/:id
@@ -629,6 +650,33 @@ const char* http_request_query(HttpRequest* req);
 // X-Forwarded-For middleware remains the right tool when this server
 // sits behind a trusted reverse proxy.
 const char* http_request_remote_addr(HttpRequest* req);
+// Companion port for `http_request_remote_addr`. Returns 0 when
+// unavailable (same conditions as the address).
+int         http_request_remote_port(HttpRequest* req);
+
+// Server-side socket name — what `getsockname(2)` reports for the
+// accepted fd. Needed when the listener binds 0.0.0.0 and the
+// handler must learn which NIC actually received the request:
+// multi-NIC / multi-tenant per-IP routing, "admin endpoint from
+// internal NIC only". Same string format and unavailability
+// semantics as the remote-* pair.
+const char* http_request_local_addr(HttpRequest* req);
+int         http_request_local_port(HttpRequest* req);
+
+// Transport scheme. `http_request_scheme` is "https" when this
+// connection was TLS-wrapped (ALPN or h2c upgrade transparent —
+// what mattered is whether the bytes were over TLS), else "http".
+// `http_request_is_tls` exposes the same as a 0/1 int for callers
+// that want a bool without the string compare. Drives canonical-
+// URL building, redirect targets, cookie Secure-flag decisions.
+const char* http_request_scheme(HttpRequest* req);
+int         http_request_is_tls(HttpRequest* req);
+
+// HTTP version as the parser captured it on the request line —
+// "HTTP/1.0", "HTTP/1.1", or "HTTP/2.0". h2 connections always
+// surface as "HTTP/2.0" regardless of the inner stream wire form.
+// Returns "" when unset (parse failed before the version slot).
+const char* http_request_http_version(HttpRequest* req);
 
 // Request-header iteration — enumerate every received header (named
 // http_get_header only does a single lookup). Wire order, duplicates
