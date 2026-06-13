@@ -102,6 +102,67 @@ attributes), processing instructions other than the prolog, DOCTYPE,
 schema-aware emission. Use `xml_raw` for trusted markup if you need
 any of these.
 
+### Pretty-print (debug-only)
+
+Both `render_html()` and `render_xml()` emit tight output — no
+indentation, no inter-element whitespace, byte-deterministic. For
+human reading or diffing during development, two post-processors
+take that tight output and return an indented version:
+
+```aether
+tight = native.render_html() {
+    native.tag("ul") {
+        native.tag("li") { native.text("a") }
+        native.tag("li") { native.text("b") }
+    }
+}
+println(native.pretty_print_html(tight, 2))
+//   <ul>
+//     <li>a</li>
+//     <li>b</li>
+//   </ul>
+
+println(native.pretty_print_xml(some_xml, 4))     // 4-space indent
+```
+
+Surface:
+
+```aether
+pretty_print_html(s: string, indent_size: int) -> string
+pretty_print_xml(s: string, indent_size: int)  -> string
+```
+
+`indent_size` is 2 or 4 in normal use; any value in `1..8` is
+honoured, anything out of range falls back to 2. Line endings are
+always `\n` — pretty-print is for humans, not machines.
+
+**Caveats — read these before using pretty-print in production:**
+
+- **It's for debugging, not serving.** The tight output is the
+  ground truth; pretty-print is a transform layer for human eyes.
+  Production paths should use `render_html()` / `render_xml()`
+  directly.
+- **HTML carve-outs.** Inside `<pre>`, `<textarea>`, `<script>`,
+  and `<style>`, depth tracking pauses and the body passes through
+  byte-for-byte. These four elements have whitespace-significant
+  content and indenting inside them would change the rendered
+  page.
+- **XML has no whitelist.** Every XML element gets indented. If
+  your XML uses mixed content (text and elements interleaved
+  inside the same parent) or carries CDATA-sensitive data, the
+  pretty-printed output is *not equivalent* to the tight version
+  for the consuming parser. Use the tight renderer for such cases.
+- **Not a general formatter.** The post-processor understands tags
+  this module emits — `<name>`, `</name>`, `<name/>`, plus a
+  fall-through for `<?...?>`, `<!--...-->`, and `<![CDATA[...]]>`.
+  Arbitrary HTML / XML with attributes (today) or unusual entity
+  use will be formatted on a best-effort basis. For arbitrary
+  input, reach for `xmllint --format`, `tidy`, or your IDE.
+- **Attributes (when they land).** The v2 XML attribute story
+  hasn't shipped; when it does, the parser here will need updating
+  to skip `key="value"` runs inside `<`...`>`. Until then, treat
+  attribute-bearing markup as undefined for the formatter.
+
 ### Plain functions (escape hatch for hot paths)
 
 If you want to avoid the per-tag strbuilder allocation the DSL

@@ -14,6 +14,39 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`contrib.templating.native`: `pretty_print_html` / `pretty_print_xml`
+  (debug-only).** Two post-processors that take the tight output of
+  `render_html()` / `render_xml()` (or any externally well-formed
+  HTML / XML string with this module's escape conventions) and return
+  an indented version with `\n` line endings between elements.
+  Surface:
+  ```aether
+  pretty_print_html(s: string, indent_size: int) -> string
+  pretty_print_xml(s: string, indent_size: int)  -> string
+  ```
+  `indent_size` honoured in the range `1..8`; out-of-range falls
+  back to 2. Pretty-print is for human reading / diffing during
+  development; production paths should use `render_html()` /
+  `render_xml()` directly. **HTML carve-outs:** `<pre>`,
+  `<textarea>`, `<script>`, and `<style>` pause depth tracking for
+  their subtree — their bodies pass through byte-for-byte because
+  whitespace inside them is significant to rendering / behaviour.
+  **XML has no whitelist:** every element gets indented; if your
+  XML uses mixed content or CDATA-sensitive data, render the tight
+  version instead. The post-processor understands `<name>` /
+  `</name>` / `<name/>` plus pass-through for `<?...?>`,
+  `<!--...-->`, and `<![CDATA[...]]>`. Once the v2 XML attribute
+  story lands, the parser here will need updating to skip
+  `key="value"` runs inside `<`...`>`. New test
+  `tests/integration/native_templating_pretty/` (10 cases — flat
+  body, nested elements, `<pre>` and `<script>` carve-outs, XML
+  prolog handling, self-close elements, indent size choice with
+  out-of-range fallback, end-to-end DSL → pretty round-trip).
+
 ## [0.249.0]
 
 ### Added
