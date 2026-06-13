@@ -1,0 +1,16 @@
+// Negative case for #703: an Aether-owned `aesort` whose signature has
+// DRIFTED from typed.h (the `es` parameter is dropped). Compiled with
+// typed.h force-included, this MUST fail with a conflicting-types error
+// — that is exactly the cross-check #703 restores: a drifted public
+// signature is caught at C compile time, not at link time or runtime.
+
+aesort(a: ptr, n: size_t, cmp: const ptr, lr: size_t, rr: size_t) {
+    if n > 0 {
+        print("sort\n")
+    }
+}
+
+main() {
+    aesort(null, 0, null, 0, 0)
+    print("ok\n")
+}

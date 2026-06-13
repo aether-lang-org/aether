@@ -1,0 +1,11 @@
+[[bin]]
+name = "probe"
+path = "probe.ae"
+
+[build]
+# Force-include the C header that the Aether-owned / extern prototypes must
+# match into every TU, including the Aether-generated .gen.c. The whole point
+# of #703 is that aetherc's emitted prototypes agree with typed.h exactly, so
+# this force-include raises no conflicting-declaration error. Compiling via
+# `ae build` (not a hand-rolled cc line) uses the real toolchain flags.
+cflags = "-include typed.h -I."

@@ -1,0 +1,38 @@
+// #703 — typed and qualified C pointers in extern signatures and in
+// Aether-owned public prototypes.
+//
+// Aether's `ptr` lowers to C `void *`; C headers use richer spellings
+// (`const void *`, `char *`, `const char *`, `T *`). When Aether owns a
+// public C symbol, or externs a const-taking C function, the emitted
+// prototype must match the header EXACTLY — otherwise the generated TU
+// cannot be compiled with its header force-included (gcc raises
+// conflicting types), forfeiting the compiler's check that the
+// definition still matches every caller's prototype.
+//
+// This probe pairs with typed.h (force-included by the harness):
+//   - `aesort` is an Aether-OWNED definition; its emitted prototype
+//     must match `void aesort(void*, size_t, size_t, const void*,
+//     size_t, size_t)`.
+//   - `myhash` / `myf` / `myg` are externs whose emitted prototypes
+//     must match the header's `const void*` / `const char*` / `char*`.
+//     They are declared but not called — a declared extern still emits
+//     a checked prototype, and compile-only verification needs no
+//     definition to link against.
+
+// Aether-owned public symbol (Aether emits the definition).
+aesort(a: ptr, n: size_t, es: size_t, cmp: const ptr, lr: size_t, rr: size_t) {
+    // The body is irrelevant to the prototype check; just touch a param.
+    if n > 0 {
+        print("sort\n")
+    }
+}
+
+// Direct externs of const-taking C functions — exact header match.
+extern myhash(key: const ptr, len: size_t) -> uint64_t
+extern myf(s: cstring_const) -> int
+extern myg(s: cstring) -> int
+
+main() {
+    aesort(null, 0, 0, null, 0, 0)
+    print("ok\n")
+}
