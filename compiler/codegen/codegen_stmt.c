@@ -5763,7 +5763,17 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                      * fires under a false-non-escape verdict → UAF. */
                     int param_idx = cclos_idx;
                     if (cclos && cclos_idx >= 0 && inner && inner->value) {
-                        ASTNode* fdef = find_function_definition_by_name(gen->program, inner->value);
+                        /* Look up the callee by its normalised (dot→underscore)
+                         * name — that's how cross-module functions land in the
+                         * merged program AST. Without normalisation an imported
+                         * `aether_ui.btn` call site looks up "aether_ui.btn"
+                         * but the merged AST has node value "aether_ui_btn",
+                         * the lookup misses, the `_ctx`-injection shift is
+                         * skipped, and the escape walk checks the wrong param
+                         * (label, read-only → false non-escape → UAF). */
+                        char fn_norm[256];
+                        const char* fn = codegen_normalise_callee(inner->value, fn_norm, sizeof(fn_norm));
+                        ASTNode* fdef = find_function_definition_by_name(gen->program, fn);
                         if (fdef) {
                             int declared_params = 0;
                             for (int pi = 0; pi < fdef->child_count; pi++) {

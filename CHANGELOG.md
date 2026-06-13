@@ -14,6 +14,34 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Closure-env UAF Part 3 — `_ctx`-injection drain gate must look up
+  the callee under its normalised (dot→underscore) name** (`closure-env-
+  freed-when-passed-to-extern-callee.md`,
+  `compiler/codegen/codegen_stmt.c`,
+  `tests/integration/closure_qualified_ctx_inject_no_uaf/`). Part 2
+  added an AST-arg-index → function-def-param-index shift at the drain
+  gate to account for `_ctx: ptr` builder auto-injection. The shift
+  looks the callee up in the merged program AST, but used the *raw*
+  call-site value (e.g. `aether_ui.btn`). Cross-module functions live
+  in the merged AST under their *normalised* name (`aether_ui_btn`),
+  so for qualified-call sites (`import aether_ui` +
+  `aether_ui.btn(...)`, aether-ui's actual usage) the lookup missed,
+  the shift was skipped, and the escape walk asked about the wrong
+  parameter (`label`, provably non-escaping) instead of `on_press`
+  (which `box_closure(on_press)` launders into the retaining extern).
+  False-non-escape → drain fires → C-side invocation later reads the
+  freed env → UAF (`heap-use-after-free` at `example_testable.ae:24`,
+  reported by aether-ui after Parts 1+2 shipped in 0.251.0). Fix
+  normalises with `codegen_normalise_callee` before the lookup, same
+  as the visible-body and escape-walker callers already do. Part 2's
+  selective-import test passed without this because selective imports
+  lower the call site to a bare unqualified name; the new test locks
+  in the qualified-call path that aether-ui uses.
+
 ## [0.254.0]
 
 ### Testing & docs

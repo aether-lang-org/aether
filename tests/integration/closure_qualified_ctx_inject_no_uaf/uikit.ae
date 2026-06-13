@@ -1,0 +1,17 @@
+// Same shape as closure_builder_ctx_inject_no_uaf's uikit, but invoked
+// through a WHOLE-MODULE import (`import uikit`, `uikit.register_btn(...)`)
+// rather than a selective one. Exercises Part 3 of the closure-env-freed
+// UAF: the drain-gate's _ctx-injection arg→param shift must look up the
+// callee under its normalised (dot→underscore) name; before the fix the
+// raw qualified value ("uikit.register_btn") missed the merged-AST node
+// (which is named "uikit_register_btn"), the shift was skipped, and the
+// escape walk checked the wrong parameter → false-non-escape → UAF.
+exports (register_btn)
+
+extern aether_ui_button_create(label: string, boxed: ptr) -> int
+
+register_btn(_ctx: ptr, label: string, on_press: fn) -> int {
+    boxed = box_closure(on_press)
+    handle = aether_ui_button_create(label, boxed)
+    return handle
+}

@@ -1,0 +1,22 @@
+// Regression for Part 3 of the closure-env-freed UAF.
+//
+// Shape: cross-module visible-body wrapper with `_ctx: ptr` as first
+// param, invoked through a WHOLE-MODULE import using the qualified call
+// form (`uikit.register_btn(...)`). The drain-gate's _ctx-injection
+// arg→param shift looks the callee up in the merged program AST, but
+// the merged AST stores cross-module functions under their normalised
+// (dot→underscore) name. Pre-fix the gate looked up the raw qualified
+// value, missed, skipped the shift, and the escape walk checked the
+// wrong parameter — same false-non-escape verdict that produced
+// aether_ui.btn's UAF in example_testable.ae.
+import uikit
+extern fire_btn()
+
+main() {
+    msg = "ok"
+    inner = |d: int| { println(msg) }
+    // Qualified-call form: uikit.register_btn, the shape aether-ui uses.
+    uikit.register_btn("=") callback { call(inner, 7) }
+    fire_btn()
+    return 0
+}
