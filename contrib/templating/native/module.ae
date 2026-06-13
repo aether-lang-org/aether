@@ -49,7 +49,8 @@ import std.string
 
 exports (
     html_text, html_raw, html_tag_open, html_tag_close, html_tag,
-    render_html, tag, text, raw
+    render_html, tag, text, raw,
+    render_xml, xml_tag, xml_self_close, xml_text, xml_raw
 )
 
 // HTML-escape one byte into `sb`. Covers the five canonical entities
@@ -222,4 +223,123 @@ builder tag(name: string): int with strbuilder_factory_64 {
 // return the assembled string.
 builder render_html(): string with strbuilder_factory_64 {
     return strbuilder.finish(_builder)
+}
+
+// ---------------------------------------------------------------------
+// XML emitter — skinny v1.
+// ---------------------------------------------------------------------
+//
+//   import contrib.templating.native as nt
+//
+//   feed = nt.render_xml() {
+//       nt.xml_tag("rss") {
+//           nt.xml_tag("channel") {
+//               nt.xml_tag("title") { nt.xml_text("Aether news") }
+//               for i in 0..3 {
+//                   nt.xml_tag("item") {
+//                       nt.xml_tag("title") { nt.xml_text(titles[i]) }
+//                   }
+//               }
+//           }
+//       }
+//   }
+//
+// `render_xml()` prefixes the standard XML 1.0 / UTF-8 prolog and
+// then runs the trailing block against a fresh emitter.
+//
+// What this v1 deliberately omits
+// -------------------------------
+//
+//   - **Attributes.** No `xml_attr` helper. Attribute-shaped data must
+//     either be lifted into child elements (`<item><name>x</name></item>`)
+//     or written via `xml_raw` against a tag built by hand. The
+//     attribute design (deferred `>`-flush vs attrs-as-map) needs a
+//     real user to settle the call-site shape; we punt the decision
+//     until that user appears.
+//   - **Namespaces.** Pass the prefixed name verbatim
+//     (`xml_tag("svg:rect")`); we emit it. Declaring `xmlns:svg=...`
+//     happens through the user typing it as raw markup — which we
+//     can't sanely do without attribute support. Real namespace
+//     support waits for the attribute round.
+//   - **Processing instructions other than the prolog**, DOCTYPE, mixed
+//     content, schema-aware emission. Out of scope. Use `xml_raw` for
+//     trusted markup if you need any of these in v1.
+//
+// XML vs HTML escape divergence
+// -----------------------------
+//
+// XML 1.0 escapes `&` `<` `>` `"` (canonical) and `'` to `&apos;`
+// rather than HTML's `&#39;`. The `xml_escape_byte` function below
+// implements XML's rule. We *also* escape `>` even though XML
+// technically only requires it inside `]]>` sequences — being more
+// conservative makes the output safe to embed inside other documents.
+// This matches `std.xml`'s `xml.writer` behaviour.
+
+// One byte XML-escaped into `sb`.
+xml_escape_byte(sb: ptr, c: int) {
+    if c == 38 {                              // '&'
+        strbuilder.append(sb, "&amp;")
+    } else if c == 60 {                       // '<'
+        strbuilder.append(sb, "&lt;")
+    } else if c == 62 {                       // '>'
+        strbuilder.append(sb, "&gt;")
+    } else if c == 34 {                       // '"'
+        strbuilder.append(sb, "&quot;")
+    } else if c == 39 {                       // '\''
+        strbuilder.append(sb, "&apos;")
+    } else {
+        strbuilder.append_byte(sb, c)
+    }
+}
+
+// `xml_text(s)` — append `s` to the active emitter with XML escape
+// applied. Auto-injects the current builder emitter as `_ctx` inside
+// any `xml_tag` / `render_xml` block.
+xml_text(_ctx: ptr, s: string) {
+    n = string_length(s)
+    i = 0
+    while i < n {
+        xml_escape_byte(_ctx, string.char_at_n(s, n, i))
+        i = i + 1
+    }
+}
+
+// `xml_raw(s)` — append `s` verbatim. Use only for trusted markup
+// (CDATA blocks, processing instructions, namespace declarations
+// you've vetted). Anything user-supplied here is a bug.
+xml_raw(_ctx: ptr, s: string) {
+    strbuilder.append(_ctx, s)
+}
+
+// `xml_tag(name) { ... }` — emit `<name>BODY</name>` where BODY is
+// the rendered output of the trailing block. Same shape as the HTML
+// `tag()` but uses XML escape rules.
+builder xml_tag(name: string): int with strbuilder_factory_64 {
+    body = strbuilder.finish(_builder)
+    parent = builder_context()
+    strbuilder.append(parent, "<")
+    strbuilder.append(parent, name)
+    strbuilder.append(parent, ">")
+    strbuilder.append(parent, body)
+    strbuilder.append(parent, "</")
+    strbuilder.append(parent, name)
+    strbuilder.append(parent, ">")
+    return 0
+}
+
+// `xml_self_close(name)` — emit `<name/>` with no body. Plain
+// function rather than builder; no trailing block means no per-call
+// strbuilder alloc.
+xml_self_close(_ctx: ptr, name: string) {
+    strbuilder.append(_ctx, "<")
+    strbuilder.append(_ctx, name)
+    strbuilder.append(_ctx, "/>")
+}
+
+// `render_xml() { ... }` — prefix the standard prolog, run the block
+// against a fresh emitter, return the assembled string.
+builder render_xml(): string with strbuilder_factory_64 {
+    out = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    body = strbuilder.finish(_builder)
+    return string.concat(out, body)
 }

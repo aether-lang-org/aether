@@ -50,6 +50,58 @@ call has parentheses — `render_html { ... }` (no parens) parses as
 "function reference, then unrelated block" and is a silent typing
 error. `render_html() { ... }` parses correctly.
 
+### XML emitter (skinny v1)
+
+```aether
+feed = native.render_xml() {
+    native.xml_tag("rss") {
+        native.xml_tag("channel") {
+            native.xml_tag("title") { native.xml_text("Aether news") }
+            for i in 0..items_n {
+                native.xml_tag("item") {
+                    native.xml_tag("title") { native.xml_text(titles[i]) }
+                }
+            }
+        }
+    }
+}
+// feed == "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss>...</rss>"
+```
+
+`render_xml()` emits the standard XML 1.0 / UTF-8 prolog and then
+runs the trailing block against a fresh emitter. `xml_tag(name)
+{...}` wraps a block in `<name>BODY</name>`. `xml_self_close(name)`
+emits `<name/>`. `xml_text(s)` escapes the five canonical XML
+entities (note: `'` → `&apos;`, NOT `&#39;` like HTML; `>` is also
+escaped, more conservative than the strict spec but matches
+`std.xml`'s writer).
+
+Surface:
+
+```aether
+render_xml() { ... }             // prolog + rendered block
+xml_tag(name) { ... }            // <name>BODY</name>
+xml_self_close(name)             // <name/>
+xml_text(s)                      // append XML-escaped
+xml_raw(s)                       // append verbatim (CDATA, vetted markup)
+```
+
+**Skinny v1 has no attribute helper.** Attribute-shaped data either
+lifts into child elements (`<item><name>x</name></item>` rather than
+`<item name="x"/>`) or uses `xml_raw` to write a hand-built tag.
+Adding `xml_attr` requires either (a) attributes-as-map on the tag
+call (`xml_tag(name, attrs: m) { ... }`) or (b) a "pending tag" state
+machine where `xml_attr` flushes the `>` on first non-attr call —
+each has trade-offs and neither has a real user yet. We'll add it
+once the first downstream user tells us which call-site shape they
+need.
+
+Also skipped in v1: namespaces (pass `xml_tag("svg:rect")` if you
+already have the prefix, but `xmlns:` declaration support waits for
+attributes), processing instructions other than the prolog, DOCTYPE,
+schema-aware emission. Use `xml_raw` for trusted markup if you need
+any of these.
+
 ### Plain functions (escape hatch for hot paths)
 
 If you want to avoid the per-tag strbuilder allocation the DSL

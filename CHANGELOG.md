@@ -18,6 +18,33 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ### Added
 
+- **`contrib.templating.native`: XML emitter (skinny v1).** Sibling of
+  the HTML DSL — same trailing-block shape, XML escape rules:
+  ```aether
+  feed = native.render_xml() {
+      native.xml_tag("rss") {
+          native.xml_tag("channel") {
+              for i in 0..items_n {
+                  native.xml_tag("item") {
+                      native.xml_tag("title") { native.xml_text(titles[i]) }
+                  }
+              }
+          }
+      }
+  }
+  ```
+  Surface: `render_xml()` (prefixes `<?xml version="1.0" encoding="UTF-8"?>`),
+  `xml_tag(name) { ... }`, `xml_self_close(name)`, `xml_text(s)`,
+  `xml_raw(s)`. `xml_text` escapes the five canonical XML entities
+  (note: `'` → `&apos;`, NOT `&#39;`; `>` also escaped, matching
+  `std.xml`'s writer). **Skinny v1 deliberately omits attributes,
+  namespaces, processing instructions, and DOCTYPE** — attribute
+  shape (attrs-as-map vs. deferred-`>` state machine) needs a real
+  downstream user to settle, and the others fall out of `xml_raw`
+  until that user appears. New test
+  `tests/integration/native_templating_xml/` (7 cases — prolog,
+  basic wrap, self-close, escape of all 5 metas, raw bypass, for-loop
+  composition, `${...}` interpolation of a captured user value).
 - **`contrib.templating.native`: builder DSL.** The walking-skeleton
   `html_text(sb, s)` / `html_tag_open(sb, s)` API gains a sibling
   surface that lets you write templates as Aether closures with
