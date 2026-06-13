@@ -32,6 +32,18 @@ typedef struct {
     char** query_values;
     int query_count;
     int query_parsed;
+    /* Connection-level metadata (peer/local addr+port, TLS flag).
+     * Manufactured-in-C requests have no real connection, so the
+     * dispatcher's getpeername+getsockname populate never runs; the
+     * calloc below zeros all six and the corresponding accessors
+     * return ""/0. Tracked at the end of the struct alongside the
+     * runtime's same trailing slots, kept in sync so the runtime's
+     * writes/reads on these fields land inside the calloc'd region. */
+    char* remote_addr;
+    int   remote_port;
+    char* local_addr;
+    int   local_port;
+    int   is_tls;
 } HttpRequest;
 
 typedef struct {
@@ -94,6 +106,8 @@ void probe_free_request(void* p) {
         free(r->query_keys[i]); free(r->query_values[i]);
     }
     free(r->query_keys); free(r->query_values);
+    free(r->remote_addr);
+    free(r->local_addr);
     free(r);
 }
 

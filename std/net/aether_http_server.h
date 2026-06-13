@@ -16,37 +16,6 @@ typedef struct {
     int header_count;
     char* body;
     size_t body_length;
-    /* Trusted TCP peer address — what `getpeername(2)` returned for
-     * the connection that carried this request. Set by the dispatcher
-     * just after the request is parsed, NULL when unavailable (e.g.
-     * a Unix-domain or in-memory transport). IPv4 strings are
-     * dotted-quad ("192.0.2.7"); IPv6 strings are the `inet_ntop`
-     * AF_INET6 form ("2001:db8::1") — without a bracketed prefix or
-     * scope id. Exposed to handlers via `http_request_remote_addr`;
-     * the X-Forwarded-For middleware is a separate, header-based
-     * channel and intentionally does NOT touch this field. */
-    char* remote_addr;
-    /* TCP peer port companion to `remote_addr`. Useful for per-
-     * connection log de-dup (vs per-host), NAT triangulation, and
-     * matching against ephemeral-source firewall rules. 0 when
-     * unavailable (same conditions as `remote_addr`). */
-    int   remote_port;
-    /* Server-side socket name — `getsockname(2)` on the accepted
-     * fd. Needed when the listener binds 0.0.0.0 (the wildcard
-     * accepts on every NIC) and the handler must know which
-     * interface received the request: multi-NIC / multi-tenant
-     * per-IP routing, "admin endpoint from internal NIC only".
-     * Same string format and unavailability semantics as the
-     * `remote_*` pair. */
-    char* local_addr;
-    int   local_port;
-    /* Transport scheme: 1 when this request arrived over a TLS-
-     * wrapped connection (`conn->ssl != NULL`), 0 for cleartext.
-     * Exposed as the string "http" / "https" via
-     * `http_request_scheme` and as a bool via `http_request_is_tls` —
-     * drives canonical-URL building, redirect targets, cookie
-     * Secure-flag decisions. */
-    int   is_tls;
 
     // Parsed data
     char** param_keys;      // From /users/:id
@@ -62,6 +31,21 @@ typedef struct {
     char** query_values;
     int query_count;
     int query_parsed;
+    /* Connection-level metadata populated by the dispatcher right after
+     * `http_parse_request_n` from `getpeername(2)` / `getsockname(2)` /
+     * `conn->ssl`. Tracked at the end of the struct so existing C
+     * consumers — `tests/integration/http_external_ptr`'s shim,
+     * downstream embedders that manufacture an HttpRequest in C — stay
+     * binary-compatible if they fail to update. Same ABI promise the
+     * query-cache fields above kept when they were added. Accessors
+     * (`http_request_remote_addr`, `_remote_port`, `_local_addr`,
+     * `_local_port`, `_scheme`, `_is_tls`) all tolerate the
+     * NULL / zero defaults a C consumer leaves behind. */
+    char* remote_addr;
+    int   remote_port;
+    char* local_addr;
+    int   local_port;
+    int   is_tls;
 } HttpRequest;
 
 // HTTP Response
