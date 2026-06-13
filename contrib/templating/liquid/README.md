@@ -108,9 +108,17 @@ append  prepend  default  truncate  truncatewords  replace
 replace_first  remove  remove_first  newline_to_br  strip_html
 strip_newlines  escape  escape_once  url_encode  url_decode  slice
 plus  minus  times  divided_by  modulo  at_least  at_most
+abs  ceil  floor  round
 md5  sha1  sha256  base64_encode  base64_decode
 escape_xml  json_escape
 ```
+
+`abs` preserves the input shape (`5` → `5`, `5.5` → `5.5`); `ceil`,
+`floor`, and `round` (no-arg) always emit an integer string
+(`{{ 3.7 | floor }}` → `"3"`). `round:N` (fixed-precision float) is
+deferred until std.string grows a printf-style formatter —
+`string.from_float` uses `%g` which drops trailing zeros, breaking
+the `round:N` contract.
 
 Unknown filter names pass the input through unchanged (Shopify
 behaviour, not an error). `divided_by:"0"` and `modulo:"0"` raise

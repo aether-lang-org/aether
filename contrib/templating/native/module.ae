@@ -1,0 +1,116 @@
+// contrib.templating.native — closure-friendly escape-correct emitter
+// helpers, no template DSL.
+//
+// Walking-skeleton drop. The pitch: the template *is* an Aether
+// function that writes into a `std.strbuilder`. The output format and
+// the escape rules live in the helpers (`html_text`, future `xml_text`
+// / `sql_text`), not in template syntax — so an HTML template author
+// physically cannot produce un-escaped user content in an attribute.
+// This is the inverse of `contrib.templating.liquid`, which exists for
+// the "operator brings their own `.liquid` file" case; this one is for
+// "library author exposes template-shaped surface where users write
+// Aether".
+//
+// v0 surface (this file):
+//
+//   import contrib.templating.native as nt
+//   import std.strbuilder
+//
+//   render_greeting(name: string) -> string {
+//       sb = strbuilder.new(64)
+//       nt.html_text(sb, "Hello ")
+//       nt.html_tag_open(sb, "b")
+//       nt.html_text(sb, name)          // escapes even if name is `<script>`
+//       nt.html_tag_close(sb, "b")
+//       return strbuilder.finish(sb)
+//   }
+//
+//   // render_greeting("Alice <script>")
+//   //   == "Hello <b>Alice &lt;script&gt;</b>"
+//
+// The walking skeleton intentionally stays with plain function calls
+// over a strbuilder rather than the trailing-block builder DSL. The
+// builder shape (`html { h1 { text(...) } }` with implicit `_ctx`) is
+// the eventual sugar; getting the escape contract right first is the
+// foundation. When the DSL surface lands it will compose with these
+// helpers — the escape rule is in `html_text`, not in syntax.
+//
+// Out of scope until a real user asks:
+//   - The trailing-block `builder` form from
+//     docs/closures-and-builder-dsl.md.
+//   - XML / SQL / JSON emitters. Each adds its own `<fmt>_text` /
+//     `<fmt>_tag_*` triple + escape rule; mechanical.
+//   - `each` / `if` / `case` template tags. Use Aether's native
+//     `for` / `if` / `switch` between helper calls — same emitter,
+//     same escape contract.
+
+import std.strbuilder
+import std.string
+
+exports (
+    html_text, html_raw, html_tag_open, html_tag_close, html_tag
+)
+
+// HTML-escape one byte into `sb`. Covers the five canonical entities
+// (& < > " '). Everything else passes through unchanged.
+html_escape_byte(sb: ptr, c: int) {
+    if c == 38 {                              // '&'
+        strbuilder.append(sb, "&amp;")
+    } else if c == 60 {                       // '<'
+        strbuilder.append(sb, "&lt;")
+    } else if c == 62 {                       // '>'
+        strbuilder.append(sb, "&gt;")
+    } else if c == 34 {                       // '"'
+        strbuilder.append(sb, "&quot;")
+    } else if c == 39 {                       // '\''
+        strbuilder.append(sb, "&#39;")
+    } else {
+        strbuilder.append_byte(sb, c)
+    }
+}
+
+// Append `s` to `sb` with HTML escaping. This is the call template
+// authors reach for almost every time — `html_raw` exists only for
+// the rare "trusted markup fragment" case.
+html_text(sb: ptr, s: string) {
+    n = string_length(s)
+    i = 0
+    while i < n {
+        html_escape_byte(sb, string.char_at_n(s, n, i))
+        i = i + 1
+    }
+}
+
+// Append `s` to `sb` VERBATIM, no escaping. Use this only for trusted
+// markup (a `<br>` literal, a pre-formatted fragment from another
+// component you trust). Templates that take any user-supplied input
+// through `html_raw()` are a bug — escaping is the helper's job.
+html_raw(sb: ptr, s: string) {
+    strbuilder.append(sb, s)
+}
+
+// Emit a `<name>` opening tag. `name` is NOT escaped; it's assumed
+// to be a static template-author-supplied identifier. (Same trust
+// model as HTML literally everywhere: the markup-author writes
+// `<div>`; the user-data goes through html_text().)
+html_tag_open(sb: ptr, name: string) {
+    strbuilder.append(sb, "<")
+    strbuilder.append(sb, name)
+    strbuilder.append(sb, ">")
+}
+
+// Emit a `</name>` closing tag. Same trust model as html_tag_open —
+// `name` is not escaped.
+html_tag_close(sb: ptr, name: string) {
+    strbuilder.append(sb, "</")
+    strbuilder.append(sb, name)
+    strbuilder.append(sb, ">")
+}
+
+// Convenience: emit `<name>body_text</name>`. For nested or computed
+// bodies, call open/close around your own helper-emitting code.
+html_tag(sb: ptr, name: string, body_text: string) {
+    html_tag_open(sb, name)
+    html_text(sb, body_text)
+    html_tag_close(sb, name)
+}
