@@ -1,0 +1,37 @@
+// Regression test for issue #528 — the `[` branch added to
+// is_newline_led_statement must NOT break legitimate multi-line
+// indexing.
+//
+// The guard fires only when a newline-led `[` is followed by
+// `<literal-or-ident> ,` — i.e. the bracket group contains a
+// top-level comma, which is impossible in a continuation index
+// (indexing accepts a single expression). Any other line-led `[`
+// is left to fold into the previous expression as before. This
+// test exercises the second behaviour: a single-element line-led
+// bracket group MUST still parse as indexing continuation.
+
+main() {
+    data = [10, 20, 30, 40, 50]
+
+    // Single-token index continuation across a newline — must fold
+    // as `data[2]` (continuation), not break out into a fresh `[2]`
+    // expression-statement. The guard explicitly does NOT fire here
+    // because `[ 2 ]` has no comma after the first element.
+    m = data
+        [2]
+    if m != 30 {
+        println("FAIL: single-token multi-line index broke (data[2] expected 30, got ${m})")
+        return
+    }
+
+    // Same with an identifier index.
+    i = 3
+    n = data
+        [i]
+    if n != 40 {
+        println("FAIL: identifier multi-line index broke (data[i] expected 40, got ${n})")
+        return
+    }
+
+    println("OK")
+}

@@ -14,6 +14,29 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Parser
+
+- **Newline-led `[` array-literal recognised as a fresh statement,
+  not folded into the previous line as indexing** (issue #528,
+  `compiler/parser/parser.c`,
+  `tests/regression/test_expr_parser_newline_bracket.ae`). The `*`
+  guard PR #527 added covered the typed-pointer / deref-store
+  cases; this extends `is_newline_led_statement` with a `[` branch
+  for the array-literal shape. Discriminator: a newline-led `[`
+  followed by a single-token primary (identifier / number / string
+  / `true` / `false` / `null`) and a top-level `,` provably can't
+  be a continuation index, because indexing accepts a single
+  expression. Other line-led `[` shapes (single-element multi-line
+  indexing, multi-token first elements) are left to fold as before
+  — the conservative bias is "don't break legit code." See the
+  comment block above the function for the per-operator decision
+  log including the operators (`-`, `+`, `(`) deliberately NOT
+  added because no inspection-cheap discriminator exists; the
+  honest fix for those is lexer-level newline significance, a
+  separate decision parked in #528.
+
 ## [0.256.0]
 
 ### Added
