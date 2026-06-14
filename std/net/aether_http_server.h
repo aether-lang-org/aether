@@ -31,6 +31,21 @@ typedef struct {
     char** query_values;
     int query_count;
     int query_parsed;
+    /* Connection-level metadata populated by the dispatcher right after
+     * `http_parse_request_n` from `getpeername(2)` / `getsockname(2)` /
+     * `conn->ssl`. Tracked at the end of the struct so existing C
+     * consumers — `tests/integration/http_external_ptr`'s shim,
+     * downstream embedders that manufacture an HttpRequest in C — stay
+     * binary-compatible if they fail to update. Same ABI promise the
+     * query-cache fields above kept when they were added. Accessors
+     * (`http_request_remote_addr`, `_remote_port`, `_local_addr`,
+     * `_local_port`, `_scheme`, `_is_tls`) all tolerate the
+     * NULL / zero defaults a C consumer leaves behind. */
+    char* remote_addr;
+    int   remote_port;
+    char* local_addr;
+    int   local_port;
+    int   is_tls;
 } HttpRequest;
 
 // HTTP Response
@@ -606,6 +621,47 @@ int         http_get_request_body_read_length(void);
 void        http_release_request_body_read(void);
 
 const char* http_request_query(HttpRequest* req);
+
+// Trusted TCP peer address — the IP `getpeername(2)` reports for the
+// connection that carried this request. Use this (not the
+// `X-Forwarded-For` header) for in-app source-IP allow/deny lists on
+// a directly-exposed listener: clients can set any value they like
+// into the header, but only the kernel's view of the peer reflects
+// reality. Returns the dotted-quad form for IPv4 ("203.0.113.7") and
+// the `inet_ntop` AF_INET6 form for IPv6 ("2001:db8::1") — no
+// brackets, no scope id. Returns "" when unavailable (Unix-domain
+// socket, getpeername failed, or req is NULL). The companion
+// X-Forwarded-For middleware remains the right tool when this server
+// sits behind a trusted reverse proxy.
+const char* http_request_remote_addr(HttpRequest* req);
+// Companion port for `http_request_remote_addr`. Returns 0 when
+// unavailable (same conditions as the address).
+int         http_request_remote_port(HttpRequest* req);
+
+// Server-side socket name — what `getsockname(2)` reports for the
+// accepted fd. Needed when the listener binds 0.0.0.0 and the
+// handler must learn which NIC actually received the request:
+// multi-NIC / multi-tenant per-IP routing, "admin endpoint from
+// internal NIC only". Same string format and unavailability
+// semantics as the remote-* pair.
+const char* http_request_local_addr(HttpRequest* req);
+int         http_request_local_port(HttpRequest* req);
+
+// Transport scheme. `http_request_scheme` is "https" when this
+// connection was TLS-wrapped (ALPN or h2c upgrade transparent —
+// what mattered is whether the bytes were over TLS), else "http".
+// `http_request_is_tls` exposes the same as a 0/1 int for callers
+// that want a bool without the string compare. Drives canonical-
+// URL building, redirect targets, cookie Secure-flag decisions.
+const char* http_request_scheme(HttpRequest* req);
+int         http_request_is_tls(HttpRequest* req);
+
+// HTTP version as the parser captured it on the request line —
+// "HTTP/1.0", "HTTP/1.1", or "HTTP/2.0". h2 connections always
+// surface as "HTTP/2.0" regardless of the inner stream wire form.
+// Returns "" when unset (parse failed before the version slot).
+const char* http_request_http_version(HttpRequest* req);
+
 // Request-header iteration — enumerate every received header (named
 // http_get_header only does a single lookup). Wire order, duplicates
 // preserved, no sort/dedup. index in [0, http_request_header_count);

@@ -115,6 +115,13 @@ const char* http_get_request_body_read(void) { return ""; }
 int http_get_request_body_read_length(void) { return 0; }
 void http_release_request_body_read(void) {}
 const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
+const char* http_request_remote_addr(HttpRequest* r) { (void)r; return ""; }
+int http_request_remote_port(HttpRequest* r) { (void)r; return 0; }
+const char* http_request_local_addr(HttpRequest* r) { (void)r; return ""; }
+int http_request_local_port(HttpRequest* r) { (void)r; return 0; }
+const char* http_request_scheme(HttpRequest* r) { (void)r; return "http"; }
+int http_request_is_tls(HttpRequest* r) { (void)r; return 0; }
+const char* http_request_http_version(HttpRequest* r) { (void)r; return ""; }
 int http_request_header_count(HttpRequest* r) { (void)r; return 0; }
 const char* http_request_header_name(HttpRequest* r, int i) { (void)r; (void)i; return ""; }
 const char* http_request_header_value(HttpRequest* r, int i) { (void)r; (void)i; return ""; }
@@ -1538,6 +1545,9 @@ void http_request_free(HttpRequest* req) {
     free(req->query_keys);
     free(req->query_values);
 
+    free(req->remote_addr);
+    free(req->local_addr);
+
     free(req);
 }
 
@@ -2527,6 +2537,68 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
      * on the next iteration. */
     conn->read_pos += request_total;
     if (!req) return 0;
+
+    /* Populate the connection-level metadata that handlers learn from
+     * the kernel rather than from the request bytes. Cheap (two
+     * cache-warm syscalls + two inet_ntop's) so it runs per request;
+     * failures (Unix-domain socket, EBADF on a just-closed fd) leave
+     * each field at its zero default and the accessors return ""/0.
+     *
+     * - remote_addr/remote_port (from getpeername): the trusted peer.
+     *   The X-Forwarded-For header is client-supplied and a wrong
+     *   basis for an allow/deny decision on a direct listener; this
+     *   is the kernel's view of the socket, which is unspoofable.
+     * - local_addr/local_port (from getsockname): which NIC this
+     *   accepted fd is bound to. Needed when the listener binds
+     *   0.0.0.0 and the handler wants to gate behaviour on which
+     *   interface received the request (admin-on-loopback, multi-
+     *   tenant per-IP routing).
+     * - is_tls: the connection wrapper, not anything in the wire
+     *   bytes. Drives scheme/redirect/cookie-Secure decisions.
+     *
+     * IPv4 + IPv6 supported via sockaddr_storage. */
+    {
+        struct sockaddr_storage ss;
+        socklen_t sslen = sizeof(ss);
+        if (getpeername(conn->fd, (struct sockaddr*)&ss, &sslen) == 0) {
+            char buf[INET6_ADDRSTRLEN];
+            const char* src = NULL;
+            int port = 0;
+            if (ss.ss_family == AF_INET) {
+                struct sockaddr_in* sa = (struct sockaddr_in*)&ss;
+                src = inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf));
+                port = ntohs(sa->sin_port);
+            } else if (ss.ss_family == AF_INET6) {
+                struct sockaddr_in6* sa = (struct sockaddr_in6*)&ss;
+                src = inet_ntop(AF_INET6, &sa->sin6_addr, buf, sizeof(buf));
+                port = ntohs(sa->sin6_port);
+            }
+            if (src) {
+                req->remote_addr = strdup(src);
+                req->remote_port = port;
+            }
+        }
+        sslen = sizeof(ss);
+        if (getsockname(conn->fd, (struct sockaddr*)&ss, &sslen) == 0) {
+            char buf[INET6_ADDRSTRLEN];
+            const char* src = NULL;
+            int port = 0;
+            if (ss.ss_family == AF_INET) {
+                struct sockaddr_in* sa = (struct sockaddr_in*)&ss;
+                src = inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf));
+                port = ntohs(sa->sin_port);
+            } else if (ss.ss_family == AF_INET6) {
+                struct sockaddr_in6* sa = (struct sockaddr_in6*)&ss;
+                src = inet_ntop(AF_INET6, &sa->sin6_addr, buf, sizeof(buf));
+                port = ntohs(sa->sin6_port);
+            }
+            if (src) {
+                req->local_addr = strdup(src);
+                req->local_port = port;
+            }
+        }
+        req->is_tls = (conn->ssl != NULL) ? 1 : 0;
+    }
 
     // Create response
     HttpServerResponse* res = http_response_create();
@@ -4198,6 +4270,68 @@ int http_request_body_read_raw(HttpRequest* req, int offset, int max) {
 
 const char* http_request_query(HttpRequest* req) {
     return (req && req->query_string) ? req->query_string : "";
+}
+
+const char* http_request_remote_addr(HttpRequest* req) {
+    /* Trusted TCP peer address. Populated by the dispatcher after
+     * `http_parse_request_n` via `getpeername(2)` + `inet_ntop`;
+     * stays NULL when the connection has no IP peer (Unix-domain
+     * socket) or when the kernel call failed (the empty string
+     * keeps the FFI shape stable for Aether callers).
+     *
+     * Intentionally separate from the X-Forwarded-For header path:
+     * the header is client-supplied (use the
+     * `std.http.middleware.use_real_ip` middleware behind a trusted
+     * proxy that overwrites it); this accessor is what the kernel
+     * actually sees on the socket, which is the only basis for a
+     * directly-exposed listener's source-IP allow/deny decision. */
+    return (req && req->remote_addr) ? req->remote_addr : "";
+}
+
+int http_request_remote_port(HttpRequest* req) {
+    return req ? req->remote_port : 0;
+}
+
+const char* http_request_local_addr(HttpRequest* req) {
+    /* Companion of `http_request_remote_addr` populated from
+     * `getsockname(2)`. The listener may have been bound to the
+     * wildcard 0.0.0.0 (or `::`) — in that case the accepted fd
+     * still carries a concrete local address for each connection,
+     * which is the only way to learn which NIC fielded the
+     * request. */
+    return (req && req->local_addr) ? req->local_addr : "";
+}
+
+int http_request_local_port(HttpRequest* req) {
+    return req ? req->local_port : 0;
+}
+
+const char* http_request_scheme(HttpRequest* req) {
+    /* "https" when the bytes arrived over a TLS-wrapped connection,
+     * "http" otherwise. Source of truth is `conn->ssl != NULL`
+     * captured at parse time; cleaner than re-deriving from a
+     * Forwarded / X-Forwarded-Proto header (those describe the
+     * edge proxy's view, not what THIS server saw). When the
+     * server sits behind a TLS-terminating proxy, the
+     * client-facing scheme can still be recovered from the
+     * X-Forwarded-Proto header; this accessor is for the local
+     * truth used by canonical URL building, redirect targets,
+     * and `Set-Cookie ... Secure` decisions. */
+    return (req && req->is_tls) ? "https" : "http";
+}
+
+int http_request_is_tls(HttpRequest* req) {
+    return (req && req->is_tls) ? 1 : 0;
+}
+
+const char* http_request_http_version(HttpRequest* req) {
+    /* The version slot the request-line / pseudo-header parser
+     * already captured ("HTTP/1.0" / "HTTP/1.1" / "HTTP/2.0").
+     * Surfaces a field that was always there but unreachable
+     * from Aether. "" when the parser hasn't populated it yet
+     * (defensive — every request that reaches a handler has
+     * passed parsing, so this is unlikely in practice). */
+    return (req && req->http_version) ? req->http_version : "";
 }
 
 // Request-header iteration (vcr_request_header_iteration_wish.md). Unlike
