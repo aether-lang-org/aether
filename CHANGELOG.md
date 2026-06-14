@@ -14,7 +14,7 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
-## [current]
+## [0.256.0]
 
 ### Added
 
