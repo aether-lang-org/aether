@@ -1210,16 +1210,56 @@ ASTNode* parse_primary_expression(Parser* parser) {
  * return 1 when the post-operator tokens strongly signal a fresh
  * statement.
  *
- * Currently handled — TOKEN_MULTIPLY:
+ * ## Currently handled
+ *
+ * TOKEN_MULTIPLY:
  *   `*StructName name [= ...]`  (typed-pointer local declaration)
  *   `*ident = ...`              (deref-store via a named ptr)
+ *   These shapes are unambiguous: an expression context never has
+ *   `* IDENT IDENT` or `* IDENT =`, so detecting them never breaks
+ *   a legitimate multi-line `*`-led continuation.
  *
- * Theoretical hazards documented in #528 but not (yet) detected:
- *   `-x = ...` / `+x = ...`     (unary-prefixed expression statement)
- *   `(expr) = ...`              (parenthesised expression statement)
- *   `[a, b, c]`                 (array-literal statement)
- * These are vanishingly rare in practice; add branches if/when they
- * actually bite. */
+ * TOKEN_LEFT_BRACKET:
+ *   `[ <literal-or-ident> ,` (array-literal expression statement,
+ *   common-shape detection only — multi-token first elements like
+ *   `[a+b, c]` aren't detected to keep lookahead bounded). The `,`
+ *   after the first element is the discriminator: indexing accepts a
+ *   single expression, so a `[` line-led by a comma-bearing bracket
+ *   group provably can't be a continuation index. The first-element
+ *   token set covers TOKEN_IDENTIFIER, TOKEN_NUMBER, string literals
+ *   (TOKEN_STRING_LITERAL / TOKEN_INTERP_STRING), and TRUE / FALSE /
+ *   NULL keywords — the primaries that fit in one lexeme.
+ *
+ * ## Considered and intentionally NOT added (this round)
+ *
+ * The remaining hazards documented in #528 do not have an
+ * inspection-cheap shape that distinguishes statement from
+ * continuation. Adding ambiguous guards would silently break
+ * legitimate multi-line expressions, which is worse than the
+ * (vanishingly rare) ambiguity the issue called out. The honest
+ * fix for these is lexer-level newline significance (ASI-style),
+ * which is a separate decision recorded in #528.
+ *
+ * TOKEN_MINUS / TOKEN_PLUS:
+ *   The hazard is `-foo()` or `+foo()` as an expression statement
+ *   after a previous line that ends in a complete expression. But
+ *   `prev - foo()` and `prev + foo()` — multi-line arithmetic — are
+ *   the same shape lexically. There is no post-operator token
+ *   pattern that proves "this is a fresh statement, not a
+ *   continuation." Detection requires lexer ASI.
+ *
+ * TOKEN_LEFT_PAREN:
+ *   The hazard is `(handler)(args)` or similar paren-led expression
+ *   statement after a previous-line expression. But `prev(arg)`
+ *   call-continuation across newlines is the same shape. No safe
+ *   discriminator without ASI. Also: Aether's tuple-destructure
+ *   uses bare `a, b = ...` not `(a, b) = ...`, so the parenthesised-
+ *   LHS hazard the issue mentions doesn't actually fire in current
+ *   Aether.
+ *
+ * If a real user-facing miscompile in any of these surfaces, the
+ * answer is to revisit the lexer-ASI decision in #528, not to keep
+ * extending this helper with progressively more dangerous guards. */
 static int is_newline_led_statement(Parser* parser, Token* op) {
     if (!op) return 0;
 
@@ -1240,6 +1280,32 @@ static int is_newline_led_statement(Parser* parser, Token* op) {
             /* `*ident = ...` deref-store. `*` + IDENT + `=`. */
             if (a1 && a1->type == TOKEN_IDENTIFIER &&
                 a2 && a2->type == TOKEN_ASSIGN) {
+                return 1;
+            }
+            return 0;
+        case TOKEN_LEFT_BRACKET:
+            /* `[ LITERAL , ...` or `[ IDENT , ...` — array-literal
+             * statement. Indexing takes one expression, so a `[`-led
+             * group that contains a comma at depth 0 can't be a
+             * continuation index. We approximate with a bounded
+             * lookahead that catches the common forms (the first
+             * element is a single token); multi-token first-element
+             * cases like `[a+b, c]` fall through to the old behaviour.
+             *
+             * Discriminating-token set for the first array element:
+             * identifier, int, float, char, or string literal. Other
+             * primaries (parens, nested `[`, prefix `-`) need more
+             * lookahead than peek_ahead can give cheaply, so they're
+             * left unflagged — the conservative bias is "don't break
+             * legit multi-line indexing." */
+            if (a1 && (a1->type == TOKEN_IDENTIFIER ||
+                       a1->type == TOKEN_NUMBER ||
+                       a1->type == TOKEN_STRING_LITERAL ||
+                       a1->type == TOKEN_INTERP_STRING ||
+                       a1->type == TOKEN_TRUE ||
+                       a1->type == TOKEN_FALSE ||
+                       a1->type == TOKEN_NULL) &&
+                a2 && a2->type == TOKEN_COMMA) {
                 return 1;
             }
             return 0;
