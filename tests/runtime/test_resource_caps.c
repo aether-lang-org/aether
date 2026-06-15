@@ -9,6 +9,7 @@
 #include "../../runtime/aether_resource_caps.h"
 #include "../../std/bytes/aether_bytes.h"
 #include "../../std/os/aether_os.h"
+#include "../../std/fs/aether_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,3 +172,26 @@ TEST_CATEGORY(caps_os_getenv_denied_past_cap, TEST_CATEGORY_STDLIB) {
     unsetenv("AETHER_CAP_TEST_VAR");
 }
 #endif
+/* #462 caps-audit, std.fs directory listing: dir_list_raw routes the
+ * DirList struct, the doubling entries array, and every strdup'd entry
+ * name through aether_caps_malloc/realloc; dir_list_free releases them
+ * via the new `capacity` field (array) and strlen-at-free (names). The
+ * correctness property — distinct from a leak, since a size-mismatched
+ * free corrupts the accounting not the heap — is that the counter
+ * returns exactly to baseline after list + free. List the current
+ * directory (which always has entries), confirm the counter grew, then
+ * free and confirm it lands back on baseline with no drift. */
+TEST_CATEGORY(caps_fs_dir_list_accounting_balances, TEST_CATEGORY_STDLIB) {
+    caps_reset();
+    uint64_t base = aether_caps_used_bytes();
+    for (int rep = 0; rep < 4; rep++) {
+        DirList* dl = dir_list_raw(".");
+        ASSERT_TRUE(dl != NULL);
+        /* The source tree's CWD always has entries → counter grew. */
+        ASSERT_TRUE(dir_list_count(dl) > 0);
+        ASSERT_TRUE(aether_caps_used_bytes() > base);
+        dir_list_free(dl);
+        /* Struct + array + every entry name freed with exact sizes. */
+        ASSERT_EQ(base, aether_caps_used_bytes());
+    }
+}

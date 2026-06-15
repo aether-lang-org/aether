@@ -1034,7 +1034,11 @@ static long long aether_fs_copy_file_range_syscall(int in_fd, int out_fd, size_t
  * caller can surface progress in the structured-error tuple. */
 static long long aether_fs_copy_readwrite(int in_fd, int out_fd, long long* out_partial) {
     enum { BUF_BYTES = 8 * 1024 * 1024 };  // 8 MiB
-    char* buf = (char*)malloc((size_t)BUF_BYTES);
+    /* #462: the copy scratch is a fixed 8 MiB — gate it so a sandboxed
+     * plugin spamming fs.copy can't pin large buffers past the cap.
+     * Internal/transient: every exit frees through the cap (constant
+     * size), so accounting is exactly balanced. */
+    char* buf = (char*)aether_caps_malloc((size_t)BUF_BYTES);
     if (!buf) {
         if (out_partial) *out_partial = 0;
         errno = ENOMEM;
@@ -1046,7 +1050,7 @@ static long long aether_fs_copy_readwrite(int in_fd, int out_fd, long long* out_
         do { r = read(in_fd, buf, (size_t)BUF_BYTES); } while (r < 0 && errno == EINTR);
         if (r < 0) {
             int saved = errno;
-            free(buf);
+            aether_caps_free(buf, (size_t)BUF_BYTES);
             if (out_partial) *out_partial = total;
             errno = saved;
             return -1;
@@ -1059,7 +1063,7 @@ static long long aether_fs_copy_readwrite(int in_fd, int out_fd, long long* out_
             do { w = write(out_fd, p, (size_t)left); } while (w < 0 && errno == EINTR);
             if (w < 0) {
                 int saved = errno;
-                free(buf);
+                aether_caps_free(buf, (size_t)BUF_BYTES);
                 if (out_partial) *out_partial = total;
                 errno = saved;
                 return -1;
@@ -1069,7 +1073,7 @@ static long long aether_fs_copy_readwrite(int in_fd, int out_fd, long long* out_
             total += w;
         }
     }
-    free(buf);
+    aether_caps_free(buf, (size_t)BUF_BYTES);
     if (out_partial) *out_partial = total;
     return total;
 }
@@ -1690,14 +1694,29 @@ int path_is_absolute(const char* path) {
     return 0;
 }
 
+/* #462: strdup through the capability allocator. The matching free in
+ * dir_list_free recomputes strlen(name)+1, which equals this size, so
+ * the accounting balances exactly. NULL-safe. */
+static char* fs_caps_strdup(const char* s) {
+    if (!s) return NULL;
+    size_t n = strlen(s) + 1;
+    char* p = (char*)aether_caps_malloc(n);
+    if (p) memcpy(p, s, n);
+    return p;
+}
+
 // Directory listing
 DirList* dir_list_raw(const char* path) {
     if (!path) return NULL;
 
-    DirList* list = (DirList*)malloc(sizeof(DirList));
+    /* #462: a directory with many entries is an unbounded surface — a
+     * sandboxed plugin can list a huge tree. Gate the DirList struct,
+     * the entries array, and every entry name through the cap. */
+    DirList* list = (DirList*)aether_caps_malloc(sizeof(DirList));
     if (!list) return NULL;
     list->entries = NULL;
     list->count = 0;
+    list->capacity = 0;
 
     #ifdef _WIN32
     WIN32_FIND_DATAA find_data;
@@ -1718,12 +1737,15 @@ DirList* dir_list_raw(const char* path) {
             strcmp(find_data.cFileName, "..") != 0) {
             if (list->count >= cap) {
                 int new_cap = cap ? cap * 2 : 16;
-                char** new_entries = (char**)realloc(list->entries, new_cap * sizeof(char*));
+                char** new_entries = (char**)aether_caps_realloc(
+                    list->entries, (size_t)cap * sizeof(char*),
+                    (size_t)new_cap * sizeof(char*));
                 if (!new_entries) break;
                 list->entries = new_entries;
                 cap = new_cap;
+                list->capacity = new_cap;
             }
-            char* name_copy = strdup(find_data.cFileName);
+            char* name_copy = fs_caps_strdup(find_data.cFileName);
             if (!name_copy) break;
             list->entries[list->count++] = name_copy;
         }
@@ -1740,12 +1762,15 @@ DirList* dir_list_raw(const char* path) {
         if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
             if (list->count >= cap) {
                 int new_cap = cap ? cap * 2 : 16;
-                char** new_entries = (char**)realloc(list->entries, new_cap * sizeof(char*));
+                char** new_entries = (char**)aether_caps_realloc(
+                    list->entries, (size_t)cap * sizeof(char*),
+                    (size_t)new_cap * sizeof(char*));
                 if (!new_entries) break;
                 list->entries = new_entries;
                 cap = new_cap;
+                list->capacity = new_cap;
             }
-            char* name_copy = strdup(entry->d_name);
+            char* name_copy = fs_caps_strdup(entry->d_name);
             if (!name_copy) break;
             list->entries[list->count++] = name_copy;
         }
@@ -1769,11 +1794,15 @@ const char* dir_list_get(DirList* list, int index) {
 void dir_list_free(DirList* list) {
     if (!list) return;
 
+    /* #462: free through the cap. Each entry name was minted by
+     * fs_caps_strdup (strlen+1 bytes); the array is `capacity` slots. */
     for (int i = 0; i < list->count; i++) {
-        free(list->entries[i]);
+        char* e = list->entries[i];
+        if (e) aether_caps_free(e, strlen(e) + 1);
     }
-    free(list->entries);
-    free(list);
+    if (list->entries)
+        aether_caps_free(list->entries, (size_t)list->capacity * sizeof(char*));
+    aether_caps_free(list, sizeof(DirList));
 }
 
 // --- Glob: pattern matching for file discovery ---
@@ -1788,10 +1817,15 @@ void dir_list_free(DirList* list) {
 
 // Helper: add a path to a DirList
 static void dirlist_add(DirList* list, const char* path) {
-    char** new_entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
+    /* #462: grow-by-one through the cap. capacity tracks the slot count
+     * so dir_list_free releases the array with its exact size. */
+    char** new_entries = (char**)aether_caps_realloc(
+        list->entries, (size_t)list->capacity * sizeof(char*),
+        (size_t)(list->count + 1) * sizeof(char*));
     if (!new_entries) return;
     list->entries = new_entries;
-    list->entries[list->count] = strdup(path);
+    list->capacity = list->count + 1;
+    list->entries[list->count] = fs_caps_strdup(path);
     list->count++;
 }
 
@@ -1914,10 +1948,11 @@ static void walk_recursive(const char* dir, const char* suffix_pattern, DirList*
 DirList* fs_glob_raw(const char* pattern) {
     if (!pattern) return NULL;
 
-    DirList* result = (DirList*)malloc(sizeof(DirList));
+    DirList* result = (DirList*)aether_caps_malloc(sizeof(DirList)); /* #462 */
     if (!result) return NULL;
     result->entries = NULL;
     result->count = 0;
+    result->capacity = 0;
 
 #ifdef _WIN32
     // Check for ** (recursive glob)
@@ -2022,10 +2057,11 @@ extern const char* aether_string_data(const void*);
 DirList* fs_glob_multi_raw(void* pattern_list) {
     if (!pattern_list) return NULL;
 
-    DirList* result = (DirList*)malloc(sizeof(DirList));
+    DirList* result = (DirList*)aether_caps_malloc(sizeof(DirList)); /* #462 */
     if (!result) return NULL;
     result->entries = NULL;
     result->count = 0;
+    result->capacity = 0;
 
     int n = list_size(pattern_list);
     for (int i = 0; i < n; i++) {
@@ -2076,7 +2112,11 @@ char* path_clean(const char* path) {
 
     /* Segment stack — at most one entry per byte of input. */
     struct seg { size_t start; size_t len; };
-    struct seg* stk = (struct seg*)malloc(sizeof(struct seg) * (in_len + 1));
+    /* #462: proportional to the (plugin-supplied) path length — gate it;
+     * internal/transient, freed through the cap with this same size on
+     * every exit. */
+    size_t stk_bytes = sizeof(struct seg) * (in_len + 1);
+    struct seg* stk = (struct seg*)aether_caps_malloc(stk_bytes);
     if (!stk) return NULL;
     size_t sp = 0;
     /* Count of leading `..` we couldn't resolve (relative paths only). */
@@ -2123,12 +2163,12 @@ char* path_clean(const char* path) {
     }
     /* Empty result → "/" if rooted else "." */
     if (sp == 0) {
-        free(stk);
+        aether_caps_free(stk, stk_bytes);
         return strdup(rooted ? "/" : ".");
     }
 
     char* out = (char*)malloc(total + 1);
-    if (!out) { free(stk); return NULL; }
+    if (!out) { aether_caps_free(stk, stk_bytes); return NULL; }
     size_t o = 0;
     if (rooted) out[o++] = '/';
     for (size_t k = 0; k < sp; k++) {
@@ -2137,7 +2177,7 @@ char* path_clean(const char* path) {
         o += stk[k].len;
     }
     out[o] = '\0';
-    free(stk);
+    aether_caps_free(stk, stk_bytes);
     return out;
 }
 
