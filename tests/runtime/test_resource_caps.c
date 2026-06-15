@@ -8,6 +8,7 @@
 #include "test_harness.h"
 #include "../../runtime/aether_resource_caps.h"
 #include "../../std/bytes/aether_bytes.h"
+#include "../../std/os/aether_os.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -134,3 +135,39 @@ TEST_CATEGORY(caps_bytes_accounting_balances, TEST_CATEGORY_STDLIB) {
         ASSERT_EQ(base, aether_caps_used_bytes());
     }
 }
+
+/* #462 caps-audit, std.os: os_getenv now allocates its returned value
+ * through aether_caps_malloc, so a sandbox memory cap below the value
+ * length refuses the read (a plugin can't exfiltrate an arbitrarily
+ * large environment value past the limit). This exercises the exact
+ * POSIX path converted in this change: uncapped it returns the value;
+ * capped below the value size it returns NULL with the counter
+ * unchanged. (os_getenv's POSIX body is the converted site; setenv is
+ * POSIX, so the test is POSIX-guarded.) */
+#ifndef _WIN32
+TEST_CATEGORY(caps_os_getenv_denied_past_cap, TEST_CATEGORY_STDLIB) {
+    caps_reset();
+    /* 64-char value, comfortably larger than the tiny cap below. */
+    setenv("AETHER_CAP_TEST_VAR",
+           "0123456789012345678901234567890123456789012345678901234567890123", 1);
+
+    /* Uncapped: the value is returned (and is cap-allocated). The
+     * caller-owned contract is libc free / fail-safe upward drift,
+     * exactly as in production. */
+    char* ok = os_getenv("AETHER_CAP_TEST_VAR");
+    ASSERT_TRUE(ok != NULL);
+    free(ok);
+
+    /* Cap below the value length: the os_getenv allocation is refused. */
+    caps_reset();
+    uint64_t base = aether_caps_used_bytes();
+    aether_caps_set_memory_cap(8);
+    char* denied = os_getenv("AETHER_CAP_TEST_VAR");
+    ASSERT_TRUE(denied == NULL);
+    /* Refusal must not perturb the counter. */
+    ASSERT_EQ(base, aether_caps_used_bytes());
+
+    aether_caps_set_memory_cap(0);
+    unsetenv("AETHER_CAP_TEST_VAR");
+}
+#endif

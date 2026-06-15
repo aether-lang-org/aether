@@ -1,6 +1,7 @@
 #include "aether_os.h"
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/aether_sandbox.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 
 /* Heap-empty sentinel for the position-0 slot on error returns
@@ -183,7 +184,15 @@ char* os_exec_raw(const char* cmd) {
 
     size_t capacity = 1024;
     size_t len = 0;
-    char* result = (char*)malloc(capacity);
+    /* #462: gate the command-output buffer through the capability
+     * allocator so a sandboxed plugin can't inflate it without bound.
+     * Caller-owned return — the success path hands `result` to the
+     * Aether heap-string tracker, which frees it with libc free; that
+     * leaves the cap counter drifted up by `capacity` (fail-safe — it
+     * never under-counts), the same documented contract as
+     * io_read_file_raw / os_getenv. Error paths below free through the
+     * cap so the counter stays balanced when nothing escapes. */
+    char* result = (char*)aether_caps_malloc(capacity);
     if (!result) {
 #ifdef _WIN32
         _pclose(pipe);
@@ -202,9 +211,9 @@ char* os_exec_raw(const char* cmd) {
         if (len + chunk + 1 > capacity) {
             size_t new_capacity = capacity;
             while (new_capacity < len + chunk + 1) new_capacity *= 2;
-            char* new_result = (char*)realloc(result, new_capacity);
+            char* new_result = (char*)aether_caps_realloc(result, capacity, new_capacity);
             if (!new_result) {
-                free(result);
+                aether_caps_free(result, capacity);
 #ifdef _WIN32
                 _pclose(pipe);
 #else
@@ -234,7 +243,13 @@ char* os_getenv(const char* name) {
     if (!aether_sandbox_check("env", name)) return NULL;
     char* val = getenv(name);
     if (!val) return NULL;
-    return strdup(val);
+    /* #462: gate through the cap (a plugin can't read an unbounded
+     * environment value past the limit). Caller-owned return freed by
+     * libc free — fail-safe upward drift, identical to io_getenv. */
+    size_t n = strlen(val);
+    char* out = (char*)aether_caps_malloc(n + 1);
+    if (out) memcpy(out, val, n + 1);
+    return out;
 }
 
 /* Format the current UTC time as an ISO-8601 timestamp string:
@@ -606,7 +621,13 @@ int os_execv(const char* prog, void* argv_list) {
     if (n < 0) return -1;
     if ((size_t)n > (SIZE_MAX / sizeof(char*)) - 2) return -1;
 
-    char** argv = (char**)malloc(sizeof(char*) * (size_t)(n + 2));
+    /* #462: internal/transient argv scratch — alloc and free both live
+     * in this function (or vanish into a successful execvp). Gate it and
+     * free through the cap with the exact byte count so accounting is
+     * balanced; the execvp-success path never returns, so its bytes are
+     * reclaimed by the process-image replacement, not a leak. */
+    size_t argv_bytes = sizeof(char*) * (size_t)(n + 2);
+    char** argv = (char**)aether_caps_malloc(argv_bytes);
     if (!argv) return -1;
 
     // Canonical POSIX behaviour: argv[0] is the program name. If the
@@ -623,7 +644,7 @@ int os_execv(const char* prog, void* argv_list) {
                 // Bail early rather than pass NULL into execvp's
                 // variadic-argv contract, which has undefined behaviour
                 // on many implementations.
-                free(argv);
+                aether_caps_free(argv, argv_bytes);
                 return -1;
             }
             // aether_string_data unwraps a magic AetherString* to its
@@ -649,7 +670,7 @@ int os_execv(const char* prog, void* argv_list) {
     // want diagnostic detail should read it themselves after the call
     // via a dedicated wrapper (not exposed yet).
     execvp(prog, argv);
-    free(argv);
+    aether_caps_free(argv, argv_bytes);
     return -1;
 #endif
 }
@@ -839,10 +860,14 @@ int os_chdir_raw(const char* path) {
 char* os_getcwd_raw(void) {
     size_t cap = 4096;
     for (;;) {
-        char* buf = (char*)malloc(cap);
+        /* #462: gate the cwd buffer (a deep path is plugin-influenced).
+         * Caller-owned return on success (libc free, fail-safe drift);
+         * the ERANGE retry frees through the cap before doubling, so the
+         * free size matches the live `cap`. */
+        char* buf = (char*)aether_caps_malloc(cap);
         if (!buf) return NULL;
         if (getcwd(buf, cap)) return buf;
-        free(buf);
+        aether_caps_free(buf, cap);
         if (errno != ERANGE) return NULL;
         if (cap > (size_t)1 << 20) return NULL; /* 1 MiB sanity ceiling */
         cap *= 2;
@@ -963,7 +988,12 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
     // result buffer starts at 4 KB with doubling growth.
     size_t cap = 4096;
     size_t len = 0;
-    char* result = (char*)malloc(cap);
+    /* #462: bound the captured child stdout — the prime DoS surface
+     * (a sandboxed plugin can spawn a process that floods stdout).
+     * Caller-owned return freed by libc free (fail-safe upward drift,
+     * the io_read_file_raw contract); error paths free through the cap
+     * with the live size so the counter stays balanced. */
+    char* result = (char*)aether_caps_malloc(cap);
     if (!result) {
         close(pipefd[0]);
         // Reap the child so we don't leave a zombie
@@ -976,7 +1006,7 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
         ssize_t n = read(pipefd[0], buf, sizeof(buf));
         if (n < 0) {
             if (errno == EINTR) continue;
-            free(result);
+            aether_caps_free(result, cap);
             close(pipefd[0]);
             int st = 0;
             waitpid(pid, &st, 0);
@@ -984,10 +1014,12 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
         }
         if (n == 0) break;
         if (len + (size_t)n + 1 > cap) {
+            size_t old_cap = cap;
             while (len + (size_t)n + 1 > cap) cap *= 2;
-            char* bigger = (char*)realloc(result, cap);
+            char* bigger = (char*)aether_caps_realloc(result, old_cap, cap);
             if (!bigger) {
-                free(result);
+                /* realloc failed: `result` still holds old_cap bytes. */
+                aether_caps_free(result, old_cap);
                 close(pipefd[0]);
                 int st = 0;
                 waitpid(pid, &st, 0);
@@ -1069,7 +1101,10 @@ _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_
 
     size_t cap = 4096;
     size_t len = 0;
-    char* result = (char*)malloc(cap);
+    /* #462: cap the captured child stdout (see os_run_capture_raw).
+     * `result` escapes into out._0 (@heap tuple slot, caller frees via
+     * libc — fail-safe drift); error paths free through the cap. */
+    char* result = (char*)aether_caps_malloc(cap);
     if (!result) {
         close(pipefd[0]);
         int st = 0;
@@ -1082,7 +1117,7 @@ _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_
         ssize_t n = read(pipefd[0], buf, sizeof(buf));
         if (n < 0) {
             if (errno == EINTR) continue;
-            free(result);
+            aether_caps_free(result, cap);
             close(pipefd[0]);
             int st = 0;
             waitpid(pid, &st, 0);
@@ -1091,10 +1126,11 @@ _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_
         }
         if (n == 0) break;
         if (len + (size_t)n + 1 > cap) {
+            size_t old_cap = cap;
             while (len + (size_t)n + 1 > cap) cap *= 2;
-            char* bigger = (char*)realloc(result, cap);
+            char* bigger = (char*)aether_caps_realloc(result, old_cap, cap);
             if (!bigger) {
-                free(result);
+                aether_caps_free(result, old_cap);
                 close(pipefd[0]);
                 int st = 0;
                 waitpid(pid, &st, 0);
@@ -1305,7 +1341,10 @@ _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* 
 
     size_t cap = 4096;
     size_t len = 0;
-    char* result = (char*)malloc(cap);
+    /* #462: cap the drained IPC-channel payload (see os_run_capture_raw).
+     * `result` escapes into out._0 (@heap, caller frees via libc —
+     * fail-safe drift); error paths free through the cap. */
+    char* result = (char*)aether_caps_malloc(cap);
     if (!result) {
         close(read_fd);
         int st = 0;
@@ -1318,7 +1357,7 @@ _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* 
         ssize_t n = read(read_fd, buf, sizeof(buf));
         if (n < 0) {
             if (errno == EINTR) continue;
-            free(result);
+            aether_caps_free(result, cap);
             close(read_fd);
             int st = 0;
             waitpid((pid_t)pid, &st, 0);
@@ -1327,10 +1366,11 @@ _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* 
         }
         if (n == 0) break;
         if (len + (size_t)n + 1 > cap) {
+            size_t old_cap = cap;
             while (len + (size_t)n + 1 > cap) cap *= 2;
-            char* bigger = (char*)realloc(result, cap);
+            char* bigger = (char*)aether_caps_realloc(result, old_cap, cap);
             if (!bigger) {
-                free(result);
+                aether_caps_free(result, old_cap);
                 close(read_fd);
                 int st = 0;
                 waitpid((pid_t)pid, &st, 0);
@@ -1614,7 +1654,10 @@ static int aether_os_buf_append(char** buf, size_t* len, size_t* cap,
     if (*len + n + 1 > *cap) {
         size_t nc = *cap ? *cap : 4096;
         while (*len + n + 1 > nc) nc *= 2;
-        char* bigger = (char*)realloc(*buf, nc);
+        /* #462: cap the captured stream (caller os_run_full_raw bounds
+         * stdout/stderr through this). realloc(NULL, ...) on the first
+         * grow behaves as malloc; the old size is *cap (0 initially). */
+        char* bigger = (char*)aether_caps_realloc(*buf, *cap, nc);
         if (!bigger) return 0;
         *buf = bigger;
         *cap = nc;
@@ -1772,7 +1815,9 @@ _tuple_string_string_int_string os_run_full_raw(const char* prog, void* argv_lis
     int st = 0;
     while (waitpid(pid, &st, 0) < 0) {
         if (errno != EINTR) {
-            free(obuf); free(ebuf);
+            /* #462: free the capped capture buffers with their live
+             * sizes (caps_free(NULL,0) is a no-op when never grown). */
+            aether_caps_free(obuf, ocap); aether_caps_free(ebuf, ecap);
             out._2 = -1;
             out._3 = "waitpid failed";
             return out;
@@ -1780,7 +1825,7 @@ _tuple_string_string_int_string os_run_full_raw(const char* prog, void* argv_lis
     }
 
     if (oom) {
-        free(obuf); free(ebuf);
+        aether_caps_free(obuf, ocap); aether_caps_free(ebuf, ecap);
         out._2 = -1;
         out._3 = "alloc failed";
         return out;
