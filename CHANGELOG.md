@@ -14,6 +14,29 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Changed
+
+- **stdlib caps-audit — `std.os` POSIX allocation sites** (#462). Routed the
+  unbounded, plugin-influenced heap allocations in `std/os/aether_os.c`
+  through the capability allocator (`aether_caps_malloc/realloc/free`) so a
+  sandboxed plugin can't inflate them past a memory cap: the command-output
+  capture buffers (`os_exec_raw`, `os_run_capture_raw`,
+  `os_run_capture_status_raw`, `os_run_pipe_drain_and_wait_raw`,
+  `os_run_full_raw`'s stdout/stderr accumulator), the `os_getcwd_raw` path
+  buffer, the `os_execv` argv scratch, and the `os_getenv` value. Caller-owned
+  returns keep the documented libc-free / fail-safe-upward-drift contract
+  (the `io_read_file_raw` / `io_getenv` model); internal/transient buffers
+  free through the cap with their exact live size (realloc-failure paths free
+  the *old* size). New `caps_os_getenv_denied_past_cap` unit test asserts an
+  env read is refused when the cap is below the value size, with the counter
+  unperturbed. Bounded sites (the 1-byte empty-heap sentinel, the
+  pointer-only argv/envp arrays) and the Windows-specific helpers
+  (`utf8_to_wide`/`wide_to_utf8`/`WBuf`/`win_launch`/drain-thread) are left as
+  tracked follow-ups; `std/fs/aether_fs.c` remains. Verified: unit 228/228
+  (ASan-clean), `leaks(1)` clean on the os example, full `.ae` regression 0
+  failures.
 ## [0.259.0]
 
 ### Changed
