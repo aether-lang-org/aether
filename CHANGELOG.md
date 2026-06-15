@@ -14,6 +14,29 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Changed
+
+- **stdlib caps-audit — `std.fs` directory listing, copy buffer, and
+  path-clean stack** (#462). Routed the remaining *unbounded / large*
+  POSIX allocations in `std/fs/aether_fs.c` through the capability
+  allocator (the marquee file-read paths — `file_read_all_raw`,
+  `fs_read_binary_raw`, `fs_pread_raw` — were already converted). Now
+  capped: the directory listing (`dir_list_raw`/`dirlist_add`'s entries
+  array + every strdup'd entry name + the `DirList` struct — a huge
+  directory is an unbounded surface), the 8 MiB `fs.copy` read/write
+  scratch buffer, and `path_clean`'s segment stack. A new `capacity`
+  field on `DirList` lets `dir_list_free` release the entries array with
+  its exact byte size; entry names free via `strlen`-at-free. Realloc
+  growth threads the old size; realloc-failure paths free the old size.
+  New `caps_fs_dir_list_accounting_balances` unit test asserts the cap
+  counter returns exactly to baseline after list+free (no drift). The
+  bounded caller-owned path strings (`path_join`/`dirname`/`basename`/
+  `extension`/`rel`, `readlink`) and the Windows-only UTF-16 conversion
+  buffers remain tracked #462 follow-ups. Verified: unit 228/228
+  (ASan-clean), full `.ae` regression 0 failures.
+
 ## [0.258.0]
 
 ### Parser

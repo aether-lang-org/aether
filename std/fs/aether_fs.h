@@ -202,6 +202,11 @@ const char* fs_fsync_raw(File* file);
 typedef struct {
     char** entries;
     int count;
+    /* #462: allocated slot count of `entries` (>= count). Tracked so
+     * the capability allocator can free the array with its exact byte
+     * size; the per-entry strdup'd names are freed via strlen at
+     * dir_list_free time. */
+    int capacity;
 } DirList;
 
 DirList* dir_list_raw(const char* path);
