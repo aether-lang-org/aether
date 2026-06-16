@@ -14,6 +14,25 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`std.json.from_int(n)` — integer-flavoured number constructor**
+  (`std/json/aether_json.c`, `std/json/aether_json.h`, `std/json/module.ae`,
+  `tests/integration/json_from_int/`). Sibling of `json.num(value: float)`:
+  takes a `long` (full int64 range) and stamps a `JV_FLAG_INTEGER` flag on
+  the `JsonValue` so the serializer emits `%lld` instead of `%g`. The
+  motivating bug: `json.num(53248000.0)` serialised as `"5.3248e+07"`
+  (`%g` switches to scientific notation past ~1e7), wrong for byte-count
+  / ID / total fields and lossy past 2^53. Adds a dedicated `integer`
+  slot to the JsonValue union (shares the slot, no struct growth) and
+  branches the encoder + `json_get_int` + `json_get_number` + clone-tree
+  paths on the flag. Parser-side automatic flagging (recognising bare
+  integers in input JSON) is a separate follow-up — the value still
+  round-trips correctly via the float path as long as it fits in 2^53.
+  Sourced from `stdlib-json-integer-value-ask.md` (fbs-core /metrics).
+
 ## [0.263.0]
 
 ### Fixed
