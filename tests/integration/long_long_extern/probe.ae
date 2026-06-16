@@ -1,0 +1,58 @@
+// Regression: `long long` as an extern parameter / return type emits
+// the verbatim C spelling, so an Aether prototype matches a libc /
+// POSIX header that spells the type as `long long` (e.g. mstime_t
+// typedefs, MT19937 / SHA reference impls). Without this, Aether
+// would emit `int64_t` and gcc rejects "conflicting types" when the
+// Aether-generated TU is compiled alongside a header that uses
+// `long long`.
+//
+// Cases:
+//   1. extern with `long long` param + return → call with int literal
+//   2. extern with `long long` return → assign + arithmetic
+//   3. mixed: `long long` param ↔ `int64_t` alias-param round-trip
+//   4. value range — hold a 33-bit value (> 2^31) so a width-narrowing
+//      bug would be visible
+//
+// The Aether-side type is still TYPE_INT64 (so arithmetic/typechecking
+// is unchanged); only the emitted C spelling differs.
+
+extern add_ll(a: long long, b: long long) -> long long
+extern make_mstime() -> long long
+extern as_int64(x: long long) -> int64_t
+extern from_int64(x: int64_t) -> long long
+
+extern exit(code: int)
+
+main() {
+    // Case 1
+    r1 = add_ll(100, 25)
+    if r1 != 125 {
+        println("FAIL case 1: ${r1}")
+        exit(1)
+    }
+
+    // Case 2
+    t = make_mstime()
+    t2 = t + 1000
+    if t2 != 1718553601000 {
+        println("FAIL case 2: ${t2}")
+        exit(1)
+    }
+
+    // Case 3
+    a = as_int64(add_ll(7, 8))
+    b = from_int64(a)
+    if a != 15 || b != 15 {
+        println("FAIL case 3: a=${a} b=${b}")
+        exit(1)
+    }
+
+    // Case 4 — 33-bit value
+    big = add_ll(9000000000, 1000000000)
+    if big != 10000000000 {
+        println("FAIL case 4: ${big}")
+        exit(1)
+    }
+
+    println("OK long_long_extern: 4 cases")
+}

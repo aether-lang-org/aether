@@ -34,6 +34,21 @@ notes to be skipped or clobbered (the failure modes documented in
   ask. Aether wrappers only (the existing `cryptography_random_bytes_raw` C
   side is unchanged).
 
+- **`long long` type spelling on extern parameters / returns**
+  (`compiler/parser/parser.c`, `tests/integration/long_long_extern/`). When
+  the parser sees a second `long` after the first, both are consumed and the
+  resulting type carries the verbatim C spelling `long long` instead of the
+  default `int64_t`. The underlying TypeKind is still `TYPE_INT64`, so all
+  arithmetic and typechecking behave identically — only the emitted C
+  declaration text changes. Closes the "Minor, real, cheap" item from
+  `aedis-core-floor-feature-asks.md`: a libc / POSIX header that spells a
+  parameter as `long long` (e.g. `mstime_t` typedef chains, the MT19937 /
+  SHA reference impls bundled with Redis) now matches its Aether-side
+  prototype byte-for-byte, removing the gcc "conflicting types" error that
+  previously forced the generated TU to compile *without* its header.
+  Four-case integration test (single arg + return, large-value retention,
+  mixed `long long` ↔ `int64_t` round-trip).
+
 ## [0.260.0]
 
 ### Changed
