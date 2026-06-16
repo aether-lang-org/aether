@@ -346,6 +346,19 @@ Type* parse_type(Parser* parser) {
         case TOKEN_INT64:
             advance_token(parser);
             type = create_type(TYPE_INT64);
+            /* `long long` — the second `long` (also TOKEN_INT64) is
+             * consumed and stamps a `long long` C alias so the emitted
+             * extern prototype matches a libc/POSIX header that spells
+             * the parameter as `long long` (e.g. mstime_t typedef chains,
+             * the MT19937 / SHA-x reference impls). The Aether-side type
+             * is still TYPE_INT64 (int64_t), so all arithmetic and
+             * typechecking behave identically — only the verbatim C
+             * spelling differs. Required by aedis core-floor (the
+             * "Minor, real, cheap" item). */
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_INT64) {
+                advance_token(parser);
+                type->c_alias = strdup("long long");
+            }
             break;
         case TOKEN_UINT64:
             advance_token(parser);

@@ -14,6 +14,7 @@
 // check the error slot.
 
 import std.string
+import std.bytes
 
 exports (
     cryptography_sha1_hex_raw, cryptography_sha256_hex_raw,
@@ -37,7 +38,7 @@ exports (
     base64_encode, base64_encode_padded, base64_decode,
     md4_hex, md5_hex, hmac_sha256_hex, hmac_sha256_bytes,
     md4_bytes, md5_bytes, sha1_bytes, sha256_bytes, hash_bytes,
-    random_bytes
+    random_bytes, random_hex, random_base64
 )
 
 extern cryptography_sha1_hex_raw(data: string, length: int) -> string
@@ -333,4 +334,57 @@ random_bytes(n: int) -> {
     owned = string_new_with_length(raw, out_n)
     cryptography_release_random_bytes()
     return owned, out_n, ""
+}
+
+// Draw `n` cryptographically-secure random bytes and return them as a
+// lowercase-hex string (2*`n` chars). Returns ("", err) on failure.
+// Composes random_bytes + per-byte hex emission; same OS-CSPRNG source
+// and same caveat: NOT std.math. The motivating shape is opaque-bearer-
+// token / API-key minting, where callers want a printable secret and
+// don't want to hand-roll the byte→hex loop.
+random_hex(n: int) -> {
+    raw, raw_n, err = random_bytes(n)
+    if err != "" {
+        return "", err
+    }
+    if n == 0 {
+        return "", ""
+    }
+    // Two ASCII chars per byte. Build into a bytes buffer to avoid
+    // O(n^2) string.concat; finish() hands off to a refcounted string.
+    out = bytes.new(raw_n * 2)
+    i = 0
+    while i < raw_n {
+        b = string.char_at_n(raw, raw_n, i)
+        hi = (b >> 4) & 15
+        lo = b & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(out, i * 2, c_hi)
+        bytes.set(out, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    return bytes.finish(out, raw_n * 2), ""
+}
+
+// Draw `n` cryptographically-secure random bytes and return them as
+// RFC 4648 §4 standard-alphabet Base64 (unpadded — same shape as
+// base64_encode). Returns ("", err) on failure. Useful when the wire
+// format prefers a denser printable encoding than hex (~33% shorter).
+// n == 0 yields "".
+random_base64(n: int) -> {
+    raw, raw_n, err = random_bytes(n)
+    if err != "" {
+        return "", err
+    }
+    if n == 0 {
+        return "", ""
+    }
+    return base64_encode(raw, raw_n)
 }
