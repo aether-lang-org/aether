@@ -36,12 +36,12 @@ main() {
     }
     i = 0
     while i < 32 {
-        c = string.char_at_n(h1, 32, i)
+        ch = string.char_at_n(h1, 32, i)
         ok = 0
-        if c >= 48 && c <= 57 { ok = 1 }    // '0'..'9'
-        if c >= 97 && c <= 102 { ok = 1 }   // 'a'..'f'
+        if ch >= 48 && ch <= 57 { ok = 1 }    // '0'..'9'
+        if ch >= 97 && ch <= 102 { ok = 1 }   // 'a'..'f'
         if ok == 0 {
-            println("  FAIL: non-hex char at ${i}: ${c}  (full='${h1}')")
+            println("  FAIL: non-hex char at ${i}: ${ch}  (full='${h1}')")
             exit(1)
         }
         i = i + 1
