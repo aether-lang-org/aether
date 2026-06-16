@@ -35,6 +35,86 @@ notes to be skipped or clobbered (the failure modes documented in
   (no accounting underflow), `-Werror` clean, http_client_dechunk +
   http_client_redirects integration tests pass (real round-trip through the
   capped response buffer).
+## [0.261.0]
+
+### Added
+
+- **`std.cryptography.random_hex(n)` / `random_base64(n)` — printable-secret
+  convenience wrappers over `random_bytes`** (`std/cryptography/module.ae`,
+  `tests/integration/cryptography_random_hex/`). Two thin Aether-side wrappers
+  that draw `n` cryptographically-secure bytes from the OS CSPRNG and return a
+  lowercase-hex (2`n` chars) or RFC 4648 §4 unpadded-base64 string respectively.
+  Motivating shape: opaque-bearer-token / API-key minting (e.g. SigV4 secret
+  keys), where callers want a printable secret and the "obvious random function"
+  should resolve to the secure path — not `std.math` (a clock-seeded PRNG fit
+  only for sampling). Composes existing primitives; no new C, no new externs.
+  Hex emission uses `std.bytes` (O(n) build vs the O(n²) repeated `string.concat`
+  path). Sourced from `stdlib-csprng-secure-random-ask.md` (fbs-core), whose
+  request items 1 + 2 (`random_bytes` + UUIDv4) already shipped at 0.213.0;
+  this lands the convenience wrappers that were the third bullet of the same
+  ask. Aether wrappers only (the existing `cryptography_random_bytes_raw` C
+  side is unchanged).
+
+- **`long long` type spelling on extern parameters / returns**
+  (`compiler/parser/parser.c`, `tests/integration/long_long_extern/`). When
+  the parser sees a second `long` after the first, both are consumed and the
+  resulting type carries the verbatim C spelling `long long` instead of the
+  default `int64_t`. The underlying TypeKind is still `TYPE_INT64`, so all
+  arithmetic and typechecking behave identically — only the emitted C
+  declaration text changes. Closes the "Minor, real, cheap" item from
+  `aedis-core-floor-feature-asks.md`: a libc / POSIX header that spells a
+  parameter as `long long` (e.g. `mstime_t` typedef chains, the MT19937 /
+  SHA reference impls bundled with Redis) now matches its Aether-side
+  prototype byte-for-byte, removing the gcc "conflicting types" error that
+  previously forced the generated TU to compile *without* its header.
+  Four-case integration test (single arg + return, large-value retention,
+  mixed `long long` ↔ `int64_t` round-trip).
+
+## [0.260.0]
+
+### Changed
+
+- **stdlib caps-audit — `std.os` POSIX allocation sites** (#462). Routed the
+  unbounded, plugin-influenced heap allocations in `std/os/aether_os.c`
+  through the capability allocator (`aether_caps_malloc/realloc/free`) so a
+  sandboxed plugin can't inflate them past a memory cap: the command-output
+  capture buffers (`os_exec_raw`, `os_run_capture_raw`,
+  `os_run_capture_status_raw`, `os_run_pipe_drain_and_wait_raw`,
+  `os_run_full_raw`'s stdout/stderr accumulator), the `os_getcwd_raw` path
+  buffer, the `os_execv` argv scratch, and the `os_getenv` value. Caller-owned
+  returns keep the documented libc-free / fail-safe-upward-drift contract
+  (the `io_read_file_raw` / `io_getenv` model); internal/transient buffers
+  free through the cap with their exact live size (realloc-failure paths free
+  the *old* size). New `caps_os_getenv_denied_past_cap` unit test asserts an
+  env read is refused when the cap is below the value size, with the counter
+  unperturbed. Bounded sites (the 1-byte empty-heap sentinel, the
+  pointer-only argv/envp arrays) and the Windows-specific helpers
+  (`utf8_to_wide`/`wide_to_utf8`/`WBuf`/`win_launch`/drain-thread) are left as
+  tracked follow-ups; `std/fs/aether_fs.c` remains. Verified: unit 228/228
+  (ASan-clean), `leaks(1)` clean on the os example, full `.ae` regression 0
+  failures.
+## [0.259.0]
+
+### Changed
+
+- **stdlib caps-audit — `std.fs` directory listing, copy buffer, and
+  path-clean stack** (#462). Routed the remaining *unbounded / large*
+  POSIX allocations in `std/fs/aether_fs.c` through the capability
+  allocator (the marquee file-read paths — `file_read_all_raw`,
+  `fs_read_binary_raw`, `fs_pread_raw` — were already converted). Now
+  capped: the directory listing (`dir_list_raw`/`dirlist_add`'s entries
+  array + every strdup'd entry name + the `DirList` struct — a huge
+  directory is an unbounded surface), the 8 MiB `fs.copy` read/write
+  scratch buffer, and `path_clean`'s segment stack. A new `capacity`
+  field on `DirList` lets `dir_list_free` release the entries array with
+  its exact byte size; entry names free via `strlen`-at-free. Realloc
+  growth threads the old size; realloc-failure paths free the old size.
+  New `caps_fs_dir_list_accounting_balances` unit test asserts the cap
+  counter returns exactly to baseline after list+free (no drift). The
+  bounded caller-owned path strings (`path_join`/`dirname`/`basename`/
+  `extension`/`rel`, `readlink`) and the Windows-only UTF-16 conversion
+  buffers remain tracked #462 follow-ups. Verified: unit 228/228
+  (ASan-clean), full `.ae` regression 0 failures.
 
 ## [0.258.0]
 
