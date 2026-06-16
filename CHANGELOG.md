@@ -16,6 +16,36 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ## [current]
 
+### Fixed
+
+- **#752: heap-string fields of a struct returned via tuple were freed
+  before the caller could read them** (`compiler/codegen/codegen_stmt.c`,
+  `tests/integration/issue_752_struct_string_tuple/`). A function
+  returning `(R, err)` where `R` contains a `string` field initialised
+  from a heap source (e.g. `string.copy(...)`) emitted:
+  ```c
+  _tuple_R_string _builder_ret = (_tuple_R_string){r, ""};
+  /* deferred */ R_destroy(&r);   // ← frees r.s
+  return _builder_ret;
+  ```
+  The tuple literal memcpys `r` into the returned tuple including its
+  `.s` pointer; the immediately-following `R_destroy(&r)` defer then
+  frees that pointer's buffer while the caller's copy still references
+  it. Use-after-free; caller saw garbage in every string field while
+  scalar fields survived. New helper
+  `emit_tuple_struct_heap_ownership_transfer` walks every tuple-return
+  child that is a bare `AST_IDENTIFIER` of struct type and emits
+  `<varname>._heap_<field> = 0;` for each heap-string field after the
+  tuple literal is built and before the defer drain. The struct's
+  `_destroy` defer becomes a no-op for the transferred fields; the
+  caller's returned struct retains `_heap_<field> = 1` so its own
+  destruct path correctly reclaims the buffer. Sourced from fbs-core's
+  attempt to convert `object_get` from a positional 8-tuple to
+  `(Object, err)` (issue #752 repro). The fix only touches the
+  with-defer multi-value-return path — the no-defer path constructs
+  the tuple inline in `return (Tuple){...};` and has no destroy defer
+  to race against.
+
 ### Added
 
 - **`std.json.from_int(n)` — integer-flavoured number constructor**
