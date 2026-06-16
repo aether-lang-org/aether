@@ -14,6 +14,26 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`std.cryptography.random_hex(n)` / `random_base64(n)` — printable-secret
+  convenience wrappers over `random_bytes`** (`std/cryptography/module.ae`,
+  `tests/integration/cryptography_random_hex/`). Two thin Aether-side wrappers
+  that draw `n` cryptographically-secure bytes from the OS CSPRNG and return a
+  lowercase-hex (2`n` chars) or RFC 4648 §4 unpadded-base64 string respectively.
+  Motivating shape: opaque-bearer-token / API-key minting (e.g. SigV4 secret
+  keys), where callers want a printable secret and the "obvious random function"
+  should resolve to the secure path — not `std.math` (a clock-seeded PRNG fit
+  only for sampling). Composes existing primitives; no new C, no new externs.
+  Hex emission uses `std.bytes` (O(n) build vs the O(n²) repeated `string.concat`
+  path). Sourced from `stdlib-csprng-secure-random-ask.md` (fbs-core), whose
+  request items 1 + 2 (`random_bytes` + UUIDv4) already shipped at 0.213.0;
+  this lands the convenience wrappers that were the third bullet of the same
+  ask. Aether wrappers only (the existing `cryptography_random_bytes_raw` C
+  side is unchanged).
+
 ## [0.260.0]
 
 ### Changed
