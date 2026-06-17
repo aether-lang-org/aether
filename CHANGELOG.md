@@ -14,6 +14,29 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Heap string fields of a struct returned from a function are no longer
+  corrupted** (#752, follow-up to #634). When a function returned a struct
+  with a heap-string field (directly via a single-value builder return, or
+  as a tuple element `return r, ""`), the struct's `<Struct>_destroy`
+  function-exit defer freed the field even though the struct escaped via
+  the return — so the caller read a dangling pointer and the string came
+  back as garbage. Int fields survived (no free); a literal-initialised
+  string survived (static), which is why the #634 test (int-only) missed
+  it. Two-sided fix matching the established return-escape contract for
+  plain heap strings: (1) the callee suppresses the struct's destroy when
+  it escapes via a return (`return_escaped_struct_vars` → consulted by
+  `try_emit_struct_destroy`), transferring ownership to the caller; (2) the
+  caller that *receives* an owned struct — a tuple-unpack target or a local
+  initialised from a struct-returning call — gets a `<Struct>_destroy`
+  defer so the fields are freed exactly once at its scope exit. Verified
+  leak-free and double-free-free (ASan + `leaks`) across tuple, single, and
+  chained receive-then-re-return forms. Regression test
+  `tests/regression/test_struct_string_field_return.ae` asserts the string
+  field's *value* (a behavioural gate, unlike the compile-only #634 test).
 ## [0.266.0]
 
 ### Fixed
