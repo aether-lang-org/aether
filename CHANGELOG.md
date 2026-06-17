@@ -14,6 +14,30 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Changed
+
+- **Codegen cleanup: removed the now-dead #759 tuple-struct heap-flag
+  transfer, superseded by #762's return-escape contract**
+  (`compiler/codegen/codegen_stmt.c`). Two independent fixes for #752
+  (struct-with-heap-string-field returned via tuple) both landed: #759
+  zeroed the source struct's `_heap_<field>` flags before the
+  function-exit `<Struct>_destroy` defer, and #762 (later, more complete)
+  suppresses that destroy entirely on the escaping struct and pushes the
+  destroy to the *receiving* caller. With #762's suppression the destroy
+  never runs in the callee, so #759's flag-zeroing became a dead store
+  (`r._heap_s = 0;` on a struct whose destructor is gone). Removed the
+  `emit_tuple_struct_heap_ownership_transfer` helper and its sole call
+  site; #762's `mark_returned_struct_escaped` on the same tuple-return
+  loop is the live, complete mechanism. No behavioural change — verified
+  the generated C drops the dead store while the caller-side single free
+  is unchanged; both #752 regression tests
+  (`tests/integration/issue_752_struct_string_tuple/`,
+  `tests/regression/test_struct_string_field_return.ae`) and unit 229/229
+  stay green. Pure dead-code removal; keeps the two-mechanisms-on-one-path
+  hazard from misleading a future editor.
+
 ## [0.267.0]
 
 ### Fixed
