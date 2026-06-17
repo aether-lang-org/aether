@@ -470,6 +470,21 @@ Type* parse_type(Parser* parser) {
                      * header does. */
                     type = create_type(TYPE_STRING);
                     type->c_alias = strdup("const char*");
+                } else if (strcmp(token->value, "uint8") == 0 ||
+                           strcmp(token->value, "uint16") == 0 ||
+                           strcmp(token->value, "uint32") == 0) {
+                    /* #745: short unsigned width names, the siblings of
+                     * the `uint64` keyword. Each has a distinct TypeKind
+                     * whose C spelling (uint8_t/uint16_t/uint32_t) is
+                     * produced by get_c_type / const_array_elem_c_type —
+                     * so we set NO c_alias (a bare "uint16" is not a C
+                     * type). Needed for module-level const lookup tables
+                     * with a pinned element width, e.g.
+                     * `const CRC16TAB: uint16[256] = [...]`. */
+                    TypeKind k = (token->value[4] == '8') ? TYPE_UINT8
+                               : (token->value[5] == '6') ? TYPE_UINT16
+                               : TYPE_UINT32;
+                    type = create_type(k);
                 } else if (c_abi_alias_kind(token->value, &alias_kind)) {
                     /* C ABI scalar aliases — exact C type spellings the
                      * Redis/mquickjs ports need so an Aether `extern`
@@ -4694,49 +4709,80 @@ ASTNode* parse_program(Parser* parser) {
                 break;
             }
             case TOKEN_CONST: {
-                // Top-level constant: const NAME = value or const arr[] = [1, 2, 3]
+                // Top-level constant: const NAME = value, const arr[] = [...],
+                // or (typed) const NAME: T[N] = [...] / const NAME: T = value.
                 int cline = token->line, ccol = token->column;
                 advance_token(parser); // consume 'const'
                 Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
                 if (!cname) { advance_token(parser); continue; }
 
-                // Check for array form: const NAME[] = [...]
                 int is_array = 0;
-                if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
+                /* #745: explicit element type for a module-level const
+                 * array — `const NAME: T[N] = [...]` lowers to a file-
+                 * scope `static const <T> NAME[N] = {...}` lookup table.
+                 * The untyped `const NAME[] = [...]` form (below) infers
+                 * `int` from the literals; the typed form lets a porter
+                 * pin the C element type (uint8/uint16/int/long/uint64)
+                 * so e.g. a CRC16 table is `uint16_t[256]`, not `int[]`.
+                 * Also accepts the typed scalar form `const NAME: T =
+                 * value`. */
+                Type* annotated_type = NULL;   // full type from `: T` / `: T[N]`
+                if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
+                    advance_token(parser); // consume ':'
+                    /* parse_type already folds a trailing `[N]` into a
+                     * TYPE_ARRAY (element + size), so `long[3]` arrives
+                     * here as array(long, 3). */
+                    annotated_type = parse_type(parser);
+                    if (!annotated_type) { advance_token(parser); continue; }
+                    if (annotated_type->kind == TYPE_ARRAY) {
+                        is_array = 1;
+                    }
+                }
+                // Untyped array form: const NAME[] = [...]
+                else if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
                     advance_token(parser); // consume '['
                     if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) { advance_token(parser); continue; }
                     is_array = 1;
                 }
 
-                if (!expect_token(parser, TOKEN_ASSIGN)) { advance_token(parser); continue; }
+                if (!expect_token(parser, TOKEN_ASSIGN)) {
+                    if (annotated_type) free_type(annotated_type);
+                    advance_token(parser); continue;
+                }
                 ASTNode* cval = parse_expression(parser);
-                if (!cval) { advance_token(parser); continue; }
+                if (!cval) { if (annotated_type) free_type(annotated_type); advance_token(parser); continue; }
                 node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
                 add_child(node, cval);
 
                 if (is_array) {
                     node->annotation = strdup("array_const");
-                    // Infer element type from first child of array literal
-                    Type* elem_type = NULL;
-                    if (cval->node_type == NULL && cval->child_count > 0 && cval->children[0]) {
-                        if (cval->children[0]->node_type) {
-                            elem_type = cval->children[0]->node_type;
+                    if (annotated_type) {
+                        /* Explicit element type + size from `: T[N]`
+                         * (ownership transferred). If the size was elided
+                         * (`T[]`), recover it from the literal length. */
+                        if (annotated_type->array_size < 0) {
+                            annotated_type->array_size = cval->child_count;
                         }
-                    } else if (cval->node_type && cval->node_type->element_type) {
-                        elem_type = cval->node_type->element_type;
-                    }
-                    if (elem_type) {
-                        node->node_type = create_array_type(clone_type(elem_type), cval->child_count);
+                        node->node_type = annotated_type;
                     } else {
-                        node->node_type = create_array_type(create_type(TYPE_PTR), cval->child_count);
+                        // Untyped `const NAME[] = [...]` — infer element type.
+                        Type* elem_type = NULL;
+                        if (cval->node_type == NULL && cval->child_count > 0 && cval->children[0]) {
+                            if (cval->children[0]->node_type) elem_type = cval->children[0]->node_type;
+                        } else if (cval->node_type && cval->node_type->element_type) {
+                            elem_type = cval->node_type->element_type;
+                        }
+                        node->node_type = elem_type
+                            ? create_array_type(clone_type(elem_type), cval->child_count)
+                            : create_array_type(create_type(TYPE_PTR), cval->child_count);
                     }
+                } else if (annotated_type) {
+                    // Typed scalar const: `const NAME: T = value`.
+                    node->node_type = annotated_type;
                 } else {
-                    // Infer type from value
-                    if (cval->node_type) {
-                        node->node_type = clone_type(cval->node_type);
-                    } else {
-                        node->node_type = create_type(TYPE_UNKNOWN);
-                    }
+                    // Infer type from value.
+                    node->node_type = cval->node_type ? clone_type(cval->node_type)
+                                                       : create_type(TYPE_UNKNOWN);
                 }
                 break;
             }
