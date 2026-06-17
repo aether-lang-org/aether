@@ -325,6 +325,16 @@ typedef struct {
     char** return_escaped_string_vars;
     int return_escaped_string_var_count;
 
+    // #752: struct locals that escape via a return (directly or as a
+    // tuple element). Such a struct's heap-string fields belong to the
+    // caller once returned, so the function-exit <Struct>_destroy defer
+    // must be suppressed — otherwise the fields are freed at callee exit
+    // while the returned (shallow) copy still points at them, and the
+    // caller reads dangling memory. Populated at each return site before
+    // defers drain; consulted by try_emit_struct_destroy.
+    char** return_escaped_struct_vars;
+    int return_escaped_struct_var_count;
+
     // `*StringSeq` (cons-cell sequence) locals whose current value is a
     // heap-allocated, refcounted seq returned by an OWNING producer
     // (string_seq_cons / reverse / concat / take / drop / from_array /
