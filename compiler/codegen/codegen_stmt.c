@@ -2713,6 +2713,10 @@ static void hoist_if_else_common_vars(CodeGenerator* gen,
 
         // Skip if already declared at outer scope.
         if (is_var_declared(gen, n)) continue;
+        /* #744: never shadow a module-level `var` global with a hoisted
+         * local — the write is routed to the file-scope static by the
+         * variable-declaration emitter. */
+        if (is_module_global_var(gen, n)) continue;
         mark_var_declared(gen, n);
 
         // Recover a usable type from either branch's initializer.
@@ -2747,7 +2751,10 @@ static void hoist_loop_vars(CodeGenerator* gen, ASTNode* body) {
         ASTNode* child = body->children[i];
         if (!child) continue;
         if (child->type == AST_VARIABLE_DECLARATION && child->value) {
-            if (!is_var_declared(gen, child->value)) {
+            /* #744: don't hoist a module-level `var` global as a loop-
+             * scoped local — it would shadow the file-scope static. */
+            if (!is_var_declared(gen, child->value) &&
+                !is_module_global_var(gen, child->value)) {
                 mark_var_declared(gen, child->value);
                 // Determine type
                 Type* var_type = child->node_type;
@@ -3158,6 +3165,15 @@ void hoist_if_branch_vars(CodeGenerator* gen, ASTNode* body) {
     for (int n = 0; n < count; n++) {
         const char* name = names[n];
         if (is_var_declared(gen, name)) continue;
+        /* #744: a module-level `var` global first assigned inside an
+         * if-branch must NOT be hoisted as a fresh function local —
+         * that local shadows the file-scope `static`, so every write
+         * lands in the local and the global keeps its initializer
+         * forever (a silent miscompile; regression in #701). The
+         * assignment is already routed to the global by the
+         * AST_VARIABLE_DECLARATION emitter (is_module_global_var), so
+         * skip it here exactly as that path does. */
+        if (is_module_global_var(gen, name)) continue;
         int referenced_outside = 0;
         for (int i = 0; i < body->child_count; i++) {
             ASTNode* child = body->children[i];

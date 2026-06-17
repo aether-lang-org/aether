@@ -1,0 +1,78 @@
+// #744 — a module-level `var` global whose FIRST assignment is inside a
+// nested block (an `if` body or a loop body) must write the file-scope
+// `static`, not a shadowing uninitialized local. Regression in the #701
+// mutable-globals feature: codegen's branch/loop var-hoisters collected
+// such a global as a fresh local, so every write landed in the local and
+// the global kept its initializer forever (a silent miscompile — in the
+// aedis MT19937-64 port it made a lazily-malloc'd state buffer's writes
+// never reach the global, 350001/350001 differential failures).
+//
+// This is a behavioural gate: it exit(1)s if a write through the global
+// fails to be observed on a later read.
+
+extern exit(code: int)
+extern malloc(n: long) -> ptr
+import std.mem
+
+// (1) first-assigned inside an `if` body.
+var g_if: ptr = null
+// (2) first-assigned inside a `while` loop body.
+var g_loop: ptr = null
+// (3) a lazily-initialised counter, first-assigned in an if body, then
+//     incremented across calls — proves the write reaches the global.
+var hits: long = 0
+
+ensure_if() {
+    if g_if == null {
+        g_if = malloc(8)
+    }
+}
+
+ensure_loop() {
+    i = 0
+    while i < 1 {
+        if g_loop == null {
+            g_loop = malloc(8)
+        }
+        i = i + 1
+    }
+}
+
+bump() {
+    if hits == 0 {
+        hits = 100        // first write inside a nested block
+    }
+    hits = hits + 1
+}
+
+main() {
+    // (1) if-body first assignment
+    ensure_if()
+    if g_if == null {
+        print("FAIL: g_if global write shadowed (if-body)\n")
+        exit(1)
+    }
+    mem.set_int(g_if, 0, 42)
+    if mem.get_int(g_if, 0) != 42 {
+        print("FAIL: g_if read-back mismatch\n")
+        exit(1)
+    }
+
+    // (2) loop-body first assignment
+    ensure_loop()
+    if g_loop == null {
+        print("FAIL: g_loop global write shadowed (loop-body)\n")
+        exit(1)
+    }
+
+    // (3) counter persists + accumulates across calls
+    bump()
+    bump()
+    bump()
+    if hits != 103 {
+        print("FAIL: hits did not persist across calls\n")
+        exit(1)
+    }
+
+    print("PASS: module globals first-assigned in nested blocks persist\n")
+}

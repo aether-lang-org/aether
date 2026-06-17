@@ -14,6 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Module-global first-assigned inside a nested block no longer shadowed
+  by an uninitialized local** (#744, regression in #701). Codegen's
+  branch/loop variable hoisters (`hoist_if_branch_vars`,
+  `hoist_if_else_common_vars`, `hoist_loop_vars`) pre-declared a `var`
+  global as a fresh function local when its first assignment appeared
+  inside an `if`/`while` body — shadowing the file-scope `static`, so
+  every write landed in the local and the global kept its initializer
+  forever. A silent miscompile whose visibility depended on optimization
+  (it corrupted the aedis MT19937-64 PRNG port: a lazily-malloc'd state
+  buffer's writes never reached the global). All three hoisters now skip
+  names that are module globals — the write is already routed to the
+  static by the variable-declaration emitter (`is_module_global_var`), so
+  the local must not be emitted. Regression test in
+  `tests/integration/module_globals/nested_block_init.ae` (if-body,
+  loop-body, and a lazily-initialised counter; exits non-zero if a write
+  fails to reach the global).
+
 ## [0.263.0]
 
 ### Fixed
