@@ -14,6 +14,26 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Typed module-level constant arrays** (#745). `const NAME: T[N] = [...]`
+  declares a file-scope `static const <T> NAME[]` lookup table with the C
+  element width pinned — `T` ∈ {`uint8`, `uint16`, `uint32`, `uint64`,
+  `int`, `long`}. Previously the only spelling was `const NAME[] = [...]`,
+  which always inferred `int` elements: a uint8/uint16 table cost 4× the
+  memory and mismatched a C header expecting a packed `uint16_t[]` (e.g.
+  the cluster-slot CRC16 table). The table is allocated once and shared
+  across calls (not re-initialised per call). Two compiler changes: the
+  top-level `const` parser now accepts a `: T[N]` annotation (and a typed
+  scalar `const NAME: T = value`), and the short unsigned width names
+  `uint8`/`uint16`/`uint32` are recognised type spellings (siblings of the
+  existing `uint64` keyword, emitting `uint8_t`/`uint16_t`/`uint32_t`); an
+  integer-element array literal may initialise a narrower integer-element
+  typed const array (the explicit, compile-time-constant intent). See
+  [docs/language-reference.md](docs/language-reference.md) (Module-level
+  constant arrays).
 ## [0.267.0]
 
 ### Fixed
