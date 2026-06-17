@@ -1218,128 +1218,24 @@ ASTNode* parse_primary_expression(Parser* parser) {
     }
 }
 
-/* Statement-shape recogniser for issue #528. Returns 1 when the
- * pending operator looks like the start of a new statement rather
- * than a continuation of the current binary expression.
+/* Newline boundary recogniser for issue #528. Aether has no semicolon
+ * requirement, so a token on a later source line than the previous token
+ * starts a fresh statement when it could otherwise be parsed as an infix
+ * or postfix continuation. Multiline expressions remain available by
+ * placing the continuing operator before the newline:
  *
- * Two conditions must both hold:
- *   (a) the operator starts a strictly later source line than its
- *       preceding token (multi-line expression boundary), and
- *   (b) the tokens immediately after the operator form a
- *       recognisable statement-leading shape for that operator.
+ *     total = a +
+ *         b
  *
- * Add new operator branches here as new ambiguities surface. Each
- * branch should be CONSERVATIVE: returning 1 stops the binary loop,
- * so any false positive breaks a legitimate multi-line expression
- * like:
- *     x = a
- *         * b
- * (operator-led continuation, no statement shape afterwards). Only
- * return 1 when the post-operator tokens strongly signal a fresh
- * statement.
- *
- * ## Currently handled
- *
- * TOKEN_MULTIPLY:
- *   `*StructName name [= ...]`  (typed-pointer local declaration)
- *   `*ident = ...`              (deref-store via a named ptr)
- *   These shapes are unambiguous: an expression context never has
- *   `* IDENT IDENT` or `* IDENT =`, so detecting them never breaks
- *   a legitimate multi-line `*`-led continuation.
- *
- * TOKEN_LEFT_BRACKET:
- *   `[ <literal-or-ident> ,` (array-literal expression statement,
- *   common-shape detection only — multi-token first elements like
- *   `[a+b, c]` aren't detected to keep lookahead bounded). The `,`
- *   after the first element is the discriminator: indexing accepts a
- *   single expression, so a `[` line-led by a comma-bearing bracket
- *   group provably can't be a continuation index. The first-element
- *   token set covers TOKEN_IDENTIFIER, TOKEN_NUMBER, string literals
- *   (TOKEN_STRING_LITERAL / TOKEN_INTERP_STRING), and TRUE / FALSE /
- *   NULL keywords — the primaries that fit in one lexeme.
- *
- * ## Considered and intentionally NOT added (this round)
- *
- * The remaining hazards documented in #528 do not have an
- * inspection-cheap shape that distinguishes statement from
- * continuation. Adding ambiguous guards would silently break
- * legitimate multi-line expressions, which is worse than the
- * (vanishingly rare) ambiguity the issue called out. The honest
- * fix for these is lexer-level newline significance (ASI-style),
- * which is a separate decision recorded in #528.
- *
- * TOKEN_MINUS / TOKEN_PLUS:
- *   The hazard is `-foo()` or `+foo()` as an expression statement
- *   after a previous line that ends in a complete expression. But
- *   `prev - foo()` and `prev + foo()` — multi-line arithmetic — are
- *   the same shape lexically. There is no post-operator token
- *   pattern that proves "this is a fresh statement, not a
- *   continuation." Detection requires lexer ASI.
- *
- * TOKEN_LEFT_PAREN:
- *   The hazard is `(handler)(args)` or similar paren-led expression
- *   statement after a previous-line expression. But `prev(arg)`
- *   call-continuation across newlines is the same shape. No safe
- *   discriminator without ASI. Also: Aether's tuple-destructure
- *   uses bare `a, b = ...` not `(a, b) = ...`, so the parenthesised-
- *   LHS hazard the issue mentions doesn't actually fire in current
- *   Aether.
- *
- * If a real user-facing miscompile in any of these surfaces, the
- * answer is to revisit the lexer-ASI decision in #528, not to keep
- * extending this helper with progressively more dangerous guards. */
-static int is_newline_led_statement(Parser* parser, Token* op) {
+ * This mirrors the existing same-line rule for trailing closures and
+ * removes the old token-shape heuristics (`*StructName name`, `[a, b]`,
+ * etc.) that still left `-x` ambiguous. */
+static int operator_starts_newline(Parser* parser, Token* op) {
     if (!op) return 0;
 
     Token* prev = peek_ahead(parser, -1);
     if (!prev || op->line <= prev->line) return 0;
-
-    Token* a1 = peek_ahead(parser, 1);
-    Token* a2 = peek_ahead(parser, 2);
-
-    switch (op->type) {
-        case TOKEN_MULTIPLY:
-            /* `*StructName name [= ...]` typed-pointer declaration —
-             * the original PR #527 case. `*` + IDENT + IDENT. */
-            if (a1 && a1->type == TOKEN_IDENTIFIER &&
-                a2 && a2->type == TOKEN_IDENTIFIER) {
-                return 1;
-            }
-            /* `*ident = ...` deref-store. `*` + IDENT + `=`. */
-            if (a1 && a1->type == TOKEN_IDENTIFIER &&
-                a2 && a2->type == TOKEN_ASSIGN) {
-                return 1;
-            }
-            return 0;
-        case TOKEN_LEFT_BRACKET:
-            /* `[ LITERAL , ...` or `[ IDENT , ...` — array-literal
-             * statement. Indexing takes one expression, so a `[`-led
-             * group that contains a comma at depth 0 can't be a
-             * continuation index. We approximate with a bounded
-             * lookahead that catches the common forms (the first
-             * element is a single token); multi-token first-element
-             * cases like `[a+b, c]` fall through to the old behaviour.
-             *
-             * Discriminating-token set for the first array element:
-             * identifier, int, float, char, or string literal. Other
-             * primaries (parens, nested `[`, prefix `-`) need more
-             * lookahead than peek_ahead can give cheaply, so they're
-             * left unflagged — the conservative bias is "don't break
-             * legit multi-line indexing." */
-            if (a1 && (a1->type == TOKEN_IDENTIFIER ||
-                       a1->type == TOKEN_NUMBER ||
-                       a1->type == TOKEN_STRING_LITERAL ||
-                       a1->type == TOKEN_INTERP_STRING ||
-                       a1->type == TOKEN_TRUE ||
-                       a1->type == TOKEN_FALSE ||
-                       a1->type == TOKEN_NULL) &&
-                a2 && a2->type == TOKEN_COMMA) {
-                return 1;
-            }
-            return 0;
-        default:
-            return 0;
-    }
+    return 1;
 }
 
 ASTNode* parse_expression(Parser* parser) {
@@ -1366,34 +1262,7 @@ ASTNode* parse_binary_expression(Parser* parser, int precedence) {
         if (op_precedence < 0) break;  // Not an operator
         if (op_precedence < precedence) break;  // Lower precedence, stop
 
-        /* Newline-led statement-shape detection (issue #528).
-         *
-         * Aether's expression parser is not consistently
-         * newline-terminated: this loop walks operators by precedence
-         * alone, so a token that's BOTH an infix operator AND a valid
-         * statement-leading token will fold into the previous
-         * expression if it appears at the start of a new line. The
-         * canonical case (filed as the P0 typed-pointer port for
-         * Redis):
-         *
-         *     q = (p as *Pt)
-         *     *Pt c = q          // meant to be a new statement;
-         *                        // parses as `(p as *Pt) * Pt`
-         *                        // without this guard.
-         *
-         * The guard's logic: when the next operator starts a new
-         * source line AND the tokens after it form a recognisable
-         * statement-leading shape, break out of the loop so the
-         * outer statement parser picks up the new statement. If the
-         * operator crosses a line but the next tokens DON'T look like
-         * a statement-lead, this is a legitimate multi-line
-         * expression (an indented operator continuation) and we
-         * continue.
-         *
-         * See is_newline_led_statement below for the per-operator
-         * shape recognisers. Add new cases there as new ambiguities
-         * surface; the loop body stays a single break. */
-        if (is_newline_led_statement(parser, operator)) {
+        if (operator_starts_newline(parser, operator)) {
             break;
         }
 
@@ -1458,6 +1327,9 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
         }
         
         if (op->type == TOKEN_LEFT_BRACKET) {
+            if (operator_starts_newline(parser, op)) {
+                break;
+            }
             // Array indexing: expr[index]
             advance_token(parser); // consume '['
             ASTNode* index = parse_expression(parser);

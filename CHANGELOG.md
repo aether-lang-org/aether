@@ -16,6 +16,20 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ## [0.270.0]
 
+### Fixed
+
+- **Parser: newline now terminates infix/postfix expression continuation**
+  (issue #528; `compiler/parser/parser.c`,
+  `tests/regression/test_parser_line_leading_statements.ae`,
+  `tests/integration/parser_newline_bracket/`). The old guarded
+  recogniser handled `*StructName name`, `*ident = ...`, and a narrow
+  `[x, y]` shape, but still let line-leading unary statements like `-x`
+  fold into the previous expression. The binary-expression loop now
+  stops whenever an infix operator starts on a later source line, and
+  postfix indexing does the same for newline-led `[`. Multiline
+  continuations remain supported by placing the operator before the
+  newline (`total = a +` newline `b`).
+
 ### Changed
 
 - **Codegen cleanup: removed the now-dead #759 tuple-struct heap-flag
