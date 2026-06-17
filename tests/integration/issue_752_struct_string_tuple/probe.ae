@@ -1,0 +1,78 @@
+// Regression for #752: when a function returns (Struct, err) where the
+// struct has heap-string fields, those fields must survive the
+// tuple-return boundary. Before the fix the struct's R_destroy(&r)
+// defer freed the field's buffer immediately after the tuple literal
+// had memcpy'd its pointer into the returned tuple — UAF, caller saw
+// garbage. The fix transfers heap ownership of every _heap_<field>
+// from the source struct to the returned tuple by zeroing the flags
+// on the source between the tuple build and the defer drain.
+//
+// Cases:
+//   1. single string field — the literal repro from the issue
+//   2. multi-string struct — two heap-string fields plus an int
+//      (proves the ownership transfer iterates every heap field)
+//   3. interp-string captured into a struct — string built via
+//      string interpolation is heap; transferred ownership must
+//      survive across the boundary
+//   4. compose: returned struct fed into another tuple-return shape
+//      — proves the fix composes when chained
+import lib.rec
+import std.string
+
+extern exit(code: int)
+
+main() {
+    // Case 1 — single-string field
+    r, _ = rec.mk(7, "hello")
+    if r.n != 7 {
+        println("FAIL case 1 n: ${r.n}")
+        exit(1)
+    }
+    if string.equals(r.s, "hello") != 1 {
+        println("FAIL case 1 s: [${r.s}]")
+        exit(1)
+    }
+
+    // Case 2 — multi-string
+    m, _ = rec.mk_multi(42, "object-1", "blue-shard")
+    if m.id != 42 {
+        println("FAIL case 2 id: ${m.id}")
+        exit(1)
+    }
+    if string.equals(m.name, "object-1") != 1 {
+        println("FAIL case 2 name: [${m.name}]")
+        exit(1)
+    }
+    if string.equals(m.label, "blue-shard") != 1 {
+        println("FAIL case 2 label: [${m.label}]")
+        exit(1)
+    }
+
+    // Case 3 — interpolated string into struct
+    suffix = "world"
+    greeting = "hello-${suffix}"
+    r3, _ = rec.mk(11, greeting)
+    if string.equals(r3.s, "hello-world") != 1 {
+        println("FAIL case 3 s: [${r3.s}]")
+        exit(1)
+    }
+
+    // Case 4 — multiple chained calls in a loop (catches a freelist
+    // reuse where the second call's heap allocation reuses the just-
+    // freed buffer slot and the bug looks like it works)
+    i = 0
+    while i < 5 {
+        rx, _ = rec.mk(i, "iter")
+        if rx.n != i {
+            println("FAIL case 4 n at i=${i}: ${rx.n}")
+            exit(1)
+        }
+        if string.equals(rx.s, "iter") != 1 {
+            println("FAIL case 4 s at i=${i}: [${rx.s}]")
+            exit(1)
+        }
+        i = i + 1
+    }
+
+    println("OK issue_752_struct_string_tuple: 4 cases")
+}

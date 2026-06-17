@@ -1616,6 +1616,46 @@ static void emit_tuple_return_position(CodeGenerator* gen, ASTNode* expr,
     }
 }
 
+/* Issue #752: when a struct local with heap-string fields is packed
+ * into a tuple return, the tuple literal memcpys the struct's bytes
+ * — including the string pointer — into the returned tuple. But the
+ * struct's `R_destroy(&r)` defer still fires at function exit (LIFO,
+ * before `return _builder_ret`), and frees the string buffer that
+ * the caller's struct copy is now pointing at. Use-after-free.
+ *
+ * Fix: between the `_builder_ret = (Tuple){r, ...}` line and the
+ * defer drain, zero every `_heap_<field>` flag on the source struct
+ * — transferring heap ownership to the returned copy. The deferred
+ * `R_destroy(&r)` then sees `_heap_<field> == 0` and walks past
+ * every heap field without freeing. The caller's struct copy still
+ * has the original `_heap_<field> == 1` so the caller's destructor
+ * eventually reclaims the buffer.
+ *
+ * Only fires when the tuple-return-position expression is a bare
+ * AST_IDENTIFIER (a local-var read). A struct literal `R{...}`
+ * doesn't have a long-lived backing variable so there's nothing
+ * to zero. The whole helper is a no-op for non-struct positions
+ * and for struct types whose definition declares no string fields.
+ */
+static void emit_tuple_struct_heap_ownership_transfer(CodeGenerator* gen,
+                                                      ASTNode* expr) {
+    if (!gen || !expr) return;
+    if (expr->type != AST_IDENTIFIER || !expr->value) return;
+    if (!expr->node_type || expr->node_type->kind != TYPE_STRUCT) return;
+    if (!expr->node_type->struct_name) return;
+    ASTNode* sdef = find_struct_definition_by_name(gen->program,
+                                                   expr->node_type->struct_name);
+    if (!sdef || !struct_has_heap_string_field(sdef)) return;
+    for (int i = 0; i < sdef->child_count; i++) {
+        ASTNode* field = sdef->children[i];
+        if (!field || field->type != AST_STRUCT_FIELD || !field->value) continue;
+        if (!field->node_type || field->node_type->kind != TYPE_STRING) continue;
+        print_indent(gen);
+        fprintf(gen->output, "%s._heap_%s = 0;\n",
+                expr->value, field->value);
+    }
+}
+
 // Recursive: collect every variable name that may need a heap-string
 // tracker — i.e. every variable that appears as the LHS of an
 // AST_VARIABLE_DECLARATION (in Aether, "decl" covers both first-
@@ -5257,6 +5297,13 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         emit_tuple_return_position(gen, stmt->children[j], j);
                     }
                     fprintf(gen->output, "};\n");
+                    /* Issue #752: transfer heap ownership of any local
+                     * struct's string fields to the returned tuple before
+                     * the deferred R_destroy(&r) drains. */
+                    for (int j = 0; j < stmt->child_count; j++) {
+                        emit_tuple_struct_heap_ownership_transfer(gen,
+                                                                  stmt->children[j]);
+                    }
                     if (owned) free_type(tuple);
                     // Multi-value returns can't be returning a closure
                     // (closures aren't tuples), so the closure-of-captures
