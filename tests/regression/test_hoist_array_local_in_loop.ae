@@ -1,0 +1,42 @@
+// Regression: a fixed-array local (`byte[N]` / `T[N]`) declared inside a
+// loop or branch body — and NOT as the first statement of that block —
+// must hoist to function scope as `T name[N];`, not the invalid
+// `T[N] name;`.
+//
+// Bug shape: the loop/branch var-hoisters emitted `<get_c_type> <name>;`,
+// and get_c_type(TYPE_ARRAY) returns "T[N]" (valid only postfix), so a
+// per-iteration scratch buffer like `byte[8] buf` inside a `while` body
+// produced `unsigned char[8] buf;` — a C syntax error ("expected
+// identifier before '['"), and the var came out undeclared at its use
+// sites. The first-statement-in-block decl path was already correct;
+// this covers the not-first / hoisted path. Hit repeatedly by the Redis
+// port's per-loop scratch buffers (t_list, t_set, rax).
+//
+// Exercises: a byte[] scratch buffer declared after another statement
+// inside a while loop, written and read each iteration, must round-trip.
+
+import std.mem
+
+extern exit(code: int)
+
+sum_packed(n: int) -> long {
+    long total = 0
+    long i = 0
+    while i < n {
+        // a statement precedes the array decl, and the decl is nested
+        // in the loop body — the trigger for the hoist bug.
+        total = total + i
+        byte[8] scratch
+        mem.set_long(scratch, 0, i * 2)
+        total = total + mem.get_long(scratch, 0)
+        i = i + 1
+    }
+    return total
+}
+
+main() {
+    // i=0: +0 +0 ; i=1: +1 +2 ; i=2: +2 +4  -> 0+0+1+2+2+4 = 9
+    if sum_packed(3) != 9 { exit(1) }
+    if sum_packed(0) != 0 { exit(2) }
+    exit(0)
+}

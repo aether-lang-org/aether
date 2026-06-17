@@ -2671,6 +2671,26 @@ static ASTNode* find_branch_decl(ASTNode* body, const char* name) {
 // Aether level, and the existing scope-restore in AST_IF_STATEMENT
 // keeps that locality. Names already declared before the if are also
 // skipped (they're already in scope).
+/* Emit a hoisted C local declaration `<type> <name>;` that is correct
+ * for ARRAY types too. get_c_type(TYPE_ARRAY) returns "T[N]", which is
+ * a valid type spelling only in the postfix-declarator position
+ * (`T name[N]`), NOT as a prefix (`T[N] name;` is invalid C). The
+ * loop/branch var hoisters below pre-declare a var as `<c_type> <name>;`
+ * — fine for scalars/pointers, but for a `byte[8]`-style fixed array it
+ * produced `unsigned char[8] name;`. Split the array case out so it
+ * emits `elem name[N];`. (Hit repeatedly by the Redis port's per-loop
+ * scratch buffers; the first-statement-in-block decl path already does
+ * this correctly, this fixes the not-first / hoisted path.) */
+static void emit_hoisted_local_decl(CodeGenerator* gen, Type* var_type,
+                                     const char* name) {
+    if (var_type && var_type->kind == TYPE_ARRAY && var_type->array_size > 0) {
+        const char* elem = get_c_type(var_type->element_type);
+        fprintf(gen->output, "%s %s[%d];\n", elem, name, var_type->array_size);
+        return;
+    }
+    fprintf(gen->output, "%s %s;\n", get_c_type(var_type), name);
+}
+
 static void hoist_if_else_common_vars(CodeGenerator* gen,
                                        ASTNode* then_body,
                                        ASTNode* else_body) {
@@ -2712,9 +2732,8 @@ static void hoist_if_else_common_vars(CodeGenerator* gen,
                 var_type = decl->children[0]->node_type;
             }
         }
-        const char* c_type = get_c_type(var_type);
         print_indent(gen);
-        fprintf(gen->output, "%s %s;\n", c_type, n);
+        emit_hoisted_local_decl(gen, var_type, n);
     }
 }
 
@@ -2774,7 +2793,7 @@ static void hoist_loop_vars(CodeGenerator* gen, ASTNode* body) {
                         }
                     }
                 } else {
-                    fprintf(gen->output, "%s %s;\n", c_type, child->value);
+                    emit_hoisted_local_decl(gen, var_type, child->value);
                 }
             }
         }
