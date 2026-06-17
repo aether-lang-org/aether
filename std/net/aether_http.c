@@ -675,7 +675,10 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
      * at the first NUL — wasn't a problem in practice because the
      * v1 wrappers only sent textual JSON, but v2 takes body+len). */
     size_t hdr_cap = 1024;
-    char* hdr = (char*)malloc(hdr_cap);
+    /* #461: gate the request-header build buffer through the cap. Self-
+     * contained — alloc, grow, and free all live in this function with
+     * hdr_cap tracking the live size, so accounting balances exactly. */
+    char* hdr = (char*)aether_caps_malloc(hdr_cap);
     if (!hdr) {
         transport_close(&t);
         response->error = string_new("out of memory building request");
@@ -690,8 +693,8 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         if (hdr_len + _slen + 1 > hdr_cap) { \
             size_t _nc = hdr_cap; \
             while (_nc < hdr_len + _slen + 1) _nc *= 2; \
-            char* _nh = (char*)realloc(hdr, _nc); \
-            if (!_nh) { free(hdr); transport_close(&t); \
+            char* _nh = (char*)aether_caps_realloc(hdr, hdr_cap, _nc); \
+            if (!_nh) { aether_caps_free(hdr, hdr_cap); transport_close(&t); \
                        response->error = string_new("out of memory building request"); \
                        return response; } \
             hdr = _nh; hdr_cap = _nc; \
@@ -745,12 +748,12 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
     #undef HDR_APPEND_STR
 
     if (transport_send(&t, hdr, (int)hdr_len) < 0) {
-        free(hdr);
+        aether_caps_free(hdr, hdr_cap);
         transport_close(&t);
         response->error = string_new("send failed");
         return response;
     }
-    free(hdr);
+    aether_caps_free(hdr, hdr_cap);
 
     /* Body — emitted raw so embedded NULs survive. */
     if (body && body_len > 0) {
@@ -775,9 +778,16 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         if (total_len + (size_t)n + 1 > cap) {
             size_t new_cap = cap ? cap * 2 : 16384;
             while (new_cap < total_len + (size_t)n + 1) new_cap *= 2;
-            char* new_resp = (char*)realloc(full_response, new_cap);
+            /* #461: the response body is attacker-controlled (a malicious
+             * server can flood it) — gate the doubling buffer through the
+             * capability allocator. `cap` carries the old size for the
+             * realloc delta and for the error-path free; the buffer is
+             * self-contained in this function (its bytes are copied into
+             * AetherStrings below, then it is freed here), so the
+             * accounting balances exactly. */
+            char* new_resp = (char*)aether_caps_realloc(full_response, cap, new_cap);
             if (!new_resp) {
-                free(full_response);
+                aether_caps_free(full_response, cap);
                 transport_close(&t);
                 response->error = string_new("out of memory reading response");
                 return response;
@@ -801,13 +811,14 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
     // Zero-byte response: still need a valid empty string so strstr
     // below is safe. Tiny allocation, done only on the empty path.
     if (!full_response) {
-        full_response = (char*)malloc(1);
+        full_response = (char*)aether_caps_malloc(1);
         if (!full_response) {
             transport_close(&t);
             response->error = string_new("out of memory");
             return response;
         }
         full_response[0] = '\0';
+        cap = 1;  /* #461: record the 1-byte size so the frees below balance */
     }
 
     transport_close(&t);
@@ -818,7 +829,7 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
      * know whether the request even reached the server. */
     char* header_end = strstr(full_response, "\r\n\r\n");
     if (recv_err && !header_end) {
-        free(full_response);
+        aether_caps_free(full_response, cap);
         response->error = string_new("recv timeout or I/O error");
         return response;
     }
@@ -860,7 +871,7 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         response->body = string_new_with_length(full_response, total_len);
     }
 
-    free(full_response);
+    aether_caps_free(full_response, cap);
     return response;
 }
 

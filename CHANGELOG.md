@@ -14,6 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Changed
+
+- **stdlib caps-audit — `std.net` HTTP client response & request buffers**
+  (#461). Routed the two *unbounded* internal buffers in the HTTP client
+  (`std/net/aether_http.c`) through the capability allocator: the response-
+  body accumulation buffer (`full_response` — the attacker-controlled DoS
+  surface: a malicious server can flood the response) and the request-header
+  build buffer (`hdr`). Both are self-contained within `http_request_internal`
+  with the live size tracked in a local (`cap` / `hdr_cap`), so the
+  realloc-delta accounting and the error-/exit-path frees balance exactly;
+  the empty-response fallback records its 1-byte size. The request body was
+  already capped (prior PR). Bounded, caller-supplied request fields
+  (method/url/header structs and strdups) and the redirect/dechunk/header-
+  extract helpers are intentionally left on libc — they cross alloc/free
+  boundaries into wrapper/test code where caps accounting can't stay
+  balanced, and they are not the unbounded surface. Verified: unit 227/227
+  (no accounting underflow), `-Werror` clean, http_client_dechunk +
+  http_client_redirects integration tests pass (real round-trip through the
+  capped response buffer).
 ## [0.261.0]
 
 ### Added
