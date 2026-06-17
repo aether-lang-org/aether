@@ -1,0 +1,120 @@
+// #626 (upload half) — RAM-bounded streaming request body.
+//
+// A PUT/POST handler that pulls the request body in bounded windows via
+// http.request_body_read(req, off, max) and streams it to a temp file,
+// without the server ever buffering the whole object. This is the exact
+// loop the fbs-core ask wrote (stdlib-streaming-upload-body-followup.md):
+//
+//   total = http.request_body_length(req)
+//   off = 0
+//   while ... { chunk, n, _ = http.request_body_read(req, off, 65536); ... }
+//
+// The handler writes the streamed bytes to <root>/uploaded.bin and
+// replies with the received byte count + a SHA-256 of the streamed
+// content, so the test driver can assert byte-identical round-trip
+// against the file it PUT. A second route echoes a fixed string to
+// prove the keep-alive connection boundary stays clean after a large
+// streamed upload (the post-handler drain works).
+
+import std.http
+import std.os
+import std.string
+import std.fs
+import std.cryptography
+
+extern http_server_start_raw(server: ptr) -> int
+extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
+// std.fs exposes `open` / `pwrite` as wrappers but `file_close` only as
+// a raw extern (not callable via the fs. namespace), so bind it here.
+extern file_close(file: ptr) -> int
+extern exit(code: int)
+
+const PORT = 19250
+
+handle_upload(req: ptr, res: ptr, ud: ptr) {
+    total = http.request_body_length(req)
+    root = aether_args_get(2)
+    out_path = "${root}/uploaded.bin"
+
+    // Stream chunks → temp file via positional writes. Peak RAM is one
+    // 64 KiB window, never the whole body — exactly the write_chunk(out,
+    // chunk, n, off) shape the ask sketched.
+    f, oerr = fs.open(out_path, "w")
+    if oerr != "" {
+        http.response_set_status(res, 500)
+        http.response_set_body(res, "open error: ${oerr}")
+        return
+    }
+    off = 0
+    received = 0
+    while off < total {
+        chunk, n, err = http.request_body_read(req, off, 65536)
+        if err != "" {
+            file_close(f)
+            http.response_set_status(res, 500)
+            http.response_set_body(res, "read error: ${err}")
+            return
+        }
+        if n == 0 {
+            break
+        }
+        fs.pwrite(f, chunk, n, off)
+        received = received + n
+        off = off + n
+    }
+    file_close(f)
+
+    // Digest the file we just wrote, so the driver can verify identity
+    // without the body ever having been whole in server RAM.
+    data, dlen, rerr = fs.read_binary(out_path)
+    if rerr != "" {
+        http.response_set_status(res, 500)
+        http.response_set_body(res, "reread error: ${rerr}")
+        return
+    }
+    digest, derr = cryptography.sha256_hex(data, dlen)
+    if derr != "" {
+        // No OpenSSL — still report the count so the test can SKIP.
+        http.response_set_body(res, "received=${received} sha256=unavailable")
+        return
+    }
+    http.response_set_body(res, "received=${received} sha256=${digest}")
+}
+
+handle_ping(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_body(res, "pong")
+}
+
+message StartSrv { raw: ptr }
+message Noop {}
+actor SrvActor {
+    state s = 0
+    receive { StartSrv(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+main() {
+    n = aether_args_count()
+    if n < 3 {
+        println("usage: server <port> <root>")
+        exit(1)
+    }
+
+    s = http.server_create(PORT)
+    if s == 0 { println("FAIL: server_create"); exit(1) }
+    http.server_set_host(s, "127.0.0.1")
+    http.server_set_keepalive(s, 1, 0, 5000ms)
+    http_server_post(s, "/upload", handle_upload, 0)
+    http.server_get(s, "/ping", handle_ping, 0)
+
+    println("READY")
+
+    spawn(SchedHelper())
+    a = spawn(SrvActor())
+    a ! StartSrv { raw: s }
+    sleep(60000)
+    exit(0)
+}

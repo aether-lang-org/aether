@@ -46,6 +46,22 @@ typedef struct {
     char* local_addr;
     int   local_port;
     int   is_tls;
+    /* Streaming request body (#626 upload half). When a request's
+     * Content-Length exceeds the streaming threshold, the dispatcher
+     * does NOT buffer the whole body — it parses headers + whatever
+     * body bytes arrived in the same recv, then sets these fields so
+     * `http_request_body_read` can pull the rest off the socket in
+     * bounded windows. `stream_conn` is an opaque `HttpConn*` (kept
+     * void* so the public header doesn't leak the connection struct);
+     * NULL on a non-streaming request, where `body` holds the whole
+     * payload as before. `stream_total` is the declared Content-Length;
+     * `stream_consumed` advances as the accessor / post-handler drain
+     * pulls bytes. Trailing fields → same ABI-stable promise as the
+     * connection-metadata block above; a C consumer that leaves them
+     * NULL/0 just gets the legacy fully-buffered behaviour. */
+    void* stream_conn;
+    long  stream_total;
+    long  stream_consumed;
 } HttpRequest;
 
 // HTTP Response

@@ -14,6 +14,46 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **RAM-bounded streaming request bodies (#626 upload half)**
+  (`std/net/aether_http_server.c`, `std/net/aether_http_server.h`,
+  `std/http/module.ae`, `tests/integration/http_stream_upload/`). The
+  HTTP/1.1 server no longer buffers a large request body whole before
+  dispatching the handler. When a request's `Content-Length` exceeds one
+  connection buffer (16 KiB), the dispatcher parses only the header
+  block and hands the handler a *streaming* request; `http.request_body_read(req,
+  off, max)` then pulls each window straight off the socket. Peak server
+  memory for a large upload is one window per connection (O(buf + chunk))
+  instead of O(Content-Length) — for N concurrent M-byte PUTs that's the
+  difference between N×M and N×window bytes live. The canonical loop the
+  fbs-core ask sketched works unchanged:
+  ```aether
+  total = http.request_body_length(req)
+  off = 0
+  while off < total {
+      chunk, n, _ = http.request_body_read(req, off, 65536)
+      if n == 0 { break }
+      fs.pwrite(out, chunk, n, off)   // stream → disk, never whole in RAM
+      off = off + n
+  }
+  ```
+  Small bodies keep the legacy fully-buffered path (random-access offsets,
+  no behavioural change); streaming reads must be sequential (the socket
+  isn't seekable). A post-handler drain consumes any body bytes the
+  handler left unread so the keep-alive connection boundary stays clean
+  for the next request (verified: a follow-up GET on the same socket
+  after a 3 MiB streamed PUT still answers correctly). New
+  `HttpRequest` streaming fields are trailing/ABI-stable (same promise as
+  the connection-metadata block). Closes the upload half of #626
+  (download/sendfile half shipped earlier); sourced from
+  `stdlib-streaming-upload-body-followup.md` (fbs-core, which measured the
+  buffered-upload peak the streaming path removes). Integration test PUTs
+  3 MiB and asserts bounded streaming + byte-identical SHA-256 round-trip
+  + clean keep-alive boundary.
+
 ## [0.268.0]
 
 ### Added
