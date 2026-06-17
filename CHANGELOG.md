@@ -5,14 +5,32 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.233.0]` (create it at the top if
+**Workflow**: New changes go under `## [current]` (create it at the top if
 absent). When a release PR merges to `main`, the release pipeline
-(`.github/workflows/release.yml`) automatically replaces `## [0.233.0]`
+(`.github/workflows/release.yml`) automatically replaces `## [current]`
 with the next version number before tagging. Always use the literal
 `[current]` placeholder — a hardcoded version header here is *not*
 renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
+
+## [0.263.0]
+
+### Fixed
+
+- **Codegen: fixed-array locals hoisted out of a loop/branch body are
+  declared `T name[N]`, not the invalid `T[N] name`** (PR #753,
+  `compiler/codegen/codegen_stmt.c`,
+  `tests/regression/test_hoist_array_local_in_loop.ae`). A `byte[N]` /
+  `T[N]` local declared inside a loop or branch — and not as the block's
+  first statement — is pre-declared at function scope by the var-hoisters.
+  They emitted `<get_c_type> <name>;`, but `get_c_type(TYPE_ARRAY)`
+  returns `T[N]` (valid only in postfix-declarator position), so the
+  hoist produced `unsigned char[8] buf;` and the variable came out
+  undeclared at its use sites. New `emit_hoisted_local_decl()`
+  special-cases `TYPE_ARRAY` to emit `elem name[N];`; both hoist sites
+  route through it. The first-statement-in-block decl path was already
+  correct. Found via the aedis Redis port's per-loop scratch buffers.
 
 ## [0.262.0]
 
@@ -138,6 +156,19 @@ notes to be skipped or clobbered (the failure modes documented in
   added because no inspection-cheap discriminator exists; the
   honest fix for those is lexer-level newline significance, a
   separate decision parked in #528.
+
+## [0.257.0]
+
+### Documentation
+
+- **`docs/dsl-without-macros.md`** — a comparison of Aether's
+  trailing-block DSL approach against Rust-style macros, with worked
+  three-way examples (RSpec/Jest/Aether for test-spec grammars,
+  Diesel/jOOQ/Aether for SQL builders, Unity/Three.js/Aether for an
+  interactive-3D scene with no canonical source form). Committed
+  `[skip actions]` as a docs-only change; this section records the
+  release that carried it (the commit deliberately skipped the release
+  pipeline, which is why no `## [0.257.0]` header was cut at the time).
 
 ## [0.256.0]
 
@@ -690,7 +721,7 @@ notes to be skipped or clobbered (the failure modes documented in
   `aether*` rows and `.obsolete` keys). Fully quit and reopen the editor
   after installing.
 
-## [0.233.0]
+## [0.235.0]
 
 ### Fixed
 
@@ -722,6 +753,33 @@ notes to be skipped or clobbered (the failure modes documented in
     combination of (lit, heap) × (lit, heap) for `glob_match`,
     `glob_match_pathname`, `starts_with`, `ends_with`, `equals`,
     `contains`, `index_of`.
+
+## [0.234.0]
+
+### Added
+
+- **`std.os` process supervision, `run_full`, `chdir`/`getcwd`; `std.signal`,
+  and `ae run -- <args>` forwarding.** The notes for this release were
+  reconstructed during the CHANGELOG drift reconciliation (see the
+  Workflow note at the top of this file). The shipped content — verified
+  against the `v0.234.0` tag — is the process-supervision primitive
+  family (`os.run_supervised`, `os.kill`, `os.wait_pid_timeout`,
+  `os.run_full`), the working-directory accessors (`os.chdir` /
+  `os.getcwd`), the `std.signal` constant module, `ae run <file> --
+  <args>` argument forwarding, the `examples/applications/build-supervisor.ae`
+  demo, the full-suite macOS `leaks(1)` gate, and the CI-image
+  pkg-config/libssl/zlib/pcre2 fix. The detailed per-entry text for
+  these had been absorbed under `## [0.231.0]` by the release-pipeline
+  drift; it remains there verbatim rather than being relocated, because
+  the 0.231↔0.234 boundary for the `make ci-windows` Fixed entry could
+  not be disambiguated with certainty and re-cutting it risked the exact
+  mislabeling this reconciliation is correcting. This header records that
+  0.234.0 shipped that body of work; the prose lives under 0.231.0.
+
+## [0.233.0]
+
+### Fixed
+
 - **Diagnostics: parse errors in an imported module are now attributed
   to that module** (#646). A syntax error inside an imported module was
   labeled with the *importing* file's name and rendered a source snippet
@@ -1223,6 +1281,22 @@ from the commit messages of `perf/windows-ci-and-leak-tail`.
   integration tests cover int / float / bool / nil round-trip,
   typed-shadows-legacy ordering, negative + zero ints, and the
   `value_to_string` round-trip on each kind.
+
+## [0.222.0]
+
+### Fixed
+
+- **`contrib.templating.liquid` — restored engine code missing from
+  PR #651** (`contrib/templating/liquid/module.ae`). PR #651 shipped
+  without the bulk of its Liquid engine implementation (~2.5k lines:
+  the parser/renderer body, plus the `liquid_assign`, `liquid_filters_basic`,
+  and `liquid_tags_simple` integration probes were left referencing
+  functions that hadn't landed). This release restores the full engine
+  body so those tests pass against real code. Committed `[skip actions]`,
+  which is why no `## [0.222.0]` header was cut at the time; this section
+  records the release. (The `git stash`/`pop` hazard that dropped the
+  original 2400-line body is the cautionary case behind the
+  "verify staged diff before commit" rule.)
 
 ## [0.221.0]
 
