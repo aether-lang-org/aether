@@ -20,12 +20,12 @@ exports (
     json_object_get_raw, json_object_set_raw, json_object_has,
     json_object_size_raw, json_object_key_at, json_object_value_at,
     json_array_get_raw, json_array_add_raw, json_array_size,
-    json_create_null, json_create_bool, json_create_number,
+    json_create_null, json_create_bool, json_create_number, json_create_int,
     json_create_string, json_create_array, json_create_object,
     parse, stringify, get_string,
     object_get, object_set, object_size, object_entry,
     array_get, array_add,
-    obj, arr, str, num, boolean, null_value, set, push, encode,
+    obj, arr, str, num, from_int, boolean, null_value, set, push, encode,
     parse_strict, last_error_kind, last_error_line, last_error_col,
     KIND_OK, KIND_PARSE_ERROR, KIND_OUT_OF_MEMORY, KIND_INVALID_INPUT
 )
@@ -80,6 +80,7 @@ extern json_array_size(arr: ptr) -> int
 extern json_create_null() -> ptr
 extern json_create_bool(value: int) -> ptr
 extern json_create_number(value: float) -> ptr
+extern json_create_int(value: long long) -> ptr
 extern json_create_string(value: string) -> ptr
 extern json_create_array() -> ptr
 extern json_create_object() -> ptr
@@ -301,9 +302,14 @@ obj() -> ptr { return json_create_object() }
 arr() -> ptr { return json_create_array() }
 
 // Scalar value constructors. `num` takes a float (JSON has one numeric
-// type); pass `1.0` etc. `boolean` takes 0/1; `null_value` is JSON null.
+// type); pass `1.0` etc. `from_int` is the integer-flavoured sibling
+// — serialised as a bare integer (no decimal point, no scientific
+// notation, full int64 range), the right shape for byte-counts / IDs
+// / totals where the consumer expects a plain integer. `boolean` takes
+// 0/1; `null_value` is JSON null.
 str(value: string) -> ptr { return json_create_string(value) }
 num(value: float) -> ptr  { return json_create_number(value) }
+from_int(value: long) -> ptr { return json_create_int(value) }
 boolean(value: int) -> ptr { return json_create_bool(value) }
 null_value() -> ptr { return json_create_null() }
 

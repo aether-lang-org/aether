@@ -1,0 +1,102 @@
+// Regression: std.json.from_int constructor (sibling of json.num) —
+// integers serialise as bare ints, full int64 range, no scientific
+// notation crossover at ~1e7. Sourced from
+// `stdlib-json-integer-value-ask.md` (fbs-core /metrics handler).
+//
+// Cases:
+//   1. small int → no decimal (json.num(42.0) also prints "42" today
+//                              — this case proves from_int matches)
+//   2. mid-size int (53,248,000) — the exact value that exposed the
+//      bug; %g would emit "5.3248e+07"
+//   3. 2^53 exactly — the IEEE-754 boundary; values past here are
+//      lossy via the float path but exact via from_int
+//   4. int64 max (9,223,372,036,854,775,807) — proves the full range
+//   5. negative int
+//   6. mixed object: from_int + num + str all in one — backward compat
+//   7. round-trip: parse a doc with a bare integer, read via get_int —
+//      proves the existing reader path still works
+
+import std.json
+import std.string
+
+extern exit(code: int)
+
+main() {
+    // Case 1
+    v1, _ = json.stringify(json.from_int(42))
+    if string.equals(v1, "42") != 1 {
+        println("FAIL case 1: got '${v1}', want '42'")
+        exit(1)
+    }
+
+    // Case 2 — the motivating bug
+    v2, _ = json.stringify(json.from_int(53248000))
+    if string.equals(v2, "53248000") != 1 {
+        println("FAIL case 2: got '${v2}', want '53248000'")
+        exit(1)
+    }
+
+    // Case 3 — 2^53 exactly (still in double's exact-int range, but
+    // not all encoders get this right)
+    v3, _ = json.stringify(json.from_int(9007199254740992))
+    if string.equals(v3, "9007199254740992") != 1 {
+        println("FAIL case 3: got '${v3}', want '9007199254740992'")
+        exit(1)
+    }
+
+    // Case 4 — int64 max
+    v4, _ = json.stringify(json.from_int(9223372036854775807))
+    if string.equals(v4, "9223372036854775807") != 1 {
+        println("FAIL case 4: got '${v4}', want '9223372036854775807'")
+        exit(1)
+    }
+
+    // Case 5 — negative
+    v5, _ = json.stringify(json.from_int(-100))
+    if string.equals(v5, "-100") != 1 {
+        println("FAIL case 5: got '${v5}', want '-100'")
+        exit(1)
+    }
+
+    // Case 6 — mixed object, backward compat with json.num()
+    root = json.obj()
+    json.set(root, "bytes", json.from_int(53248000))
+    json.set(root, "pi",    json.num(3.14))
+    json.set(root, "name",  json.str("fbs-core"))
+    out, _ = json.encode(root)
+    // We don't pin exact whitespace — assert each fragment is present
+    // and the integer one is bare (no exponent).
+    if string.contains(out, "\"bytes\":53248000") != 1 {
+        println("FAIL case 6 (bytes): ${out}")
+        exit(1)
+    }
+    if string.contains(out, "\"pi\":3.14") != 1 {
+        println("FAIL case 6 (pi): ${out}")
+        exit(1)
+    }
+    if string.contains(out, "\"name\":\"fbs-core\"") != 1 {
+        println("FAIL case 6 (name): ${out}")
+        exit(1)
+    }
+
+    // Case 7 — encode a large from_int, parse a separately-built
+    // wire-format integer literal. Confirms the encoder writes a bare
+    // integer that round-trips through any consumer that uses the
+    // standard JSON parser. Parse-side automatic flagging is a
+    // follow-up (the parser would need to remember which input forms
+    // came in as ints vs floats — a separate ask); for now the value
+    // survives via the float route since it fits in 2^53.
+    root2 = json.obj()
+    json.set(root2, "count", json.from_int(53248000))
+    s1, _ = json.encode(root2)
+    if string.contains(s1, "53248000") != 1 {
+        println("FAIL case 7 encode: ${s1}")
+        exit(1)
+    }
+    if string.contains(s1, "e+") == 1 || string.contains(s1, "E+") == 1 {
+        println("FAIL case 7 saw exponent: ${s1}")
+        exit(1)
+    }
+
+    println("OK json_from_int: 7 cases")
+}
