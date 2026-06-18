@@ -7,15 +7,33 @@ in-process, with a live, persistent VM:
 ```aether
 import contrib.host.factor
 
-r = factor.eval("USING: math ; 2 3 +")   // r = "5" — result back INTO Aether
-factor.set("x", "10")                      // hand a k-v pair to Factor
-_ = factor.eval("USING: namespaces math math.parser ; \
-                 \"x\" get string>number 5 + number>string \"x\" set-global")
-v = factor.get("x")                        // v = "15" — read it back
+// eval-with-result: fib(10) computed in the VM, value back INTO Aether.
+// Use a <<HEREDOC — no interpolation, no escaping, so Factor's own "..."
+// strings pass through verbatim and the snippet reads like real Factor.
+r = factor.eval(<<FACTOR
+USING: math kernel prettyprint ;
+IN: scratchpad
+: fib ( n -- m ) dup 2 < [ ] [ dup 1 - fib swap 2 - fib + ] if ;
+10 fib pprint
+FACTOR
+)                                              // r = "55"
+
+// a Factor script populates the shared k-v map; Aether reads it back
+_ = factor.run(<<FACTOR
+USING: math math.parser namespaces sequences kernel ;
+IN: scratchpad
+: fib ( n -- m ) dup 2 < [ ] [ dup 1 - fib swap 2 - fib + ] if ;
+10 <iota> [ dup fib number>string swap number>string "fib" prepend set-global ] each
+FACTOR
+)
+v = factor.get("fib9")                         // v = "34"
 ```
 
-The VM is created once and reused across calls, so `set` / `eval` / `get`
-share state — a k-v map handed in and read back, same process.
+The VM is created once and reused across calls, so `set` / `run` / `eval` /
+`get` share state — a k-v map populated by a Factor script and read back,
+same process. The map is **per-key string scalars**, not an aggregate: `set` /
+`get` marshal one value at a time (Aether reconstructs the whole map by
+looping `get` over the keys it expects); there is no bulk-map or JSON channel.
 
 > **Status: experimental, needs a forked Factor.** This host is unlike the
 > others — read the two caveats below before reaching for it.
@@ -24,7 +42,7 @@ share state — a k-v map handed in and read back, same process.
 
 | Call | Effect |
 |------|--------|
-| `factor.eval(code) -> string` | evaluate `code` in the persistent VM; returns its captured output (`""` on failure) |
+| `factor.eval(code) -> string` | evaluate `code` in the persistent VM; returns its **printed output** (`""` if the lib can't load; Factor's error text if the snippet errors — see below) |
 | `factor.run(code) -> int` | fire-and-forget; 0 on success |
 | `factor.set(key, value)` | store a string value under `key` in the VM's global namespace |
 | `factor.get(key) -> string` | read `key` back as raw text (`10`, not `"10"`); `""` if absent |
@@ -37,6 +55,21 @@ renders a stored string as its own content and a number as its digits
 
 Evaluated snippets run in a **bare vocabulary** — there are no default
 imports — so each snippet must name what it uses (`USING: math ; …`).
+
+`factor.eval` captures **printed output**, not the data stack: it runs the
+snippet under Factor's `eval>string` with effect `( -- )`, so the snippet must
+leave a clean stack and *print* whatever it wants back (`… pprint`, `… .`,
+`… present write`). A bare `2 3 +` leaves a value on the stack and is a
+stack-effect error — render it: `2 3 + pprint`. On a snippet error
+(stack-effect mismatch, undefined word, …) `eval>string` recovers and writes
+the **error text** into the captured output, so `eval` returns Factor's
+diagnostic string rather than `""` — handy when debugging, but check for it if
+you treat a non-empty result as success.
+
+Defining a word inline (`: name ( … ) … ;`) needs an **`IN:` vocabulary**
+declaration first (e.g. `IN: scratchpad`) — eval runs outside any vocabulary,
+and a colon definition with no `IN:` fails with *"Not in a vocabulary; IN:
+form required."*
 
 ## Caveat 1 — needs the embed-api fork of Factor
 
