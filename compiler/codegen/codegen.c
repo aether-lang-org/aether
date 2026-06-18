@@ -216,6 +216,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->escaped_string_var_count = 0;
     gen->return_escaped_string_vars = NULL;
     gen->return_escaped_string_var_count = 0;
+    gen->return_escaped_struct_vars = NULL;
+    gen->return_escaped_struct_var_count = 0;
     // *StringSeq ownership tracking — MUST be zero-initialised here:
     // the CodeGenerator is field-initialised (not calloc'd), so leaving
     // these uninitialised made the first clear_seq_vars() free garbage
@@ -468,6 +470,14 @@ void clear_escaped_string_vars(CodeGenerator* gen) {
     }
     gen->return_escaped_string_vars = NULL;
     gen->return_escaped_string_var_count = 0;
+    if (gen->return_escaped_struct_vars) {
+        for (int i = 0; i < gen->return_escaped_struct_var_count; i++) {
+            free(gen->return_escaped_struct_vars[i]);
+        }
+        free(gen->return_escaped_struct_vars);
+    }
+    gen->return_escaped_struct_vars = NULL;
+    gen->return_escaped_struct_var_count = 0;
 }
 
 /* ---- *StringSeq local registry (parallel to heap_string_vars) ----
@@ -545,6 +555,30 @@ void mark_return_escaped_string_var(CodeGenerator* gen, const char* var_name) {
     gen->return_escaped_string_vars = new_vars;
     gen->return_escaped_string_vars[gen->return_escaped_string_var_count] = strdup(var_name);
     gen->return_escaped_string_var_count++;
+}
+
+/* #752: a struct local returned (directly or as a tuple element)
+ * transfers ownership of its heap-string fields to the caller, so the
+ * function-exit <Struct>_destroy defer must NOT fire for it. */
+int is_return_escaped_struct_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->return_escaped_struct_var_count; i++) {
+        if (strcmp(gen->return_escaped_struct_vars[i], var_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void mark_return_escaped_struct_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_return_escaped_struct_var(gen, var_name)) return;
+    char** new_vars = realloc(gen->return_escaped_struct_vars,
+                              sizeof(char*) * (gen->return_escaped_struct_var_count + 1));
+    if (!new_vars) return;
+    gen->return_escaped_struct_vars = new_vars;
+    gen->return_escaped_struct_vars[gen->return_escaped_struct_var_count] = strdup(var_name);
+    gen->return_escaped_struct_var_count++;
 }
 
 // Normalise a callee name's dots to underscores. Used by every
@@ -735,6 +769,12 @@ static int try_emit_struct_destroy(CodeGenerator* gen, ASTNode* deferred) {
     memcpy(var_buf, rest, var_len);
     var_buf[var_len] = '\0';
     const char* struct_name = sep + 1;
+    /* #752: suppress the destroy when this struct escaped via a return —
+     * its heap-string fields now belong to the caller. Consume the defer
+     * (return 1) so it is not freed at callee exit. */
+    if (is_return_escaped_struct_var(gen, var_buf)) {
+        return 1;
+    }
     print_indent(gen);
     fprintf(gen->output,
             "/* deferred */ %s_destroy(&%s);\n",
@@ -2382,6 +2422,35 @@ void generate_type(CodeGenerator* gen, Type* type) {
     fprintf(gen->output, "%s", get_c_type(type));
 }
 
+/* #750: emit a C function-pointer declarator for a `fn(...)->R`
+ * (TYPE_FUNCTION, is_fnptr) parameter. The pointed-to name must sit
+ * INSIDE the `(*...)`, so this can't use the plain `<type> <name>`
+ * shape get_c_type provides (is_fnptr collapses to "void*" there).
+ *   name != NULL  ->  `R (*name)(T1, T2)`   (a definition parameter)
+ *   name == NULL  ->  `R (*)(T1, T2)`       (a prototype's abstract declarator)
+ * The element type strings mirror the call-site cast in codegen_expr.c
+ * so a fn-ptr param, its prototype, and a call through it all agree. */
+void emit_fnptr_decl(CodeGenerator* gen, Type* sig, const char* name) {
+    const char* ret_c = (sig && sig->return_type)
+                        ? get_c_type(sig->return_type) : "void";
+    fprintf(gen->output, "%s (*%s)(", ret_c, name ? name : "");
+    if (sig && sig->param_count > 0) {
+        for (int i = 0; i < sig->param_count; i++) {
+            if (i > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "%s", get_c_type(sig->param_types[i]));
+        }
+    } else {
+        fprintf(gen->output, "void");
+    }
+    fprintf(gen->output, ")");
+}
+
+/* True for a parameter/local whose declared type is a typed C function
+ * pointer (`fn(...)->R`), the shape #750 emits specially. */
+int is_fnptr_type(Type* t) {
+    return t && t->kind == TYPE_FUNCTION && t->is_fnptr;
+}
+
 // Generate a default return value for pattern match failures
 // This outputs a sentinel value that indicates "no match" for this clause
 void generate_default_return_value(CodeGenerator* gen, Type* type) {
@@ -3390,7 +3459,13 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                        param->type == AST_PATTERN_STRUCT ||
                        param->type == AST_VARIABLE_DECLARATION) {
                 if (param_count > 0) fprintf(gen->output, ", ");
-                generate_type(gen, param->node_type);
+                /* #750: fn-ptr param → abstract declarator `R (*)(T1,T2)`
+                 * so the prototype matches the definition. */
+                if (is_fnptr_type(param->node_type)) {
+                    emit_fnptr_decl(gen, param->node_type, NULL);
+                } else {
+                    generate_type(gen, param->node_type);
+                }
                 param_count++;
             }
         }

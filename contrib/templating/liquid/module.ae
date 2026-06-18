@@ -398,8 +398,8 @@ lex(src: string) -> (ptr, string) {
                 // drop the tag entirely. Outer dash strips already
                 // applied to the preceding text (via `ls`); the closer's
                 // right-strip carries to the next TEXT.
-                if string_length(body) > 0
-                   && string.char_at_n(body, string_length(body), 0) == 35 {   // '#'
+                if string_length(body) > 0 &&
+                   string.char_at_n(body, string_length(body), 0) == 35 {   // '#'
                     if rs == 1 { strip_next = 1 }
                     pos = pos_after
                     continue
@@ -825,10 +825,10 @@ filter_url_encode(s: string) -> string {
     while i < n {
         c = string.char_at_n(s, n, i)
         // Unreserved per RFC 3986: A-Z a-z 0-9 - _ . ~
-        if (c >= 48 && c <= 57)
-           || (c >= 65 && c <= 90)
-           || (c >= 97 && c <= 122)
-           || c == 45 || c == 95 || c == 46 || c == 126 {
+        if (c >= 48 && c <= 57) ||
+           (c >= 65 && c <= 90) ||
+           (c >= 97 && c <= 122) ||
+           c == 45 || c == 95 || c == 46 || c == 126 {
             strbuilder.append(sb, string.from_char(c))
         } else if c == 32 {
             strbuilder.append(sb, "+")
@@ -2149,18 +2149,18 @@ render_range(kinds: ptr, contents: ptr, start: int, end: int, ctx: ptr) -> (stri
                 return strbuilder.finish(sb), "__break__"
             } else if string.equals(head, "continue") == 1 {
                 return strbuilder.finish(sb), "__continue__"
-            } else if string.equals(head, "elsif") == 1
-                   || string.equals(head, "else") == 1
-                   || string.equals(head, "endif") == 1
-                   || string.equals(head, "endunless") == 1
-                   || string.equals(head, "endcase") == 1
-                   || string.equals(head, "endfor") == 1
-                   || string.equals(head, "endtablerow") == 1
-                   || string.equals(head, "endblock") == 1
-                   || string.equals(head, "block") == 1
-                   || string.equals(head, "layout") == 1
-                   || string.equals(head, "extends") == 1
-                   || string.equals(head, "when") == 1 {
+            } else if string.equals(head, "elsif") == 1 ||
+                   string.equals(head, "else") == 1 ||
+                   string.equals(head, "endif") == 1 ||
+                   string.equals(head, "endunless") == 1 ||
+                   string.equals(head, "endcase") == 1 ||
+                   string.equals(head, "endfor") == 1 ||
+                   string.equals(head, "endtablerow") == 1 ||
+                   string.equals(head, "endblock") == 1 ||
+                   string.equals(head, "block") == 1 ||
+                   string.equals(head, "layout") == 1 ||
+                   string.equals(head, "extends") == 1 ||
+                   string.equals(head, "when") == 1 {
                 return strbuilder.finish(sb),
                     string.concat("stray `{% ", string.concat(head, " %}` outside its block"))
             } else {
@@ -2230,8 +2230,8 @@ render_if_block(kinds: ptr, contents: ptr, start: int, end: int,
         // branch already matched — we just need to skip to endif).
         if matched == 0 {
             take = 0
-            if string.equals(head, end_kw) == 1 || string.equals(head, "else") == 1
-               || string.equals(head, "elsif") == 1 {
+            if string.equals(head, end_kw) == 1 || string.equals(head, "else") == 1 ||
+               string.equals(head, "elsif") == 1 {
                 tv = 0
                 if string_length(cur_cond) > 0 {
                     v, cerr = eval_condition(ctx, cur_cond)

@@ -1,8 +1,8 @@
 // Issue #528: line-leading operators must not fold into the previous
 // statement's expression when they form a recognisable statement
 // shape. PR #527 added a targeted `*StructName name` guard; this test
-// covers the generalised shape recogniser in
-// `is_newline_led_statement` (compiler/parser/parser.c).
+// covers the newline boundary rule in `parse_binary_expression`
+// (compiler/parser/parser.c).
 //
 // Without the guard:
 //
@@ -59,17 +59,27 @@ main() {
     }
     println("  PASS case 2: line-leading deref-store doesn't fold into previous expr")
 
-    // ---- Case 3: legitimate multi-line expression — operator
-    //              continuation MUST still work (no false positive) ---
+    // ---- Case 3: line-leading unary expression statement -------------
     a = 10
     b = 20
-    sum = a
-        + b
-    if sum != 30 {
-        println("FAIL case 3: line-led `+` lost \`a\`; got ${sum}, want 30")
+    // Pre-fix, this parsed as `a = 10 - b` because the newline-led
+    // `-` folded into the previous assignment expression.
+    -b
+    if a != 10 {
+        println("FAIL case 3: line-led unary statement folded into previous expr; got ${a}, want 10")
         return
     }
-    println("  PASS case 3: multi-line expression continuation preserved")
+    println("  PASS case 3: line-leading unary statement doesn't fold")
+
+    // Multiline expressions still work when the operator appears
+    // before the newline.
+    sum = a +
+        b
+    if sum != 30 {
+        println("FAIL case 4: trailing-operator continuation got ${sum}, want 30")
+        return
+    }
+    println("  PASS case 4: trailing-operator continuation preserved")
 
     free(p)
     free(raw)

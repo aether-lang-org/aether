@@ -1,0 +1,51 @@
+// Regression (#750): a `fn(T1,T2)->R` PARAMETER lowers to the exact C
+// function-pointer type `R (*name)(T1,T2)` in both the prototype and the
+// definition, and a call through it (`cb(a,b)`) is a real indirect call.
+//
+// Before #750 a fn-typed param became a bare `void*` and `cb(a,b)` emitted
+// invalid C ("called object is not a function"). The `as fn(...)` cast only
+// rescued a single in-body callback; it didn't scale to multiple callback
+// params or callback-taking helpers (dictScan, raxWalk, command-table
+// iteration in the Redis port). Sibling of fn-ptr struct fields / typed
+// fn-ptr locals.
+//
+// Covers: void-returning callback, int-returning callback, two callback
+// params in one signature, and an indirect call whose result feeds an
+// expression. Asserted + exit(1) on mismatch.
+
+import std.mem
+extern exit(code: int)
+extern malloc(n: long) -> ptr
+
+// void-returning fn-ptr param — writes through the out-pointers.
+fill_pair(cb: fn(ptr, ptr) -> void, a: ptr, b: ptr) {
+    cb(a, b)
+}
+
+// two fn-ptr params + an int return, both called and combined.
+combine(f: fn(int, int) -> int, g: fn(int) -> int, x: int, y: int) -> int {
+    return f(x, y) + g(x)
+}
+
+writer(a: ptr, b: ptr) {
+    mem.set_int(a, 0, 42)
+    mem.set_int(b, 0, 99)
+}
+add(x: int, y: int) -> int { return x + y }
+dbl(x: int) -> int { return x * 2 }
+
+main() {
+    println("=== test_fn_pointer_params ===")
+
+    p = malloc(8)
+    q = malloc(8)
+    fill_pair(writer as fn(ptr, ptr) -> void, p, q)
+    if mem.get_int(p, 0) != 42 { println("FAIL: void cb out-param a"); exit(1) }
+    if mem.get_int(q, 0) != 99 { println("FAIL: void cb out-param b"); exit(1) }
+
+    r = combine(add as fn(int, int) -> int, dbl as fn(int) -> int, 3, 4)
+    if r != 13 { println("FAIL: two-callback combine (got ${r}, want 13)"); exit(1) }
+
+    println("  PASS: fn-ptr params lower to typed indirect calls")
+    println("OK")
+}

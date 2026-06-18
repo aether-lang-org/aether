@@ -704,13 +704,14 @@ request_body_length(req: ptr) -> int {
 // (bytes, n, "") on success — `n` may be less than `max` at EOF.
 // Returns ("", 0, error) on failure.
 //
-// This is the SHAPE the fbs-core port asked for, so downstream code
-// can stream-process uploads. CURRENT IMPLEMENTATION reads from the
-// already-buffered body — the RAM-bounded internals (handler runs
-// before body finishes arriving) are a follow-up. Today this gives
-// porters a chunked-iteration loop that works against the buffered
-// body; the day the parse loop streams, the same code keeps working
-// without changes.
+// RAM-bounded for large uploads (#626). A body larger than the 16 KiB
+// connection buffer is NOT buffered whole: the server parses headers,
+// then this accessor pulls each window straight off the socket. Reads
+// must be sequential (offset advances by the returned `n`, which the
+// loop below does naturally). Small bodies stay fully buffered and
+// support random-access offsets. Either way the loop below is
+// identical — peak server memory for a large PUT is one window per
+// connection, not the whole object.
 //
 // Pair with `request_body_length` to drive the loop:
 //
