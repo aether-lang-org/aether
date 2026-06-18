@@ -1,0 +1,64 @@
+// Regression (#752): a heap STRING field of a struct returned from a
+// function must survive the return — both for a tuple-wrapped return
+// (`return s, ""`) and a single-value builder return (`return s`).
+//
+// Pre-fix, the struct's heap-string field was freed at function exit
+// (the struct's `<Struct>_destroy` defer fired even though the struct
+// escaped via the return), so the caller read a dangling pointer and
+// the field came back as garbage. Int fields survived (no free); a
+// string field from a *literal* survived (static, never freed) — which
+// is exactly why the #634 test (int-only) didn't catch it.
+//
+// This is a BEHAVIOURAL gate: it compares the returned string field's
+// value and exit(1)s on garbage. It also covers a chained
+// receive-then-re-return (ownership must transfer, not double-free).
+
+import std.string
+
+extern exit(code: int)
+
+struct R { n: int  s: string }
+
+// Tuple-wrapped return of a struct with a heap-string field.
+mk_tuple(x: int, txt: string) -> {
+    r = R { n: x, s: string.copy(txt) }
+    return r, ""
+}
+
+// Single-value builder return of the same.
+mk_single(x: int, txt: string) -> {
+    return R { n: x, s: string.copy(txt) }
+}
+
+// Chained: receive ownership, then re-return (must not double-free).
+passthrough(x: int, txt: string) -> {
+    r, e = mk_tuple(x, txt)
+    return r, ""
+}
+
+check(label: string, got: R, want_n: int, want_s: string) {
+    if got.n != want_n {
+        println("FAIL ${label}: int field n=${got.n} expected ${want_n}")
+        exit(1)
+    }
+    if string.equals(got.s, want_s) == 0 {
+        println("FAIL ${label}: string field s=[${got.s}] expected [${want_s}]")
+        exit(1)
+    }
+    println("  PASS ${label}: n=${got.n} s=[${got.s}]")
+}
+
+main() {
+    println("=== test_struct_string_field_return ===")
+
+    a, ea = mk_tuple(7, "hello")
+    check("tuple", a, 7, "hello")
+
+    b = mk_single(11, "world")
+    check("single", b, 11, "world")
+
+    c, ec = passthrough(5, "chain")
+    check("chained", c, 5, "chain")
+
+    println("OK")
+}

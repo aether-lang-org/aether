@@ -36,6 +36,239 @@ notes to be skipped or clobbered (the failure modes documented in
   (#773) and struct fields (#777) for Ask A, the inline `...` C-varargs
   call-through already shipped for Ask B, and `longdouble` for Ask C.
 
+## [0.273.0]
+
+### Added
+
+- **By-value struct returns and stack-struct locals** (#746). A function
+  may now declare a by-value struct return type (`make() -> Pair`), and a
+  struct can be declared as a stack-allocated local (`Pair p` — no `*`, no
+  initializer) and filled field-by-field. Both were parse errors before:
+  the `-> StructName` return type fell through the `->` return-type
+  disambiguator (an off-by-one in its `{` lookahead — `->` is already
+  consumed, so the name sits at offset 0, not 1) into the `-> expr`
+  arrow-body path; and `StructName name` had no statement-level
+  declaration case (only `*StructName name` and the C-ABI aliases like
+  `size_t n`). Both fixes are parser-only — the `IDENT IDENT` stack-local
+  case mirrors the existing `*StructName name` pointer path, and codegen
+  was already correct (struct return type via get_c_type, `.field` access
+  on a value struct, `return p` as a C struct copy). Completes the
+  by-value struct set (by-value params already worked), so an all-scalar
+  record (a geometry/bounding-box result, the geohash_helper.c shape) can
+  be built on the stack and returned without heap allocation or an
+  out-pointer. See [docs/language-reference.md](docs/language-reference.md)
+  (By-value struct returns and stack-struct locals).
+## [0.272.0]
+
+### Added
+
+- **Function-pointer parameters** (#750). A `fn(T1, T2) -> R` parameter now
+  lowers to the exact C function-pointer type `R (*name)(T1, T2)` in both
+  the prototype and the definition, and a call through it (`cb(a, b)`) is a
+  real typed indirect call. Previously a fn-typed parameter collapsed to a
+  bare `void*` and the body call emitted invalid C ("called object is not a
+  function"); the `as fn(...)` cast only rescued a single in-body callback,
+  which didn't scale to multiple callback params or callback-taking helpers.
+  This is the parameter form of the existing typed-fn-pointer machinery
+  (`as fn(...)` locals, fn-pointer struct fields): the parser/typechecker
+  already carried `is_fnptr` onto the parameter, so the fix is codegen-only —
+  a fn-ptr declarator emitter for the prototype + definition, plus
+  registering the param in the fn-ptr-local registry so the call site emits
+  the typed indirect call. Unblocks porting callback APIs (Redis dictScan/
+  raxWalk/command-table iteration; qsort, signal handlers, libcurl/sqlite
+  hooks). See [docs/language-reference.md](docs/language-reference.md)
+  (Function-pointer parameters).
+## [0.270.0]
+
+### Fixed
+
+- **Parser: newline now terminates infix/postfix expression continuation**
+  (issue #528; `compiler/parser/parser.c`,
+  `tests/regression/test_parser_line_leading_statements.ae`,
+  `tests/integration/parser_newline_bracket/`). The old guarded
+  recogniser handled `*StructName name`, `*ident = ...`, and a narrow
+  `[x, y]` shape, but still let line-leading unary statements like `-x`
+  fold into the previous expression. The binary-expression loop now
+  stops whenever an infix operator starts on a later source line, and
+  postfix indexing does the same for newline-led `[`. Multiline
+  continuations remain supported by placing the operator before the
+  newline (`total = a +` newline `b`).
+
+### Changed
+
+- **Codegen cleanup: removed the now-dead #759 tuple-struct heap-flag
+  transfer, superseded by #762's return-escape contract**
+  (`compiler/codegen/codegen_stmt.c`). Two independent fixes for #752
+  (struct-with-heap-string-field returned via tuple) both landed: #759
+  zeroed the source struct's `_heap_<field>` flags before the
+  function-exit `<Struct>_destroy` defer, and #762 (later, more complete)
+  suppresses that destroy entirely on the escaping struct and pushes the
+  destroy to the *receiving* caller. With #762's suppression the destroy
+  never runs in the callee, so #759's flag-zeroing became a dead store
+  (`r._heap_s = 0;` on a struct whose destructor is gone). Removed the
+  `emit_tuple_struct_heap_ownership_transfer` helper and its sole call
+  site; #762's `mark_returned_struct_escaped` on the same tuple-return
+  loop is the live, complete mechanism. No behavioural change — verified
+  the generated C drops the dead store while the caller-side single free
+  is unchanged; both #752 regression tests
+  (`tests/integration/issue_752_struct_string_tuple/`,
+  `tests/regression/test_struct_string_field_return.ae`) and unit 229/229
+  stay green. Pure dead-code removal; keeps the two-mechanisms-on-one-path
+  hazard from misleading a future editor.
+
+## [0.269.0]
+
+### Added
+
+- **RAM-bounded streaming request bodies (#626 upload half)**
+  (`std/net/aether_http_server.c`, `std/net/aether_http_server.h`,
+  `std/http/module.ae`, `tests/integration/http_stream_upload/`). The
+  HTTP/1.1 server no longer buffers a large request body whole before
+  dispatching the handler. When a request's `Content-Length` exceeds one
+  connection buffer (16 KiB), the dispatcher parses only the header
+  block and hands the handler a *streaming* request; `http.request_body_read(req,
+  off, max)` then pulls each window straight off the socket. Peak server
+  memory for a large upload is one window per connection (O(buf + chunk))
+  instead of O(Content-Length) — for N concurrent M-byte PUTs that's the
+  difference between N×M and N×window bytes live. The canonical loop the
+  fbs-core ask sketched works unchanged:
+  ```aether
+  total = http.request_body_length(req)
+  off = 0
+  while off < total {
+      chunk, n, _ = http.request_body_read(req, off, 65536)
+      if n == 0 { break }
+      fs.pwrite(out, chunk, n, off)   // stream → disk, never whole in RAM
+      off = off + n
+  }
+  ```
+  Small bodies keep the legacy fully-buffered path (random-access offsets,
+  no behavioural change); streaming reads must be sequential (the socket
+  isn't seekable). A post-handler drain consumes any body bytes the
+  handler left unread so the keep-alive connection boundary stays clean
+  for the next request (verified: a follow-up GET on the same socket
+  after a 3 MiB streamed PUT still answers correctly). New
+  `HttpRequest` streaming fields are trailing/ABI-stable (same promise as
+  the connection-metadata block). Closes the upload half of #626
+  (download/sendfile half shipped earlier); sourced from
+  `stdlib-streaming-upload-body-followup.md` (fbs-core, which measured the
+  buffered-upload peak the streaming path removes). Integration test PUTs
+  3 MiB and asserts bounded streaming + byte-identical SHA-256 round-trip
+  + clean keep-alive boundary.
+
+## [0.268.0]
+
+### Added
+
+- **Typed module-level constant arrays** (#745). `const NAME: T[N] = [...]`
+  declares a file-scope `static const <T> NAME[]` lookup table with the C
+  element width pinned — `T` ∈ {`uint8`, `uint16`, `uint32`, `uint64`,
+  `int`, `long`}. Previously the only spelling was `const NAME[] = [...]`,
+  which always inferred `int` elements: a uint8/uint16 table cost 4× the
+  memory and mismatched a C header expecting a packed `uint16_t[]` (e.g.
+  the cluster-slot CRC16 table). The table is allocated once and shared
+  across calls (not re-initialised per call). Two compiler changes: the
+  top-level `const` parser now accepts a `: T[N]` annotation (and a typed
+  scalar `const NAME: T = value`), and the short unsigned width names
+  `uint8`/`uint16`/`uint32` are recognised type spellings (siblings of the
+  existing `uint64` keyword, emitting `uint8_t`/`uint16_t`/`uint32_t`); an
+  integer-element array literal may initialise a narrower integer-element
+  typed const array (the explicit, compile-time-constant intent). See
+  [docs/language-reference.md](docs/language-reference.md) (Module-level
+  constant arrays).
+
+## [0.267.0]
+
+### Fixed
+
+- **Heap string fields of a struct returned from a function are no longer
+  corrupted** (#752, follow-up to #634). When a function returned a struct
+  with a heap-string field (directly via a single-value builder return, or
+  as a tuple element `return r, ""`), the struct's `<Struct>_destroy`
+  function-exit defer freed the field even though the struct escaped via
+  the return — so the caller read a dangling pointer and the string came
+  back as garbage. Int fields survived (no free); a literal-initialised
+  string survived (static), which is why the #634 test (int-only) missed
+  it. Two-sided fix matching the established return-escape contract for
+  plain heap strings: (1) the callee suppresses the struct's destroy when
+  it escapes via a return (`return_escaped_struct_vars` → consulted by
+  `try_emit_struct_destroy`), transferring ownership to the caller; (2) the
+  caller that *receives* an owned struct — a tuple-unpack target or a local
+  initialised from a struct-returning call — gets a `<Struct>_destroy`
+  defer so the fields are freed exactly once at its scope exit. Verified
+  leak-free and double-free-free (ASan + `leaks`) across tuple, single, and
+  chained receive-then-re-return forms. Regression test
+  `tests/regression/test_struct_string_field_return.ae` asserts the string
+  field's *value* (a behavioural gate, unlike the compile-only #634 test).
+## [0.266.0]
+
+### Fixed
+
+- **Module-global first-assigned inside a nested block no longer shadowed
+  by an uninitialized local** (#744, regression in #701). Codegen's
+  branch/loop variable hoisters (`hoist_if_branch_vars`,
+  `hoist_if_else_common_vars`, `hoist_loop_vars`) pre-declared a `var`
+  global as a fresh function local when its first assignment appeared
+  inside an `if`/`while` body — shadowing the file-scope `static`, so
+  every write landed in the local and the global kept its initializer
+  forever. A silent miscompile whose visibility depended on optimization
+  (it corrupted the aedis MT19937-64 PRNG port: a lazily-malloc'd state
+  buffer's writes never reached the global). All three hoisters now skip
+  names that are module globals — the write is already routed to the
+  static by the variable-declaration emitter (`is_module_global_var`), so
+  the local must not be emitted. Regression test in
+  `tests/integration/module_globals/nested_block_init.ae` (if-body,
+  loop-body, and a lazily-initialised counter; exits non-zero if a write
+  fails to reach the global).
+## [0.265.0]
+
+### Fixed
+
+- **#752: heap-string fields of a struct returned via tuple were freed
+  before the caller could read them** (`compiler/codegen/codegen_stmt.c`,
+  `tests/integration/issue_752_struct_string_tuple/`). A function
+  returning `(R, err)` where `R` contains a `string` field initialised
+  from a heap source (e.g. `string.copy(...)`) emitted:
+  ```c
+  _tuple_R_string _builder_ret = (_tuple_R_string){r, ""};
+  /* deferred */ R_destroy(&r);   // ← frees r.s
+  return _builder_ret;
+  ```
+  The tuple literal memcpys `r` into the returned tuple including its
+  `.s` pointer; the immediately-following `R_destroy(&r)` defer then
+  frees that pointer's buffer while the caller's copy still references
+  it. Use-after-free; caller saw garbage in every string field while
+  scalar fields survived. New helper
+  `emit_tuple_struct_heap_ownership_transfer` walks every tuple-return
+  child that is a bare `AST_IDENTIFIER` of struct type and emits
+  `<varname>._heap_<field> = 0;` for each heap-string field after the
+  tuple literal is built and before the defer drain. The struct's
+  `_destroy` defer becomes a no-op for the transferred fields; the
+  caller's returned struct retains `_heap_<field> = 1` so its own
+  destruct path correctly reclaims the buffer. Sourced from fbs-core's
+  attempt to convert `object_get` from a positional 8-tuple to
+  `(Object, err)` (issue #752 repro). The fix only touches the
+  with-defer multi-value-return path — the no-defer path constructs
+  the tuple inline in `return (Tuple){...};` and has no destroy defer
+  to race against.
+
+### Added
+
+- **`std.json.from_int(n)` — integer-flavoured number constructor**
+  (`std/json/aether_json.c`, `std/json/aether_json.h`, `std/json/module.ae`,
+  `tests/integration/json_from_int/`). Sibling of `json.num(value: float)`:
+  takes a `long` (full int64 range) and stamps a `JV_FLAG_INTEGER` flag on
+  the `JsonValue` so the serializer emits `%lld` instead of `%g`. The
+  motivating bug: `json.num(53248000.0)` serialised as `"5.3248e+07"`
+  (`%g` switches to scientific notation past ~1e7), wrong for byte-count
+  / ID / total fields and lossy past 2^53. Adds a dedicated `integer`
+  slot to the JsonValue union (shares the slot, no struct growth) and
+  branches the encoder + `json_get_int` + `json_get_number` + clone-tree
+  paths on the flag. Parser-side automatic flagging (recognising bare
+  integers in input JSON) is a separate follow-up — the value still
+  round-trips correctly via the float path as long as it fits in 2^53.
+  Sourced from `stdlib-json-integer-value-ask.md` (fbs-core /metrics).
+
 ## [0.263.0]
 
 ### Fixed

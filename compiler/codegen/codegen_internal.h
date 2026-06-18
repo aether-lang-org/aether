@@ -22,6 +22,8 @@ int is_c_reserved_word(const char* name);
 const char* safe_c_name(const char* name);
 const char* get_c_operator(const char* aether_op);
 void generate_type(CodeGenerator* gen, Type* type);
+void emit_fnptr_decl(CodeGenerator* gen, Type* sig, const char* name);
+int is_fnptr_type(Type* t);
 int is_var_declared(CodeGenerator* gen, const char* var_name);
 void mark_var_declared(CodeGenerator* gen, const char* var_name);
 void clear_declared_vars(CodeGenerator* gen);
@@ -35,6 +37,8 @@ void mark_escaped_string_var(CodeGenerator* gen, const char* var_name);
 void clear_escaped_string_vars(CodeGenerator* gen);
 int is_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
 void mark_return_escaped_string_var(CodeGenerator* gen, const char* var_name);
+int is_return_escaped_struct_var(CodeGenerator* gen, const char* var_name);
+void mark_return_escaped_struct_var(CodeGenerator* gen, const char* var_name);
 
 /* *StringSeq local registry (parallel to the heap-string set). A seq
  * var owns a refcounted spine freed by string_seq_free (a decrement). */

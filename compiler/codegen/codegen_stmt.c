@@ -2714,6 +2714,10 @@ static void hoist_if_else_common_vars(CodeGenerator* gen,
 
         // Skip if already declared at outer scope.
         if (is_var_declared(gen, n)) continue;
+        /* #744: never shadow a module-level `var` global with a hoisted
+         * local — the write is routed to the file-scope static by the
+         * variable-declaration emitter. */
+        if (is_module_global_var(gen, n)) continue;
         mark_var_declared(gen, n);
 
         // Recover a usable type from either branch's initializer.
@@ -2748,7 +2752,10 @@ static void hoist_loop_vars(CodeGenerator* gen, ASTNode* body) {
         ASTNode* child = body->children[i];
         if (!child) continue;
         if (child->type == AST_VARIABLE_DECLARATION && child->value) {
-            if (!is_var_declared(gen, child->value)) {
+            /* #744: don't hoist a module-level `var` global as a loop-
+             * scoped local — it would shadow the file-scope static. */
+            if (!is_var_declared(gen, child->value) &&
+                !is_module_global_var(gen, child->value)) {
                 mark_var_declared(gen, child->value);
                 // Determine type
                 Type* var_type = child->node_type;
@@ -3159,6 +3166,15 @@ void hoist_if_branch_vars(CodeGenerator* gen, ASTNode* body) {
     for (int n = 0; n < count; n++) {
         const char* name = names[n];
         if (is_var_declared(gen, name)) continue;
+        /* #744: a module-level `var` global first assigned inside an
+         * if-branch must NOT be hoisted as a fresh function local —
+         * that local shadows the file-scope `static`, so every write
+         * lands in the local and the global keeps its initializer
+         * forever (a silent miscompile; regression in #701). The
+         * assignment is already routed to the global by the
+         * AST_VARIABLE_DECLARATION emitter (is_module_global_var), so
+         * skip it here exactly as that path does. */
+        if (is_module_global_var(gen, name)) continue;
         int referenced_outside = 0;
         for (int i = 0; i < body->child_count; i++) {
             ASTNode* child = body->children[i];
@@ -3214,6 +3230,48 @@ static void collect_if_branch_vars(ASTNode* body, const char** out, int* count, 
             }
             if (!dup) out[(*count)++] = child->value;
         }
+    }
+}
+
+/* #752: a struct local returned (directly or as a tuple element) hands
+ * ownership of its heap-string fields to the caller. Mark it so the
+ * function-exit <Struct>_destroy defer is suppressed (try_emit_struct_
+ * destroy) — otherwise the fields are freed at callee exit while the
+ * returned shallow copy still points at them. Marking a non-struct
+ * identifier is harmless (no struct_destroy defer is keyed to it). */
+static void mark_returned_struct_escaped(CodeGenerator* gen, ASTNode* expr) {
+    if (!expr || expr->type != AST_IDENTIFIER || !expr->value || !gen->program) return;
+    Type* t = expr->node_type;
+    if (!t || t->kind != TYPE_STRUCT || !t->struct_name) return;
+    ASTNode* sdef = find_struct_definition_by_name(gen->program, t->struct_name);
+    if (sdef && struct_has_heap_string_field(sdef)) {
+        mark_return_escaped_struct_var(gen, expr->value);
+    }
+}
+
+/* #752 (caller side): a struct local that RECEIVES ownership of a
+ * returned struct — a tuple-unpack target, or a local initialised from a
+ * struct-returning call — owns that struct's heap-string fields and must
+ * free them at scope exit. Push the same `<Struct>_destroy` defer the
+ * struct-literal declaration path uses. The callee already transferred
+ * ownership (its own destroy was suppressed via mark_return_escaped_
+ * struct_var), so this is the single owner; no double-free. Gated on the
+ * struct actually having heap-string fields (else the defer is a no-op
+ * we skip emitting). */
+static void push_struct_destroy_defer(CodeGenerator* gen, const char* var_name,
+                                      Type* struct_type, int line, int col) {
+    if (!gen->program || !var_name || !struct_type ||
+        struct_type->kind != TYPE_STRUCT || !struct_type->struct_name) return;
+    ASTNode* sdef = find_struct_definition_by_name(gen->program, struct_type->struct_name);
+    if (!sdef || !struct_has_heap_string_field(sdef)) return;
+    char annot[300];
+    snprintf(annot, sizeof(annot), "struct_destroy:%s:%s",
+             var_name, struct_type->struct_name);
+    ASTNode* carrier = create_ast_node(AST_EXPRESSION_STATEMENT, NULL, line, col);
+    if (carrier) {
+        if (carrier->annotation) free(carrier->annotation);
+        carrier->annotation = strdup(annot);
+        push_defer(gen, carrier);
     }
 }
 
@@ -3487,6 +3545,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         is_heap_string_var(gen, var->value) && pos_is_heap) {
                         print_indent(gen);
                         fprintf(gen->output, "_heap_%s = 1;\n", var->value);
+                    }
+                    /* #752: a struct-typed tuple position transfers
+                     * ownership of its heap-string fields to this LHS —
+                     * free them at scope exit. */
+                    if (rhs_type && rhs_type->kind == TYPE_TUPLE &&
+                        j < rhs_type->tuple_count) {
+                        push_struct_destroy_defer(gen, var->value,
+                                                  rhs_type->tuple_types[j],
+                                                  stmt->line, stmt->column);
                     }
                 }
             }
@@ -4224,6 +4291,18 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "%s", vq);
                         generate_type(gen, var_type);
                         fprintf(gen->output, " %s", stmt->value);
+                        /* #752 (caller side): a struct-with-heap-fields
+                         * received from a struct-returning CALL transfers
+                         * ownership to this local — free its fields at
+                         * scope exit. Gated on a function-call initializer
+                         * (an owned, freshly-returned struct); a plain
+                         * alias (`o2 = o`) is not a call and gets no
+                         * defer, so there's no double-free. */
+                        if (stmt->child_count > 0 && stmt->children[0] &&
+                            stmt->children[0]->type == AST_FUNCTION_CALL) {
+                            push_struct_destroy_defer(gen, stmt->value, var_type,
+                                                      stmt->line, stmt->column);
+                        }
                     }
 
                     if (stmt->child_count > 0) {
@@ -5245,6 +5324,17 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     }
                     fprintf(gen->output, "};\n");
                     if (owned) free_type(tuple);
+                    /* #752: any struct element of the returned tuple
+                     * escapes — suppress its exit-time `<Struct>_destroy`
+                     * so its heap-string fields aren't freed under the
+                     * caller (the caller that receives the unpacked struct
+                     * gets its own destroy defer — see #762's two-sided
+                     * return-escape contract). This supersedes the earlier
+                     * #759 flag-zeroing approach, which only neutered the
+                     * callee's destroy and left the caller-side leak. */
+                    for (int j = 0; j < stmt->child_count; j++) {
+                        mark_returned_struct_escaped(gen, stmt->children[j]);
+                    }
                     // Multi-value returns can't be returning a closure
                     // (closures aren't tuples), so the closure-of-captures
                     // protection logic the single-value path runs is
@@ -5355,6 +5445,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         }
                         scan_idx = start_count;
                     }
+                    /* #752: a directly-returned struct escapes — suppress
+                     * its exit-time destroy (heap-string fields now owned
+                     * by the caller). */
+                    mark_returned_struct_escaped(gen, stmt->children[0]);
                     emit_all_defers_protected(gen, protected_names, protected_count);
                     for (int p = 0; p < protected_count; p++) free(protected_names[p]);
                     free(protected_names);

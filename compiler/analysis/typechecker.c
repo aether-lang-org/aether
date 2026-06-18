@@ -2809,11 +2809,35 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     return 1;
                 }
 
+                /* #745: a typed module-level const array
+                 * (`const T[N] = [literals]`, annotation "array_const")
+                 * lets the porter pin the C element type — narrowing the
+                 * int literals to uint8/uint16/uint32 is the explicit,
+                 * compile-time-constant intent (same posture as
+                 * `byte b = 5`), not an is_assignable mismatch. Permit an
+                 * integer-element array literal to initialise an integer-
+                 * element typed const array. */
+                int array_const_int_narrow = 0;
+                if (stmt->annotation && strcmp(stmt->annotation, "array_const") == 0 &&
+                    init_type && init_type->kind == TYPE_ARRAY && init_type->element_type &&
+                    stmt->node_type && stmt->node_type->kind == TYPE_ARRAY &&
+                    stmt->node_type->element_type) {
+                    TypeKind ie = init_type->element_type->kind;
+                    TypeKind de = stmt->node_type->element_type->kind;
+                    int ie_int = (ie == TYPE_INT || ie == TYPE_INT64 || ie == TYPE_UINT64 ||
+                                  ie == TYPE_UINT32 || ie == TYPE_UINT16 || ie == TYPE_UINT8 ||
+                                  ie == TYPE_BYTE);
+                    int de_int = (de == TYPE_INT || de == TYPE_INT64 || de == TYPE_UINT64 ||
+                                  de == TYPE_UINT32 || de == TYPE_UINT16 || de == TYPE_UINT8 ||
+                                  de == TYPE_BYTE);
+                    array_const_int_narrow = ie_int && de_int;
+                }
+
                 // If variable has no explicit type (TYPE_UNKNOWN), use initializer's type
                 if (!stmt->node_type || stmt->node_type->kind == TYPE_UNKNOWN) {
                     if (stmt->node_type) free_type(stmt->node_type);
                     stmt->node_type = clone_type(init_type);
-                } else if (!is_assignable(init_type, stmt->node_type)) {
+                } else if (!array_const_int_narrow && !is_assignable(init_type, stmt->node_type)) {
                     // Has explicit type but initializer doesn't match
                     free_type(init_type);
                     type_error("Type mismatch in variable initialization", stmt->line, stmt->column);

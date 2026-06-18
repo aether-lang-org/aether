@@ -263,6 +263,18 @@ main() {
 
 Constants are emitted as `#define` in generated C — zero runtime cost.
 
+#### Module-level constant arrays — lookup tables
+
+A `const` array lowers to a file-scope `static const` table, allocated once and shared across every call (not re-initialised per call) — the right shape for a table-driven algorithm:
+
+```aether
+const PRIMES[] = [2, 3, 5, 7, 11]          // element type inferred (int)
+const CRC16TAB: uint16[256] = [ 0x0000, 0x1021, /* ... */ ]   // element type pinned
+```
+
+- `const NAME[] = [...]` infers the element type from the literals (`int` for integer literals).
+- `const NAME: T[N] = [...]` pins the C element type — `T` may be `uint8` / `uint16` / `uint32` / `uint64` / `int` / `long` — so e.g. a CRC16 table emits `static const uint16_t NAME[256]` rather than a 4×-wider `int[]`, and matches a C header that expects the packed type. Integer literals narrow to the chosen element type (the explicit, compile-time-constant intent, like `byte b = 5`). Indexed access (`NAME[i]`) emits `NAME[i]`; the array is read-only.
+
 **The RHS of `const` must be a compile-time constant expression.** Allowed forms: literals (int / float / bool / string / null), other consts referenced by name, unary / binary expressions over those, and string interpolation where every interpolated value is itself const. **Function calls are rejected** at typecheck time:
 
 ```aether
@@ -995,6 +1007,28 @@ struct Config {
 }
 ```
 
+### By-value struct returns and stack-struct locals
+
+A function can return a struct **by value**, and a struct can be declared as a **stack-allocated local** (no `*`, no initializer) and filled field-by-field:
+
+```aether
+struct Pair { a: long  b: long }
+
+make_pair(x: long) -> Pair {     // by-value struct return type
+    Pair p                       // stack-allocated struct local
+    p.a = x
+    p.b = x + 1
+    return p                     // returned by value (a struct copy)
+}
+
+main() {
+    q = make_pair(10)
+    print(q.a)                   // 10
+}
+```
+
+This is the value sibling of the `*StructName` pointer form below: `Pair p` is a stack struct (`.field` access), `*Pair p` is a pointer (`->field`). By-value struct **parameters** (`pair_sum(p: Pair)`) already worked; these complete the set, so an all-scalar record can be built locally and returned without heap allocation or an out-pointer — the shape C interop structs (e.g. a geometry/bounding-box result) expect.
+
 ### Pointer-to-struct type — `*StructName` and `expr as *StructName`
 
 For systems-programming code that overlays a struct header on a raw `ptr` (e.g. linked-list nodes in C-allocated memory, on-disk file headers read into a buffer), Aether has a first-class pointer-to-struct type spelled `*StructName` and a postfix `as` cast operator that produces a value of that type:
@@ -1591,6 +1625,22 @@ main() {
 ```
 
 By default the C symbol matches the Aether-side name (or its namespace-prefixed form when the function lives in an imported module). For a specific C symbol, use the parenthesised form: `@c_callback("aether_signal_handler") on_sigint(sig: int) { … }`. See [`docs/c-interop.md`](c-interop.md#exporting-an-aether-function-as-a-c-callback--c_callback) for the full reference.
+
+### Function-pointer parameters — `fn(T1, T2) -> R`
+
+A parameter typed `fn(T1, T2) -> R` is a typed C function pointer: it emits the exact `R (*name)(T1, T2)` in the generated prototype and is directly callable in the body, so callback-taking functions port cleanly:
+
+```aether
+walk(cb: fn(ptr, ptr) -> void, a: ptr, b: ptr) {
+    cb(a, b)                       // a real indirect call
+}
+
+reduce(f: fn(int, int) -> int, x: int, y: int) -> int {
+    return f(x, y)                 // multiple callbacks per signature are fine
+}
+```
+
+Pass an Aether function's address with the `as fn(...)` cast — `walk(my_handler as fn(ptr, ptr) -> void, p, q)` — or a C function pointer obtained from an extern. This is the parameter form of the same typed-fn-pointer machinery used by `as fn(...)` locals and function-pointer struct fields; the prototype matches the C signature exactly (needed for callback APIs like `qsort`, `dictScan`, signal handlers, libcurl/sqlite hooks).
 
 ### `@derive(eq)` — synthesize an equality helper for a struct
 

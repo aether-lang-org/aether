@@ -2499,7 +2499,20 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         content_length = strtol(cl_hdr + 15, NULL, 10);
         if (content_length < 0) content_length = 0;
     }
-    if (content_length > 0) {
+    /* #626 (upload half) — streaming-body decision. A body whose
+     * declared Content-Length exceeds one connection buffer (16 KiB)
+     * is NOT fully buffered: we parse the headers, then hand the
+     * handler a streaming request whose `http_request_body_read` pulls
+     * bounded windows off the socket. This keeps peak server RAM at
+     * O(buf + chunk) per connection instead of O(Content-Length) — the
+     * difference between N×M-bytes-live and N×window-live for N
+     * concurrent M-byte uploads. Bodies that fit in the buffer take the
+     * legacy fully-buffered path (no behavioural change, and nothing to
+     * gain by streaming them). The threshold is the buffer cap so a
+     * "small" body is exactly "fits without growing the buffer". */
+    int stream_body = (content_length > HTTP_CONN_BUF_CAP);
+
+    if (content_length > 0 && !stream_body) {
         int needed_total = header_size + (int)content_length;
         /* Make sure the buffer can hold (read_pos + needed_total)
          * bytes plus a NUL. */
@@ -2517,6 +2530,10 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         }
         request_total = needed_total;
     }
+    /* When streaming, `request_total` stays at `header_size` — we parse
+     * only the header block now; the body bytes (the slice already in
+     * the buffer plus everything still on the socket) are left for the
+     * body-read accessor and the post-handler drain to consume. */
 
     /* Carve out the request slice. The length-aware `_n` entry point
      * gets the exact byte count so its body-parse clamps `Content-
@@ -2534,9 +2551,22 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
 
     /* Advance past the parsed bytes regardless of parse outcome —
      * a malformed request shouldn't make the same bytes parse again
-     * on the next iteration. */
+     * on the next iteration. When streaming we advance only past the
+     * headers; `read_pos` then points at the first body byte, which the
+     * accessor reads from and the drain skips past. */
     conn->read_pos += request_total;
     if (!req) return 0;
+
+    /* Wire up the streaming-body state so http_request_body_read can
+     * pull the rest off the socket. body_length carries the declared
+     * total so length-aware callers (http.request_body_length) still
+     * report the wire size; `body` is NULL (no buffered payload). */
+    if (stream_body) {
+        req->stream_conn     = conn;
+        req->stream_total    = content_length;
+        req->stream_consumed = 0;
+        req->body_length     = (size_t)content_length;
+    }
 
     /* Populate the connection-level metadata that handlers learn from
      * the kernel rather than from the request bytes. Cheap (two
@@ -2841,6 +2871,44 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
             h->hook(req, res, duration_us, h->user_data);
             h = h->next;
         }
+    }
+
+    /* #626 — drain any unread streaming-body bytes. A handler that
+     * streamed only part of the body (or ignored it entirely — e.g. a
+     * 413/401 rejection before reading) leaves the rest sitting on the
+     * socket. On a keep-alive connection the next request parse would
+     * then start mid-body and desync the wire. Consume whatever's left
+     * of `stream_total` so `read_pos`/the socket sit exactly at the
+     * next request boundary. Bounded scratch (no full-body buffer);
+     * we read and discard. If the peer closed mid-body the drain just
+     * stops — the keep-alive check below will see the broken stream on
+     * the next recv and close. */
+    if (req->stream_conn) {
+        HttpConn* sconn = (HttpConn*)req->stream_conn;
+        long left = req->stream_total - req->stream_consumed;
+        /* First, discard any already-buffered body bytes. */
+        if (left > 0) {
+            int buffered = sconn->write_pos - sconn->read_pos;
+            if (buffered > 0) {
+                int drop = (buffered < (int)left) ? buffered : (int)left;
+                sconn->read_pos += drop;
+                req->stream_consumed += drop;
+                left -= drop;
+            }
+        }
+        /* Then read-and-discard the rest off the socket in buffer-sized
+         * gulps (reusing the connection buffer's tail as scratch). */
+        while (left > 0) {
+            char scratch[4096];
+            int chunk = (left < (long)sizeof(scratch)) ? (int)left : (int)sizeof(scratch);
+            int n = conn_recv(sconn, scratch, chunk);
+            if (n <= 0) break;
+            req->stream_consumed += n;
+            left -= n;
+        }
+        /* The streaming body is fully consumed (or the stream broke);
+         * clear the backref so nothing touches it post-free. */
+        req->stream_conn = NULL;
     }
 
     /* Decide whether this response keeps the connection open.
@@ -4199,7 +4267,12 @@ const char* http_request_body(HttpRequest* req) {
 }
 
 int http_request_body_length(HttpRequest* req) {
-    return (req && req->body) ? (int)req->body_length : 0;
+    if (!req) return 0;
+    /* Streaming request: `body` is NULL but the declared length is the
+     * Content-Length we stashed. The canonical upload loop reads this
+     * to know how many bytes to pull via http_request_body_read. */
+    if (req->stream_conn) return (int)req->stream_total;
+    return req->body ? (int)req->body_length : 0;
 }
 
 /* #626 — chunked-read request body, TLS split-accessor shape.
@@ -4215,12 +4288,19 @@ int http_request_body_length(HttpRequest* req) {
  * The Aether wrapper bundles this into a (bytes, n, err) tuple that
  * destructures the same way fs.read_binary does.
  *
- * IMPLEMENTATION CAVEAT (be honest with porters): this currently
- * reads from the ALREADY-BUFFERED req->body. The full RAM win the
- * issue asks for needs a parse-time reshape (handler runs before
- * the body finishes arriving) — that's a follow-up issue. Today
- * the API gives porters the chunked-read SHAPE they want, so their
- * code is ready for the day the internals stream. */
+ * TWO BACKING MODES (#626 upload half, now implemented):
+ *   - Small bodies (Content-Length <= 16 KiB) are fully buffered into
+ *     req->body at parse time; this accessor returns a random-access
+ *     slice of that buffer (offset may be any value < total).
+ *   - Large bodies are NOT buffered. The dispatcher parses only the
+ *     headers and marks the request streaming (req->stream_conn set);
+ *     this accessor then pulls the next window straight off the socket.
+ *     Reads must be SEQUENTIAL (offset == bytes already consumed) — the
+ *     socket isn't seekable. Peak server RAM stays at O(buf + window)
+ *     per connection instead of O(Content-Length), which is the win the
+ *     fbs-core port measured (N concurrent M-byte uploads no longer hold
+ *     N×M live). The canonical loop is offset-forward, which satisfies
+ *     the sequential constraint naturally. */
 static __thread unsigned char* g_rbr_buf = NULL;
 static __thread size_t         g_rbr_cap = 0;
 static __thread int            g_rbr_len = 0;
@@ -4244,18 +4324,71 @@ int http_get_request_body_read_length(void) {
     return g_rbr_len;
 }
 
+/* Yield an EOF result (1-byte buffer, length 0) into the TLS slot. */
+static int rbr_yield_eof(void) {
+    g_rbr_buf = (unsigned char*)malloc(1);
+    if (!g_rbr_buf) return 0;
+    g_rbr_cap = 1;
+    g_rbr_buf[0] = 0;
+    g_rbr_len = 0;
+    return 1;
+}
+
 int http_request_body_read_raw(HttpRequest* req, int offset, int max) {
     release_rbr_locked();
     if (!req || offset < 0 || max < 0) return 0;
+
+    /* #626 streaming path. When the dispatcher chose not to buffer the
+     * whole body, pull the next window straight off the socket. The
+     * read is SEQUENTIAL: `offset` must equal how much has already been
+     * consumed (the canonical loop walks `off` forward by the returned
+     * `n`). A non-sequential offset on a streaming body can't be
+     * honoured — the socket isn't seekable — so it yields EOF rather
+     * than silently returning wrong bytes. Bytes come first from
+     * whatever already sits in the connection buffer (arrived in the
+     * same recv as the headers), then from fresh `conn_recv` calls,
+     * always bounded by `max`. */
+    if (req->stream_conn) {
+        HttpConn* conn = (HttpConn*)req->stream_conn;
+        long remaining = req->stream_total - req->stream_consumed;
+        if (remaining <= 0) return rbr_yield_eof();
+        if ((long)offset != req->stream_consumed) {
+            /* Out-of-order read against an unbuffered stream — refuse. */
+            return rbr_yield_eof();
+        }
+
+        long want = (max < remaining) ? (long)max : remaining;
+        if (want <= 0) return rbr_yield_eof();
+        g_rbr_buf = (unsigned char*)malloc((size_t)want);
+        if (!g_rbr_buf) return 0;
+        g_rbr_cap = (size_t)want;
+
+        long got = 0;
+        /* (a) drain any body bytes already in the connection buffer. */
+        int buffered = conn->write_pos - conn->read_pos;
+        if (buffered > 0) {
+            int take = (buffered < (int)(want - got)) ? buffered : (int)(want - got);
+            memcpy(g_rbr_buf + got, conn->buf + conn->read_pos, (size_t)take);
+            conn->read_pos += take;
+            got += take;
+        }
+        /* (b) read the rest straight off the socket, bounded by want. */
+        while (got < want) {
+            int chunk = (int)(want - got);
+            int n = conn_recv(conn, g_rbr_buf + got, chunk);
+            if (n <= 0) break;   /* short read / peer closed mid-body */
+            got += n;
+        }
+        if (got <= 0) { release_rbr_locked(); return rbr_yield_eof(); }
+        req->stream_consumed += got;
+        g_rbr_len = (int)got;
+        return 1;
+    }
+
+    /* Legacy fully-buffered path: random-access slice of req->body. */
     int total = (req->body) ? (int)req->body_length : 0;
     if (offset >= total) {
-        /* EOF: yield a 1-byte buffer with length 0. */
-        g_rbr_buf = (unsigned char*)malloc(1);
-        if (!g_rbr_buf) return 0;
-        g_rbr_cap = 1;
-        g_rbr_buf[0] = 0;
-        g_rbr_len = 0;
-        return 1;
+        return rbr_yield_eof();
     }
     int avail = total - offset;
     int want = (max < avail) ? max : avail;

@@ -864,6 +864,16 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         if (child->type == AST_PATTERN_VARIABLE ||
             child->type == AST_VARIABLE_DECLARATION) {
             if (param_count > 0) fprintf(gen->output, ", ");
+            /* #750: a `fn(...)->R` parameter must emit the typed C
+             * function-pointer declarator `R (*name)(T1,T2)` — the name
+             * sits inside the `(*...)`, so the plain type+name path below
+             * can't express it. */
+            if (is_fnptr_type(child->node_type)) {
+                emit_fnptr_decl(gen, child->node_type, child->value);
+                snprintf(last_param_cname, sizeof(last_param_cname), "%s", child->value);
+                param_count++;
+                continue;
+            }
             generate_type(gen, child->node_type);
             // If this parameter is a Route 1 promoted name in this function,
             // emit it as `_param_<name>` so the body's heap cell can use
@@ -957,6 +967,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         if ((child->type == AST_PATTERN_VARIABLE || child->type == AST_VARIABLE_DECLARATION)
             && child->value) {
             mark_var_declared(gen, child->value);
+            /* #750: register a `fn(...)->R` parameter in the fn-ptr
+             * registry so a call through it (`cb(a,b)`) lowers via the
+             * same typed indirect-call path as fn-ptr locals
+             * (codegen_expr.c), not a bare `cb(a,b)` against a void*. */
+            if (is_fnptr_type(child->node_type)) {
+                register_fnptr_local(gen, child->value, child->node_type);
+            }
         }
     }
 
