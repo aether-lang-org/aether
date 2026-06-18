@@ -1743,10 +1743,23 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
      *    flexible-array `T name[];` instead of the pointer-shaped
      *    `T* name;` an Aether-managed dynamic array would use. */
     int is_extern = struct_def->annotation &&
-                    strcmp(struct_def->annotation, "extern") == 0;
+                    (strcmp(struct_def->annotation, "extern") == 0 ||
+                     strcmp(struct_def->annotation, "extern_packed") == 0);
+
+    /* #747: `@packed` emits the C body with __attribute__((packed)) so
+     * the layout has no inter-field padding — the sdshdr8/16/32/64 shape
+     * a port needs to overlay a packed C struct. The attribute goes
+     * between `struct` and the tag (GCC/Clang spelling) so it applies to
+     * the type. */
+    int is_packed = struct_def->annotation &&
+                    strcmp(struct_def->annotation, "extern_packed") == 0;
 
     // Generate C struct
-    print_line(gen, "typedef struct %s {", struct_def->value);
+    if (is_packed) {
+        print_line(gen, "typedef struct __attribute__((packed)) %s {", struct_def->value);
+    } else {
+        print_line(gen, "typedef struct %s {", struct_def->value);
+    }
     indent(gen);
 
     /* Heap-string ownership tracking for struct fields (#465).

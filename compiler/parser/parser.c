@@ -3449,20 +3449,47 @@ ASTNode* parse_extern_declaration(Parser* parser) {
          * own typedef collides with the header's.  See
          * redis-porting-language-gaps.md "P0: Header-Defined C Struct
          * Interop". */
-        if (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
+        /* Zero or more `@`-attributes after the name:
+         *   @c_import  — layout imported from a C header (no body emitted)
+         *   @packed    — emit the C body with __attribute__((packed)) so
+         *                its layout has no inter-field padding (#747): the
+         *                Redis sdshdr8/16/32/64 shape. Mutually exclusive
+         *                with @c_import (a header-defined struct's packing
+         *                is the header's job; @packed only governs a body
+         *                Aether emits). */
+        int has_c_import = 0, has_packed = 0;
+        while (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
             advance_token(parser);  // consume '@'
             Token* attr = peek_token(parser);
             if (attr && attr->type == TOKEN_IDENTIFIER && attr->value &&
                 strcmp(attr->value, "c_import") == 0) {
-                advance_token(parser);  // consume 'c_import'
-                free(sd->annotation);
-                sd->annotation = strdup("extern_c_import");
+                advance_token(parser);
+                has_c_import = 1;
+            } else if (attr && attr->type == TOKEN_IDENTIFIER && attr->value &&
+                       strcmp(attr->value, "packed") == 0) {
+                advance_token(parser);
+                has_packed = 1;
             } else {
                 parser_error(parser,
-                    "unknown extern-struct attribute (expected @c_import)");
+                    "unknown extern-struct attribute (expected @c_import or @packed)");
                 free_ast_node(sd);
                 return NULL;
             }
+        }
+        if (has_c_import && has_packed) {
+            parser_error(parser,
+                "@packed and @c_import are mutually exclusive — a @c_import "
+                "struct's layout (incl. packing) comes from the C header; "
+                "use @packed only on a struct whose body Aether emits");
+            free_ast_node(sd);
+            return NULL;
+        }
+        if (has_c_import) {
+            free(sd->annotation);
+            sd->annotation = strdup("extern_c_import");
+        } else if (has_packed) {
+            free(sd->annotation);
+            sd->annotation = strdup("extern_packed");
         }
 
         if (!expect_token(parser, TOKEN_LEFT_BRACE)) {
