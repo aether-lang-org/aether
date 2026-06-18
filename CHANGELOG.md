@@ -18,6 +18,18 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ### Added
 
+- **Streaming (incremental) digest context in `std.cryptography`**
+  (`std/cryptography/`). `digest_new(algo)` returns an opaque context;
+  `digest_update(ctx, data, n)` feeds bytes in pieces; `digest_final_hex(ctx)`
+  / `digest_final_bytes(ctx)` finalize (and free the context). `algo` uses
+  the same names as `hash_hex` ("md5", "sha256", "sha1", "md4", ...).
+  This hashes data that arrives in windows without ever holding it whole —
+  a blob store can now compute an upload's ETag as it streams to disk
+  instead of reading the stored object back purely to MD5 it (S3 ETag =
+  md5-of-object; multipart ETag = md5-of-md5s). `digest_free(ctx)` is the
+  abandon-without-finalize cleanup path. Thin veneer over libcrypto's
+  `EVP_DigestInit/Update/Final`; returns the "openssl unavailable" error
+  shape on builds without OpenSSL.
 - **`fs.join_clean(a, b)` and `fs.first_element(path)`** (`std/fs/module.ae`).
   `join_clean` is `path_join` followed by `clean` in one call — the
   cleaned path that actually reaches the filesystem after a caller-

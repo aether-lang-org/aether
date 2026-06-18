@@ -267,6 +267,94 @@ int cryptography_hmac_sha256_bytes_raw(const char* key, int key_len,
     return 1;
 }
 
+/* ---- Incremental (streaming) digest context (fbs-core ask #4) ----
+ *
+ * A heap EVP_MD_CTX handle the caller threads through update()/final().
+ * The architectural win for a blob store: hash each window AS it streams
+ * to disk instead of reading the whole object back to compute its ETag.
+ * S3 ETag = md5-of-the-object; multipart ETag = md5-of-md5s — both want
+ * a context that survives across reads.
+ *
+ * The handle is the EVP_MD_CTX* itself, returned to Aether as an opaque
+ * `ptr`. new() allocates + EVP_DigestInit_ex; update() feeds bytes;
+ * final_hex()/final_bytes() finalize AND free the context (so the common
+ * path needs no explicit free); free() is the abandon-without-finalize
+ * cleanup path (e.g. an aborted upload). Algorithm is chosen by name at
+ * new() time — same dispatcher rules as hash_hex (md4/md5 bind directly
+ * so they work on OpenSSL 3's legacy provider; everything else goes
+ * through EVP_get_digestbyname). */
+
+static const EVP_MD* resolve_md_by_name(const char* algo) {
+    if (!algo) return NULL;
+    /* md4/md5 must bind directly: EVP_get_digestbyname doesn't consult
+     * the legacy provider where MD4 lives on OpenSSL 3, and we want the
+     * same provider behaviour the one-shot helpers already have. */
+    if (strcmp(algo, "md4") == 0) { ensure_legacy_provider(); return EVP_md4(); }
+    if (strcmp(algo, "md5") == 0) { return EVP_md5(); }
+    return EVP_get_digestbyname(algo);
+}
+
+void* cryptography_digest_new_raw(const char* algo) {
+    const EVP_MD* md = resolve_md_by_name(algo);
+    if (!md) return NULL;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return NULL;
+    if (EVP_DigestInit_ex(ctx, md, NULL) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return NULL;
+    }
+    return ctx;
+}
+
+int cryptography_digest_update_raw(void* handle, const char* data, int length) {
+    if (!handle || length < 0) return 0;
+    size_t want;
+    const unsigned char* bytes = cryptography_unwrap_bytes(data, length, &want);
+    if (want > 0 && !bytes) return 0;
+    if (want == 0) return 1;  /* feeding zero bytes is a no-op success */
+    return EVP_DigestUpdate((EVP_MD_CTX*)handle, bytes, want) == 1 ? 1 : 0;
+}
+
+/* Finalize → caller-frees lowercase hex; frees the context either way. */
+char* cryptography_digest_final_hex_raw(void* handle) {
+    if (!handle) return NULL;
+    EVP_MD_CTX* ctx = (EVP_MD_CTX*)handle;
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int  digest_len = 0;
+    int ok = EVP_DigestFinal_ex(ctx, digest, &digest_len) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok) return NULL;
+    return hex_encode(digest, (size_t)digest_len);
+}
+
+/* Finalize → binary-digest TLS slot (for SigV4 payload hashing, where
+ * the raw bytes key the next round). Frees the context either way.
+ * Bytes via cryptography_get_binary_digest() / ..._length(). */
+int cryptography_digest_final_bytes_raw(void* handle) {
+    if (!handle) return 0;
+    EVP_MD_CTX* ctx = (EVP_MD_CTX*)handle;
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int  digest_len = 0;
+    int ok = EVP_DigestFinal_ex(ctx, digest, &digest_len) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok) return 0;
+
+    release_dig_locked();
+    size_t alloc = digest_len > 0 ? digest_len : 1;
+    g_dig_buf = (unsigned char*)aether_caps_malloc(alloc);
+    if (!g_dig_buf) { g_dig_cap = 0; g_dig_len = 0; return 0; }
+    g_dig_cap = alloc;
+    memcpy(g_dig_buf, digest, digest_len);
+    g_dig_len = (int)digest_len;
+    return 1;
+}
+
+/* Abandon a context without finalizing — the aborted-upload cleanup
+ * path. NULL-safe so callers can free unconditionally. */
+void cryptography_digest_free_raw(void* handle) {
+    if (handle) EVP_MD_CTX_free((EVP_MD_CTX*)handle);
+}
+
 /* ---- Base64 ----
  *
  * Standard alphabet (RFC 4648 §4), unpadded. OpenSSL's EVP_EncodeBlock
@@ -475,6 +563,22 @@ int cryptography_hash_bytes_raw(const char* algo, const char* data, int length) 
 const char* cryptography_get_binary_digest(void) { return ""; }
 int cryptography_get_binary_digest_length(void) { return 0; }
 void cryptography_release_binary_digest(void) {}
+
+void* cryptography_digest_new_raw(const char* algo) {
+    (void)algo; return NULL;
+}
+int cryptography_digest_update_raw(void* handle, const char* data, int length) {
+    (void)handle; (void)data; (void)length; return 0;
+}
+char* cryptography_digest_final_hex_raw(void* handle) {
+    (void)handle; return NULL;
+}
+int cryptography_digest_final_bytes_raw(void* handle) {
+    (void)handle; return 0;
+}
+void cryptography_digest_free_raw(void* handle) {
+    (void)handle;
+}
 
 #endif /* AETHER_HAS_OPENSSL */
 

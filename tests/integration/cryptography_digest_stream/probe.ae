@@ -1,0 +1,143 @@
+// Regression: std.cryptography incremental (streaming) digest context.
+// The architectural primitive a blob store needs — hash data in pieces
+// without ever holding it whole — so ETag = md5-of-object can be computed
+// as the upload streams to disk instead of reading the object back.
+//
+// Cases:
+//   1. md5("abc") fed in two chunks ("a" + "bc") == the one-shot md5
+//      AND the known vector 900150983cd24fb0d6963f7d28e17f72
+//   2. sha256("abc") streamed == one-shot sha256_hex == FIPS vector
+//   3. digest_final_bytes returns the raw 16-byte md5 digest
+//   4. empty input (new + immediate final, no update) == md5("")
+//   5. unknown algorithm name → (null, "unknown algorithm")
+//   6. digest_free on an abandoned context doesn't crash
+
+import std.cryptography
+import std.string
+
+extern exit(code: int)
+
+main() {
+    print("=== std.cryptography streaming digest context ===\n\n")
+
+    // OpenSSL-skip probe — same as cryptography_sha. The context API is
+    // libcrypto-backed, so skip gracefully when it's absent (Windows CI).
+    _, probe_err = cryptography.sha256_hex("probe", 5)
+    if probe_err != "" {
+        println("SKIP cryptography_digest_stream: ${probe_err} (likely Windows CI without OpenSSL)")
+        print("\n=== streaming digest tests skipped (no backend) ===\n")
+        return
+    }
+
+    // ---- Test 1: md5("abc") in two chunks == one-shot == vector ----
+    print("Test 1: md5 streamed in two chunks\n")
+    ctx1, e1 = cryptography.digest_new("md5")
+    if e1 != "" {
+        println("  FAIL: digest_new(md5): ${e1}")
+        exit(1)
+    }
+    _, ue1 = cryptography.digest_update(ctx1, "a", 1)
+    if ue1 != "" {
+        println("  FAIL: update 1: ${ue1}")
+        exit(1)
+    }
+    _, ue2 = cryptography.digest_update(ctx1, "bc", 2)
+    if ue2 != "" {
+        println("  FAIL: update 2: ${ue2}")
+        exit(1)
+    }
+    hex1, fe1 = cryptography.digest_final_hex(ctx1)
+    if fe1 != "" {
+        println("  FAIL: final: ${fe1}")
+        exit(1)
+    }
+    if string.equals(hex1, "900150983cd24fb0d6963f7d28e17f72") != 1 {
+        println("  FAIL: md5(abc) streamed = ${hex1}")
+        exit(1)
+    }
+    // Also equal the one-shot helper.
+    oneshot, _ = cryptography.md5_hex("abc", 3)
+    if string.equals(hex1, oneshot) != 1 {
+        println("  FAIL: streamed ${hex1} != one-shot ${oneshot}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 2: sha256("abc") streamed == one-shot == FIPS vector ----
+    print("\nTest 2: sha256 streamed\n")
+    ctx2, e2 = cryptography.digest_new("sha256")
+    if e2 != "" {
+        println("  FAIL: digest_new(sha256): ${e2}")
+        exit(1)
+    }
+    _, _ = cryptography.digest_update(ctx2, "abc", 3)
+    hex2, fe2 = cryptography.digest_final_hex(ctx2)
+    if fe2 != "" {
+        println("  FAIL: final: ${fe2}")
+        exit(1)
+    }
+    if string.equals(hex2, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") != 1 {
+        println("  FAIL: sha256(abc) streamed = ${hex2}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 3: digest_final_bytes → 16 raw md5 bytes ----
+    print("\nTest 3: digest_final_bytes length\n")
+    ctx3, e3 = cryptography.digest_new("md5")
+    if e3 != "" {
+        println("  FAIL: digest_new(md5): ${e3}")
+        exit(1)
+    }
+    _, _ = cryptography.digest_update(ctx3, "abc", 3)
+    raw, n3, fe3 = cryptography.digest_final_bytes(ctx3)
+    if fe3 != "" {
+        println("  FAIL: final_bytes: ${fe3}")
+        exit(1)
+    }
+    if n3 != 16 {
+        println("  FAIL: md5 raw length = ${n3}, want 16")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 4: empty input (no update) == md5("") ----
+    print("\nTest 4: md5 of empty (new + final, no update)\n")
+    ctx4, e4 = cryptography.digest_new("md5")
+    if e4 != "" {
+        println("  FAIL: digest_new(md5): ${e4}")
+        exit(1)
+    }
+    hex4, fe4 = cryptography.digest_final_hex(ctx4)
+    if fe4 != "" {
+        println("  FAIL: final: ${fe4}")
+        exit(1)
+    }
+    if string.equals(hex4, "d41d8cd98f00b204e9800998ecf8427e") != 1 {
+        println("  FAIL: md5(empty) = ${hex4}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 5: unknown algorithm ----
+    print("\nTest 5: unknown algorithm rejected\n")
+    ctx5, e5 = cryptography.digest_new("not-a-real-algo")
+    if string.equals(e5, "unknown algorithm") != 1 {
+        println("  FAIL: expected 'unknown algorithm', got '${e5}'")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 6: digest_free abandons a context without crashing ----
+    print("\nTest 6: digest_free on abandoned context\n")
+    ctx6, e6 = cryptography.digest_new("sha256")
+    if e6 != "" {
+        println("  FAIL: digest_new(sha256): ${e6}")
+        exit(1)
+    }
+    _, _ = cryptography.digest_update(ctx6, "partial", 7)
+    cryptography.digest_free(ctx6)
+    print("  PASS\n")
+
+    print("\n=== All streaming digest tests passed ===\n")
+}
