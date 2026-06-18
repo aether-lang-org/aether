@@ -34,6 +34,9 @@ if ! grep -q "PASS: tuple unwrap success path" "$TMPDIR/run.log"; then
 fi
 
 # ---- panic path ----
+# probe_panic.ae catches the unwrap trap with try/catch so it exits 0
+# (the repo's harness auto-runs every .ae file and treats a non-zero
+# exit as failure). It asserts the trap fired and the panic was catchable.
 if ! "$ROOT/build/ae" build "$SCRIPT_DIR/probe_panic.ae" -o "$TMPDIR/panic" \
         >"$TMPDIR/build_panic.log" 2>&1; then
     echo "  [FAIL] tuple_unwrap_bang: panic-probe build failed"
@@ -41,12 +44,10 @@ if ! "$ROOT/build/ae" build "$SCRIPT_DIR/probe_panic.ae" -o "$TMPDIR/panic" \
     exit 1
 fi
 
-# Expect a NON-zero exit (panic/abort). If it exits 0 or prints the
-# unreachable sentinel, the trap didn't fire.
 panic_out="$("$TMPDIR/panic" 2>&1)"
 panic_rc=$?
-if [ "$panic_rc" -eq 0 ]; then
-    echo "  [FAIL] tuple_unwrap_bang: panic path exited 0 (trap did not fire)"
+if [ "$panic_rc" -ne 0 ]; then
+    echo "  [FAIL] tuple_unwrap_bang: panic-probe exited non-zero (trap not caught)"
     echo "$panic_out" | sed 's/^/    /' | head -10
     exit 1
 fi
@@ -54,6 +55,11 @@ if echo "$panic_out" | grep -q "REACHED-AFTER-UNWRAP"; then
     echo "  [FAIL] tuple_unwrap_bang: code after unwrap ran (trap did not fire)"
     exit 1
 fi
+if ! echo "$panic_out" | grep -q "PASS: .* traps on error slot"; then
+    echo "  [FAIL] tuple_unwrap_bang: panic path didn't reach its PASS line"
+    echo "$panic_out" | sed 's/^/    /' | head -10
+    exit 1
+fi
 
-echo "  [PASS] tuple_unwrap_bang: success yields slot 0; error slot traps"
+echo "  [PASS] tuple_unwrap_bang: success yields slot 0; error slot traps (catchable)"
 exit 0
