@@ -1008,6 +1008,24 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_LITERAL:
             return clone_type(expr->node_type);
 
+        case AST_TUPLE_UNWRAP: {
+            /* `expr!` — unwrap-or-trap: the result is the operand tuple's
+             * FIRST slot type. Operand must be a tuple (a (value, err)
+             * return); a non-tuple operand is a type error reported in
+             * typecheck_expression. */
+            if (expr->child_count == 0 || !expr->children[0])
+                return create_type(TYPE_UNKNOWN);
+            Type* operand = infer_type(expr->children[0], table);
+            Type* result = create_type(TYPE_UNKNOWN);
+            if (operand && operand->kind == TYPE_TUPLE &&
+                operand->tuple_count >= 1 && operand->tuple_types[0]) {
+                free_type(result);
+                result = clone_type(operand->tuple_types[0]);
+            }
+            if (operand) free_type(operand);
+            return result;
+        }
+
         case AST_NULL_LITERAL:
             return create_type(TYPE_PTR);
 
@@ -2317,6 +2335,38 @@ int typecheck_program(ASTNode* program) {
         }
     }
 
+    // Re-sync import-alias short symbols from their now-inferred full
+    // symbols. The short aliases (registered above for selective AND
+    // glob imports) clone the full symbol's type BEFORE `infer_all_types`
+    // runs, so a wrapper whose return type is inferred — e.g. an
+    // `fs.list_dir` whose `-> { ... return list, "" }` body yields a
+    // `(ptr, string)` tuple — leaves the short alias `list_dir` stuck on
+    // the pre-inference placeholder (int/unknown). A bare `list, err =
+    // list_dir(...)` call then resolves through the stale short symbol,
+    // stamps the call node's return type as `int`, and codegen emits
+    // `int _tup0 = fs_list_dir(...)` — a C type error. Selective imports
+    // happened to dodge this when the call rewrote-and-re-resolved to the
+    // full symbol, but the glob path did not; refreshing every alias from
+    // the canonical full symbol makes both forms carry the wrappers' real
+    // tuple return types. (fbs-core ask #1.)
+    for (int a = 0; a < import_alias_count; a++) {
+        const char* short_name = import_aliases[a].short_name;
+        const char* dotted = import_aliases[a].qualified_name;
+        // Build the underscored full C name from the dotted alias
+        // ("fs.list_dir" -> "fs_list_dir").
+        char full_name[256];
+        snprintf(full_name, sizeof(full_name), "%s", dotted);
+        for (char* p = full_name; *p; p++) { if (*p == '.') *p = '_'; }
+
+        Symbol* full_sym = lookup_symbol(global_table, full_name);
+        Symbol* short_sym = lookup_symbol_local(global_table, short_name);
+        if (full_sym && short_sym && short_sym->is_function && full_sym->type) {
+            if (short_sym->type) free_type(short_sym->type);
+            short_sym->type = clone_type(full_sym->type);
+            short_sym->node = full_sym->node;
+        }
+    }
+
     // Second pass: type check all nodes
     for (int i = 0; i < program->child_count; i++) {
         typecheck_node(program->children[i], global_table);
@@ -3386,12 +3436,52 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
         case AST_UNARY_EXPRESSION: {
             if (expr->child_count > 0) {
                 typecheck_expression(expr->children[0], table);
-                expr->node_type = infer_unary_type(expr->children[0], 
+                expr->node_type = infer_unary_type(expr->children[0],
                                                  get_token_type_from_string(expr->value));
             }
             return 1;
         }
-        
+
+        case AST_TUPLE_UNWRAP: {
+            /* `expr!` — unwrap-or-trap. The operand must return a tuple
+             * whose LAST slot is the (string) error; the unwrap yields
+             * the first slot and panics at runtime if the error slot is
+             * non-empty. Typecheck the operand, then require a tuple of
+             * at least 2 elements with a string final slot — the
+             * canonical `(value, err)` shape this sugar targets. */
+            if (expr->child_count == 0) return 0;
+            typecheck_expression(expr->children[0], table);
+            Type* op = infer_type(expr->children[0], table);
+            if (!op || op->kind != TYPE_TUPLE) {
+                type_error("`!` unwrap requires a tuple-returning operand "
+                           "(a `(value, err)` result)",
+                           expr->line, expr->column);
+                if (op) free_type(op);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            if (op->tuple_count < 2) {
+                type_error("`!` unwrap requires a `(value, err)` tuple "
+                           "with at least two slots",
+                           expr->line, expr->column);
+                free_type(op);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            Type* last = op->tuple_types[op->tuple_count - 1];
+            if (!last || last->kind != TYPE_STRING) {
+                type_error("`!` unwrap requires the final tuple slot to be "
+                           "the `string` error of a `(value, err)` result",
+                           expr->line, expr->column);
+                free_type(op);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            expr->node_type = clone_type(op->tuple_types[0]);
+            free_type(op);
+            return 1;
+        }
+
         case AST_FUNCTION_CALL:
             return typecheck_function_call(expr, table);
             

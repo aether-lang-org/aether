@@ -1616,13 +1616,35 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
             continue;
         }
 
-        // Actor V2 - Fire-and-forget operator: actor ! Message { ... }
+        // `!` is overloaded: actor fire-and-forget (`actor ! Message {...}`)
+        // vs unwrap-or-trap (`tuple_call()!`). Disambiguate on the token
+        // after `!`: a fire-and-forget is always followed by a message
+        // *type* — an uppercase-leading identifier. Anything else (a
+        // newline, a binary operator, `,`, `)`, EOF, a lowercase ident,
+        // a literal …) is the unwrap suffix. Same lookahead style the
+        // `?` actor-ask handler below uses to reject ternary misuse.
         if (op->type == TOKEN_EXCLAIM) {
+            Token* after = peek_ahead(parser, 1);
+            int is_fire_forget = (after && after->type == TOKEN_IDENTIFIER &&
+                                  after->value && after->value[0] >= 'A' &&
+                                  after->value[0] <= 'Z');
+            if (!is_fire_forget) {
+                // Unwrap-or-trap: yields the tuple's first slot, panics
+                // if the trailing error slot is non-empty.
+                advance_token(parser); // consume '!'
+                ASTNode* unwrap = create_ast_node(AST_TUPLE_UNWRAP, NULL,
+                                                  op->line, op->column);
+                add_child(unwrap, expr);
+                expr = unwrap;
+                continue;
+            }
+
+            // Actor V2 - Fire-and-forget operator: actor ! Message { ... }
             advance_token(parser); // consume '!'
-            
+
             ASTNode* message = parse_message_constructor(parser);
             if (!message) return NULL;
-            
+
             ASTNode* send_op = create_ast_node(AST_SEND_FIRE_FORGET, NULL, op->line, op->column);
             add_child(send_op, expr);     // actor reference
             add_child(send_op, message);  // message to send

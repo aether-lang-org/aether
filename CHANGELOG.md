@@ -14,6 +14,63 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`expr!` unwrap-or-trap operator** (`compiler/parser`, `compiler/analysis`,
+  `compiler/codegen`). A postfix `!` on a `(value, err)` tuple yields the
+  first slot and panics if the trailing (string) error slot is non-empty:
+  `h = cryptography.random_hex(n)!` replaces the two-line
+  `h, e = ...  return h` discard wrapper. Works on any tuple whose final
+  slot is the `string` error (2-tuples, the `(bytes, len, err)` 3-tuple,
+  …); the result type is the first slot. Composes anywhere an expression
+  is allowed — assignment RHS, call arguments — via a GCC
+  statement-expression that evaluates the tuple once. `!` stays the actor
+  fire-and-forget operator when followed by a message type (an
+  uppercase-leading identifier); the unwrap reading applies everywhere
+  else. A non-tuple or string-less-final-slot operand is a compile error.
+
+### Fixed
+
+- **`import std.fs (*)` (glob import) now carries the real tuple return
+  types of `(value, err)` wrappers** (`compiler/analysis/typechecker.c`).
+  A glob import registered each short alias by cloning the full symbol's
+  type *before* return-type inference ran, so a wrapper whose return type
+  is inferred (e.g. `fs.list_dir`'s `(ptr, string)` tuple) left the bare
+  alias `list_dir` stuck on a pre-inference `int` placeholder. A
+  `list, err = list_dir(...)` then stamped the call's return type as
+  `int` and codegen emitted `int _tup0 = fs_list_dir(...)` — a C type
+  error. Namespaced (`fs.list_dir`) and selective imports already worked;
+  the glob form did not. Import-alias short symbols are now re-synced from
+  their inferred full symbols after type inference, so all three import
+  forms agree. (fbs-core ask #1.)
+
+### Added
+
+- **Streaming (incremental) digest context in `std.cryptography`**
+  (`std/cryptography/`). `digest_new(algo)` returns an opaque context;
+  `digest_update(ctx, data, n)` feeds bytes in pieces; `digest_final_hex(ctx)`
+  / `digest_final_bytes(ctx)` finalize (and free the context). `algo` uses
+  the same names as `hash_hex` ("md5", "sha256", "sha1", "md4", ...).
+  This hashes data that arrives in windows without ever holding it whole —
+  a blob store can now compute an upload's ETag as it streams to disk
+  instead of reading the stored object back purely to MD5 it (S3 ETag =
+  md5-of-object; multipart ETag = md5-of-md5s). `digest_free(ctx)` is the
+  abandon-without-finalize cleanup path. Thin veneer over libcrypto's
+  `EVP_DigestInit/Update/Final`; returns the "openssl unavailable" error
+  shape on builds without OpenSSL.
+- **`fs.join_clean(a, b)` and `fs.first_element(path)`** (`std/fs/module.ae`).
+  `join_clean` is `path_join` followed by `clean` in one call — the
+  cleaned path that actually reaches the filesystem after a caller-
+  supplied segment is appended, so `fs.join_clean("bucket", "a/../b")`
+  collapses to `bucket/b` rather than leaving the traversal in place
+  (path-traversal-defense invariant for object stores). Empty-segment
+  handling mirrors `path_join`'s identity behaviour. `first_element`
+  returns the leading cleaned path component (`fs.first_element("/a/b")`
+  → `"a"`). Together they let downstream blob-store code drop its
+  hand-rolled `pathutil.join` wrapper.
+
 ## [0.277.0]
 
 ### Fixed

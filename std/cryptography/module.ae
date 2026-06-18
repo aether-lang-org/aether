@@ -3,10 +3,12 @@
 //
 // Pure functions: bytes in, hex digest or Base64 string out. Binary-
 // safe via explicit byte length (embedded NULs are fine; pass 0 to
-// hash or encode an empty buffer). HMAC, key derivation, symmetric
-// ciphers, signing, streaming digests, URL-safe Base64, and
-// PKCS#7 / PEM parsing are deliberately out of scope — see
-// docs/stdlib-vs-contrib.md for the "one obvious shape" criterion.
+// hash or encode an empty buffer). Streaming (incremental) digests are
+// supported via the digest-context API (digest_new / digest_update /
+// digest_final_*). HMAC, key derivation, symmetric ciphers, signing,
+// URL-safe Base64, and PKCS#7 / PEM parsing remain deliberately out of
+// scope — see docs/stdlib-vs-contrib.md for the "one obvious shape"
+// criterion.
 //
 // When the Aether toolchain was built without OpenSSL, every wrapper
 // returns a non-empty error string ("openssl unavailable") rather
@@ -34,11 +36,16 @@ exports (
     cryptography_random_bytes_raw,
     cryptography_get_random_bytes, cryptography_get_random_bytes_length,
     cryptography_release_random_bytes,
+    cryptography_digest_new_raw, cryptography_digest_update_raw,
+    cryptography_digest_final_hex_raw, cryptography_digest_final_bytes_raw,
+    cryptography_digest_free_raw,
     sha1_hex, sha256_hex, hash_hex, hash_supported,
     base64_encode, base64_encode_padded, base64_decode,
     md4_hex, md5_hex, hmac_sha256_hex, hmac_sha256_bytes,
     md4_bytes, md5_bytes, sha1_bytes, sha256_bytes, hash_bytes,
-    random_bytes, random_hex, random_base64
+    random_bytes, random_hex, random_base64,
+    digest_new, digest_update, digest_final_hex, digest_final_bytes,
+    digest_free
 )
 
 extern cryptography_sha1_hex_raw(data: string, length: int) -> string
@@ -69,6 +76,12 @@ extern cryptography_random_bytes_raw(n: int) -> int
 extern cryptography_get_random_bytes() -> string
 extern cryptography_get_random_bytes_length() -> int
 extern cryptography_release_random_bytes()
+
+extern cryptography_digest_new_raw(algo: string) -> ptr
+extern cryptography_digest_update_raw(handle: ptr, data: string, length: int) -> int
+extern cryptography_digest_final_hex_raw(handle: ptr) -> string
+extern cryptography_digest_final_bytes_raw(handle: ptr) -> int
+extern cryptography_digest_free_raw(handle: ptr)
 
 extern string_new_with_length(data: string, length: int) -> ptr
 
@@ -387,4 +400,88 @@ random_base64(n: int) -> {
         return "", ""
     }
     return base64_encode(raw, raw_n)
+}
+
+// ---- Incremental (streaming) digest context ----
+//
+// Hash data that arrives in pieces — without ever holding it whole.
+// The motivating shape is a blob store streaming an upload to disk in
+// fixed windows: open a context, feed each window as it lands, then
+// finalize to get the ETag, instead of reading the stored object back
+// off disk purely to MD5 it. S3 ETag = md5-of-the-object; multipart
+// ETag = md5-of-md5s — both want a context that survives across reads.
+//
+//   ctx, err = cryptography.digest_new("md5")
+//   // inside the window loop:
+//   ok, uerr = cryptography.digest_update(ctx, chunk, n)
+//   // after the loop:
+//   etag, ferr = cryptography.digest_final_hex(ctx)   // ctx now freed
+//
+// The two final() variants free the context, so the success path needs
+// no explicit free; call digest_free only when bailing out before
+// finalizing (e.g. an aborted upload).
+
+// Create a streaming digest context for `algo` ("md5", "sha256",
+// "sha1", "md4", or any name OpenSSL's by-name lookup recognizes —
+// same rules as hash_hex). Returns (ctx, "") on success, (null, error)
+// on unknown algorithm / OOM / no OpenSSL. The returned handle is
+// opaque; thread it through digest_update / digest_final_*.
+digest_new(algo: string) -> {
+    ctx = cryptography_digest_new_raw(algo)
+    if ctx == null {
+        if cryptography_hash_supported(algo) == 0 {
+            return null, "unknown algorithm"
+        }
+        return null, "openssl unavailable"
+    }
+    return ctx, ""
+}
+
+// Feed `length` bytes of `data` into the context. Binary-safe (`data`
+// may be an owned AetherString from fs.pread / a window buffer; embedded
+// NULs survive). Returns (1, "") on success, (0, error) on failure.
+// Feeding 0 bytes is a no-op success. Does NOT free the context.
+digest_update(ctx: ptr, data: string, length: int) -> {
+    ok = cryptography_digest_update_raw(ctx, data, length)
+    if ok == 0 {
+        return 0, "digest update failed"
+    }
+    return 1, ""
+}
+
+// Finalize the context and return the digest as lowercase hex (32 chars
+// for md5/md4, 40 for sha1, 64 for sha256). The context is FREED by this
+// call — do not reuse or free it again. Returns (hex, "") on success,
+// ("", error) on failure.
+digest_final_hex(ctx: ptr) -> {
+    out = cryptography_digest_final_hex_raw(ctx)
+    if out == 0 {
+        return "", "digest finalize failed"
+    }
+    return out, ""
+}
+
+// Finalize the context and return the raw digest bytes as an owned
+// AetherString (16 bytes for md5/md4, 20 for sha1, 32 for sha256).
+// The context is FREED by this call. Use this when the raw bytes key a
+// subsequent step (SigV4 payload hashing). Returns (bytes, length, "")
+// on success, ("", 0, error) on failure.
+digest_final_bytes(ctx: ptr) -> {
+    ok = cryptography_digest_final_bytes_raw(ctx)
+    if ok == 0 {
+        return "", 0, "digest finalize failed"
+    }
+    raw = cryptography_get_binary_digest()
+    n   = cryptography_get_binary_digest_length()
+    owned = string_new_with_length(raw, n)
+    cryptography_release_binary_digest()
+    return owned, n, ""
+}
+
+// Abandon a context without finalizing — the cleanup path for an
+// aborted operation. NULL-safe; a no-op on a null handle. After a
+// successful digest_final_* the context is already freed, so this is
+// only for the bail-out-before-final case.
+digest_free(ctx: ptr) {
+    cryptography_digest_free_raw(ctx)
 }

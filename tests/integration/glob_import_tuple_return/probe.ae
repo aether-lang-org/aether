@@ -1,0 +1,43 @@
+// Regression (fbs-core ask #1): `import std.fs (*)` must carry the real
+// tuple return types of the (value, err) wrappers. Before the fix, a
+// glob import cloned each short alias's type BEFORE return-type inference
+// ran, so a bare `list, err = list_dir(...)` resolved the call as
+// returning `int` and codegen emitted `int _tup0 = fs_list_dir(...)` — a
+// C type error ("incompatible types when initializing int from
+// _tuple_ptr_string"). Namespaced (fs.list_dir) and selective imports
+// dodged it; the glob form did not.
+//
+// This probe exercises the glob form against a tuple-returning wrapper,
+// a string-returning utility, and a string->string transform, all
+// reached unqualified. If it compiles and runs, the glob alias types are
+// correct.
+
+import std.fs (*)
+
+extern exit(code: int)
+
+main() {
+    // Tuple-returning wrapper reached unqualified — the case that
+    // previously failed to compile.
+    list, err = list_dir("/tmp")
+    if err != "" {
+        println("FAIL: list_dir errored: ${err}")
+        exit(1)
+    }
+
+    // Non-tuple string-returning utility, also via glob.
+    j = path_join("a", "b")
+    if j != "a/b" {
+        println("FAIL: path_join = ${j}")
+        exit(1)
+    }
+
+    // string -> string transform via glob.
+    c = clean("/x//y/../z")
+    if c != "/x/z" {
+        println("FAIL: clean = ${c}")
+        exit(1)
+    }
+
+    println("PASS: glob import tuple-return types correct")
+}

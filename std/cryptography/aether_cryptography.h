@@ -8,10 +8,11 @@
  *   base64_encode(data, length)  — RFC 4648 §4 standard alphabet, unpadded
  *   base64_decode(b64)           — bytes + length via TLS split-accessor
  *
- * HMAC, key derivation, symmetric ciphers, signing, streaming digests,
- * URL-safe Base64 (RFC 4648 §5), and PKCS#7 / PEM parsing are
- * deliberately out of scope. See docs/stdlib-vs-contrib.md for the
- * "one obvious shape" criterion.
+ * Streaming (incremental) digests are supported via the digest-context
+ * API (digest_new / digest_update / digest_final_*). Key derivation,
+ * symmetric ciphers, signing, URL-safe Base64 (RFC 4648 §5), and
+ * PKCS#7 / PEM parsing remain deliberately out of scope. See
+ * docs/stdlib-vs-contrib.md for the "one obvious shape" criterion.
  *
  * When the build has AETHER_HAS_OPENSSL (the default on every
  * platform where OpenSSL is available), the implementation is a
@@ -97,6 +98,35 @@ int cryptography_hash_bytes_raw(const char* algo, const char* data, int length);
 const char* cryptography_get_binary_digest(void);
 int         cryptography_get_binary_digest_length(void);
 void        cryptography_release_binary_digest(void);
+
+/* Incremental (streaming) digest context (fbs-core ask #4). A heap
+ * EVP_MD_CTX handle the caller threads through update() then final().
+ * Lets a streaming consumer (blob store, large-file hasher) hash each
+ * window as it arrives instead of buffering the whole input — the S3
+ * ETag use case, where reading the stored object back purely to MD5 it
+ * is the architectural compromise this removes.
+ *
+ *   digest_new(algo)        → opaque ctx handle, or NULL on unknown
+ *                             algorithm / OOM / no OpenSSL. `algo` uses
+ *                             the same names as hash_hex ("md5",
+ *                             "sha256", "sha1", "md4", ...).
+ *   digest_update(ctx,d,n)  → 1 on success, 0 on failure. Binary-safe;
+ *                             `d` may be an AetherString* or char*.
+ *                             Feeding 0 bytes is a no-op success.
+ *   digest_final_hex(ctx)   → caller-frees lowercase hex; FREES ctx.
+ *   digest_final_bytes(ctx) → raw digest into the binary-digest TLS
+ *                             slot (for SigV4 chaining); FREES ctx.
+ *   digest_free(ctx)        → abandon without finalizing (aborted
+ *                             upload). NULL-safe.
+ *
+ * The two final() variants free the context, so the success path needs
+ * no explicit free; call digest_free only when bailing out before
+ * final. */
+void* cryptography_digest_new_raw(const char* algo);
+int   cryptography_digest_update_raw(void* handle, const char* data, int length);
+char* cryptography_digest_final_hex_raw(void* handle);
+int   cryptography_digest_final_bytes_raw(void* handle);
+void  cryptography_digest_free_raw(void* handle);
 
 /* Base64 encode `length` bytes of `data` using the RFC 4648 §4
  * standard alphabet, unpadded (callers needing `=` padding append

@@ -88,6 +88,10 @@ typedef enum {
     // Expressions
     AST_BINARY_EXPRESSION,
     AST_UNARY_EXPRESSION,
+    // `expr!` — unwrap-or-trap on a (value, err) tuple: yields the first
+    // slot, panics if the trailing error slot is non-empty. Single child:
+    // the tuple-returning operand.
+    AST_TUPLE_UNWRAP,
     AST_FUNCTION_CALL,
     AST_ACTOR_REF,
     AST_IDENTIFIER,
