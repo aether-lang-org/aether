@@ -207,15 +207,18 @@ int factor_set(const char* key, const char* value) {
 AetherString* factor_get(const char* key) {
     if (!key) return string_new("");
     char snip[8192];
-    // USING: kernel namespaces prettyprint io ; "<key>" get [ unparse write ] when*
-    // `unparse` gives a faithful single-value rendering; missing key -> "".
+    // USING: kernel namespaces present io ; "<key>" get [ present write ] when*
+    // `present` renders the value as raw text — a string yields its own
+    // content (no quotes), a number yields its decimal digits — matching the
+    // string-only k-v convention of the other hosts (get "x" -> 10, not
+    // "10"). Missing key -> "".
     int w = snprintf(snip, sizeof(snip),
-        "USING: kernel namespaces prettyprint io ; \"");
+        "USING: kernel namespaces present io ; \"");
     if (w < 0) return string_new("");
     if (append_escaped(snip, sizeof(snip), (size_t)w, key) < 0)
         return string_new("");
     size_t at = strlen(snip);
-    const char* tail = "\" get [ unparse write ] when*";
+    const char* tail = "\" get [ present write ] when*";
     if (at + strlen(tail) + 1 >= sizeof(snip)) return string_new("");
     memcpy(snip + at, tail, strlen(tail) + 1);
 
