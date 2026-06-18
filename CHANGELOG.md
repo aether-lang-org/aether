@@ -14,6 +14,28 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **By-value struct returns and stack-struct locals** (#746). A function
+  may now declare a by-value struct return type (`make() -> Pair`), and a
+  struct can be declared as a stack-allocated local (`Pair p` — no `*`, no
+  initializer) and filled field-by-field. Both were parse errors before:
+  the `-> StructName` return type fell through the `->` return-type
+  disambiguator (an off-by-one in its `{` lookahead — `->` is already
+  consumed, so the name sits at offset 0, not 1) into the `-> expr`
+  arrow-body path; and `StructName name` had no statement-level
+  declaration case (only `*StructName name` and the C-ABI aliases like
+  `size_t n`). Both fixes are parser-only — the `IDENT IDENT` stack-local
+  case mirrors the existing `*StructName name` pointer path, and codegen
+  was already correct (struct return type via get_c_type, `.field` access
+  on a value struct, `return p` as a C struct copy). Completes the
+  by-value struct set (by-value params already worked), so an all-scalar
+  record (a geometry/bounding-box result, the geohash_helper.c shape) can
+  be built on the stack and returned without heap allocation or an
+  out-pointer. See [docs/language-reference.md](docs/language-reference.md)
+  (By-value struct returns and stack-struct locals).
 ## [0.272.0]
 
 ### Added
