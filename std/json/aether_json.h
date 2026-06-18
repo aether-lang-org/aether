@@ -112,6 +112,11 @@ int json_array_size(JsonValue* arr);
 JsonValue* json_create_null(void);
 JsonValue* json_create_bool(int value);
 JsonValue* json_create_number(double value);
+/* Integer-flavoured number — serialised as a bare integer (`%lld`),
+ * not scientific notation. Full int64 range (separate union slot from
+ * `data.number`). Use this for byte-counts, IDs, totals — anything the
+ * consumer expects to read as a plain integer. */
+JsonValue* json_create_int(long long value);
 JsonValue* json_create_string(const char* value);
 JsonValue* json_create_array(void);
 JsonValue* json_create_object(void);
