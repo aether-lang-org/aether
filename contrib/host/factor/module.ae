@@ -1,0 +1,24 @@
+// contrib.host.factor — Embedded Factor Language Host Module
+//
+// Runs Factor (concatenative, stack-based) code inside the Aether process
+// via a forked libfactor that exposes a generic C eval-a-string embedding
+// API. NOTE: unlike the other hosts, this needs the embed-api fork of
+// Factor (upstream ships only a process-takeover entry point), and Factor's
+// VM is NOT contained by the in-process libc sandbox — rely on the
+// process-level sandbox for isolation. See README.md.
+//
+// Setup (env, orchestrator-owned):
+//   AETHER_FACTOR_SONAME = path to the forked libfactor (e.g. ./libfactor.so)
+//   AETHER_FACTOR_IMAGE  = path to the bootstrapped factor.image
+//
+// Usage:
+//   import contrib.host.factor
+//
+//   factor.run("2 3 + .")        // prints 5
+
+exports (factor_run_sandboxed, factor_run, factor_init, factor_finalize)
+
+extern factor_run_sandboxed(perms: ptr, code: string) -> int
+extern factor_run(code: string) -> int
+extern factor_init() -> int
+extern factor_finalize()
