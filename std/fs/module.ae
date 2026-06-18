@@ -253,6 +253,8 @@ extern fs_glob_multi_raw(patterns: ptr) -> ptr
 // NUL). Length-aware reads use string_new_with_length.
 extern string_concat(a: string, b: string) -> string
 extern string_length(str: string) -> int
+extern string_char_at(str: string, index: int) -> int
+extern string_substring(str: string, start: int, end: int) -> string
 
 // Length-preserving string constructor. Takes an explicit byte count
 // so binary payloads with embedded NULs survive the copy. Returns a
@@ -603,6 +605,65 @@ chmod(path: string, mode: int) -> {
 //   fs.clean("")               → "."
 clean(path: string) -> string {
     return path_clean(path)
+}
+
+// Lexically-cleaned join. `path_join(a, b)` followed by `clean` in one
+// call — the path that actually hits the filesystem after a user-
+// supplied segment is appended. Use this (not bare `path_join`) wherever
+// `b` may contain `..` or `.` — object keys, archive entry names, any
+// caller-controlled tail — so `join_clean("bucket", "a/../b")` collapses
+// to "bucket/b" rather than leaving the traversal in place. Pair with
+// `is_within_base` for the containment check.
+//
+// Empty-segment handling mirrors path_join's identity behaviour: an
+// empty `a` or `b` cleans the other side alone (so the result is never
+// a spurious "./x" or "x/.").
+//
+// Examples:
+//   fs.join_clean("bucket", "a/../b") → "bucket/b"
+//   fs.join_clean("/data", "x/./y")   → "/data/x/y"
+//   fs.join_clean("", "a/../b")       → "b"
+//   fs.join_clean("bucket", "")       → "bucket"
+join_clean(a: string, b: string) -> string {
+    if string_length(a) == 0 {
+        return path_clean(b)
+    }
+    if string_length(b) == 0 {
+        return path_clean(a)
+    }
+    return path_clean(path_join(a, b))
+}
+
+// First cleaned path segment. Cleans `path` then returns the leading
+// component up to (but not including) the first "/". For a rooted path
+// the leading "/" is dropped first, so `first_element("/a/b")` is "a".
+// A path that cleans to "." or "/" yields "". Useful for splitting an
+// object key into its top-level bucket/prefix after traversal has been
+// neutralised.
+//
+// Examples:
+//   fs.first_element("a/b/c")     → "a"
+//   fs.first_element("/a/b")      → "a"
+//   fs.first_element("x/../y/z")  → "y"
+//   fs.first_element("only")      → "only"
+//   fs.first_element("/")         → ""
+first_element(path: string) -> string {
+    cleaned = path_clean(path)
+    start = 0
+    if string_length(cleaned) > 0 {
+        if string_char_at(cleaned, 0) == 47 {   // leading '/'
+            start = 1
+        }
+    }
+    i = start
+    n = string_length(cleaned)
+    while i < n {
+        if string_char_at(cleaned, i) == 47 {
+            return string_substring(cleaned, start, i)
+        }
+        i = i + 1
+    }
+    return string_substring(cleaned, start, n)
 }
 
 // Lexical containment: does cleaned `target` lie under cleaned `base`?

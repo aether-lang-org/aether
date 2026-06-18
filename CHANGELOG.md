@@ -14,6 +14,21 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`fs.join_clean(a, b)` and `fs.first_element(path)`** (`std/fs/module.ae`).
+  `join_clean` is `path_join` followed by `clean` in one call — the
+  cleaned path that actually reaches the filesystem after a caller-
+  supplied segment is appended, so `fs.join_clean("bucket", "a/../b")`
+  collapses to `bucket/b` rather than leaving the traversal in place
+  (path-traversal-defense invariant for object stores). Empty-segment
+  handling mirrors `path_join`'s identity behaviour. `first_element`
+  returns the leading cleaned path component (`fs.first_element("/a/b")`
+  → `"a"`). Together they let downstream blob-store code drop its
+  hand-rolled `pathutil.join` wrapper.
+
 ## [0.277.0]
 
 ### Fixed
