@@ -3960,6 +3960,43 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
     return 1;
 }
 
+/* #749: resolve `<recv>.<field>` where `recv` is a local struct or
+ * pointer-to-struct whose `field` is a function-pointer member. Returns
+ * the field's TYPE_FUNCTION (is_fnptr) Type* (borrowed — do not free) or
+ * NULL. *out_is_ptr is set to 1 when the receiver is a pointer-to-struct
+ * (codegen then emits `->field` rather than `.field`). */
+static Type* resolve_fnptr_struct_field(SymbolTable* table, const char* recv_name,
+                                        const char* field_name, int* out_is_ptr) {
+    Symbol* rs = lookup_symbol(table, recv_name);
+    if (!rs || !rs->type) return NULL;
+    Type* st = rs->type;
+    const char* sname = NULL;
+    int is_ptr = 0;
+    if (st->kind == TYPE_STRUCT && st->struct_name) {
+        sname = st->struct_name;
+    } else if (st->kind == TYPE_PTR && st->element_type &&
+               st->element_type->kind == TYPE_STRUCT && st->element_type->struct_name) {
+        sname = st->element_type->struct_name;
+        is_ptr = 1;
+    } else {
+        return NULL;
+    }
+    Symbol* ss = lookup_symbol(table, sname);
+    if (!ss || !ss->node) return NULL;
+    for (int fi = 0; fi < ss->node->child_count; fi++) {
+        ASTNode* f = ss->node->children[fi];
+        if (f && f->value && strcmp(f->value, field_name) == 0) {
+            if (f->node_type && f->node_type->kind == TYPE_FUNCTION &&
+                f->node_type->is_fnptr) {
+                if (out_is_ptr) *out_is_ptr = is_ptr;
+                return f->node_type;
+            }
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
 int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     if (!call || call->type != AST_FUNCTION_CALL) return 0;
 
@@ -4079,6 +4116,38 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
             call->node_type = create_type(TYPE_UNKNOWN);
         }
         return 1;
+    }
+
+    /* #749: dispatch through a function-pointer struct field —
+     * `recv.fnptrfield(args)`. The parser collapsed the member-access
+     * callee to the dotted name `recv.field` (dropping the receiver
+     * subtree), and it did not resolve as a function symbol above. If
+     * `recv` is a local struct / pointer-to-struct whose `field` is a
+     * function pointer, this is a typed indirect call — typecheck the
+     * args against the field's signature, stamp the return type, and tag
+     * the node so codegen emits `(recv.field)(args)` / `(recv->field)(args)`.
+     * Single-level receiver only (a bare local); the part before the dot
+     * must contain no further dots. */
+    if ((!symbol || !symbol->is_function) && call->value) {
+        char* dot = strrchr(call->value, '.');
+        size_t rlen = dot ? (size_t)(dot - call->value) : 0;
+        if (dot && rlen > 0 && rlen < 200 && !memchr(call->value, '.', rlen)) {
+            char recv[200];
+            memcpy(recv, call->value, rlen);
+            recv[rlen] = '\0';
+            int is_ptr = 0;
+            Type* fsig = resolve_fnptr_struct_field(table, recv, dot + 1, &is_ptr);
+            if (fsig) {
+                for (int i = 0; i < call->child_count; i++) {
+                    typecheck_expression(call->children[i], table);
+                }
+                call->node_type = fsig->return_type
+                    ? clone_type(fsig->return_type) : create_type(TYPE_UNKNOWN);
+                if (call->annotation) free(call->annotation);
+                call->annotation = strdup(is_ptr ? "fnfield_ptr" : "fnfield_val");
+                return 1;
+            }
+        }
     }
 
     if (!symbol || !symbol->is_function) {

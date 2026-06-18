@@ -1642,6 +1642,27 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
  * the trailing slot of the outer struct from this function's perspective,
  * so the caller passes 0 for them.
  */
+/* #749: emit a function-pointer struct field as `R (*name)(T1, T2)`.
+ * The field name sits inside the `(*...)` declarator, so the plain
+ * `<type> name` shape can't express it (get_c_type collapses an fn-ptr
+ * type to "void*"). Mirrors the typed indirect-call cast in
+ * codegen_expr.c so a field, the C layout, and a call through it agree.
+ * Local to this TU (the fn-ptr-parameter feature has a sibling exported
+ * helper; keep this one file-static to avoid a cross-PR symbol clash). */
+static void emit_fnptr_struct_field(CodeGenerator* gen, Type* sig, const char* name) {
+    const char* ret_c = (sig && sig->return_type) ? get_c_type(sig->return_type) : "void";
+    fprintf(gen->output, "%s (*%s)(", ret_c, name ? name : "");
+    if (sig && sig->param_count > 0) {
+        for (int i = 0; i < sig->param_count; i++) {
+            if (i > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "%s", get_c_type(sig->param_types[i]));
+        }
+    } else {
+        fprintf(gen->output, "void");
+    }
+    fprintf(gen->output, ")");
+}
+
 static void generate_extern_struct_field(CodeGenerator* gen, ASTNode* field,
                                          int is_extern, int is_last_in_parent) {
     if (!field) return;
@@ -1674,6 +1695,12 @@ static void generate_extern_struct_field(CodeGenerator* gen, ASTNode* field,
     } else if (field->bit_width > 0) {
         generate_type(gen, field->node_type);
         fprintf(gen->output, " %s : %d;\n", field->value, field->bit_width);
+    } else if (field->node_type && field->node_type->kind == TYPE_FUNCTION &&
+               field->node_type->is_fnptr) {
+        /* #749: typed function-pointer field (a `dictType`-style vtable
+         * member) — emit `R (*name)(T1,T2)`, not `void* name`. */
+        emit_fnptr_struct_field(gen, field->node_type, field->value);
+        fprintf(gen->output, ";\n");
     } else {
         generate_type(gen, field->node_type);
         fprintf(gen->output, " %s;\n", field->value);

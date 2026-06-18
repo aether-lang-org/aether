@@ -1007,27 +1007,27 @@ struct Config {
 }
 ```
 
-### By-value struct returns and stack-struct locals
+### Function-pointer struct fields — a vtable of callbacks
 
-A function can return a struct **by value**, and a struct can be declared as a **stack-allocated local** (no `*`, no initializer) and filled field-by-field:
+A struct field can be a function pointer (`fn(T1, T2) -> R`) — the `dictType`-style vtable. The field emits as the C function-pointer member `R (*name)(T1, T2)`, and a call through it is a real indirect call:
 
 ```aether
-struct Pair { a: long  b: long }
-
-make_pair(x: long) -> Pair {     // by-value struct return type
-    Pair p                       // stack-allocated struct local
-    p.a = x
-    p.b = x + 1
-    return p                     // returned by value (a struct copy)
+struct Ops {
+    hash:    fn(int) -> int
+    combine: fn(int, int) -> int
 }
 
 main() {
-    q = make_pair(10)
-    print(q.a)                   // 10
+    o = Ops { hash: my_hash as fn(int) -> int, combine: my_add as fn(int, int) -> int }
+    o.hash(5)                       // value struct  → (o.hash)(5)
+}
+
+dispatch(p: *Ops, k: int) -> int {
+    return p.hash(k)                // pointer struct → (p->hash)(k)
 }
 ```
 
-This is the value sibling of the `*StructName` pointer form below: `Pair p` is a stack struct (`.field` access), `*Pair p` is a pointer (`->field`). By-value struct **parameters** (`pair_sum(p: Pair)`) already worked; these complete the set, so an all-scalar record can be built locally and returned without heap allocation or an out-pointer — the shape C interop structs (e.g. a geometry/bounding-box result) expect.
+Assign each field an Aether function's address via `as fn(...)` (or a C function pointer from an extern). Dispatch works for a value struct (`o.field(args)`) and a pointer-to-struct (`p.field(args)` lowers to `p->field(args)`); the receiver must be a single local, and the field's signature is taken from the struct definition. This is the field form of the same typed-fn-pointer machinery as `as fn(...)` locals.
 
 ### Pointer-to-struct type — `*StructName` and `expr as *StructName`
 
