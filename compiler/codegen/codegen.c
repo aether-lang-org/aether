@@ -2422,6 +2422,35 @@ void generate_type(CodeGenerator* gen, Type* type) {
     fprintf(gen->output, "%s", get_c_type(type));
 }
 
+/* #750: emit a C function-pointer declarator for a `fn(...)->R`
+ * (TYPE_FUNCTION, is_fnptr) parameter. The pointed-to name must sit
+ * INSIDE the `(*...)`, so this can't use the plain `<type> <name>`
+ * shape get_c_type provides (is_fnptr collapses to "void*" there).
+ *   name != NULL  ->  `R (*name)(T1, T2)`   (a definition parameter)
+ *   name == NULL  ->  `R (*)(T1, T2)`       (a prototype's abstract declarator)
+ * The element type strings mirror the call-site cast in codegen_expr.c
+ * so a fn-ptr param, its prototype, and a call through it all agree. */
+void emit_fnptr_decl(CodeGenerator* gen, Type* sig, const char* name) {
+    const char* ret_c = (sig && sig->return_type)
+                        ? get_c_type(sig->return_type) : "void";
+    fprintf(gen->output, "%s (*%s)(", ret_c, name ? name : "");
+    if (sig && sig->param_count > 0) {
+        for (int i = 0; i < sig->param_count; i++) {
+            if (i > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "%s", get_c_type(sig->param_types[i]));
+        }
+    } else {
+        fprintf(gen->output, "void");
+    }
+    fprintf(gen->output, ")");
+}
+
+/* True for a parameter/local whose declared type is a typed C function
+ * pointer (`fn(...)->R`), the shape #750 emits specially. */
+int is_fnptr_type(Type* t) {
+    return t && t->kind == TYPE_FUNCTION && t->is_fnptr;
+}
+
 // Generate a default return value for pattern match failures
 // This outputs a sentinel value that indicates "no match" for this clause
 void generate_default_return_value(CodeGenerator* gen, Type* type) {
@@ -3430,7 +3459,13 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                        param->type == AST_PATTERN_STRUCT ||
                        param->type == AST_VARIABLE_DECLARATION) {
                 if (param_count > 0) fprintf(gen->output, ", ");
-                generate_type(gen, param->node_type);
+                /* #750: fn-ptr param → abstract declarator `R (*)(T1,T2)`
+                 * so the prototype matches the definition. */
+                if (is_fnptr_type(param->node_type)) {
+                    emit_fnptr_decl(gen, param->node_type, NULL);
+                } else {
+                    generate_type(gen, param->node_type);
+                }
                 param_count++;
             }
         }

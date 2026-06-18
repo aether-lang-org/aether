@@ -1588,6 +1588,22 @@ main() {
 
 By default the C symbol matches the Aether-side name (or its namespace-prefixed form when the function lives in an imported module). For a specific C symbol, use the parenthesised form: `@c_callback("aether_signal_handler") on_sigint(sig: int) { … }`. See [`docs/c-interop.md`](c-interop.md#exporting-an-aether-function-as-a-c-callback--c_callback) for the full reference.
 
+### Function-pointer parameters — `fn(T1, T2) -> R`
+
+A parameter typed `fn(T1, T2) -> R` is a typed C function pointer: it emits the exact `R (*name)(T1, T2)` in the generated prototype and is directly callable in the body, so callback-taking functions port cleanly:
+
+```aether
+walk(cb: fn(ptr, ptr) -> void, a: ptr, b: ptr) {
+    cb(a, b)                       // a real indirect call
+}
+
+reduce(f: fn(int, int) -> int, x: int, y: int) -> int {
+    return f(x, y)                 // multiple callbacks per signature are fine
+}
+```
+
+Pass an Aether function's address with the `as fn(...)` cast — `walk(my_handler as fn(ptr, ptr) -> void, p, q)` — or a C function pointer obtained from an extern. This is the parameter form of the same typed-fn-pointer machinery used by `as fn(...)` locals and function-pointer struct fields; the prototype matches the C signature exactly (needed for callback APIs like `qsort`, `dictScan`, signal handlers, libcurl/sqlite hooks).
+
 ### `@derive(eq)` — synthesize an equality helper for a struct
 
 Annotate a struct definition with `@derive(eq)` and the compiler synthesizes `int <StructName>_eq(<StructName> a, <StructName> b)` automatically — a field-by-field `==` chain that returns `1` when every field matches, `0` otherwise:

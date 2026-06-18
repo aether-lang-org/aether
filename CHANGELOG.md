@@ -14,6 +14,26 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Function-pointer parameters** (#750). A `fn(T1, T2) -> R` parameter now
+  lowers to the exact C function-pointer type `R (*name)(T1, T2)` in both
+  the prototype and the definition, and a call through it (`cb(a, b)`) is a
+  real typed indirect call. Previously a fn-typed parameter collapsed to a
+  bare `void*` and the body call emitted invalid C ("called object is not a
+  function"); the `as fn(...)` cast only rescued a single in-body callback,
+  which didn't scale to multiple callback params or callback-taking helpers.
+  This is the parameter form of the existing typed-fn-pointer machinery
+  (`as fn(...)` locals, fn-pointer struct fields): the parser/typechecker
+  already carried `is_fnptr` onto the parameter, so the fix is codegen-only —
+  a fn-ptr declarator emitter for the prototype + definition, plus
+  registering the param in the fn-ptr-local registry so the call site emits
+  the typed indirect call. Unblocks porting callback APIs (Redis dictScan/
+  raxWalk/command-table iteration; qsort, signal handlers, libcurl/sqlite
+  hooks). See [docs/language-reference.md](docs/language-reference.md)
+  (Function-pointer parameters).
 ## [0.270.0]
 
 ### Fixed
