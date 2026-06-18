@@ -3530,7 +3530,7 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                     if (field && field->type == AST_STRUCT_FIELD &&
                         field->node_type &&
                         field->node_type->kind == TYPE_STRING) {
-                        char msg[320];
+                        char msg[640];
                         snprintf(msg, sizeof(msg),
                             "heap.new(%s) — struct '%s' has a `string` field "
                             "('%s'); heap.new is restricted to POD structs "

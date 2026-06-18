@@ -21,3 +21,7 @@ without losing track of where each one came from.
 Each doc was originally drafted in the corresponding GitHub issue
 body; lifted into the repo so it stays discoverable next to the
 code and survives issue-tracker churn.
+
+For a broader lineage note that is about Aether's own closure/runtime
+tradeoff rather than one comparison target, see
+[`../closure-lineage-and-runtime-tradeoffs.md`](../closure-lineage-and-runtime-tradeoffs.md).
