@@ -1008,6 +1008,24 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_LITERAL:
             return clone_type(expr->node_type);
 
+        case AST_TUPLE_UNWRAP: {
+            /* `expr!` — unwrap-or-trap: the result is the operand tuple's
+             * FIRST slot type. Operand must be a tuple (a (value, err)
+             * return); a non-tuple operand is a type error reported in
+             * typecheck_expression. */
+            if (expr->child_count == 0 || !expr->children[0])
+                return create_type(TYPE_UNKNOWN);
+            Type* operand = infer_type(expr->children[0], table);
+            Type* result = create_type(TYPE_UNKNOWN);
+            if (operand && operand->kind == TYPE_TUPLE &&
+                operand->tuple_count >= 1 && operand->tuple_types[0]) {
+                free_type(result);
+                result = clone_type(operand->tuple_types[0]);
+            }
+            if (operand) free_type(operand);
+            return result;
+        }
+
         case AST_NULL_LITERAL:
             return create_type(TYPE_PTR);
 
@@ -3418,12 +3436,52 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
         case AST_UNARY_EXPRESSION: {
             if (expr->child_count > 0) {
                 typecheck_expression(expr->children[0], table);
-                expr->node_type = infer_unary_type(expr->children[0], 
+                expr->node_type = infer_unary_type(expr->children[0],
                                                  get_token_type_from_string(expr->value));
             }
             return 1;
         }
-        
+
+        case AST_TUPLE_UNWRAP: {
+            /* `expr!` — unwrap-or-trap. The operand must return a tuple
+             * whose LAST slot is the (string) error; the unwrap yields
+             * the first slot and panics at runtime if the error slot is
+             * non-empty. Typecheck the operand, then require a tuple of
+             * at least 2 elements with a string final slot — the
+             * canonical `(value, err)` shape this sugar targets. */
+            if (expr->child_count == 0) return 0;
+            typecheck_expression(expr->children[0], table);
+            Type* op = infer_type(expr->children[0], table);
+            if (!op || op->kind != TYPE_TUPLE) {
+                type_error("`!` unwrap requires a tuple-returning operand "
+                           "(a `(value, err)` result)",
+                           expr->line, expr->column);
+                if (op) free_type(op);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            if (op->tuple_count < 2) {
+                type_error("`!` unwrap requires a `(value, err)` tuple "
+                           "with at least two slots",
+                           expr->line, expr->column);
+                free_type(op);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            Type* last = op->tuple_types[op->tuple_count - 1];
+            if (!last || last->kind != TYPE_STRING) {
+                type_error("`!` unwrap requires the final tuple slot to be "
+                           "the `string` error of a `(value, err)` result",
+                           expr->line, expr->column);
+                free_type(op);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            expr->node_type = clone_type(op->tuple_types[0]);
+            free_type(op);
+            return 1;
+        }
+
         case AST_FUNCTION_CALL:
             return typecheck_function_call(expr, table);
             

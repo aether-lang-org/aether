@@ -16,6 +16,21 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ## [current]
 
+### Added
+
+- **`expr!` unwrap-or-trap operator** (`compiler/parser`, `compiler/analysis`,
+  `compiler/codegen`). A postfix `!` on a `(value, err)` tuple yields the
+  first slot and panics if the trailing (string) error slot is non-empty:
+  `h = cryptography.random_hex(n)!` replaces the two-line
+  `h, e = ...  return h` discard wrapper. Works on any tuple whose final
+  slot is the `string` error (2-tuples, the `(bytes, len, err)` 3-tuple,
+  …); the result type is the first slot. Composes anywhere an expression
+  is allowed — assignment RHS, call arguments — via a GCC
+  statement-expression that evaluates the tuple once. `!` stays the actor
+  fire-and-forget operator when followed by a message type (an
+  uppercase-leading identifier); the unwrap reading applies everywhere
+  else. A non-tuple or string-less-final-slot operand is a compile error.
+
 ### Fixed
 
 - **`import std.fs (*)` (glob import) now carries the real tuple return

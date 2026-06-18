@@ -1,0 +1,13 @@
+// Companion to probe.ae: the `!` unwrap PANIC path. fs.open on a
+// nonexistent path returns (null, "cannot open file"); unwrapping it
+// must abort with a non-zero exit. The test driver runs this and asserts
+// the process did NOT exit 0.
+
+import std.fs
+
+main() {
+    f = fs.open("/no/such/dir/definitely/missing", "r")!
+    // Unreachable — the unwrap above panics. If we get here, the trap
+    // didn't fire; print a sentinel the driver treats as failure.
+    println("REACHED-AFTER-UNWRAP")
+}

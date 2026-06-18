@@ -1758,6 +1758,46 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             fprintf(gen->output, "NULL");
             break;
 
+        case AST_TUPLE_UNWRAP: {
+            /* `expr!` — unwrap-or-trap. Emit a GCC statement-expression
+             * that evaluates the tuple once, panics if the trailing
+             * (string) error slot is non-empty, and yields the first
+             * slot:
+             *
+             *   ({ _tuple_T_string _u = <operand>;
+             *      if (_u._N && _u._N[0]) aether_panic("...");
+             *      _u._0; })
+             *
+             * The error slot is non-empty iff its pointer is non-NULL AND
+             * its first byte is not '\0' — matching the `err != ""`
+             * convention every (value, err) wrapper uses (the "" success
+             * sentinel is a non-NULL empty string). */
+            if (expr->child_count == 0 || !expr->children[0]) break;
+            ASTNode* operand = expr->children[0];
+            Type* tup = operand->node_type;
+            if (!tup || tup->kind != TYPE_TUPLE || tup->tuple_count < 2) {
+                /* Typechecker already rejected this; emit the operand
+                 * bare so codegen doesn't crash on a malformed tree. */
+                generate_expression(gen, operand);
+                break;
+            }
+            ensure_tuple_typedef(gen, tup);
+            const char* tuple_c = get_c_type(tup);
+            int err_idx = tup->tuple_count - 1;
+            static int unwrap_tmp_counter = 0;
+            int uid = unwrap_tmp_counter++;
+
+            fprintf(gen->output, "({ %s _unw%d = ", tuple_c, uid);
+            generate_expression(gen, operand);
+            fprintf(gen->output, "; ");
+            fprintf(gen->output,
+                    "if (_unw%d._%d && _unw%d._%d[0]) "
+                    "aether_panic(_unw%d._%d); ",
+                    uid, err_idx, uid, err_idx, uid, err_idx);
+            fprintf(gen->output, "_unw%d._0; })", uid);
+            break;
+        }
+
         case AST_IF_EXPRESSION:
             // if cond { then } else { else } → C ternary: (cond) ? (then) : (else)
             if (expr->child_count >= 3) {
