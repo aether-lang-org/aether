@@ -2338,6 +2338,10 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             fprintf(gen->output, "printf(\"%%f\", ");
                             generate_expression(gen, arg);
                             fprintf(gen->output, ")");
+                        } else if (arg_type->kind == TYPE_LONGDOUBLE) {
+                            fprintf(gen->output, "printf(\"%%Lf\", ");
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, ")");
                         } else if (arg_type->kind == TYPE_STRING) {
                             if (arg->type == AST_LITERAL) {
                                 // String literal — never NULL, use printf directly
@@ -2393,7 +2397,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     fprintf(gen->output, "%%%%");
                                 } else if (arg_idx < expr->child_count) {
                                     Type* atype = expr->children[arg_idx]->node_type;
-                                    if (atype && atype->kind == TYPE_FLOAT) fprintf(gen->output, "%%f");
+                                    if (atype && atype->kind == TYPE_LONGDOUBLE) fprintf(gen->output, "%%Lf");
+                                    else if (atype && atype->kind == TYPE_FLOAT) fprintf(gen->output, "%%f");
                                     else if (atype && atype->kind == TYPE_INT64) fprintf(gen->output, "%%lld");
                                     else if (atype && atype->kind == TYPE_DURATION) fprintf(gen->output, "%%s");
                                     else if (atype && (atype->kind == TYPE_STRING || atype->kind == TYPE_PTR)) fprintf(gen->output, "%%s");
@@ -2522,7 +2527,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     fprintf(gen->output, "%%%%");
                                 } else if (arg_idx < expr->child_count) {
                                     Type* atype = expr->children[arg_idx]->node_type;
-                                    if (atype && atype->kind == TYPE_FLOAT) fprintf(gen->output, "%%f");
+                                    if (atype && atype->kind == TYPE_LONGDOUBLE) fprintf(gen->output, "%%Lf");
+                                    else if (atype && atype->kind == TYPE_FLOAT) fprintf(gen->output, "%%f");
                                     else if (atype && atype->kind == TYPE_INT64) fprintf(gen->output, "%%lld");
                                     else if (atype && atype->kind == TYPE_DURATION) fprintf(gen->output, "%%s");
                                     else if (atype && (atype->kind == TYPE_STRING || atype->kind == TYPE_PTR)) fprintf(gen->output, "%%s");
@@ -3871,6 +3877,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             case TYPE_UINT64: fprintf(gen->output, "%%llu"); break; \
                             case TYPE_DURATION: fprintf(gen->output, "%%s"); break; \
                             case TYPE_FLOAT:  fprintf(gen->output, "%%g");  break; \
+                            case TYPE_LONGDOUBLE: fprintf(gen->output, "%%Lg"); break; \
                             case TYPE_BOOL:   fprintf(gen->output, "%%s");  break; \
                             case TYPE_STRING: fprintf(gen->output, "%%s");  break; \
                             case TYPE_PTR:    fprintf(gen->output, "%%s");  break; \
@@ -4215,6 +4222,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             const char* c_zero = "0";
                             switch (reply_field_type) {
                                 case TYPE_FLOAT:   c_type = "double"; c_zero = "0.0"; break;
+                                case TYPE_LONGDOUBLE: c_type = "long double"; c_zero = "0.0L"; break;
                                 case TYPE_BOOL:    c_type = "int";    c_zero = "0";   break;
                                 case TYPE_STRING:  c_type = "const char*"; c_zero = "NULL"; break;
                                 case TYPE_INT64:   c_type = "int64_t"; c_zero = "0";  break;
@@ -4254,6 +4262,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             // Emit the field type size based on reply_field_type
                             switch (reply_field_type) {
                                 case TYPE_FLOAT:   fprintf(gen->output, "double"); break;
+                                case TYPE_LONGDOUBLE: fprintf(gen->output, "long double"); break;
                                 case TYPE_INT64:   fprintf(gen->output, "int64_t"); break;
                                 case TYPE_UINT64:  fprintf(gen->output, "uint64_t"); break;
                                 case TYPE_DURATION: fprintf(gen->output, "int64_t"); break;

@@ -268,6 +268,10 @@ Type* infer_from_binary_op(Type* left, Type* right, const char* operator) {
         if (left->kind == TYPE_INT && right->kind == TYPE_INT) {
             return create_type(TYPE_INT);
         }
+        // #749: longdouble is the widest numeric — wins over float/int.
+        if (left->kind == TYPE_LONGDOUBLE || right->kind == TYPE_LONGDOUBLE) {
+            return create_type(TYPE_LONGDOUBLE);
+        }
         // If either is float, result is float
         if (left->kind == TYPE_FLOAT || right->kind == TYPE_FLOAT) {
             return create_type(TYPE_FLOAT);

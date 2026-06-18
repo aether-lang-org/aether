@@ -62,6 +62,7 @@ const char* const_array_elem_c_type(Type* t) {
         case TYPE_UINT16:  return "uint16_t";
         case TYPE_UINT8:   return "uint8_t";
         case TYPE_FLOAT:   return "double";
+        case TYPE_LONGDOUBLE: return "long double";
         case TYPE_PTR:     return "void*";
         case TYPE_BYTE:    return "unsigned char";
         case TYPE_BOOL:    return "_Bool";
@@ -1213,6 +1214,7 @@ void emit_actor_to_header(CodeGenerator* gen, ASTNode* actor) {
                                 case TYPE_INT: c_type = "int"; break;
                                 /* See get_c_type() — Aether `float` is always C `double`. */
                                 case TYPE_FLOAT: c_type = "double"; break;
+                                case TYPE_LONGDOUBLE: c_type = "long double"; break;
                                 case TYPE_STRING: c_type = "const char*"; break;
                                 case TYPE_BOOL: c_type = "int"; break;
                                 case TYPE_BYTE: c_type = "unsigned char"; break;
@@ -1425,6 +1427,7 @@ const char* get_c_type(Type* type) {
          * Aether-defined function was called from C with a `double`
          * argument. Now consistent everywhere. */
         case TYPE_FLOAT: return "double";
+        case TYPE_LONGDOUBLE: return "long double";
         case TYPE_BOOL: return "int";
         /* `unsigned char` (not `uint8_t`) so the compiler's strict-aliasing
          * exemption applies: code may legally read or write any other
@@ -1578,6 +1581,7 @@ static const char* get_abi_type(Type* type) {
          * get_c_type() for rationale. The public ABI (`aether_*`
          * wrapper symbols emitted with --emit=lib) follows suit. */
         case TYPE_FLOAT:  return "double";
+        case TYPE_LONGDOUBLE: return "long double";
         case TYPE_BOOL:   return "int32_t";
         case TYPE_BYTE:   return "unsigned char";
         case TYPE_STRING: return "const char*";
@@ -2464,6 +2468,9 @@ void generate_default_return_value(CodeGenerator* gen, Type* type) {
             break;
         case TYPE_FLOAT:
             fprintf(gen->output, "0.0");
+            break;
+        case TYPE_LONGDOUBLE:
+            fprintf(gen->output, "0.0L");
             break;
         case TYPE_STRING:
             fprintf(gen->output, "\"\"");

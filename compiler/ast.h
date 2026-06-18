@@ -180,6 +180,8 @@ typedef enum {
     TYPE_UINT8,         // No bare keyword; reached only via c_abi_alias.
     TYPE_DURATION,      // signed 64-bit nanosecond count
     TYPE_FLOAT,
+    TYPE_LONGDOUBLE,    // C `long double` — widest numeric (#749). Reached
+                        // via the `longdouble` type name; no source literal.
     TYPE_BOOL,
     TYPE_BYTE,          // unsigned 8-bit (`unsigned char` in C). Type-precision
                         // for struct fields, function params, returns, locals.

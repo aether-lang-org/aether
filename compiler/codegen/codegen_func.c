@@ -588,6 +588,9 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
             case TYPE_FLOAT:
                 fprintf(gen->output, "double");  // C uses double by default
                 break;
+            case TYPE_LONGDOUBLE:
+                fprintf(gen->output, "long double");
+                break;
             case TYPE_PTR:
                 /* `*StructName` typed pointer (PR #307): TYPE_PTR with a
                  * TYPE_STRUCT element. Emit `StructName*` so the extern
@@ -654,6 +657,9 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
                         break;
                     case TYPE_FLOAT:
                         fprintf(gen->output, "double");
+                        break;
+                    case TYPE_LONGDOUBLE:
+                        fprintf(gen->output, "long double");
                         break;
                     case TYPE_PTR:
                         /* See the matching note on the return-type switch
