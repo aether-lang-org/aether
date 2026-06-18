@@ -178,10 +178,15 @@ function showLspMissingMessage(channel: vscode.OutputChannel): void {
     });
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    const channel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
-    context.subscriptions.push(channel);
-
+// Start (or restart) the language-server client against the resolved
+// binary. Pure LSP wiring — it never touches the output channel's
+// lifetime or the config-change listener, so it is safe to call
+// repeatedly (on activation and on every aether.lsp.* change) without
+// leaking channels or listeners. Failure to find or start the server is
+// reported but NEVER thrown: the grammar + file icon are declarative
+// contributions that stand on their own, so syntax-only mode is always
+// available even if the server is missing.
+async function startClient(channel: vscode.OutputChannel): Promise<void> {
     const config = vscode.workspace.getConfiguration('aether');
     const enabled = config.get<boolean>('lsp.enable', true);
     if (!enabled) {
@@ -232,10 +237,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.showErrorMessage(
             `Aether language server failed to start: ${err instanceof Error ? err.message : String(err)}`,
         );
+        client = undefined;
     }
+}
 
-    // Settings change → reactivate. Cheaper than restarting the editor
-    // when the user updates aether.lsp.path or aether.lsp.enable.
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    // Channel and the config-change listener are created ONCE per
+    // activation and torn down with the extension. Earlier this function
+    // re-invoked itself on every config change, which created a fresh
+    // channel and registered another config listener each time — leaking
+    // listeners and spawning duplicate LSP clients over a session. The
+    // restart now reuses this channel and only cycles the client.
+    const channel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+    context.subscriptions.push(channel);
+
+    // Settings change → restart just the client (not the whole extension),
+    // so the output channel and this very listener are never duplicated.
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(async (event) => {
             if (
@@ -244,10 +261,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             ) {
                 channel.appendLine('[aether] Configuration changed; restarting language server.');
                 await deactivate();
-                await activate(context);
+                await startClient(channel);
             }
         }),
     );
+
+    await startClient(channel);
 }
 
 export async function deactivate(): Promise<void> {

@@ -2,7 +2,7 @@
   "name": "aether-language",
   "displayName": "Aether Language Support",
   "description": "Syntax highlighting and Language Server integration for Aether — a modern actor-based programming language.",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "publisher": "aether",
   "icon": "icon.png",
   "license": "MIT",
@@ -56,101 +56,105 @@
       }
     ],
     "configurationDefaults": {
+      "[aether]": {
+        "_note": "The Aether LSP emits no semantic tokens, so the fixed TextMate palette below is the sole colour source — keep it that way. Disabling semantic highlighting for .ae makes the palette authoritative on every platform even if a future toolchain or a second extension starts emitting semantic tokens (those follow the user's theme and would otherwise differ across Windows/macOS and flicker when the server reconnects).",
+        "editor.semanticHighlighting.enabled": false
+      },
       "editor.tokenColorCustomizations": {
         "textMateRules": [
           {
-            "_design_note": "Aether keeps a fixed palette for the .aether-suffixed scopes the grammar emits — the user's colour theme still paints everything OUTSIDE this list (markdown, JSON, JS, etc.) and anything in an .ae file we don't enumerate here. Without this block, default themes paint the grammar's scopes wildly differently across machines and the .ae reading experience varies by ~10 themes. The palette below is designed for dark-theme readability with each colour reflecting the token's structural role (comments recede, keywords pop, function definitions anchor, syntactic landmarks like arrows pull the eye to turning points).",
-            "_palette_legend": "Comments=green-italic (#6A9955) | Strings=warm-rose (#CE9178) | Numbers=sage (#B5CEA8) | Atoms=teal (#4EC9B0) | Keywords=violet-italic (#C586C0) | Functions=warm-yellow (#DCDCAA) | Variables=sky-blue (#9CDCFE) | Operators=light-gray (#D4D4D4) | Brackets=mid-gray (#808080) | Arrows=pumpkin-bold (#D19A66)"
+            "_design_note": "Aether ships a FIXED, red-forward palette for the .aether-suffixed scopes the grammar emits, so the .ae reading experience is identical on every machine and every base theme (Windows / macOS / Linux). The user's colour theme still paints everything OUTSIDE this list (markdown, JSON, JS, etc.) and any .ae token we don't enumerate. The Aether LSP emits no semantic tokens, so these TextMate rules are authoritative — nothing overrides them. The palette is red-dominant on purpose (an Erlang-inspired identity): keywords, types, the actor verbs and the structural landmarks all live in the red family, with gold reserved for function definitions (the one anchor the eye needs to navigate) and muted green/amber/sage for comments/strings/numbers so the code stays legible rather than monochrome.",
+            "_palette_legend": "Comments=green-italic (#6A9955) | Strings=amber (#CE9178) | Numbers=sage (#B5CEA8) | Literals=red-italic (#E06C75) | Keywords=red-italic (#E06C75) | Types=salmon (#E59CA3) | Actors/Messages=red-bold (#E06C75) | Functions=gold (#DCDCAA) | Variables=slate (#ABB2BF) | Arrows/send=red-bold (#E06C75) | Operators=slate (#ABB2BF) | Brackets=dim (#5C6370)"
           },
           {
-            "_role": "Comments — green italic. Comments are scaffolding; they should be legible without competing with code for attention.",
+            "_role": "Comments — green italic. Comments are scaffolding; legible without competing with code.",
             "scope": "comment.line.aether,comment.block.aether,comment.line.double-slash.aether,punctuation.definition.comment.aether",
             "settings": { "foreground": "#6A9955", "fontStyle": "italic" }
           },
           {
-            "_role": "Strings — warm rose. Quote-delimiters share the colour so the whole literal reads as one block.",
+            "_role": "Strings — amber. Warm but clearly distinct from the red keyword/type family so a string never reads as code.",
             "scope": "string.quoted.double.aether,punctuation.definition.string.begin.aether,punctuation.definition.string.end.aether",
             "settings": { "foreground": "#CE9178" }
           },
           {
-            "_role": "Escape sequences inside strings — subtle mustard so they stand out from string body without screaming.",
+            "_role": "Escape sequences inside strings — mustard, a step off the string body.",
             "scope": "constant.character.escape.aether",
             "settings": { "foreground": "#D7BA7D" }
           },
           {
-            "_role": "String interpolation `${...}` — violet, matching keywords so 'code-inside-a-string' visually signals 'this is code, not text'.",
+            "_role": "String interpolation `${...}` — red, matching keywords so 'code-inside-a-string' signals 'this is code, not text'.",
             "scope": "punctuation.section.interpolation.begin.aether,punctuation.section.interpolation.end.aether,meta.interpolation.aether",
-            "settings": { "foreground": "#C586C0" }
+            "settings": { "foreground": "#E06C75" }
           },
           {
-            "_role": "Numbers — sage green. Distinct from strings (rose), readable at all sizes. Same colour across every numeric base (binary / octal / hex / float) — bases are syntactic, not semantic.",
+            "_role": "Numbers — sage green. Distinct from amber strings and red keywords, readable at all sizes; one colour across every base (binary / octal / hex / float).",
             "scope": "constant.numeric.aether,constant.numeric.decimal.aether,constant.numeric.binary.aether,constant.numeric.hex.aether,constant.numeric.octal.aether,constant.numeric.float.aether",
             "settings": { "foreground": "#B5CEA8" }
           },
           {
-            "_role": "Literal constants — `true`, `false`, `null`. Teal, italic. Lexically distinguishable and semantically irreducible — they get the same colour family as primitive types.",
+            "_role": "Literal constants — `true`, `false`, `null`, `self`. Red italic: lexically irreducible atoms, the Erlang-atom hue.",
             "scope": "constant.language.aether,constant.language.boolean.aether,constant.language.null.aether",
-            "settings": { "foreground": "#4EC9B0", "fontStyle": "italic" }
+            "settings": { "foreground": "#E06C75", "fontStyle": "italic" }
           },
           {
-            "_role": "Control + declaration keywords — `if`, `else`, `match`, `case`, `for`, `while`, `return`, `import`, `exports`, etc. Violet italic so the eye reaches them last in a dense line.",
+            "_role": "Control + declaration keywords — `if`, `else`, `match`, `for`, `while`, `return`, `import`, `as`, etc. Red italic: the dominant accent, the eye's anchor in a dense line.",
             "scope": "keyword.control.aether,keyword.declaration.aether",
-            "settings": { "foreground": "#C586C0", "fontStyle": "italic" }
+            "settings": { "foreground": "#E06C75", "fontStyle": "italic" }
           },
           {
-            "_role": "Storage-class keywords — `struct`, `actor`, `enum`, `fn`. Same violet as control keywords; structurally they're the same role.",
+            "_role": "Storage-class keywords — `struct`, `actor`, `message`, `func`, `state`, `extern`, `let`, `var`, `const`. Same red as control keywords; structurally the same role (they introduce things).",
             "scope": "storage.type.aether",
-            "settings": { "foreground": "#C586C0", "fontStyle": "italic" }
+            "settings": { "foreground": "#E06C75", "fontStyle": "italic" }
           },
           {
-            "_role": "Primitive types — `int`, `string`, `bool`, `byte`, `float`. Teal — primitives anchor the type system; same colour family as `true`/`false` because they're recognised lexically the same way.",
+            "_role": "Primitive types — `int`, `string`, `bool`, `byte`, `float`, `ptr`. Salmon: the red family, lighter than keywords so types and the keywords that introduce them stay distinguishable.",
             "scope": "support.type.primitive.aether",
-            "settings": { "foreground": "#4EC9B0" }
+            "settings": { "foreground": "#E59CA3" }
           },
           {
-            "_role": "Actor and message-type names — bold teal. Bold-weight elevates them above plain types because they carry behavioural meaning (something receives them, something sends them).",
+            "_role": "Actor and message-type names — red bold. They carry behavioural meaning (something receives them, something sends them); bold elevates them above inert types.",
             "scope": "entity.name.message.aether,entity.name.actor.aether",
-            "settings": { "foreground": "#4EC9B0", "fontStyle": "bold" }
+            "settings": { "foreground": "#E06C75", "fontStyle": "bold" }
           },
           {
-            "_role": "Struct and user-type names — teal, no bold. Same family as actors/messages but less emphatic; structs are inert data.",
+            "_role": "Struct and user-type names — salmon, no bold. Same family as actors/messages but less emphatic; structs are inert data.",
             "scope": "entity.name.struct.aether,entity.name.type.aether",
-            "settings": { "foreground": "#4EC9B0" }
+            "settings": { "foreground": "#E59CA3" }
           },
           {
-            "_role": "Function definitions — warm yellow, bold. Definitions anchor a file's structure and the eye should find them quickly during navigation.",
+            "_role": "Function definitions — gold, bold. The one non-red anchor: definitions structure a file and the eye must find them fast; gold reads cleanly against the red field.",
             "scope": "entity.name.function.aether",
             "settings": { "foreground": "#DCDCAA", "fontStyle": "bold" }
           },
           {
-            "_role": "The `main()` function specifically — same warm yellow as other defs, but bold + italic so the entry point pops in a file that defines many helpers.",
+            "_role": "The `main()` entry point — gold bold italic so it pops among many helpers.",
             "scope": "entity.name.function.main.aether",
             "settings": { "foreground": "#DCDCAA", "fontStyle": "bold italic" }
           },
           {
-            "_role": "Built-in / support functions — warm yellow, no bold. Stdlib calls aren't structural — they're tools.",
+            "_role": "Built-in / support functions — gold, no bold. Stdlib calls are tools, not structure.",
             "scope": "support.function.aether",
             "settings": { "foreground": "#DCDCAA" }
           },
           {
-            "_role": "Variables — sky blue. Distinct from function-call colour so call-vs-bind reads at a glance.",
+            "_role": "Variables — slate. Deliberately neutral so the red accents and gold functions carry the colour; bindings are the canvas, not the paint.",
             "scope": "variable.other.aether",
-            "settings": { "foreground": "#9CDCFE" }
+            "settings": { "foreground": "#ABB2BF" }
           },
           {
-            "_role": "Arrow / actor / cons operators — pumpkin orange bold. `->` (return type), `<-` (receive), `!` (send), `::` (cons). These are syntactic landmarks; warm-orange-bold marks them as turning points the eye should catch.",
+            "_role": "Arrow / actor / cons operators — red bold. `->` (return type), `!`/`?` (send/ask), `|` (cons). The syntactic turning points; red-bold marks them as landmarks, in the same hue as the keywords they punctuate.",
             "scope": "keyword.operator.arrow.aether,keyword.operator.actor.aether,punctuation.separator.cons.aether,meta.pattern.cons.aether",
-            "settings": { "foreground": "#D19A66", "fontStyle": "bold" }
+            "settings": { "foreground": "#E06C75", "fontStyle": "bold" }
           },
           {
-            "_role": "Ordinary operators — assignment, comparison, logical, arithmetic, bitwise, pointer. Light gray (theme-foreground colour) so they recede; the operands are what matters.",
+            "_role": "Ordinary operators — assignment, comparison, logical, arithmetic, bitwise, pointer. Slate so they recede; the operands matter.",
             "scope": "keyword.operator.assignment.aether,keyword.operator.comparison.aether,keyword.operator.logical.aether,keyword.operator.arithmetic.aether,keyword.operator.bitwise.aether,keyword.operator.type.pointer.aether",
-            "settings": { "foreground": "#D4D4D4" }
+            "settings": { "foreground": "#ABB2BF" }
           },
           {
-            "_role": "Brackets and accessors — mid-gray. Slightly dimmer than operators because they're structural noise, not semantic content.",
+            "_role": "Brackets and accessors — dim slate. Structural noise, dimmer than operators.",
             "scope": "punctuation.section.brackets.begin.aether,punctuation.section.brackets.end.aether,punctuation.accessor.aether",
-            "settings": { "foreground": "#808080" }
+            "settings": { "foreground": "#5C6370" }
           }
         ]
       }
