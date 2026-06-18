@@ -1,0 +1,34 @@
+// Regression (#791): `fn name(...)` is a valid top-level function
+// definition spelling — first-class, not surviving via parse-error
+// recovery. The std library uses it (std.uuid, std.url); before this
+// fix a standalone `fn name()` errored ("unexpected identifier at top
+// level"), and a module using `fn` only parsed because error recovery
+// skipped the `fn` token — which surfaced as a spurious parse error in
+// that module when it was re-parsed under a strict path at full
+// module-graph scale.
+//
+// `fn` is intentionally NOT a reserved word (it doubles as the
+// fn-pointer type head `fn(...) -> R`); the definition form is
+// recognised by shape (`fn` + name + `(`). Mixing `fn`- and bare-style
+// definitions in one file must work, and a `fn(...)`-typed parameter
+// must still parse as a type, not a definition.
+
+extern exit(code: int)
+
+fn add(a: int, b: int) -> int { return a + b }
+
+// bare-style definition in the same file
+mul(a: int, b: int) -> int { return a * b }
+
+// `fn` def whose parameter is itself a fn-pointer type (the `fn` head
+// must read as a type here, not a nested definition).
+fn apply(f: fn(int, int) -> int, x: int, y: int) -> int {
+    return f(x, y)
+}
+
+main() {
+    if add(40, 2) != 42 { println("FAIL: fn add"); exit(1) }
+    if mul(6, 7) != 42  { println("FAIL: bare mul"); exit(1) }
+    if apply(add as fn(int, int) -> int, 20, 22) != 42 { println("FAIL: fn apply + fn-ptr param"); exit(1) }
+    println("OK: fn-keyword function definitions")
+}

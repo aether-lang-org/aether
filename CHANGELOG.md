@@ -14,6 +14,26 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **`fn name(...)` is now a first-class top-level function definition**
+  (#791). `fn` is not a reserved word (it doubles as the function-pointer
+  type head `fn(...) -> R`), so a top-level `fn name()` previously only
+  survived via parse-error recovery: the parser raised "unexpected
+  identifier at top level" on `fn`, recovery skipped the token, and
+  `name(...)` then parsed as a function. That recovery is silent when a
+  module is imported but fatal on a standalone / strict re-parse, so at
+  full module-graph scale a re-parsed sibling module that used the `fn`
+  spelling (e.g. std.uuid, std.url) surfaced the recovery as a spurious
+  top-level parse error attributed to that module. The top-level parser
+  now recognises `fn` + name + `(` as a function definition directly, so
+  the spelling is first-class and parses identically on every path
+  (standalone build, import, and re-parse). `fn`-typed parameters
+  (`f: fn(int) -> int`) still parse as types — the definition form is
+  distinguished by the identifier between `fn` and `(`.
+
 ## [0.281.0]
 
 ### Fixed
