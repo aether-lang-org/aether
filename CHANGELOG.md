@@ -14,6 +14,29 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Function-pointer struct fields** (#749 Ask A). A struct field typed
+  `fn(T1, T2) -> R` now emits the C function-pointer member
+  `R (*name)(T1, T2)` (instead of an untyped `void*`), and a call through
+  it is a real indirect call: `o.field(args)` for a value struct,
+  `p.field(args)` → `p->field(args)` for a pointer-to-struct. This is the
+  `dictType` vtable shape that gates the Redis dict.c port (2340 lines)
+  and the keyspace command tier. Field PARSING already worked (parse_type
+  yields the fn-ptr type); the change is codegen + dispatch: a typed
+  field-declarator emitter, plus — because the parser collapses a
+  member-access callee to the dotted name `recv.field` and drops the
+  receiver — a typecheck branch that recognises `recv.fnptrfield(args)`
+  (resolving the field signature off the struct definition, tagging the
+  receiver as value vs pointer) and a matching codegen branch that emits
+  the indirect call. Single-level receiver (a bare local); the field
+  already carries a real C fn-ptr type, so the call needs no cast. Sibling
+  of fn-pointer parameters (#750) and typed fn-ptr locals. See
+  [docs/language-reference.md](docs/language-reference.md) (Function-
+  pointer struct fields).
+
 ## [0.263.0]
 
 ### Fixed

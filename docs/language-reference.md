@@ -979,6 +979,28 @@ struct Config {
 }
 ```
 
+### Function-pointer struct fields — a vtable of callbacks
+
+A struct field can be a function pointer (`fn(T1, T2) -> R`) — the `dictType`-style vtable. The field emits as the C function-pointer member `R (*name)(T1, T2)`, and a call through it is a real indirect call:
+
+```aether
+struct Ops {
+    hash:    fn(int) -> int
+    combine: fn(int, int) -> int
+}
+
+main() {
+    o = Ops { hash: my_hash as fn(int) -> int, combine: my_add as fn(int, int) -> int }
+    o.hash(5)                       // value struct  → (o.hash)(5)
+}
+
+dispatch(p: *Ops, k: int) -> int {
+    return p.hash(k)                // pointer struct → (p->hash)(k)
+}
+```
+
+Assign each field an Aether function's address via `as fn(...)` (or a C function pointer from an extern). Dispatch works for a value struct (`o.field(args)`) and a pointer-to-struct (`p.field(args)` lowers to `p->field(args)`); the receiver must be a single local, and the field's signature is taken from the struct definition. This is the field form of the same typed-fn-pointer machinery as `as fn(...)` locals.
+
 ### Pointer-to-struct type — `*StructName` and `expr as *StructName`
 
 For systems-programming code that overlays a struct header on a raw `ptr` (e.g. linked-list nodes in C-allocated memory, on-disk file headers read into a buffer), Aether has a first-class pointer-to-struct type spelled `*StructName` and a postfix `as` cast operator that produces a value of that type:

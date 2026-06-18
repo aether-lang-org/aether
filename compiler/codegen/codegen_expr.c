@@ -2257,6 +2257,36 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             break;
             
         case AST_FUNCTION_CALL:
+            /* #749: dispatch through a function-pointer struct field.
+             * The typechecker tagged `recv.field(args)` calls whose
+             * `field` is an fn-ptr member with "fnfield_ptr"/"fnfield_val"
+             * (receiver is a pointer-to-struct vs a value struct). Emit
+             * the indirect call `(recv->field)(args)` / `(recv.field)(args)`
+             * — the field already has a real C fn-ptr type (#749 codegen),
+             * so no cast is needed. */
+            if (expr->annotation && expr->value &&
+                strncmp(expr->annotation, "fnfield_", 8) == 0) {
+                int is_ptr = strcmp(expr->annotation, "fnfield_ptr") == 0;
+                const char* dot = strrchr(expr->value, '.');
+                if (dot) {
+                    char recv[200];
+                    size_t rlen = (size_t)(dot - expr->value);
+                    if (rlen >= sizeof(recv)) rlen = sizeof(recv) - 1;
+                    memcpy(recv, expr->value, rlen);
+                    recv[rlen] = '\0';
+                    char recv_c[200], field_c[200];
+                    snprintf(recv_c, sizeof(recv_c), "%s", safe_c_name(recv));
+                    snprintf(field_c, sizeof(field_c), "%s", safe_c_name(dot + 1));
+                    fprintf(gen->output, "(%s%s%s)(",
+                            recv_c, is_ptr ? "->" : ".", field_c);
+                    for (int i = 0; i < expr->child_count; i++) {
+                        if (i > 0) fprintf(gen->output, ", ");
+                        generate_expression(gen, expr->children[i]);
+                    }
+                    fprintf(gen->output, ")");
+                    break;
+                }
+            }
             if (expr->value) {
                 const char* func_name = expr->value;
                 /* Dotted source callees (`string.seq_free`) normalised to

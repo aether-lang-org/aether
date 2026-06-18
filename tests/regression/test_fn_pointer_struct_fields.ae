@@ -1,0 +1,56 @@
+// Regression (#749 Ask A): function-pointer struct FIELDS — a struct
+// field typed `fn(T1,T2)->R` emits the C function-pointer field
+// `R (*name)(T1,T2)` and is callable as `o.field(args)` (value struct)
+// or `p.field(args)` → `p->field(args)` (pointer-to-struct). This is the
+// `dictType` vtable shape that gates the Redis dict.c port and the whole
+// keyspace command tier.
+//
+// Before, an fn-ptr field collapsed to `void* name` and a call through it
+// (`o.field(args)`) tried to resolve `o.field` as a module-qualified
+// function → "Undefined function 'o.field'". Sibling of fn-pointer
+// parameters and typed fn-ptr locals; the field type flows from the
+// struct definition (not a symbol), so dispatch resolves the field
+// signature off the struct's field list at typecheck.
+//
+// Covers: value-struct dispatch, dispatch via a by-value struct param,
+// pointer-to-struct dispatch (`->`), and field assignment through a
+// pointer. Asserted + exit(1) on mismatch.
+
+extern exit(code: int)
+extern malloc(n: long) -> ptr
+
+struct Ops {
+    hash: fn(int) -> int
+    combine: fn(int, int) -> int
+}
+
+bump(x: int) -> int { return x + 100 }
+addf(a: int, b: int) -> int { return a + b }
+
+// Dispatch through a by-value struct parameter's field.
+run_hash(o: Ops, k: int) -> int {
+    return o.hash(k)
+}
+
+// Dispatch through a pointer-to-struct parameter's field (emits `->`).
+run_hash_ptr(p: *Ops, k: int) -> int {
+    return p.hash(k)
+}
+
+main() {
+    println("=== test_fn_pointer_struct_fields ===")
+
+    o = Ops { hash: bump as fn(int) -> int, combine: addf as fn(int, int) -> int }
+    if o.hash(5) != 105       { println("FAIL: value o.hash"); exit(1) }
+    if o.combine(10, 20) != 30 { println("FAIL: value o.combine"); exit(1) }
+    if run_hash(o, 7) != 107  { println("FAIL: dispatch via value param"); exit(1) }
+
+    *Ops p = malloc(16) as *Ops
+    p.hash = bump as fn(int) -> int
+    p.combine = addf as fn(int, int) -> int
+    if run_hash_ptr(p, 9) != 109 { println("FAIL: dispatch via ptr param"); exit(1) }
+    if p.combine(3, 4) != 7      { println("FAIL: ptr o.combine"); exit(1) }
+
+    println("  PASS: fn-pointer struct fields dispatch (value + pointer)")
+    println("OK")
+}
