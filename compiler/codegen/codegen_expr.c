@@ -1758,6 +1758,24 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             fprintf(gen->output, "NULL");
             break;
 
+        case AST_HEAP_NEW: {
+            /* heap.new(T) — zero-init heap allocation of a POD struct,
+             * yielding `*T`. calloc guarantees the zero-init the safety
+             * review (issue #564, H5) requires: with no string fields
+             * (enforced POD-only by the typechecker) there are no hidden
+             * `_heap_<field>` trackers to mis-seed, but calloc keeps every
+             * scalar / ptr / array field a clean zero. Cast to T* so member
+             * access (`p.field`) and `heap.free(p)` see the right type. */
+            const char* struct_c = "void";
+            if (expr->node_type && expr->node_type->kind == TYPE_PTR &&
+                expr->node_type->element_type) {
+                struct_c = get_c_type(expr->node_type->element_type);
+            }
+            fprintf(gen->output, "((%s*)calloc(1, sizeof(%s)))",
+                    struct_c, struct_c);
+            break;
+        }
+
         case AST_TUPLE_UNWRAP: {
             /* `expr!` — unwrap-or-trap. Emit a GCC statement-expression
              * that evaluates the tuple once, panics if the trailing
@@ -2297,6 +2315,17 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             break;
             
         case AST_FUNCTION_CALL:
+            /* heap.free(p) — counterpart to heap.new(T) (issue #564).
+             * POD boxes own no heap fields (typechecker enforces), so a
+             * plain free(p) reclaims the whole box. NULL-safe (free(NULL)
+             * is a no-op). One positional arg: the `*T` pointer. */
+            if (expr->value && strcmp(expr->value, "heap.free") == 0 &&
+                expr->child_count == 1) {
+                fprintf(gen->output, "free(");
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, ")");
+                break;
+            }
             /* #749: dispatch through a function-pointer struct field.
              * The typechecker tagged `recv.field(args)` calls whose
              * `field` is an fn-ptr member with "fnfield_ptr"/"fnfield_val"

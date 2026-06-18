@@ -636,6 +636,10 @@ dispatch table. The ref cells provide shared mutable state across all callbacks.
 
 ## Comparison with Other Languages
 
+For the broader "why this shape exists" comparison against Lisp,
+Smalltalk, Rust, and Zig, see
+[`closure-lineage-and-runtime-tradeoffs.md`](closure-lineage-and-runtime-tradeoffs.md).
+
 | Feature | Smalltalk | Ruby | Groovy | Aether |
 |---------|-----------|------|--------|--------|
 | Block/closure syntax | `[:x | x * 2]` | `{|x| x * 2}` | `{x -> x * 2}` | `\|x\| -> x * 2` |

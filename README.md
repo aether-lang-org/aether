@@ -375,7 +375,7 @@ btn("decrement") callback { ref_set(counter, ref_get(counter) - 1) }
 
 The compiler distinguishes them at parse time, which is what makes the sandboxing story (above) work: `hide`/`seal except` checks happen against the hoisted form of `closure` and `callback` blocks, so a `seal except req, res` on a callback body genuinely prevents the body from reaching outer scope. Immediate blocks inherit the caller's lexical scope by design — they're structure, not callbacks.
 
-Inspired by Smalltalk blocks, Ruby's blocks/procs, Groovy closures, and Kotlin/SwiftUI's trailing-block DSLs. See [Closures and Builder DSL](docs/closures-and-builder-dsl.md) for the builder-context mechanism, ref cells, and full DSL pattern.
+Inspired by Smalltalk blocks, Ruby's blocks/procs, Groovy closures, and Kotlin/SwiftUI's trailing-block DSLs. See [Closures and Builder DSL](docs/closures-and-builder-dsl.md) for the builder-context mechanism, ref cells, and full DSL pattern; see [Closure lineage and runtime tradeoffs](docs/closure-lineage-and-runtime-tradeoffs.md) for why Aether keeps closure-shaped values without adopting a Lisp/Smalltalk runtime.
 
 ## Config IS Code
 

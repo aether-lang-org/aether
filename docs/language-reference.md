@@ -39,6 +39,7 @@ The placement is deliberate — Aether picks the pieces of each tradition that c
 ### Where Aether is neither — it's just systems-pragmatic
 
 - Manual heap discipline is visible — `box_closure` / `unbox_closure`, `ref()` cells, the automatic heap-string ownership tracker (`_heap_<name>` companion flags), `defer` for resource cleanup. Closer to Rust's explicit ownership story than to either paradigm's purist position.
+- Aether's closure model deliberately trades Lisp/Smalltalk-style runtime-owned environments for generated C structs whose lifetimes are mostly inferred by the compiler. See [Closure lineage and runtime tradeoffs](closure-lineage-and-runtime-tradeoffs.md) for the comparison.
 - The C ABI / `extern` boundary is a first-class concern, not a hidden detail. The typechecker pragmatically allows `int ↔ ptr` and `fn ↔ ptr` coercions because surface ergonomics matter more than type-purity at the FFI boundary.
 - The capability + sandbox system (compile-time module gate / scope-level `hide` / `seal except` / LD_PRELOAD libc gate) is its own concern, orthogonal to both paradigms.
 

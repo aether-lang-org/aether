@@ -14,6 +14,26 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`heap.new(T)` / `heap.free(p)` — POD struct heap allocation** (issue
+  #564; `compiler/parser`, `compiler/analysis`, `compiler/codegen`).
+  `ctx = heap.new(AppCtx)` allocates a zero-initialised `AppCtx` on the
+  heap and returns `*AppCtx`; fields are read/written through the pointer
+  (`ctx.port = 8080`) and the box is reclaimed with `heap.free(ctx)`
+  (NULL-safe). Lowers to `((T*)calloc(1, sizeof(T)))` / `free(p)` — the
+  guaranteed zero-init the memory-safety review requires. **POD-only**: the
+  type must be a struct with no `string` (or other heap-managed) field; a
+  non-POD struct is a compile error directing the author to hold heavy data
+  as an opaque handle the struct doesn't own. This is the safe first cut
+  from the issue's recommendation #1 — richer boxes that own their fields
+  need an ownership model (retain-on-store + typed free) specced first.
+  Replaces the `malloc(64) as *AppCtx` magic-number pattern with a
+  type-safe, self-documenting primitive. Pairs with the
+  `defer heap.free(p)` idiom for scope-bounded lifetimes.
+
 ## [0.278.0]
 
 ### Added

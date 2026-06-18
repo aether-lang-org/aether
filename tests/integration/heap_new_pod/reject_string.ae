@@ -1,0 +1,11 @@
+// Negative cell for issue #564: heap.new must REJECT a struct with a
+// `string` (heap-managed) field at compile time — POD-only gate. The
+// .sh driver expects this build to FAIL.
+struct WithStr {
+    name: string
+    n: int
+}
+main() {
+    p = heap.new(WithStr)
+    println("should not compile")
+}
