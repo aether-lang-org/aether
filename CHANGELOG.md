@@ -18,6 +18,25 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ### Added
 
+- **`@packed` extern structs** (#747 item 1, the Redis sds.c blocker). An
+  `extern struct ... @packed { ... }` emits the C body with
+  `__attribute__((packed))`, so the layout has no inter-field padding or
+  trailing alignment — the `sdshdr8/16/32/64` shape where the length/
+  alloc/flags header sits at fixed packed offsets before the string data.
+  `sizeof(S)` / `offsetof(S, f)` lower to C and report the packed numbers,
+  and a `*S` overlay reads/writes fields at their packed offsets (verified
+  by round-trip). `@packed` is mutually exclusive with `@c_import` (a
+  header-defined struct's packing is the header's job; combining them is a
+  parse error). Bit-width fields and a trailing flexible array still work
+  under `@packed`. Note: pure `@c_import` overlays already inherit the
+  header's packed layout (no body emitted), so `@packed` is the tool when
+  Aether owns the struct body (a pure-Aether port with no C header). See
+  [docs/c-interop.md](docs/c-interop.md) (Packed structs).
+
+## [current]
+
+### Added
+
 - **Function-pointer struct fields** (#749 Ask A). A struct field typed
   `fn(T1, T2) -> R` now emits the C function-pointer member
   `R (*name)(T1, T2)` (instead of an untyped `void*`), and a call through

@@ -694,6 +694,20 @@ Access via dotted notation: `d.u.f64`, `d.u.func.length`, `d.u.getset.get_func_n
 - Pure Aether structs (without the `extern` annotation) reject `union { ... }` at parse time — Aether's normal value semantics aren't compatible with overlapping fields.
 - `union` is now a reserved keyword and can't be used as an identifier name anywhere.
 
+### Packed structs — `extern struct ... @packed`
+
+A `@packed` attribute on an `extern struct` emits the C body with `__attribute__((packed))`, so the layout has **no inter-field padding** and no trailing alignment:
+
+```aether
+extern struct sdshdr16 @packed { len: uint16  alloc: uint16  flags: byte }
+// sizeof == 5 (not 6); offsetof(flags) == 4
+```
+
+This is the shape a packed C header struct needs — e.g. the Redis `sdshdr8/16/32/64` headers, where the length/alloc/flags sit at fixed packed offsets immediately before the string data. `sizeof(StructName)` and `offsetof(StructName, field)` lower to C and therefore report the packed numbers, and a `*StructName` overlay on a raw buffer reads/writes the fields at their packed offsets.
+
+- `@packed` governs only a struct body **Aether emits**. It is mutually exclusive with `@c_import` (whose layout — including packing — comes from the included C header); combining them is a parse error.
+- Bit-width fields (`name: type : NN`) and a trailing flexible array still work under `@packed`, exactly as for a plain `extern struct`.
+
 ### Aether-side string-builder return types
 
 Aether-side primitives that build strings split into two camps:
