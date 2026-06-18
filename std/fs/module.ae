@@ -35,7 +35,7 @@ exports (
     dir_list_count, dir_list_get, dir_list_free,
     path_join, path_dirname, path_basename, path_extension, path_is_absolute,
     path_clean, path_is_within_base, path_rel,
-    clean, is_within_base, rel,
+    clean, is_within_base, rel, join_clean, first_element,
     fs_pwrite_raw, fs_pread_raw, fs_get_pread, fs_get_pread_length,
     fs_release_pread, fs_ftruncate_raw, fs_fsync_raw,
     pwrite, pread, ftruncate, fsync,
