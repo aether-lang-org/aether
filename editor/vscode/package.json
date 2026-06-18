@@ -112,6 +112,11 @@
             "settings": { "foreground": "#E59CA3" }
           },
           {
+            "_role": "Attribute annotations — `@c_import`, `@packed`, `@derive`, `@extern`, `@c_callback`, `@heap`, `@retain`. Salmon italic: modifiers in the red family, set apart from keywords by the italic.",
+            "scope": "storage.modifier.annotation.aether",
+            "settings": { "foreground": "#E59CA3", "fontStyle": "italic" }
+          },
+          {
             "_role": "Actor and message-type names — red bold. They carry behavioural meaning (something receives them, something sends them); bold elevates them above inert types.",
             "scope": "entity.name.message.aether,entity.name.actor.aether",
             "settings": { "foreground": "#E06C75", "fontStyle": "bold" }
