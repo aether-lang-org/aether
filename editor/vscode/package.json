@@ -55,6 +55,12 @@
         "path": "./aether.tmLanguage.json"
       }
     ],
+    "snippets": [
+      {
+        "language": "aether",
+        "path": "./snippets/aether.json"
+      }
+    ],
     "configurationDefaults": {
       "[aether]": {
         "_note": "The Aether LSP emits no semantic tokens, so the fixed TextMate palette below is the sole colour source — keep it that way. Disabling semantic highlighting for .ae makes the palette authoritative on every platform even if a future toolchain or a second extension starts emitting semantic tokens (those follow the user's theme and would otherwise differ across Windows/macOS and flicker when the server reconnects).",
@@ -153,7 +159,7 @@
           },
           {
             "_role": "Ordinary operators — assignment, comparison, logical, arithmetic, bitwise, pointer. Slate so they recede; the operands matter.",
-            "scope": "keyword.operator.assignment.aether,keyword.operator.comparison.aether,keyword.operator.logical.aether,keyword.operator.arithmetic.aether,keyword.operator.bitwise.aether,keyword.operator.type.pointer.aether",
+            "scope": "keyword.operator.assignment.aether,keyword.operator.comparison.aether,keyword.operator.logical.aether,keyword.operator.arithmetic.aether,keyword.operator.bitwise.aether,keyword.operator.type.pointer.aether,keyword.operator.range.aether",
             "settings": { "foreground": "#ABB2BF" }
           },
           {

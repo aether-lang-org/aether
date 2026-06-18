@@ -161,7 +161,7 @@
       "patterns": [
         {
           "name": "keyword.control.aether",
-          "match": "\\b(if|else|for|in|while|switch|case|default|break|continue|return|match|receive|reply|send|spawn_actor|spawn|defer|panic|try|catch|after|when|requires|ensures)\\b"
+          "match": "\\b(if|else|for|in|while|switch|case|default|break|continue|return|match|receive|reply|send|spawn_actor|spawn|make|defer|panic|try|catch|after|when|requires|ensures)\\b"
         }
       ]
     },
@@ -261,6 +261,11 @@
         {
           "name": "keyword.operator.arrow.aether",
           "match": "->"
+        },
+        {
+          "comment": "Range `..` (for i in 0..n) and the variadic / spread `...` in extern signatures. Longer literal first so `...` never tokenizes as `..` + `.`.",
+          "name": "keyword.operator.range.aether",
+          "match": "\\.\\.\\.|\\.\\."
         },
         {
           "name": "keyword.operator.assignment.aether",
