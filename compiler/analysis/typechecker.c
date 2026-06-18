@@ -1046,6 +1046,19 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_VA_END:
             return create_type(TYPE_VOID);
 
+        case AST_HEAP_NEW: {
+            /* heap.new(T) — yields `*T` (TYPE_PTR with element_type =
+             * TYPE_STRUCT{name}). Same result shape as `as *T`. The
+             * POD-only gate and struct-existence error live in
+             * typecheck_expression; here we just hand back the type. */
+            if (!expr->value) return create_type(TYPE_UNKNOWN);
+            Type* inner = create_type(TYPE_STRUCT);
+            inner->struct_name = strdup(expr->value);
+            Type* result = create_type(TYPE_PTR);
+            result->element_type = inner;
+            return result;
+        }
+
         case AST_PTR_AS_STRUCT_CAST: {
             /* `expr as *StructName` — view the operand as a pointer to
              * StructName. Operand must be ptr-typed. Result is
@@ -3482,6 +3495,67 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             return 1;
         }
 
+        case AST_HEAP_NEW: {
+            /* heap.new(T) — zero-init heap allocation of a POD struct.
+             * Validate: (a) T names a struct; (b) it is POD — no `string`
+             * (or other heap-managed) field. The string gate mirrors the
+             * existing destructor predicate `struct_has_heap_string_field`:
+             * a struct with a heap field needs an ownership model before
+             * it can be boxed (issue #564), so reject it at compile time
+             * with a clear message rather than minting a UAF/leak footgun. */
+            if (!expr->value) {
+                type_error("heap.new requires a struct type name",
+                           expr->line, expr->column);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            Symbol* struct_sym = lookup_symbol(table, expr->value);
+            if (!struct_sym || !struct_sym->type ||
+                struct_sym->type->kind != TYPE_STRUCT) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "heap.new(%s) — '%s' is not a struct type",
+                    expr->value, expr->value);
+                type_error(msg, expr->line, expr->column);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            /* POD gate: walk the struct definition's fields for any
+             * heap-managed (string) field. struct_sym->node is the
+             * AST_STRUCT_DEFINITION (set when the struct was registered). */
+            ASTNode* sdef = struct_sym->node;
+            if (sdef && sdef->type == AST_STRUCT_DEFINITION) {
+                for (int fi = 0; fi < sdef->child_count; fi++) {
+                    ASTNode* field = sdef->children[fi];
+                    if (field && field->type == AST_STRUCT_FIELD &&
+                        field->node_type &&
+                        field->node_type->kind == TYPE_STRING) {
+                        char msg[320];
+                        snprintf(msg, sizeof(msg),
+                            "heap.new(%s) — struct '%s' has a `string` field "
+                            "('%s'); heap.new is restricted to POD structs "
+                            "(scalars, ptr, fixed arrays). A struct with a "
+                            "heap-managed field needs an ownership model "
+                            "(retain-on-store + typed free) that does not yet "
+                            "exist — hold heavy data as an opaque handle/ptr "
+                            "the struct does not own, or keep it on the stack.",
+                            expr->value, expr->value,
+                            field->value ? field->value : "?");
+                        type_error(msg, expr->line, expr->column);
+                        expr->node_type = create_type(TYPE_UNKNOWN);
+                        return 0;
+                    }
+                }
+            }
+            /* Result type: *T (TYPE_PTR -> TYPE_STRUCT{name}). */
+            if (expr->node_type) free_type(expr->node_type);
+            Type* inner = create_type(TYPE_STRUCT);
+            inner->struct_name = strdup(expr->value);
+            expr->node_type = create_type(TYPE_PTR);
+            expr->node_type->element_type = inner;
+            return 1;
+        }
+
         case AST_FUNCTION_CALL:
             return typecheck_function_call(expr, table);
             
@@ -4089,6 +4163,32 @@ static Type* resolve_fnptr_struct_field(SymbolTable* table, const char* recv_nam
 
 int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     if (!call || call->type != AST_FUNCTION_CALL) return 0;
+
+    // heap.free(p) — the counterpart to heap.new(T) (issue #564). Not a
+    // real function symbol; codegen lowers it to free(p). Validate the
+    // single argument is a pointer (a *T from heap.new, or any ptr) and
+    // stamp the call's type as void. Reject misuse with a clear message
+    // before the generic "undefined function" path runs.
+    if (call->value && strcmp(call->value, "heap.free") == 0) {
+        if (call->child_count != 1) {
+            type_error("heap.free(p) takes exactly one pointer argument",
+                       call->line, call->column);
+            call->node_type = create_type(TYPE_VOID);
+            return 0;
+        }
+        typecheck_expression(call->children[0], table);
+        Type* arg = infer_type(call->children[0], table);
+        int ok = !arg || arg->kind == TYPE_PTR || arg->kind == TYPE_UNKNOWN;
+        if (arg) free_type(arg);
+        if (!ok) {
+            type_error("heap.free(p) — argument must be a pointer "
+                       "(a `*T` from heap.new)", call->line, call->column);
+            call->node_type = create_type(TYPE_VOID);
+            return 0;
+        }
+        call->node_type = create_type(TYPE_VOID);
+        return 1;
+    }
 
     // Use qualified lookup to handle namespaced calls like string.new -> string_new
     Symbol* symbol = lookup_qualified_symbol(table, call->value);

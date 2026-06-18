@@ -1,0 +1,6 @@
+// Negative cell for issue #564: heap.new(T) where T is not a struct must
+// be a compile error. The .sh driver expects this build to FAIL.
+main() {
+    p = heap.new(NotAStruct)
+    println("should not compile")
+}

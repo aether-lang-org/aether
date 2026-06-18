@@ -1474,10 +1474,33 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                 func_name = strdup(qualified_name);
             }
 
+            // heap.new(TypeName) — like sizeof, the argument is a *type
+            // name*, not a value, so it can't go through the normal
+            // argument parser (which would treat `AppCtx` as an undefined
+            // variable). Intercept the call shape here and build a
+            // dedicated AST_HEAP_NEW node carrying the struct name. (#564)
+            // heap.free(p) is an ordinary call — handled at codegen.
+            if (func_name && strcmp(func_name, "heap.new") == 0) {
+                int hn_line = op->line, hn_col = op->column;
+                advance_token(parser); // consume '('
+                Token* tyname = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!tyname) { free((void*)func_name); free_ast_node(expr); return NULL; }
+                ASTNode* heap_new = create_ast_node(AST_HEAP_NEW, tyname->value,
+                                                    hn_line, hn_col);
+                if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                    free((void*)func_name); free_ast_node(expr);
+                    free_ast_node(heap_new); return NULL;
+                }
+                free((void*)func_name);
+                free_ast_node(expr);  // discard the `heap.new` member-access subtree
+                expr = heap_new;
+                continue;             // resume the postfix loop on the new node
+            }
+
             advance_token(parser); // consume '('
 
             ASTNode* func_call = create_ast_node(AST_FUNCTION_CALL, func_name, op->line, op->column);
-            
+
             // Parse arguments
             if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
                 do {

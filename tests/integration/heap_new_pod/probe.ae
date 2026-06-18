@@ -1,0 +1,78 @@
+// Issue #564: heap.new(T) / heap.free(p) — zero-init heap allocation of
+// a POD struct, returning *T, freed explicitly. POD-only (the compiler
+// rejects structs with heap-managed fields; covered by the .sh driver's
+// negative cells). This probe exercises the success path:
+//   1. scalar + ptr fields: write/read through the box, zero-init
+//   2. fixed-array field: indexed write/read, zero-init of untouched slots
+//   3. defer heap.free(p) cleanup idiom
+//   4. the motivating shape — a handler context threaded as an opaque ptr
+
+struct AppCtx {
+    db: ptr
+    port: int
+    flags: int
+}
+
+struct Buf {
+    data: int[4]
+    len: int
+}
+
+extern exit(code: int)
+
+use_ctx(ud: ptr) -> int {
+    c = ud as *AppCtx
+    return c.port
+}
+
+main() {
+    // 1. scalar + ptr, zero-init
+    ctx = heap.new(AppCtx)
+    if ctx.port != 0 {
+        println("FAIL: port not zero-inited: ${ctx.port}")
+        exit(1)
+    }
+    if ctx.db != null {
+        println("FAIL: db ptr not zero-inited")
+        exit(1)
+    }
+    ctx.port = 8080
+    ctx.flags = 5
+    if ctx.port != 8080 {
+        println("FAIL: port write/read: ${ctx.port}")
+        exit(1)
+    }
+
+    // 4. thread the box through an opaque ptr (the user_data shape)
+    if use_ctx(ctx) != 8080 {
+        println("FAIL: ctx via opaque ptr")
+        exit(1)
+    }
+    heap.free(ctx)
+
+    // 2. fixed-array field
+    b = heap.new(Buf)
+    b.data[0] = 11
+    b.data[1] = 22
+    b.len = 2
+    if b.data[0] != 11 {
+        println("FAIL: array slot 0: ${b.data[0]}")
+        exit(1)
+    }
+    if b.data[3] != 0 {
+        println("FAIL: untouched array slot not zero: ${b.data[3]}")
+        exit(1)
+    }
+    heap.free(b)
+
+    // 3. defer cleanup idiom (freed at scope exit of the helper)
+    deferred_alloc()
+
+    println("PASS: heap.new POD success path")
+}
+
+deferred_alloc() {
+    c = heap.new(AppCtx)
+    defer heap.free(c)
+    c.port = 1
+}

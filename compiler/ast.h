@@ -144,6 +144,15 @@ typedef enum {
     AST_SIZEOF,             // sizeof(TypeName)
     AST_OFFSETOF,           // offsetof(TypeName, fieldName)
 
+    // heap.new(T) — zero-initialised heap allocation of a POD struct,
+    // returning `*T` (issue #564). `value` holds the struct type name;
+    // node_type is TYPE_PTR with element_type = TYPE_STRUCT{name}.
+    // POD-only: the typechecker rejects any struct with a `string` or
+    // other heap-managed field (those need an ownership model first).
+    // Codegen emits `((T*)calloc(1, sizeof(T)))`. Freed with the
+    // ordinary call `heap.free(p)`, codegen-lowered to `free(p)`.
+    AST_HEAP_NEW,           // heap.new(TypeName)
+
     // C variadic-consumer intrinsics. Let an Aether function declared
     // with a trailing `...` param read its varargs the way C does.
     //   AST_VA_START — `va_start()`; yields an opaque ptr (va_list

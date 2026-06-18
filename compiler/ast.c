@@ -425,6 +425,7 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_BINARY_EXPRESSION: return "BINARY_EXPRESSION";
         case AST_UNARY_EXPRESSION: return "UNARY_EXPRESSION";
         case AST_TUPLE_UNWRAP: return "TUPLE_UNWRAP";
+        case AST_HEAP_NEW: return "HEAP_NEW";
         case AST_FUNCTION_CALL: return "FUNCTION_CALL";
         case AST_ACTOR_REF: return "ACTOR_REF";
         case AST_IDENTIFIER: return "IDENTIFIER";
