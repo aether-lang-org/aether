@@ -33,7 +33,7 @@ notes to be skipped or clobbered (the failure modes documented in
   Aether owns the struct body (a pure-Aether port with no C header). See
   [docs/c-interop.md](docs/c-interop.md) (Packed structs).
 
-## [current]
+## [0.276.0]
 
 ### Added
 
