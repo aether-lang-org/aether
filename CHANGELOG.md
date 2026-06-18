@@ -14,6 +14,36 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **contrib host bridges: lua + tcl compile against newer Homebrew /
+  Tcl-9 libraries** (`contrib/host/lua/aether_host_lua.c`,
+  `contrib/host/tcl/aether_host_tcl.c`). Both dlopen bridges name C-API
+  functions as struct fields and call them as `g_lib.Fn(...)`, which the
+  preprocessor mangles when the library header turned `Fn` into a
+  function-like macro:
+  - **Lua 5.4** (Homebrew): `luaL_openlibs(L)` is
+    `#define`d to `luaL_openselectedlibs(L, ~0, 0)`, so
+    `g_lua.luaL_openlibs(L)` rewrote to a non-existent
+    `luaL_openselectedlibs` member (macOS build break; Debian's Lua 5.4
+    ships it as a real declaration, which is why Linux CI never saw it).
+    Fix: `#undef luaL_openlibs` after the headers and dlsym the real
+    exported symbol (present in every shipping liblua).
+  - **Tcl 9.0** (Homebrew): `Tcl_GetStringResult` and `Tcl_GetString`
+    became function-like macros over `Tcl_GetStringFromObj` and are no
+    longer exported, so the struct-field calls referenced non-existent
+    members. Fix: `#undef` both, resolve the lowest-common-denominator
+    real exports `Tcl_GetStringFromObj` + `Tcl_GetObjResult` (present in
+    both 8.6 and 9.0), and recompose the two accessors as local helpers.
+  Both verified by compiling each bridge against the real (8.6 / 5.3 /
+  5.4) headers and against simulated Homebrew-macro headers — clean with
+  the fix, reproduces the reported break without it. No behavioural
+  change on platforms that were already building (the `#undef`s are
+  no-ops where the macro is absent). Surfaced on a macOS/Homebrew
+  `make install-contrib` (Lua 5.4.x, Tcl 9.0.3).
+
 ## [0.275.0]
 
 ### Added
@@ -119,6 +149,7 @@ notes to be skipped or clobbered (the failure modes documented in
   raxWalk/command-table iteration; qsort, signal handlers, libcurl/sqlite
   hooks). See [docs/language-reference.md](docs/language-reference.md)
   (Function-pointer parameters).
+
 ## [0.270.0]
 
 ### Fixed

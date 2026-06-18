@@ -37,6 +37,21 @@
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
+
+/* Lua 5.4+ defines luaL_openlibs as a function-like macro:
+ *   #define luaL_openlibs(L) luaL_openselectedlibs(L, ~0, 0)
+ * Left in place, it rewrites our struct-field call
+ * `g_lua.luaL_openlibs(L)` (and the RESOLVE(luaL_openlibs, ...)
+ * registration) into a reference to a non-existent
+ * `luaL_openselectedlibs` member — the macOS/Homebrew Lua 5.4 build
+ * break. We dlsym the real exported `luaL_openlibs` symbol, which
+ * every shipping liblua provides, so undo the macro and call it as a
+ * plain function pointer. (Lua 5.3 has no such macro; the #undef is a
+ * harmless no-op there — matching the version-indifference this bridge
+ * is built for.) */
+#ifdef luaL_openlibs
+#undef luaL_openlibs
+#endif
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
