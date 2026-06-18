@@ -1,0 +1,97 @@
+{
+  "Main function": {
+    "prefix": "main",
+    "body": ["main() {", "\t$0", "}"],
+    "description": "Program entry point"
+  },
+  "Function": {
+    "prefix": "fn",
+    "body": ["${1:name}(${2:arg: int}) -> ${3:int} {", "\t$0", "}"],
+    "description": "Function definition (name(params) -> Ret { … })"
+  },
+  "Function (void)": {
+    "prefix": "fnv",
+    "body": ["${1:name}(${2:arg: int}) {", "\t$0", "}"],
+    "description": "Void function definition"
+  },
+  "Struct": {
+    "prefix": "struct",
+    "body": ["struct ${1:Name} {", "\t${2:field}: ${3:int}", "}"],
+    "description": "Struct definition"
+  },
+  "Message": {
+    "prefix": "message",
+    "body": ["message ${1:Name} { ${2:field}: ${3:int} }"],
+    "description": "Actor message type"
+  },
+  "Actor": {
+    "prefix": "actor",
+    "body": [
+      "actor ${1:Name} {",
+      "\tstate ${2:value} = ${3:0}",
+      "",
+      "\treceive {",
+      "\t\t${4:Msg}(${5:arg}) -> {",
+      "\t\t\t$0",
+      "\t\t}",
+      "\t}",
+      "}"
+    ],
+    "description": "Actor with state and a receive handler"
+  },
+  "Receive block": {
+    "prefix": "receive",
+    "body": ["receive {", "\t${1:Msg}(${2:arg}) -> {", "\t\t$0", "\t}", "}"],
+    "description": "Actor receive block"
+  },
+  "Ask (synchronous)": {
+    "prefix": "ask",
+    "body": ["${1:actor} ? ${2:Msg} { ${3:field}: ${4:value} }"],
+    "description": "Synchronous request/reply: send and block for the reply"
+  },
+  "Reply": {
+    "prefix": "reply",
+    "body": ["reply ${1:Msg} { ${2:field}: ${3:value} }"],
+    "description": "Reply to the current ask from inside a receive handler"
+  },
+  "Match": {
+    "prefix": "match",
+    "body": ["match ${1:expr} {", "\t${2:Pattern} -> {", "\t\t$0", "\t}", "}"],
+    "description": "Match expression"
+  },
+  "For loop": {
+    "prefix": "for",
+    "body": ["for ${1:i} in ${2:0}..${3:n} {", "\t$0", "}"],
+    "description": "For loop over a range"
+  },
+  "If": {
+    "prefix": "if",
+    "body": ["if ${1:cond} {", "\t$0", "}"],
+    "description": "If statement"
+  },
+  "If / else": {
+    "prefix": "ifelse",
+    "body": ["if ${1:cond} {", "\t$2", "} else {", "\t$0", "}"],
+    "description": "If / else statement"
+  },
+  "Import": {
+    "prefix": "import",
+    "body": ["import ${1:std.string}"],
+    "description": "Import a module"
+  },
+  "Exports": {
+    "prefix": "exports",
+    "body": ["exports (${1:Name})"],
+    "description": "Module export list"
+  },
+  "Extern": {
+    "prefix": "extern",
+    "body": ["extern ${1:name}(${2:arg: int}) -> ${3:int}"],
+    "description": "Declare a C function to call from Aether"
+  },
+  "Defer": {
+    "prefix": "defer",
+    "body": ["defer ${1:cleanup}($0)"],
+    "description": "Defer a cleanup call to scope exit"
+  }
+}

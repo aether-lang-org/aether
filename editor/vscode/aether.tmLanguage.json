@@ -7,6 +7,7 @@
     { "include": "#strings" },
     { "include": "#numbers" },
     { "include": "#literals" },
+    { "include": "#annotations" },
     { "include": "#cons-pattern" },
     { "include": "#typed-pointer" },
     { "include": "#storage-keywords" },
@@ -21,6 +22,15 @@
     { "include": "#operators" }
   ],
   "repository": {
+    "annotations": {
+      "comment": "Attribute annotations: @c_import, @packed, @derive(eq), @extern(\"sym\"), @c_callback, @heap, @borrow, @retain, @aether. The leading @name is one token; any (args) after it fall through to the normal patterns.",
+      "patterns": [
+        {
+          "name": "storage.modifier.annotation.aether",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
     "comments": {
       "patterns": [
         {
@@ -138,11 +148,11 @@
       "patterns": [
         {
           "name": "storage.type.aether",
-          "match": "\\b(actor|struct|message|state|extern|func|let|var|const|builder|callback)\\b"
+          "match": "\\b(actor|struct|message|state|extern|func|let|var|const|builder|callback|union)\\b"
         },
         {
           "name": "keyword.declaration.aether",
-          "match": "\\b(import|export|as|hide|seal|except)\\b"
+          "match": "\\b(import|exports|export|module|as|hide|seal|except)\\b"
         }
       ]
     },
@@ -151,7 +161,7 @@
       "patterns": [
         {
           "name": "keyword.control.aether",
-          "match": "\\b(if|else|for|while|switch|case|default|break|continue|return|match|receive|send|spawn_actor|spawn|defer|panic|try|catch|after)\\b"
+          "match": "\\b(if|else|for|in|while|switch|case|default|break|continue|return|match|receive|reply|send|spawn_actor|spawn|make|defer|panic|try|catch|after|when|requires|ensures)\\b"
         }
       ]
     },
@@ -159,7 +169,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.aether",
-          "match": "\\b(int|int64|int32|long|short|float|double|bool|string|void|ptr|actor_ref)\\b"
+          "match": "\\b(int|int64|int32|uint64|uint32|uint16|uint8|longdouble|long|short|float|double|bool|byte|string|cstring_const|cstring|void|ptr|actor_ref)\\b"
         }
       ]
     },
@@ -251,6 +261,11 @@
         {
           "name": "keyword.operator.arrow.aether",
           "match": "->"
+        },
+        {
+          "comment": "Range `..` (for i in 0..n) and the variadic / spread `...` in extern signatures. Longer literal first so `...` never tokenizes as `..` + `.`.",
+          "name": "keyword.operator.range.aether",
+          "match": "\\.\\.\\.|\\.\\."
         },
         {
           "name": "keyword.operator.assignment.aether",
