@@ -14,11 +14,24 @@
 // Usage:
 //   import contrib.host.factor
 //
-//   factor.run("2 3 + .")        // prints 5
+//   r = factor.eval("USING: math ; 2 3 +")   // r = "5" (result INTO Aether)
+//   factor.set("x", "10")                     // hand a k-v pair to Factor
+//   _ = factor.eval("USING: namespaces math ; \"x\" get 5 + \"x\" set-global")
+//   v = factor.get("x")                       // v = "15" (read it back)
+//
+// The VM is persistent across calls, so set/eval/get share state — a live
+// k-v map handed in and read back, same process.
 
-exports (factor_run_sandboxed, factor_run, factor_init, factor_finalize)
+exports (factor_run_sandboxed, factor_run, factor_eval,
+         factor_set, factor_get, factor_init, factor_finalize)
 
 extern factor_run_sandboxed(perms: ptr, code: string) -> int
 extern factor_run(code: string) -> int
+// Evaluate `code` in the persistent VM; returns its captured output as a
+// string ("" on failure). State persists across calls.
+extern factor_eval(code: string) -> string
+// Live k-v map over the persistent VM's global namespace.
+extern factor_set(key: string, value: string) -> int
+extern factor_get(key: string) -> string
 extern factor_init() -> int
 extern factor_finalize()
