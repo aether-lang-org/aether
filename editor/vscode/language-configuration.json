@@ -25,6 +25,29 @@
       "start": "^\\s*//\\s*#?region",
       "end": "^\\s*//\\s*#?endregion"
     }
-  }
+  },
+  "indentationRules": {
+    "increaseIndentPattern": "^.*\\{[^}\"']*$",
+    "decreaseIndentPattern": "^\\s*\\}"
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*/\\*\\*?(?!.*\\*/)",
+      "afterText": "^\\s*\\*/",
+      "action": { "indent": "indentOutdent", "appendText": " * " }
+    },
+    {
+      "beforeText": "^\\s*/\\*\\*?(?!.*\\*/)",
+      "action": { "indent": "none", "appendText": " * " }
+    },
+    {
+      "beforeText": "^\\s*\\* ([^*]|\\*(?!/))*$",
+      "action": { "indent": "none", "appendText": "* " }
+    },
+    {
+      "beforeText": "^\\s*\\*/\\s*$",
+      "action": { "indent": "none", "removeText": 1 }
+    }
+  ]
 }
 

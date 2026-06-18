@@ -31,6 +31,10 @@ copy_extension_assets() {
     cp "$SCRIPT_DIR/aether.tmLanguage.json"       "$target_dir/"
     cp "$SCRIPT_DIR/language-configuration.json"  "$target_dir/"
 
+    # Snippets (contributes.snippets → ./snippets/aether.json).
+    mkdir -p "$target_dir/snippets"
+    cp "$SCRIPT_DIR/snippets/aether.json"         "$target_dir/snippets/"
+
     # File-icon theme — gives `.ae` files the module icon in the
     # explorer pane. Distinct from a *colour* theme; the extension
     # no longer ships one of those (the user's chosen colour theme
