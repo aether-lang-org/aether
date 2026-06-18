@@ -2025,18 +2025,19 @@ ASTNode* parse_statement(Parser* parser) {
             // Check if this is: identifier = expression (Python-style)
             // or tuple destructuring: identifier, identifier = expression
             Token* next = peek_ahead(parser, 1);
-            // C-style typed local with a C ABI alias type:
-            //   `size_t n = ...`, `ssize_t r = ...`
-            // The leading identifier is a known alias and the next
-            // token is another identifier — unambiguously a typed
-            // declaration, same shape as `int x = ...`.
-            {
-                TypeKind _alias_k;
-                if (token->value &&
-                    c_abi_alias_kind(token->value, &_alias_k) &&
-                    next && next->type == TOKEN_IDENTIFIER) {
-                    return parse_variable_declaration(parser);
-                }
+            // C-style typed local declaration — two adjacent identifiers
+            // (`IDENT IDENT`) at statement start:
+            //   `size_t n = ...`      (C ABI alias type, #...)
+            //   `Pair p`              (#746: stack-allocated struct local,
+            //                          the value sibling of `*Pair p`)
+            //   `GeoHashRadius r = make(...)`
+            // No other construct has the `IDENT IDENT` shape — exactly the
+            // disambiguation the `*StructName name` pointer path already
+            // relies on (member access uses `.`, calls use `(`). parse_type
+            // lowers a bare struct-name identifier to TYPE_STRUCT, and the
+            // declaration may omit the initializer (`Pair p`).
+            if (next && next->type == TOKEN_IDENTIFIER) {
+                return parse_variable_declaration(parser);
             }
             if (next && (next->type == TOKEN_ASSIGN || next->type == TOKEN_COMMA)) {
                 return parse_python_style_declaration(parser);
@@ -3942,10 +3943,16 @@ ASTNode* parse_function_definition(Parser* parser) {
                     }
                     // `-> Name { ... }` — only a typed return if what
                     // follows `{` is NOT a struct-literal `field:` head.
-                    Token* after_name = peek_ahead(parser, 2);
+                    // `->` is already consumed, so the return-type name is
+                    // at offset 0 (peek), `{` at offset 1, and the first
+                    // body token at offset 2 (#746: these were 2/3/4,
+                    // off by one, so `-> Pair { ... }` never matched and
+                    // fell through to the `-> expr` path, leaving `{`
+                    // dangling → a top-level parse error).
+                    Token* after_name = peek_ahead(parser, 1);
                     if (after_name && after_name->type == TOKEN_LEFT_BRACE) {
-                        Token* after_brace = peek_ahead(parser, 3);
-                        Token* after_field = peek_ahead(parser, 4);
+                        Token* after_brace = peek_ahead(parser, 2);
+                        Token* after_field = peek_ahead(parser, 3);
                         int looks_like_struct_literal =
                             after_brace &&
                             after_brace->type == TOKEN_IDENTIFIER &&

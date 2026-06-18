@@ -979,6 +979,28 @@ struct Config {
 }
 ```
 
+### By-value struct returns and stack-struct locals
+
+A function can return a struct **by value**, and a struct can be declared as a **stack-allocated local** (no `*`, no initializer) and filled field-by-field:
+
+```aether
+struct Pair { a: long  b: long }
+
+make_pair(x: long) -> Pair {     // by-value struct return type
+    Pair p                       // stack-allocated struct local
+    p.a = x
+    p.b = x + 1
+    return p                     // returned by value (a struct copy)
+}
+
+main() {
+    q = make_pair(10)
+    print(q.a)                   // 10
+}
+```
+
+This is the value sibling of the `*StructName` pointer form below: `Pair p` is a stack struct (`.field` access), `*Pair p` is a pointer (`->field`). By-value struct **parameters** (`pair_sum(p: Pair)`) already worked; these complete the set, so an all-scalar record can be built locally and returned without heap allocation or an out-pointer — the shape C interop structs (e.g. a geometry/bounding-box result) expect.
+
 ### Pointer-to-struct type — `*StructName` and `expr as *StructName`
 
 For systems-programming code that overlays a struct header on a raw `ptr` (e.g. linked-list nodes in C-allocated memory, on-disk file headers read into a buffer), Aether has a first-class pointer-to-struct type spelled `*StructName` and a postfix `as` cast operator that produces a value of that type:

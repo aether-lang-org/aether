@@ -1,0 +1,62 @@
+// Regression (#746): a function may return a struct BY VALUE
+// (`make() -> Pair`) and declare a stack-allocated struct LOCAL
+// (`Pair p`, no `*`, no initializer). Both were parse errors before:
+//   - `-> Pair` fell through the `->` return-type disambiguator (an
+//     off-by-one in its `{` lookahead) into the `-> expr` arrow-body
+//     path, leaving `{` dangling → a top-level parse cascade.
+//   - `Pair p` (IDENT IDENT) had no statement-level declaration case
+//     (only `*Pair p` and the C-ABI aliases `size_t n` did).
+//
+// By-value struct params and `*Pair` pointer access already worked;
+// this completes the set so an all-scalar struct (GeoHashRadius-shaped:
+// the Redis geohash_helper.c blocker) can be built on the stack, filled
+// field-by-field, and returned by value. Codegen was already correct
+// (struct return type via get_c_type, `.field` access on a value
+// struct, `return p` as a C struct copy) — the gap was purely parsing.
+
+extern exit(code: int)
+
+struct Pair { a: long  b: long }
+
+// Stack-struct local + field writes + by-value return.
+make_pair(x: long) -> Pair {
+    Pair p
+    p.a = x
+    p.b = x + 1
+    return p
+}
+
+// By-value struct PARAMETER consuming the returned value.
+pair_sum(p: Pair) -> long {
+    return p.a + p.b
+}
+
+// Two stack locals, returned conditionally — exercises the value-struct
+// local in more than the trivial single-decl shape.
+pick(hi: bool) -> Pair {
+    Pair lo
+    lo.a = 1
+    lo.b = 2
+    Pair big
+    big.a = 100
+    big.b = 200
+    if hi { return big }
+    return lo
+}
+
+main() {
+    println("=== test_by_value_struct_return ===")
+
+    q = make_pair(10)
+    if q.a != 10 { println("FAIL: q.a"); exit(1) }
+    if q.b != 11 { println("FAIL: q.b"); exit(1) }
+    if pair_sum(q) != 21 { println("FAIL: pair_sum"); exit(1) }
+
+    hi = pick(true)
+    if hi.a != 100 { println("FAIL: pick(true).a"); exit(1) }
+    lo = pick(false)
+    if lo.b != 2 { println("FAIL: pick(false).b"); exit(1) }
+
+    println("  PASS: by-value struct return + stack-struct locals")
+    println("OK")
+}
