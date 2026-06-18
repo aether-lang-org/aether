@@ -84,6 +84,7 @@ Aether is not, and has no plans to be, a pure FP language (no Hindley-Milner inf
 | `byte` | Unsigned 8-bit (0..255) | `byte b = 0xFF` |
 | `void` | No value (for functions) | - |
 | `long` | 64-bit signed integer | `long x = 0` |
+| `longdouble` | C `long double` — widest float (C interop) | `extern strtold(...) -> longdouble` |
 | `ptr` | Raw pointer (for C interop) | `null` |
 
 #### `byte` — unsigned 8-bit
@@ -111,6 +112,21 @@ main() {
 **Range check on integer literals.** Assigning an out-of-range integer literal to a `byte` slot is a compile-time error: `byte b = 256` is rejected. Non-literal int → byte assignments compile and truncate at runtime (`byte b = some_int` keeps the low 8 bits), matching how other narrowings (`int64 → int`) behave.
 
 **Arithmetic.** `byte op byte → byte`; mixed `byte op int → int` (the wider type wins). This keeps NaN-boxing / packed-tag patterns expressible (`tag & 0x07` stays a byte) while letting general arithmetic widen naturally.
+
+#### `longdouble` — C `long double`
+
+The `longdouble` type maps to C `long double`, the widest floating type — for exact-decimal numeric paths a C interop layer expects it (libc `strtold`, `INCRBYFLOAT`-style score conversion). It supports arithmetic (`+ - * /`), comparison, and conversion to/from `int` and `float`; as the widest numeric it wins promotion (`longdouble op int` / `longdouble op float` → `longdouble`). It's usable in locals, function params/returns, struct fields, and `extern` signatures. There is no `longdouble` literal — values arrive from an extern (`extern strtold(s: cstring_const, end: ptr) -> longdouble`) or by widening an `int`/`float`. Interpolation and `print` format it with `%Lg`/`%Lf`.
+
+```aether
+extern strtold(s: cstring_const, end: ptr) -> longdouble
+incr(cur: longdouble, by: longdouble) -> longdouble { return cur + by }
+
+main() {
+    base = strtold("3.14159265358979323846", null)
+    next = incr(base, base)        // long double arithmetic, full precision
+    println("v=${next}")           // %Lg
+}
+```
 
 **C-side mapping.** `byte` lowers to `unsigned char` in the generated C, not `uint8_t`. The two are typedef-compatible on most platforms but C's strict-aliasing rules give `unsigned char *` an exemption (it can alias *any* type for read/write); `uint8_t *` does not. Since `byte` is exactly the type used to inspect the bytes of other types' storage, `unsigned char` is the right choice.
 

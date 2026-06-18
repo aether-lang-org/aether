@@ -593,6 +593,7 @@ static const char* type_name(Type* t) {
         case TYPE_UINT8:    return "uint8";
         case TYPE_DURATION: return "Duration";
         case TYPE_FLOAT:    return "float";
+        case TYPE_LONGDOUBLE: return "longdouble";
         case TYPE_BOOL:     return "bool";
         case TYPE_BYTE:     return "byte";
         case TYPE_STRING:   return "string";
@@ -617,7 +618,7 @@ static int is_integer_scalar(TypeKind kind) {
 static int is_numeric_scalar(TypeKind kind) {
     return kind == TYPE_INT || kind == TYPE_INT64 || kind == TYPE_UINT64 ||
            kind == TYPE_UINT32 || kind == TYPE_UINT16 || kind == TYPE_UINT8 ||
-           kind == TYPE_FLOAT;
+           kind == TYPE_FLOAT || kind == TYPE_LONGDOUBLE;
 }
 
 static TypeKind wider_integer_kind(TypeKind a, TypeKind b) {
@@ -908,7 +909,15 @@ int is_type_compatible(Type* from, Type* to) {
     // long <-> float compatibility
     if (from->kind == TYPE_INT64 && to->kind == TYPE_FLOAT) return 1;
     if (from->kind == TYPE_FLOAT && to->kind == TYPE_INT64) return 1;
-    
+    // #749: longdouble interconverts with int / int64 / uint64 / float.
+    // It is the widest C float; the C compiler performs the conversion.
+    if (from->kind == TYPE_LONGDOUBLE &&
+        (to->kind == TYPE_INT || to->kind == TYPE_INT64 ||
+         to->kind == TYPE_UINT64 || to->kind == TYPE_FLOAT)) return 1;
+    if (to->kind == TYPE_LONGDOUBLE &&
+        (from->kind == TYPE_INT || from->kind == TYPE_INT64 ||
+         from->kind == TYPE_UINT64 || from->kind == TYPE_FLOAT)) return 1;
+
     // Array compatibility
     if (from->kind == TYPE_ARRAY && to->kind == TYPE_ARRAY) {
         return is_type_compatible(from->element_type, to->element_type);
@@ -978,6 +987,7 @@ int is_callable(Type* type) {
         case TYPE_UINT64:
         case TYPE_DURATION:
         case TYPE_FLOAT:
+        case TYPE_LONGDOUBLE:
         case TYPE_BOOL:
         case TYPE_STRING:
         case TYPE_VOID:
@@ -1387,6 +1397,10 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
             }
             if (left_type->kind == TYPE_DURATION || right_type->kind == TYPE_DURATION) {
                 return create_type(TYPE_UNKNOWN);
+            }
+            // #749: longdouble is the widest numeric — wins over float/int.
+            if (left_type->kind == TYPE_LONGDOUBLE || right_type->kind == TYPE_LONGDOUBLE) {
+                return create_type(TYPE_LONGDOUBLE);
             }
             if (left_type->kind == TYPE_FLOAT || right_type->kind == TYPE_FLOAT) {
                 return create_type(TYPE_FLOAT);
@@ -3160,7 +3174,7 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     int mismatch = 0;
                     if ((spec == 's') && ak != TYPE_STRING && ak != TYPE_PTR) mismatch = 1;
                     if ((spec == 'd' || spec == 'i') && ak != TYPE_INT && ak != TYPE_INT64 && ak != TYPE_BOOL) mismatch = 1;
-                    if ((spec == 'f' || spec == 'g' || spec == 'e') && ak != TYPE_FLOAT) mismatch = 1;
+                    if ((spec == 'f' || spec == 'g' || spec == 'e') && ak != TYPE_FLOAT && ak != TYPE_LONGDOUBLE) mismatch = 1;
                     if (mismatch) {
                         char wbuf[256];
                         snprintf(wbuf, sizeof(wbuf),
@@ -4324,7 +4338,8 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                 arg_type->kind == TYPE_UINT32 ||
                 arg_type->kind == TYPE_UINT16 ||
                 arg_type->kind == TYPE_UINT8 ||
-                arg_type->kind == TYPE_FLOAT;
+                arg_type->kind == TYPE_FLOAT ||
+                arg_type->kind == TYPE_LONGDOUBLE;
             int arg_is_duration = arg_type->kind == TYPE_DURATION;
             int arg_is_unknown = arg_type->kind == TYPE_UNKNOWN;
 

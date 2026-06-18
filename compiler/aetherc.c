@@ -378,6 +378,7 @@ static const char* aether_type_spelling(Type* t) {
         case TYPE_UINT8:  return "uint8";
         case TYPE_DURATION: return "Duration";
         case TYPE_FLOAT:  return "float";
+        case TYPE_LONGDOUBLE: return "longdouble";
         case TYPE_BOOL:   return "bool";
         case TYPE_STRING: return "string";
         case TYPE_PTR:    return "ptr";
@@ -615,6 +616,7 @@ static int emit_literal_arg_payload(FILE* out, ASTNode* arg) {
         case TYPE_INT:
         case TYPE_INT64:
         case TYPE_FLOAT:
+        case TYPE_LONGDOUBLE:
         case TYPE_BOOL:
             fputs("{\"literal\":", out);
             emit_json_string(out, arg->value);
@@ -802,6 +804,7 @@ static const char* inspect_type_name(Type* t) {
         case TYPE_UINT8:     return "uint8";
         case TYPE_DURATION:  return "Duration";
         case TYPE_FLOAT:     return "float";
+        case TYPE_LONGDOUBLE: return "longdouble";
         case TYPE_BOOL:      return "bool";
         case TYPE_BYTE:      return "byte";
         case TYPE_STRING:    return "string";

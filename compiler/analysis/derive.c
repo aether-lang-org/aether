@@ -88,6 +88,7 @@ static FieldKind classify_field(Type* t) {
         case TYPE_INT:
         case TYPE_INT64:
         case TYPE_FLOAT:
+        case TYPE_LONGDOUBLE:
         case TYPE_BYTE:
         case TYPE_BOOL:
             return FIELD_PRIMITIVE_NUMERIC;
