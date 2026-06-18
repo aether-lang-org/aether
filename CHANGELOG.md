@@ -14,6 +14,17 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **`std.fs`: export `join_clean` and `first_element`.** The two
+  path-cleaning wrappers added in `std.fs: add join_clean + first_element`
+  were defined but omitted from the module `exports (...)` list, so
+  `fs.join_clean(...)` / `fs.first_element(...)` failed at the call site
+  with `E0301: Undefined function` (the `tests/integration/fs_join_clean`
+  regression went red). Added both to the export list.
+
 ## [0.279.0]
 
 ### Added
