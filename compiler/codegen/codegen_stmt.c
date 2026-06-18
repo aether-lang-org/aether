@@ -1944,6 +1944,7 @@ int call_arg_escapes(TypeKind param_kind) {
         case TYPE_DURATION:
         case TYPE_BYTE:
         case TYPE_FLOAT:
+        case TYPE_LONGDOUBLE:
         case TYPE_BOOL:
         case TYPE_VOID:
             return 0;
@@ -5017,6 +5018,8 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             match_c_type = "const char*";
                         else if (mexpr_type->kind == TYPE_FLOAT)
                             match_c_type = "double";
+                        else if (mexpr_type->kind == TYPE_LONGDOUBLE)
+                            match_c_type = "long double";
                         else if (mexpr_type->kind == TYPE_INT64)
                             match_c_type = "int64_t";
                         else if (mexpr_type->kind == TYPE_BOOL)
@@ -5989,6 +5992,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "printf(\"%%f\", ");
                         generate_expression(gen, first_arg);
                         fprintf(gen->output, ");\n");
+                    } else if (arg_type->kind == TYPE_LONGDOUBLE) {
+                        fprintf(gen->output, "printf(\"%%Lf\", ");
+                        generate_expression(gen, first_arg);
+                        fprintf(gen->output, ");\n");
                     } else if (arg_type->kind == TYPE_STRING) {
                         // NULL-safe via helper (no double-evaluation)
                         fprintf(gen->output, "printf(\"%%s\", _aether_safe_str(");
@@ -6059,7 +6066,9 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                     // Replace with type-correct specifier
                                     ASTNode* arg = stmt->children[arg_idx];
                                     Type* atype = arg->node_type;
-                                    if (atype && atype->kind == TYPE_FLOAT) {
+                                    if (atype && atype->kind == TYPE_LONGDOUBLE) {
+                                        fprintf(gen->output, "%%Lf");
+                                    } else if (atype && atype->kind == TYPE_FLOAT) {
                                         fprintf(gen->output, "%%f");
                                     } else if (atype && atype->kind == TYPE_INT64) {
                                         fprintf(gen->output, "%%lld");

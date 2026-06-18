@@ -36,6 +36,28 @@ notes to be skipped or clobbered (the failure modes documented in
   of fn-pointer parameters (#750) and typed fn-ptr locals. See
   [docs/language-reference.md](docs/language-reference.md) (Function-
   pointer struct fields).
+## [0.274.0]
+
+### Added
+
+- **`longdouble` primitive type** (#749 Ask C, completing the aedis
+  core-floor umbrella). Maps to C `long double` — the widest floating
+  type — for the exact-decimal numeric paths a C interop layer needs
+  (libc `strtold`, INCRBYFLOAT / sorted-set score conversion,
+  object.c/util.c number formatting). Supports arithmetic (`+ - * /`),
+  comparison, and conversion to/from `int` and `float`; as the widest
+  numeric it wins promotion (`longdouble op int` / `op float` →
+  `longdouble`). Usable in locals, params/returns, struct fields, and
+  `extern` signatures; formatted with `%Lg`/`%Lf` in interpolation and
+  `print`. No source literal — values arrive via an extern or by widening
+  an `int`/`float`. Spelled as the type name `longdouble` (no new keyword
+  token). See [docs/language-reference.md](docs/language-reference.md)
+  (`longdouble`).
+
+  With this, the #749 umbrella is fully addressed: fn-pointer parameters
+  (#773) and struct fields (#777) for Ask A, the inline `...` C-varargs
+  call-through already shipped for Ask B, and `longdouble` for Ask C.
+
 ## [0.273.0]
 
 ### Added

@@ -470,6 +470,12 @@ Type* parse_type(Parser* parser) {
                      * header does. */
                     type = create_type(TYPE_STRING);
                     type->c_alias = strdup("const char*");
+                } else if (strcmp(token->value, "longdouble") == 0) {
+                    /* #749: `long double` — the widest C floating type.
+                     * An identifier-spelled primitive (no keyword token);
+                     * get_c_type emits "long double". Values arrive via
+                     * externs (strtold), arithmetic promotes to it. */
+                    type = create_type(TYPE_LONGDOUBLE);
                 } else if (strcmp(token->value, "uint8") == 0 ||
                            strcmp(token->value, "uint16") == 0 ||
                            strcmp(token->value, "uint32") == 0) {
@@ -3820,11 +3826,13 @@ ASTNode* parse_function_definition(Parser* parser) {
                     is_typed_return = 1;
                     break;
                 case TOKEN_IDENTIFIER: {
-                    // A C ABI scalar alias (size_t, ssize_t, ...) in
-                    // return position is unambiguously a type.
+                    // A C ABI scalar alias (size_t, ssize_t, ...) or the
+                    // `longdouble` primitive (#749) in return position is
+                    // unambiguously a type.
                     TypeKind alias_k;
                     if (peek->value &&
-                        c_abi_alias_kind(peek->value, &alias_k)) {
+                        (c_abi_alias_kind(peek->value, &alias_k) ||
+                         strcmp(peek->value, "longdouble") == 0)) {
                         is_typed_return = 1;
                         break;
                     }
