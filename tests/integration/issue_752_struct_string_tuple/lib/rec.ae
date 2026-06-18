@@ -1,0 +1,30 @@
+// Library module for the issue #752 regression: a function returns
+// (Struct, err) where Struct has a heap-string field. Before the fix
+// the caller saw garbage in that field — the struct's R_destroy(&r)
+// defer freed the string after the tuple literal had already memcpy'd
+// the pointer into the returned tuple.
+import std.string
+exports (R, mk, mk_multi)
+
+struct R {
+    n: int
+    s: string
+}
+
+mk(x: int, txt: string) -> {
+    r = R { n: x, s: string.copy(txt) }
+    return r, ""
+}
+
+// Multiple heap-string fields plus an int field, to prove the
+// ownership-transfer fix iterates every heap field.
+struct M {
+    id:    int
+    name:  string
+    label: string
+}
+
+mk_multi(id: int, name: string, label: string) -> {
+    m = M { id: id, name: string.copy(name), label: string.copy(label) }
+    return m, ""
+}

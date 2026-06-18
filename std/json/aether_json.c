@@ -505,7 +505,15 @@ enum {
     // a heap-created container gets promoted to arena-backed via
     // `ensure_container_arena` — after that, `v->arena` is set but the
     // struct itself still sits on the heap.
-    JV_FLAG_HEAP_STRUCT = 0x02u
+    JV_FLAG_HEAP_STRUCT = 0x02u,
+    // Marks a JSON_NUMBER whose value originated as an integer (via
+    // json_create_int / json.from_int) — the serializer emits it as a
+    // bare integer (`%lld`) instead of `%g`. Without this flag,
+    // `json_create_number(53248000.0)` serialises to `5.3248e+07`,
+    // which is lossy past 2^53 and wrong for consumers expecting a
+    // plain integer count (e.g. byte-totals, IDs). Sourced from
+    // `stdlib-json-integer-value-ask.md` (fbs-core /metrics handler).
+    JV_FLAG_INTEGER     = 0x04u
 };
 
 // Parallel arrays for an object's (key, key_len, value) triples.
@@ -524,6 +532,14 @@ struct JsonValue {
     union {
         int      boolean;
         double   number;
+        /* Integer storage for values constructed via json_create_int.
+         * Marked by JV_FLAG_INTEGER; the serializer reads `integer`
+         * (not `number`) when the flag is set. Keeps the full int64
+         * range — the alternative (storing as double in the existing
+         * `number` slot) loses precision past 2^53, which is exactly
+         * the bug fbs-core's metrics handler tripped on. Shares the
+         * union slot so JsonValue stays its 32-byte footprint. */
+        long long integer;
         struct {
             const char* data;
             uint32_t    length;
@@ -1313,11 +1329,20 @@ int json_get_bool(JsonValue* v) {
 }
 
 double json_get_number(JsonValue* v) {
-    return (v && v->type == JSON_NUMBER) ? v->data.number : 0.0;
+    if (!v || v->type != JSON_NUMBER) return 0.0;
+    /* Integer-flavoured values (json_create_int) read from the dedicated
+     * `integer` slot; widen to double for the float-shaped API. */
+    if (v->flags & JV_FLAG_INTEGER) return (double)v->data.integer;
+    return v->data.number;
 }
 
 int json_get_int(JsonValue* v) {
-    return (int)json_get_number(v);
+    if (!v || v->type != JSON_NUMBER) return 0;
+    /* Integer-flavoured values read the dedicated slot directly so the
+     * full int64 range survives the round-trip — int->int doesn't lose
+     * precision past 2^53 the way double->int would. */
+    if (v->flags & JV_FLAG_INTEGER) return (int)v->data.integer;
+    return (int)v->data.number;
 }
 
 const char* json_get_string_raw(JsonValue* v) {
@@ -1426,7 +1451,14 @@ static JsonValue* deep_copy_into_arena(JsonValue* src, Arena* dst_arena) {
     switch (src->type) {
         case JSON_NULL: break;
         case JSON_BOOL: out->data.boolean = src->data.boolean; break;
-        case JSON_NUMBER: out->data.number = src->data.number; break;
+        case JSON_NUMBER:
+            if (src->flags & JV_FLAG_INTEGER) {
+                out->flags |= JV_FLAG_INTEGER;
+                out->data.integer = src->data.integer;
+            } else {
+                out->data.number = src->data.number;
+            }
+            break;
         case JSON_STRING: {
             uint32_t len = src->data.str.length;
             const char* c = arena_copy_str(dst_arena, src->data.str.data, len);
@@ -1650,6 +1682,23 @@ JsonValue* json_create_number(double n) {
     return v;
 }
 
+/* Integer-flavoured number constructor (#752-sibling /
+ * stdlib-json-integer-value-ask.md). Stores the value in the dedicated
+ * `integer` union slot — preserving the full int64 range — and stamps
+ * JV_FLAG_INTEGER so the serializer emits `%lld` instead of `%g`. The
+ * existing json_create_number(double) path is unchanged; this exists
+ * because the float route serialises large integers as scientific
+ * notation (53248000.0 -> "5.3248e+07") which is wrong for byte-count
+ * / total-bytes / id fields and lossy past 2^53. */
+JsonValue* json_create_int(long long n) {
+    JsonValue* v = heap_new(JSON_NUMBER);
+    if (v) {
+        v->data.integer = n;
+        v->flags |= JV_FLAG_INTEGER;
+    }
+    return v;
+}
+
 JsonValue* json_create_string(const char* s) {
     JsonValue* v = heap_new(JSON_STRING);
     if (!v) return NULL;
@@ -1819,7 +1868,15 @@ static void sb_emit_value(StrBuf* b, JsonValue* v, int depth) {
             break;
         case JSON_NUMBER: {
             char nb[64];
-            int n = snprintf(nb, sizeof(nb), "%g", v->data.number);
+            int n;
+            if (v->flags & JV_FLAG_INTEGER) {
+                /* Integer-flavoured number — full int64 range, bare
+                 * integer wire format, no scientific-notation crossover
+                 * past ~1e7. */
+                n = snprintf(nb, sizeof(nb), "%lld", v->data.integer);
+            } else {
+                n = snprintf(nb, sizeof(nb), "%g", v->data.number);
+            }
             if (n > 0) sb_append(b, nb, (size_t)n);
             break;
         }

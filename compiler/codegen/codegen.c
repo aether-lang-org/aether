@@ -216,6 +216,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->escaped_string_var_count = 0;
     gen->return_escaped_string_vars = NULL;
     gen->return_escaped_string_var_count = 0;
+    gen->return_escaped_struct_vars = NULL;
+    gen->return_escaped_struct_var_count = 0;
     // *StringSeq ownership tracking — MUST be zero-initialised here:
     // the CodeGenerator is field-initialised (not calloc'd), so leaving
     // these uninitialised made the first clear_seq_vars() free garbage
@@ -468,6 +470,14 @@ void clear_escaped_string_vars(CodeGenerator* gen) {
     }
     gen->return_escaped_string_vars = NULL;
     gen->return_escaped_string_var_count = 0;
+    if (gen->return_escaped_struct_vars) {
+        for (int i = 0; i < gen->return_escaped_struct_var_count; i++) {
+            free(gen->return_escaped_struct_vars[i]);
+        }
+        free(gen->return_escaped_struct_vars);
+    }
+    gen->return_escaped_struct_vars = NULL;
+    gen->return_escaped_struct_var_count = 0;
 }
 
 /* ---- *StringSeq local registry (parallel to heap_string_vars) ----
@@ -545,6 +555,30 @@ void mark_return_escaped_string_var(CodeGenerator* gen, const char* var_name) {
     gen->return_escaped_string_vars = new_vars;
     gen->return_escaped_string_vars[gen->return_escaped_string_var_count] = strdup(var_name);
     gen->return_escaped_string_var_count++;
+}
+
+/* #752: a struct local returned (directly or as a tuple element)
+ * transfers ownership of its heap-string fields to the caller, so the
+ * function-exit <Struct>_destroy defer must NOT fire for it. */
+int is_return_escaped_struct_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->return_escaped_struct_var_count; i++) {
+        if (strcmp(gen->return_escaped_struct_vars[i], var_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void mark_return_escaped_struct_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_return_escaped_struct_var(gen, var_name)) return;
+    char** new_vars = realloc(gen->return_escaped_struct_vars,
+                              sizeof(char*) * (gen->return_escaped_struct_var_count + 1));
+    if (!new_vars) return;
+    gen->return_escaped_struct_vars = new_vars;
+    gen->return_escaped_struct_vars[gen->return_escaped_struct_var_count] = strdup(var_name);
+    gen->return_escaped_struct_var_count++;
 }
 
 // Normalise a callee name's dots to underscores. Used by every
@@ -735,6 +769,12 @@ static int try_emit_struct_destroy(CodeGenerator* gen, ASTNode* deferred) {
     memcpy(var_buf, rest, var_len);
     var_buf[var_len] = '\0';
     const char* struct_name = sep + 1;
+    /* #752: suppress the destroy when this struct escaped via a return —
+     * its heap-string fields now belong to the caller. Consume the defer
+     * (return 1) so it is not freed at callee exit. */
+    if (is_return_escaped_struct_var(gen, var_buf)) {
+        return 1;
+    }
     print_indent(gen);
     fprintf(gen->output,
             "/* deferred */ %s_destroy(&%s);\n",

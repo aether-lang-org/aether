@@ -470,6 +470,21 @@ Type* parse_type(Parser* parser) {
                      * header does. */
                     type = create_type(TYPE_STRING);
                     type->c_alias = strdup("const char*");
+                } else if (strcmp(token->value, "uint8") == 0 ||
+                           strcmp(token->value, "uint16") == 0 ||
+                           strcmp(token->value, "uint32") == 0) {
+                    /* #745: short unsigned width names, the siblings of
+                     * the `uint64` keyword. Each has a distinct TypeKind
+                     * whose C spelling (uint8_t/uint16_t/uint32_t) is
+                     * produced by get_c_type / const_array_elem_c_type —
+                     * so we set NO c_alias (a bare "uint16" is not a C
+                     * type). Needed for module-level const lookup tables
+                     * with a pinned element width, e.g.
+                     * `const CRC16TAB: uint16[256] = [...]`. */
+                    TypeKind k = (token->value[4] == '8') ? TYPE_UINT8
+                               : (token->value[5] == '6') ? TYPE_UINT16
+                               : TYPE_UINT32;
+                    type = create_type(k);
                 } else if (c_abi_alias_kind(token->value, &alias_kind)) {
                     /* C ABI scalar aliases — exact C type spellings the
                      * Redis/mquickjs ports need so an Aether `extern`
@@ -1203,128 +1218,24 @@ ASTNode* parse_primary_expression(Parser* parser) {
     }
 }
 
-/* Statement-shape recogniser for issue #528. Returns 1 when the
- * pending operator looks like the start of a new statement rather
- * than a continuation of the current binary expression.
+/* Newline boundary recogniser for issue #528. Aether has no semicolon
+ * requirement, so a token on a later source line than the previous token
+ * starts a fresh statement when it could otherwise be parsed as an infix
+ * or postfix continuation. Multiline expressions remain available by
+ * placing the continuing operator before the newline:
  *
- * Two conditions must both hold:
- *   (a) the operator starts a strictly later source line than its
- *       preceding token (multi-line expression boundary), and
- *   (b) the tokens immediately after the operator form a
- *       recognisable statement-leading shape for that operator.
+ *     total = a +
+ *         b
  *
- * Add new operator branches here as new ambiguities surface. Each
- * branch should be CONSERVATIVE: returning 1 stops the binary loop,
- * so any false positive breaks a legitimate multi-line expression
- * like:
- *     x = a
- *         * b
- * (operator-led continuation, no statement shape afterwards). Only
- * return 1 when the post-operator tokens strongly signal a fresh
- * statement.
- *
- * ## Currently handled
- *
- * TOKEN_MULTIPLY:
- *   `*StructName name [= ...]`  (typed-pointer local declaration)
- *   `*ident = ...`              (deref-store via a named ptr)
- *   These shapes are unambiguous: an expression context never has
- *   `* IDENT IDENT` or `* IDENT =`, so detecting them never breaks
- *   a legitimate multi-line `*`-led continuation.
- *
- * TOKEN_LEFT_BRACKET:
- *   `[ <literal-or-ident> ,` (array-literal expression statement,
- *   common-shape detection only — multi-token first elements like
- *   `[a+b, c]` aren't detected to keep lookahead bounded). The `,`
- *   after the first element is the discriminator: indexing accepts a
- *   single expression, so a `[` line-led by a comma-bearing bracket
- *   group provably can't be a continuation index. The first-element
- *   token set covers TOKEN_IDENTIFIER, TOKEN_NUMBER, string literals
- *   (TOKEN_STRING_LITERAL / TOKEN_INTERP_STRING), and TRUE / FALSE /
- *   NULL keywords — the primaries that fit in one lexeme.
- *
- * ## Considered and intentionally NOT added (this round)
- *
- * The remaining hazards documented in #528 do not have an
- * inspection-cheap shape that distinguishes statement from
- * continuation. Adding ambiguous guards would silently break
- * legitimate multi-line expressions, which is worse than the
- * (vanishingly rare) ambiguity the issue called out. The honest
- * fix for these is lexer-level newline significance (ASI-style),
- * which is a separate decision recorded in #528.
- *
- * TOKEN_MINUS / TOKEN_PLUS:
- *   The hazard is `-foo()` or `+foo()` as an expression statement
- *   after a previous line that ends in a complete expression. But
- *   `prev - foo()` and `prev + foo()` — multi-line arithmetic — are
- *   the same shape lexically. There is no post-operator token
- *   pattern that proves "this is a fresh statement, not a
- *   continuation." Detection requires lexer ASI.
- *
- * TOKEN_LEFT_PAREN:
- *   The hazard is `(handler)(args)` or similar paren-led expression
- *   statement after a previous-line expression. But `prev(arg)`
- *   call-continuation across newlines is the same shape. No safe
- *   discriminator without ASI. Also: Aether's tuple-destructure
- *   uses bare `a, b = ...` not `(a, b) = ...`, so the parenthesised-
- *   LHS hazard the issue mentions doesn't actually fire in current
- *   Aether.
- *
- * If a real user-facing miscompile in any of these surfaces, the
- * answer is to revisit the lexer-ASI decision in #528, not to keep
- * extending this helper with progressively more dangerous guards. */
-static int is_newline_led_statement(Parser* parser, Token* op) {
+ * This mirrors the existing same-line rule for trailing closures and
+ * removes the old token-shape heuristics (`*StructName name`, `[a, b]`,
+ * etc.) that still left `-x` ambiguous. */
+static int operator_starts_newline(Parser* parser, Token* op) {
     if (!op) return 0;
 
     Token* prev = peek_ahead(parser, -1);
     if (!prev || op->line <= prev->line) return 0;
-
-    Token* a1 = peek_ahead(parser, 1);
-    Token* a2 = peek_ahead(parser, 2);
-
-    switch (op->type) {
-        case TOKEN_MULTIPLY:
-            /* `*StructName name [= ...]` typed-pointer declaration —
-             * the original PR #527 case. `*` + IDENT + IDENT. */
-            if (a1 && a1->type == TOKEN_IDENTIFIER &&
-                a2 && a2->type == TOKEN_IDENTIFIER) {
-                return 1;
-            }
-            /* `*ident = ...` deref-store. `*` + IDENT + `=`. */
-            if (a1 && a1->type == TOKEN_IDENTIFIER &&
-                a2 && a2->type == TOKEN_ASSIGN) {
-                return 1;
-            }
-            return 0;
-        case TOKEN_LEFT_BRACKET:
-            /* `[ LITERAL , ...` or `[ IDENT , ...` — array-literal
-             * statement. Indexing takes one expression, so a `[`-led
-             * group that contains a comma at depth 0 can't be a
-             * continuation index. We approximate with a bounded
-             * lookahead that catches the common forms (the first
-             * element is a single token); multi-token first-element
-             * cases like `[a+b, c]` fall through to the old behaviour.
-             *
-             * Discriminating-token set for the first array element:
-             * identifier, int, float, char, or string literal. Other
-             * primaries (parens, nested `[`, prefix `-`) need more
-             * lookahead than peek_ahead can give cheaply, so they're
-             * left unflagged — the conservative bias is "don't break
-             * legit multi-line indexing." */
-            if (a1 && (a1->type == TOKEN_IDENTIFIER ||
-                       a1->type == TOKEN_NUMBER ||
-                       a1->type == TOKEN_STRING_LITERAL ||
-                       a1->type == TOKEN_INTERP_STRING ||
-                       a1->type == TOKEN_TRUE ||
-                       a1->type == TOKEN_FALSE ||
-                       a1->type == TOKEN_NULL) &&
-                a2 && a2->type == TOKEN_COMMA) {
-                return 1;
-            }
-            return 0;
-        default:
-            return 0;
-    }
+    return 1;
 }
 
 ASTNode* parse_expression(Parser* parser) {
@@ -1351,34 +1262,7 @@ ASTNode* parse_binary_expression(Parser* parser, int precedence) {
         if (op_precedence < 0) break;  // Not an operator
         if (op_precedence < precedence) break;  // Lower precedence, stop
 
-        /* Newline-led statement-shape detection (issue #528).
-         *
-         * Aether's expression parser is not consistently
-         * newline-terminated: this loop walks operators by precedence
-         * alone, so a token that's BOTH an infix operator AND a valid
-         * statement-leading token will fold into the previous
-         * expression if it appears at the start of a new line. The
-         * canonical case (filed as the P0 typed-pointer port for
-         * Redis):
-         *
-         *     q = (p as *Pt)
-         *     *Pt c = q          // meant to be a new statement;
-         *                        // parses as `(p as *Pt) * Pt`
-         *                        // without this guard.
-         *
-         * The guard's logic: when the next operator starts a new
-         * source line AND the tokens after it form a recognisable
-         * statement-leading shape, break out of the loop so the
-         * outer statement parser picks up the new statement. If the
-         * operator crosses a line but the next tokens DON'T look like
-         * a statement-lead, this is a legitimate multi-line
-         * expression (an indented operator continuation) and we
-         * continue.
-         *
-         * See is_newline_led_statement below for the per-operator
-         * shape recognisers. Add new cases there as new ambiguities
-         * surface; the loop body stays a single break. */
-        if (is_newline_led_statement(parser, operator)) {
+        if (operator_starts_newline(parser, operator)) {
             break;
         }
 
@@ -1443,6 +1327,9 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
         }
         
         if (op->type == TOKEN_LEFT_BRACKET) {
+            if (operator_starts_newline(parser, op)) {
+                break;
+            }
             // Array indexing: expr[index]
             advance_token(parser); // consume '['
             ASTNode* index = parse_expression(parser);
@@ -4694,49 +4581,80 @@ ASTNode* parse_program(Parser* parser) {
                 break;
             }
             case TOKEN_CONST: {
-                // Top-level constant: const NAME = value or const arr[] = [1, 2, 3]
+                // Top-level constant: const NAME = value, const arr[] = [...],
+                // or (typed) const NAME: T[N] = [...] / const NAME: T = value.
                 int cline = token->line, ccol = token->column;
                 advance_token(parser); // consume 'const'
                 Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
                 if (!cname) { advance_token(parser); continue; }
 
-                // Check for array form: const NAME[] = [...]
                 int is_array = 0;
-                if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
+                /* #745: explicit element type for a module-level const
+                 * array — `const NAME: T[N] = [...]` lowers to a file-
+                 * scope `static const <T> NAME[N] = {...}` lookup table.
+                 * The untyped `const NAME[] = [...]` form (below) infers
+                 * `int` from the literals; the typed form lets a porter
+                 * pin the C element type (uint8/uint16/int/long/uint64)
+                 * so e.g. a CRC16 table is `uint16_t[256]`, not `int[]`.
+                 * Also accepts the typed scalar form `const NAME: T =
+                 * value`. */
+                Type* annotated_type = NULL;   // full type from `: T` / `: T[N]`
+                if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
+                    advance_token(parser); // consume ':'
+                    /* parse_type already folds a trailing `[N]` into a
+                     * TYPE_ARRAY (element + size), so `long[3]` arrives
+                     * here as array(long, 3). */
+                    annotated_type = parse_type(parser);
+                    if (!annotated_type) { advance_token(parser); continue; }
+                    if (annotated_type->kind == TYPE_ARRAY) {
+                        is_array = 1;
+                    }
+                }
+                // Untyped array form: const NAME[] = [...]
+                else if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
                     advance_token(parser); // consume '['
                     if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) { advance_token(parser); continue; }
                     is_array = 1;
                 }
 
-                if (!expect_token(parser, TOKEN_ASSIGN)) { advance_token(parser); continue; }
+                if (!expect_token(parser, TOKEN_ASSIGN)) {
+                    if (annotated_type) free_type(annotated_type);
+                    advance_token(parser); continue;
+                }
                 ASTNode* cval = parse_expression(parser);
-                if (!cval) { advance_token(parser); continue; }
+                if (!cval) { if (annotated_type) free_type(annotated_type); advance_token(parser); continue; }
                 node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
                 add_child(node, cval);
 
                 if (is_array) {
                     node->annotation = strdup("array_const");
-                    // Infer element type from first child of array literal
-                    Type* elem_type = NULL;
-                    if (cval->node_type == NULL && cval->child_count > 0 && cval->children[0]) {
-                        if (cval->children[0]->node_type) {
-                            elem_type = cval->children[0]->node_type;
+                    if (annotated_type) {
+                        /* Explicit element type + size from `: T[N]`
+                         * (ownership transferred). If the size was elided
+                         * (`T[]`), recover it from the literal length. */
+                        if (annotated_type->array_size < 0) {
+                            annotated_type->array_size = cval->child_count;
                         }
-                    } else if (cval->node_type && cval->node_type->element_type) {
-                        elem_type = cval->node_type->element_type;
-                    }
-                    if (elem_type) {
-                        node->node_type = create_array_type(clone_type(elem_type), cval->child_count);
+                        node->node_type = annotated_type;
                     } else {
-                        node->node_type = create_array_type(create_type(TYPE_PTR), cval->child_count);
+                        // Untyped `const NAME[] = [...]` — infer element type.
+                        Type* elem_type = NULL;
+                        if (cval->node_type == NULL && cval->child_count > 0 && cval->children[0]) {
+                            if (cval->children[0]->node_type) elem_type = cval->children[0]->node_type;
+                        } else if (cval->node_type && cval->node_type->element_type) {
+                            elem_type = cval->node_type->element_type;
+                        }
+                        node->node_type = elem_type
+                            ? create_array_type(clone_type(elem_type), cval->child_count)
+                            : create_array_type(create_type(TYPE_PTR), cval->child_count);
                     }
+                } else if (annotated_type) {
+                    // Typed scalar const: `const NAME: T = value`.
+                    node->node_type = annotated_type;
                 } else {
-                    // Infer type from value
-                    if (cval->node_type) {
-                        node->node_type = clone_type(cval->node_type);
-                    } else {
-                        node->node_type = create_type(TYPE_UNKNOWN);
-                    }
+                    // Infer type from value.
+                    node->node_type = cval->node_type ? clone_type(cval->node_type)
+                                                       : create_type(TYPE_UNKNOWN);
                 }
                 break;
             }

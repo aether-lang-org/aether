@@ -247,6 +247,18 @@ main() {
 
 Constants are emitted as `#define` in generated C — zero runtime cost.
 
+#### Module-level constant arrays — lookup tables
+
+A `const` array lowers to a file-scope `static const` table, allocated once and shared across every call (not re-initialised per call) — the right shape for a table-driven algorithm:
+
+```aether
+const PRIMES[] = [2, 3, 5, 7, 11]          // element type inferred (int)
+const CRC16TAB: uint16[256] = [ 0x0000, 0x1021, /* ... */ ]   // element type pinned
+```
+
+- `const NAME[] = [...]` infers the element type from the literals (`int` for integer literals).
+- `const NAME: T[N] = [...]` pins the C element type — `T` may be `uint8` / `uint16` / `uint32` / `uint64` / `int` / `long` — so e.g. a CRC16 table emits `static const uint16_t NAME[256]` rather than a 4×-wider `int[]`, and matches a C header that expects the packed type. Integer literals narrow to the chosen element type (the explicit, compile-time-constant intent, like `byte b = 5`). Indexed access (`NAME[i]`) emits `NAME[i]`; the array is read-only.
+
 **The RHS of `const` must be a compile-time constant expression.** Allowed forms: literals (int / float / bool / string / null), other consts referenced by name, unary / binary expressions over those, and string interpolation where every interpolated value is itself const. **Function calls are rejected** at typecheck time:
 
 ```aether
