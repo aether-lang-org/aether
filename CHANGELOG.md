@@ -16,6 +16,21 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ## [current]
 
+### Fixed
+
+- **`import std.fs (*)` (glob import) now carries the real tuple return
+  types of `(value, err)` wrappers** (`compiler/analysis/typechecker.c`).
+  A glob import registered each short alias by cloning the full symbol's
+  type *before* return-type inference ran, so a wrapper whose return type
+  is inferred (e.g. `fs.list_dir`'s `(ptr, string)` tuple) left the bare
+  alias `list_dir` stuck on a pre-inference `int` placeholder. A
+  `list, err = list_dir(...)` then stamped the call's return type as
+  `int` and codegen emitted `int _tup0 = fs_list_dir(...)` — a C type
+  error. Namespaced (`fs.list_dir`) and selective imports already worked;
+  the glob form did not. Import-alias short symbols are now re-synced from
+  their inferred full symbols after type inference, so all three import
+  forms agree. (fbs-core ask #1.)
+
 ### Added
 
 - **Streaming (incremental) digest context in `std.cryptography`**

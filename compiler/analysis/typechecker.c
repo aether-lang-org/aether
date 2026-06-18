@@ -2317,6 +2317,38 @@ int typecheck_program(ASTNode* program) {
         }
     }
 
+    // Re-sync import-alias short symbols from their now-inferred full
+    // symbols. The short aliases (registered above for selective AND
+    // glob imports) clone the full symbol's type BEFORE `infer_all_types`
+    // runs, so a wrapper whose return type is inferred — e.g. an
+    // `fs.list_dir` whose `-> { ... return list, "" }` body yields a
+    // `(ptr, string)` tuple — leaves the short alias `list_dir` stuck on
+    // the pre-inference placeholder (int/unknown). A bare `list, err =
+    // list_dir(...)` call then resolves through the stale short symbol,
+    // stamps the call node's return type as `int`, and codegen emits
+    // `int _tup0 = fs_list_dir(...)` — a C type error. Selective imports
+    // happened to dodge this when the call rewrote-and-re-resolved to the
+    // full symbol, but the glob path did not; refreshing every alias from
+    // the canonical full symbol makes both forms carry the wrappers' real
+    // tuple return types. (fbs-core ask #1.)
+    for (int a = 0; a < import_alias_count; a++) {
+        const char* short_name = import_aliases[a].short_name;
+        const char* dotted = import_aliases[a].qualified_name;
+        // Build the underscored full C name from the dotted alias
+        // ("fs.list_dir" -> "fs_list_dir").
+        char full_name[256];
+        snprintf(full_name, sizeof(full_name), "%s", dotted);
+        for (char* p = full_name; *p; p++) { if (*p == '.') *p = '_'; }
+
+        Symbol* full_sym = lookup_symbol(global_table, full_name);
+        Symbol* short_sym = lookup_symbol_local(global_table, short_name);
+        if (full_sym && short_sym && short_sym->is_function && full_sym->type) {
+            if (short_sym->type) free_type(short_sym->type);
+            short_sym->type = clone_type(full_sym->type);
+            short_sym->node = full_sym->node;
+        }
+    }
+
     // Second pass: type check all nodes
     for (int i = 0; i < program->child_count; i++) {
         typecheck_node(program->children[i], global_table);
