@@ -14,6 +14,32 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Native HMAC + HMAC-DRBG** (`std.cryptography.hmac`,
+  `std.cryptography.drbg`, issue #739) — pure Aether on the native SHA-2.
+  - **`std.cryptography.hmac`** — RFC 2104 HMAC over any native SHA-2 digest,
+    working entirely in `bytes` buffers (so it's binary-safe for arbitrary
+    keys/messages, including the key-longer-than-block hashed-key path).
+    One-shot (`hmac_sha256` / `_hex`, `hmac_sha512`, generic `hmac_bytes` /
+    `hmac_hex`) and streaming (`new(algo, key, key_len)` → `update` →
+    `final_bytes` / `final_hex`). Verified against `openssl dgst -mac HMAC`
+    on RFC 4231 vectors.
+  - **`std.cryptography.drbg`** — SP800-90A HMAC-DRBG, ported from Bouncy
+    Castle's `HMacSP800Drbg.cs`. Deterministic (caller supplies entropy):
+    `new(algo, entropy, …, nonce, …, perso, …)` → `generate` /
+    `generate_with_input` / `reseed`. Verified against Bouncy Castle's own
+    `HMacDrbgTest.cs` SHA-256 vector (two generates match byte-for-byte).
+  - Also adds `sha2.update_bytes(ctx, bytes, len)` — a binary-safe streaming
+    update the HMAC construction needs.
+
+  No externs to OpenSSL or any C crypto library. Regression:
+  `tests/regression/test_hmac_drbg_native.ae`. Bouncy Castle (MIT) attribution
+  on the DRBG; HMAC is the generic RFC 2104 construction. CTR-DRBG is deferred
+  until native AES lands.
+
 ## [0.285.0]
 
 ### Added

@@ -1,0 +1,280 @@
+// Copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.hmac — keyed-hash message authentication (RFC 2104)
+// in pure Aether on top of the native std.cryptography.sha2 family. NO
+// externs to OpenSSL or any C crypto library: the ipad/opad construction
+// and the double-hash are all done here over std.bytes buffers.
+//
+// Import with:  import std.cryptography.hmac
+//
+// HMAC works over BINARY data — keys, the ipad/opad blocks, and the
+// intermediate digest are all full of NUL bytes — so every byte path
+// goes through std.bytes and sha2.update_bytes (never the string-based
+// sha2.update, which truncates at the first NUL).
+//
+//   HMAC(K, m) = H( (K0 ^ opad) || H( (K0 ^ ipad) || m ) )
+//
+// where K0 is the key padded/hashed to the hash's block size B:
+//   B = 64  for sha256 / sha224
+//   B = 128 for sha512 / sha384 / sha512-224 / sha512-256
+//
+// Two shapes are exposed:
+//   one-shot:   hmac_sha256_bytes(key, key_len, msg, msg_len)  (+_hex)
+//   streaming:  ctx = new("sha256", key, key_len)
+//               update(ctx, msg, msg_len); final_hex(ctx)
+
+import std.bits
+import std.bytes
+import std.cryptography.sha2
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+exports (
+    new, update, final_bytes, final_hex, free_ctx,
+    hmac_bytes, hmac_hex,
+    hmac_sha256, hmac_sha256_hex,
+    hmac_sha512, hmac_sha512_hex
+)
+
+// ---- Streaming context ----
+//
+// We keep the inner sha2 ctx already primed with (K0 ^ ipad), plus the
+// opad block (K0 ^ 0x5c) so finalization can run the outer hash. The
+// algo string lets the outer/inner hashes pick the same core.
+struct HmacCtx {
+    inner: ptr        // sha2 ctx, already fed (K0 ^ ipad)
+    opad: ptr         // std.bytes buffer, B bytes: K0 ^ 0x5c
+    block_size: int   // B
+    digest_len: int   // hash output length
+    algo: string      // sha2 algo name
+}
+
+// Block size B for a given algo. Returns 0 for an unknown algo.
+block_size_for(algo: string) -> int {
+    if algo == "sha256" {
+        return 64
+    } else if algo == "sha224" {
+        return 64
+    } else if algo == "sha512" {
+        return 128
+    } else if algo == "sha384" {
+        return 128
+    } else if algo == "sha512-224" {
+        return 128
+    } else if algo == "sha512-256" {
+        return 128
+    }
+    return 0
+}
+
+// Compute K0 (the block-sized key) into a fresh std.bytes buffer of B
+// bytes. If key_len > B, K0 = H(key) zero-padded to B; otherwise the
+// key is copied and zero-padded to B. Returns the buffer, or null on a
+// bad algo. The caller owns and frees the result.
+make_k0(algo: string, key: ptr, key_len: int, block_size: int) -> ptr {
+    k0 = bytes.new(block_size)
+    // Zero-fill the whole block first so the pad is implicit.
+    j = 0
+    while j < block_size {
+        bytes.set(k0, j, 0)
+        j = j + 1
+    }
+    if key_len > block_size {
+        // K0 = H(key) (binary-safe), padded with zeros to B.
+        hctx, herr = sha2.new(algo)
+        if herr != "" {
+            bytes.free(k0)
+            return null
+        }
+        sha2.update_bytes(hctx, key, key_len)
+        digest = sha2.final_bytes(hctx)
+        dl = bytes.length(digest)
+        i = 0
+        while i < dl {
+            bytes.set(k0, i, bytes.get(digest, i))
+            i = i + 1
+        }
+        bytes.free(digest)
+    } else {
+        i = 0
+        while i < key_len {
+            bytes.set(k0, i, bytes.get(key, i))
+            i = i + 1
+        }
+    }
+    return k0
+}
+
+// Create a streaming HMAC context. `algo` is one of the sha2 family
+// names ("sha256", "sha512", ...). `key` / `key_len` is the (binary)
+// key as an AetherBytes buffer. Returns (ctx, "") on success or
+// (null, error). Thread the handle through update / final_*.
+new(algo: string, key: ptr, key_len: int) -> {
+    bs = block_size_for(algo)
+    if bs == 0 {
+        return null, "unknown algorithm"
+    }
+    ctx = malloc(48) as *HmacCtx
+    if ctx == null {
+        return null, "allocation failed"
+    }
+    k0 = make_k0(algo, key, key_len, bs)
+    if k0 == null {
+        free(ctx)
+        return null, "unknown algorithm"
+    }
+
+    // Build ipad = K0 ^ 0x36 and opad = K0 ^ 0x5c.
+    ipad = bytes.new(bs)
+    opad = bytes.new(bs)
+    i = 0
+    while i < bs {
+        kb = bytes.get(k0, i)
+        bytes.set(ipad, i, (kb ^ 0x36) & 255)
+        bytes.set(opad, i, (kb ^ 0x5c) & 255)
+        i = i + 1
+    }
+    bytes.free(k0)
+
+    // Start the inner hash and feed it the ipad block.
+    inner, ierr = sha2.new(algo)
+    if ierr != "" {
+        bytes.free(ipad)
+        bytes.free(opad)
+        free(ctx)
+        return null, ierr
+    }
+    sha2.update_bytes(inner, ipad, bs)
+    bytes.free(ipad)
+
+    ctx.inner = inner
+    ctx.opad = opad
+    ctx.block_size = bs
+    ctx.algo = algo
+    ctx.digest_len = 0
+    return ctx, ""
+}
+
+// Feed message bytes (binary-safe) into the inner hash.
+update(ctx: ptr, data: ptr, len: int) {
+    c = ctx as *HmacCtx
+    sha2.update_bytes(c.inner, data, len)
+}
+
+// Finalize: inner = H(ipad || msg); return H(opad || inner) as an
+// AetherBytes buffer of digest_len bytes. FREES the context (the inner
+// sha2 ctx is freed by final_bytes; the outer one by final_hex/_bytes).
+final_bytes(ctx: ptr) -> ptr {
+    c = ctx as *HmacCtx
+    // inner digest (frees the inner sha2 ctx)
+    inner_digest = sha2.final_bytes(c.inner)
+    c.inner = null
+    idl = bytes.length(inner_digest)
+
+    outer, oerr = sha2.new(c.algo)
+    if oerr != "" {
+        bytes.free(inner_digest)
+        bytes.free(c.opad)
+        free(ctx)
+        return null
+    }
+    sha2.update_bytes(outer, c.opad, c.block_size)
+    sha2.update_bytes(outer, inner_digest, idl)
+    bytes.free(inner_digest)
+    result = sha2.final_bytes(outer)
+
+    bytes.free(c.opad)
+    c.opad = null
+    free(ctx)
+    return result
+}
+
+// Finalize and return the MAC as lowercase hex. FREES the context.
+final_hex(ctx: ptr) -> string {
+    res = final_bytes(ctx)
+    if res == null {
+        return ""
+    }
+    s = bytes_to_hex(res)
+    bytes.free(res)
+    return s
+}
+
+// Abandon a context without finalizing. NULL-safe.
+free_ctx(ctx: ptr) {
+    if ctx == null {
+        return
+    }
+    c = ctx as *HmacCtx
+    if c.inner != null {
+        sha2.free_ctx(c.inner)
+        c.inner = null
+    }
+    if c.opad != null {
+        bytes.free(c.opad)
+        c.opad = null
+    }
+    free(ctx)
+}
+
+// ---- One-shot convenience ----
+
+// General one-shot: HMAC over `algo` of `msg` keyed by `key`. Returns
+// an AetherBytes of the MAC, or null on a bad algo / allocation failure.
+hmac_bytes(algo: string, key: ptr, key_len: int, msg: ptr, msg_len: int) -> ptr {
+    ctx, err = new(algo, key, key_len)
+    if err != "" {
+        return null
+    }
+    update(ctx, msg, msg_len)
+    return final_bytes(ctx)
+}
+
+hmac_hex(algo: string, key: ptr, key_len: int, msg: ptr, msg_len: int) -> string {
+    ctx, err = new(algo, key, key_len)
+    if err != "" {
+        return ""
+    }
+    update(ctx, msg, msg_len)
+    return final_hex(ctx)
+}
+
+hmac_sha256(key: ptr, key_len: int, msg: ptr, msg_len: int) -> ptr {
+    return hmac_bytes("sha256", key, key_len, msg, msg_len)
+}
+hmac_sha256_hex(key: ptr, key_len: int, msg: ptr, msg_len: int) -> string {
+    return hmac_hex("sha256", key, key_len, msg, msg_len)
+}
+hmac_sha512(key: ptr, key_len: int, msg: ptr, msg_len: int) -> ptr {
+    return hmac_bytes("sha512", key, key_len, msg, msg_len)
+}
+hmac_sha512_hex(key: ptr, key_len: int, msg: ptr, msg_len: int) -> string {
+    return hmac_hex("sha512", key, key_len, msg, msg_len)
+}
+
+// ---- Internal helpers ----
+
+// Lowercase-hex encode an AetherBytes buffer into an owned string.
+bytes_to_hex(b: ptr) -> string {
+    n = bytes.length(b)
+    hexbuf = bytes.new(n * 2)
+    i = 0
+    while i < n {
+        v = bytes.get(b, i)
+        hi = (v >> 4) & 15
+        lo = v & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    return bytes.finish(hexbuf, n * 2)
+}
