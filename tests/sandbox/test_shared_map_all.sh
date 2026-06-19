@@ -326,11 +326,66 @@ check "Java status" "java:status=ok" "$JAVA_OUT"
 check "Java frozen" "java:untampered=Frank" "$JAVA_OUT"
 fi
 
+# --- Factor (embed-api fork; gated on env, not a dev package) ---
+echo ""
+echo "=== Factor ==="
+if [ -z "$AETHER_FACTOR_SONAME" ] || [ -z "$AETHER_FACTOR_IMAGE" ] || \
+   [ ! -f "$AETHER_FACTOR_SONAME" ] || [ ! -f "$AETHER_FACTOR_IMAGE" ]; then
+    echo "  [SKIP] Factor: \$AETHER_FACTOR_SONAME / \$AETHER_FACTOR_IMAGE unset"
+    echo "         (needs the aether-lang-org/factor-language fork's libfactor + image)"
+else
+FACTOR_OUT=$(gcc -o /tmp/test_map_factor \
+    "$ROOT/contrib/host/factor/aether_host_factor.c" \
+    "$ROOT/runtime/aether_sandbox.c" \
+    "$ROOT/runtime/aether_shared_map.c" \
+    -I"$ROOT" -I"$ROOT/runtime" -DAETHER_HAS_FACTOR -DAETHER_HAS_SANDBOX \
+    -L"$ROOT/build" -laether -ldl -lm -lrt -lpthread \
+    -Wno-discarded-qualifiers \
+    -xc - 2>/dev/null << 'CEOF'
+#include <stdio.h>
+#include <stdint.h>
+#include "aether_shared_map.h"
+extern void* list_new(void); extern void list_add(void*, void*); extern void list_free(void*);
+extern int factor_run_sandboxed_with_map(void*, const char*, uint64_t);
+extern void factor_finalize(void);
+void aether_args_init(int a, char** v){(void)a;(void)v;}
+void* _aether_ctx_stack[64]; int _aether_ctx_depth = 0;
+int main() {
+    void* p = list_new();
+    uint64_t t; AetherSharedMap* m = aether_shared_map_new(&t);
+    // Hand Factor English text; it map-reduces a word-frequency histogram into
+    // the shared map under keys it DISCOVERS at runtime (the words). Aether
+    // never named those keys upfront — it reads them all back via the map.
+    aether_shared_map_put(m, "text", "the cat sat on the mat the cat");
+    factor_run_sandboxed_with_map(p,
+        "USING: splitting sequences math math.parser namespaces kernel ;\n"
+        "IN: scratchpad\n"
+        "\"text\" aether-map-get \" \" split\n"
+        "[ dup aether-map-get [ string>number ] [ 0 ] if* "
+        "1 + number>string aether-map-put ] each\n"
+    , t);
+    aether_shared_map_revoke_token(t);
+    // Discovered-key readback: count includes the runtime-created word keys.
+    printf("factor:the=%s\n", aether_shared_map_get(m, "the"));
+    printf("factor:cat=%s\n", aether_shared_map_get(m, "cat"));
+    printf("factor:mat=%s\n", aether_shared_map_get(m, "mat"));
+    printf("factor:keys=%d\n", aether_shared_map_count(m));
+    aether_shared_map_free(m); factor_finalize(); list_free(p);
+    return 0;
+}
+CEOF
+AETHER_FACTOR_SONAME="$AETHER_FACTOR_SONAME" AETHER_FACTOR_IMAGE="$AETHER_FACTOR_IMAGE" \
+    /tmp/test_map_factor 2>/dev/null)
+check "Factor map-reduce the" "factor:the=3" "$FACTOR_OUT"
+check "Factor map-reduce cat" "factor:cat=2" "$FACTOR_OUT"
+check "Factor discovered keys" "factor:keys=6" "$FACTOR_OUT"
+fi
+
 # --- Summary ---
 echo ""
 echo "============================================"
 echo "  $PASS passed, $FAIL failed"
 echo "============================================"
 
-rm -f /tmp/test_map_lua /tmp/test_map_js /tmp/test_map_py /tmp/test_map_perl /tmp/test_map_ruby /tmp/test_map_java
+rm -f /tmp/test_map_lua /tmp/test_map_js /tmp/test_map_py /tmp/test_map_perl /tmp/test_map_ruby /tmp/test_map_java /tmp/test_map_factor
 exit $FAIL

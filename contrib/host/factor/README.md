@@ -30,10 +30,13 @@ v = factor.get("fib9")                         // v = "34"
 ```
 
 The VM is created once and reused across calls, so `set` / `run` / `eval` /
-`get` share state — a k-v map populated by a Factor script and read back,
-same process. The map is **per-key string scalars**, not an aggregate: `set` /
-`get` marshal one value at a time (Aether reconstructs the whole map by
-looping `get` over the keys it expects); there is no bulk-map or JSON channel.
+`get` share state — a scalar k-v map handed in and read back, same process.
+
+For map-shaped interop there is also a **first-class shared map**
+(`run_sandboxed_with_map`), the same mechanism the other hosts use — see
+[Shared map](#shared-map-first-class-map-interop) below. Use the scalar
+`set` / `get` for a few known keys; use the shared map when the guest computes
+the keyset (e.g. a map-reduce whose keys you don't know upfront).
 
 > **Status: experimental, needs a forked Factor.** This host is unlike the
 > others — read the two caveats below before reaching for it.
@@ -47,6 +50,7 @@ looping `get` over the keys it expects); there is no bulk-map or JSON channel.
 | `factor.set(key, value)` | store a string value under `key` in the VM's global namespace |
 | `factor.get(key) -> string` | read `key` back as raw text (`10`, not `"10"`); `""` if absent |
 | `factor.run_sandboxed(perms, code)` | see Caveat 2 |
+| `factor.run_sandboxed_with_map(perms, code, map_token)` | run `code` with live access to an Aether-owned shared map — see below |
 
 Like every other host, the k-v map is **string-only** — there is no int or
 float channel. Numbers round-trip as their decimal text; `factor.get`
@@ -70,6 +74,44 @@ Defining a word inline (`: name ( … ) … ;`) needs an **`IN:` vocabulary**
 declaration first (e.g. `IN: scratchpad`) — eval runs outside any vocabulary,
 and a colon definition with no `IN:` fails with *"Not in a vocabulary; IN:
 form required."*
+
+## Shared map (first-class map interop)
+
+`factor.run_sandboxed_with_map(perms, code, map_token)` gives the Factor
+script a **live view of an Aether-owned shared map** — the same
+`aether_shared_map` mechanism the other hosts (lua/python/…) use. Aether
+builds the map, the Factor script reads and writes it *as it runs* through two
+words the bridge injects, and Aether reads the whole map back afterwards —
+including keys the script **discovers at runtime**:
+
+```factor
+"key" aether-map-get          ! -> value string, or f if absent (inputs are
+                              !    readable; they're frozen, so writes to them
+                              !    are rejected)
+"key" "value" aether-map-put  ! write/overwrite an output key
+```
+
+Because Aether owns the map, key discovery is free: after the run, enumerate
+with `map.keys(m)` (`std.collections`) — no host-side "list keys" call. This
+is the right tool when the **guest computes the keyset**. Example — a
+word-frequency map-reduce over English text whose keys (the words) aren't
+known upfront:
+
+```factor
+USING: splitting sequences math math.parser namespaces kernel ;
+IN: scratchpad
+"text" aether-map-get " " split
+[ dup aether-map-get [ string>number ] [ 0 ] if* 1 + number>string aether-map-put ] each
+```
+
+Hand in `text = "the cat sat on the mat the cat"`, run the above, and the map
+comes back with `the=3 cat=2 sat=1 on=1 mat=1` — keys Aether never named.
+Still string-only (counts round-trip as decimal text). The `aether-map-get` /
+`aether-map-put` words are injected automatically; you do **not** add a
+`USING:`/`FUNCTION:` prelude for them.
+
+Choose by shape: scalar `set`/`get` for a few **known** keys; the shared map
+when the guest **produces** the keyset.
 
 ## Caveat 1 — needs the embed-api fork of Factor
 

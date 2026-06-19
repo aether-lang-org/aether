@@ -1,9 +1,16 @@
 #ifndef AETHER_HOST_FACTOR_H
 #define AETHER_HOST_FACTOR_H
 
+#include <stdint.h>
+
 #include "../../../std/string/aether_string.h"
 
 int factor_run_sandboxed(void* perms, const char* code);
+// First-class shared-map run: the Factor script reads/writes the Aether-owned
+// shared map (by token) live via FFI words aether-map-get / aether-map-put,
+// so runtime-discovered keys come back too. Aether enumerates with map.keys().
+int factor_run_sandboxed_with_map(void* perms, const char* code,
+                                  uint64_t map_token);
 int factor_run(const char* code);
 // Evaluate `code` in the persistent VM, returning its captured output as an
 // owned AetherString ("" on failure). State persists across calls.

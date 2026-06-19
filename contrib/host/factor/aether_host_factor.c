@@ -26,8 +26,10 @@
 
 #include "aether_host_factor.h"
 #include "../../../std/string/aether_string.h"
+#include "../../../runtime/aether_shared_map.h"
 
 #include <dlfcn.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,10 +40,18 @@
 
 static void* libfactor_handle = NULL;
 
+// Host k-v hook function-pointer types (must match fork vm/embed_api.cpp).
+typedef const char* (*factor_map_get_fn)(const char* key);
+typedef void        (*factor_map_put_fn)(const char* key, const char* value);
+
 static struct {
     // Generic re-entrant embedding API (fork vm/embed_api.cpp).
     char* (*factor_embed_eval)(const char* image_path, const char* src);
     void  (*factor_embed_eval_free)(char* result);
+    // Host k-v hooks: register callbacks the embedded Factor code reaches via
+    // FFI while it runs. Optional — absent on an older fork; the shared-map
+    // entry point degrades gracefully if NULL.
+    void  (*factor_embed_map_set_hooks)(factor_map_get_fn, factor_map_put_fn);
 } g_factor;
 
 // Resolved Factor image path (the bootstrapped factor.image). The VM needs
@@ -60,6 +70,10 @@ static int resolve_factor_symbols(void* h) {
             "factor_embed_eval_free (needs the embed-api fork).\n");
         return -1;
     }
+    // Optional: present on a fork with the k-v hooks. The shared-map run
+    // path checks for it and errors clearly if the fork is too old.
+    *(void**)(&g_factor.factor_embed_map_set_hooks) =
+        dlsym(h, "factor_embed_map_set_hooks");
     return 0;
 }
 
@@ -139,6 +153,95 @@ int factor_run_sandboxed(void* perms, const char* code) {
     // sandbox around this whole program, not a per-call checker swap.
     (void)perms;
     return factor_run(code);
+}
+
+// --- First-class shared map (run_with_map), matching the other hosts -------
+//
+// Unlike scalar set/get, this hands the embedded Factor code a live view of
+// an Aether-owned shared map: Aether builds the map, calls
+// factor_run_sandboxed_with_map, the Factor script reads/writes it AS IT RUNS
+// via two FFI words (aether-map-get / aether-map-put), and Aether reads the
+// whole map back afterwards — including keys the script discovered at runtime
+// (e.g. a word-frequency map-reduce). Aether enumerates with map.keys(); no
+// host-side key-enumeration call is needed.
+//
+// Mechanism (mirrors contrib/host/lua's map_token bindings): the bridge
+// registers C callbacks into the fork via factor_embed_map_set_hooks; those
+// callbacks read/write the shared map by token. A small Factor FFI prelude
+// (LIBRARY: factor + FUNCTION:) is prepended to the user code so the script
+// can name aether-map-get / aether-map-put. Single-threaded: one token live
+// at a time, set around the eval.
+
+static uint64_t g_current_map_token = 0;
+
+// Called FROM Factor (via the FFI prelude) to read a shared-map key. Returns
+// a borrowed C string owned by the shared map; Factor copies it at the
+// c-string return boundary, so the borrow only needs to outlive that copy.
+static const char* host_factor_map_get(const char* key) {
+    if (!g_current_map_token || !key) return NULL;
+    return aether_shared_map_get_by_token(g_current_map_token, key);
+}
+
+// Called FROM Factor to write a shared-map key (output area).
+static void host_factor_map_put(const char* key, const char* value) {
+    if (!g_current_map_token || !key || !value) return;
+    aether_shared_map_put_by_token(g_current_map_token, key, value);
+}
+
+// FFI prelude prepended to user code: declares the two host entry points as
+// Factor words. Needs IN: (FUNCTION: defines words, which requires a
+// vocabulary) and alien.syntax/alien.c-types for FUNCTION:/c-string/void.
+// The wrapper words rename to the friendlier aether-map-get/put.
+static const char* FACTOR_MAP_PRELUDE =
+    "USING: alien.syntax alien.c-types ; IN: aether.host.map\n"
+    "LIBRARY: factor\n"
+    "FUNCTION: c-string factor_embed_map_get ( c-string key )\n"
+    "FUNCTION: void factor_embed_map_put ( c-string key, c-string value )\n"
+    ": aether-map-get ( key -- value/f ) factor_embed_map_get ;\n"
+    ": aether-map-put ( key value -- ) factor_embed_map_put ;\n";
+
+int factor_run_sandboxed_with_map(void* perms, const char* code,
+                                  uint64_t map_token) {
+    (void)perms;  // see SANDBOX CAVEAT; process-level isolation only
+    if (!code) return -1;
+    if (factor_init() != 0) return -1;
+    if (!g_factor.factor_embed_map_set_hooks) {
+        fprintf(stderr,
+            "aether host_factor: libfactor lacks factor_embed_map_set_hooks "
+            "(needs a newer embed-api fork with the k-v hooks).\n");
+        return -1;
+    }
+
+    // Inputs become read-only to the guest after this (matches lua/etc.).
+    extern void aether_shared_map_freeze_inputs_by_token(uint64_t);
+    aether_shared_map_freeze_inputs_by_token(map_token);
+
+    g_factor.factor_embed_map_set_hooks(host_factor_map_get,
+                                        host_factor_map_put);
+    g_current_map_token = map_token;
+
+    // Prepend the FFI prelude so the script can call aether-map-get/put.
+    size_t plen = strlen(FACTOR_MAP_PRELUDE);
+    size_t clen = strlen(code);
+    char* full = (char*)malloc(plen + clen + 2);
+    if (!full) {
+        g_current_map_token = 0;
+        g_factor.factor_embed_map_set_hooks(NULL, NULL);
+        return -1;
+    }
+    memcpy(full, FACTOR_MAP_PRELUDE, plen);
+    full[plen] = '\n';
+    memcpy(full + plen + 1, code, clen + 1);
+
+    char* r = factor_eval_raw(full);
+    free(full);
+
+    g_current_map_token = 0;
+    g_factor.factor_embed_map_set_hooks(NULL, NULL);
+
+    if (!r) return -1;
+    g_factor.factor_embed_eval_free(r);
+    return 0;
 }
 
 // factor.eval(code) -> string. Evaluate `code` and return its captured
@@ -235,6 +338,10 @@ void factor_finalize(void) {}
 int factor_run(const char* code) { (void)code; return factor_init(); }
 int factor_run_sandboxed(void* perms, const char* code) {
     (void)perms; (void)code; return factor_init();
+}
+int factor_run_sandboxed_with_map(void* perms, const char* code,
+                                  uint64_t map_token) {
+    (void)perms; (void)code; (void)map_token; return factor_init();
 }
 AetherString* factor_eval(const char* code) {
     (void)code; (void)factor_init(); return string_new("");
