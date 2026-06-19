@@ -1,0 +1,9 @@
+// Imports a >20k-token module and calls its first, middle, and last fn.
+// Pre-fix, MAX_MODULE_TOKENS (20000) truncated the import mid-stream, so the
+// tail fn (bigmod.add_2199) was missing and this failed to type-check.
+import bigmod
+
+main() {
+    total = bigmod.add_0(1) + bigmod.add_1100(1) + bigmod.add_2199(1)
+    println("total=${total}")
+}

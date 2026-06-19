@@ -753,7 +753,15 @@ ASTNode* module_parse_file(const char* file_path) {
 
     // Tokenize
     lexer_init(source);
-    Token* tokens[MAX_MODULE_TOKENS];
+    // Heap-allocated to avoid a large fixed stack array; this also lets the
+    // cap grow without risking stack overflow for token-dense modules.
+    Token** tokens = malloc(sizeof(Token*) * MAX_MODULE_TOKENS);
+    if (!tokens) {
+        aether_error_set_source(saved_err_filename, saved_err_source);
+        free(source);
+        lexer_restore(&saved);
+        return NULL;
+    }
     int token_count = 0;
 
     while (token_count < MAX_MODULE_TOKENS - 1) {
@@ -781,6 +789,7 @@ ASTNode* module_parse_file(const char* file_path) {
     for (int i = 0; i < token_count; i++) {
         free_token(tokens[i]);
     }
+    free(tokens);
     free_parser(parser);
     free(source);
 

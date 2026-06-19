@@ -14,6 +14,21 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Fixed
+
+- **Module token cap raised 20000 → 100000, buffer heap-allocated**
+  (`compiler/aether_module.c`). `module_parse_file` capped imported modules at
+  `MAX_MODULE_TOKENS` tokens; a larger module was silently truncated
+  mid-token-stream, dropping its tail declarations so callers hit spurious
+  `E0301: Undefined function` on the missing symbols. Raised the cap 5× and
+  moved the token buffer off the stack to a `malloc`'d array (a fixed
+  100k-entry stack array would risk overflow), with NULL-check cleanup and a
+  matching free. Regression: `tests/integration/module_token_cap` imports a
+  ~2200-function module (>20k tokens) and calls its first, middle, and last
+  function — truncation under the old cap left the tail undefined.
+
 ## [0.282.0]
 
 ### Fixed
