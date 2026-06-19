@@ -73,6 +73,11 @@ main() {
     cursor.free(cur3)
     bytes.free(sl)
 
+    // cursors borrow their buffer (cursor.free does NOT free it), so the
+    // test owns and frees the underlying bytes itself.
+    bytes.free(b)
+    bytes.free(b2)
+
     if fails == 0 {
         print("PASS: std.bytes.cursor\n")
     } else {

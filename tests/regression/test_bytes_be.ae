@@ -51,6 +51,8 @@ main() {
     _ = bytes.set_be16(b, 10, 0x1234)
     if bytes.get_be16(b, 10) != 0x1234 { print("FAIL be16 offset\n"); fails = fails + 1 }
 
+    bytes.free(b)
+
     if fails == 0 {
         print("PASS: std.bytes BE\n")
     } else {
