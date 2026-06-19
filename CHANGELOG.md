@@ -14,6 +14,26 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Native SHA-2 family** (`std.cryptography.sha2`, issue #739 slice 2) —
+  SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, SHA-512/256, implemented in
+  **pure Aether** on the Tier-0 foundations (`std.bits` for logical
+  shifts/rotates, `std.longarr` for the 64-bit message schedule, `std.bytes`
+  big-endian accessors). No externs to OpenSSL or any C crypto library — the
+  compression functions, padding, and length encoding are all Aether code.
+  Ported from Bouncy Castle's `GeneralDigest` / `LongDigest` /
+  `Sha{224,256,384,512}Digest`. Both one-shot (`sha256_hex` / `sha256_bytes`,
+  …) and streaming (`new(algo)` → `update` → `final_hex` / `final_bytes`,
+  ctx self-freed on finalize). Every digest was cross-checked against
+  `openssl dgst` across all block-boundary input lengths (55/56/63/64/65/
+  119/120/127/128). Regression: `tests/regression/test_sha2_native.ae` (NIST/
+  RFC vectors + streaming-equals-one-shot). Bouncy Castle (MIT) attribution
+  per file. This unblocks native streaming-digest + DRBG (Tier 1 items 5/6),
+  which the existing OpenSSL-backed digest ctx will be retired in favour of.
+
 ## [0.284.0]
 
 ### Added
