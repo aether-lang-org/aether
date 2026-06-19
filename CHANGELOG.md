@@ -60,6 +60,18 @@ notes to be skipped or clobbered (the failure modes documented in
   with `E0301: Undefined function` (the `tests/integration/fs_join_clean`
   regression went red). Added both to the export list.
 
+## [0.280.0]
+
+### Changed
+
+- **VS Code extension: grammar, snippets, and ergonomics refresh**
+  (`editor/vscode/`). Refreshed the TextMate grammar for missing keywords,
+  types, and `@annotations`; added range/spread operators, the `make` keyword,
+  and snippets; block-comment on-enter + indent rules; a cross-platform
+  "Erlang-style" palette; and README palette/install-snippet docs. Also
+  rebuilt `out/extension.js` with an activation-leak fix. Editor tooling only —
+  no compiler, std, or runtime change.
+
 ## [0.279.0]
 
 ### Added
@@ -273,6 +285,19 @@ notes to be skipped or clobbered (the failure modes documented in
   hooks). See [docs/language-reference.md](docs/language-reference.md)
   (Function-pointer parameters).
 
+## [0.271.0]
+
+### Fixed
+
+- **Parser: terminate expression continuations at newlines**
+  (`compiler/parser/parser.c`). A line-leading token was sometimes folded into
+  the previous line's expression as a continuation, so statements that begin a
+  fresh line (e.g. a following `[...]` or call) could be mis-grouped. The
+  parser now ends an expression continuation at a newline, matching the
+  line-oriented statement model; net simplification of the continuation logic.
+  Covered by `tests/syntax/test_parser_line_leading_statements.ae` and a new
+  `test_parser_newline_bracket` regression.
+
 ## [0.270.0]
 
 ### Fixed
@@ -463,6 +488,15 @@ notes to be skipped or clobbered (the failure modes documented in
   integers in input JSON) is a separate follow-up — the value still
   round-trips correctly via the float path as long as it fits in 2^53.
   Sourced from `stdlib-json-integer-value-ask.md` (fbs-core /metrics).
+
+## [0.264.0]
+
+### Documentation
+
+- **Reconciled drifted CHANGELOG version sections** (0.222, 0.234, 0.235,
+  0.257, 0.263). Backfilled clean missing sections and relocated entries that
+  had landed under the wrong version header, restoring a gapless changelog
+  through that range. Docs only — no code change.
 
 ## [0.263.0]
 
