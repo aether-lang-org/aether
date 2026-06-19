@@ -1,0 +1,118 @@
+// Copyright (c) 2026 Aether Developers.
+//
+// std.longarr - Fixed-size packed-long buffer (the 64-bit twin of std.intarr)
+//
+// For 64-bit-keyed lookup, packed-word tables (hash state words, cryptography
+// round buffers, wide DP tables), and other hot paths where std.list's
+// void*-boxed items cost an allocation per entry. Size is fixed at
+// allocation — callers that need growth use std.list instead.
+// Aether's `long` is a 64-bit C long long, so the buffer is packed
+// long longs end-to-end.
+//
+// API shape mirrors std.intarr exactly:
+//   - Raw externs bounds-check on read (return 0 on OOB) and write
+//     (no-op on OOB). Fast path uses the `_unchecked` variants.
+//   - Go-style wrappers (`new`, `get`, `set`) return tuples/errors
+//     for callers that want to distinguish "absent" from "stored zero".
+
+exports (
+    new, new_filled, get, set,
+    longarr_new_raw, longarr_new_filled_raw,
+    longarr_size, longarr_get_raw, longarr_set_raw,
+    longarr_get_unchecked, longarr_set_unchecked,
+    longarr_fill, longarr_free
+)
+
+// ---- Raw externs (escape hatch; also the hot-path API) ----
+
+// Allocate a LongArray of `size` longs, zero-initialised. Returns
+// null if `size` is negative or allocation fails.
+extern longarr_new_raw(size: int) -> ptr
+
+// Allocate and fill every index with `init`.
+extern longarr_new_filled_raw(size: int, init: long) -> ptr
+
+// Number of elements. -1 if `arr` is null.
+extern longarr_size(arr: ptr) -> int
+
+// Read at `i`. Returns 0 if `arr` is null or `i` is out-of-range.
+// Use `longarr.get` (below) to distinguish stored-zero from OOB.
+extern longarr_get_raw(arr: ptr, i: int) -> long
+
+// Write `value` at `i`. No-op if `arr` is null or `i` is out-of-range.
+// Use `longarr.set` (below) if you need an error on OOB.
+extern longarr_set_raw(arr: ptr, i: int, value: long)
+
+// Hot-path variants — caller guarantees index is in [0, size). OOB
+// access is undefined behaviour. Don't use from outside a tight loop.
+extern longarr_get_unchecked(arr: ptr, i: int) -> long
+extern longarr_set_unchecked(arr: ptr, i: int, value: long)
+
+// Fill every element with `value`.
+extern longarr_fill(arr: ptr, value: long)
+
+// Release. Idempotent on null.
+extern longarr_free(arr: ptr)
+
+// ---- Go-style wrappers ----
+
+// Allocate a LongArray of `size` elements, zero-initialised.
+// Returns (ptr, "") on success, (null, error) on failure.
+new(size: int) -> {
+    if size < 0 {
+        return null, "negative size"
+    }
+    a = longarr_new_raw(size)
+    if a == null {
+        return null, "allocation failed"
+    }
+    return a, ""
+}
+
+// Allocate and fill with `init` at every index.
+new_filled(size: int, init: long) -> {
+    if size < 0 {
+        return null, "negative size"
+    }
+    a = longarr_new_filled_raw(size, init)
+    if a == null {
+        return null, "allocation failed"
+    }
+    return a, ""
+}
+
+// Bounds-checked read. Returns (value, "") on success, (0, error)
+// for null array or OOB index. Use the raw `longarr_get_raw` directly
+// (imported above) when you don't need to tell absent apart from
+// stored-zero — it's one fewer function call and one fewer branch.
+get(arr: ptr, i: int) -> {
+    if arr == null {
+        return 0, "null array"
+    }
+    n = longarr_size(arr)
+    if i < 0 {
+        return 0, "index out of range"
+    }
+    if i >= n {
+        return 0, "index out of range"
+    }
+    return longarr_get_raw(arr, i), ""
+}
+
+// Bounds-checked write. Returns "" on success, error for null array
+// or OOB index. Use the raw `longarr_set_raw` directly in hot paths
+// where a no-op-on-OOB is acceptable.
+set(arr: ptr, i: int, value: long) -> {
+    if arr == null {
+        return "null array"
+    }
+    n = longarr_size(arr)
+    if i < 0 {
+        return "index out of range"
+    }
+    if i >= n {
+        return "index out of range"
+    }
+    longarr_set_raw(arr, i, value)
+    return ""
+}

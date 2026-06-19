@@ -1,0 +1,82 @@
+// Copyright (c) 2026 Aether Developers.
+//
+// Regression: std.bytes.cursor — read-position over a bytes buffer. The
+// foundation for every byte parser to come (ASN.1, PEM, OpenPGP, TLS record).
+// Aether-native (bc-csharp parses over .NET Streams, a different shape), so
+// the properties under test are: correct advance, big-endian multibyte reads,
+// peek-without-advance, remaining/eof bookkeeping, slice extraction, and clean
+// behaviour at and past end-of-buffer.
+
+import std.bytes
+import std.bytes.cursor
+import std.string
+
+main() {
+    print("=== std.bytes.cursor ===\n")
+    fails = 0
+
+    // Build an 8-byte buffer: DE AD BE EF 01 02 03 04
+    b = bytes.new(0)
+    _ = bytes.set_be32(b, 0, 0xDEADBEEF)
+    _ = bytes.set_be32(b, 4, 0x01020304)
+
+    cur, err = cursor.new(b)
+    if string.equals(err, "") != 1 { print("FAIL new: ${err}\n"); fails = fails + 1 }
+    if cursor.remaining(cur) != 8 { print("FAIL initial remaining\n"); fails = fails + 1 }
+    if cursor.eof(cur) != 0 { print("FAIL initial eof\n"); fails = fails + 1 }
+
+    // peek doesn't advance
+    if cursor.peek(cur) != 0xDE { print("FAIL peek\n"); fails = fails + 1 }
+    if cursor.remaining(cur) != 8 { print("FAIL remaining after peek\n"); fails = fails + 1 }
+
+    // read_u8 advances by 1
+    if cursor.read_u8(cur) != 0xDE { print("FAIL read_u8\n"); fails = fails + 1 }
+    if cursor.remaining(cur) != 7 { print("FAIL remaining after u8\n"); fails = fails + 1 }
+
+    // read_be_u16: next two bytes AD BE -> 0xADBE
+    if cursor.read_be_u16(cur) != 0xADBE { print("FAIL read_be_u16\n"); fails = fails + 1 }
+    if cursor.remaining(cur) != 5 { print("FAIL remaining after u16\n"); fails = fails + 1 }
+
+    // read_be_u32: EF 01 02 03 -> 0xEF010203
+    if cursor.read_be_u32(cur) != 0xEF010203 { print("FAIL read_be_u32\n"); fails = fails + 1 }
+    if cursor.remaining(cur) != 1 { print("FAIL remaining after u32\n"); fails = fails + 1 }
+
+    // one byte left: 04
+    if cursor.read_u8(cur) != 0x04 { print("FAIL last byte\n"); fails = fails + 1 }
+    if cursor.eof(cur) != 1 { print("FAIL eof after drain\n"); fails = fails + 1 }
+
+    // reads past end return -1 and don't underflow
+    if cursor.read_u8(cur) != -1 { print("FAIL read_u8 past eof\n"); fails = fails + 1 }
+    if cursor.read_be_u16(cur) != -1 { print("FAIL read_be_u16 past eof\n"); fails = fails + 1 }
+    if cursor.peek(cur) != -1 { print("FAIL peek past eof\n"); fails = fails + 1 }
+    cursor.free(cur)
+
+    // read_be_u64 over a fresh cursor: 11 22 33 44 55 66 77 88
+    b2 = bytes.new(0)
+    _ = bytes.set_be64(b2, 0, 0x1122334455667788)
+    cur2, _ = cursor.new(b2)
+    if cursor.read_be_u64(cur2) != 0x1122334455667788 { print("FAIL read_be_u64\n"); fails = fails + 1 }
+    if cursor.eof(cur2) != 1 { print("FAIL u64 drained\n"); fails = fails + 1 }
+    cursor.free(cur2)
+
+    // read_slice: take the first 4 of 8 bytes
+    cur3, _ = cursor.new(b)
+    sl = cursor.read_slice(cur3, 4)
+    if sl == null { print("FAIL read_slice null\n"); fails = fails + 1 }
+    if bytes.length(sl) != 4 { print("FAIL slice length\n"); fails = fails + 1 }
+    if bytes.get_be32(sl, 0) != 0xDEADBEEF { print("FAIL slice content\n"); fails = fails + 1 }
+    if cursor.remaining(cur3) != 4 { print("FAIL remaining after slice\n"); fails = fails + 1 }
+    // a slice larger than remaining returns null and doesn't advance
+    over = cursor.read_slice(cur3, 99)
+    if over != null { print("FAIL oversize slice should be null\n"); fails = fails + 1 }
+    if cursor.remaining(cur3) != 4 { print("FAIL remaining after failed slice\n"); fails = fails + 1 }
+    cursor.free(cur3)
+    bytes.free(sl)
+
+    if fails == 0 {
+        print("PASS: std.bytes.cursor\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

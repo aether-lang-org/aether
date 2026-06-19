@@ -1,0 +1,84 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// Regression: std.bits — unsigned-bit helpers (lsr, rotate, popcount, clz,
+// udiv/urem, ucmp). Test vectors ported from bc-csharp's
+// crypto/test/src/util/utiltest/{IntegersTest,LongsTest}.cs
+// (NumberOfLeadingZeros / PopCount / RotateLeft loop patterns).
+
+import std.bits
+
+main() {
+    print("=== std.bits ===\n")
+    fails = 0
+
+    // ---- logical right shift (Aether's >> is arithmetic) ----
+    if bits.lsr32(0x80000000, 4) != 0x08000000 { print("FAIL lsr32 msb\n"); fails = fails + 1 }
+    if bits.lsr32(0xFFFFFFFF, 28) != 0x0000000F { print("FAIL lsr32 all\n"); fails = fails + 1 }
+    if bits.lsr64(0x8000000000000000, 4) != 0x0800000000000000 { print("FAIL lsr64 msb\n"); fails = fails + 1 }
+    if bits.lsr64(0xFFFFFFFFFFFFFFFF, 60) != 0x0F { print("FAIL lsr64 all\n"); fails = fails + 1 }
+
+    // ---- rotate (ported invariants from Integers.RotateLeft/Right) ----
+    if bits.rotr32(0x00000001, 1) != 0x80000000 { print("FAIL rotr32\n"); fails = fails + 1 }
+    if bits.rotl32(0x80000000, 1) != 0x00000001 { print("FAIL rotl32\n"); fails = fails + 1 }
+    if bits.rotr32(0x12345678, 0) != 0x12345678 { print("FAIL rotr32 by 0\n"); fails = fails + 1 }
+    if bits.rotl32(0x12345678, 0) != 0x12345678 { print("FAIL rotl32 by 0\n"); fails = fails + 1 }
+    // rotl then rotr by same amount is identity
+    if bits.rotr32(bits.rotl32(0xDEADBEEF, 13), 13) != 0xDEADBEEF { print("FAIL rotl/rotr 32 inverse\n"); fails = fails + 1 }
+    if bits.rotr64(1, 1) != 0x8000000000000000 { print("FAIL rotr64\n"); fails = fails + 1 }
+    if bits.rotl64(0x8000000000000000, 1) != 1 { print("FAIL rotl64\n"); fails = fails + 1 }
+    if bits.rotr64(bits.rotl64(0x0123456789ABCDEF, 29), 29) != 0x0123456789ABCDEF { print("FAIL rotl/rotr 64 inverse\n"); fails = fails + 1 }
+
+    // ---- NumberOfLeadingZeros (clz) — ported loop from IntegersTest.cs:
+    // for i in 0..31: clz(0x80000000 >> i) == i  and  clz(0xFFFFFFFF >> i) == i
+    i = 0
+    while i < 31 {
+        if bits.clz32(bits.lsr32(0x80000000, i)) != i { print("FAIL clz32 msb i=${i}\n"); fails = fails + 1 }
+        if bits.clz32(bits.lsr32(0xFFFFFFFF, i)) != i { print("FAIL clz32 all i=${i}\n"); fails = fails + 1 }
+        i = i + 1
+    }
+    if bits.clz32(1) != 31 { print("FAIL clz32(1)\n"); fails = fails + 1 }
+    if bits.clz32(0) != 32 { print("FAIL clz32(0)\n"); fails = fails + 1 }
+
+    // 64-bit clz loop (ported from LongsTest.cs)
+    j = 0
+    while j < 63 {
+        if bits.clz64(bits.lsr64(0x8000000000000000, j)) != j { print("FAIL clz64 msb j=${j}\n"); fails = fails + 1 }
+        if bits.clz64(bits.lsr64(0xFFFFFFFFFFFFFFFF, j)) != j { print("FAIL clz64 all j=${j}\n"); fails = fails + 1 }
+        j = j + 1
+    }
+    if bits.clz64(1) != 63 { print("FAIL clz64(1)\n"); fails = fails + 1 }
+    if bits.clz64(0) != 64 { print("FAIL clz64(0)\n"); fails = fails + 1 }
+
+    // ---- PopCount (ported from IntegersTest.PopCount idea) ----
+    if bits.popcount32(0) != 0 { print("FAIL popcount32(0)\n"); fails = fails + 1 }
+    if bits.popcount32(0xFFFFFFFF) != 32 { print("FAIL popcount32(all)\n"); fails = fails + 1 }
+    if bits.popcount32(0x80000001) != 2 { print("FAIL popcount32(ends)\n"); fails = fails + 1 }
+    if bits.popcount64(0) != 0 { print("FAIL popcount64(0)\n"); fails = fails + 1 }
+    if bits.popcount64(0xFFFFFFFFFFFFFFFF) != 64 { print("FAIL popcount64(all)\n"); fails = fails + 1 }
+    if bits.popcount64(0x8000000000000001) != 2 { print("FAIL popcount64(ends)\n"); fails = fails + 1 }
+
+    // ---- unsigned divide / remainder / compare ----
+    // 0xFFFFFFFF as unsigned is 4294967295; /2 = 2147483647 (0x7FFFFFFF).
+    // Signed it would be -1 / 2 = 0, so this distinguishes the unsigned path.
+    if bits.udiv32(0xFFFFFFFF, 2) != 0x7FFFFFFF { print("FAIL udiv32\n"); fails = fails + 1 }
+    if bits.urem32(0xFFFFFFFF, 10) != 5 { print("FAIL urem32\n"); fails = fails + 1 }
+    if bits.udiv32(7, 0) != 0 { print("FAIL udiv32 by 0\n"); fails = fails + 1 }
+    if bits.urem32(7, 0) != 0 { print("FAIL urem32 by 0\n"); fails = fails + 1 }
+    if bits.udiv64(0xFFFFFFFFFFFFFFFF, 2) != 0x7FFFFFFFFFFFFFFF { print("FAIL udiv64\n"); fails = fails + 1 }
+    if bits.urem64(0xFFFFFFFFFFFFFFFF, 16) != 15 { print("FAIL urem64\n"); fails = fails + 1 }
+    // ucmp64: 0xFFFF...FF is huge unsigned but -1 signed
+    if bits.ucmp64(0xFFFFFFFFFFFFFFFF, 1) != 1 { print("FAIL ucmp64 huge>small\n"); fails = fails + 1 }
+    if bits.ucmp64(1, 0xFFFFFFFFFFFFFFFF) != -1 { print("FAIL ucmp64 small<huge\n"); fails = fails + 1 }
+    if bits.ucmp64(42, 42) != 0 { print("FAIL ucmp64 eq\n"); fails = fails + 1 }
+
+    if fails == 0 {
+        print("PASS: std.bits\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

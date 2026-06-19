@@ -23,11 +23,15 @@ exports (
     aether_bytes_length,
     aether_bytes_set_le16, aether_bytes_get_le16,
     aether_bytes_set_le32, aether_bytes_get_le32,
+    aether_bytes_set_be16, aether_bytes_get_be16,
+    aether_bytes_set_be32, aether_bytes_get_be32,
+    aether_bytes_set_be64, aether_bytes_get_be64,
     aether_bytes_copy_from_string, aether_bytes_copy_from_bytes,
     aether_bytes_copy_within,
     aether_bytes_finish, aether_bytes_free,
     new, set, get, length,
     set_le16, get_le16, set_le32, get_le32,
+    set_be16, get_be16, set_be32, get_be32, set_be64, get_be64,
     copy_from_string, copy_from_bytes, copy_within, finish, free
 )
 
@@ -40,6 +44,12 @@ extern aether_bytes_set_le16(b: ptr, index: int, value: int) -> int
 extern aether_bytes_get_le16(b: ptr, index: int) -> int
 extern aether_bytes_set_le32(b: ptr, index: int, value: int) -> int
 extern aether_bytes_get_le32(b: ptr, index: int) -> int
+extern aether_bytes_set_be16(b: ptr, index: int, value: int) -> int
+extern aether_bytes_get_be16(b: ptr, index: int) -> int
+extern aether_bytes_set_be32(b: ptr, index: int, value: int) -> int
+extern aether_bytes_get_be32(b: ptr, index: int) -> int
+extern aether_bytes_set_be64(b: ptr, index: int, value: long) -> int
+extern aether_bytes_get_be64(b: ptr, index: int) -> long
 extern aether_bytes_copy_from_string(b: ptr, dst: int, src: string, src_len: int) -> int
 // Two-buffer copy. `dst` and `src` are distinct AetherBytes pointers;
 // `length` is the count of bytes to copy from `src` at offset
@@ -116,6 +126,47 @@ set_le32(b: ptr, index: int, value: int) -> int {
 // Round-trips losslessly with set_le32 for any int input.
 get_le32(b: ptr, index: int) -> int {
     return aether_bytes_get_le32(b, index)
+}
+
+// Big-endian 16-bit write at `index..index+1` (most-significant byte
+// first). Grows the buffer if needed. Returns 1 on success, 0 on
+// failure (NULL buffer or negative index).
+set_be16(b: ptr, index: int, value: int) -> int {
+    return aether_bytes_set_be16(b, index, value)
+}
+
+// Big-endian 16-bit read at `index..index+1`. Returns the unsigned
+// 16-bit value as an int, or -1 on failure (NULL buffer, negative
+// index, or range past current length).
+get_be16(b: ptr, index: int) -> int {
+    return aether_bytes_get_be16(b, index)
+}
+
+// Big-endian 32-bit write at `index..index+3` (most-significant byte
+// first). Grows the buffer if needed. Returns 1 on success, 0 on
+// failure.
+set_be32(b: ptr, index: int, value: int) -> int {
+    return aether_bytes_set_be32(b, index, value)
+}
+
+// Big-endian 32-bit read at `index..index+3`. Returns the value as an
+// int (top bit reads back as the sign bit), or -1 on failure.
+// Round-trips losslessly with set_be32 for any int input.
+get_be32(b: ptr, index: int) -> int {
+    return aether_bytes_get_be32(b, index)
+}
+
+// Big-endian 64-bit write at `index..index+7` (most-significant byte
+// first). Grows the buffer if needed. Returns 1 on success, 0 on
+// failure.
+set_be64(b: ptr, index: int, value: long) -> int {
+    return aether_bytes_set_be64(b, index, value)
+}
+
+// Big-endian 64-bit read at `index..index+7`. Returns the value as a
+// long, or -1 on failure. Round-trips losslessly with set_be64.
+get_be64(b: ptr, index: int) -> long {
+    return aether_bytes_get_be64(b, index)
 }
 
 // Copy `src_len` bytes from `src` into the buffer starting at offset
