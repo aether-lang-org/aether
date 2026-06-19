@@ -4751,6 +4751,30 @@ ASTNode* parse_program(Parser* parser) {
             case TOKEN_IDENTIFIER: {
                 // Check if this is a function: identifier(...)
                 Token* next = peek_ahead(parser, 1);
+                // `fn name(...)` — `fn` as a function-definition keyword.
+                // `fn` is NOT a lexer keyword (it doubles as the fn-pointer
+                // type head `fn(...) -> R`), so the definition form is
+                // recognised here by shape: `fn` + name + `(`. The std
+                // library uses this spelling (std.uuid, std.url). Before,
+                // a top-level `fn name()` only survived via parse-error
+                // recovery — the "unexpected identifier" error fired on
+                // `fn`, recovery skipped it, and `name(` then parsed as a
+                // function. That recovery is non-fatal when a module is
+                // imported but fatal on a standalone/strict parse, so at
+                // full module-graph scale a re-parsed sibling module that
+                // used `fn` surfaced the recovery as a spurious top-level
+                // parse error in that module (#791). Accepting `fn` here
+                // makes the spelling first-class and the parse identical on
+                // every path.
+                if (token->value && strcmp(token->value, "fn") == 0 &&
+                    next && next->type == TOKEN_IDENTIFIER) {
+                    Token* after = peek_ahead(parser, 2);
+                    if (after && after->type == TOKEN_LEFT_PAREN) {
+                        advance_token(parser);  // consume `fn`
+                        node = parse_function_definition(parser);
+                        break;
+                    }
+                }
                 if (next && next->type == TOKEN_LEFT_PAREN) {
                     // Function without 'func' keyword
                     node = parse_function_definition(parser);
