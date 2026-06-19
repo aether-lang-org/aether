@@ -1,0 +1,712 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.sha2 — the SHA-2 family in pure Aether (FIPS 180-4),
+// ported from Bouncy Castle's Sha256Digest / Sha512Digest / LongDigest /
+// GeneralDigest. NO externs to OpenSSL or any C crypto: the compression
+// function, message schedule, padding, and big-endian length encoding are
+// all implemented here in Aether.
+//
+// Import with:  import std.cryptography.sha2
+//
+// Two shapes are exposed:
+//   one-shot:   sha256_hex(data, len)  / sha256_bytes(data, len)
+//               sha224_*, sha384_*, sha512_*, sha512_224_*, sha512_256_*
+//   streaming:  ctx = new("sha256"); update(ctx, data, len); final_hex(ctx)
+// The one-shot functions are thin wrappers over a streaming ctx.
+//
+// Aether-specific care taken (this is where SHA bugs live):
+//   * SHA-256/224 work on 32-bit words but Aether `int`/`long` are wider,
+//     so every 32-bit add is masked with & 0xFFFFFFFF (see m32()).
+//   * Aether `>>` is arithmetic; logical shifts / rotates go through
+//     std.bits (lsr32/rotr32/lsr64/rotr64).
+//   * Everything is big-endian via std.bytes get_be32 / get_be64 and a
+//     hand-rolled big-endian word emit on the output side.
+
+import std.bits
+import std.bytes
+import std.longarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+exports (
+    new, update, final_hex, final_bytes, free_ctx,
+    sha256_hex, sha256_bytes,
+    sha224_hex, sha224_bytes,
+    sha512_hex, sha512_bytes,
+    sha384_hex, sha384_bytes,
+    sha512_224_hex, sha512_224_bytes,
+    sha512_256_hex, sha512_256_bytes
+)
+
+// 32-bit mask — applied after every 32-bit add so high bits never leak.
+
+// ---- Streaming context ----
+//
+// One struct covers both cores; `is512` picks 64-bit (1024-bit block,
+// 80 rounds, 128-bit length) vs 32-bit (512-bit block, 64 rounds,
+// 64-bit length). Hash words are stored as `long`; for the 32-bit
+// cores they hold values already masked to 32 bits.
+struct Sha2Ctx {
+    h0: long
+    h1: long
+    h2: long
+    h3: long
+    h4: long
+    h5: long
+    h6: long
+    h7: long
+    block: ptr        // std.bytes buffer, block_size bytes
+    block_len: int    // bytes currently buffered (0..block_size-1 between blocks)
+    count_lo: long    // total message length in bytes (low 64 bits)
+    count_hi: long    // high bits of the byte count (for SHA-512's 128-bit length)
+    w: ptr            // longarr(80) message schedule
+    is512: int        // 1 => 64-bit core, 0 => 32-bit core
+    block_size: int   // 64 (sha256 family) or 128 (sha512 family)
+    digest_len: int   // output length in bytes (28/32/48/64/...)
+}
+
+// ---- SHA-256 round constants (first 32 bits of cube roots of first 64 primes) ----
+const K256: long[64] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+    0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+    0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]
+
+// ---- SHA-512 round constants (first 64 bits of cube roots of first 80 primes) ----
+const K512: long[80] = [
+    0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
+    0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
+    0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
+    0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235, 0xc19bf174cf692694,
+    0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
+    0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
+    0x983e5152ee66dfab, 0xa831c66d2db43210, 0xb00327c898fb213f, 0xbf597fc7beef0ee4,
+    0xc6e00bf33da88fc2, 0xd5a79147930aa725, 0x06ca6351e003826f, 0x142929670a0e6e70,
+    0x27b70a8546d22ffc, 0x2e1b21385c26c926, 0x4d2c6dfc5ac42aed, 0x53380d139d95b3df,
+    0x650a73548baf63de, 0x766a0abb3c77b2a8, 0x81c2c92e47edaee6, 0x92722c851482353b,
+    0xa2bfe8a14cf10364, 0xa81a664bbc423001, 0xc24b8b70d0f89791, 0xc76c51a30654be30,
+    0xd192e819d6ef5218, 0xd69906245565a910, 0xf40e35855771202a, 0x106aa07032bbd1b8,
+    0x19a4c116b8d2d0c8, 0x1e376c085141ab53, 0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8,
+    0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb, 0x5b9cca4f7763e373, 0x682e6ff3d6b2b8a3,
+    0x748f82ee5defb2fc, 0x78a5636f43172f60, 0x84c87814a1f0ab72, 0x8cc702081a6439ec,
+    0x90befffa23631e28, 0xa4506cebde82bde9, 0xbef9a3f7b2c67915, 0xc67178f2e372532b,
+    0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
+    0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
+    0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
+    0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817
+]
+
+// ---- 32-bit helpers (SHA-256 / SHA-224) ----
+// Mask a (possibly wide) value down to 32 bits.
+m32(x: long) -> long {
+    return x & 0xFFFFFFFF
+}
+
+// SHA-256 sigma/sum/Ch/Maj functions. Everything is kept `long` end-to-end
+// to avoid int/long var-slot churn; the value passed to std.bits.* (which
+// take 32-bit `int`) is always pre-masked to 32 bits so the narrowing at
+// the call boundary is lossless, and the bit op returns a clean 32-bit
+// result that we widen back to long via & 0xFFFFFFFF. rotr32 / lsr32 use
+// the unsigned interpretation from std.bits.
+theta0_256(x: long) -> long {
+    return (bits.rotr32(x, 7) ^ bits.rotr32(x, 18) ^ bits.lsr32(x, 3)) & 0xFFFFFFFF
+}
+theta1_256(x: long) -> long {
+    return (bits.rotr32(x, 17) ^ bits.rotr32(x, 19) ^ bits.lsr32(x, 10)) & 0xFFFFFFFF
+}
+sum0_256(x: long) -> long {
+    return (bits.rotr32(x, 2) ^ bits.rotr32(x, 13) ^ bits.rotr32(x, 22)) & 0xFFFFFFFF
+}
+sum1_256(x: long) -> long {
+    return (bits.rotr32(x, 6) ^ bits.rotr32(x, 11) ^ bits.rotr32(x, 25)) & 0xFFFFFFFF
+}
+ch32(x: long, y: long, z: long) -> long {
+    return ((x & y) ^ ((~x) & z)) & 0xFFFFFFFF
+}
+maj32(x: long, y: long, z: long) -> long {
+    return ((x & y) ^ (x & z) ^ (y & z)) & 0xFFFFFFFF
+}
+
+// ---- 64-bit helpers (SHA-512 / SHA-384 / SHA-512/t) ----
+sigma0_512(x: long) -> long {
+    return bits.rotr64(x, 1) ^ bits.rotr64(x, 8) ^ bits.lsr64(x, 7)
+}
+sigma1_512(x: long) -> long {
+    return bits.rotr64(x, 19) ^ bits.rotr64(x, 61) ^ bits.lsr64(x, 6)
+}
+sum0_512(x: long) -> long {
+    return bits.rotr64(x, 28) ^ bits.rotr64(x, 34) ^ bits.rotr64(x, 39)
+}
+sum1_512(x: long) -> long {
+    return bits.rotr64(x, 14) ^ bits.rotr64(x, 18) ^ bits.rotr64(x, 41)
+}
+ch64(x: long, y: long, z: long) -> long {
+    return (x & y) ^ ((~x) & z)
+}
+maj64(x: long, y: long, z: long) -> long {
+    return (x & y) ^ (x & z) ^ (y & z)
+}
+
+// ---- Block processing ----
+
+// Process one 64-byte block for the SHA-256 core. Reads 16 big-endian
+// 32-bit words out of the block buffer, expands to 64, runs the 64
+// rounds, folds into the hash state. Every 32-bit add is masked.
+process_block_256(ctx: *Sha2Ctx) {
+    w = ctx.w
+    // Load 16 words, big-endian.
+    i = 0
+    while i < 16 {
+        word = bytes.get_be32(ctx.block, i * 4)
+        // get_be32 may return a sign-extended negative int for the high
+        // bit; mask to 32 bits so the schedule math stays unsigned.
+        longarr_set_unchecked(w, i, m32(word))
+        i = i + 1
+    }
+    // Expand to 64 words.
+    i = 16
+    while i < 64 {
+        w2 = longarr_get_unchecked(w, i - 2)
+        w7 = longarr_get_unchecked(w, i - 7)
+        w15 = longarr_get_unchecked(w, i - 15)
+        w16 = longarr_get_unchecked(w, i - 16)
+        // theta operands are pre-masked to 32 bits inside the helpers.
+        t1 = theta1_256(w2 & 0xFFFFFFFF)
+        t0 = theta0_256(w15 & 0xFFFFFFFF)
+        v = m32(t1 + w7 + t0 + w16)
+        longarr_set_unchecked(w, i, v)
+        i = i + 1
+    }
+
+    a = m32(ctx.h0)
+    b = m32(ctx.h1)
+    c = m32(ctx.h2)
+    d = m32(ctx.h3)
+    e = m32(ctx.h4)
+    f = m32(ctx.h5)
+    g = m32(ctx.h6)
+    h = m32(ctx.h7)
+
+    i = 0
+    while i < 64 {
+        kv = K256[i]
+        wv = longarr_get_unchecked(w, i)
+        s1 = sum1_256(e)
+        chv = ch32(e, f, g)
+        t1 = m32(h + s1 + chv + kv + wv)
+        s0 = sum0_256(a)
+        mjv = maj32(a, b, c)
+        t2 = m32(s0 + mjv)
+        h = g
+        g = f
+        f = e
+        e = m32(d + t1)
+        d = c
+        c = b
+        b = a
+        a = m32(t1 + t2)
+        i = i + 1
+    }
+
+    ctx.h0 = m32(ctx.h0 + a)
+    ctx.h1 = m32(ctx.h1 + b)
+    ctx.h2 = m32(ctx.h2 + c)
+    ctx.h3 = m32(ctx.h3 + d)
+    ctx.h4 = m32(ctx.h4 + e)
+    ctx.h5 = m32(ctx.h5 + f)
+    ctx.h6 = m32(ctx.h6 + g)
+    ctx.h7 = m32(ctx.h7 + h)
+}
+
+// Process one 128-byte block for the SHA-512 core. 64-bit math wraps
+// naturally at 64 bits (Aether long is 64-bit), so no masking is needed
+// on the adds — but shifts/rotates still go through std.bits.
+process_block_512(ctx: *Sha2Ctx) {
+    w = ctx.w
+    i = 0
+    while i < 16 {
+        word = bytes.get_be64(ctx.block, i * 8)
+        longarr_set_unchecked(w, i, word)
+        i = i + 1
+    }
+    i = 16
+    while i < 80 {
+        w2 = longarr_get_unchecked(w, i - 2)
+        w7 = longarr_get_unchecked(w, i - 7)
+        w15 = longarr_get_unchecked(w, i - 15)
+        w16 = longarr_get_unchecked(w, i - 16)
+        v = sigma1_512(w2) + w7 + sigma0_512(w15) + w16
+        longarr_set_unchecked(w, i, v)
+        i = i + 1
+    }
+
+    a = ctx.h0
+    b = ctx.h1
+    c = ctx.h2
+    d = ctx.h3
+    e = ctx.h4
+    f = ctx.h5
+    g = ctx.h6
+    h = ctx.h7
+
+    i = 0
+    while i < 80 {
+        kv = K512[i]
+        wv = longarr_get_unchecked(w, i)
+        t1 = h + sum1_512(e) + ch64(e, f, g) + kv + wv
+        t2 = sum0_512(a) + maj64(a, b, c)
+        h = g
+        g = f
+        f = e
+        e = d + t1
+        d = c
+        c = b
+        b = a
+        a = t1 + t2
+        i = i + 1
+    }
+
+    ctx.h0 = ctx.h0 + a
+    ctx.h1 = ctx.h1 + b
+    ctx.h2 = ctx.h2 + c
+    ctx.h3 = ctx.h3 + d
+    ctx.h4 = ctx.h4 + e
+    ctx.h5 = ctx.h5 + f
+    ctx.h6 = ctx.h6 + g
+    ctx.h7 = ctx.h7 + h
+}
+
+process_block(ctx: *Sha2Ctx) {
+    if ctx.is512 == 1 {
+        process_block_512(ctx)
+    } else {
+        process_block_256(ctx)
+    }
+}
+
+// ---- Public streaming API ----
+
+// Create a streaming SHA-2 context. `algo` is one of:
+//   "sha256" "sha224" "sha512" "sha384" "sha512-224" "sha512-256"
+// Returns (ctx, "") on success, (null, error) for an unknown algorithm
+// or allocation failure. Thread the handle through update / final_*.
+new(algo: string) -> {
+    ctx = malloc(160) as *Sha2Ctx
+    if ctx == null {
+        return null, "allocation failed"
+    }
+    ctx.block_len = 0
+    ctx.count_lo = 0
+    ctx.count_hi = 0
+
+    is512 = 0
+    if algo == "sha256" {
+        ctx.h0 = 0x6a09e667
+        ctx.h1 = 0xbb67ae85
+        ctx.h2 = 0x3c6ef372
+        ctx.h3 = 0xa54ff53a
+        ctx.h4 = 0x510e527f
+        ctx.h5 = 0x9b05688c
+        ctx.h6 = 0x1f83d9ab
+        ctx.h7 = 0x5be0cd19
+        ctx.digest_len = 32
+    } else if algo == "sha224" {
+        ctx.h0 = 0xc1059ed8
+        ctx.h1 = 0x367cd507
+        ctx.h2 = 0x3070dd17
+        ctx.h3 = 0xf70e5939
+        ctx.h4 = 0xffc00b31
+        ctx.h5 = 0x68581511
+        ctx.h6 = 0x64f98fa7
+        ctx.h7 = 0xbefa4fa4
+        ctx.digest_len = 28
+    } else if algo == "sha512" {
+        is512 = 1
+        ctx.h0 = 0x6a09e667f3bcc908
+        ctx.h1 = 0xbb67ae8584caa73b
+        ctx.h2 = 0x3c6ef372fe94f82b
+        ctx.h3 = 0xa54ff53a5f1d36f1
+        ctx.h4 = 0x510e527fade682d1
+        ctx.h5 = 0x9b05688c2b3e6c1f
+        ctx.h6 = 0x1f83d9abfb41bd6b
+        ctx.h7 = 0x5be0cd19137e2179
+        ctx.digest_len = 64
+    } else if algo == "sha384" {
+        is512 = 1
+        ctx.h0 = 0xcbbb9d5dc1059ed8
+        ctx.h1 = 0x629a292a367cd507
+        ctx.h2 = 0x9159015a3070dd17
+        ctx.h3 = 0x152fecd8f70e5939
+        ctx.h4 = 0x67332667ffc00b31
+        ctx.h5 = 0x8eb44a8768581511
+        ctx.h6 = 0xdb0c2e0d64f98fa7
+        ctx.h7 = 0x47b5481dbefa4fa4
+        ctx.digest_len = 48
+    } else if algo == "sha512-224" {
+        is512 = 1
+        ctx.h0 = 0x8c3d37c819544da2
+        ctx.h1 = 0x73e1996689dcd4d6
+        ctx.h2 = 0x1dfab7ae32ff9c82
+        ctx.h3 = 0x679dd514582f9fcf
+        ctx.h4 = 0x0f6d2b697bd44da8
+        ctx.h5 = 0x77e36f7304c48942
+        ctx.h6 = 0x3f9d85a86a1d36c8
+        ctx.h7 = 0x1112e6ad91d692a1
+        ctx.digest_len = 28
+    } else if algo == "sha512-256" {
+        is512 = 1
+        ctx.h0 = 0x22312194fc2bf72c
+        ctx.h1 = 0x9f555fa3c84c64c2
+        ctx.h2 = 0x2393b86b6f53b151
+        ctx.h3 = 0x963877195940eabd
+        ctx.h4 = 0x96283ee2a88effe3
+        ctx.h5 = 0xbe5e1e2553863992
+        ctx.h6 = 0x2b0199fc2c85b8aa
+        ctx.h7 = 0x0eb72ddc81c52ca2
+        ctx.digest_len = 32
+    } else {
+        free(ctx)
+        return null, "unknown algorithm"
+    }
+
+    ctx.is512 = is512
+    if is512 == 1 {
+        ctx.block_size = 128
+    } else {
+        ctx.block_size = 64
+    }
+    ctx.block = bytes.new(ctx.block_size)
+    // Pre-size the block buffer to block_size so set/get land in range.
+    j = 0
+    while j < ctx.block_size {
+        bytes.set(ctx.block, j, 0)
+        j = j + 1
+    }
+    ctx.w = longarr_new_raw(80)
+    return ctx, ""
+}
+
+// Feed `length` bytes of `data` into the context. Binary-safe; embedded
+// NULs are fine. Feeding 0 bytes is a no-op. Does NOT free the context.
+update(ctx: ptr, data: string, length: int) {
+    c = ctx as *Sha2Ctx
+    if length <= 0 {
+        return
+    }
+    bs = c.block_size
+    i = 0
+    while i < length {
+        b = string_char_at_n(data, length, i)
+        bytes.set(c.block, c.block_len, b & 255)
+        c.block_len = c.block_len + 1
+        if c.block_len == bs {
+            process_block(c)
+            c.block_len = 0
+        }
+        i = i + 1
+    }
+    // Update the 128-bit byte count (low/high).
+    old_lo = c.count_lo
+    c.count_lo = c.count_lo + length
+    // Detect unsigned overflow of the low word.
+    if bits.ucmp64(c.count_lo, old_lo) < 0 {
+        c.count_hi = c.count_hi + 1
+    }
+}
+
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+
+// Append a single byte to the block buffer, processing on fill. Used by
+// the padding logic inside finalize.
+push_pad_byte(c: *Sha2Ctx, b: int) {
+    bytes.set(c.block, c.block_len, b & 255)
+    c.block_len = c.block_len + 1
+    if c.block_len == c.block_size {
+        process_block(c)
+        c.block_len = 0
+    }
+}
+
+// Finalize: pad, append the big-endian bit length, process the final
+// block(s), and emit the digest into a fresh std.bytes buffer of
+// digest_len bytes. Does NOT free the context (callers use final_hex /
+// final_bytes which free it, or free_ctx to bail).
+finalize_to_bytes(c: *Sha2Ctx) -> ptr {
+    // Bit length BEFORE padding.
+    // For the 32-bit core: 64-bit big-endian bit length = count_lo << 3.
+    // For the 64-bit core: 128-bit big-endian bit length; the low 64
+    // bits are (count_lo << 3); the high 64 bits are
+    // (count_hi << 3) | (count_lo >>> 61).
+    bit_lo = c.count_lo << 3
+    bit_hi = (c.count_hi << 3) | bits.lsr64(c.count_lo, 61)
+
+    // Append the 0x80 pad byte.
+    push_pad_byte(c, 0x80)
+
+    // Zero-pad until there is room for the length field at the end of a
+    // block. Length field is 8 bytes (256 core) or 16 bytes (512 core).
+    len_bytes = 8
+    if c.is512 == 1 {
+        len_bytes = 16
+    }
+    pad_target = c.block_size - len_bytes
+    while c.block_len != pad_target {
+        push_pad_byte(c, 0)
+    }
+
+    // Emit the big-endian length field directly into the block buffer,
+    // then process the final block.
+    if c.is512 == 1 {
+        bytes.set_be64(c.block, pad_target, bit_hi)
+        bytes.set_be64(c.block, pad_target + 8, bit_lo)
+    } else {
+        bytes.set_be64(c.block, pad_target, bit_lo)
+    }
+    c.block_len = c.block_size
+    process_block(c)
+    c.block_len = 0
+
+    // Serialize the 8 hash words big-endian, then truncate to digest_len.
+    out = bytes.new(c.digest_len)
+    if c.is512 == 1 {
+        emit_be64_words(c, out)
+    } else {
+        emit_be32_words(c, out)
+    }
+    // out holds up to 64 bytes; only digest_len are meaningful.
+    return out
+}
+
+emit_be32_words(c: *Sha2Ctx, out: ptr) {
+    set_be32_masked(out, 0, c.h0)
+    set_be32_masked(out, 4, c.h1)
+    set_be32_masked(out, 8, c.h2)
+    set_be32_masked(out, 12, c.h3)
+    set_be32_masked(out, 16, c.h4)
+    set_be32_masked(out, 20, c.h5)
+    if c.digest_len > 24 {
+        set_be32_masked(out, 24, c.h6)
+    }
+    if c.digest_len > 28 {
+        set_be32_masked(out, 28, c.h7)
+    }
+}
+
+// Write the low 32 bits of `v` big-endian at byte offset `off`. We avoid
+// bytes.set_be32 here because v is a 64-bit long; emit byte-by-byte.
+set_be32_masked(out: ptr, off: int, v: long) {
+    bytes.set(out, off,     bits.lsr64(v, 24) & 255)
+    bytes.set(out, off + 1, bits.lsr64(v, 16) & 255)
+    bytes.set(out, off + 2, bits.lsr64(v, 8) & 255)
+    bytes.set(out, off + 3, v & 255)
+}
+
+emit_be64_words(c: *Sha2Ctx, out: ptr) {
+    bytes.set_be64(out, 0, c.h0)
+    bytes.set_be64(out, 8, c.h1)
+    bytes.set_be64(out, 16, c.h2)
+    bytes.set_be64(out, 24, c.h3)
+    if c.digest_len > 32 {
+        bytes.set_be64(out, 32, c.h4)
+    }
+    if c.digest_len > 40 {
+        bytes.set_be64(out, 40, c.h5)
+    }
+    if c.digest_len > 48 {
+        bytes.set_be64(out, 48, c.h6)
+    }
+    if c.digest_len > 56 {
+        bytes.set_be64(out, 56, c.h7)
+    }
+}
+
+// Finalize and return the raw digest bytes as an owned AetherString of
+// digest_len bytes. FREES the context.
+final_bytes(ctx: ptr) -> ptr {
+    c = ctx as *Sha2Ctx
+    out = finalize_to_bytes(c)
+    dl = c.digest_len
+    s = bytes.finish(out, dl)
+    free_internals(c)
+    free(ctx)
+    // Wrap the AetherString back into a bytes buffer so callers get a
+    // ptr (matching the requested signature). Length is dl.
+    res = bytes.new(dl)
+    bytes.copy_from_string(res, 0, s, dl)
+    return res
+}
+
+// Finalize and return the digest as lowercase hex. FREES the context.
+final_hex(ctx: ptr) -> string {
+    c = ctx as *Sha2Ctx
+    out = finalize_to_bytes(c)
+    dl = c.digest_len
+    hexbuf = bytes.new(dl * 2)
+    i = 0
+    while i < dl {
+        b = bytes.get(out, i)
+        hi = (b >> 4) & 15
+        lo = b & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    s = bytes.finish(hexbuf, dl * 2)
+    free_internals(c)
+    free(ctx)
+    return s
+}
+
+free_internals(c: *Sha2Ctx) {
+    if c.block != null {
+        bytes.free(c.block)
+        c.block = null
+    }
+    if c.w != null {
+        longarr_free(c.w)
+        c.w = null
+    }
+}
+
+// Abandon a context without finalizing — the bail-out cleanup path.
+// NULL-safe. After final_hex / final_bytes the context is already freed.
+free_ctx(ctx: ptr) {
+    if ctx == null {
+        return
+    }
+    c = ctx as *Sha2Ctx
+    free_internals(c)
+    free(ctx)
+}
+
+// ---- One-shot convenience wrappers ----
+// Each opens a ctx, feeds the whole input, and finalizes (which frees
+// the ctx). hex variants return a lowercase-hex string; bytes variants
+// return a ptr to a std.bytes buffer of the raw digest.
+
+sha256_hex(data: string, len: int) -> string {
+    ctx, err = new("sha256")
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+sha256_bytes(data: string, len: int) -> ptr {
+    ctx, err = new("sha256")
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+
+sha224_hex(data: string, len: int) -> string {
+    ctx, err = new("sha224")
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+sha224_bytes(data: string, len: int) -> ptr {
+    ctx, err = new("sha224")
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+
+sha512_hex(data: string, len: int) -> string {
+    ctx, err = new("sha512")
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+sha512_bytes(data: string, len: int) -> ptr {
+    ctx, err = new("sha512")
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+
+sha384_hex(data: string, len: int) -> string {
+    ctx, err = new("sha384")
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+sha384_bytes(data: string, len: int) -> ptr {
+    ctx, err = new("sha384")
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+
+sha512_224_hex(data: string, len: int) -> string {
+    ctx, err = new("sha512-224")
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+sha512_224_bytes(data: string, len: int) -> ptr {
+    ctx, err = new("sha512-224")
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+
+sha512_256_hex(data: string, len: int) -> string {
+    ctx, err = new("sha512-256")
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+sha512_256_bytes(data: string, len: int) -> ptr {
+    ctx, err = new("sha512-256")
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
