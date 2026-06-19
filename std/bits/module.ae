@@ -1,0 +1,113 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.bits — unsigned-bit helpers.
+//
+// Aether's `>>` on int/long is arithmetic (sign-propagating) and the
+// language has no unsigned integer types. Cryptography / codec code routinely
+// needs the *unsigned* interpretation: logical right shift, rotates,
+// popcount, count-leading-zeros, and unsigned division / remainder /
+// compare. These map exactly onto C casts to the unsigned type, so each
+// friendly name is a thin wrapper over an `aether_bits_*` extern.
+//
+// Width note: `int` is 32-bit and `long` is 64-bit on every target.
+// The 32-bit ops take/return `int`; the 64-bit ops take/return `long`
+// for the value with an `int` shift/rotate count.
+
+exports (
+    lsr32, lsr64,
+    rotr32, rotl32, rotr64, rotl64,
+    popcount32, popcount64,
+    clz32, clz64,
+    udiv32, urem32, udiv64, urem64,
+    ucmp64,
+    aether_bits_lsr32, aether_bits_lsr64,
+    aether_bits_rotr32, aether_bits_rotl32,
+    aether_bits_rotr64, aether_bits_rotl64,
+    aether_bits_popcount32, aether_bits_popcount64,
+    aether_bits_clz32, aether_bits_clz64,
+    aether_bits_udiv32, aether_bits_urem32,
+    aether_bits_udiv64, aether_bits_urem64,
+    aether_bits_ucmp64
+)
+
+// ---- Raw externs ----
+extern aether_bits_lsr32(x: int, n: int) -> int
+extern aether_bits_lsr64(x: long, n: int) -> long
+extern aether_bits_rotr32(x: int, n: int) -> int
+extern aether_bits_rotl32(x: int, n: int) -> int
+extern aether_bits_rotr64(x: long, n: int) -> long
+extern aether_bits_rotl64(x: long, n: int) -> long
+extern aether_bits_popcount32(x: int) -> int
+extern aether_bits_popcount64(x: long) -> int
+extern aether_bits_clz32(x: int) -> int
+extern aether_bits_clz64(x: long) -> int
+extern aether_bits_udiv32(a: int, b: int) -> int
+extern aether_bits_urem32(a: int, b: int) -> int
+extern aether_bits_udiv64(a: long, b: long) -> long
+extern aether_bits_urem64(a: long, b: long) -> long
+extern aether_bits_ucmp64(a: long, b: long) -> int
+
+// ---- Friendly wrappers ----
+
+// Logical (unsigned) right shift of `x` by `n` bits. The shift count
+// is masked by (W-1), so n is taken mod 32 (lsr32) / mod 64 (lsr64).
+lsr32(x: int, n: int) -> int {
+    return aether_bits_lsr32(x, n)
+}
+lsr64(x: long, n: int) -> long {
+    return aether_bits_lsr64(x, n)
+}
+
+// Bit rotates. Count masked by (W-1); a count of 0 returns x unchanged.
+rotr32(x: int, n: int) -> int {
+    return aether_bits_rotr32(x, n)
+}
+rotl32(x: int, n: int) -> int {
+    return aether_bits_rotl32(x, n)
+}
+rotr64(x: long, n: int) -> long {
+    return aether_bits_rotr64(x, n)
+}
+rotl64(x: long, n: int) -> long {
+    return aether_bits_rotl64(x, n)
+}
+
+// Count of set bits over the unsigned value.
+popcount32(x: int) -> int {
+    return aether_bits_popcount32(x)
+}
+popcount64(x: long) -> int {
+    return aether_bits_popcount64(x)
+}
+
+// Count leading zeros over the unsigned value, MSB-first. Returns the
+// width (32 / 64) for a zero input.
+clz32(x: int) -> int {
+    return aether_bits_clz32(x)
+}
+clz64(x: long) -> int {
+    return aether_bits_clz64(x)
+}
+
+// Unsigned division / remainder. Returns 0 if the divisor is 0.
+udiv32(a: int, b: int) -> int {
+    return aether_bits_udiv32(a, b)
+}
+urem32(a: int, b: int) -> int {
+    return aether_bits_urem32(a, b)
+}
+udiv64(a: long, b: long) -> long {
+    return aether_bits_udiv64(a, b)
+}
+urem64(a: long, b: long) -> long {
+    return aether_bits_urem64(a, b)
+}
+
+// Unsigned compare of two 64-bit values. Returns -1 / 0 / 1.
+ucmp64(a: long, b: long) -> int {
+    return aether_bits_ucmp64(a, b)
+}

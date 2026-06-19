@@ -8,6 +8,7 @@ typedef struct ArrayList ArrayList;
 typedef struct HashMap HashMap;
 typedef struct IntArray IntArray;
 typedef struct FloatArray FloatArray;
+typedef struct LongArray LongArray;
 
 ArrayList* list_new();
 int list_add_raw(ArrayList* list, void* item);
@@ -164,5 +165,48 @@ void floatarr_fill(FloatArray* arr, double value);
 
 // Release the backing buffer and the struct. Idempotent on NULL.
 void floatarr_free(FloatArray* arr);
+
+// -------------------------------------------------------------------
+// LongArray — fixed-size packed long-long buffer with O(1) random access.
+//
+// The 64-bit twin of IntArray. Same shape, same bounds-check policy.
+// Aether's `long` lowers to C `long long`, so the element type is
+// `long long` end-to-end. Use this for 64-bit-keyed lookup, packed-word
+// tables (hash state words, crypto round buffers), and any other
+// workload that wants a flat packed-long buffer without going through
+// std.list's void*-boxed-per-entry overhead.
+// -------------------------------------------------------------------
+
+// Allocate a LongArray of `size` elements, zero-initialised. Returns
+// NULL if size is negative or allocation failed. The `_raw` suffix
+// matches intarr_new_raw's collision-avoidance with the Aether-side
+// `longarr.new` wrapper.
+LongArray* longarr_new_raw(int size);
+
+// Allocate and fill with `init` at every index.
+LongArray* longarr_new_filled_raw(int size, long long init);
+
+// Number of elements. Returns -1 if `arr` is NULL — distinguishable
+// from a legal empty array (size 0).
+int longarr_size(LongArray* arr);
+
+// Read the value at `i`. Returns 0 if `arr` is NULL or `i` is
+// out-of-range. Aether wrapper `longarr.get` turns these into
+// Go-style `(value, err)` returns.
+long long longarr_get_raw(LongArray* arr, int i);
+
+// Write `value` at `i`. No-op if `arr` is NULL or `i` is out-of-range.
+void longarr_set_raw(LongArray* arr, int i, long long value);
+
+// Hot-path skip-the-bounds-check variants. Caller is responsible for
+// keeping the index in [0, size); OOB is undefined behaviour.
+long long longarr_get_unchecked(LongArray* arr, int i);
+void      longarr_set_unchecked(LongArray* arr, int i, long long value);
+
+// Fill every element with `value`.
+void longarr_fill(LongArray* arr, long long value);
+
+// Release the backing buffer and the struct. Idempotent on NULL.
+void longarr_free(LongArray* arr);
 
 #endif

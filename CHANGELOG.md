@@ -14,6 +14,30 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **Cryptography port Tier 0 foundations** (issue #739, slice 1) — four
+  Aether-native stdlib modules every digest/cipher port depends on:
+  - **`std.longarr`** — fixed-size 64-bit packed array, the `long`-cell twin
+    of `std.intarr` (SHA-512 / Keccak / GCM / Poly1305 / lattice-PQC state).
+  - **`std.bits`** — unsigned-bit helpers Aether's signed `int`/`long` can't
+    express directly: `lsr32/64` (logical right shift — Aether's `>>` is
+    arithmetic), `rotr/rotl 32/64`, `popcount32/64`, `clz32/64`, `udiv/urem
+    32/64`, `ucmp64`. Ported from Bouncy Castle's `Integers.cs` / `Longs.cs`.
+  - **`std.bytes` big-endian accessors** — `set_be16/32/64` + `get_be16/32/64`,
+    the BE twin of the existing `_le*` family (cryptography wire format is mostly
+    big-endian). Modelled on Bouncy Castle's `Pack.cs`.
+  - **`std.bytes.cursor`** — forward read-position over a bytes buffer
+    (`read_u8`, `read_be_u16/32/64`, `read_slice`, `remaining`, `peek`, `eof`,
+    `pos`/`seek`); foundation for byte parsers (ASN.1, PEM, OpenPGP).
+
+  Regression tests (`tests/regression/test_{bits,longarr,bytes_be,bytes_cursor}.ae`)
+  include vectors ported from Bouncy Castle's `IntegersTest`/`LongsTest`.
+  Bouncy Castle (MIT) attribution per ported file plus a new top-level
+  `THIRD_PARTY_LICENSES.md`.
+
 ## [0.283.0]
 
 ### Fixed
