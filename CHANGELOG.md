@@ -14,6 +14,26 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.293.0]
+
+### Added
+
+- **Three more digests in `std.cryptography`** — RIPEMD-160, RIPEMD-128, and
+  SM3, each ported in pure Aether from Bouncy Castle's
+  `RipeMD160Digest` / `RipeMD128Digest` / `SM3Digest` (no externs to OpenSSL
+  or any C crypto). Each module exposes one-shot `*_hex` / `*_bytes` and a
+  streaming `new` / `update` / `update_bytes` / `final_hex` / `final_bytes` /
+  `free_ctx` surface, mirroring `std.cryptography.sha2`.
+  - **`std.cryptography.ripemd160`** — 160-bit RIPEMD (the second hash in
+    Bitcoin's HASH160). Little-endian dual-line 80-round compression.
+  - **`std.cryptography.ripemd128`** — 128-bit RIPEMD; 4-word, 64-round
+    dual-line variant.
+  - **`std.cryptography.sm3`** — Chinese SM3 (GB/T 32905); 256-bit,
+    SHA-256-like big-endian construction.
+  - All three validated against published test vectors (empty / `abc` /
+    `message digest` / alphabet / multi-block inputs) with streaming-vs-one-shot
+    consistency checks; see `tests/integration/crypto_{ripemd160,ripemd128,sm3}`.
+
 ## [0.292.0]
 
 ### Added
