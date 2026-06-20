@@ -14,6 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`std.bignum` — arbitrary-precision integers (foundation layer)** (issue
+  #739 slice 11, the BigInteger watershed). Pure Aether, ported from Bouncy
+  Castle's `BigInteger.cs`: sign-magnitude representation (32-bit limbs over
+  `std.intarr`, big-endian, separate sign in {-1,0,1}). This first layer
+  covers `from_bytes` / `to_bytes` (two's-complement **signed**) +
+  `from_bytes_unsigned` / `to_bytes_unsigned` (magnitude) over `std.bytes`
+  (consistent with the rest of the cryptography port), `from_int`, `compare`,
+  `is_zero`, `sign`, `bit_length`, `add`, `subtract`, `negate`, `abs`,
+  `shift_left`, `shift_right`. Every operation was cross-checked against
+  Python's arbitrary-precision `int` (add/sub/compare/shift over signed
+  integers including INT_MIN; signed+unsigned byte round-trips including the
+  `80` / `0080` / `00ff` / -128 two's-complement edges). Regression:
+  `tests/regression/test_bignum_foundation.ae`. No externs to OpenSSL or any C
+  bignum library. **Multiply, divide/mod, mod_pow, gcd, mod_inverse, and
+  is_probable_prime are deferred to follow-up layers** — this foundation is the
+  Tier-2 gate that, once complete, unblocks RSA/DSA/ECDSA/X.509.
+
 ## [0.286.0]
 
 ### Added
