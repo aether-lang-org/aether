@@ -3649,6 +3649,29 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                 stmt->value);
                         fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
                     }
+                } else if (stmt->child_count > 0 && stmt->children[0] &&
+                           stmt->children[0]->type == AST_IDENTIFIER &&
+                           stmt->children[0]->node_type &&
+                           stmt->children[0]->node_type->kind == TYPE_STRING &&
+                           !is_heap_string_var(gen, stmt->children[0]->value)) {
+                    /* Retaining a BORROWED string into actor state — the
+                     * classic case is a message pattern field (`SetN(in_n)
+                     * -> { n = in_n }`). The field is owned by the message
+                     * envelope and freed by `<Msg>_release_fields` right
+                     * after this handler returns, so storing the raw pointer
+                     * into `self->field` dangles and a LATER message reads
+                     * freed bytes (the aeo actor-state-string corruption).
+                     * Copy into an owned AetherString — the same idiom the
+                     * message SEND site uses for string fields — and free any
+                     * prior owned copy. Marked via `_heap_<field>` so a
+                     * subsequent retain frees the previous one. */
+                    fprintf(gen->output, "{ const char* _tmp_old = self->%s; ", stmt->value);
+                    fprintf(gen->output, "const char* _src = (const char*)(");
+                    generate_expression(gen, stmt->children[0]);
+                    fprintf(gen->output, "); self->%s = _src ? (const char*)string_new_with_length(aether_string_data(_src), (int)aether_string_length(_src)) : _src;",
+                            stmt->value);
+                    fprintf(gen->output, " if (_heap_%s) aether_heap_str_free(_tmp_old);", stmt->value);
+                    fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
                 } else {
                     fprintf(gen->output, "self->%s", stmt->value);
                     if (stmt->child_count > 0) {
