@@ -69,6 +69,52 @@ main() {
     if beq(rtc, ptc) != 1 { print("FAIL ctr rt\n"); fails=fails+1 }
     aes.free(ec); bytes.free(ctc); bytes.free(rtc); bytes.free(ptc); bytes.free(iv); bytes.free(kc)
 
+    // AES-128-CBC (NIST SP800-38A F.2.1 / F.2.2), 4 blocks, block-aligned.
+    kb = hb("2b7e151628aed2a6abf7158809cf4f3c")
+    ivb = hb("000102030405060708090a0b0c0d0e0f")
+    ptb = hb(string.concat("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51",
+                           "30c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710"))
+    ecb_ = aes.new_encryptor(kb, 16)
+    cbc = aes.cbc_encrypt(ecb_, ivb, ptb)
+    want_cbc = string.concat("7649abac8119b246cee98e9b12e9197d5086cb9b507219ee95db113a917678b2",
+                             "73bed6b8e3c1743b7116e69e222295163ff1caa1681fac09120eca307586e1a7")
+    if string.equals(bh(cbc), want_cbc) != 1 { print("FAIL cbc enc ${bh(cbc)}\n"); fails=fails+1 }
+    dcb = aes.new_decryptor(kb, 16)
+    cbc_rt = aes.cbc_decrypt(dcb, ivb, cbc)
+    if beq(cbc_rt, ptb) != 1 { print("FAIL cbc dec\n"); fails=fails+1 }
+    aes.free(ecb_); aes.free(dcb); bytes.free(cbc); bytes.free(cbc_rt)
+    bytes.free(ptb); bytes.free(ivb); bytes.free(kb)
+
+    // CBC + PKCS#7 round-trip on a non-block-multiple payload (13 bytes).
+    kp = hb("2b7e151628aed2a6abf7158809cf4f3c")
+    ivp = hb("000102030405060708090a0b0c0d0e0f")
+    msg = hb("48656c6c6f2c20416574686572")   // "Hello, Aether" (13 bytes)
+    ep = aes.new_encryptor(kp, 16)
+    ctp = aes.cbc_encrypt_pkcs7(ep, ivp, msg)
+    if bytes.length(ctp) != 16 { print("FAIL pkcs7 ct length ${bytes.length(ctp)}\n"); fails=fails+1 }
+    dp = aes.new_decryptor(kp, 16)
+    ptp, perr = aes.cbc_decrypt_pkcs7(dp, ivp, ctp)
+    if perr != "" { print("FAIL pkcs7 unpad err ${perr}\n"); fails=fails+1 }
+    if beq(ptp, msg) != 1 { print("FAIL pkcs7 rt\n"); fails=fails+1 }
+    aes.free(ep); aes.free(dp); bytes.free(ctp); bytes.free(ptp)
+    bytes.free(msg); bytes.free(ivp); bytes.free(kp)
+
+    // PKCS#7 padding edge cases (standalone).
+    // (a) exact-block input → a full extra padding block (16 bytes of 0x10).
+    blk16 = hb("00112233445566778899aabbccddeeff")
+    padded = aes.pkcs7_pad(blk16)
+    if bytes.length(padded) != 32 { print("FAIL pkcs7 full-block pad len\n"); fails=fails+1 }
+    if (bytes.get(padded, 31) & 0xFF) != 16 { print("FAIL pkcs7 full-block pad byte\n"); fails=fails+1 }
+    unp, uerr = aes.pkcs7_unpad(padded)
+    if uerr != "" { print("FAIL pkcs7 full-block unpad ${uerr}\n"); fails=fails+1 }
+    if beq(unp, blk16) != 1 { print("FAIL pkcs7 full-block rt\n"); fails=fails+1 }
+    bytes.free(padded); bytes.free(unp); bytes.free(blk16)
+    // (b) corrupted padding is rejected.
+    bad = hb("00112233445566778899aabbccddee07")   // last byte says pad=7 but isn't
+    _, berr = aes.pkcs7_unpad(bad)
+    if berr == "" { print("FAIL pkcs7 should reject bad padding\n"); fails=fails+1 }
+    bytes.free(bad)
+
     bytes.free(pt)
     if fails == 0 { print("PASS: contrib.cryptography.aes\n") } else { print("FAILED: ${fails}\n"); exit(1) }
 }

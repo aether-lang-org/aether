@@ -27,6 +27,10 @@
 // Convenience modes in this slice:
 //   aes.ecb_encrypt / ecb_decrypt  — block-aligned, NO padding
 //   aes.ctr_xor                    — CTR keystream over arbitrary length
+//   aes.cbc_encrypt / cbc_decrypt  — block-aligned CBC, NO padding
+//   aes.cbc_encrypt_pkcs7 / cbc_decrypt_pkcs7
+//                                  — CBC with PKCS#7 padding (arbitrary length)
+//   aes.pkcs7_pad / pkcs7_unpad    — standalone PKCS#7 helpers
 //
 // All buffers are std.bytes (caller frees results).
 
@@ -37,7 +41,9 @@ import std.string
 
 exports (
     new_encryptor, new_decryptor, process_block, free,
-    block_size, ecb_encrypt, ecb_decrypt, ctr_xor
+    block_size, ecb_encrypt, ecb_decrypt, ctr_xor,
+    cbc_encrypt, cbc_decrypt, cbc_encrypt_pkcs7, cbc_decrypt_pkcs7,
+    pkcs7_pad, pkcs7_unpad
 )
 
 extern malloc(size: int) -> ptr
@@ -327,4 +333,151 @@ ctr_increment(ctr: ptr) {
         }
         i = i - 1
     }
+}
+
+// ---- CBC (block-aligned, NO padding) ----
+// `ctx` is an encryptor for cbc_encrypt and a decryptor for cbc_decrypt.
+// `iv` is the 16-byte initialization vector. Input length MUST be a
+// multiple of 16; a non-multiple returns an empty buffer (use the
+// _pkcs7 variants for arbitrary-length data).
+//
+// CBC encrypt: C_i = E(P_i XOR C_{i-1}), with C_{-1} = IV.
+cbc_encrypt(ctx: ptr, iv: ptr, data: ptr) -> ptr {
+    n = bytes.length(data)
+    if n % 16 != 0 {
+        return bytes.new(0)
+    }
+    out = bytes.new(n)
+    prev = bytes.new(16)
+    i = 0
+    while i < 16 { bytes.set(prev, i, bytes.get(iv, i)); i = i + 1 }
+    off = 0
+    while off < n {
+        blk = bytes.new(16)
+        j = 0
+        while j < 16 {
+            bytes.set(blk, j, (bytes.get(data, off + j) ^ bytes.get(prev, j)) & 0xFF)
+            j = j + 1
+        }
+        eb = process_block(ctx, blk)
+        k = 0
+        while k < 16 {
+            v = bytes.get(eb, k)
+            bytes.set(out, off + k, v)
+            bytes.set(prev, k, v)   // ciphertext becomes the next XOR mask
+            k = k + 1
+        }
+        bytes.free(blk); bytes.free(eb)
+        off = off + 16
+    }
+    bytes.free(prev)
+    return out
+}
+
+// CBC decrypt: P_i = D(C_i) XOR C_{i-1}, with C_{-1} = IV.
+cbc_decrypt(ctx: ptr, iv: ptr, data: ptr) -> ptr {
+    n = bytes.length(data)
+    if n % 16 != 0 {
+        return bytes.new(0)
+    }
+    out = bytes.new(n)
+    prev = bytes.new(16)
+    i = 0
+    while i < 16 { bytes.set(prev, i, bytes.get(iv, i)); i = i + 1 }
+    off = 0
+    while off < n {
+        blk = bytes.new(16)
+        j = 0
+        while j < 16 { bytes.set(blk, j, bytes.get(data, off + j)); j = j + 1 }
+        db = process_block(ctx, blk)
+        k = 0
+        while k < 16 {
+            bytes.set(out, off + k, (bytes.get(db, k) ^ bytes.get(prev, k)) & 0xFF)
+            bytes.set(prev, k, bytes.get(blk, k))   // this ciphertext block
+            k = k + 1
+        }
+        bytes.free(blk); bytes.free(db)
+        off = off + 16
+    }
+    bytes.free(prev)
+    return out
+}
+
+// ---- PKCS#7 padding ----
+// Append (16 - n mod 16) bytes, each equal to that count. A full extra
+// block is added when the input is already a multiple of 16, so the
+// padding is always present and unambiguous (RFC 5652 §6.3).
+pkcs7_pad(data: ptr) -> ptr {
+    n = bytes.length(data)
+    pad = 16 - (n % 16)        // 1..16
+    out = bytes.new(n + pad)
+    i = 0
+    while i < n { bytes.set(out, i, bytes.get(data, i)); i = i + 1 }
+    j = 0
+    while j < pad { bytes.set(out, n + j, pad); j = j + 1 }
+    return out
+}
+
+// Strip PKCS#7 padding. Returns (plaintext, "") on success or
+// (empty-buffer, error) if the padding is malformed (bad length, pad byte
+// out of range, or trailing bytes that don't all match the count). The
+// check walks all `pad` trailing bytes regardless of an early mismatch so
+// the work is independent of where the first bad byte is.
+pkcs7_unpad(data: ptr) -> {
+    n = bytes.length(data)
+    if n == 0 {
+        return bytes.new(0), "empty input"
+    }
+    if n % 16 != 0 {
+        return bytes.new(0), "length not a multiple of 16"
+    }
+    pad = bytes.get(data, n - 1) & 0xFF
+    if pad < 1 {
+        return bytes.new(0), "bad padding"
+    }
+    if pad > 16 {
+        return bytes.new(0), "bad padding"
+    }
+    bad = 0
+    i = 0
+    while i < pad {
+        if (bytes.get(data, n - 1 - i) & 0xFF) != pad {
+            bad = 1
+        }
+        i = i + 1
+    }
+    if bad == 1 {
+        return bytes.new(0), "bad padding"
+    }
+    outlen = n - pad
+    out = bytes.new(outlen)
+    j = 0
+    while j < outlen { bytes.set(out, j, bytes.get(data, j)); j = j + 1 }
+    return out, ""
+}
+
+// ---- CBC + PKCS#7 (arbitrary length) ----
+// Pads then CBC-encrypts; ciphertext length is always a multiple of 16 and
+// strictly greater than the plaintext. `ctx` is an encryptor.
+cbc_encrypt_pkcs7(ctx: ptr, iv: ptr, data: ptr) -> ptr {
+    padded = pkcs7_pad(data)
+    out = cbc_encrypt(ctx, iv, padded)
+    bytes.free(padded)
+    return out
+}
+
+// CBC-decrypts then strips PKCS#7. `ctx` is a decryptor. Returns
+// (plaintext, "") or (empty, error) for a bad length / bad padding.
+cbc_decrypt_pkcs7(ctx: ptr, iv: ptr, data: ptr) -> {
+    n = bytes.length(data)
+    if n == 0 {
+        return bytes.new(0), "empty input"
+    }
+    if n % 16 != 0 {
+        return bytes.new(0), "length not a multiple of 16"
+    }
+    raw = cbc_decrypt(ctx, iv, data)
+    out, err = pkcs7_unpad(raw)
+    bytes.free(raw)
+    return out, err
 }

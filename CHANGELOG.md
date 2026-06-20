@@ -14,6 +14,28 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.294.0]
+
+### Added
+
+- **AES CBC mode + PKCS#7 padding** in `contrib.cryptography.aes`, layered
+  over the existing FIPS-197 block primitive (no externs to OpenSSL).
+  - `cbc_encrypt` / `cbc_decrypt` — block-aligned CBC (C_i = E(P_i XOR C_{i-1})).
+  - `pkcs7_pad` / `pkcs7_unpad` — RFC 5652 §6.3 padding (a full extra block is
+    added when the input is already a multiple of 16; `pkcs7_unpad` returns
+    `(plaintext, err)` and rejects malformed padding).
+  - `cbc_encrypt_pkcs7` / `cbc_decrypt_pkcs7` — arbitrary-length CBC.
+  - Validated against NIST SP800-38A F.2.1/F.2.2 CBC vectors plus PKCS#7
+    round-trip and bad-padding-rejection cases.
+- **RIPEMD-256 and RIPEMD-320 digests** in `std.cryptography`, ported in pure
+  Aether from Bouncy Castle's `RipeMD256Digest` / `RipeMD320Digest`. These run
+  the two RIPEMD-128 / -160 lines side by side for a wider (256-/320-bit)
+  output at the same security level as -128 / -160. Same streaming + one-shot
+  surface as the other digests; validated against the published RIPEMD
+  reference vectors.
+  - **`std.cryptography.ripemd256`** — 256-bit, 8-word dual-line.
+  - **`std.cryptography.ripemd320`** — 320-bit, 10-word dual-line.
+
 ## [0.293.0]
 
 ### Added
