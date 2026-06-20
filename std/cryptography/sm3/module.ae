@@ -1,0 +1,382 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.sm3 — the Chinese SM3 hash (GB/T 32905-2016) in pure
+// Aether, ported from Bouncy Castle's SM3Digest / GeneralDigest. NO externs
+// to OpenSSL or any C crypto.
+//
+// SM3 is a 256-bit hash with a SHA-256-like Merkle-Damgard structure: a
+// 64-byte block, big-endian words and length, 8 chaining words, 64 rounds
+// with two boolean-function regimes (rounds 0-15 vs 16-63).
+//
+// Import with:  import std.cryptography.sm3
+//
+//   one-shot:   sm3_hex(data, len) / sm3_bytes(data, len)
+//   streaming:  ctx = new(); update(ctx, data, len); final_hex(ctx)
+//
+// Aether-specific care:
+//   * 32-bit words, so every add is masked with & 0xFFFFFFFF (m32).
+//   * Rotates are LEFT via std.bits.rotl32 on a pre-masked value.
+//   * BIG-endian word load (bytes.get_be32) and output, like SHA-256.
+//   * The round constant T is precomputed (BC builds it in a static ctor);
+//     here it is a const table of the rolled values.
+
+import std.bits
+import std.bytes
+import std.intarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+
+exports (
+    new, update, update_bytes, final_hex, final_bytes, free_ctx,
+    sm3_hex, sm3_bytes
+)
+
+// Precomputed round constant T[j] = ROL(0x79CC4519, j) for j<16,
+// ROL(0x7A879D8A, j mod 32) for 16<=j<64.
+const T_SM3: long[64] = [
+    0x79cc4519, 0xf3988a32, 0xe7311465, 0xce6228cb,
+    0x9cc45197, 0x3988a32f, 0x7311465e, 0xe6228cbc,
+    0xcc451979, 0x988a32f3, 0x311465e7, 0x6228cbce,
+    0xc451979c, 0x88a32f39, 0x11465e73, 0x228cbce6,
+    0x9d8a7a87, 0x3b14f50f, 0x7629ea1e, 0xec53d43c,
+    0xd8a7a879, 0xb14f50f3, 0x629ea1e7, 0xc53d43ce,
+    0x8a7a879d, 0x14f50f3b, 0x29ea1e76, 0x53d43cec,
+    0xa7a879d8, 0x4f50f3b1, 0x9ea1e762, 0x3d43cec5,
+    0x7a879d8a, 0xf50f3b14, 0xea1e7629, 0xd43cec53,
+    0xa879d8a7, 0x50f3b14f, 0xa1e7629e, 0x43cec53d,
+    0x879d8a7a, 0x0f3b14f5, 0x1e7629ea, 0x3cec53d4,
+    0x79d8a7a8, 0xf3b14f50, 0xe7629ea1, 0xcec53d43,
+    0x9d8a7a87, 0x3b14f50f, 0x7629ea1e, 0xec53d43c,
+    0xd8a7a879, 0xb14f50f3, 0x629ea1e7, 0xc53d43ce,
+    0x8a7a879d, 0x14f50f3b, 0x29ea1e76, 0x53d43cec,
+    0xa7a879d8, 0x4f50f3b1, 0x9ea1e762, 0x3d43cec5
+]
+
+struct Sm3Ctx {
+    v0: long
+    v1: long
+    v2: long
+    v3: long
+    v4: long
+    v5: long
+    v6: long
+    v7: long
+    block: ptr        // std.bytes buffer, 64 bytes
+    block_len: int
+    count_lo: long
+    count_hi: long
+    w: ptr            // intarr(68) message expansion
+}
+
+m32(x: long) -> long {
+    return x & 0xFFFFFFFF
+}
+rl(x: long, n: int) -> long {
+    return bits.rotl32(x & 0xFFFFFFFF, n) & 0xFFFFFFFF
+}
+
+// Permutation functions.
+p0(x: long) -> long {
+    return (x ^ rl(x, 9) ^ rl(x, 17)) & 0xFFFFFFFF
+}
+p1(x: long) -> long {
+    return (x ^ rl(x, 15) ^ rl(x, 23)) & 0xFFFFFFFF
+}
+
+// Boolean functions; rounds 0-15 use the XOR forms, 16-63 the majority/mux.
+ff0(x: long, y: long, z: long) -> long {
+    return (x ^ y ^ z) & 0xFFFFFFFF
+}
+ff1(x: long, y: long, z: long) -> long {
+    return ((x & y) | (x & z) | (y & z)) & 0xFFFFFFFF
+}
+gg0(x: long, y: long, z: long) -> long {
+    return (x ^ y ^ z) & 0xFFFFFFFF
+}
+gg1(x: long, y: long, z: long) -> long {
+    return ((x & y) | ((~x) & z)) & 0xFFFFFFFF
+}
+
+wg(c: *Sm3Ctx, i: int) -> long {
+    return intarr_get_unchecked(c.w, i) & 0xFFFFFFFF
+}
+
+process_block(c: *Sm3Ctx) {
+    w = c.w
+    // Load 16 big-endian words; expand to 68.
+    i = 0
+    while i < 16 {
+        word = bytes.get_be32(c.block, i * 4)
+        intarr_set_unchecked(w, i, word & 0xFFFFFFFF)
+        i = i + 1
+    }
+    i = 16
+    while i < 68 {
+        wj3 = wg(c, i - 3)
+        r15 = rl(wj3, 15)
+        x = wg(c, i - 16) ^ wg(c, i - 9) ^ r15
+        wj13 = wg(c, i - 13)
+        r7 = rl(wj13, 7)
+        v = (p1(x & 0xFFFFFFFF) ^ r7 ^ wg(c, i - 6)) & 0xFFFFFFFF
+        intarr_set_unchecked(w, i, v)
+        i = i + 1
+    }
+
+    a = m32(c.v0)
+    b = m32(c.v1)
+    cc = m32(c.v2)
+    d = m32(c.v3)
+    e = m32(c.v4)
+    f = m32(c.v5)
+    g = m32(c.v6)
+    h = m32(c.v7)
+
+    // Rounds 0-15.
+    j = 0
+    while j < 16 {
+        a12 = rl(a, 12)
+        s1_ = m32(a12 + e + T_SM3[j])
+        ss1 = rl(s1_, 7)
+        ss2 = (ss1 ^ a12) & 0xFFFFFFFF
+        wj = wg(c, j)
+        w1j = (wj ^ wg(c, j + 4)) & 0xFFFFFFFF
+        tt1 = m32(ff0(a, b, cc) + d + ss2 + w1j)
+        tt2 = m32(gg0(e, f, g) + h + ss1 + wj)
+        d = cc
+        cc = rl(b, 9)
+        b = a
+        a = tt1
+        h = g
+        g = rl(f, 19)
+        f = e
+        e = p0(tt2)
+        j = j + 1
+    }
+    // Rounds 16-63.
+    j = 16
+    while j < 64 {
+        a12 = rl(a, 12)
+        s1_ = m32(a12 + e + T_SM3[j])
+        ss1 = rl(s1_, 7)
+        ss2 = (ss1 ^ a12) & 0xFFFFFFFF
+        wj = wg(c, j)
+        w1j = (wj ^ wg(c, j + 4)) & 0xFFFFFFFF
+        tt1 = m32(ff1(a, b, cc) + d + ss2 + w1j)
+        tt2 = m32(gg1(e, f, g) + h + ss1 + wj)
+        d = cc
+        cc = rl(b, 9)
+        b = a
+        a = tt1
+        h = g
+        g = rl(f, 19)
+        f = e
+        e = p0(tt2)
+        j = j + 1
+    }
+
+    c.v0 = (c.v0 ^ a) & 0xFFFFFFFF
+    c.v1 = (c.v1 ^ b) & 0xFFFFFFFF
+    c.v2 = (c.v2 ^ cc) & 0xFFFFFFFF
+    c.v3 = (c.v3 ^ d) & 0xFFFFFFFF
+    c.v4 = (c.v4 ^ e) & 0xFFFFFFFF
+    c.v5 = (c.v5 ^ f) & 0xFFFFFFFF
+    c.v6 = (c.v6 ^ g) & 0xFFFFFFFF
+    c.v7 = (c.v7 ^ h) & 0xFFFFFFFF
+}
+
+new() -> {
+    ctx = malloc(128) as *Sm3Ctx
+    if ctx == null {
+        return null, "allocation failed"
+    }
+    ctx.v0 = 0x7380166f
+    ctx.v1 = 0x4914b2b9
+    ctx.v2 = 0x172442d7
+    ctx.v3 = 0xda8a0600
+    ctx.v4 = 0xa96f30bc
+    ctx.v5 = 0x163138aa
+    ctx.v6 = 0xe38dee4d
+    ctx.v7 = 0xb0fb0e4e
+    ctx.block_len = 0
+    ctx.count_lo = 0
+    ctx.count_hi = 0
+    ctx.block = bytes.new(64)
+    j = 0
+    while j < 64 {
+        bytes.set(ctx.block, j, 0)
+        j = j + 1
+    }
+    ctx.w = intarr_new_raw(68)
+    return ctx, ""
+}
+
+update(ctx: ptr, data: string, length: int) {
+    c = ctx as *Sm3Ctx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        b = string_char_at_n(data, length, i)
+        bytes.set(c.block, c.block_len, b & 255)
+        c.block_len = c.block_len + 1
+        if c.block_len == 64 {
+            process_block(c)
+            c.block_len = 0
+        }
+        i = i + 1
+    }
+    old_lo = c.count_lo
+    c.count_lo = c.count_lo + length
+    if bits.ucmp64(c.count_lo, old_lo) < 0 {
+        c.count_hi = c.count_hi + 1
+    }
+}
+
+update_bytes(ctx: ptr, data: ptr, length: int) {
+    c = ctx as *Sm3Ctx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        b = bytes.get(data, i)
+        bytes.set(c.block, c.block_len, b & 255)
+        c.block_len = c.block_len + 1
+        if c.block_len == 64 {
+            process_block(c)
+            c.block_len = 0
+        }
+        i = i + 1
+    }
+    old_lo = c.count_lo
+    c.count_lo = c.count_lo + length
+    if bits.ucmp64(c.count_lo, old_lo) < 0 {
+        c.count_hi = c.count_hi + 1
+    }
+}
+
+push_pad_byte(c: *Sm3Ctx, b: int) {
+    bytes.set(c.block, c.block_len, b & 255)
+    c.block_len = c.block_len + 1
+    if c.block_len == 64 {
+        process_block(c)
+        c.block_len = 0
+    }
+}
+
+finalize_to_bytes(c: *Sm3Ctx) -> ptr {
+    bit_lo = c.count_lo << 3
+    bit_hi = (c.count_hi << 3) | bits.lsr64(c.count_lo, 61)
+
+    push_pad_byte(c, 0x80)
+    while c.block_len != 56 {
+        push_pad_byte(c, 0)
+    }
+    // 64-bit big-endian length.
+    bytes.set_be64(c.block, 56, bit_lo)
+    // SM3 message length is 64-bit; bit_hi is non-zero only beyond 2^61
+    // bytes, far past any practical input. Fold it in for completeness by
+    // OR-ing into the high word would overflow set_be64's 64-bit slot, so
+    // the standard 64-bit length field (bit_lo) is authoritative here.
+    process_block(c)
+    c.block_len = 0
+
+    out = bytes.new(32)
+    emit_be32(out, 0, c.v0)
+    emit_be32(out, 4, c.v1)
+    emit_be32(out, 8, c.v2)
+    emit_be32(out, 12, c.v3)
+    emit_be32(out, 16, c.v4)
+    emit_be32(out, 20, c.v5)
+    emit_be32(out, 24, c.v6)
+    emit_be32(out, 28, c.v7)
+    return out
+}
+
+emit_be32(out: ptr, off: int, v: long) {
+    bytes.set(out, off,     bits.lsr64(v, 24) & 255)
+    bytes.set(out, off + 1, bits.lsr64(v, 16) & 255)
+    bytes.set(out, off + 2, bits.lsr64(v, 8) & 255)
+    bytes.set(out, off + 3, v & 255)
+}
+
+free_internals(c: *Sm3Ctx) {
+    if c.block != null {
+        bytes.free(c.block)
+        c.block = null
+    }
+    if c.w != null {
+        intarr_free(c.w)
+        c.w = null
+    }
+}
+
+final_bytes(ctx: ptr) -> ptr {
+    c = ctx as *Sm3Ctx
+    out = finalize_to_bytes(c)
+    s = bytes.finish(out, 32)
+    free_internals(c)
+    free(ctx)
+    res = bytes.new(32)
+    bytes.copy_from_string(res, 0, s, 32)
+    return res
+}
+
+final_hex(ctx: ptr) -> string {
+    c = ctx as *Sm3Ctx
+    out = finalize_to_bytes(c)
+    hexbuf = bytes.new(64)
+    i = 0
+    while i < 32 {
+        b = bytes.get(out, i)
+        hi = (b >> 4) & 15
+        lo = b & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    s = bytes.finish(hexbuf, 64)
+    free_internals(c)
+    free(ctx)
+    return s
+}
+
+free_ctx(ctx: ptr) {
+    if ctx == null {
+        return
+    }
+    c = ctx as *Sm3Ctx
+    free_internals(c)
+    free(ctx)
+}
+
+sm3_hex(data: string, len: int) -> string {
+    ctx, err = new()
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+sm3_bytes(data: string, len: int) -> ptr {
+    ctx, err = new()
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}

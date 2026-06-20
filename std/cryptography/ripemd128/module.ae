@@ -1,0 +1,451 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.ripemd128 — RIPEMD-128 in pure Aether, ported from
+// Bouncy Castle's RipeMD128Digest / GeneralDigest. NO externs to OpenSSL
+// or any C crypto.
+//
+// RIPEMD-128 is the 128-bit variant of RIPEMD (Dobbertin/Bosselaers/Preneel,
+// 1996); a 4-word, 64-round dual-line construction. Like its -160 sibling it
+// is little-endian on input, output, and the length field.
+//
+// Import with:  import std.cryptography.ripemd128
+//
+//   one-shot:   ripemd128_hex(data, len) / ripemd128_bytes(data, len)
+//   streaming:  ctx = new(); update(ctx, data, len); final_hex(ctx)
+//
+// Aether-specific care matches std.cryptography.ripemd160: every 32-bit add
+// masked with & 0xFFFFFFFF; rotates are LEFT via std.bits.rotl32 on a
+// pre-masked value; little-endian word load/store.
+
+import std.bits
+import std.bytes
+import std.intarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+
+exports (
+    new, update, update_bytes, final_hex, final_bytes, free_ctx,
+    ripemd128_hex, ripemd128_bytes
+)
+
+struct Rmd128Ctx {
+    h0: long
+    h1: long
+    h2: long
+    h3: long
+    block: ptr        // std.bytes buffer, 64 bytes
+    block_len: int
+    count_lo: long
+    count_hi: long
+    x: ptr            // intarr(16) loaded message words
+}
+
+m32(x: long) -> long {
+    return x & 0xFFFFFFFF
+}
+
+rl(x: long, n: int) -> long {
+    return bits.rotl32(x & 0xFFFFFFFF, n) & 0xFFFFFFFF
+}
+
+f1(x: long, y: long, z: long) -> long {
+    return (x ^ y ^ z) & 0xFFFFFFFF
+}
+f2(x: long, y: long, z: long) -> long {
+    return ((x & y) | ((~x) & z)) & 0xFFFFFFFF
+}
+f3(x: long, y: long, z: long) -> long {
+    return ((x | (~y)) ^ z) & 0xFFFFFFFF
+}
+f4(x: long, y: long, z: long) -> long {
+    return ((x & z) | (y & (~z))) & 0xFFFFFFFF
+}
+
+xg(ctx: *Rmd128Ctx, i: int) -> long {
+    return intarr_get_unchecked(ctx.x, i) & 0xFFFFFFFF
+}
+
+// Left-line step functions: a = RL(a + Fi(b,c,d) + x + K, s)
+sf1(a: long, b: long, c: long, d: long, x: long, s: int) -> long {
+    return rl(m32(a + f1(b,c,d) + x), s)
+}
+sf2(a: long, b: long, c: long, d: long, x: long, s: int) -> long {
+    return rl(m32(a + f2(b,c,d) + x + 0x5a827999), s)
+}
+sf3(a: long, b: long, c: long, d: long, x: long, s: int) -> long {
+    return rl(m32(a + f3(b,c,d) + x + 0x6ed9eba1), s)
+}
+sf4(a: long, b: long, c: long, d: long, x: long, s: int) -> long {
+    return rl(m32(a + f4(b,c,d) + x + 0x8f1bbcdc), s)
+}
+// Right-line step functions (parallel rounds): swapped function order and
+// distinct constants per BC RipeMD128Digest.
+sff1(a: long, b: long, c: long, d: long, x: long, s: int) -> long {
+    return rl(m32(a + f1(b,c,d) + x), s)
+}
+sff2(a: long, b: long, c: long, d: long, x: long, s: int) -> long {
+    return rl(m32(a + f2(b,c,d) + x + 0x6d703ef3), s)
+}
+sff3(a: long, b: long, c: long, d: long, x: long, s: int) -> long {
+    return rl(m32(a + f3(b,c,d) + x + 0x5c4dd124), s)
+}
+sff4(a: long, b: long, c: long, d: long, x: long, s: int) -> long {
+    return rl(m32(a + f4(b,c,d) + x + 0x50a28be6), s)
+}
+
+process_block(ctx: *Rmd128Ctx) {
+    a = m32(ctx.h0)
+    b = m32(ctx.h1)
+    c = m32(ctx.h2)
+    d = m32(ctx.h3)
+    aa = a
+    bb = b
+    cc = c
+    dd = d
+
+    // ---- Round 1 (left) ----
+    a = sf1(a, b, c, d, xg(ctx, 0), 11)
+    d = sf1(d, a, b, c, xg(ctx, 1), 14)
+    c = sf1(c, d, a, b, xg(ctx, 2), 15)
+    b = sf1(b, c, d, a, xg(ctx, 3), 12)
+    a = sf1(a, b, c, d, xg(ctx, 4),  5)
+    d = sf1(d, a, b, c, xg(ctx, 5),  8)
+    c = sf1(c, d, a, b, xg(ctx, 6),  7)
+    b = sf1(b, c, d, a, xg(ctx, 7),  9)
+    a = sf1(a, b, c, d, xg(ctx, 8), 11)
+    d = sf1(d, a, b, c, xg(ctx, 9), 13)
+    c = sf1(c, d, a, b, xg(ctx,10), 14)
+    b = sf1(b, c, d, a, xg(ctx,11), 15)
+    a = sf1(a, b, c, d, xg(ctx,12),  6)
+    d = sf1(d, a, b, c, xg(ctx,13),  7)
+    c = sf1(c, d, a, b, xg(ctx,14),  9)
+    b = sf1(b, c, d, a, xg(ctx,15),  8)
+
+    // ---- Round 2 (left) ----
+    a = sf2(a, b, c, d, xg(ctx, 7),  7)
+    d = sf2(d, a, b, c, xg(ctx, 4),  6)
+    c = sf2(c, d, a, b, xg(ctx,13),  8)
+    b = sf2(b, c, d, a, xg(ctx, 1), 13)
+    a = sf2(a, b, c, d, xg(ctx,10), 11)
+    d = sf2(d, a, b, c, xg(ctx, 6),  9)
+    c = sf2(c, d, a, b, xg(ctx,15),  7)
+    b = sf2(b, c, d, a, xg(ctx, 3), 15)
+    a = sf2(a, b, c, d, xg(ctx,12),  7)
+    d = sf2(d, a, b, c, xg(ctx, 0), 12)
+    c = sf2(c, d, a, b, xg(ctx, 9), 15)
+    b = sf2(b, c, d, a, xg(ctx, 5),  9)
+    a = sf2(a, b, c, d, xg(ctx, 2), 11)
+    d = sf2(d, a, b, c, xg(ctx,14),  7)
+    c = sf2(c, d, a, b, xg(ctx,11), 13)
+    b = sf2(b, c, d, a, xg(ctx, 8), 12)
+
+    // ---- Round 3 (left) ----
+    a = sf3(a, b, c, d, xg(ctx, 3), 11)
+    d = sf3(d, a, b, c, xg(ctx,10), 13)
+    c = sf3(c, d, a, b, xg(ctx,14),  6)
+    b = sf3(b, c, d, a, xg(ctx, 4),  7)
+    a = sf3(a, b, c, d, xg(ctx, 9), 14)
+    d = sf3(d, a, b, c, xg(ctx,15),  9)
+    c = sf3(c, d, a, b, xg(ctx, 8), 13)
+    b = sf3(b, c, d, a, xg(ctx, 1), 15)
+    a = sf3(a, b, c, d, xg(ctx, 2), 14)
+    d = sf3(d, a, b, c, xg(ctx, 7),  8)
+    c = sf3(c, d, a, b, xg(ctx, 0), 13)
+    b = sf3(b, c, d, a, xg(ctx, 6),  6)
+    a = sf3(a, b, c, d, xg(ctx,13),  5)
+    d = sf3(d, a, b, c, xg(ctx,11), 12)
+    c = sf3(c, d, a, b, xg(ctx, 5),  7)
+    b = sf3(b, c, d, a, xg(ctx,12),  5)
+
+    // ---- Round 4 (left) ----
+    a = sf4(a, b, c, d, xg(ctx, 1), 11)
+    d = sf4(d, a, b, c, xg(ctx, 9), 12)
+    c = sf4(c, d, a, b, xg(ctx,11), 14)
+    b = sf4(b, c, d, a, xg(ctx,10), 15)
+    a = sf4(a, b, c, d, xg(ctx, 0), 14)
+    d = sf4(d, a, b, c, xg(ctx, 8), 15)
+    c = sf4(c, d, a, b, xg(ctx,12),  9)
+    b = sf4(b, c, d, a, xg(ctx, 4),  8)
+    a = sf4(a, b, c, d, xg(ctx,13),  9)
+    d = sf4(d, a, b, c, xg(ctx, 3), 14)
+    c = sf4(c, d, a, b, xg(ctx, 7),  5)
+    b = sf4(b, c, d, a, xg(ctx,15),  6)
+    a = sf4(a, b, c, d, xg(ctx,14),  8)
+    d = sf4(d, a, b, c, xg(ctx, 5),  6)
+    c = sf4(c, d, a, b, xg(ctx, 6),  5)
+    b = sf4(b, c, d, a, xg(ctx, 2), 12)
+
+    // ---- Parallel round 1 (right, uses FF4) ----
+    aa = sff4(aa, bb, cc, dd, xg(ctx, 5),  8)
+    dd = sff4(dd, aa, bb, cc, xg(ctx,14),  9)
+    cc = sff4(cc, dd, aa, bb, xg(ctx, 7),  9)
+    bb = sff4(bb, cc, dd, aa, xg(ctx, 0), 11)
+    aa = sff4(aa, bb, cc, dd, xg(ctx, 9), 13)
+    dd = sff4(dd, aa, bb, cc, xg(ctx, 2), 15)
+    cc = sff4(cc, dd, aa, bb, xg(ctx,11), 15)
+    bb = sff4(bb, cc, dd, aa, xg(ctx, 4),  5)
+    aa = sff4(aa, bb, cc, dd, xg(ctx,13),  7)
+    dd = sff4(dd, aa, bb, cc, xg(ctx, 6),  7)
+    cc = sff4(cc, dd, aa, bb, xg(ctx,15),  8)
+    bb = sff4(bb, cc, dd, aa, xg(ctx, 8), 11)
+    aa = sff4(aa, bb, cc, dd, xg(ctx, 1), 14)
+    dd = sff4(dd, aa, bb, cc, xg(ctx,10), 14)
+    cc = sff4(cc, dd, aa, bb, xg(ctx, 3), 12)
+    bb = sff4(bb, cc, dd, aa, xg(ctx,12),  6)
+
+    // ---- Parallel round 2 (right, uses FF3) ----
+    aa = sff3(aa, bb, cc, dd, xg(ctx, 6),  9)
+    dd = sff3(dd, aa, bb, cc, xg(ctx,11), 13)
+    cc = sff3(cc, dd, aa, bb, xg(ctx, 3), 15)
+    bb = sff3(bb, cc, dd, aa, xg(ctx, 7),  7)
+    aa = sff3(aa, bb, cc, dd, xg(ctx, 0), 12)
+    dd = sff3(dd, aa, bb, cc, xg(ctx,13),  8)
+    cc = sff3(cc, dd, aa, bb, xg(ctx, 5),  9)
+    bb = sff3(bb, cc, dd, aa, xg(ctx,10), 11)
+    aa = sff3(aa, bb, cc, dd, xg(ctx,14),  7)
+    dd = sff3(dd, aa, bb, cc, xg(ctx,15),  7)
+    cc = sff3(cc, dd, aa, bb, xg(ctx, 8), 12)
+    bb = sff3(bb, cc, dd, aa, xg(ctx,12),  7)
+    aa = sff3(aa, bb, cc, dd, xg(ctx, 4),  6)
+    dd = sff3(dd, aa, bb, cc, xg(ctx, 9), 15)
+    cc = sff3(cc, dd, aa, bb, xg(ctx, 1), 13)
+    bb = sff3(bb, cc, dd, aa, xg(ctx, 2), 11)
+
+    // ---- Parallel round 3 (right, uses FF2) ----
+    aa = sff2(aa, bb, cc, dd, xg(ctx,15),  9)
+    dd = sff2(dd, aa, bb, cc, xg(ctx, 5),  7)
+    cc = sff2(cc, dd, aa, bb, xg(ctx, 1), 15)
+    bb = sff2(bb, cc, dd, aa, xg(ctx, 3), 11)
+    aa = sff2(aa, bb, cc, dd, xg(ctx, 7),  8)
+    dd = sff2(dd, aa, bb, cc, xg(ctx,14),  6)
+    cc = sff2(cc, dd, aa, bb, xg(ctx, 6),  6)
+    bb = sff2(bb, cc, dd, aa, xg(ctx, 9), 14)
+    aa = sff2(aa, bb, cc, dd, xg(ctx,11), 12)
+    dd = sff2(dd, aa, bb, cc, xg(ctx, 8), 13)
+    cc = sff2(cc, dd, aa, bb, xg(ctx,12),  5)
+    bb = sff2(bb, cc, dd, aa, xg(ctx, 2), 14)
+    aa = sff2(aa, bb, cc, dd, xg(ctx,10), 13)
+    dd = sff2(dd, aa, bb, cc, xg(ctx, 0), 13)
+    cc = sff2(cc, dd, aa, bb, xg(ctx, 4),  7)
+    bb = sff2(bb, cc, dd, aa, xg(ctx,13),  5)
+
+    // ---- Parallel round 4 (right, uses FF1) ----
+    aa = sff1(aa, bb, cc, dd, xg(ctx, 8), 15)
+    dd = sff1(dd, aa, bb, cc, xg(ctx, 6),  5)
+    cc = sff1(cc, dd, aa, bb, xg(ctx, 4),  8)
+    bb = sff1(bb, cc, dd, aa, xg(ctx, 1), 11)
+    aa = sff1(aa, bb, cc, dd, xg(ctx, 3), 14)
+    dd = sff1(dd, aa, bb, cc, xg(ctx,11), 14)
+    cc = sff1(cc, dd, aa, bb, xg(ctx,15),  6)
+    bb = sff1(bb, cc, dd, aa, xg(ctx, 0), 14)
+    aa = sff1(aa, bb, cc, dd, xg(ctx, 5),  6)
+    dd = sff1(dd, aa, bb, cc, xg(ctx,12),  9)
+    cc = sff1(cc, dd, aa, bb, xg(ctx, 2), 12)
+    bb = sff1(bb, cc, dd, aa, xg(ctx,13),  9)
+    aa = sff1(aa, bb, cc, dd, xg(ctx, 9), 12)
+    dd = sff1(dd, aa, bb, cc, xg(ctx, 7),  5)
+    cc = sff1(cc, dd, aa, bb, xg(ctx,10), 15)
+    bb = sff1(bb, cc, dd, aa, xg(ctx,14),  8)
+
+    // Combine the two lines.
+    t = m32(ctx.h1 + c + dd)
+    ctx.h1 = m32(ctx.h2 + d + aa)
+    ctx.h2 = m32(ctx.h3 + a + bb)
+    ctx.h3 = m32(ctx.h0 + b + cc)
+    ctx.h0 = t
+}
+
+new() -> {
+    ctx = malloc(80) as *Rmd128Ctx
+    if ctx == null {
+        return null, "allocation failed"
+    }
+    ctx.h0 = 0x67452301
+    ctx.h1 = 0xefcdab89
+    ctx.h2 = 0x98badcfe
+    ctx.h3 = 0x10325476
+    ctx.block_len = 0
+    ctx.count_lo = 0
+    ctx.count_hi = 0
+    ctx.block = bytes.new(64)
+    j = 0
+    while j < 64 {
+        bytes.set(ctx.block, j, 0)
+        j = j + 1
+    }
+    ctx.x = intarr_new_raw(16)
+    return ctx, ""
+}
+
+absorb_block(c: *Rmd128Ctx) {
+    i = 0
+    while i < 16 {
+        w = bytes.get_le32(c.block, i * 4)
+        intarr_set_unchecked(c.x, i, w)
+        i = i + 1
+    }
+    process_block(c)
+}
+
+update(ctx: ptr, data: string, length: int) {
+    c = ctx as *Rmd128Ctx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        b = string_char_at_n(data, length, i)
+        bytes.set(c.block, c.block_len, b & 255)
+        c.block_len = c.block_len + 1
+        if c.block_len == 64 {
+            absorb_block(c)
+            c.block_len = 0
+        }
+        i = i + 1
+    }
+    old_lo = c.count_lo
+    c.count_lo = c.count_lo + length
+    if bits.ucmp64(c.count_lo, old_lo) < 0 {
+        c.count_hi = c.count_hi + 1
+    }
+}
+
+update_bytes(ctx: ptr, data: ptr, length: int) {
+    c = ctx as *Rmd128Ctx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        b = bytes.get(data, i)
+        bytes.set(c.block, c.block_len, b & 255)
+        c.block_len = c.block_len + 1
+        if c.block_len == 64 {
+            absorb_block(c)
+            c.block_len = 0
+        }
+        i = i + 1
+    }
+    old_lo = c.count_lo
+    c.count_lo = c.count_lo + length
+    if bits.ucmp64(c.count_lo, old_lo) < 0 {
+        c.count_hi = c.count_hi + 1
+    }
+}
+
+push_pad_byte(c: *Rmd128Ctx, b: int) {
+    bytes.set(c.block, c.block_len, b & 255)
+    c.block_len = c.block_len + 1
+    if c.block_len == 64 {
+        absorb_block(c)
+        c.block_len = 0
+    }
+}
+
+finalize_to_bytes(c: *Rmd128Ctx) -> ptr {
+    bit_lo = c.count_lo << 3
+    bit_hi = (c.count_hi << 3) | bits.lsr64(c.count_lo, 61)
+
+    push_pad_byte(c, 0x80)
+    while c.block_len != 56 {
+        push_pad_byte(c, 0)
+    }
+    bytes.set_le32(c.block, 56, bit_lo & 0xFFFFFFFF)
+    bytes.set_le32(c.block, 60, bit_hi & 0xFFFFFFFF)
+    absorb_block(c)
+    c.block_len = 0
+
+    out = bytes.new(16)
+    emit_le32(out, 0, c.h0)
+    emit_le32(out, 4, c.h1)
+    emit_le32(out, 8, c.h2)
+    emit_le32(out, 12, c.h3)
+    return out
+}
+
+emit_le32(out: ptr, off: int, v: long) {
+    bytes.set(out, off,     v & 255)
+    bytes.set(out, off + 1, bits.lsr64(v, 8) & 255)
+    bytes.set(out, off + 2, bits.lsr64(v, 16) & 255)
+    bytes.set(out, off + 3, bits.lsr64(v, 24) & 255)
+}
+
+free_internals(c: *Rmd128Ctx) {
+    if c.block != null {
+        bytes.free(c.block)
+        c.block = null
+    }
+    if c.x != null {
+        intarr_free(c.x)
+        c.x = null
+    }
+}
+
+final_bytes(ctx: ptr) -> ptr {
+    c = ctx as *Rmd128Ctx
+    out = finalize_to_bytes(c)
+    s = bytes.finish(out, 16)
+    free_internals(c)
+    free(ctx)
+    res = bytes.new(16)
+    bytes.copy_from_string(res, 0, s, 16)
+    return res
+}
+
+final_hex(ctx: ptr) -> string {
+    c = ctx as *Rmd128Ctx
+    out = finalize_to_bytes(c)
+    hexbuf = bytes.new(32)
+    i = 0
+    while i < 16 {
+        b = bytes.get(out, i)
+        hi = (b >> 4) & 15
+        lo = b & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    s = bytes.finish(hexbuf, 32)
+    free_internals(c)
+    free(ctx)
+    return s
+}
+
+free_ctx(ctx: ptr) {
+    if ctx == null {
+        return
+    }
+    c = ctx as *Rmd128Ctx
+    free_internals(c)
+    free(ctx)
+}
+
+ripemd128_hex(data: string, len: int) -> string {
+    ctx, err = new()
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+ripemd128_bytes(data: string, len: int) -> ptr {
+    ctx, err = new()
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
