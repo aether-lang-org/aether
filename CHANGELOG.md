@@ -14,6 +14,44 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **SHA-3 / SHAKE (FIPS 202)** — `std.cryptography.sha3`, the Keccak hash
+  family in pure Aether ported from Bouncy Castle (#739), no externs to
+  OpenSSL. Keccak-f[1600] permutation (θ/ρ/π/χ/ι, 24 rounds) under a sponge:
+  fixed-length `sha3_{224,256,384,512}_{hex,bytes}` and the extendable-output
+  functions `shake{128,256}_{hex,bytes}(data, len, out_len)`, plus a streaming
+  `new(variant)` / `update` / `final_*` ctx. Validated against FIPS 202 /
+  NIST known-answer vectors (SHA3-224/256/384/512 and SHAKE128/256).
+- **BLAKE2b + BLAKE2s (RFC 7693)** — `std.cryptography.blake2`, pure Aether
+  from the Bouncy Castle port (#739). 64-bit BLAKE2b (≤64-byte digest) and
+  32-bit BLAKE2s (≤32-byte digest), each with plain, variable-length, and
+  keyed (MAC) modes plus streaming ctxs: `blake2{b,s}_{hex,bytes}`,
+  `*_{hex,bytes}_n` (variable length), `*_keyed_{hex,bytes}`. Validated
+  against RFC 7693 reference vectors (plain + keyed).
+
+### Changed
+
+- **`make contrib` / `install-contrib` now build and ship two more host
+  bridges** — `contrib.host.factor` (dlopen libfactor; archive builds bare,
+  Factor runtime only needed to *run* code) and `contrib.host.aether`
+  (Aether-hosts-Aether fork+exec sandbox; libc + in-tree sandbox runtime
+  only). Both were already present in the tree but were missing from the
+  build catalogue / install set; they now join the other in-process bridges.
+  Adds `tests/integration/host_aether/` (compile + run round-trip) alongside
+  the existing factor test. `host/{java,go}` remain out of v1 (javac/jar and
+  cgo c-archive don't fit the cc→ar pipeline).
+
+### Removed
+
+- **`contrib/climate_http_tests/`** — the Servirtium climate-API record/replay
+  harness moved to the servirtium-vcr repo (`integration/climate_interop/`),
+  where the VCR tapes + record-then-replay tests live alongside the
+  other-language reference implementations. The copy here was a stale,
+  byte-identical 2-file subset already excluded from install.
+
 ## [0.298.0]
 
 ### Added

@@ -110,8 +110,8 @@ plays that role), no interfaces.
   a stdlib gap is real** — a porter writing a downstream port may
   not realise the module is there. Today covers: `xml/expat` (SAX
   XML parser via libexpat), `sqlite`, `host/{python,ruby,lua,perl,
-  tcl,duktape,tinygo,go,java}` for embedded interpreters,
-  `climate_http_tests`, `tinyweb`.
+  tcl,duktape,tinygo,factor,aether,go,java}` for embedded
+  interpreters, `tinyweb`.
 - `compiler/aetherc.c` — CLI entry. `--emit=lib`, `--with=`, import
   gate lives around line 590.
 - `build/aetherc`, `build/ae` — the compiled binary. `make && make
