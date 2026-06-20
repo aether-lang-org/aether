@@ -14,6 +14,34 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.290.0]
+
+### Added
+
+- **`contrib.cryptography.pem` / `.asn1` / `.rsa`** (issue #739) — the format
+  layer that turns `std.bignum` into usable RSA, all pure Aether (no OpenSSL
+  RSA; the OS CSPRNG via `std.cryptography.random_bytes` is the only extern,
+  for PKCS#1 v1.5 padding randomness).
+  - **`contrib.cryptography.pem`** — RFC 7468 PEM `parse` / `encode` over a
+    self-contained RFC 4648 base64 codec (no extern base64). 64-column line
+    wrapping, BEGIN/END label-match validation.
+  - **`contrib.cryptography.asn1`** — ASN.1 **DER** parser + emitter over
+    `std.bytes`: TLV read with `last_tag`, typed readers/encoders for INTEGER
+    (via `std.bignum`), SEQUENCE, OBJECT IDENTIFIER, OCTET/BIT STRING, NULL,
+    BOOLEAN. Ported from Bouncy Castle's `asn1/`.
+  - **`contrib.cryptography.rsa`** — the first `std.bignum` consumer: key from
+    components or PKCS#1 `RSAPrivateKey` DER, raw `m^e`/`c^d mod n` via
+    `bignum.mod_pow`, and PKCS#1 v1.5 encrypt/decrypt + sign/verify (over a
+    caller-supplied DigestInfo, so RSA stays hash-agnostic). Ported from
+    Bouncy Castle's RSA engine + `Pkcs1Encoding` + `RsaDigestSigner`.
+
+  Cross-validated against OpenSSL end-to-end on a real RSA key: our code
+  decrypts an OpenSSL PKCS#1 ciphertext, verifies an OpenSSL SHA-256
+  signature, and **our v1.5 signature is byte-identical to OpenSSL's**; the
+  ASN.1 codec reproduces a real key's DER byte-for-byte on re-encode.
+  Regressions: `tests/regression/test_{pem_codec,asn1_der,rsa_pkcs1}.ae`.
+  Constant-time decryption, OAEP, PSS, and X.509/PKCS#8 are follow-up slices.
+
 ## [0.289.0]
 
 ### Added

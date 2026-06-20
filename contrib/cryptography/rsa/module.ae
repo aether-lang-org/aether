@@ -1,0 +1,298 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// contrib.cryptography.rsa — RSA, the first consumer of std.bignum.
+//
+// Pure Aether: the modular exponentiation is std.bignum.mod_pow, the key
+// is parsed from PKCS#1 DER via contrib.cryptography.asn1, and PKCS#1 v1.5
+// padding is built byte-by-byte. No OpenSSL RSA — only the OS CSPRNG
+// (std.cryptography.random_bytes) for type-2 encryption padding, which is
+// a randomness source, not a reimplemented crypto algorithm.
+//
+// Ported from Bouncy Castle's RsaCoreEngine + Pkcs1Encoding +
+// RsaDigestSigner (crypto/src/crypto/{engines,encodings,signers}/, MIT).
+//
+// Scope (this slice):
+//   - key_from_components(n, e, d) / key_free
+//   - key_from_pkcs1_der(bytes) — parse an RSAPrivateKey SEQUENCE
+//   - raw encrypt/decrypt primitives (m^e mod n / c^d mod n)
+//   - PKCS#1 v1.5 encrypt (type 2) / decrypt
+//   - PKCS#1 v1.5 sign (type 1) / verify over a caller-supplied DigestInfo
+//     blob (keeps RSA hash-agnostic; the digest+DigestInfo prefix is built
+//     by the caller, so any std.cryptography digest composes).
+//
+// NOTE: this is the textbook construction for correctness and as the first
+// bignum consumer. Constant-time decryption, OAEP, PSS, and Montgomery
+// acceleration are follow-up slices (see docs/bignum-deferred-optimizations.md
+// for the mod_pow speedup).
+
+import std.string
+import std.bignum
+import std.bytes
+import std.cryptography
+import contrib.cryptography.asn1
+
+exports (
+    key_from_components, key_from_pkcs1_der, key_free,
+    modulus_bytes, modulus_bits,
+    raw_encrypt, raw_decrypt,
+    encrypt_pkcs1, decrypt_pkcs1,
+    sign_pkcs1, verify_pkcs1
+)
+
+extern malloc(size: int) -> ptr
+@extern("free") libc_free(p: ptr)
+
+// An RSA key owns its component bignums (n, e, d). For a public-only key
+// `d` is null; raw_decrypt / sign require a private key.
+struct RsaKey {
+    n: ptr    // modulus (bignum)
+    e: ptr    // public exponent (bignum)
+    d: ptr    // private exponent (bignum) or null
+}
+
+// Build a key from already-parsed bignums. The key TAKES OWNERSHIP of n,
+// e, d (frees them in key_free) — pass clones if you need to keep them.
+key_from_components(n: ptr, e: ptr, d: ptr) -> ptr {
+    k = malloc(24) as *RsaKey
+    k.n = n
+    k.e = e
+    k.d = d
+    return k
+}
+
+key_free(k: ptr) {
+    if k == null { return }
+    kk = k as *RsaKey
+    if kk.n != null { bignum.free(kk.n) }
+    if kk.e != null { bignum.free(kk.e) }
+    if kk.d != null { bignum.free(kk.d) }
+    libc_free(k)
+}
+
+// Parse a PKCS#1 RSAPrivateKey DER (SEQUENCE { version, n, e, d, p, q,
+// dp, dq, qinv }). Returns (key, "") or (null, err). We keep n, e, d and
+// free the CRT params (this slice doesn't use CRT).
+key_from_pkcs1_der(der: ptr) -> (ptr, string) {
+    r = asn1.reader_new(der)
+    sub, body, serr = asn1.read_sequence(r)
+    if string.equals(serr, "") != 1 {
+        asn1.reader_free(r)
+        return null, serr
+    }
+    ver, verr = asn1.read_integer(sub)
+    if string.equals(verr, "") != 1 {
+        asn1.reader_free(sub); bytes.free(body); asn1.reader_free(r)
+        return null, verr
+    }
+    bignum.free(ver)
+    n, nerr = asn1.read_integer(sub)
+    e, eerr = asn1.read_integer(sub)
+    d, derr = asn1.read_integer(sub)
+    asn1.reader_free(sub); bytes.free(body); asn1.reader_free(r)
+    if string.equals(nerr, "") != 1 { return null, nerr }
+    if string.equals(eerr, "") != 1 { return null, eerr }
+    if string.equals(derr, "") != 1 { return null, derr }
+    return key_from_components(n, e, d), derr
+}
+
+// Byte length of the modulus (the RSA block size k).
+modulus_bytes(k: ptr) -> int {
+    kk = k as *RsaKey
+    return (bignum.bit_length(kk.n) + 7) / 8
+}
+
+modulus_bits(k: ptr) -> int {
+    kk = k as *RsaKey
+    return bignum.bit_length(kk.n)
+}
+
+// ---- raw primitives ----
+//
+// raw_encrypt: m^e mod n. raw_decrypt: c^d mod n. Input/output are
+// fixed-width k-byte big-endian std.bytes (caller frees). The integer
+// must be < n; callers go through the PKCS#1 wrappers normally.
+raw_encrypt(k: ptr, m_bytes: ptr) -> ptr {
+    kk = k as *RsaKey
+    klen = modulus_bytes(k)
+    m = bignum.from_bytes_unsigned(m_bytes, bytes.length(m_bytes))
+    c = bignum.mod_pow(m, kk.e, kk.n)
+    out = to_fixed(c, klen)
+    bignum.free(m); bignum.free(c)
+    return out
+}
+
+raw_decrypt(k: ptr, c_bytes: ptr) -> ptr {
+    kk = k as *RsaKey
+    klen = modulus_bytes(k)
+    c = bignum.from_bytes_unsigned(c_bytes, bytes.length(c_bytes))
+    m = bignum.mod_pow(c, kk.d, kk.n)
+    out = to_fixed(m, klen)
+    bignum.free(c); bignum.free(m)
+    return out
+}
+
+// bignum -> exactly `width` big-endian bytes, left-zero-padded. The
+// unsigned magnitude is right-aligned into a fresh std.bytes.
+to_fixed(n: ptr, width: int) -> ptr {
+    mag = bignum.to_bytes_unsigned(n)
+    mlen = bytes.length(mag)
+    out = bytes.new(width)
+    z = 0
+    while z < width { bytes.set(out, z, 0); z = z + 1 }
+    // copy mag into the low (rightmost) bytes
+    off = width - mlen
+    i = 0
+    while i < mlen {
+        if off + i >= 0 {
+            bytes.set(out, off + i, bytes.get(mag, i))
+        }
+        i = i + 1
+    }
+    bytes.free(mag)
+    return out
+}
+
+// ---- PKCS#1 v1.5 ----
+//
+// EME-PKCS1-v1_5 encryption block (type 2):
+//   0x00 || 0x02 || PS(random nonzero, >= 8 bytes) || 0x00 || M
+// Returns (ciphertext_bytes, "") or (null, err). `msg` must satisfy
+// len(msg) <= k - 11.
+encrypt_pkcs1(k: ptr, msg: ptr) -> (ptr, string) {
+    klen = modulus_bytes(k)
+    mlen = bytes.length(msg)
+    if mlen > klen - 11 {
+        return null, "rsa: message too long for PKCS#1 v1.5"
+    }
+    block = bytes.new(klen)
+    bytes.set(block, 0, 0x00)
+    bytes.set(block, 1, 0x02)
+    pslen = klen - mlen - 3
+    // fill PS with nonzero random bytes
+    rnd, rn, rerr = cryptography.random_bytes(pslen * 2 + 16)
+    if string.equals(rerr, "") != 1 {
+        bytes.free(block)
+        return null, rerr
+    }
+    filled = 0
+    ri = 0
+    while filled < pslen {
+        rb = 0
+        if ri < rn { rb = string_char_at_n(rnd, rn, ri) & 0xFF }
+        ri = ri + 1
+        if rb != 0 {
+            bytes.set(block, 2 + filled, rb)
+            filled = filled + 1
+        }
+        // if we run out of random, top up deterministically with a nonzero
+        if ri >= rn { ri = 0 }
+    }
+    bytes.set(block, 2 + pslen, 0x00)
+    i = 0
+    while i < mlen {
+        bytes.set(block, 3 + pslen + i, bytes.get(msg, i))
+        i = i + 1
+    }
+    c = raw_encrypt(k, block)
+    bytes.free(block)
+    string.free(rnd)
+    return c, rerr
+}
+
+// Decrypt + strip PKCS#1 v1.5 type-2 padding. Returns (message, "") or
+// (null, err). (Not constant-time — a hardening follow-up.)
+decrypt_pkcs1(k: ptr, ct: ptr) -> (ptr, string) {
+    klen = modulus_bytes(k)
+    block = raw_decrypt(k, ct)
+    // expect 0x00 0x02 PS 0x00 M
+    ok = 1
+    if bytes.get(block, 0) != 0x00 { ok = 0 }
+    if bytes.get(block, 1) != 0x02 { ok = 0 }
+    // find the 0x00 separator after >= 8 padding bytes
+    sep = -1
+    i = 2
+    while i < klen {
+        if bytes.get(block, i) == 0x00 {
+            sep = i
+            i = klen
+        } else {
+            i = i + 1
+        }
+    }
+    if sep < 0 { ok = 0 }
+    if ok == 1 { if sep < 10 { ok = 0 } }   // 2 prefix + >=8 PS
+    if ok != 1 {
+        bytes.free(block)
+        return null, "rsa: PKCS#1 v1.5 decryption error"
+    }
+    mlen = klen - sep - 1
+    out = bytes.new(mlen)
+    j = 0
+    while j < mlen {
+        bytes.set(out, j, bytes.get(block, sep + 1 + j))
+        j = j + 1
+    }
+    bytes.free(block)
+    return out, ""
+}
+
+// ---- PKCS#1 v1.5 signatures (type 1) ----
+//
+// EMSA-PKCS1-v1_5 over a caller-supplied DigestInfo blob `di` (the DER
+// of the AlgorithmIdentifier+digest; the caller composes it so RSA stays
+// hash-agnostic):
+//   0x00 || 0x01 || PS(0xFF, >= 8 bytes) || 0x00 || di
+// sign returns the raw signature (k bytes). verify recomputes the block
+// and compares.
+sign_pkcs1(k: ptr, di: ptr) -> (ptr, string) {
+    klen = modulus_bytes(k)
+    dlen = bytes.length(di)
+    if dlen > klen - 11 {
+        return null, "rsa: DigestInfo too long for modulus"
+    }
+    block = build_emsa(di, klen)
+    s = raw_decrypt(k, block)   // signing = private-key op (c^d mod n)
+    bytes.free(block)
+    return s, ""
+}
+
+// verify: public-key op on the signature, rebuild the expected EMSA block
+// from `di`, compare byte-for-byte. Returns 1 (valid) / 0 (invalid).
+verify_pkcs1(k: ptr, di: ptr, sig: ptr) -> int {
+    klen = modulus_bytes(k)
+    recovered = raw_encrypt(k, sig)   // s^e mod n
+    expected = build_emsa(di, klen)
+    ok = 1
+    if bytes.length(recovered) != bytes.length(expected) { ok = 0 }
+    if ok == 1 {
+        i = 0
+        while i < bytes.length(expected) {
+            if bytes.get(recovered, i) != bytes.get(expected, i) { ok = 0 }
+            i = i + 1
+        }
+    }
+    bytes.free(recovered); bytes.free(expected)
+    return ok
+}
+
+// Build the type-1 EMSA block: 0x00 0x01 FF...FF 0x00 di  (k bytes).
+build_emsa(di: ptr, klen: int) -> ptr {
+    dlen = bytes.length(di)
+    block = bytes.new(klen)
+    bytes.set(block, 0, 0x00)
+    bytes.set(block, 1, 0x01)
+    pslen = klen - dlen - 3
+    i = 0
+    while i < pslen { bytes.set(block, 2 + i, 0xFF); i = i + 1 }
+    bytes.set(block, 2 + pslen, 0x00)
+    j = 0
+    while j < dlen {
+        bytes.set(block, 3 + pslen + j, bytes.get(di, j))
+        j = j + 1
+    }
+    return block
+}

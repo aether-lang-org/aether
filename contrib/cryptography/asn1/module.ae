@@ -1,0 +1,461 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// contrib.cryptography.asn1 — ASN.1 DER (Distinguished Encoding Rules)
+// parser and emitter, the byte layer under RSA/DSA keys, X.509, and PKCS.
+//
+// DER is tag-length-value (TLV): one identifier octet, a definite length
+// (short form < 128, else long form), then the content. This module reads
+// TLVs out of a std.bytes buffer (position-tracked) and emits them back
+// into fresh std.bytes. Ported from Bouncy Castle's asn1/ codec
+// (crypto/src/asn1/, MIT) — same tag constants and length rules.
+//
+// Scope is the subset RSA/X.509 need: INTEGER (via std.bignum), SEQUENCE,
+// OBJECT IDENTIFIER, OCTET STRING, BIT STRING, NULL, BOOLEAN, plus generic
+// TLV read for anything else. Constructed parsing is done by reading the
+// SEQUENCE content as a new sub-reader.
+//
+// Surface (read):
+//   r = asn1.reader_new(bytes_buf)
+//   content, err = asn1.read_tlv(r)             // generic; tag via last_tag(r)
+//   inner, err        = asn1.read_sequence(r)   // -> sub-reader over the body
+//   n, err            = asn1.read_integer(r)    // -> bignum
+//   oid, err          = asn1.read_oid(r)        // -> dotted string
+//   asn1.reader_eof(r) -> int ; asn1.reader_free(r)
+//
+// Surface (write) — each returns a freshly allocated std.bytes TLV:
+//   asn1.encode_integer(bn) / encode_oid(dotted) / encode_octet_string(b)
+//   asn1.encode_bit_string(b, unused_bits) / encode_null() / encode_boolean(v)
+//   asn1.encode_sequence(list_of_tlv_bytes)   // concatenates + wraps
+
+import std.bytes
+import std.bignum
+import std.string
+import std.strbuilder
+
+exports (
+    TAG_BOOLEAN, TAG_INTEGER, TAG_BIT_STRING, TAG_OCTET_STRING,
+    TAG_NULL, TAG_OID, TAG_SEQUENCE, TAG_SET,
+    reader_new, reader_free, reader_eof, reader_remaining,
+    read_tlv, last_tag, read_sequence, read_integer, read_oid,
+    read_octet_string, read_bit_string, read_null, read_boolean,
+    encode_integer, encode_oid, encode_octet_string,
+    encode_bit_string, encode_null, encode_boolean, encode_sequence,
+    encode_len
+)
+
+// ---- universal tag numbers ----
+TAG_BOOLEAN() -> int { return 0x01 }
+TAG_INTEGER() -> int { return 0x02 }
+TAG_BIT_STRING() -> int { return 0x03 }
+TAG_OCTET_STRING() -> int { return 0x04 }
+TAG_NULL() -> int { return 0x05 }
+TAG_OID() -> int { return 0x06 }
+TAG_SEQUENCE() -> int { return 0x30 }   // constructed | 0x10
+TAG_SET() -> int { return 0x31 }        // constructed | 0x11
+
+// ---- reader: a (bytes, pos, len) cursor ----
+//
+// We keep the reader state in a small malloc'd struct via std.bytes itself
+// would be circular; instead use an intarr-free plain triple stored in a
+// 3-slot intarr is overkill. Use a struct.
+
+extern malloc(size: int) -> ptr
+@extern("free") libc_free(p: ptr)
+
+struct Reader {
+    buf: ptr      // std.bytes (NOT owned — caller frees)
+    pos: int
+    len: int
+    last_tag: int // tag of the most recent read_tlv (avoids a 3-tuple return)
+}
+
+reader_new(b: ptr) -> ptr {
+    r = malloc(32) as *Reader
+    r.buf = b
+    r.pos = 0
+    r.len = bytes.length(b)
+    r.last_tag = -1
+    return r
+}
+
+reader_free(r: ptr) {
+    if r == null { return }
+    libc_free(r)
+}
+
+reader_eof(r: ptr) -> int {
+    rr = r as *Reader
+    if rr.pos >= rr.len { return 1 }
+    return 0
+}
+
+reader_remaining(r: ptr) -> int {
+    rr = r as *Reader
+    return rr.len - rr.pos
+}
+
+// ---- generic TLV read ----
+//
+// Reads one TLV at the current position. Returns (content_bytes, "")
+// where content_bytes is a fresh std.bytes holding the value octets
+// (caller frees); the tag of the read TLV is stored on the reader and
+// retrieved with `last_tag(r)`. Advances the reader past the whole TLV.
+// On error returns (null, err) and leaves the position unspecified.
+//
+// (A 2-tuple + reader-stored tag is used rather than a 3-tuple
+// `(int, ptr, string)` return: a 3+-element tuple carrying a heap string
+// leaks the empty success-string when a caller doesn't forward it — an
+// Aether heap-string-tracker gap; the 2-tuple shape is clean.)
+read_tlv(r: ptr) -> (ptr, string) {
+    rr = r as *Reader
+    if rr.pos >= rr.len {
+        return null, "asn1: unexpected end of input (tag)"
+    }
+    tag = bytes.get(rr.buf, rr.pos) & 0xFF
+    rr.last_tag = tag
+    rr.pos = rr.pos + 1
+    // length
+    if rr.pos >= rr.len {
+        return null, "asn1: unexpected end of input (length)"
+    }
+    len0 = bytes.get(rr.buf, rr.pos) & 0xFF
+    rr.pos = rr.pos + 1
+    length = 0
+    if len0 < 0x80 {
+        length = len0
+    } else {
+        nbytes = len0 & 0x7F
+        if nbytes == 0 {
+            return null, "asn1: indefinite length not allowed in DER"
+        }
+        if nbytes > 4 {
+            return null, "asn1: length too large"
+        }
+        k = 0
+        while k < nbytes {
+            if rr.pos >= rr.len {
+                return null, "asn1: truncated long-form length"
+            }
+            length = (length << 8) | (bytes.get(rr.buf, rr.pos) & 0xFF)
+            rr.pos = rr.pos + 1
+            k = k + 1
+        }
+    }
+    if rr.pos + length > rr.len {
+        return null, "asn1: content runs past end of input"
+    }
+    // copy content into a fresh bytes
+    content = bytes.new(length)
+    i = 0
+    while i < length {
+        bytes.set(content, i, bytes.get(rr.buf, rr.pos + i))
+        i = i + 1
+    }
+    rr.pos = rr.pos + length
+    return content, ""
+}
+
+// Tag of the most recently read TLV (-1 if none read yet).
+last_tag(r: ptr) -> int {
+    rr = r as *Reader
+    return rr.last_tag
+}
+
+// Read a TLV and assert its tag. Returns (content_bytes, "") or (null, err).
+read_tagged(r: ptr, want_tag: int) -> (ptr, string) {
+    content, err = read_tlv(r)
+    if string.equals(err, "") != 1 {
+        return null, err
+    }
+    rr = r as *Reader
+    if rr.last_tag != want_tag {
+        bytes.free(content)
+        return null, "asn1: unexpected tag"
+    }
+    return content, err
+}
+
+// SEQUENCE -> a new sub-reader over the body (caller reader_free's it AND
+// must keep the returned body bytes alive until done; we hand back the
+// body bytes too so the caller can free it). Returns (sub_reader, body_bytes, err).
+read_sequence(r: ptr) -> (ptr, ptr, string) {
+    body, err = read_tagged(r, 0x30)
+    if string.equals(err, "") != 1 {
+        return null, null, err
+    }
+    sub = reader_new(body)
+    return sub, body, err
+}
+
+// INTEGER -> bignum (signed two's-complement big-endian, exactly what
+// bignum.from_bytes decodes). Returns (bignum, "") or (null, err).
+read_integer(r: ptr) -> (ptr, string) {
+    content, err = read_tagged(r, 0x02)
+    if string.equals(err, "") != 1 {
+        return null, err
+    }
+    clen = bytes.length(content)
+    n = bignum.from_bytes(content, clen)
+    bytes.free(content)
+    return n, err
+}
+
+// OCTET STRING -> raw bytes (caller frees).
+read_octet_string(r: ptr) -> (ptr, string) {
+    return read_tagged(r, 0x04)
+}
+
+// BIT STRING -> (bytes_without_unused_octet, unused_bits, ""). The first
+// content octet is the count of unused trailing bits; we return the rest.
+read_bit_string(r: ptr) -> (ptr, int, string) {
+    content, err = read_tagged(r, 0x03)
+    if string.equals(err, "") != 1 {
+        return null, 0, err
+    }
+    clen = bytes.length(content)
+    if clen < 1 {
+        bytes.free(content)
+        return null, 0, "asn1: empty BIT STRING"
+    }
+    unused = bytes.get(content, 0) & 0xFF
+    out = bytes.new(clen - 1)
+    i = 1
+    while i < clen {
+        bytes.set(out, i - 1, bytes.get(content, i))
+        i = i + 1
+    }
+    bytes.free(content)
+    return out, unused, err
+}
+
+read_null(r: ptr) -> string {
+    content, err = read_tagged(r, 0x05)
+    if string.equals(err, "") != 1 {
+        return err
+    }
+    n = bytes.length(content)
+    bytes.free(content)
+    if n != 0 {
+        return "asn1: NULL with non-empty content"
+    }
+    return err
+}
+
+read_boolean(r: ptr) -> (int, string) {
+    content, err = read_tagged(r, 0x01)
+    if string.equals(err, "") != 1 {
+        return 0, err
+    }
+    if bytes.length(content) != 1 {
+        bytes.free(content)
+        return 0, "asn1: BOOLEAN length != 1"
+    }
+    v = bytes.get(content, 0) & 0xFF
+    bytes.free(content)
+    if v == 0 { return 0, err }
+    return 1, err
+}
+
+// OBJECT IDENTIFIER -> dotted-decimal string (e.g. "1.2.840.113549.1.1.1").
+read_oid(r: ptr) -> (string, string) {
+    content, err = read_tagged(r, 0x06)
+    if string.equals(err, "") != 1 {
+        return "", err
+    }
+    n = bytes.length(content)
+    if n < 1 {
+        bytes.free(content)
+        return "", "asn1: empty OID"
+    }
+    sb = strbuilder.new(n * 4)
+    first = bytes.get(content, 0) & 0xFF
+    // first byte encodes (40*X + Y); X in {0,1,2}
+    x = first / 40
+    y = first - (x * 40)
+    if x > 2 { x = 2; y = first - 80 }
+    strbuilder.append_int(sb, x)
+    strbuilder.append_byte(sb, 46)   // '.'
+    strbuilder.append_int(sb, y)
+    // remaining: base-128 groups, high bit = continuation
+    acc = 0
+    i = 1
+    while i < n {
+        b = bytes.get(content, i) & 0xFF
+        acc = (acc << 7) | (b & 0x7F)
+        if (b & 0x80) == 0 {
+            strbuilder.append_byte(sb, 46)   // '.'
+            strbuilder.append_int(sb, acc)
+            acc = 0
+        }
+        i = i + 1
+    }
+    bytes.free(content)
+    return strbuilder.finish(sb), err
+}
+
+// ---- length encoding ----
+//
+// Returns a fresh std.bytes holding the DER length octets for `length`.
+encode_len(length: int) -> ptr {
+    out = bytes.new(0)
+    if length < 0x80 {
+        bytes.set(out, 0, length)
+        return out
+    }
+    // long form: count significant bytes of length
+    nbytes = 0
+    tmp = length
+    while tmp > 0 {
+        nbytes = nbytes + 1
+        tmp = tmp >> 8
+    }
+    bytes.set(out, 0, 0x80 | nbytes)
+    i = 0
+    while i < nbytes {
+        shift = (nbytes - 1 - i) * 8
+        bytes.set(out, 1 + i, (length >> shift) & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+// Build a TLV: tag byte + encoded length + content. Consumes (frees)
+// `content`. Returns a fresh std.bytes.
+wrap_tlv(tag: int, content: ptr) -> ptr {
+    clen = bytes.length(content)
+    lenbytes = encode_len(clen)
+    nlen = bytes.length(lenbytes)
+    out = bytes.new(1 + nlen + clen)
+    bytes.set(out, 0, tag & 0xFF)
+    i = 0
+    while i < nlen {
+        bytes.set(out, 1 + i, bytes.get(lenbytes, i))
+        i = i + 1
+    }
+    j = 0
+    while j < clen {
+        bytes.set(out, 1 + nlen + j, bytes.get(content, j))
+        j = j + 1
+    }
+    bytes.free(lenbytes)
+    bytes.free(content)
+    return out
+}
+
+// ---- typed encoders ----
+
+// INTEGER from a bignum. bignum.to_bytes already produces the minimal
+// signed two's-complement big-endian encoding DER requires.
+encode_integer(n: ptr) -> ptr {
+    content = bignum.to_bytes(n)
+    return wrap_tlv(0x02, content)
+}
+
+encode_octet_string(b: ptr) -> ptr {
+    // copy so we own the content passed to wrap_tlv
+    n = bytes.length(b)
+    c = bytes.new(n)
+    i = 0
+    while i < n { bytes.set(c, i, bytes.get(b, i)); i = i + 1 }
+    return wrap_tlv(0x04, c)
+}
+
+// BIT STRING with `unused` trailing unused bits (0 for whole-byte content).
+encode_bit_string(b: ptr, unused: int) -> ptr {
+    n = bytes.length(b)
+    c = bytes.new(n + 1)
+    bytes.set(c, 0, unused & 0xFF)
+    i = 0
+    while i < n { bytes.set(c, 1 + i, bytes.get(b, i)); i = i + 1 }
+    return wrap_tlv(0x03, c)
+}
+
+encode_null() -> ptr {
+    return wrap_tlv(0x05, bytes.new(0))
+}
+
+encode_boolean(v: int) -> ptr {
+    c = bytes.new(1)
+    if v != 0 { bytes.set(c, 0, 0xFF) } else { bytes.set(c, 0, 0x00) }
+    return wrap_tlv(0x01, c)
+}
+
+// OBJECT IDENTIFIER from a dotted-decimal string.
+encode_oid(dotted: string) -> ptr {
+    // parse arcs
+    content = bytes.new(0)
+    clen = 0
+    n = string.length(dotted)
+    // collect arcs into a small list via repeated parse
+    arc1 = -1
+    arc2 = -1
+    cur = 0
+    have = 0
+    arccount = 0
+    i = 0
+    while i <= n {
+        ch = 0
+        if i < n { ch = string_char_at_n(dotted, n, i) }
+        if i == n {
+            ch = 46   // force flush of last arc
+        }
+        if ch == 46 {
+            if arccount == 0 {
+                arc1 = cur
+            } else {
+                if arccount == 1 {
+                    arc2 = cur
+                    // emit first byte = 40*arc1 + arc2
+                    bytes.set(content, clen, (40 * arc1) + arc2)
+                    clen = clen + 1
+                } else {
+                    clen = emit_base128(content, clen, cur)
+                }
+            }
+            arccount = arccount + 1
+            cur = 0
+            have = 0
+        } else {
+            cur = (cur * 10) + (ch - 48)
+            have = 1
+        }
+        i = i + 1
+    }
+    return wrap_tlv(0x06, content)
+}
+
+// emit `v` as base-128 with continuation bits into `content` at offset
+// `off`; returns the new offset.
+emit_base128(content: ptr, off: int, v: int) -> int {
+    if v == 0 {
+        bytes.set(content, off, 0)
+        return off + 1
+    }
+    // collect 7-bit groups, most-significant first
+    ngroups = 0
+    tmp = v
+    while tmp > 0 {
+        ngroups = ngroups + 1
+        tmp = tmp >> 7
+    }
+    g = ngroups - 1
+    while g >= 0 {
+        shift = g * 7
+        byteval = (v >> shift) & 0x7F
+        if g != 0 { byteval = byteval | 0x80 }   // continuation on all but last
+        bytes.set(content, off, byteval)
+        off = off + 1
+        g = g - 1
+    }
+    return off
+}
+
+// Convenience: wrap a pre-concatenated body of child TLVs as a SEQUENCE.
+// `body` is consumed (freed).
+encode_sequence(body: ptr) -> ptr {
+    return wrap_tlv(0x30, body)
+}
