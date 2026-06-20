@@ -14,6 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.291.0]
+
+### Added
+
+- **`contrib.cryptography.aes` — AES (FIPS-197)** (issue #739) — the
+  block-cipher core that unblocks the entire symmetric surface (CBC / CTR /
+  CFB / OFB / ECB / GCM / CCM / EAX / OCB / AES-key-wrap / AES-CMAC /
+  AES-CTR-DRBG all drive exactly this primitive). Pure Aether, byte-oriented
+  FIPS-197 reference form (256-byte S-box + inverse, GF(2⁸) `xtime`) — chosen
+  over Bouncy Castle's T-box `AesEngine` for auditability and to avoid the
+  cache-timing surface of big T-tables (a T-box/AES-NI fast path is a later
+  perf slice). 128/192/256-bit keys. Surface: `new_encryptor` / `new_decryptor`
+  / `process_block` (the 16-byte primitive the modes call), plus `ecb_encrypt`
+  / `ecb_decrypt` (block-aligned, no padding) and `ctr_xor` (CTR stream).
+  Verified against the FIPS-197 Appendix B/C known-answer vectors for all three
+  key sizes and the NIST SP800-38A F.5 AES-128-CTR vector (also reproduced via
+  `openssl enc -aes-128-ctr`); ASan-clean. Regression:
+  `tests/regression/test_aes.ae`. No OpenSSL AES — the round functions, key
+  schedule, and modes are all Aether. Padded modes (CBC/PKCS#7), the AEADs
+  (GCM/CCM/ChaCha20-Poly1305), and key-wrap are follow-up slices on this core.
+
 ## [0.290.0]
 
 ### Added

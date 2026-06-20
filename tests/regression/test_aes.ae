@@ -1,0 +1,74 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// Regression: contrib.cryptography.aes (FIPS-197), issue #739 — the
+// block-cipher core every symmetric mode drives. Block KATs are the
+// canonical FIPS-197 Appendix B/C vectors (AES-128/192/256); CTR is the
+// NIST SP800-38A F.5 vector, also reproduced via `openssl enc -aes-128-ctr`.
+// Covers encrypt + decrypt block, ECB, and CTR (symmetric round-trip).
+
+import contrib.cryptography.aes
+import std.bytes
+import std.string
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+beq(a: ptr, b: ptr) -> int { if bytes.length(a)!=bytes.length(b) { return 0 } i=0; while i<bytes.length(a) { if bytes.get(a,i)!=bytes.get(b,i) { return 0 } i=i+1 } return 1 }
+
+main() {
+    print("=== contrib.cryptography.aes ===\n")
+    fails = 0
+    pt = hb("00112233445566778899aabbccddeeff")
+
+    // AES-128 (FIPS-197 Appendix B / C.1)
+    k = hb("000102030405060708090a0b0c0d0e0f")
+    e = aes.new_encryptor(k, 16); ct = aes.process_block(e, pt)
+    if string.equals(bh(ct), "69c4e0d86a7b0430d8cdb78070b4c55a") != 1 { print("FAIL aes128 enc\n"); fails=fails+1 }
+    d = aes.new_decryptor(k, 16); rt = aes.process_block(d, ct)
+    if beq(rt, pt) != 1 { print("FAIL aes128 dec\n"); fails=fails+1 }
+    aes.free(e); aes.free(d); bytes.free(ct); bytes.free(rt); bytes.free(k)
+
+    // AES-192 (FIPS-197 C.2)
+    k2 = hb("000102030405060708090a0b0c0d0e0f1011121314151617")
+    e2 = aes.new_encryptor(k2, 24); ct2 = aes.process_block(e2, pt)
+    if string.equals(bh(ct2), "dda97ca4864cdfe06eaf70a0ec0d7191") != 1 { print("FAIL aes192 enc ${bh(ct2)}\n"); fails=fails+1 }
+    d2 = aes.new_decryptor(k2, 24); rt2 = aes.process_block(d2, ct2)
+    if beq(rt2, pt) != 1 { print("FAIL aes192 dec\n"); fails=fails+1 }
+    aes.free(e2); aes.free(d2); bytes.free(ct2); bytes.free(rt2); bytes.free(k2)
+
+    // AES-256 (FIPS-197 C.3)
+    k3 = hb("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    e3 = aes.new_encryptor(k3, 32); ct3 = aes.process_block(e3, pt)
+    if string.equals(bh(ct3), "8ea2b7ca516745bfeafc49904b496089") != 1 { print("FAIL aes256 enc\n"); fails=fails+1 }
+    d3 = aes.new_decryptor(k3, 32); rt3 = aes.process_block(d3, ct3)
+    if beq(rt3, pt) != 1 { print("FAIL aes256 dec\n"); fails=fails+1 }
+    aes.free(e3); aes.free(d3); bytes.free(ct3); bytes.free(rt3); bytes.free(k3)
+
+    // ECB over two blocks (block-aligned)
+    ke = hb("000102030405060708090a0b0c0d0e0f")
+    two = hb("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+    ee = aes.new_encryptor(ke, 16); ecb = aes.ecb_encrypt(ee, two)
+    if string.equals(bh(ecb), "69c4e0d86a7b0430d8cdb78070b4c55a69c4e0d86a7b0430d8cdb78070b4c55a") != 1 { print("FAIL ecb\n"); fails=fails+1 }
+    de = aes.new_decryptor(ke, 16); ecbrt = aes.ecb_decrypt(de, ecb)
+    if beq(ecbrt, two) != 1 { print("FAIL ecb rt\n"); fails=fails+1 }
+    aes.free(ee); aes.free(de); bytes.free(ecb); bytes.free(ecbrt); bytes.free(two); bytes.free(ke)
+
+    // AES-128-CTR (NIST SP800-38A F.5.1 / openssl -aes-128-ctr), 2 blocks
+    kc = hb("2b7e151628aed2a6abf7158809cf4f3c")
+    iv = hb("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
+    ptc = hb("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51")
+    ec = aes.new_encryptor(kc, 16)
+    ctc = aes.ctr_xor(ec, iv, ptc)
+    if string.equals(bh(ctc), "874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff") != 1 { print("FAIL ctr ${bh(ctc)}\n"); fails=fails+1 }
+    // CTR is symmetric: re-running on ciphertext recovers plaintext
+    rtc = aes.ctr_xor(ec, iv, ctc)
+    if beq(rtc, ptc) != 1 { print("FAIL ctr rt\n"); fails=fails+1 }
+    aes.free(ec); bytes.free(ctc); bytes.free(rtc); bytes.free(ptc); bytes.free(iv); bytes.free(kc)
+
+    bytes.free(pt)
+    if fails == 0 { print("PASS: contrib.cryptography.aes\n") } else { print("FAILED: ${fails}\n"); exit(1) }
+}
