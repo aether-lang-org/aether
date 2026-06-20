@@ -1,0 +1,988 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.bignum — arbitrary-precision integers (foundation layer).
+//
+// Ported from Bouncy Castle's BigInteger.cs. Representation follows BC
+// exactly: sign-magnitude, with a big-endian magnitude (limb [0] is the
+// most-significant 32-bit limb) and a separate `sign` in {-1, 0, 1}.
+// Zero is represented canonically as sign==0 with an empty (len==0)
+// magnitude (BC's ZeroMagnitude).
+//
+// Limbs are unsigned 32-bit quantities stored in a std.intarr. Aether's
+// `int` is 64-bit and `intarr` stores 32-bit slots that sign-extend on
+// read, so every limb read is masked with `& 0xFFFFFFFF` before use, and
+// limb arithmetic is done in 64-bit with explicit lo32/hi32 carry split.
+// Logical shifts route through std.bits (lsr32 / lsr64) since Aether `>>`
+// is arithmetic.
+//
+// This is layer 1: representation + from/to_bytes + compare + add/sub/
+// negate/abs/shift + bit_length. Multiply / divide / modpow land later.
+//
+// A bignum is an opaque `ptr` to a heap-allocated BN struct. Operations
+// return NEW bignums and never mutate their inputs. There is no GC;
+// callers free results with bignum.free.
+
+import std.intarr
+import std.bits
+import std.strbuilder
+import std.bytes
+
+exports (
+    from_bytes, from_bytes_unsigned, to_bytes, to_bytes_unsigned,
+    from_int,
+    compare, is_zero, sign, bit_length,
+    add, subtract, negate, abs,
+    shift_left, shift_right,
+    to_hex, free
+)
+
+// libc allocator — whitelisted externs, no shim. The struct is three
+// machine words; we over-allocate to 24 bytes to be safe on padding.
+// We free via realloc(p, 0) so our public function can be named `free`
+// without shadowing a same-named extern within the module.
+extern malloc(size: int) -> ptr
+extern realloc(p: ptr, size: int) -> ptr
+
+struct BN {
+    sign: int   // -1, 0, or 1
+    mag: ptr    // std.intarr of 32-bit limbs, big-endian ([0] = MSB), or null
+    len: int    // number of limbs; 0 for zero
+}
+
+// ---- internal construction helpers ----
+
+// Allocate a BN. `mag` may be null (only valid with len 0 / sign 0).
+bn_alloc(s: int, mag: ptr, len: int) -> *BN {
+    n = malloc(24) as *BN
+    n.sign = s
+    n.mag = mag
+    n.len = len
+    return n
+}
+
+// Canonical zero.
+bn_zero() -> *BN {
+    return bn_alloc(0, null, 0)
+}
+
+// Read limb i of a magnitude as an unsigned 32-bit value in a 64-bit int.
+limb(mag: ptr, i: int) -> long {
+    return intarr_get_raw(mag, i) & 0xFFFFFFFF
+}
+
+// Build a BN from a freshly-built magnitude array, stripping leading
+// zero limbs (BC's `checkMag` constructor). Takes ownership of `mag`
+// when no stripping is needed; otherwise copies into a tight array and
+// frees the original. `signum` is the intended sign for a non-zero
+// result.
+bn_from_mag_checked(signum: int, mag: ptr, len: int) -> *BN {
+    i = 0
+    while i < len {
+        if (intarr_get_raw(mag, i) & 0xFFFFFFFF) != 0 {
+            break
+        }
+        i = i + 1
+    }
+    if i == len {
+        // all zero
+        intarr_free(mag)
+        return bn_zero()
+    }
+    if i == 0 {
+        // no leading zeros; keep array as-is
+        return bn_alloc(signum, mag, len)
+    }
+    // copy the significant tail into a tight array
+    newlen = len - i
+    nm = intarr_new_raw(newlen)
+    j = 0
+    while j < newlen {
+        intarr_set_raw(nm, j, intarr_get_raw(mag, i + j))
+        j = j + 1
+    }
+    intarr_free(mag)
+    return bn_alloc(signum, nm, newlen)
+}
+
+// Clone a magnitude array of `len` limbs into a new one.
+mag_clone(mag: ptr, len: int) -> ptr {
+    nm = intarr_new_raw(len)
+    i = 0
+    while i < len {
+        intarr_set_raw(nm, i, intarr_get_raw(mag, i))
+        i = i + 1
+    }
+    return nm
+}
+
+// ---- byte decoding (BC MakeMagnitudeBE / InitBE) ----
+
+// Build a magnitude (big-endian limbs) from a byte span [off, off+length),
+// stripping leading zero bytes. Returns (mag, len); len 0 / null mag for
+// all-zero input.
+make_magnitude_be(b: ptr, off: int, length: int) -> (ptr, int) {
+    e = off + length
+    // strip leading zero bytes
+    start = off
+    while start < e {
+        if (mem_get_byte(b, start) & 0xFF) != 0 {
+            break
+        }
+        start = start + 1
+    }
+    nbytes = e - start
+    if nbytes <= 0 {
+        return null, 0
+    }
+    nints = (nbytes + 3) / 4
+    mag = intarr_new_raw(nints)
+    // first limb takes the leading partial group
+    first = ((nbytes - 1) % 4) + 1
+    v = 0
+    k = 0
+    while k < first {
+        v = (v << 8) | (mem_get_byte(b, start + k) & 0xFF)
+        k = k + 1
+    }
+    intarr_set_raw(mag, 0, v & 0xFFFFFFFF)
+    // remaining limbs are full 4-byte groups
+    pos = start + first
+    li = 1
+    while li < nints {
+        w = 0
+        j = 0
+        while j < 4 {
+            w = (w << 8) | (mem_get_byte(b, pos + j) & 0xFF)
+            j = j + 1
+        }
+        intarr_set_raw(mag, li, w & 0xFFFFFFFF)
+        pos = pos + 4
+        li = li + 1
+    }
+    return mag, nints
+}
+
+// Byte access for from_bytes input. The input `b` is a std.bytes object
+// (AetherBytes), matching the rest of the cryptography port (sha2/hmac/drbg
+// all take std.bytes ptrs), NOT a raw C pointer. All from_bytes readers go
+// through this one helper, so the whole module reads the std.bytes data
+// region rather than the struct header.
+mem_get_byte(b: ptr, i: int) -> int {
+    return bytes.get(b, i) & 0xFF
+}
+
+// Big-endian, two's-complement SIGNED decode (BC BigInteger(byte[])).
+from_bytes(b: ptr, length: int) -> ptr {
+    if length <= 0 {
+        return bn_zero()
+    }
+    top = mem_get_byte(b, 0) & 0xFF
+    if top < 0x80 {
+        // non-negative
+        mag, len = make_magnitude_be(b, 0, length)
+        if len == 0 {
+            return bn_zero()
+        }
+        return bn_alloc(1, mag, len)
+    }
+    // negative: two's-complement decode of the magnitude.
+    // strip leading 0xFF sign bytes
+    e = length
+    ib = 0
+    while ib < e {
+        if (mem_get_byte(b, ib) & 0xFF) != 0xFF {
+            break
+        }
+        ib = ib + 1
+    }
+    if ib >= e {
+        // all 0xFF -> value is -1
+        m = intarr_new_raw(1)
+        intarr_set_raw(m, 0, 1)
+        return bn_alloc(-1, m, 1)
+    }
+    if (mem_get_byte(b, ib) & 0xFF) == 0x00 {
+        ib = ib - 1
+    }
+    numbytes = e - ib
+    // build the inverted+1 (negated) byte buffer into a temp intarr-as-bytes
+    // We compute the magnitude bytes directly: inverse = ~byte, then +1
+    // with carry propagation from the least-significant end.
+    inv = intarr_new_raw(numbytes)   // one byte per slot
+    idx = 0
+    src = ib
+    while idx < numbytes {
+        inv_set_byte(inv, idx, (~mem_get_byte(b, src)) & 0xFF)
+        idx = idx + 1
+        src = src + 1
+    }
+    // propagate +1 from the end: while trailing 0xFF, set to 0x00; then ++.
+    index = numbytes - 1
+    while index >= 0 {
+        if inv_get_byte(inv, index) == 0xFF {
+            inv_set_byte(inv, index, 0x00)
+            index = index - 1
+        } else {
+            break
+        }
+    }
+    if index >= 0 {
+        inv_set_byte(inv, index, inv_get_byte(inv, index) + 1)
+    }
+    // make magnitude from these bytes (big-endian)
+    mag, len = make_magnitude_from_bytearr(inv, numbytes)
+    intarr_free(inv)
+    if len == 0 {
+        return bn_zero()
+    }
+    return bn_alloc(-1, mag, len)
+}
+
+// byte stored one-per-int-slot helpers (for the negation scratch buffer)
+inv_get_byte(a: ptr, i: int) -> int {
+    return intarr_get_raw(a, i) & 0xFF
+}
+inv_set_byte(a: ptr, i: int, v: int) {
+    intarr_set_raw(a, i, v & 0xFF)
+}
+
+// make_magnitude_be variant that reads from an intarr-of-bytes (big-endian)
+make_magnitude_from_bytearr(a: ptr, length: int) -> (ptr, int) {
+    start = 0
+    while start < length {
+        if inv_get_byte(a, start) != 0 {
+            break
+        }
+        start = start + 1
+    }
+    nbytes = length - start
+    if nbytes <= 0 {
+        return null, 0
+    }
+    nints = (nbytes + 3) / 4
+    mag = intarr_new_raw(nints)
+    first = ((nbytes - 1) % 4) + 1
+    v = 0
+    k = 0
+    while k < first {
+        v = (v << 8) | inv_get_byte(a, start + k)
+        k = k + 1
+    }
+    intarr_set_raw(mag, 0, v & 0xFFFFFFFF)
+    pos = start + first
+    li = 1
+    while li < nints {
+        w = 0
+        j = 0
+        while j < 4 {
+            w = (w << 8) | inv_get_byte(a, pos + j)
+            j = j + 1
+        }
+        intarr_set_raw(mag, li, w & 0xFFFFFFFF)
+        pos = pos + 4
+        li = li + 1
+    }
+    return mag, nints
+}
+
+// Big-endian, always-non-negative magnitude decode (BC ToByteArrayUnsigned
+// inverse — magnitude only).
+from_bytes_unsigned(b: ptr, length: int) -> ptr {
+    if length <= 0 {
+        return bn_zero()
+    }
+    mag, len = make_magnitude_be(b, 0, length)
+    if len == 0 {
+        return bn_zero()
+    }
+    return bn_alloc(1, mag, len)
+}
+
+// Convenience: from a signed 64-bit value, full range including the most
+// negative value.
+from_int(v: long) -> ptr {
+    if v == 0 {
+        return bn_zero()
+    }
+    s = 1
+    // magnitude as unsigned 64-bit. For the most-negative value, -v
+    // overflows; compute magnitude via two's complement bit pattern.
+    umag = v
+    if v < 0 {
+        s = -1
+        // unsigned magnitude = (~v) + 1 in 64-bit, which equals -v for
+        // all but LONG_MIN, and is correct (0x8000...0) for LONG_MIN too.
+        umag = (~v) + 1
+    }
+    hi = bits.lsr64(umag, 32) & 0xFFFFFFFF
+    lo = umag & 0xFFFFFFFF
+    if hi != 0 {
+        mag = intarr_new_raw(2)
+        intarr_set_raw(mag, 0, hi & 0xFFFFFFFF)
+        intarr_set_raw(mag, 1, lo & 0xFFFFFFFF)
+        return bn_alloc(s, mag, 2)
+    }
+    mag = intarr_new_raw(1)
+    intarr_set_raw(mag, 0, lo & 0xFFFFFFFF)
+    return bn_alloc(s, mag, 1)
+}
+
+// ---- queries ----
+
+is_zero(n: ptr) -> int {
+    bn = n as *BN
+    if bn.sign == 0 {
+        return 1
+    }
+    return 0
+}
+
+sign(n: ptr) -> int {
+    bn = n as *BN
+    return bn.sign
+}
+
+// BitLen of an unsigned 32-bit value (BC BitLen(uint)).
+bitlen32(v: long) -> int {
+    u = v & 0xFFFFFFFF
+    if u == 0 {
+        return 0
+    }
+    // 32 - clz32, using the unsigned clz from std.bits
+    return 32 - bits.clz32(u & 0xFFFFFFFF)
+}
+
+// Bit length of a magnitude (unsigned), no sign adjustment. Position of
+// the highest set bit + 1. Returns 0 for an all-zero / null magnitude.
+mag_bit_length(mag: ptr, len: int) -> int {
+    indx = 0
+    while indx < len {
+        if limb(mag, indx) != 0 {
+            break
+        }
+        indx = indx + 1
+    }
+    if indx >= len {
+        return 0
+    }
+    return 32 * ((len - indx) - 1) + bitlen32(limb(mag, indx))
+}
+
+// BC CalcBitLength, including the negative power-of-two adjustment.
+bit_length(n: ptr) -> int {
+    bn = n as *BN
+    if bn.sign == 0 {
+        return 0
+    }
+    mag = bn.mag
+    len = bn.len
+    indx = 0
+    while indx < len {
+        if limb(mag, indx) != 0 {
+            break
+        }
+        indx = indx + 1
+    }
+    if indx >= len {
+        return 0
+    }
+    bitlength = 32 * ((len - indx) - 1)
+    firstmag = limb(mag, indx)
+    bitlength = bitlength + bitlen32(firstmag)
+    // negative powers of two: (firstMag & -firstMag) == firstMag means a
+    // single set bit; for a negative value its bit length is one less.
+    if bn.sign < 0 {
+        negf = ((~firstmag) + 1) & 0xFFFFFFFF
+        if (firstmag & negf) == firstmag {
+            // confirm no other limbs are set
+            allzero = 1
+            j = indx + 1
+            while j < len {
+                if limb(mag, j) != 0 {
+                    allzero = 0
+                    break
+                }
+                j = j + 1
+            }
+            if allzero == 1 {
+                bitlength = bitlength - 1
+            }
+        }
+    }
+    return bitlength
+}
+
+// ---- comparison ----
+
+// Unsigned compare of two magnitudes (no leading zeros assumed equal-ish;
+// BC CompareNoLeadingZeros operates on whole arrays from index 0).
+compare_mag(x: ptr, xlen: int, y: ptr, ylen: int) -> int {
+    if xlen != ylen {
+        if xlen < ylen {
+            return -1
+        }
+        return 1
+    }
+    i = 0
+    while i < xlen {
+        v1 = limb(x, i)
+        v2 = limb(y, i)
+        if v1 != v2 {
+            if v1 < v2 {
+                return -1
+            }
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+compare(a: ptr, b: ptr) -> int {
+    ba = a as *BN
+    bb = b as *BN
+    if ba.sign < bb.sign {
+        return -1
+    }
+    if ba.sign > bb.sign {
+        return 1
+    }
+    if ba.sign == 0 {
+        return 0
+    }
+    return ba.sign * compare_mag(ba.mag, ba.len, bb.mag, bb.len)
+}
+
+// ---- magnitude add / subtract (unsigned) ----
+
+// Returns a freshly allocated magnitude (mag, len) = x + y (unsigned),
+// big-endian. Result may be one limb longer than max(xlen, ylen).
+mag_add(x: ptr, xlen: int, y: ptr, ylen: int) -> (ptr, int) {
+    // ensure x is the longer
+    if xlen < ylen {
+        return mag_add(y, ylen, x, xlen)
+    }
+    res = intarr_new_raw(xlen + 1)
+    long m = 0
+    ti = xlen - 1
+    vi = ylen - 1
+    ri = xlen   // result index (xlen+1 slots, [0..xlen])
+    while vi >= 0 {
+        m = m + limb(x, ti) + limb(y, vi)
+        intarr_set_raw(res, ri, (m & 0xFFFFFFFF))
+        m = bits.lsr64(m, 32)
+        ti = ti - 1
+        vi = vi - 1
+        ri = ri - 1
+    }
+    while ti >= 0 {
+        m = m + limb(x, ti)
+        intarr_set_raw(res, ri, (m & 0xFFFFFFFF))
+        m = bits.lsr64(m, 32)
+        ti = ti - 1
+        ri = ri - 1
+    }
+    // final carry into the top slot (index 0)
+    intarr_set_raw(res, 0, (m & 0xFFFFFFFF))
+    return res, xlen + 1
+}
+
+// Returns (mag, len) = x - y (unsigned), assuming x >= y. Result has xlen
+// limbs (caller strips leading zeros via checked construction).
+mag_sub(x: ptr, xlen: int, y: ptr, ylen: int) -> (ptr, int) {
+    res = intarr_new_raw(xlen)
+    borrow = 0
+    ti = xlen - 1
+    vi = ylen - 1
+    while vi >= 0 {
+        diff = limb(x, ti) - limb(y, vi) + borrow
+        intarr_set_raw(res, ti, (diff & 0xFFFFFFFF))
+        // borrow is -1 if diff went negative, else 0
+        if diff < 0 {
+            borrow = -1
+        } else {
+            borrow = 0
+        }
+        ti = ti - 1
+        vi = vi - 1
+    }
+    while ti >= 0 {
+        diff = limb(x, ti) + borrow
+        intarr_set_raw(res, ti, (diff & 0xFFFFFFFF))
+        if diff < 0 {
+            borrow = -1
+        } else {
+            borrow = 0
+        }
+        ti = ti - 1
+    }
+    return res, xlen
+}
+
+// ---- public add / subtract / negate / abs ----
+
+add(a: ptr, b: ptr) -> ptr {
+    ba = a as *BN
+    bb = b as *BN
+    if ba.sign == 0 {
+        return clone(b)
+    }
+    if bb.sign == 0 {
+        return clone(a)
+    }
+    if ba.sign == bb.sign {
+        mag, len = mag_add(ba.mag, ba.len, bb.mag, bb.len)
+        return bn_from_mag_checked(ba.sign, mag, len)
+    }
+    // opposite signs: subtract smaller magnitude from larger
+    c = compare_mag(ba.mag, ba.len, bb.mag, bb.len)
+    if c == 0 {
+        return bn_zero()
+    }
+    if c > 0 {
+        mag, len = mag_sub(ba.mag, ba.len, bb.mag, bb.len)
+        return bn_from_mag_checked(ba.sign, mag, len)
+    }
+    mag, len = mag_sub(bb.mag, bb.len, ba.mag, ba.len)
+    return bn_from_mag_checked(bb.sign, mag, len)
+}
+
+subtract(a: ptr, b: ptr) -> ptr {
+    bb = b as *BN
+    if bb.sign == 0 {
+        return clone(a)
+    }
+    ba = a as *BN
+    if ba.sign == 0 {
+        // -b
+        return negate(b)
+    }
+    if ba.sign != bb.sign {
+        // a - b where signs differ == a + (magnitude added), sign of a
+        mag, len = mag_add(ba.mag, ba.len, bb.mag, bb.len)
+        return bn_from_mag_checked(ba.sign, mag, len)
+    }
+    // same sign: compare magnitudes
+    c = compare_mag(ba.mag, ba.len, bb.mag, bb.len)
+    if c == 0 {
+        return bn_zero()
+    }
+    if c > 0 {
+        mag, len = mag_sub(ba.mag, ba.len, bb.mag, bb.len)
+        return bn_from_mag_checked(ba.sign, mag, len)
+    }
+    mag, len = mag_sub(bb.mag, bb.len, ba.mag, ba.len)
+    return bn_from_mag_checked(-ba.sign, mag, len)
+}
+
+negate(n: ptr) -> ptr {
+    bn = n as *BN
+    if bn.sign == 0 {
+        return bn_zero()
+    }
+    return bn_alloc(-bn.sign, mag_clone(bn.mag, bn.len), bn.len)
+}
+
+abs(n: ptr) -> ptr {
+    bn = n as *BN
+    if bn.sign >= 0 {
+        return clone(n)
+    }
+    return negate(n)
+}
+
+// internal: deep clone
+clone(n: ptr) -> ptr {
+    bn = n as *BN
+    if bn.sign == 0 {
+        return bn_zero()
+    }
+    return bn_alloc(bn.sign, mag_clone(bn.mag, bn.len), bn.len)
+}
+
+// ---- shifts ----
+
+// BC ShiftLeft of a magnitude by n bits (n > 0). Returns (mag, len).
+mag_shift_left(mag: ptr, maglen: int, n: int) -> (ptr, int) {
+    nints = bits.lsr32(n, 5)   // n / 32
+    nbits = n & 0x1f
+    if nbits == 0 {
+        newlen = maglen + nints
+        nm = intarr_new_raw(newlen)
+        i = 0
+        while i < maglen {
+            intarr_set_raw(nm, i, intarr_get_raw(mag, i))
+            i = i + 1
+        }
+        // trailing nints limbs already zero
+        return nm, newlen
+    }
+    nbits2 = 32 - nbits
+    highbits = bits.lsr32((intarr_get_raw(mag, 0) & 0xFFFFFFFF), nbits2) & 0xFFFFFFFF
+    newlen = maglen + nints
+    extra = 0
+    if highbits != 0 {
+        newlen = newlen + 1
+        extra = 1
+    }
+    nm = intarr_new_raw(newlen)
+    i = 0
+    if extra == 1 {
+        intarr_set_raw(nm, 0, highbits & 0xFFFFFFFF)
+        i = 1
+    }
+    m = limb(mag, 0)
+    j = 0
+    while j < maglen - 1 {
+        nxt = limb(mag, j + 1)
+        val = ((m << nbits) & 0xFFFFFFFF) | bits.lsr32((nxt & 0xFFFFFFFF), nbits2) & 0xFFFFFFFF
+        intarr_set_raw(nm, i, val & 0xFFFFFFFF)
+        i = i + 1
+        m = nxt
+        j = j + 1
+    }
+    last = (limb(mag, maglen - 1) << nbits) & 0xFFFFFFFF
+    intarr_set_raw(nm, i, last & 0xFFFFFFFF)
+    // remaining nints low limbs are already zero
+    return nm, newlen
+}
+
+shift_left(n: ptr, bits_to: int) -> ptr {
+    bn = n as *BN
+    if bn.sign == 0 {
+        return bn_zero()
+    }
+    if bits_to == 0 {
+        return clone(n)
+    }
+    if bits_to < 0 {
+        return shift_right(n, 0 - bits_to)
+    }
+    mag, len = mag_shift_left(bn.mag, bn.len, bits_to)
+    return bn_from_mag_checked(bn.sign, mag, len)
+}
+
+shift_right(n: ptr, bits_to: int) -> ptr {
+    bn = n as *BN
+    if bits_to == 0 {
+        return clone(n)
+    }
+    if bits_to < 0 {
+        return shift_left(n, 0 - bits_to)
+    }
+    bl = bit_length(n)
+    if bits_to >= bl {
+        // result is 0 for non-negative, -1 for negative (floor division)
+        if bn.sign < 0 {
+            m = intarr_new_raw(1)
+            intarr_set_raw(m, 0, 1)
+            return bn_alloc(-1, m, 1)
+        }
+        return bn_zero()
+    }
+    // For negatives, BC's ShiftRight is floor division by 2^n. The naive
+    // magnitude right-shift truncates toward zero; if any bit was shifted
+    // out of a negative number we must round away from zero by 1 ulp
+    // (i.e. add 1 to the magnitude). Detect dropped bits first.
+    dropped = mag_has_low_bits(bn.mag, bn.len, bits_to)
+
+    resultlength = bits.lsr32((bl - bits_to + 31), 5)   // (bl - n + 31) / 32
+    res = intarr_new_raw(resultlength)
+    numints = bits.lsr32(bits_to, 5)   // n / 32
+    numbits = bits_to & 31
+    if numbits == 0 {
+        // copy the leading resultlength limbs of the magnitude
+        i = 0
+        while i < resultlength {
+            intarr_set_raw(res, i, intarr_get_raw(bn.mag, i))
+            i = i + 1
+        }
+    } else {
+        numbits2 = 32 - numbits
+        magpos = bn.len - 1 - numints
+        i = resultlength - 1
+        while i >= 0 {
+            v = bits.lsr32((limb(bn.mag, magpos) & 0xFFFFFFFF), numbits) & 0xFFFFFFFF
+            if magpos - 1 >= 0 {
+                v = v | ((limb(bn.mag, magpos - 1) << numbits2) & 0xFFFFFFFF)
+            }
+            intarr_set_raw(res, i, v & 0xFFFFFFFF)
+            magpos = magpos - 1
+            i = i - 1
+        }
+    }
+    shifted = bn_from_mag_checked(bn.sign, res, resultlength)
+    if bn.sign < 0 {
+        if dropped == 1 {
+            // floor: subtract 1 from a negative == add 1 to magnitude
+            one = from_int(1)
+            adjusted = subtract(shifted, one)
+            free(one)
+            free(shifted)
+            return adjusted
+        }
+    }
+    return shifted
+}
+
+// Returns 1 if any of the low `nbits` bits of the magnitude are set.
+mag_has_low_bits(mag: ptr, maglen: int, nbits: int) -> int {
+    if nbits <= 0 {
+        return 0
+    }
+    fulllimbs = bits.lsr32(nbits, 5)   // nbits / 32
+    rembits = nbits & 31
+    // check the `fulllimbs` least-significant limbs (the tail of the array)
+    i = 0
+    while i < fulllimbs {
+        idx = maglen - 1 - i
+        if idx < 0 {
+            return 0
+        }
+        if limb(mag, idx) != 0 {
+            return 1
+        }
+        i = i + 1
+    }
+    if rembits != 0 {
+        idx = maglen - 1 - fulllimbs
+        if idx >= 0 {
+            mask = (1 << rembits) - 1
+            if (limb(mag, idx) & mask) != 0 {
+                return 1
+            }
+        }
+    }
+    return 0
+}
+
+// ---- byte encoding (BC ToByteArray) ----
+
+// Helper: number of bytes for nbits (ceil division by 8).
+bytes_for_bits(nbits: int) -> int {
+    return (nbits + 7) / 8
+}
+
+// Signed two's-complement big-endian. Returns a std.intarr where slot i
+// holds byte i (0..255); the byte count is the intarr's size. Callers
+// read with intarr_get_raw and mask & 0xFF.
+//
+// NOTE: returns the bytes in an intarr-of-bytes; the test harness reads
+// them back through bignum.* helpers. To keep the public surface a plain
+// `ptr` of raw bytes, we copy into a malloc'd byte buffer.
+to_bytes(n: ptr) -> ptr {
+    return to_bytes_impl(n, 0)
+}
+
+to_bytes_unsigned(n: ptr) -> ptr {
+    return to_bytes_impl(n, 1)
+}
+
+// We return a malloc'd buffer whose first 4 bytes are the length (LE int)
+// followed by the bytes. That keeps the signature `-> ptr` while letting
+// callers recover the length. The test harness uses to_bytes_len + raw
+// byte reads.
+//
+// Layout: [int32 length][bytes...]. mem.get_int reads the prefix.
+
+// Returns a std.bytes (AetherBytes) holding the big-endian encoding —
+// consistent with the rest of the cryptography port. Caller frees with
+// bytes.free.
+to_bytes_impl(n: ptr, as_unsigned: int) -> ptr {
+    bn = n as *BN
+    if bn.sign == 0 {
+        if as_unsigned == 1 {
+            // empty byte array (zero has no unsigned magnitude bytes)
+            return bytes.new(0)
+        }
+        // single zero byte
+        z1 = bytes.new(1)
+        bytes.set(z1, 0, 0)
+        return z1
+    }
+    // Unsigned encoding is the bare magnitude (abs), so its effective sign
+    // for the byte-writer is positive. Signed encoding keeps the real sign.
+    effsign = bn.sign
+    if as_unsigned == 1 {
+        effsign = 1
+    }
+    // Signed encoding uses BC BitLength (with the negative-power-of-two
+    // adjustment); unsigned encoding uses the bare magnitude bit length.
+    bl = bit_length(n)
+    if as_unsigned == 1 {
+        bl = mag_bit_length(bn.mag, bn.len)
+    }
+    // BC: nBits = (unsigned && sign>0) ? BitLength : BitLength+1. The +1
+    // reserves the two's-complement sign bit for signed encodings and for
+    // negative values.
+    nbits = bl
+    if as_unsigned != 1 {
+        nbits = bl + 1
+    }
+    nbytes = bytes_for_bits(nbits)
+    buf = bytes.new(nbytes)
+    base = 0
+
+    mag = bn.mag
+    maglen = bn.len
+    magindex = maglen
+    bytesindex = nbytes   // exclusive end within the byte region
+
+    if effsign > 0 {
+        while magindex > 1 {
+            magindex = magindex - 1
+            mv = limb(mag, magindex)
+            bytesindex = bytesindex - 4
+            bytes.set(buf, base + bytesindex + 0, (bits.lsr64(mv, 24) & 0xFF))
+            bytes.set(buf, base + bytesindex + 1, (bits.lsr64(mv, 16) & 0xFF))
+            bytes.set(buf, base + bytesindex + 2, (bits.lsr64(mv, 8) & 0xFF))
+            bytes.set(buf, base + bytesindex + 3, (mv & 0xFF))
+        }
+        lastmag = limb(mag, 0)
+        while lastmag > 0xFF {
+            bytesindex = bytesindex - 1
+            bytes.set(buf, base + bytesindex, (lastmag & 0xFF))
+            lastmag = bits.lsr64(lastmag, 8)
+        }
+        bytesindex = bytesindex - 1
+        bytes.set(buf, base + bytesindex, (lastmag & 0xFF))
+        // any remaining leading byte (the optional sign byte) is already 0
+        // from malloc? malloc does not zero — explicitly zero the prefix.
+        z = 0
+        while z < bytesindex {
+            bytes.set(buf, base + z, 0)
+            z = z + 1
+        }
+    } else {
+        // sign < 0
+        carry = 1
+        while magindex > 1 {
+            magindex = magindex - 1
+            mv = (~limb(mag, magindex)) & 0xFFFFFFFF
+            if carry == 1 {
+                mv = (mv + 1) & 0xFFFFFFFF
+                if mv == 0 {
+                    carry = 1
+                } else {
+                    carry = 0
+                }
+            }
+            bytesindex = bytesindex - 4
+            bytes.set(buf, base + bytesindex + 0, (bits.lsr64(mv, 24) & 0xFF))
+            bytes.set(buf, base + bytesindex + 1, (bits.lsr64(mv, 16) & 0xFF))
+            bytes.set(buf, base + bytesindex + 2, (bits.lsr64(mv, 8) & 0xFF))
+            bytes.set(buf, base + bytesindex + 3, (mv & 0xFF))
+        }
+        lastmag = limb(mag, 0)
+        if carry == 1 {
+            lastmag = lastmag - 1
+        }
+        while lastmag > 0xFF {
+            bytesindex = bytesindex - 1
+            bytes.set(buf, base + bytesindex, ((~lastmag) & 0xFF))
+            lastmag = bits.lsr64(lastmag, 8)
+        }
+        bytesindex = bytesindex - 1
+        bytes.set(buf, base + bytesindex, ((~lastmag) & 0xFF))
+        if bytesindex != 0 {
+            bytesindex = bytesindex - 1
+            bytes.set(buf, base + bytesindex, 0xFF)
+        }
+        // zero any bytes before bytesindex (shouldn't be any after the
+        // sign byte write, but be safe)
+        z = 0
+        while z < bytesindex {
+            bytes.set(buf, base + z, 0xFF)
+            z = z + 1
+        }
+    }
+    return buf
+}
+
+// ---- to_hex (signed, Python-style) ----
+
+hex_digit(v: int) -> int {
+    if v < 10 {
+        return 48 + v       // '0'..'9'
+    }
+    return 87 + v           // 'a'..'f'  (97 - 10)
+}
+
+to_hex(n: ptr) -> string {
+    bn = n as *BN
+    if bn.sign == 0 {
+        return "0"
+    }
+    mag = bn.mag
+    maglen = bn.len
+    // skip leading zero limbs
+    start = 0
+    while start < maglen {
+        if limb(mag, start) != 0 {
+            break
+        }
+        start = start + 1
+    }
+    sb = strbuilder.new(maglen * 8 + 1)
+    if bn.sign < 0 {
+        strbuilder.append_byte(sb, 45)   // '-'
+    }
+    // first significant limb: no leading zeros
+    append_limb_nolead(sb, limb(mag, start))
+    i = start + 1
+    while i < maglen {
+        append_limb_padded(sb, limb(mag, i))
+        i = i + 1
+    }
+    s = strbuilder.finish(sb)
+    return s
+}
+
+// 8 zero-padded hex digits of one limb.
+append_limb_padded(sb: ptr, v: long) {
+    shift = 28
+    while shift >= 0 {
+        d = bits.lsr64(v, shift) & 0xF
+        strbuilder.append_byte(sb, hex_digit(d))
+        shift = shift - 4
+    }
+}
+
+// hex of one limb with no leading zeros (most-significant limb).
+append_limb_nolead(sb: ptr, v: long) {
+    if v == 0 {
+        strbuilder.append_byte(sb, 48)   // '0'
+        return
+    }
+    shift = 28
+    while shift >= 0 {
+        if (bits.lsr64(v, shift) & 0xF) != 0 {
+            break
+        }
+        shift = shift - 4
+    }
+    while shift >= 0 {
+        d = bits.lsr64(v, shift) & 0xF
+        strbuilder.append_byte(sb, hex_digit(d))
+        shift = shift - 4
+    }
+}
+
+// ---- free ----
+
+free(n: ptr) {
+    if n == null {
+        return
+    }
+    bn = n as *BN
+    if bn.mag != null {
+        intarr_free(bn.mag)
+    }
+    // realloc(p, 0) frees p; assign the result so gcc's warn_unused_result
+    // on realloc is satisfied (the returned pointer is unspecified/freed).
+    _freed = realloc(n, 0)
+}

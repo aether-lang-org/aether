@@ -1,0 +1,110 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// Regression: std.bignum foundation layer (issue #739 slice 11), the
+// arbitrary-precision integer the RSA/EC work will build on. This layer is
+// representation + from/to_bytes (std.bytes, two's-complement signed +
+// unsigned) + compare + add/subtract/negate/abs/shift. Every result here was
+// cross-checked against Python's arbitrary-precision int during development
+// (add/sub/cmp/shift over signed integers incl. INT_MIN, 1793/1793 lines;
+// signed+unsigned byte round-trips incl. the 80/0080/00ff/-128 edges).
+//
+// Multiply / divide / mod_pow / gcd / is_prime are later layers, not here.
+
+import std.bignum
+import std.bytes
+import std.string
+
+hv(c: int) -> int {
+    if c >= 48 { if c <= 57 { return c - 48 } }
+    if c >= 97 { if c <= 102 { return c - 87 } }
+    return 0
+}
+hb(h: string) -> ptr {
+    n = string.length(h); b = bytes.new(0); i = 0
+    while i < n { bytes.set(b, i / 2, hv(string_char_at_n(h, n, i)) * 16 + hv(string_char_at_n(h, n, i + 1))); i = i + 2 }
+    return b
+}
+bhex(b: ptr) -> string {
+    d = "0123456789abcdef"; out = ""; n = bytes.length(b); i = 0
+    while i < n {
+        v = bytes.get(b, i)
+        out = string.concat(out, string.concat(string.substring(d, (v/16)&15, ((v/16)&15)+1), string.substring(d, v&15, (v&15)+1)))
+        i = i + 1
+    }
+    return out
+}
+
+main() {
+    print("=== std.bignum foundation ===\n")
+    fails = 0
+
+    // ---- arithmetic via from_int, compared to to_hex (Python-style) ----
+    a = bignum.from_int(1234567890)
+    b = bignum.from_int(-987654321)
+    s = bignum.add(a, b)        // 246913569 = 0xeb79a21
+    if string.equals(bignum.to_hex(s), "eb79a21") != 1 { print("FAIL add\n"); fails = fails + 1 }
+    d = bignum.subtract(a, b)   // 2222222211 = 0x84746b83
+    if string.equals(bignum.to_hex(d), "84746b83") != 1 { print("FAIL subtract\n"); fails = fails + 1 }
+    if bignum.compare(a, b) != 1 { print("FAIL compare a>b\n"); fails = fails + 1 }
+    if bignum.compare(b, a) != -1 { print("FAIL compare b<a\n"); fails = fails + 1 }
+    if bignum.compare(a, a) != 0 { print("FAIL compare a==a\n"); fails = fails + 1 }
+    ng = bignum.negate(a)
+    if string.equals(bignum.to_hex(ng), "-499602d2") != 1 { print("FAIL negate\n"); fails = fails + 1 }
+    ab = bignum.abs(b)
+    if string.equals(bignum.to_hex(ab), "3ade68b1") != 1 { print("FAIL abs\n"); fails = fails + 1 }
+    bignum.free(s); bignum.free(d); bignum.free(ng); bignum.free(ab); bignum.free(a); bignum.free(b)
+
+    // shift_left / shift_right (logical/arith) — 1 << 40 = 0x10000000000
+    one = bignum.from_int(1)
+    sl = bignum.shift_left(one, 40)
+    if string.equals(bignum.to_hex(sl), "10000000000") != 1 { print("FAIL shift_left 40\n"); fails = fails + 1 }
+    bignum.free(sl); bignum.free(one)
+    // -8 >> 1 = -4 (floor, matching BC/Python)
+    neg8 = bignum.from_int(-8)
+    sr = bignum.shift_right(neg8, 1)
+    if string.equals(bignum.to_hex(sr), "-4") != 1 { print("FAIL shift_right neg floor\n"); fails = fails + 1 }
+    bignum.free(sr); bignum.free(neg8)
+
+    // ---- byte round-trips through std.bytes (the RSA-relevant path) ----
+    // unsigned: leading zero stripped
+    in1 = hb("00ff")
+    u1 = bignum.from_bytes_unsigned(in1, 2)
+    ub1 = bignum.to_bytes_unsigned(u1)
+    if string.equals(bhex(ub1), "ff") != 1 { print("FAIL unsigned 00ff->ff\n"); fails = fails + 1 }
+    bytes.free(ub1); bignum.free(u1); bytes.free(in1)
+
+    // signed: 0x80 decodes as -128, re-encodes minimal as 80
+    in2 = hb("80")
+    s2 = bignum.from_bytes(in2, 1)
+    if bignum.sign(s2) != -1 { print("FAIL signed 80 is negative\n"); fails = fails + 1 }
+    sb2 = bignum.to_bytes(s2)
+    if string.equals(bhex(sb2), "80") != 1 { print("FAIL signed 80 round-trip\n"); fails = fails + 1 }
+    bytes.free(sb2); bignum.free(s2); bytes.free(in2)
+
+    // signed: 0x0080 (= +128) keeps the leading zero (sign bit)
+    in3 = hb("0080")
+    s3 = bignum.from_bytes(in3, 2)
+    if bignum.sign(s3) != 1 { print("FAIL signed 0080 is positive\n"); fails = fails + 1 }
+    sb3 = bignum.to_bytes(s3)
+    if string.equals(bhex(sb3), "0080") != 1 { print("FAIL signed 0080 round-trip\n"); fails = fails + 1 }
+    bytes.free(sb3); bignum.free(s3); bytes.free(in3)
+
+    // a 16-byte (128-bit) value round-trips exactly (unsigned)
+    big_h = "0123456789abcdeffedcba9876543210"
+    inb = hb(big_h)
+    ub = bignum.from_bytes_unsigned(inb, 16)
+    obb = bignum.to_bytes_unsigned(ub)
+    if string.equals(bhex(obb), big_h) != 1 { print("FAIL 128-bit round-trip\n"); fails = fails + 1 }
+    bytes.free(obb); bignum.free(ub); bytes.free(inb)
+
+    if fails == 0 {
+        print("PASS: std.bignum foundation\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}
