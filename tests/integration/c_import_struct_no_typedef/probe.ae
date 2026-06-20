@@ -1,0 +1,51 @@
+// Integration test for `@c_import` against a header that defines its
+// struct WITHOUT a convenience typedef.  POSIX headers do this all
+// the time — `struct tm` in <time.h>, `struct stat` in <sys/stat.h>,
+// `struct sockaddr`, etc.  Aetherc must emit `struct N *` (not bare
+// `N *`) when rendering pointers to these `@c_import` structs.
+//
+// This probe:
+//   - declares `widget` with `@c_import` (no Aether-emitted typedef),
+//   - casts a raw `ptr` to `*widget`,
+//   - writes and reads fields,
+//   - links against widget.h which has NO `typedef struct widget widget;`
+//   - succeeds only when aetherc emits `struct widget *` everywhere.
+
+extern struct widget @c_import {
+    serial: int
+    weight: int
+    payload: ptr
+}
+
+extern malloc(n: size_t) -> ptr
+extern free(p: ptr)
+
+bump_weight(w: *widget, delta: int) {
+    w.weight = w.weight + delta
+}
+
+main() {
+    p = malloc(32)
+
+    w = (p as *widget)
+    w.serial = 42
+    w.weight = 100
+    w.payload = null
+
+    bump_weight(w, 7)
+
+    int s = w.serial
+    int wt = w.weight
+    if s != 42 {
+        println("FAIL: serial=${s}, want 42")
+        return
+    }
+    if wt != 107 {
+        println("FAIL: weight=${wt}, want 107")
+        return
+    }
+    println("serial=${s} weight=${wt}")
+
+    free(p)
+    println("OK")
+}

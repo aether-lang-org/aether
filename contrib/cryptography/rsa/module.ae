@@ -33,6 +33,7 @@ import std.string
 import std.bignum
 import std.bytes
 import std.cryptography
+import std.cryptography.sha2
 import contrib.cryptography.asn1
 
 exports (
@@ -40,7 +41,9 @@ exports (
     modulus_bytes, modulus_bits,
     raw_encrypt, raw_decrypt,
     encrypt_pkcs1, decrypt_pkcs1,
-    sign_pkcs1, verify_pkcs1
+    sign_pkcs1, verify_pkcs1,
+    encrypt_oaep, decrypt_oaep,
+    sign_pss, verify_pss
 )
 
 extern malloc(size: int) -> ptr
@@ -295,4 +298,298 @@ build_emsa(di: ptr, klen: int) -> ptr {
         j = j + 1
     }
     return block
+}
+
+// ---- SHA-256 helper (binary-safe via std.cryptography.sha2) ----
+// hLen for SHA-256.
+oaep_hlen() -> int { return 32 }
+sha256b(data: ptr, len: int) -> ptr {
+    ctx, err = sha2.new("sha256")
+    sha2.update_bytes(ctx, data, len)
+    return sha2.final_bytes(ctx)
+}
+
+// ---- MGF1 (RFC 8017 B.2.1) with SHA-256 ----
+// mask = MGF1(seed, mask_len): for counter = 0,1,...: T ||= SHA256(seed || I2OSP(counter,4)).
+mgf1(seed: ptr, seed_len: int, mask_len: int) -> ptr {
+    out = bytes.new(mask_len)
+    produced = 0
+    counter = 0
+    while produced < mask_len {
+        // input = seed || counter (4-byte BE)
+        inlen = seed_len + 4
+        inb = bytes.new(inlen)
+        bytes.copy_from_bytes(inb, 0, seed, 0, seed_len)
+        bytes.set(inb, seed_len + 0, (counter >> 24) & 0xFF)
+        bytes.set(inb, seed_len + 1, (counter >> 16) & 0xFF)
+        bytes.set(inb, seed_len + 2, (counter >> 8) & 0xFF)
+        bytes.set(inb, seed_len + 3, counter & 0xFF)
+        h = sha256b(inb, inlen)
+        bytes.free(inb)
+        // copy min(hLen, remaining) into out
+        hl = bytes.length(h)
+        remaining = mask_len - produced
+        take = hl
+        if remaining < take { take = remaining }
+        bytes.copy_from_bytes(out, produced, h, 0, take)
+        bytes.free(h)
+        produced = produced + take
+        counter = counter + 1
+    }
+    return out
+}
+
+// XOR src into dst over `len` bytes (dst modified in place).
+xor_into(dst: ptr, src: ptr, len: int) {
+    i = 0
+    while i < len {
+        bytes.set(dst, i, (bytes.get(dst, i) ^ bytes.get(src, i)) & 0xFF)
+        i = i + 1
+    }
+}
+
+// ---- RSAES-OAEP (RFC 8017 §7.1), SHA-256, empty label ----
+// Encrypt `msg` (mlen bytes). `seed` must be exactly hLen (32) random bytes
+// (caller-supplied for determinism/testability). Returns k-byte ciphertext,
+// or null if the message is too long (mlen > k - 2*hLen - 2).
+encrypt_oaep(k: ptr, msg: ptr, mlen: int, seed: ptr) -> ptr {
+    klen = modulus_bytes(k)
+    hlen = oaep_hlen()
+    if mlen > klen - 2 * hlen - 2 {
+        return null
+    }
+    // lHash = SHA256("")  (empty label)
+    empty = bytes.new(0)
+    lhash = sha256b(empty, 0)
+    bytes.free(empty)
+
+    // DB = lHash || PS(0x00..) || 0x01 || M   (length k - hLen - 1)
+    dblen = klen - hlen - 1
+    db = bytes.new(dblen)
+    z = 0
+    while z < dblen { bytes.set(db, z, 0); z = z + 1 }
+    bytes.copy_from_bytes(db, 0, lhash, 0, hlen)
+    ps_end = dblen - mlen - 1            // index of the 0x01 separator
+    bytes.set(db, ps_end, 0x01)
+    if mlen > 0 { bytes.copy_from_bytes(db, ps_end + 1, msg, 0, mlen) }
+    bytes.free(lhash)
+
+    // dbMask = MGF1(seed, dblen); maskedDB = DB ^ dbMask
+    dbmask = mgf1(seed, hlen, dblen)
+    xor_into(db, dbmask, dblen)
+    bytes.free(dbmask)
+
+    // seedMask = MGF1(maskedDB, hLen); maskedSeed = seed ^ seedMask
+    seedmask = mgf1(db, dblen, hlen)
+    mseed = bytes.new(hlen)
+    bytes.copy_from_bytes(mseed, 0, seed, 0, hlen)
+    xor_into(mseed, seedmask, hlen)
+    bytes.free(seedmask)
+
+    // EM = 0x00 || maskedSeed || maskedDB
+    em = bytes.new(klen)
+    bytes.set(em, 0, 0)
+    bytes.copy_from_bytes(em, 1, mseed, 0, hlen)
+    bytes.copy_from_bytes(em, 1 + hlen, db, 0, dblen)
+    bytes.free(mseed); bytes.free(db)
+
+    ct = raw_encrypt(k, em)
+    bytes.free(em)
+    return ct
+}
+
+// Decrypt OAEP ciphertext (k bytes). Returns (plaintext, "") or
+// (null, error) on any padding/format failure.
+decrypt_oaep(k: ptr, ct: ptr) -> {
+    klen = modulus_bytes(k)
+    hlen = oaep_hlen()
+    if bytes.length(ct) != klen {
+        return null, "ciphertext length mismatch"
+    }
+    if klen < 2 * hlen + 2 {
+        return null, "modulus too small for OAEP"
+    }
+    em = raw_decrypt(k, ct)
+
+    empty = bytes.new(0)
+    lhash = sha256b(empty, 0)
+    bytes.free(empty)
+
+    bad = 0
+    if (bytes.get(em, 0) & 0xFF) != 0 { bad = 1 }   // leading byte must be 0x00
+
+    // split: maskedSeed = em[1..1+hLen], maskedDB = em[1+hLen..k]
+    dblen = klen - hlen - 1
+    mseed = bytes.new(hlen)
+    bytes.copy_from_bytes(mseed, 0, em, 1, hlen)
+    db = bytes.new(dblen)
+    bytes.copy_from_bytes(db, 0, em, 1 + hlen, dblen)
+
+    // seed = maskedSeed ^ MGF1(maskedDB, hLen)
+    seedmask = mgf1(db, dblen, hlen)
+    xor_into(mseed, seedmask, hlen)
+    bytes.free(seedmask)
+    // DB = maskedDB ^ MGF1(seed, dblen)
+    dbmask = mgf1(mseed, hlen, dblen)
+    xor_into(db, dbmask, dblen)
+    bytes.free(dbmask)
+
+    // DB = lHash' || PS || 0x01 || M ; check lHash' == lHash
+    i = 0
+    while i < hlen {
+        if (bytes.get(db, i) & 0xFF) != (bytes.get(lhash, i) & 0xFF) { bad = 1 }
+        i = i + 1
+    }
+    bytes.free(lhash)
+
+    // find the 0x01 separator after the zero padding
+    sep = -1
+    j = hlen
+    while j < dblen {
+        bv = bytes.get(db, j) & 0xFF
+        if sep == -1 {
+            if bv == 0x01 {
+                sep = j
+            } else if bv != 0x00 {
+                bad = 1     // non-zero byte before the separator
+            }
+        }
+        j = j + 1
+    }
+    if sep == -1 { bad = 1 }
+
+    if bad == 1 {
+        bytes.free(em); bytes.free(mseed); bytes.free(db)
+        return null, "decryption error"
+    }
+
+    mlen = dblen - sep - 1
+    out = bytes.new(mlen)
+    if mlen > 0 { bytes.copy_from_bytes(out, 0, db, sep + 1, mlen) }
+    bytes.free(em); bytes.free(mseed); bytes.free(db)
+    return out, ""
+}
+
+// ---- RSASSA-PSS (RFC 8017 §8.1 / §9.1), SHA-256 ----
+// Sign the SHA-256 `mhash` (32 bytes) with `salt` (slen bytes, caller-
+// supplied for determinism). Returns the k-byte signature, or null on error.
+sign_pss(k: ptr, mhash: ptr, salt: ptr, slen: int) -> ptr {
+    klen = modulus_bytes(k)
+    hlen = oaep_hlen()
+    embits = modulus_bits(k) - 1
+    emlen = (embits + 7) / 8
+    if emlen < hlen + slen + 2 {
+        return null
+    }
+    // M' = 0x00*8 || mHash || salt ; H = SHA256(M')
+    mp_len = 8 + hlen + slen
+    mp = bytes.new(mp_len)
+    z = 0
+    while z < 8 { bytes.set(mp, z, 0); z = z + 1 }
+    bytes.copy_from_bytes(mp, 8, mhash, 0, hlen)
+    if slen > 0 { bytes.copy_from_bytes(mp, 8 + hlen, salt, 0, slen) }
+    h = sha256b(mp, mp_len)
+    bytes.free(mp)
+
+    // DB = PS(0x00) || 0x01 || salt   (length emLen - hLen - 1)
+    dblen = emlen - hlen - 1
+    db = bytes.new(dblen)
+    z = 0
+    while z < dblen { bytes.set(db, z, 0); z = z + 1 }
+    bytes.set(db, dblen - slen - 1, 0x01)
+    if slen > 0 { bytes.copy_from_bytes(db, dblen - slen, salt, 0, slen) }
+
+    // maskedDB = DB ^ MGF1(H, dblen)
+    dbmask = mgf1(h, hlen, dblen)
+    xor_into(db, dbmask, dblen)
+    bytes.free(dbmask)
+    // clear the leftmost (8*emLen - embits) bits of maskedDB
+    clear_bits = 8 * emlen - embits
+    if clear_bits > 0 {
+        mask = (0xFF >> clear_bits) & 0xFF
+        bytes.set(db, 0, bytes.get(db, 0) & mask)
+    }
+
+    // EM = maskedDB || H || 0xbc
+    em = bytes.new(emlen)
+    bytes.copy_from_bytes(em, 0, db, 0, dblen)
+    bytes.copy_from_bytes(em, dblen, h, 0, hlen)
+    bytes.set(em, emlen - 1, 0xbc)
+    bytes.free(db); bytes.free(h)
+
+    // sig = raw_decrypt(EM as integer) — but emLen may be < klen; left-pad.
+    emfull = bytes.new(klen)
+    z = 0
+    while z < klen { bytes.set(emfull, z, 0); z = z + 1 }
+    bytes.copy_from_bytes(emfull, klen - emlen, em, 0, emlen)
+    bytes.free(em)
+    sig = raw_decrypt(k, emfull)
+    bytes.free(emfull)
+    return sig
+}
+
+// Verify a PSS signature `sig` (k bytes) over `mhash` (32 bytes) with the
+// expected salt length `slen`. Returns 1 if valid, 0 otherwise.
+verify_pss(k: ptr, mhash: ptr, sig: ptr, slen: int) -> int {
+    klen = modulus_bytes(k)
+    hlen = oaep_hlen()
+    embits = modulus_bits(k) - 1
+    emlen = (embits + 7) / 8
+    if bytes.length(sig) != klen { return 0 }
+
+    emfull = raw_encrypt(k, sig)
+    // take the low emLen bytes as EM
+    em = bytes.new(emlen)
+    bytes.copy_from_bytes(em, 0, emfull, klen - emlen, emlen)
+    bytes.free(emfull)
+
+    ok = 1
+    if (bytes.get(em, emlen - 1) & 0xFF) != 0xbc { ok = 0 }
+
+    dblen = emlen - hlen - 1
+    maskeddb = bytes.new(dblen)
+    bytes.copy_from_bytes(maskeddb, 0, em, 0, dblen)
+    h = bytes.new(hlen)
+    bytes.copy_from_bytes(h, 0, em, dblen, hlen)
+
+    // leftmost clear_bits of maskedDB must be zero
+    clear_bits = 8 * emlen - embits
+    if clear_bits > 0 {
+        top = (bytes.get(maskeddb, 0) >> (8 - clear_bits)) & 0xFF
+        if top != 0 { ok = 0 }
+    }
+
+    // DB = maskedDB ^ MGF1(H, dblen)
+    dbmask = mgf1(h, hlen, dblen)
+    xor_into(maskeddb, dbmask, dblen)
+    bytes.free(dbmask)
+    if clear_bits > 0 {
+        mask = (0xFF >> clear_bits) & 0xFF
+        bytes.set(maskeddb, 0, bytes.get(maskeddb, 0) & mask)
+    }
+
+    // DB must be 0x00*(dblen-slen-1) || 0x01 || salt
+    i = 0
+    while i < dblen - slen - 1 {
+        if (bytes.get(maskeddb, i) & 0xFF) != 0 { ok = 0 }
+        i = i + 1
+    }
+    if (bytes.get(maskeddb, dblen - slen - 1) & 0xFF) != 0x01 { ok = 0 }
+
+    // salt = last slen bytes of DB; recompute H' = SHA256(0^8 || mHash || salt)
+    mp_len = 8 + hlen + slen
+    mp = bytes.new(mp_len)
+    z = 0
+    while z < 8 { bytes.set(mp, z, 0); z = z + 1 }
+    bytes.copy_from_bytes(mp, 8, mhash, 0, hlen)
+    if slen > 0 { bytes.copy_from_bytes(mp, 8 + hlen, maskeddb, dblen - slen, slen) }
+    hp = sha256b(mp, mp_len)
+    bytes.free(mp)
+    i = 0
+    while i < hlen {
+        if (bytes.get(hp, i) & 0xFF) != (bytes.get(h, i) & 0xFF) { ok = 0 }
+        i = i + 1
+    }
+    bytes.free(hp); bytes.free(h); bytes.free(maskeddb); bytes.free(em)
+    return ok
 }

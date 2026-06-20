@@ -44,7 +44,8 @@ exports (
     block_size, ecb_encrypt, ecb_decrypt, ctr_xor,
     cbc_encrypt, cbc_decrypt, cbc_encrypt_pkcs7, cbc_decrypt_pkcs7,
     pkcs7_pad, pkcs7_unpad,
-    cmac, key_wrap, key_unwrap
+    cmac, key_wrap, key_unwrap,
+    gcm_seal, gcm_open
 )
 
 extern malloc(size: int) -> ptr
@@ -711,4 +712,215 @@ key_unwrap(key: ptr, keylen: int, data: ptr, len: int) -> {
         return null, "integrity check failed"
     }
     return r, ""
+}
+
+// ---- AES-GCM (NIST SP800-38D) ----
+// Authenticated encryption. `iv` is the nonce (any length, but 12 bytes is
+// the standard/fast path and the only length handled here). `aad` is the
+// additional authenticated data (may be empty). gcm_seal returns the
+// ciphertext with the 16-byte tag appended (pt_len + 16). gcm_open verifies
+// the trailing tag (constant-time) before returning (plaintext, "") or
+// (null, error). `ctx` is an AES ENCRYPTOR (GCM only runs the cipher forward).
+//
+// GHASH multiplies in GF(2^128) with the GCM reducing polynomial; H = E(0).
+
+// GF(2^128) multiply (x * y) in GCM's bit-reflected basis. x,y,out are
+// 16-byte buffers (big-endian block order, MSB-first bit numbering).
+gf_mul(x: ptr, y: ptr) -> ptr {
+    z = bytes.new(16)
+    v = bytes.new(16)
+    i = 0
+    while i < 16 { bytes.set(z, i, 0); bytes.set(v, i, bytes.get(y, i)); i = i + 1 }
+    // For each bit of x from MSB (bit 0 of byte 0) to LSB:
+    bit = 0
+    while bit < 128 {
+        byte_i = bit / 8
+        bit_i = 7 - (bit % 8)
+        if ((bytes.get(x, byte_i) >> bit_i) & 1) == 1 {
+            k = 0
+            while k < 16 { bytes.set(z, k, (bytes.get(z, k) ^ bytes.get(v, k)) & 0xFF); k = k + 1 }
+        }
+        // v = (v >> 1); if LSB of v was set, v ^= R (R = 0xe1 || 0...0)
+        lsb = bytes.get(v, 15) & 1
+        gf_shr1(v)
+        if lsb == 1 {
+            bytes.set(v, 0, (bytes.get(v, 0) ^ 0xe1) & 0xFF)
+        }
+        bit = bit + 1
+    }
+    bytes.free(v)
+    return z
+}
+// Right-shift a 16-byte big-endian value by 1 bit, in place.
+gf_shr1(v: ptr) {
+    i = 0
+    carry = 0
+    while i < 16 {
+        cur = bytes.get(v, i) & 0xFF
+        nv = ((cur >> 1) | (carry << 7)) & 0xFF
+        carry = cur & 1
+        bytes.set(v, i, nv)
+        i = i + 1
+    }
+}
+
+// GHASH: fold `data` (len bytes, processed in 16-byte blocks, zero-padded)
+// into the running hash `acc` (16 bytes) under subkey H. Returns a fresh acc.
+ghash_update(acc: ptr, h: ptr, data: ptr, len: int) -> ptr {
+    cur = bytes.new(16)
+    i = 0
+    while i < 16 { bytes.set(cur, i, bytes.get(acc, i)); i = i + 1 }
+    off = 0
+    while off < len {
+        // XOR next (zero-padded) block into cur
+        j = 0
+        while j < 16 {
+            b = 0
+            if off + j < len { b = bytes.get(data, off + j) }
+            bytes.set(cur, j, (bytes.get(cur, j) ^ b) & 0xFF)
+            j = j + 1
+        }
+        nxt = gf_mul(cur, h)
+        bytes.free(cur)
+        cur = nxt
+        off = off + 16
+    }
+    return cur
+}
+
+// Increment the low 32 bits (last 4 bytes) of a 16-byte counter, big-endian.
+gctr_inc32(ctr: ptr) {
+    i = 15
+    carry = 1
+    while i >= 12 {
+        if carry == 1 {
+            v = (bytes.get(ctr, i) + 1) & 0xFF
+            bytes.set(ctr, i, v)
+            if v != 0 { carry = 0 }
+        }
+        i = i - 1
+    }
+}
+
+// CTR-mode encrypt/decrypt `data` starting from counter block `ctr0`
+// (incremented before the first block per GCM). Returns a fresh buffer.
+gctr(ctx: ptr, ctr0: ptr, data: ptr, len: int) -> ptr {
+    out = bytes.new(len)
+    ctr = bytes.new(16)
+    i = 0
+    while i < 16 { bytes.set(ctr, i, bytes.get(ctr0, i)); i = i + 1 }
+    off = 0
+    while off < len {
+        gctr_inc32(ctr)
+        ks = process_block(ctx, ctr)
+        j = 0
+        while j < 16 {
+            if off + j < len {
+                bytes.set(out, off + j, (bytes.get(data, off + j) ^ bytes.get(ks, j)) & 0xFF)
+            }
+            j = j + 1
+        }
+        bytes.free(ks)
+        off = off + 16
+    }
+    bytes.free(ctr)
+    return out
+}
+
+// Compute the GCM tag for ciphertext `ct`/`ct_len` and `aad`/`aad_len`
+// under subkey H and pre-counter J0. Returns the 16-byte tag.
+gcm_tag(ctx: ptr, h: ptr, j0: ptr, aad: ptr, aad_len: int, ct: ptr, ct_len: int) -> ptr {
+    acc = bytes.new(16)
+    z = 0
+    while z < 16 { bytes.set(acc, z, 0); z = z + 1 }
+    a1 = ghash_update(acc, h, aad, aad_len)
+    bytes.free(acc)
+    a2 = ghash_update(a1, h, ct, ct_len)
+    bytes.free(a1)
+    // length block: [len(AAD) in bits | len(C) in bits], each 64-bit BE
+    lb = bytes.new(16)
+    set_be64_bits(lb, 0, aad_len)
+    set_be64_bits(lb, 8, ct_len)
+    a3 = ghash_update(a2, h, lb, 16)
+    bytes.free(a2); bytes.free(lb)
+    // S = E(J0); tag = a3 XOR S
+    s = process_block(ctx, j0)
+    tag = bytes.new(16)
+    k = 0
+    while k < 16 { bytes.set(tag, k, (bytes.get(a3, k) ^ bytes.get(s, k)) & 0xFF); k = k + 1 }
+    bytes.free(a3); bytes.free(s)
+    return tag
+}
+// Write (byte_len * 8) as a 64-bit big-endian value at offset off.
+set_be64_bits(b: ptr, off: int, byte_len: int) {
+    long bits_len = byte_len * 8
+    i = 7
+    while i >= 0 {
+        bytes.set(b, off + i, bits_len & 0xFF)
+        bits_len = bits.lsr64(bits_len, 8)
+        i = i - 1
+    }
+}
+
+// Build J0 for a 12-byte IV: IV || 0x00000001.
+gcm_j0(iv: ptr) -> ptr {
+    j0 = bytes.new(16)
+    i = 0
+    while i < 12 { bytes.set(j0, i, bytes.get(iv, i)); i = i + 1 }
+    bytes.set(j0, 12, 0); bytes.set(j0, 13, 0); bytes.set(j0, 14, 0); bytes.set(j0, 15, 1)
+    return j0
+}
+
+// Seal: returns ciphertext (pt_len bytes) with the 16-byte tag appended.
+// `ctx` is an encryptor; `iv` must be 12 bytes.
+gcm_seal(ctx: ptr, iv: ptr, aad: ptr, aad_len: int, pt: ptr, pt_len: int) -> ptr {
+    // H = E(0^128)
+    zero = bytes.new(16)
+    z = 0
+    while z < 16 { bytes.set(zero, z, 0); z = z + 1 }
+    h = process_block(ctx, zero)
+    bytes.free(zero)
+
+    j0 = gcm_j0(iv)
+    ct = gctr(ctx, j0, pt, pt_len)
+    tag = gcm_tag(ctx, h, j0, aad, aad_len, ct, pt_len)
+
+    out = bytes.new(pt_len + 16)
+    bytes.copy_from_bytes(out, 0, ct, 0, pt_len)
+    bytes.copy_from_bytes(out, pt_len, tag, 0, 16)
+    bytes.free(h); bytes.free(j0); bytes.free(ct); bytes.free(tag)
+    return out
+}
+
+// Open: verifies the trailing 16-byte tag (constant-time) then decrypts.
+// `ctx` is an encryptor; `iv` must be 12 bytes. Returns (plaintext, "") or
+// (null, error).
+gcm_open(ctx: ptr, iv: ptr, aad: ptr, aad_len: int, ct_with_tag: ptr, ct_len: int) -> {
+    if ct_len < 16 {
+        return null, "ciphertext too short"
+    }
+    body_len = ct_len - 16
+    zero = bytes.new(16)
+    z = 0
+    while z < 16 { bytes.set(zero, z, 0); z = z + 1 }
+    h = process_block(ctx, zero)
+    bytes.free(zero)
+    j0 = gcm_j0(iv)
+
+    want = gcm_tag(ctx, h, j0, aad, aad_len, ct_with_tag, body_len)
+    // constant-time compare against the supplied tag
+    diff = 0
+    i = 0
+    while i < 16 {
+        diff = diff | ((bytes.get(want, i) ^ bytes.get(ct_with_tag, body_len + i)) & 0xFF)
+        i = i + 1
+    }
+    bytes.free(want)
+    if diff != 0 {
+        bytes.free(h); bytes.free(j0)
+        return null, "authentication failed"
+    }
+    pt = gctr(ctx, j0, ct_with_tag, body_len)
+    bytes.free(h); bytes.free(j0)
+    return pt, ""
 }
