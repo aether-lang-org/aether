@@ -14,6 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.296.0]
+
+### Added
+
+- **Elliptic-curve cryptography — X25519, Ed25519, and NIST P-256** in pure
+  Aether on top of std.bignum (the largest single bc-csharp / #739 gap). No
+  externs to OpenSSL; each validated against its RFC / NIST test vectors.
+  - **`contrib.cryptography.x25519`** — X25519 ECDH (RFC 7748): Montgomery
+    ladder over GF(2^255-19). `x25519(scalar, u)`, `base_mult(scalar)`.
+    Validated against RFC 7748 §5.2 and the §6.1 Diffie-Hellman round.
+  - **`contrib.cryptography.ed25519`** — Ed25519 signatures (RFC 8032):
+    twisted-Edwards point ops in extended coordinates, SHA-512-based key/nonce
+    derivation, point compression/decompression. `publickey`, `sign`, `verify`.
+    Validated against RFC 8032 §7.1 Tests 1-3 (exact signatures + verify).
+  - **`contrib.cryptography.p256`** — NIST P-256 / secp256r1: short-Weierstrass
+    Jacobian point arithmetic, ECDH, and ECDSA. `scalar_mult[_base]`, `ecdh`,
+    `ecdsa_sign`, `ecdsa_verify`. Validated against a NIST ECDH CAVP vector,
+    the published 2G doubling, and an ECDSA sign/verify round-trip.
+  - These are correctness-first ports over the variable-time std.bignum — not
+    constant-time/side-channel-hardened; documented in each module header.
+
 ## [0.295.0]
 
 ### Added
