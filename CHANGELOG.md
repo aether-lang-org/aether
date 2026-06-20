@@ -14,6 +14,28 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.289.0]
+
+### Added
+
+- **`std.bignum` — `mod_pow` / `gcd` / `mod_inverse` / `is_probable_prime`**
+  (issue #739, the layer that completes the BigInteger surface for RSA/DSA).
+  `mod_pow` is square-and-multiply modular exponentiation; `gcd` is Euclid;
+  `mod_inverse` is iterative extended Euclid (returns `null` when no inverse
+  exists, i.e. `gcd(a,m) != 1`); `is_probable_prime(n, rounds)` is Miller-Rabin
+  over a fixed set of small witness bases (deterministic for all n < 3.3e24,
+  a strong probable-prime test beyond). Bouncy Castle uses Barrett/Montgomery
+  reduction for `ModPow` and Montgomery-form Miller-Rabin; the textbook forms
+  here give identical results with no extern crypto — the Montgomery fast paths
+  are a tracked follow-up optimization. Fuzzed against Python over 366
+  `mod_pow`/`gcd`/`mod_inverse` cases (operands up to 128 bits) plus a primality
+  sweep over 2..2000 and several 32-bit knowns (incl. the Carmichael number
+  561 and the Mersenne prime M31); ASan-clean across a heavy mixed-op loop.
+  Regression: `tests/regression/test_bignum_modpow.ae`. This completes the
+  arbitrary-precision integer surface (#739 Tier-2 gate) that unblocks
+  RSA/DSA/ECDSA/X.509. Still pure Aether — no externs to OpenSSL or any C
+  bignum library.
+
 ## [0.287.0]
 
 ### Added
