@@ -36,6 +36,7 @@ exports (
     from_int,
     compare, is_zero, sign, bit_length,
     add, subtract, negate, abs,
+    multiply, divide, remainder, mod,
     shift_left, shift_right,
     to_hex, free
 )
@@ -606,6 +607,205 @@ clone(n: ptr) -> ptr {
         return bn_zero()
     }
     return bn_alloc(bn.sign, mag_clone(bn.mag, bn.len), bn.len)
+}
+
+// ---- multiply (BC schoolbook Multiply(uint[] x, uint[] y, uint[] z)) ----
+
+// Schoolbook multiply: accumulates y*z into the freshly-zeroed `x`
+// (big-endian limbs, length y.len + z.len). Faithful port of BC's
+// Multiply(x, y, z) where x is the result buffer. Mutates `x` in place.
+mag_multiply(x: ptr, xlen: int, y: ptr, ylen: int, z: ptr, zlen: int) {
+    i = zlen
+    xbase = xlen - ylen
+    while i > 0 {
+        i = i - 1
+        a = limb(z, i)
+        long val = 0
+        if a != 0 {
+            j = ylen - 1
+            while j >= 0 {
+                val = val + a * limb(y, j) + limb(x, xbase + j)
+                intarr_set_raw(x, xbase + j, (val & 0xFFFFFFFF))
+                val = bits.lsr64(val, 32)
+                j = j - 1
+            }
+        }
+        xbase = xbase - 1
+        if xbase >= 0 {
+            intarr_set_raw(x, xbase, (val & 0xFFFFFFFF))
+        }
+    }
+}
+
+multiply(a: ptr, b: ptr) -> ptr {
+    ba = a as *BN
+    bb = b as *BN
+    if ba.sign == 0 {
+        return bn_zero()
+    }
+    if bb.sign == 0 {
+        return bn_zero()
+    }
+    reslen = ba.len + bb.len
+    res = intarr_new_raw(reslen)   // calloc: zero-filled
+    mag_multiply(res, reslen, ba.mag, ba.len, bb.mag, bb.len)
+    rsign = 1
+    if ba.sign != bb.sign {
+        rsign = -1
+    }
+    return bn_from_mag_checked(rsign, res, reslen)
+}
+
+// ---- division (binary long division) ----
+//
+// Rather than port BC's optimized shift-and-subtract Divide (which mutates
+// its dividend in place and is intricate to get right), we use a plain
+// bit-at-a-time long division over the unsigned magnitudes. It is O(n^2)
+// in the bit length but obviously correct and easy to verify against an
+// arbitrary-precision oracle; the RSA hot path will use Montgomery
+// reduction (a later slice), not this. Signs follow BC: quotient sign =
+// a.sign*b.sign (truncated toward zero), remainder sign = a.sign.
+
+// Test bit `pos` (0 = LSB) of a magnitude (big-endian limbs).
+mag_test_bit(mag: ptr, len: int, pos: int) -> int {
+    limbfromlsb = bits.lsr32(pos, 5)   // pos / 32
+    bitinlimb = pos & 0x1f
+    idx = len - 1 - limbfromlsb        // big-endian: LSB limb is last
+    if idx < 0 {
+        return 0
+    }
+    if (bits.lsr64(limb(mag, idx), bitinlimb) & 1) != 0 {
+        return 1
+    }
+    return 0
+}
+
+// Unsigned magnitude divide: returns (quotient_bn, remainder_bn) as BNs
+// (both non-negative, canonical). Caller adjusts signs and frees.
+mag_divmod_bn(num: ptr, numlen: int, den: ptr, denlen: int) -> (ptr, ptr) {
+    // quotient and remainder accumulate as BNs; we iterate bit positions
+    // from the most-significant bit of the numerator down to 0.
+    q = bn_zero()
+    r = bn_zero()
+    den_bn = bn_alloc(1, mag_clone(den, denlen), denlen)
+    nbits = mag_bit_length(num, numlen)
+    pos = nbits - 1
+    while pos >= 0 {
+        // r = (r << 1) | bit(num, pos)
+        r2 = shift_left(r, 1)
+        free(r)
+        r = r2
+        if mag_test_bit(num, numlen, pos) == 1 {
+            // set r's low bit: r = r + 1
+            one = from_int(1)
+            r3 = add(r, one)
+            free(one)
+            free(r)
+            r = r3
+        }
+        // if r >= den: r -= den; q |= (1 << pos)
+        if compare_mag_bn(r, den_bn) >= 0 {
+            r4 = subtract(r, den_bn)
+            free(r)
+            r = r4
+            bitval = make_pow2(pos)
+            q2 = add(q, bitval)
+            free(bitval)
+            free(q)
+            q = q2
+        }
+        pos = pos - 1
+    }
+    free(den_bn)
+    return q, r
+}
+
+// Compare two non-negative BNs by magnitude (both sign >= 0).
+compare_mag_bn(x: ptr, y: ptr) -> int {
+    bx = x as *BN
+    by = y as *BN
+    if bx.sign == 0 {
+        if by.sign == 0 {
+            return 0
+        }
+        return -1
+    }
+    if by.sign == 0 {
+        return 1
+    }
+    return compare_mag(bx.mag, bx.len, by.mag, by.len)
+}
+
+// Build the BN value 2^pos (a single set bit).
+make_pow2(pos: int) -> ptr {
+    one = from_int(1)
+    if pos == 0 {
+        return one
+    }
+    r = shift_left(one, pos)
+    free(one)
+    return r
+}
+
+divide(a: ptr, b: ptr) -> ptr {
+    bb = b as *BN
+    if bb.sign == 0 {
+        return bn_zero()   // division by zero -> zero (caller should guard)
+    }
+    ba = a as *BN
+    if ba.sign == 0 {
+        return bn_zero()
+    }
+    if compare_mag(ba.mag, ba.len, bb.mag, bb.len) < 0 {
+        return bn_zero()
+    }
+    q, r = mag_divmod_bn(ba.mag, ba.len, bb.mag, bb.len)
+    free(r)
+    bq = q as *BN
+    if bq.sign != 0 {
+        if ba.sign != bb.sign {
+            bq.sign = -1
+        }
+    }
+    return q
+}
+
+remainder(a: ptr, b: ptr) -> ptr {
+    bb = b as *BN
+    if bb.sign == 0 {
+        return bn_zero()
+    }
+    ba = a as *BN
+    if ba.sign == 0 {
+        return bn_zero()
+    }
+    if compare_mag(ba.mag, ba.len, bb.mag, bb.len) < 0 {
+        return clone(a)
+    }
+    q, r = mag_divmod_bn(ba.mag, ba.len, bb.mag, bb.len)
+    free(q)
+    br = r as *BN
+    if br.sign != 0 {
+        // remainder takes the dividend's sign (BC Remainder)
+        if ba.sign < 0 {
+            br.sign = -1
+        }
+    }
+    return r
+}
+
+// Mathematical modulus: always in [0, |b|) (BC Mod).
+mod(a: ptr, b: ptr) -> ptr {
+    r = remainder(a, b)
+    br = r as *BN
+    if br.sign >= 0 {
+        return r
+    }
+    babs = abs(b)
+    adjusted = add(r, babs)
+    free(babs)
+    free(r)
+    return adjusted
 }
 
 // ---- shifts ----

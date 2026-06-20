@@ -18,6 +18,19 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ### Added
 
+- **`std.bignum` — multiply / divide / remainder / mod** (issue #739, the
+  layer after the foundation). `multiply` is Bouncy Castle's schoolbook
+  `Multiply(uint[],uint[],uint[])`; `divide` / `remainder` / `mod` are binary
+  long division over the unsigned magnitudes with BC's sign rules (quotient
+  truncates toward zero with sign `a.sign*b.sign`; remainder takes the
+  dividend's sign; `mod` is always in `[0,|b|)`). The whole surface was fuzzed
+  against Python's arbitrary-precision `int` over 414 signed multi-limb cases
+  (including the 5-limb / 2-limb division a first shift-division port looped
+  on) and is ASan-clean across the intermediate-heavy divmod loop. Regression:
+  `tests/regression/test_bignum_muldiv.ae`. Still pure Aether — no externs to
+  OpenSSL or any C bignum library. **`mod_pow` / `gcd` / `mod_inverse` /
+  `is_probable_prime` remain follow-up layers**; `mod_pow` (the RSA workhorse)
+  will use Montgomery reduction rather than this O(n²) division.
 - **`std.bignum` — arbitrary-precision integers (foundation layer)** (issue
   #739 slice 11, the BigInteger watershed). Pure Aether, ported from Bouncy
   Castle's `BigInteger.cs`: sign-magnitude representation (32-bit limbs over
