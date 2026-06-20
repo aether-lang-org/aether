@@ -14,7 +14,27 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
-## [0.297.0]
+## [0.298.0]
+
+### Added
+
+- **AES-GCM + RSA-OAEP + RSA-PSS** — the remaining mainstream symmetric-AEAD
+  and modern-RSA-padding gaps from the Bouncy Castle port (#739), pure Aether,
+  no externs to OpenSSL.
+  - **`contrib.cryptography.aes`** gains `gcm_seal` / `gcm_open` (AES-GCM,
+    NIST SP800-38D): GHASH over GF(2^128), J0/CTR encryption, 16-byte auth tag
+    with constant-time compare. Validated against NIST GCM test cases 1/2/4.
+  - **`contrib.cryptography.rsa`** gains `encrypt_oaep` / `decrypt_oaep`
+    (RSAES-OAEP) and `sign_pss` / `verify_pss` (RSASSA-PSS), RFC 8017 with
+    SHA-256 + MGF1. Validated against reference vectors (byte-exact encrypt /
+    sign, decrypt / verify, round-trips). `encrypt_oaep` and `sign_pss` take
+    the seed / salt as a parameter for determinism (callers pass a CSPRNG
+    value in production).
+- **`tests/integration/c_import_struct_no_typedef`** — regression guard for
+  `aetherc` emitting `struct Name *` (not bare `Name *`) for pointers to
+  `@c_import` structs that ship no convenience typedef (the `struct tm` /
+  `struct stat` shape). The fix landed earlier via #534; this adds the test
+  that guards it.
 
 ### Changed
 

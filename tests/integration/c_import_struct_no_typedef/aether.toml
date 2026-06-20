@@ -1,0 +1,11 @@
+[[bin]]
+name = "probe"
+path = "probe.ae"
+
+[build]
+# Force-include the C header that owns `struct widget` into every TU,
+# including the Aether-generated .gen.c.  The header deliberately does
+# NOT carry a `typedef struct widget widget;`, so the only way this
+# compiles is if aetherc emits `struct widget *` (not bare `widget *`)
+# wherever it renders a pointer to the @c_import struct.
+cflags = "-include widget.h -I."
