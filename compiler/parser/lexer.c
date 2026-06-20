@@ -581,6 +581,86 @@ Token* next_token() {
                     if (blen > 0 && buf[blen-1] == '\n') blen--;
                     buf[blen] = '\0';
 
+                    // ---- Common-leading-whitespace dedent ----
+                    // Strip the longest run of leading whitespace shared by
+                    // every non-blank content line, so a heredoc can be
+                    // indented to match its surrounding code without that
+                    // indentation leaking into the string. Blank lines
+                    // (empty or whitespace-only) don't constrain the common
+                    // prefix (a single blank line shouldn't force prefix=0),
+                    // but they are still emitted. The prefix match is
+                    // character-exact: a space where another line has a tab
+                    // (or vice-versa) is an inconsistency that stops the
+                    // strip at that column — we never shift past a column
+                    // where lines disagree. To keep a literal common indent,
+                    // shift one line further left than the rest.
+                    {
+                        // Pass 1: compute the common whitespace prefix.
+                        // `common` points at the first non-blank line's
+                        // leading whitespace; `common_len` shrinks as later
+                        // lines diverge.
+                        const char* common = NULL;
+                        int common_len = 0;
+                        int li = 0;
+                        while (li < blen) {
+                            // Measure this line's leading whitespace.
+                            int ws = 0;
+                            while (li + ws < blen &&
+                                   (buf[li + ws] == ' ' || buf[li + ws] == '\t')) {
+                                ws++;
+                            }
+                            int line_end = li + ws;
+                            int is_blank = (line_end >= blen || buf[line_end] == '\n');
+                            if (!is_blank) {
+                                if (common == NULL) {
+                                    common = &buf[li];
+                                    common_len = ws;
+                                } else {
+                                    // Trim common_len to the longest exact
+                                    // character match with this line's ws.
+                                    int k = 0;
+                                    while (k < common_len && k < ws &&
+                                           common[k] == buf[li + k]) {
+                                        k++;
+                                    }
+                                    common_len = k;
+                                }
+                            }
+                            // Advance to the start of the next line.
+                            int p = li;
+                            while (p < blen && buf[p] != '\n') p++;
+                            if (p < blen) p++;   // skip the '\n'
+                            li = p;
+                        }
+
+                        // Pass 2: rewrite buf in place, dropping the first
+                        // `common_len` chars of each line.
+                        if (common_len > 0) {
+                            int rd = 0, wr = 0;
+                            while (rd < blen) {
+                                // Skip up to common_len leading ws chars on
+                                // this line (a blank/short line may have
+                                // fewer — drop only what it has).
+                                int skip = 0;
+                                while (skip < common_len && rd < blen &&
+                                       (buf[rd] == ' ' || buf[rd] == '\t') &&
+                                       buf[rd] != '\n') {
+                                    rd++;
+                                    skip++;
+                                }
+                                // Copy the rest of the line including '\n'.
+                                while (rd < blen && buf[rd] != '\n') {
+                                    buf[wr++] = buf[rd++];
+                                }
+                                if (rd < blen) {        // copy the newline
+                                    buf[wr++] = buf[rd++];
+                                }
+                            }
+                            blen = wr;
+                            buf[blen] = '\0';
+                        }
+                    }
+
                     Token* tok = create_token(TOKEN_STRING_LITERAL, buf, start_line, current_column);
                     free(buf);
                     return tok;
