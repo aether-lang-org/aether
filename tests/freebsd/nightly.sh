@@ -87,9 +87,14 @@ fail_report() {
     note "FreeBSD enforcement tests"
     sh tests/freebsd/run.sh || { fail_report "freebsd enforcement tests"; exit 1; }
 
-    note "seccomp clone fence (issue #668)"
-    sh tests/integration/sandbox_clone_fence/test_sandbox_clone_fence.sh \
-        || { fail_report "sandbox_clone_fence"; exit 1; }
+    # The seccomp clone-fence test (#668) is Linux-only (it compiles a probe
+    # against <linux/sched.h>); on FreeBSD the kernel fence is Capsicum, not
+    # seccomp, so skip it here. Run it only when this harness runs on Linux.
+    if [ "$(uname -s)" = "Linux" ]; then
+        note "seccomp clone fence (issue #668)"
+        sh tests/integration/sandbox_clone_fence/test_sandbox_clone_fence.sh \
+            || { fail_report "sandbox_clone_fence"; exit 1; }
+    fi
 
     note "ALL GREEN  $TS"
 } 2>&1 | tee "$LOG"
