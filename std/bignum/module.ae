@@ -19,8 +19,13 @@
 // Logical shifts route through std.bits (lsr32 / lsr64) since Aether `>>`
 // is arithmetic.
 //
-// This is layer 1: representation + from/to_bytes + compare + add/sub/
-// negate/abs/shift + bit_length. Multiply / divide / modpow land later.
+// The full surface: representation + from/to_bytes + compare + add/sub/
+// negate/abs/shift + bit_length + multiply + divide/remainder/mod + mod_pow
+// + gcd + mod_inverse + is_probable_prime. The arithmetic uses textbook
+// algorithms chosen for verifiability (binary long division, square-and-
+// multiply mod_pow, fixed-base Miller-Rabin); the BC-style Montgomery /
+// Barrett / Karatsuba fast paths are deferred perfections, tracked in
+// docs/bignum-deferred-optimizations.md.
 //
 // A bignum is an opaque `ptr` to a heap-allocated BN struct. Operations
 // return NEW bignums and never mutate their inputs. There is no GC;
@@ -37,6 +42,7 @@ exports (
     compare, is_zero, sign, bit_length,
     add, subtract, negate, abs,
     multiply, divide, remainder, mod,
+    mod_pow, gcd, mod_inverse, is_probable_prime,
     shift_left, shift_right,
     to_hex, free
 )
@@ -806,6 +812,255 @@ mod(a: ptr, b: ptr) -> ptr {
     free(babs)
     free(r)
     return adjusted
+}
+
+// ---- modular exponentiation / gcd / inverse / primality ----
+//
+// These build on multiply + mod (and the binary divide underneath). BC's
+// ModPow uses Barrett / Montgomery reduction and its primality test uses
+// Montgomery-form Miller-Rabin; we use the textbook square-and-multiply +
+// extended-Euclid + plain Miller-Rabin instead — same results, no extern
+// crypto, and obviously correct against an arbitrary-precision oracle. The
+// constant-time / Montgomery fast paths are a later optimization slice.
+
+// modular exponentiation: base^exp mod m (exp >= 0, m > 0). Square-and-
+// multiply, MSB-to-LSB. Matches BC ModPow for non-negative exponents.
+mod_pow(base: ptr, exp: ptr, m: ptr) -> ptr {
+    bm = m as *BN
+    if bm.sign < 1 {
+        // modulus must be positive; mirror BC by returning zero defensively
+        return bn_zero()
+    }
+    // m == 1 -> everything is 0
+    one = from_int(1)
+    if compare(m, one) == 0 {
+        free(one)
+        return bn_zero()
+    }
+    be = exp as *BN
+    if be.sign == 0 {
+        // exp == 0 -> 1
+        return one
+    }
+    bb = base as *BN
+    if bb.sign == 0 {
+        free(one)
+        return bn_zero()
+    }
+    // square-and-multiply over the exponent's magnitude bits, MSB->LSB.
+    // acc starts at 1; base_mod = base mod m handles base >= m / negative base.
+    nbits = mag_bit_length(be.mag, be.len)
+    i = nbits - 1
+    acc = from_int(1)
+    base_mod = mod(base, m)
+    while i >= 0 {
+        // acc = acc^2 mod m
+        sq = multiply(acc, acc)
+        sqm = mod(sq, m)
+        free(sq)
+        free(acc)
+        acc = sqm
+        if mag_test_bit(be.mag, be.len, i) == 1 {
+            // acc = acc * base_mod mod m
+            pr = multiply(acc, base_mod)
+            prm = mod(pr, m)
+            free(pr)
+            free(acc)
+            acc = prm
+        }
+        i = i - 1
+    }
+    free(base_mod)
+    free(one)
+    return acc
+}
+
+// gcd(|a|, |b|) via Euclid (BC Gcd). Always non-negative.
+gcd(a: ptr, b: ptr) -> ptr {
+    ba = a as *BN
+    bb = b as *BN
+    if bb.sign == 0 {
+        return abs(a)
+    }
+    if ba.sign == 0 {
+        return abs(b)
+    }
+    u = abs(a)
+    v = abs(b)
+    while is_zero(v) != 1 {
+        r = mod(u, v)
+        free(u)
+        u = v
+        v = r
+    }
+    free(v)
+    return u
+}
+
+// modular inverse: a^(-1) mod m, in [0, m). Iterative extended Euclid.
+// Returns null if gcd(a, m) != 1 (no inverse exists). m must be > 0.
+mod_inverse(a: ptr, m: ptr) -> ptr {
+    bm = m as *BN
+    if bm.sign < 1 {
+        return null
+    }
+    one = from_int(1)
+    if compare(m, one) == 0 {
+        // mod 1: inverse is 0
+        free(one)
+        return bn_zero()
+    }
+    // work with d = a mod m in [0, m)
+    d = mod(a, m)
+    // extended Euclid: track (old_r, r) and (old_s, s) with
+    //   old_r = old_s*a' + ...  ; on termination old_s is the inverse.
+    old_r = clone(m)
+    r = d              // d owned here
+    old_s = from_int(0)
+    s = from_int(1)
+    while is_zero(r) != 1 {
+        q = divide(old_r, r)
+        // (old_r, r) = (r, old_r - q*r)
+        qr = multiply(q, r)
+        nr = subtract(old_r, qr)
+        free(qr)
+        free(old_r)
+        old_r = r
+        r = nr
+        // (old_s, s) = (s, old_s - q*s)
+        qs = multiply(q, s)
+        ns = subtract(old_s, qs)
+        free(qs)
+        free(old_s)
+        old_s = s
+        s = ns
+        free(q)
+    }
+    free(r)
+    free(s)
+    // old_r is gcd(a, m); must be 1 for an inverse to exist
+    if compare(old_r, one) != 0 {
+        free(old_r)
+        free(old_s)
+        free(one)
+        return null
+    }
+    free(old_r)
+    free(one)
+    // normalize old_s into [0, m)
+    bs = old_s as *BN
+    if bs.sign < 0 {
+        adj = add(old_s, m)
+        free(old_s)
+        return adj
+    }
+    return old_s
+}
+
+// Miller-Rabin primality test with a fixed set of small witness bases.
+// `rounds` caps how many bases to try (the fixed list is deterministic for
+// all n < 3.317e24 with the first 13 primes; beyond that it is a strong
+// probable-prime test). Returns 1 for probable prime, 0 for composite.
+is_probable_prime(n: ptr, rounds: int) -> int {
+    bn = n as *BN
+    if bn.sign <= 0 {
+        return 0
+    }
+    two = from_int(2)
+    three = from_int(3)
+    // n < 2 -> not prime; n == 2 or 3 -> prime
+    if compare(n, two) < 0 {
+        free(two); free(three)
+        return 0
+    }
+    if compare(n, two) == 0 {
+        free(two); free(three)
+        return 1
+    }
+    if compare(n, three) == 0 {
+        free(two); free(three)
+        return 1
+    }
+    // even -> composite
+    if mag_test_bit(bn.mag, bn.len, 0) == 0 {
+        free(two); free(three)
+        return 0
+    }
+    // write n-1 = d * 2^s with d odd
+    one = from_int(1)
+    nm1 = subtract(n, one)
+    s = 0
+    d = clone(nm1)
+    bd = d as *BN
+    while mag_test_bit(bd.mag, bd.len, 0) == 0 {
+        d2 = shift_right(d, 1)
+        free(d)
+        d = d2
+        bd = d as *BN
+        s = s + 1
+    }
+    // fixed deterministic witness bases (first 13 primes)
+    bases = intarr_new_raw(13)
+    intarr_set_raw(bases, 0, 2);   intarr_set_raw(bases, 1, 3)
+    intarr_set_raw(bases, 2, 5);   intarr_set_raw(bases, 3, 7)
+    intarr_set_raw(bases, 4, 11);  intarr_set_raw(bases, 5, 13)
+    intarr_set_raw(bases, 6, 17);  intarr_set_raw(bases, 7, 19)
+    intarr_set_raw(bases, 8, 23);  intarr_set_raw(bases, 9, 29)
+    intarr_set_raw(bases, 10, 31); intarr_set_raw(bases, 11, 37)
+    intarr_set_raw(bases, 12, 41)
+    nbases = 13
+    limit = rounds
+    if limit > nbases { limit = nbases }
+    if limit < 1 { limit = 1 }
+    result = 1
+    bi = 0
+    while bi < limit {
+        a = from_int(intarr_get_raw(bases, bi))
+        // skip bases >= n-1 (only relevant for tiny n, already handled above)
+        if compare(a, nm1) >= 0 {
+            free(a)
+            bi = bi + 1
+        } else {
+            // x = a^d mod n
+            x = mod_pow(a, d, n)
+            // if x == 1 or x == n-1, this base passes
+            passes = 0
+            if compare(x, one) == 0 {
+                passes = 1
+            }
+            if compare(x, nm1) == 0 {
+                passes = 1
+            }
+            if passes == 0 {
+                // repeat s-1 times: x = x^2 mod n; pass if x == n-1
+                rr = 1
+                while rr < s {
+                    sq = multiply(x, x)
+                    x2 = mod(sq, n)
+                    free(sq)
+                    free(x)
+                    x = x2
+                    if compare(x, nm1) == 0 {
+                        passes = 1
+                        rr = s   // break
+                    } else {
+                        rr = rr + 1
+                    }
+                }
+            }
+            free(x)
+            free(a)
+            if passes == 0 {
+                result = 0
+                bi = limit   // composite — stop
+            } else {
+                bi = bi + 1
+            }
+        }
+    }
+    intarr_free(bases)
+    free(one); free(two); free(three); free(nm1); free(d)
+    return result
 }
 
 // ---- shifts ----
