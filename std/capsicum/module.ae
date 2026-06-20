@@ -1,0 +1,144 @@
+// std.capsicum — FreeBSD Capsicum capability-mode bindings.
+// Import with: import std.capsicum
+//
+// Capsicum is FreeBSD's OS-enforced sandbox. A process calls
+// capsicum.enter() to drop into "capability mode": from then on the
+// kernel forbids it from reaching any global namespace — no opening
+// new paths, no binding sockets, no PID lookups. It may act only on
+// file descriptors it already holds, each narrowed by capsicum.rights_limit().
+//
+// Unlike Aether's LD_PRELOAD sandbox (std-level, bypassable by raw
+// syscalls or static binaries), Capsicum is enforced by the kernel and
+// cannot be escaped from userspace. capsicum.enter() is IRREVERSIBLE
+// and inherited by child processes.
+//
+// This module is the hand-written entry point: code that wants OS-level
+// containment opens the fds it needs, limits each one, then enters
+// capability mode. Wiring Capsicum into spawn_sandboxed automatically is
+// a later phase — see docs/aether_compared_to_capsicum.md.
+//
+// Portability: off FreeBSD every call returns CAP_UNSUPPORTED and
+// available() returns 0. Portable code should branch on available()
+// before relying on enforcement.
+//
+// Typical use:
+//
+//   import std.capsicum
+//
+//   main() {
+//       if capsicum.available() == 0 {
+//           println("Capsicum not available — running unsandboxed")
+//           return
+//       }
+//       // Open every file and socket the program needs FIRST, while
+//       // still unconfined. Narrow each fd you hold to just the rights
+//       // it needs:
+//       //   capsicum.rights_limit(an_fd, capsicum.R_READ | capsicum.R_SEEK)
+//       // Then lock the process down — irreversibly:
+//       capsicum.enter()
+//       // From here the kernel forbids opening any new path or socket.
+//   }
+//
+// rights_limit() takes a raw integer fd. Obtaining an fd from the
+// higher-level std.file / std.net handles is a follow-up once those
+// modules expose their descriptors; until then rights_limit() is most
+// useful with fds from raw externs or inherited descriptors.
+
+exports (
+    // Return codes
+    CAP_OK, CAP_ERR, CAP_UNSUPPORTED,
+    // Raw externs
+    aether_capsicum_available, aether_capsicum_enter,
+    aether_capsicum_in_mode, aether_capsicum_rights_limit,
+    aether_capsicum_fcntls_limit,
+    // Ergonomic wrappers
+    available, enter, in_mode, rights_limit, fcntls_limit,
+    // cap_rights bits (R_*) and fcntl-command bits (F_*)
+    R_READ, R_WRITE, R_SEEK, R_FSTAT, R_FTRUNCATE, R_FSYNC, R_MMAP,
+    R_ACCEPT, R_CONNECT, R_BIND, R_LISTEN, R_RECV, R_SEND, R_EVENT,
+    R_IOCTL, R_FCNTL,
+    F_GETFL, F_SETFL, F_GETOWN, F_SETOWN
+)
+
+// ---- Return codes (mirror aether_capsicum.h) ----
+
+const CAP_OK          =  0   // operation succeeded
+const CAP_ERR         = -1   // syscall failed
+const CAP_UNSUPPORTED = -2   // not FreeBSD, or kernel lacks Capsicum
+
+// ---- cap_rights bits ----
+// OR these for rights_limit(): capsicum.R_READ | capsicum.R_SEEK.
+// Exposed as `const` (not functions) so `a | b` parses as bitwise-OR —
+// a `|` immediately after a call is read as a closure delimiter.
+// Values mirror AETHER_CAPR_* in aether_capsicum.h.
+
+const R_READ      = 0x0001
+const R_WRITE     = 0x0002
+const R_SEEK      = 0x0004
+const R_FSTAT     = 0x0008
+const R_FTRUNCATE = 0x0010
+const R_FSYNC     = 0x0020
+const R_MMAP      = 0x0040
+const R_ACCEPT    = 0x0080
+const R_CONNECT   = 0x0100
+const R_BIND      = 0x0200
+const R_LISTEN    = 0x0400
+const R_RECV      = 0x0800
+const R_SEND      = 0x1000
+const R_EVENT     = 0x2000
+const R_IOCTL     = 0x4000
+const R_FCNTL     = 0x8000
+
+// ---- fcntl-command bits ----
+// OR these for fcntls_limit(). Mirror AETHER_CAPF_* in aether_capsicum.h.
+
+const F_GETFL  = 0x01
+const F_SETFL  = 0x02
+const F_GETOWN = 0x04
+const F_SETOWN = 0x08
+
+// ---- Raw externs ----
+
+// 1 if Capsicum is usable in this process, 0 otherwise.
+extern aether_capsicum_available() -> int
+
+// Enter capability mode. Irreversible. Returns CAP_OK / CAP_ERR /
+// CAP_UNSUPPORTED.
+extern aether_capsicum_enter() -> int
+
+// 1 if already in capability mode, 0 if not, CAP_UNSUPPORTED off FreeBSD.
+extern aether_capsicum_in_mode() -> int
+
+// Limit `fd` to the rights in `rights_mask` (OR of R_* values).
+// Rights only ever narrow. Returns CAP_OK / CAP_ERR / CAP_UNSUPPORTED.
+extern aether_capsicum_rights_limit(fd: int, rights_mask: int) -> int
+
+// Limit which fcntl(2) commands `fd` permits (OR of F_* values).
+extern aether_capsicum_fcntls_limit(fd: int, fcntl_mask: int) -> int
+
+// ---- Ergonomic wrappers (capsicum.* namespace) ----
+
+// Is Capsicum enforcement available right now?
+available() -> int {
+    return aether_capsicum_available()
+}
+
+// Enter capability mode — irreversible, inherited by children.
+enter() -> int {
+    return aether_capsicum_enter()
+}
+
+// Is the current process already sandboxed by Capsicum?
+in_mode() -> int {
+    return aether_capsicum_in_mode()
+}
+
+// Narrow an fd to `rights_mask`.
+rights_limit(fd: int, rights_mask: int) -> int {
+    return aether_capsicum_rights_limit(fd, rights_mask)
+}
+
+// Narrow the fcntl commands allowed on an fd.
+fcntls_limit(fd: int, fcntl_mask: int) -> int {
+    return aether_capsicum_fcntls_limit(fd, fcntl_mask)
+}

@@ -1,0 +1,57 @@
+// FreeBSD-only Capsicum enforcement test (run as a subprocess by the
+// nightly harness / tests/freebsd/run.sh). NOT in the CI regression set —
+// the CI matrix has no FreeBSD runner; the portable contract is covered by
+// tests/regression/test_capsicum_portability.ae.
+//
+// capsicum.enter() is IRREVERSIBLE and process-wide, so this whole program
+// is the unit: it asserts pre-state, enters capability mode, then asserts
+// post-state (in_mode flips; opening a global-namespace path is denied —
+// capability mode forbids access to the global file namespace). Exits 0 on
+// success, 1 on any contract violation, 2 if run off FreeBSD (the harness
+// treats 2 as "skipped").
+
+import std.capsicum
+import std.os
+import std.file
+import std.string
+
+main() {
+    if string.equals(os.platform(), "freebsd") != 1 {
+        print("SKIP: not FreeBSD\n")
+        exit(2)
+    }
+    if capsicum.available() != 1 {
+        print("FAIL: available() != 1 on FreeBSD\n")
+        exit(1)
+    }
+    // Pre-entry: not yet in capability mode; a global open() works.
+    if capsicum.in_mode() != 0 {
+        print("FAIL: already in capability mode before enter()\n")
+        exit(1)
+    }
+    pre = file.exists("/etc/passwd")
+    print("pre-enter /etc/passwd exists=${pre}\n")
+
+    // Enter capability mode — irreversible from here.
+    r = capsicum.enter()
+    if r != capsicum.CAP_OK {
+        print("FAIL: enter() returned ${r}, expected CAP_OK\n")
+        exit(1)
+    }
+    if capsicum.in_mode() != 1 {
+        print("FAIL: in_mode() != 1 after enter()\n")
+        exit(1)
+    }
+
+    // Post-entry: opening a global-namespace path MUST be denied. In
+    // capability mode, open(2) on an absolute path fails with ECAPMODE,
+    // so file.open returns a failure (null handle / error).
+    h, err = file.open("/etc/passwd", "r")
+    if h != null {
+        print("FAIL: opened /etc/passwd AFTER entering capability mode (not contained!)\n")
+        exit(1)
+    }
+    print("ok: /etc/passwd open denied in capability mode (${err})\n")
+    print("PASS: capsicum enforcement\n")
+    exit(0)
+}

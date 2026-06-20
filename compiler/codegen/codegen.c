@@ -2547,6 +2547,10 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     print_line(gen, "#endif");
     // Initialize command-line arguments
     print_line(gen, "aether_args_init(argc, argv);");
+    // Opt-in OS-enforced sandbox: if AETHER_CAPSICUM=1 (FreeBSD), enter
+    // capability mode here — after rtld has loaded every shared library,
+    // before any user code or file/socket access. No-op otherwise.
+    print_line(gen, "aether_capsicum_autosandbox();");
     // main_exit_ret and main_exit: label are needed when actors exist
     // (scheduler cleanup) or when main() contains return statements.
     int needs_main_exit = gen->actor_count > 0 || has_return_statement(main);
@@ -3075,12 +3079,19 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         print_line(gen, "    }");
         print_line(gen, "    return 0;");
         print_line(gen, "}");
+        print_line(gen, "extern void aether_sandbox_audit(const char*, const char*, int);");
         print_line(gen, "static int _aether_sandbox_check_impl(const char* category, const char* resource) {");
         print_line(gen, "    if (_aether_ctx_depth <= 0) return 1;");
+        print_line(gen, "    int _allowed = 1;");
         print_line(gen, "    for (int level = 0; level < _aether_ctx_depth; level++) {");
-        print_line(gen, "        if (!_aether_perms_allow(_aether_ctx_stack[level], category, resource)) return 0;");
+        print_line(gen, "        if (!_aether_perms_allow(_aether_ctx_stack[level], category, resource)) { _allowed = 0; break; }");
         print_line(gen, "    }");
-        print_line(gen, "    return 1;");
+        // Audit every in-process permission check — allowed and denied.
+        // The sink is opt-in (AETHER_SANDBOX_AUDIT) and the ring buffer
+        // is cheap, so this is unconditional. Note this runs only when a
+        // sandbox is active (_aether_ctx_depth > 0).
+        print_line(gen, "    aether_sandbox_audit(category, resource, _allowed);");
+        print_line(gen, "    return _allowed;");
         print_line(gen, "}");
         print_line(gen, "static void _aether_sandbox_install(void) { _aether_sandbox_checker = _aether_sandbox_check_impl; }");
         print_line(gen, "static void _aether_sandbox_uninstall(void) { if (_aether_ctx_depth <= 0) _aether_sandbox_checker = 0; }");
@@ -3094,6 +3105,9 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "");
     // Declare runtime args function (avoid full header to prevent conflicts with actor runtime)
     print_line(gen, "void aether_args_init(int argc, char** argv);");
+    // Opt-in Capsicum self-sandbox hook (runtime/sandbox/capsicum_autosandbox.c).
+    // No-op unless AETHER_CAPSICUM=1 and the platform is FreeBSD.
+    print_line(gen, "void aether_capsicum_autosandbox(void);");
     print_line(gen, "");
 
     // Only include actor runtime if program uses actors

@@ -1,0 +1,63 @@
+// FreeBSD-only Casper delegation test (run as a subprocess by the nightly
+// harness). Proves the two-phase pattern that std.casper's docstring (and
+// aeo's design) depend on: open the service channel BEFORE entering
+// capability mode, then use it AFTER — a passwd lookup that would
+// otherwise be impossible in capability mode (no /etc/passwd access)
+// succeeds because Casper performs it on the other side of the boundary.
+//
+// Uses pwd (root -> uid 0) rather than DNS: deterministic, no network.
+// Exits 0 on success, 1 on contract violation, 2 if not FreeBSD (skip).
+
+import std.capsicum
+import std.casper
+import std.os
+import std.string
+
+main() {
+    if string.equals(os.platform(), "freebsd") != 1 {
+        print("SKIP: not FreeBSD\n")
+        exit(2)
+    }
+    if casper.available() != 1 {
+        print("FAIL: casper.available() != 1\n")
+        exit(1)
+    }
+
+    // Phase 1 — open the channel while still OUTSIDE capability mode.
+    cap = casper.init()
+    if cap == null {
+        print("FAIL: casper.init() returned null\n")
+        exit(1)
+    }
+    pwdchan = casper.service(cap, "system.pwd")
+    if pwdchan == null {
+        print("FAIL: could not open system.pwd channel\n")
+        casper.close(cap)
+        exit(1)
+    }
+
+    // Phase 2 — enter capability mode (irreversible).
+    r = capsicum.enter()
+    if r != capsicum.CAP_OK {
+        print("FAIL: enter() returned ${r}\n")
+        exit(1)
+    }
+    if capsicum.in_mode() != 1 {
+        print("FAIL: not in capability mode after enter()\n")
+        exit(1)
+    }
+
+    // Post-entry pwd lookup via the pre-opened Casper channel. In
+    // capability mode a direct /etc/passwd read is denied; this only
+    // works because Casper does it across the boundary.
+    uid = casper.pwd_uid(pwdchan, "root")
+    if uid != 0 {
+        print("FAIL: casper pwd_uid(root) = ${uid}, expected 0\n")
+        exit(1)
+    }
+    print("ok: casper resolved root -> uid 0 inside capability mode\n")
+    casper.close(pwdchan)
+    casper.close(cap)
+    print("PASS: casper delegation across the Capsicum boundary\n")
+    exit(0)
+}

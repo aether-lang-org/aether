@@ -321,6 +321,13 @@ plays that role), no interfaces.
 - Iteration order in `std.json` is insertion order across both parse
   and builder paths. Documented contract, several downstream users
   (including svn-aether's server) rely on it.
+- **Any C symbol codegen emits a call to must be linkable in EVERY
+  build, including WASM.** The `ci-wasm` Makefile target uses its own
+  minimal `RUNTIME_FILES` list (not `RUNTIME_SRC`); add new runtime
+  files there too, and keep the symbol self-guarded so it's a no-op
+  object off its target OS. Otherwise `wasm-ld` errors `undefined
+  symbol` while every native platform is green. (Bit us when the
+  Capsicum self-sandbox startup hook landed.)
 
 ## When stuck
 

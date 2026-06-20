@@ -488,6 +488,69 @@ The file mode is the default because it's the right experience for
 a novice: run the program, it fails, open `aether-sandbox.log`, see
 exactly what to grant. Self-service.
 
+## Audit trail
+
+Denial logging above covers the **cross-process** (LD_PRELOAD) layer.
+The **in-process** layer — the stdlib grant checks an in-program
+`sandbox { }` block drives, and the checks embedded/hosted plugins go
+through — has its own audit trail, recording every permission decision,
+*allowed as well as denied*.
+
+### Live sink
+
+Set `AETHER_SANDBOX_AUDIT` — same shape as `AETHER_SANDBOX_LOG`:
+
+| Mode | Env var | Behaviour |
+|------|---------|-----------|
+| **Off** (default) | `AETHER_SANDBOX_AUDIT=none` or unset | No sink. The ring buffer (below) is still populated. |
+| **Stderr** | `AETHER_SANDBOX_AUDIT=stderr` | `AETHER_ALLOWED:` / `AETHER_DENIED:` lines as checks happen. |
+| **File** | `AETHER_SANDBOX_AUDIT=file` | Same lines appended to `./aether-sandbox.log`. |
+
+Off by default because — unlike denial-only logging — auditing records
+*allowed* checks too and is verbose. Denials keep the `AETHER_DENIED:`
+prefix the rest of the tooling greps for; allowed checks get a parallel
+`AETHER_ALLOWED:`.
+
+### Queryable log — `std.audit`
+
+The last 256 checks are also held in an in-memory ring buffer that the
+program can read back through the `std.audit` module:
+
+```aether
+import std.audit
+
+// ... run sandboxed work ...
+
+n = audit.count()
+for (i = 0; i < n; i = i + 1) {
+    cat, res, allowed = audit.entry(i)   // allowed: 1 = passed, 0 = denied
+    // ...
+}
+println("${audit.denied_count()} denials of ${n} checks")
+audit.clear()                            // scope the next query
+```
+
+This is the programmatic face of the audit trail: counting denials,
+asserting an expected access pattern in a test, building a "why was
+this blocked" report. Worked example: `examples/audit-demo.ae`.
+
+## Platform support
+
+The runtime-process layer (`libaether_sandbox.so` + `spawn_sandboxed`)
+builds and runs on **Linux and FreeBSD**. Both ship a dynamic linker
+that honours `LD_PRELOAD` and `dlsym(RTLD_NEXT, ...)`, which is all the
+interception model requires.
+
+| Platform | Runtime sandbox | Notes |
+|----------|----------------|-------|
+| **Linux** | LD_PRELOAD (`libaether_sandbox.so`) | Preload locates itself via `/proc/self/exe`. Intercepts the glibc large-file (`open64`/`fopen64`/`mmap64`) and `clone3` entry points in addition to the common surface. |
+| **FreeBSD** | LD_PRELOAD + **Capsicum self-sandbox** + **Casper** | LD_PRELOAD works as on Linux (preload locates itself via `sysctl(KERN_PROC_PATHNAME)` — no `/proc`; no `*64`/`clone3`). An Aether process launched with `AETHER_CAPSICUM=1` enters FreeBSD capability mode at startup — kernel-enforced, unbypassable containment; `spawn_sandboxed` sets that for Aether children automatically. `std.casper` lets a capability-mode process still resolve DNS / read passwd / read sysctl by delegating to the Casper daemon. See [`aether_compared_to_capsicum.md`](aether_compared_to_capsicum.md). |
+| **macOS** | Not supported | `DYLD_INSERT_LIBRARIES` exists but the hardened runtime ignores it for system binaries. `spawn_sandboxed` is a stub that fails loudly. |
+| **Windows** | Not supported | No `LD_PRELOAD` equivalent. `spawn_sandboxed` is a stub. |
+
+The in-process layer (module boundary, scope boundary, and the stdlib
+grant checks) is pure C and works on every platform regardless.
+
 ## Security review checklist
 
 Before signing off an Aether sandboxed deployment, verify:

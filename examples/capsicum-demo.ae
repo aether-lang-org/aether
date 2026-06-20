@@ -1,0 +1,63 @@
+// capsicum-demo.ae — OS-enforced sandboxing with FreeBSD Capsicum.
+//
+// Demonstrates std.capsicum: a process opens what it needs while still
+// unconfined, calls capsicum.enter() to drop into capability mode, and
+// from then on the KERNEL forbids it from opening any new path. Unlike
+// Aether's LD_PRELOAD sandbox this cannot be bypassed from userspace.
+//
+// Run on FreeBSD:   ae run examples/capsicum-demo.ae
+// On other systems the demo prints that Capsicum is unavailable and
+// exits cleanly — the std.capsicum calls are portable no-ops there.
+
+import std.capsicum
+import std.file
+import std.string
+
+main() {
+    println("=== Capsicum demo ===")
+    println("")
+
+    avail = capsicum.available()
+    if avail == 0 {
+        println("Capsicum is not available on this platform.")
+        println("(std.capsicum builds everywhere but only FreeBSD")
+        println(" kernels enforce it. Nothing to demonstrate here.)")
+        return
+    }
+
+    println("Capsicum is available — kernel enforcement is in play.")
+    println("")
+
+    // --- Before entering capability mode: full filesystem access ---
+    println("--- before capsicum.enter() ---")
+    before, err1 = file.read("/etc/passwd")
+    if err1 == "" {
+        println("  [OK]    read /etc/passwd (${string_length(before)} bytes)")
+    } else {
+        println("  [FAIL]  read /etc/passwd: ${err1}")
+    }
+
+    // --- Lock the process down. Irreversible. ---
+    println("")
+    println("Calling capsicum.enter() — irreversible...")
+    rc = capsicum.enter()
+    if rc != capsicum.CAP_OK {
+        println("  capsicum.enter() failed (rc=${rc})")
+        return
+    }
+    println("  now in capability mode: ${capsicum.in_mode()}")
+    println("")
+
+    // --- After entering: opening any new path is denied by the kernel ---
+    println("--- after capsicum.enter() ---")
+    contents, err2 = file.read("/etc/passwd")
+    if err2 == "" {
+        println("  [UNEXPECTED] read /etc/passwd still succeeded (${contents})")
+    } else {
+        println("  [BLOCKED] read /etc/passwd: ${err2}")
+        println("            ^ the kernel refused open(2) in capability mode")
+    }
+
+    println("")
+    println("Containment is enforced by the OS, not by cooperation.")
+}
