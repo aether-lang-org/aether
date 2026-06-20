@@ -2012,7 +2012,8 @@ ci-wasm: clean compiler ae
 		std/collections/aether_collections.c \
 		std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c \
 		std/os/aether_os.c std/collections/aether_hashmap.c std/collections/aether_set.c \
-		std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_longarr.c std/collections/aether_bits.c"; \
+		std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_longarr.c std/collections/aether_bits.c \
+		runtime/sandbox/capsicum_autosandbox.c"; \
 	for src in build/wasm/hello.c build/wasm/counter.c build/wasm/test_platform_caps.c \
 	           build/wasm/test_coop_chain.c; do \
 		name=$$(basename $$src .c); \
