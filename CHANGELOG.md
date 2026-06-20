@@ -14,6 +14,39 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.295.0]
+
+### Added
+
+- **Key derivation, AES MAC/wrap, and a ChaCha20-Poly1305 AEAD** — a large
+  pure-Aether tranche of the Bouncy Castle port (#739), all validated against
+  RFC test vectors, no externs to OpenSSL.
+  - **`std.cryptography.hkdf`** — HKDF (RFC 5869) extract/expand over the
+    existing HMAC. Validated against RFC 5869 Test Case 1.
+  - **`std.cryptography.pbkdf2`** — PBKDF2 (PKCS#5 v2 / RFC 8018) over HMAC.
+    Validated against published PBKDF2-HMAC-SHA256 vectors.
+  - **`contrib.cryptography.aes`** gains `cmac` (AES-CMAC, RFC 4493) and
+    `key_wrap` / `key_unwrap` (AES Key Wrap, RFC 3394) on the existing block
+    primitive. Validated against all four RFC 4493 CMAC vectors and the
+    RFC 3394 wrap vector (+ unwrap integrity check).
+  - **`contrib.cryptography.chacha20poly1305`** — ChaCha20, Poly1305, and the
+    ChaCha20-Poly1305 AEAD (RFC 8439): `chacha20_xor`, `poly1305_mac`,
+    `aead_seal`, `aead_open` (constant-time tag compare). The pure-Aether
+    counterpart to AES-GCM. Validated against the RFC 8439 §2.5.2 and §2.8.2
+    vectors (seal reproduces the exact spec ciphertext+tag; tampered tags are
+    rejected).
+
+### Fixed
+
+- **Actors: a string message field retained into actor state no longer
+  corrupts.** `SetN(in_n) -> { n = in_n }` stored a raw pointer into the
+  message envelope's string, which is freed right after the handler returns,
+  so a later message read freed bytes. The retain now copies the borrowed
+  string into an owned AetherString (freeing any prior copy). Also fixes the
+  defensive-copy workaround `n = string.concat(in_n, "")`, which previously
+  failed to compile (`'_heap_n' undeclared`) because actor handlers skipped
+  the function-scope heap-string hoist pass. (Reported by aeo.)
+
 ## [0.294.0]
 
 ### Added
