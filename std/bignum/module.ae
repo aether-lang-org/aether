@@ -42,10 +42,14 @@ exports (
 
 // libc allocator — whitelisted externs, no shim. The struct is three
 // machine words; we over-allocate to 24 bytes to be safe on padding.
-// We free via realloc(p, 0) so our public function can be named `free`
-// without shadowing a same-named extern within the module.
+// libc `free` is bound under the name `libc_free` via @extern so it can
+// coexist with this module's public `free` function (which mangles to a
+// distinct symbol). We deliberately do NOT free the struct via
+// realloc(p, 0): glibc returns NULL for that, but macOS frees the old
+// block and returns a fresh minimum-size allocation, which then leaks —
+// caught by the macOS leaks(1) gate as 16-byte ROOT LEAKs.
 extern malloc(size: int) -> ptr
-extern realloc(p: ptr, size: int) -> ptr
+@extern("free") libc_free(p: ptr)
 
 struct BN {
     sign: int   // -1, 0, or 1
@@ -982,7 +986,5 @@ free(n: ptr) {
     if bn.mag != null {
         intarr_free(bn.mag)
     }
-    // realloc(p, 0) frees p; assign the result so gcc's warn_unused_result
-    // on realloc is satisfied (the returned pointer is unspecified/freed).
-    _freed = realloc(n, 0)
+    libc_free(n)
 }
