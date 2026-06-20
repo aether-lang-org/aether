@@ -2071,6 +2071,15 @@ static void build_gcc_cmd(char* cmd, size_t size,
     const char* pcre2_libs = "";
 #endif
 
+    // libcasper + cap_* services — std.casper delegates DNS / passwd /
+    // sysctl past Capsicum capability mode. FreeBSD-only; empty on
+    // every other platform, where std.casper links its stub path.
+#ifdef AETHER_CASPER_LIBS
+    const char* casper_libs = AETHER_CASPER_LIBS;
+#else
+    const char* casper_libs = "";
+#endif
+
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -2094,8 +2103,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         // BEFORE -laether on the link line — gcc resolves undefined
         // references left-to-right through static archives.
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -rdynamic -L%s %s -laether -o \"%s\" -pthread -lm %s %s %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, g_host_bridge_link, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, link_flags, g_binimport_link);
+            "gcc %s %s \"%s\"%s %s -rdynamic -L%s %s -laether -o \"%s\" -pthread -lm %s %s %s %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, g_host_bridge_link, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, casper_libs, link_flags, g_binimport_link);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
@@ -2108,8 +2117,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         // symbols defined in tc.runtime_srcs (aether_shared_map_*,
         // etc.), so they appear BEFORE the runtime source list.
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, g_host_bridge_link, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, link_flags, g_binimport_link);
+            "gcc %s %s \"%s\"%s %s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, g_host_bridge_link, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, casper_libs, link_flags, g_binimport_link);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "

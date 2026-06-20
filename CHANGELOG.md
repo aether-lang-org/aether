@@ -14,6 +14,40 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.292.0]
+
+### Added
+
+- **FreeBSD sandbox parity + Capsicum / Casper / audit** (`std.capsicum`,
+  `std.casper`, `std.audit`) — revives `feat/freebsd-sandbox-parity` onto
+  current main. Pure Aether + `#if`-guarded C; degrades cleanly off FreeBSD.
+  - **`std.capsicum`** — FreeBSD Capsicum bindings: `available` / `enter` /
+    `in_mode` / `rights_limit` / `fcntls_limit` with the full `R_*` / `F_*`
+    constant set. `available()` returns 0 off FreeBSD (or on a kernel without
+    Capsicum) and `enter()` returns `CAP_UNSUPPORTED` (-2) — portable code
+    branches on `available()` before relying on enforcement, never crashes.
+    Phase-2 self-sandbox at startup (`runtime/sandbox/capsicum_autosandbox.c`).
+  - **`std.casper`** — Casper service delegation (DNS / passwd / sysctl) across
+    the capability-mode boundary, with the mandatory two-phase ordering baked
+    into the docstring (open service channels *before* `capsicum.enter()`).
+    libcasper + per-service libs are resolved by globbing the actual `.so.*`
+    filenames (GhostBSD lacks the `.so` linker symlinks); empty → stub path.
+  - **`std.audit`** — audit trail for the in-process permission layer
+    (`runtime/sandbox/aether_audit.{c,h}`).
+  - Runtime sandbox split into `runtime/sandbox/spawn_sandboxed_{bsd,linux,stub}.c`
+    (`#if defined(__FreeBSD__)/__linux__`-guarded; the Linux impl moved from
+    the old single `runtime/aether_spawn_sandboxed.c`). The LD_PRELOAD
+    containment shim now also builds on FreeBSD.
+  - Examples: `capsicum-demo.ae`, `casper-demo.ae`, `audit-demo.ae`.
+
+  Ported by an author who got Capsicum right (the two-phase Casper ordering).
+  Downstream consumer: the **aeo** orchestrator's host-adaptation / fast-fail
+  grammar (`require_capsicum()` / `prefer_capsicum()`) sits directly on this
+  surface. **Deferred follow-ups:** automatic Capsicum wiring into
+  `spawn_sandboxed` (consumers call `capsicum.enter()` explicitly for now), and
+  exposing fds from `std.file` / `std.net` handles so `rights_limit()` works on
+  more than raw/inherited descriptors.
+
 ## [0.291.0]
 
 ### Added

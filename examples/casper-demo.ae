@@ -1,0 +1,76 @@
+// casper-demo.ae — resolving a hostname from inside a Capsicum sandbox.
+//
+// A process in Capsicum capability mode cannot reach DNS, /etc/passwd,
+// or sysctl directly — those are global namespaces the kernel walls
+// off. Casper bridges the gap: a separate daemon does the lookup and
+// hands back the answer over a channel opened BEFORE cap_enter().
+//
+// The ordering is the whole point of this demo:
+//   1. open the Casper channels   (still unconfined)
+//   2. capsicum.enter()           (lock down)
+//   3. use the channels           (works — via the daemon)
+//
+// Run on FreeBSD:   ae run examples/casper-demo.ae
+// Off FreeBSD the demo reports Casper unavailable and exits cleanly.
+
+import std.casper
+import std.capsicum
+
+main() {
+    println("=== Casper demo ===")
+    println("")
+
+    if casper.available() == 0 {
+        println("Casper is not available on this platform.")
+        println("(std.casper builds everywhere; only FreeBSD has the")
+        println(" casper daemon. Nothing to demonstrate here.)")
+        return
+    }
+
+    // --- Phase 1: open channels while still unconfined ---
+    println("opening Casper service channels (unconfined)...")
+    c = casper.init()
+    if c == null {
+        println("  casper.init() failed")
+        return
+    }
+    net = casper.service(c, "system.net")
+    sysctl_ch = casper.service(c, "system.sysctl")
+    casper.close(c)              // parent handle no longer needed
+    if net == null {
+        println("  could not open system.net")
+        return
+    }
+
+    // --- Phase 2: enter capability mode ---
+    println("entering Capsicum capability mode...")
+    if capsicum.enter() != capsicum.CAP_OK {
+        println("  capsicum.enter() failed")
+        return
+    }
+    println("  in_capability_mode: ${capsicum.in_mode()}")
+    println("")
+
+    // --- Phase 3: the channels still work, sandboxed ---
+    println("--- inside the sandbox ---")
+
+    ip, derr = casper.dns_resolve(net, "freebsd.org")
+    if derr == "" {
+        println("  [OK]    dns_resolve freebsd.org -> ${ip}")
+    } else {
+        println("  [FAIL]  dns_resolve: ${derr}")
+    }
+
+    host, serr = casper.sysctl(sysctl_ch, "kern.hostname")
+    if serr == "" {
+        println("  [OK]    sysctl kern.hostname -> ${host}")
+    } else {
+        println("  [FAIL]  sysctl: ${serr}")
+    }
+
+    casper.close(net)
+    casper.close(sysctl_ch)
+    println("")
+    println("DNS and sysctl reached the daemon — global namespaces")
+    println("stay walled off, but delegated lookups still answer.")
+}
