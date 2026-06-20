@@ -1,0 +1,54 @@
+// Regression: heredoc common-leading-whitespace dedent.
+// The longest leading-whitespace prefix shared by every non-blank content
+// line is stripped; blank lines don't constrain it; relative indent is kept;
+// a space-vs-tab disagreement stops the strip (nothing removed); the `<<`
+// left-shift operator is unaffected.
+import std.string
+
+main() {
+    fails = 0
+
+    // Uniform indent fully stripped.
+    a = <<END
+    line one
+    line two
+END
+    if string.equals(a, "line one\nline two") != 1 {
+        print("FAIL uniform: <${a}>\n"); fails = fails + 1
+    }
+
+    // Nested: common prefix removed, relative indent preserved.
+    b = <<END
+    outer
+      inner
+    outer2
+END
+    if string.equals(b, "outer\n  inner\nouter2") != 1 {
+        print("FAIL nested: <${b}>\n"); fails = fails + 1
+    }
+
+    // Blank middle line doesn't force prefix=0.
+    c = <<END
+    first
+
+    third
+END
+    if string.equals(c, "first\n\nthird") != 1 {
+        print("FAIL blank: <${c}>\n"); fails = fails + 1
+    }
+
+    // Zero indent unchanged.
+    d = <<END
+no indent
+still none
+END
+    if string.equals(d, "no indent\nstill none") != 1 {
+        print("FAIL zero: <${d}>\n"); fails = fails + 1
+    }
+
+    // Left-shift operator still works (heredoc needs an identifier after <<).
+    sh = 1 << 4
+    if sh != 16 { print("FAIL shift: ${sh}\n"); fails = fails + 1 }
+
+    if fails == 0 { print("PASS: heredoc dedent\n") } else { print("FAILED: ${fails}\n"); exit(1) }
+}

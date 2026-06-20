@@ -14,6 +14,34 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [0.297.0]
+
+### Changed
+
+- **Heredocs strip common leading-whitespace indent** (`<<MARKER … MARKER`).
+  The longest leading-whitespace prefix shared by every non-blank line is now
+  removed, so a heredoc body can be indented to match its surrounding code
+  without that indentation leaking into the string. Blank lines don't
+  constrain the prefix; relative indentation within the block is preserved.
+  The match is character-exact — a space-vs-tab disagreement at a column stops
+  the strip there (no shifting past a column where lines differ); to keep a
+  literal common indent, indent one line less than the rest. The closing
+  marker must be at column 0. Docs in `docs/language-reference.md`; regression
+  in `tests/regression/test_heredoc_dedent.ae`.
+
+### Fixed
+
+- **Parser: `call(...) | EXPR` is no longer misread as a trailing closure.**
+  A `|` (or `||`) immediately after a function call was unconditionally parsed
+  as the start of a trailing-closure parameter list (`func(args) |x| { … }`),
+  so a bitwise/logical-OR on a call result — `strlen(s) | 0x80` — failed with
+  "Expected IDENTIFIER, got NUMBER". A `|`/`||` is now treated as a trailing
+  closure only when the parameter list is followed by `{` or `->`; otherwise it
+  is left for the expression parser. Genuine typed-param trailing closures
+  (`each(xs) |x: int| { … }`, `map(xs) |x: int| -> x*2`) still parse. (Bit the
+  AES/ChaCha and Ed25519 crypto ports.) Regression in
+  `tests/regression/test_pipe_after_call.ae`.
+
 ## [0.296.0]
 
 ### Added

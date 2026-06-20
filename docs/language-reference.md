@@ -1693,6 +1693,53 @@ tcp_send_raw(conn, msg)          // can be passed to any function expecting ptr
 
 When used directly inside `print`/`println`, the compiler optimizes to a `printf` call (no allocation).
 
+### Heredoc strings
+
+`<<MARKER … MARKER` captures a multi-line **literal** string — no `${}`
+interpolation and no escape processing, so it's ideal for embedding another
+language's source verbatim (SQL, a `contrib.host.*` snippet) without escaping
+the guest's own quotes. The heredoc only triggers when `<<` is immediately
+followed by an identifier; `1 << 4` stays the left-shift operator.
+
+```aether
+sql = <<SQL
+SELECT id, name
+FROM users
+WHERE active = 1
+SQL
+```
+
+The body runs from the line after `<<MARKER` to a line whose first characters
+are exactly `MARKER` (the closing marker must be at column 0). Windows `\r\n`
+is normalized to `\n`, and the single newline immediately before the closing
+marker is dropped (it's syntax, not content).
+
+**Common-indent dedent.** The longest run of leading whitespace shared by every
+*non-blank* line is stripped, so a heredoc can be indented to match its
+surrounding code without that indentation leaking into the string:
+
+```aether
+fn describe() -> string {
+    return <<TEXT
+        line one
+          line two
+    TEXT
+}
+// → "line one\n  line two"   (common 8-space prefix removed; the relative
+//                              2-space indent of "line two" is preserved)
+```
+
+Rules:
+- **Blank / whitespace-only lines don't constrain** the common prefix (a single
+  blank line won't force the prefix to zero), but they're still emitted.
+- The prefix match is **character-exact**: if one line indents with spaces and
+  another with a tab at the same column, that's a disagreement and the strip
+  stops there — Aether never shifts past a column where lines differ. To keep a
+  literal common indent in the string, indent one line one notch less than the
+  rest (so the common prefix is shorter than the indent you want kept).
+- A line indented *less* than the common prefix simply loses what leading
+  whitespace it has and lands at column 0.
+
 ### Timing
 
 | Function | Description |

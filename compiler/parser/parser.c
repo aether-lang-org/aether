@@ -41,6 +41,64 @@ Token* peek_ahead(Parser* parser, int offset) {
     return parser->tokens[pos];
 }
 
+// Disambiguate a `|` (or `||`) right after a function call: is it the start
+// of a trailing closure `func(args) |params| { ... }` / `func(args) || { ... }`,
+// or a bitwise/logical operator `func(args) | EXPR` / `func(args) || EXPR`?
+//
+// A trailing closure's parameter list is always immediately followed by a
+// `{` block or a `->` arrow. So: from the opening `|`, scan a plausible
+// parameter list (identifiers / commas / `: type` annotations) to a closing
+// `|`, then require `{` or `->`. For `||` (empty params) just require the
+// next token to be `{` or `->`. Anything else is an operator and must be
+// left for the expression parser (fixes `strlen(s) | 0x80` being misread as
+// a closure — see the AES/ChaCha/Ed25519 crypto ports). `offset` is the
+// position of the `|`/`||` token relative to parser->current_token.
+static int looks_like_trailing_closure(Parser* parser, int offset) {
+    Token* t = peek_ahead(parser, offset);
+    if (!t) return 0;
+    if (t->type == TOKEN_OR) {
+        // `||` — empty param list; closure only if followed by `{` or `->`.
+        Token* after = peek_ahead(parser, offset + 1);
+        return after && (after->type == TOKEN_LEFT_BRACE || after->type == TOKEN_ARROW);
+    }
+    if (t->type != TOKEN_PIPE) return 0;
+
+    // Scan forward to the matching closing `|`. The decisive test is what
+    // follows that closing pipe: a real closure has `|params| {` or
+    // `|params| ->`. A bitwise expression `f() | EXPR` has no second `|`
+    // before the statement ends, or — for `f() | a | b` — the token after
+    // the second `|` is an operand, not `{`/`->`, so it's rejected here.
+    //
+    // The interior scan is permissive (closure params include type-keyword
+    // tokens like `int`/`string`, not just identifiers, so we can't whitelist
+    // narrowly) but bails on tokens that cannot appear inside a parameter
+    // list and that would instead terminate or nest an expression: another
+    // `|`/`||` (handled as the closing pipe / a non-closure), a `{`, `->`,
+    // `;`, `)`, `}`, `(`, or EOF.
+    int i = offset + 1;
+    while (1) {
+        Token* tk = peek_ahead(parser, i);
+        if (!tk) return 0;
+        if (tk->type == TOKEN_PIPE) {
+            // Closing pipe — closure iff `{` or `->` follows.
+            Token* after = peek_ahead(parser, i + 1);
+            return after && (after->type == TOKEN_LEFT_BRACE || after->type == TOKEN_ARROW);
+        }
+        if (tk->type == TOKEN_OR ||             // `||` mid-list → not a param list
+            tk->type == TOKEN_LEFT_BRACE ||     // `{` before a closing `|`
+            tk->type == TOKEN_ARROW ||
+            tk->type == TOKEN_SEMICOLON ||
+            tk->type == TOKEN_LEFT_PAREN ||
+            tk->type == TOKEN_RIGHT_PAREN ||
+            tk->type == TOKEN_RIGHT_BRACE ||
+            tk->type == TOKEN_EOF) {
+            return 0;
+        }
+        i++;
+        if (i - offset > 64) return 0;          // runaway guard
+    }
+}
+
 Token* advance_token(Parser* parser) {
     if (parser->current_token >= parser->token_count) {
         return NULL;
@@ -1575,9 +1633,14 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                         add_child(trailing, body);
                         add_child(func_call, trailing);
                     }
-                } else if (next_tok && (next_tok->type == TOKEN_PIPE || next_tok->type == TOKEN_OR)) {
+                } else if (next_tok && (next_tok->type == TOKEN_PIPE || next_tok->type == TOKEN_OR)
+                           && looks_like_trailing_closure(parser, 0)) {
                     // Trailing closure with params: func(args) |x| { ... }
-                    // These are real closures (not DSL blocks) — they get hoisted
+                    // These are real closures (not DSL blocks) — they get hoisted.
+                    // The looks_like_trailing_closure guard distinguishes this
+                    // from `func(args) | EXPR` (bitwise-or) / `func(args) || EXPR`
+                    // (logical-or), where the `|`/`||` is a binary operator and
+                    // must be left for the expression parser.
                     ASTNode* trailing = parse_closure_expression(parser);
                     if (trailing) {
                         add_child(func_call, trailing);

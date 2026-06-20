@@ -163,7 +163,14 @@ plays that role), no interfaces.
 - **`<<MARKER … MARKER` heredocs.** Literal string, no interpolation/escaping.
   Reach for them to embed another language's source verbatim
   (`contrib.host.*` snippets, SQL) — no `\"` on the guest's own quotes. Use
-  `"…"` when you need `${}`.
+  `"…"` when you need `${}`. **Common-indent dedent (default):** the longest
+  leading-whitespace prefix shared by every non-blank line is stripped, so you
+  can indent the body to match surrounding code without that indent leaking
+  into the string. Blank lines don't constrain the prefix; relative indentation
+  within the block is kept. The match is character-exact — a space-vs-tab
+  mismatch at a column stops the strip there (no shifting past a disagreement),
+  so to keep a literal common indent, indent one line less than the rest. The
+  closing marker must be at column 0. (lexer.c `<<` case.)
 - **Trailing closure brace must be on the call's line.** `f(x) { … }`
   attaches as a trailing closure; `f(x)\n{ … }` is parsed as a
   separate bare-brace block. The compiler warns on the next-line
