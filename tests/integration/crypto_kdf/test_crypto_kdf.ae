@@ -1,0 +1,41 @@
+// Validate std.cryptography.hkdf (RFC 5869) and std.cryptography.pbkdf2
+// (RFC 8018) against published test vectors.
+import std.cryptography.hkdf
+import std.cryptography.pbkdf2
+import std.bytes
+import std.string
+import std.io
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+
+check(label: string, got: string, want: string) -> int {
+    if got == want { println("ok   ${label}"); return 0 }
+    println("FAIL ${label}"); println("  got:  ${got}"); println("  want: ${want}"); return 1
+}
+
+main() {
+    fails = 0
+
+    // RFC 5869 Test Case 1 (HKDF-SHA256)
+    ikm = hb("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
+    salt = hb("000102030405060708090a0b0c")
+    info = hb("f0f1f2f3f4f5f6f7f8f9")
+    okm = hkdf.hkdf("sha256", salt, bytes.length(salt), ikm, bytes.length(ikm), info, bytes.length(info), 42)
+    fails = fails + check("hkdf rfc5869 tc1", bh(okm),
+        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
+
+    // PBKDF2-HMAC-SHA256 (widely-published vectors)
+    pw = hb("70617373776f7264")   // "password"
+    sp = hb("73616c74")          // "salt"
+    dk1 = pbkdf2.pbkdf2("sha256", pw, bytes.length(pw), sp, bytes.length(sp), 1, 32)
+    fails = fails + check("pbkdf2 sha256 c=1", bh(dk1),
+        "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b")
+    dk2 = pbkdf2.pbkdf2("sha256", pw, bytes.length(pw), sp, bytes.length(sp), 4096, 32)
+    fails = fails + check("pbkdf2 sha256 c=4096", bh(dk2),
+        "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a")
+
+    if fails == 0 { println("ALL PASS"); return }
+    println("FAILURES"); exit(1)
+}

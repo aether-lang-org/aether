@@ -1,0 +1,52 @@
+// Validate contrib.cryptography.chacha20poly1305 against RFC 8439 vectors:
+// the Poly1305 §2.5.2 tag and the ChaCha20-Poly1305 AEAD §2.8.2 example
+// (seal produces the exact spec ciphertext+tag; open round-trips and a
+// tampered tag is rejected).
+import contrib.cryptography.chacha20poly1305
+import std.bytes
+import std.string
+import std.io
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+sb(s: string) -> ptr { n=string.length(s); b=bytes.new(n); i=0; while i<n { bytes.set(b,i,string_char_at_n(s,n,i)&0xFF); i=i+1 } return b }
+beq(a: ptr, b: ptr) -> int { if bytes.length(a)!=bytes.length(b) { return 0 } i=0; while i<bytes.length(a) { if bytes.get(a,i)!=bytes.get(b,i) { return 0 } i=i+1 } return 1 }
+
+check(label: string, got: string, want: string) -> int {
+    if got == want { println("ok   ${label}"); return 0 }
+    println("FAIL ${label}"); println("  got:  ${got}"); println("  want: ${want}"); return 1
+}
+
+main() {
+    fails = 0
+
+    // RFC 8439 §2.5.2 Poly1305
+    pk = hb("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b")
+    msg = sb("Cryptographic Forum Research Group")
+    fails = fails + check("poly1305 §2.5.2",
+        bh(chacha20poly1305.poly1305_mac(pk, msg, bytes.length(msg))),
+        "a8061dc1305136c6c22b8baf0c0127a9")
+
+    // RFC 8439 §2.8.2 AEAD
+    key = hb("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f")
+    nonce = hb("070000004041424344454647")
+    aad = hb("50515253c0c1c2c3c4c5c6c7")
+    pt = sb("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.")
+    sealed = chacha20poly1305.aead_seal(key, nonce, aad, bytes.length(aad), pt, bytes.length(pt))
+    want = string.concat("d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116",
+                         "1ae10b594f09e26a7e902ecbd0600691")
+    fails = fails + check("aead §2.8.2 seal", bh(sealed), want)
+
+    op, err = chacha20poly1305.aead_open(key, nonce, aad, bytes.length(aad), sealed, bytes.length(sealed))
+    if err != "" { println("FAIL aead open err ${err}"); fails = fails + 1 }
+    if beq(op, pt) != 1 { println("FAIL aead open roundtrip"); fails = fails + 1 } else { println("ok   aead open roundtrip") }
+
+    // Tamper the last tag byte → open must reject.
+    bytes.set(sealed, bytes.length(sealed) - 1, (bytes.get(sealed, bytes.length(sealed) - 1) ^ 0x01) & 0xFF)
+    _, terr = chacha20poly1305.aead_open(key, nonce, aad, bytes.length(aad), sealed, bytes.length(sealed))
+    if terr == "" { println("FAIL aead must reject tampered tag"); fails = fails + 1 } else { println("ok   aead rejects tampered tag") }
+
+    if fails == 0 { println("ALL PASS"); return }
+    println("FAILURES"); exit(1)
+}

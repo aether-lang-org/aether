@@ -1,0 +1,42 @@
+// Regression: a string carried in as a MESSAGE FIELD and retained into
+// ACTOR STATE must survive past the originating message's release. The
+// message's string field is freed by <Msg>_release_fields right after the
+// handler returns, so storing the raw pointer dangled and a LATER message
+// read freed bytes (the aeo actor-state-string corruption). The compiler
+// now copies a borrowed string into an owned AetherString on the
+// `self->field = <message-string>` retain, freeing any prior copy.
+//
+// Also exercises:
+//   - the `string.concat(in_n, "")` defensive-copy idiom, which previously
+//     failed to COMPILE (`'_heap_n' undeclared`) because actor handlers
+//     skipped the function-scope `_heap_<name>` hoist pass.
+//   - reassignment (the prior owned copy must be freed, not leaked/UAF).
+import std.string
+
+message SetN { in_n: string }
+message SetC { in_c: string }
+message Show {}
+
+actor A {
+    state n = ""
+    state c = ""
+    receive {
+        SetN(in_n) -> { n = in_n }                       // direct retain
+        SetC(in_c) -> { c = string.concat(in_c, "!") }   // defensive copy
+        Show       -> { println("n=${n} c=${c}") }
+    }
+}
+
+main() {
+    a = spawn(A())
+    a ! SetN { in_n: "aeo-db" }
+    a ! SetC { in_c: "cfg" }
+    sleep(60)
+    a ! Show {}                                          // expect: n=aeo-db c=cfg!
+    sleep(60)
+    a ! SetN { in_n: "second-longer-value" }             // reassign → free first
+    sleep(60)
+    a ! Show {}                                          // expect: n=second-longer-value c=cfg!
+    sleep(60)
+    wait_for_idle()
+}

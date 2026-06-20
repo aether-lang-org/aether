@@ -297,6 +297,21 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                             &gen->current_promoted_captures,
                             &gen->current_promoted_capture_count);
 
+                        // Pre-hoist `_heap_<name>` companions for string
+                        // locals in the handler body, exactly as
+                        // generate_function_definition does for regular
+                        // functions (codegen_func.c) and main (codegen.c).
+                        // Without this, a handler that builds a heap string
+                        // — e.g. `n = string.concat(in_n, "")` to retain a
+                        // message field into state — emits a `_heap_n`
+                        // tracker reference that is never declared, producing
+                        // `'_heap_n' undeclared` in the generated C. The
+                        // handler is its own C function, so it needs the same
+                        // function-scope hoist pass.
+                        if (arm_body && arm_body->type == AST_BLOCK) {
+                            hoist_heap_string_trackers(gen, arm_body);
+                        }
+
                         // Generate handler body
                         if (arm_body && arm_body->type == AST_BLOCK) {
                             for (int k = 0; k < arm_body->child_count; k++) {

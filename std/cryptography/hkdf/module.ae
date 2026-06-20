@@ -1,0 +1,172 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.hkdf — HKDF (HMAC-based Extract-and-Expand KDF, RFC 5869)
+// in pure Aether, ported from Bouncy Castle's HkdfBytesGenerator. NO externs
+// to OpenSSL — built entirely on std.cryptography.hmac (which is itself pure
+// Aether over std.cryptography.sha2).
+//
+// HKDF is the modern key-derivation workhorse (TLS 1.3, Signal, Noise).
+// Two phases:
+//   PRK = HKDF-Extract(salt, IKM)         = HMAC(salt, IKM)
+//   OKM = HKDF-Expand(PRK, info, L)       = T(1) | T(2) | ... truncated to L,
+//         where T(0)="" and T(i) = HMAC(PRK, T(i-1) | info | byte(i)).
+//
+// Import with:  import std.cryptography.hkdf
+//
+//   hkdf_extract(algo, salt, salt_len, ikm, ikm_len) -> ptr (PRK bytes)
+//   hkdf_expand(algo, prk, prk_len, info, info_len, out_len) -> ptr (OKM)
+//   hkdf(algo, salt, salt_len, ikm, ikm_len, info, info_len, out_len) -> ptr
+//
+// `algo` is any std.cryptography.hmac algorithm ("sha256", "sha512", ...).
+// All buffers are std.bytes (caller frees results). A NULL salt is treated
+// as a string of HashLen zero bytes (RFC 5869 §2.2). out_len must be
+// <= 255*HashLen (RFC 5869 §2.3) — over-length returns null.
+
+import std.bytes
+import std.cryptography.hmac
+
+exports (
+    hkdf_extract, hkdf_expand, hkdf, hash_len
+)
+
+// Output length of the underlying hash, in bytes.
+hash_len(algo: string) -> int {
+    if algo == "sha256" {
+        return 32
+    }
+    if algo == "sha224" {
+        return 28
+    }
+    if algo == "sha512" {
+        return 64
+    }
+    if algo == "sha384" {
+        return 48
+    }
+    if algo == "sha512-224" {
+        return 28
+    }
+    if algo == "sha512-256" {
+        return 32
+    }
+    if algo == "sha1" {
+        return 20
+    }
+    return 0
+}
+
+// HKDF-Extract: PRK = HMAC(salt, IKM). A NULL/empty salt becomes HashLen
+// zero bytes per RFC 5869 §2.2. Returns PRK (HashLen bytes), or null.
+hkdf_extract(algo: string, salt: ptr, salt_len: int, ikm: ptr, ikm_len: int) -> ptr {
+    hl = hash_len(algo)
+    if hl == 0 {
+        return null
+    }
+    use_salt = salt
+    use_salt_len = salt_len
+    made = null
+    if salt == null || salt_len <= 0 {
+        made = bytes.new(hl)
+        i = 0
+        while i < hl {
+            bytes.set(made, i, 0)
+            i = i + 1
+        }
+        use_salt = made
+        use_salt_len = hl
+    }
+    prk = hmac.hmac_bytes(algo, use_salt, use_salt_len, ikm, ikm_len)
+    if made != null {
+        bytes.free(made)
+    }
+    return prk
+}
+
+// HKDF-Expand: OKM = T(1)|T(2)|... truncated to out_len, where
+// T(i) = HMAC(PRK, T(i-1) | info | byte(i)). Returns OKM, or null if
+// out_len exceeds 255*HashLen or on error.
+hkdf_expand(algo: string, prk: ptr, prk_len: int, info: ptr, info_len: int, out_len: int) -> ptr {
+    hl = hash_len(algo)
+    if hl == 0 {
+        return null
+    }
+    if out_len <= 0 {
+        return bytes.new(0)
+    }
+    if out_len > 255 * hl {
+        return null
+    }
+    inf_len = info_len
+    if info == null {
+        inf_len = 0
+    }
+
+    out = bytes.new(out_len)
+    produced = 0
+    counter = 1
+    prev = null          // T(i-1) bytes buffer (null for T(0))
+    prev_len = 0
+
+    while produced < out_len {
+        // Build the HMAC input: T(i-1) | info | byte(i).
+        tlen = prev_len + inf_len + 1
+        tin = bytes.new(tlen)
+        off = 0
+        if prev != null {
+            bytes.copy_from_bytes(tin, off, prev, 0, prev_len)
+            off = off + prev_len
+        }
+        if inf_len > 0 {
+            bytes.copy_from_bytes(tin, off, info, 0, inf_len)
+            off = off + inf_len
+        }
+        bytes.set(tin, off, counter & 0xFF)
+
+        ti = hmac.hmac_bytes(algo, prk, prk_len, tin, tlen)
+        bytes.free(tin)
+        if ti == null {
+            if prev != null {
+                bytes.free(prev)
+            }
+            bytes.free(out)
+            return null
+        }
+
+        // Copy min(hl, remaining) bytes of T(i) into the output.
+        remaining = out_len - produced
+        take = hl
+        if remaining < take {
+            take = remaining
+        }
+        bytes.copy_from_bytes(out, produced, ti, 0, take)
+        produced = produced + take
+
+        if prev != null {
+            bytes.free(prev)
+        }
+        prev = ti
+        prev_len = hl
+        counter = counter + 1
+    }
+    if prev != null {
+        bytes.free(prev)
+    }
+    return out
+}
+
+// Full HKDF: extract then expand. Returns out_len bytes of OKM, or null.
+hkdf(algo: string, salt: ptr, salt_len: int, ikm: ptr, ikm_len: int, info: ptr, info_len: int, out_len: int) -> ptr {
+    hl = hash_len(algo)
+    if hl == 0 {
+        return null
+    }
+    prk = hkdf_extract(algo, salt, salt_len, ikm, ikm_len)
+    if prk == null {
+        return null
+    }
+    okm = hkdf_expand(algo, prk, bytes.length(prk), info, info_len, out_len)
+    bytes.free(prk)
+    return okm
+}
