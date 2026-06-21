@@ -14,6 +14,34 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **AEAD, password hashing, more curves, and classic hashes** — a large
+  pure-Aether tranche of the Bouncy Castle port (#739), each validated
+  against NIST / RFC / Bouncy Castle test vectors. No externs to OpenSSL.
+  - **`contrib.cryptography.aes`** gains three more AEAD modes on the
+    existing block primitive: **CCM** (NIST SP800-38C), **EAX** (over the
+    existing CMAC), and **OCB** (RFC 7253) — `ccm_seal`/`ccm_open`,
+    `eax_seal`/`eax_open`, `ocb_seal`/`ocb_open`, each with a constant-time
+    tag check and `-1` failure sentinel on tamper.
+  - **`std.cryptography.scrypt`** (RFC 7914) and **`std.cryptography.argon2`**
+    (RFC 9106 — Argon2d/i/id) password-hashing KDFs. scrypt reuses PBKDF2;
+    Argon2 reuses BLAKE2b. `scrypt(...)`, `argon2id`/`argon2i`/`argon2d`
+    (+ `_hex`), with optional secret/AD.
+  - **`contrib.cryptography.secp256k1`** (Koblitz curve — ECDH + ECDSA, the
+    same short-Weierstrass plumbing as P-256), **`contrib.cryptography.x448`**
+    (RFC 7748 Montgomery ladder), and **`contrib.cryptography.ed448`**
+    (RFC 8032 — SHAKE256-based, 57-byte keys / 114-byte signatures).
+  - **`std.cryptography.whirlpool`** (ISO/IEC 10118-3), **`std.cryptography.tiger`**
+    (192-bit), and **`std.cryptography.skein`** (Skein-512, Threefish + UBI),
+    each with the sm3-style streaming + one-shot API.
+  - Correctness-first ports over the variable-time std.bignum (curves) — not
+    constant-time/side-channel-hardened; documented in each module header.
+    Skein-256/1024 state sizes and Tiger2 are noted as deferred.
+- Integration tests: `tests/integration/crypto_{aead_modes,pwhash,classic_hashes,curves2}`.
+
 ## [0.299.0]
 
 ### Added
