@@ -1,0 +1,640 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.blake2 — BLAKE2b and BLAKE2s (RFC 7693) in pure Aether,
+// ported from Bouncy Castle's Blake2bDigest / Blake2sDigest. NO externs to
+// OpenSSL or any C crypto.
+//
+// BLAKE2b uses 64-bit words, a 128-byte block and digests up to 64 bytes;
+// BLAKE2s uses 32-bit words, a 64-byte block and digests up to 32 bytes.
+// Both load message words and emit the digest LITTLE-ENDIAN, run the same
+// SIGMA permutation schedule (12 rounds for b, 10 for s), and mix with the
+// G quarter-round (right rotations). Keyed (MAC) mode prepends a single
+// zero-padded key block; variable digest length is folded into the
+// parameter block.
+//
+// Import with:  import std.cryptography.blake2
+//
+//   one-shot:   blake2b_hex(data, len) / blake2s_hex(data, len)
+//   variable:   blake2b_hex_n(data, len, out_len)
+//   keyed:      blake2b_keyed_hex(data, len, key, key_len, out_len)
+//   streaming:  ctx = new_b(64); update(ctx, data, len); final_hex(ctx)
+//
+// Aether-specific care:
+//   * int/long are both 64-bit; `>>` is ARITHMETIC. BLAKE2s is 32-bit
+//     math, so every add is masked with & 0xFFFFFFFF and right shifts in
+//     the rotate go through std.bits.lsr32 (via bits.rotr32). BLAKE2b is
+//     64-bit: 64-bit two's-complement add wraps mod 2^64 naturally, which
+//     is exactly the modular add BLAKE2b wants — no masking needed.
+//   * Message words and output are LITTLE-endian. bytes.get_le32/set_le32
+//     serve BLAKE2s; the 64-bit LE words for BLAKE2b are assembled and
+//     emitted byte-by-byte here (std.bytes has only big-endian 64).
+//   * Right rotations: BLAKE2b rotr64 by 32,24,16,63; BLAKE2s rotr32 by
+//     16,12,8,7. The G function needs only add/xor/rotr — no bitwise NOT.
+
+import std.bits
+import std.bytes
+import std.longarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+
+exports (
+    new_b, new_b_keyed, new_s, new_s_keyed,
+    update, update_bytes, final_hex, final_bytes, free_ctx,
+    blake2b_hex, blake2b_bytes, blake2s_hex, blake2s_bytes,
+    blake2b_hex_n, blake2b_bytes_n, blake2s_hex_n, blake2s_bytes_n,
+    blake2b_keyed_hex, blake2b_keyed_bytes,
+    blake2s_keyed_hex, blake2s_keyed_bytes
+)
+
+// ---- IVs ----
+const IV_B: long[8] = [
+    0x6a09e667f3bcc908, 0xbb67ae8584caa73b,
+    0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+    0x510e527fade682d1, 0x9b05688c2b3e6c1f,
+    0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
+]
+
+const IV_S: long[8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+]
+
+// ---- SIGMA permutation (12 rows x 16; BLAKE2s uses the first 10) ----
+const SIGMA: long[192] = [
+    0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+    14, 10,  4,  8,  9, 15, 13,  6,  1, 12,  0,  2, 11,  7,  5,  3,
+    11,  8, 12,  0,  5,  2, 15, 13, 10, 14,  3,  6,  7,  1,  9,  4,
+    7,  9,  3,  1, 13, 12, 11, 14,  2,  6,  5, 10,  4,  0, 15,  8,
+    9,  0,  5,  7,  2,  4, 10, 15, 14,  1, 11, 12,  6,  8,  3, 13,
+    2, 12,  6, 10,  0, 11,  8,  3,  4, 13,  7,  5, 15, 14,  1,  9,
+    12,  5,  1, 15, 14, 13,  4, 10,  0,  7,  6,  3,  9,  2,  8, 11,
+    13, 11,  7, 14, 12,  1,  3,  9,  5,  0, 15,  4,  8,  6,  2, 10,
+    6, 15, 14,  9, 11,  3,  0,  8, 12,  2, 13,  7,  1,  4, 10,  5,
+    10,  2,  8,  4,  7,  6,  1,  5, 15, 11,  9, 14,  3, 12, 13,  0,
+    0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+    14, 10,  4,  8,  9, 15, 13,  6,  1, 12,  0,  2, 11,  7,  5,  3
+]
+
+// is_b: 1 = BLAKE2b (64-bit, 128-byte block), 0 = BLAKE2s (32-bit, 64-byte).
+struct Blake2Ctx {
+    h: ptr            // longarr(16): 8 chaining words (low 32 bits used for s)
+    block: ptr        // std.bytes input block buffer
+    block_len: int    // bytes currently in `block`
+    t0: long          // byte counter, low
+    t1: long          // byte counter, high
+    out_len: int
+    is_b: int
+    block_size: int   // 128 (b) or 64 (s)
+}
+
+m32(x: long) -> long {
+    return x & 0xFFFFFFFF
+}
+
+// ---- BLAKE2b G mixing (full 64-bit, natural wrap) ----
+gb(v: ptr, a: int, b: int, c: int, d: int, x: long, y: long) {
+    va = longarr_get_unchecked(v, a)
+    vb = longarr_get_unchecked(v, b)
+    vc = longarr_get_unchecked(v, c)
+    vd = longarr_get_unchecked(v, d)
+
+    va = va + vb + x
+    vd = bits.rotr64(vd ^ va, 32)
+    vc = vc + vd
+    vb = bits.rotr64(vb ^ vc, 24)
+    va = va + vb + y
+    vd = bits.rotr64(vd ^ va, 16)
+    vc = vc + vd
+    vb = bits.rotr64(vb ^ vc, 63)
+
+    longarr_set_unchecked(v, a, va)
+    longarr_set_unchecked(v, b, vb)
+    longarr_set_unchecked(v, c, vc)
+    longarr_set_unchecked(v, d, vd)
+}
+
+// ---- BLAKE2s G mixing (32-bit, masked) ----
+gs(v: ptr, a: int, b: int, c: int, d: int, x: long, y: long) {
+    va = longarr_get_unchecked(v, a) & 0xFFFFFFFF
+    vb = longarr_get_unchecked(v, b) & 0xFFFFFFFF
+    vc = longarr_get_unchecked(v, c) & 0xFFFFFFFF
+    vd = longarr_get_unchecked(v, d) & 0xFFFFFFFF
+
+    va = (va + vb + x) & 0xFFFFFFFF
+    vd = bits.rotr32(vd ^ va, 16) & 0xFFFFFFFF
+    vc = (vc + vd) & 0xFFFFFFFF
+    vb = bits.rotr32(vb ^ vc, 12) & 0xFFFFFFFF
+    va = (va + vb + y) & 0xFFFFFFFF
+    vd = bits.rotr32(vd ^ va, 8) & 0xFFFFFFFF
+    vc = (vc + vd) & 0xFFFFFFFF
+    vb = bits.rotr32(vb ^ vc, 7) & 0xFFFFFFFF
+
+    longarr_set_unchecked(v, a, va)
+    longarr_set_unchecked(v, b, vb)
+    longarr_set_unchecked(v, c, vc)
+    longarr_set_unchecked(v, d, vd)
+}
+
+// Load one little-endian 64-bit word from the block at byte offset off.
+// Each byte is widened to a `long` local before shifting so the high
+// shifts (>= 32) are done in 64-bit, not the 32-bit `int` of bytes.get.
+load_le64(b: ptr, off: int) -> long {
+    long r = 0
+    long b0 = bytes.get(b, off) & 255
+    long b1 = bytes.get(b, off + 1) & 255
+    long b2 = bytes.get(b, off + 2) & 255
+    long b3 = bytes.get(b, off + 3) & 255
+    long b4 = bytes.get(b, off + 4) & 255
+    long b5 = bytes.get(b, off + 5) & 255
+    long b6 = bytes.get(b, off + 6) & 255
+    long b7 = bytes.get(b, off + 7) & 255
+    r = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24) | (b4 << 32) | (b5 << 40) | (b6 << 48) | (b7 << 56)
+    return r
+}
+
+// last: 1 if this is the final block (set f0 = all-ones).
+compress(c: *Blake2Ctx, last: int) {
+    v = longarr_new_raw(16)
+    m = longarr_new_raw(16)
+
+    // Load message words little-endian.
+    if c.is_b == 1 {
+        i = 0
+        while i < 16 {
+            longarr_set_unchecked(m, i, load_le64(c.block, i * 8))
+            i = i + 1
+        }
+    } else {
+        i = 0
+        while i < 16 {
+            longarr_set_unchecked(m, i, bytes.get_le32(c.block, i * 4) & 0xFFFFFFFF)
+            i = i + 1
+        }
+    }
+
+    // v[0..7] = h, v[8..15] = IV.
+    i = 0
+    while i < 8 {
+        longarr_set_unchecked(v, i, longarr_get_unchecked(c.h, i))
+        i = i + 1
+    }
+    if c.is_b == 1 {
+        i = 0
+        while i < 8 {
+            longarr_set_unchecked(v, 8 + i, IV_B[i])
+            i = i + 1
+        }
+        // Mix counter and final flag.
+        longarr_set_unchecked(v, 12, IV_B[4] ^ c.t0)
+        longarr_set_unchecked(v, 13, IV_B[5] ^ c.t1)
+        if last == 1 {
+            longarr_set_unchecked(v, 14, IV_B[6] ^ 0xFFFFFFFFFFFFFFFF)
+        }
+    } else {
+        i = 0
+        while i < 8 {
+            longarr_set_unchecked(v, 8 + i, IV_S[i])
+            i = i + 1
+        }
+        longarr_set_unchecked(v, 12, (IV_S[4] ^ c.t0) & 0xFFFFFFFF)
+        longarr_set_unchecked(v, 13, (IV_S[5] ^ c.t1) & 0xFFFFFFFF)
+        if last == 1 {
+            longarr_set_unchecked(v, 14, (IV_S[6] ^ 0xFFFFFFFF) & 0xFFFFFFFF)
+        }
+    }
+
+    rounds = 10
+    if c.is_b == 1 {
+        rounds = 12
+    }
+
+    r = 0
+    while r < rounds {
+        so = r * 16
+        s0  = SIGMA[so]
+        s1  = SIGMA[so + 1]
+        s2  = SIGMA[so + 2]
+        s3  = SIGMA[so + 3]
+        s4  = SIGMA[so + 4]
+        s5  = SIGMA[so + 5]
+        s6  = SIGMA[so + 6]
+        s7  = SIGMA[so + 7]
+        s8  = SIGMA[so + 8]
+        s9  = SIGMA[so + 9]
+        s10 = SIGMA[so + 10]
+        s11 = SIGMA[so + 11]
+        s12 = SIGMA[so + 12]
+        s13 = SIGMA[so + 13]
+        s14 = SIGMA[so + 14]
+        s15 = SIGMA[so + 15]
+
+        if c.is_b == 1 {
+            gb(v, 0, 4,  8, 12, longarr_get_unchecked(m, s0),  longarr_get_unchecked(m, s1))
+            gb(v, 1, 5,  9, 13, longarr_get_unchecked(m, s2),  longarr_get_unchecked(m, s3))
+            gb(v, 2, 6, 10, 14, longarr_get_unchecked(m, s4),  longarr_get_unchecked(m, s5))
+            gb(v, 3, 7, 11, 15, longarr_get_unchecked(m, s6),  longarr_get_unchecked(m, s7))
+            gb(v, 0, 5, 10, 15, longarr_get_unchecked(m, s8),  longarr_get_unchecked(m, s9))
+            gb(v, 1, 6, 11, 12, longarr_get_unchecked(m, s10), longarr_get_unchecked(m, s11))
+            gb(v, 2, 7,  8, 13, longarr_get_unchecked(m, s12), longarr_get_unchecked(m, s13))
+            gb(v, 3, 4,  9, 14, longarr_get_unchecked(m, s14), longarr_get_unchecked(m, s15))
+        } else {
+            gs(v, 0, 4,  8, 12, longarr_get_unchecked(m, s0),  longarr_get_unchecked(m, s1))
+            gs(v, 1, 5,  9, 13, longarr_get_unchecked(m, s2),  longarr_get_unchecked(m, s3))
+            gs(v, 2, 6, 10, 14, longarr_get_unchecked(m, s4),  longarr_get_unchecked(m, s5))
+            gs(v, 3, 7, 11, 15, longarr_get_unchecked(m, s6),  longarr_get_unchecked(m, s7))
+            gs(v, 0, 5, 10, 15, longarr_get_unchecked(m, s8),  longarr_get_unchecked(m, s9))
+            gs(v, 1, 6, 11, 12, longarr_get_unchecked(m, s10), longarr_get_unchecked(m, s11))
+            gs(v, 2, 7,  8, 13, longarr_get_unchecked(m, s12), longarr_get_unchecked(m, s13))
+            gs(v, 3, 4,  9, 14, longarr_get_unchecked(m, s14), longarr_get_unchecked(m, s15))
+        }
+        r = r + 1
+    }
+
+    // h[i] ^= v[i] ^ v[i+8].
+    if c.is_b == 1 {
+        i = 0
+        while i < 8 {
+            nv = longarr_get_unchecked(c.h, i) ^ longarr_get_unchecked(v, i) ^ longarr_get_unchecked(v, i + 8)
+            longarr_set_unchecked(c.h, i, nv)
+            i = i + 1
+        }
+    } else {
+        i = 0
+        while i < 8 {
+            nv = (longarr_get_unchecked(c.h, i) ^ longarr_get_unchecked(v, i) ^ longarr_get_unchecked(v, i + 8)) & 0xFFFFFFFF
+            longarr_set_unchecked(c.h, i, nv)
+            i = i + 1
+        }
+    }
+
+    longarr_free(v)
+    longarr_free(m)
+}
+
+// Increment the 128-bit byte counter (t1:t0) by n.
+inc_counter(c: *Blake2Ctx, n: int) {
+    old = c.t0
+    c.t0 = c.t0 + n
+    if bits.ucmp64(c.t0, old) < 0 {
+        c.t1 = c.t1 + 1
+    }
+}
+
+// ---- Context construction ----
+mk_ctx(out_len: int, is_b: int) -> *Blake2Ctx {
+    ctx = malloc(96) as *Blake2Ctx
+    if ctx == null {
+        return null
+    }
+    ctx.is_b = is_b
+    ctx.out_len = out_len
+    ctx.block_len = 0
+    ctx.t0 = 0
+    ctx.t1 = 0
+    if is_b == 1 {
+        ctx.block_size = 128
+    } else {
+        ctx.block_size = 64
+    }
+    ctx.block = bytes.new(ctx.block_size)
+    j = 0
+    while j < ctx.block_size {
+        bytes.set(ctx.block, j, 0)
+        j = j + 1
+    }
+    ctx.h = longarr_new_raw(16)
+    return ctx
+}
+
+// Initialise h from IV with the parameter block folded into h[0].
+init_h(c: *Blake2Ctx, key_len: int) {
+    if c.is_b == 1 {
+        i = 0
+        while i < 8 {
+            longarr_set_unchecked(c.h, i, IV_B[i])
+            i = i + 1
+        }
+        // digest_len | (key_len<<8) | (fanout=1<<16) | (depth=1<<24)
+        param = (c.out_len & 0xFF) | ((key_len & 0xFF) << 8) | 0x01010000
+        longarr_set_unchecked(c.h, 0, IV_B[0] ^ param)
+    } else {
+        i = 0
+        while i < 8 {
+            longarr_set_unchecked(c.h, i, IV_S[i])
+            i = i + 1
+        }
+        param = (c.out_len & 0xFF) | ((key_len & 0xFF) << 8) | 0x01010000
+        longarr_set_unchecked(c.h, 0, (IV_S[0] ^ param) & 0xFFFFFFFF)
+    }
+}
+
+// Seed the first block with the zero-padded key (keyed/MAC mode).
+seed_key(c: *Blake2Ctx, key: ptr, key_len: int) {
+    if key_len <= 0 {
+        return
+    }
+    i = 0
+    while i < key_len {
+        bytes.set(c.block, i, bytes.get(key, i) & 255)
+        i = i + 1
+    }
+    // The remainder of the block is already zero. A keyed digest always
+    // processes a full key block before the message.
+    c.block_len = c.block_size
+}
+
+new_b(out_len: int) -> ptr {
+    c = mk_ctx(out_len, 1)
+    if c == null {
+        return null
+    }
+    init_h(c, 0)
+    return c
+}
+
+new_b_keyed(out_len: int, key: ptr, key_len: int) -> ptr {
+    c = mk_ctx(out_len, 1)
+    if c == null {
+        return null
+    }
+    init_h(c, key_len)
+    seed_key(c, key, key_len)
+    return c
+}
+
+new_s(out_len: int) -> ptr {
+    c = mk_ctx(out_len, 0)
+    if c == null {
+        return null
+    }
+    init_h(c, 0)
+    return c
+}
+
+new_s_keyed(out_len: int, key: ptr, key_len: int) -> ptr {
+    c = mk_ctx(out_len, 0)
+    if c == null {
+        return null
+    }
+    init_h(c, key_len)
+    seed_key(c, key, key_len)
+    return c
+}
+
+// Push one input byte. BLAKE2 compresses a block only once it is known
+// NOT to be the last, so we compress a full block on the arrival of the
+// next byte (i.e. when block_len already == block_size).
+push_byte(c: *Blake2Ctx, b: int) {
+    if c.block_len == c.block_size {
+        inc_counter(c, c.block_size)
+        compress(c, 0)
+        c.block_len = 0
+    }
+    bytes.set(c.block, c.block_len, b & 255)
+    c.block_len = c.block_len + 1
+}
+
+update(ctx: ptr, data: string, length: int) {
+    c = ctx as *Blake2Ctx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        push_byte(c, string_char_at_n(data, length, i))
+        i = i + 1
+    }
+}
+
+update_bytes(ctx: ptr, data: ptr, length: int) {
+    c = ctx as *Blake2Ctx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        push_byte(c, bytes.get(data, i))
+        i = i + 1
+    }
+}
+
+// Emit a little-endian 64-bit word into out at off.
+store_le64(out: ptr, off: int, v: long) {
+    bytes.set(out, off,     v & 255)
+    bytes.set(out, off + 1, bits.lsr64(v, 8) & 255)
+    bytes.set(out, off + 2, bits.lsr64(v, 16) & 255)
+    bytes.set(out, off + 3, bits.lsr64(v, 24) & 255)
+    bytes.set(out, off + 4, bits.lsr64(v, 32) & 255)
+    bytes.set(out, off + 5, bits.lsr64(v, 40) & 255)
+    bytes.set(out, off + 6, bits.lsr64(v, 48) & 255)
+    bytes.set(out, off + 7, bits.lsr64(v, 56) & 255)
+}
+
+// Finalise: zero-pad the last block, compress with the final flag, then
+// serialise the chaining words little-endian and return the first
+// out_len bytes. Returns a std.bytes buffer of out_len bytes.
+finalize_to_bytes(c: *Blake2Ctx) -> ptr {
+    inc_counter(c, c.block_len)
+    // Zero-pad the rest of the final block.
+    while c.block_len < c.block_size {
+        bytes.set(c.block, c.block_len, 0)
+        c.block_len = c.block_len + 1
+    }
+    compress(c, 1)
+
+    // Full state, little-endian.
+    full_len = 32
+    if c.is_b == 1 {
+        full_len = 64
+    }
+    full = bytes.new(full_len)
+    if c.is_b == 1 {
+        i = 0
+        while i < 8 {
+            store_le64(full, i * 8, longarr_get_unchecked(c.h, i))
+            i = i + 1
+        }
+    } else {
+        i = 0
+        while i < 8 {
+            bytes.set_le32(full, i * 4, longarr_get_unchecked(c.h, i) & 0xFFFFFFFF)
+            i = i + 1
+        }
+    }
+
+    out = bytes.new(c.out_len)
+    i = 0
+    while i < c.out_len {
+        bytes.set(out, i, bytes.get(full, i))
+        i = i + 1
+    }
+    bytes.free(full)
+    return out
+}
+
+free_internals(c: *Blake2Ctx) {
+    if c.block != null {
+        bytes.free(c.block)
+        c.block = null
+    }
+    if c.h != null {
+        longarr_free(c.h)
+        c.h = null
+    }
+}
+
+final_bytes(ctx: ptr) -> ptr {
+    c = ctx as *Blake2Ctx
+    n = c.out_len
+    out = finalize_to_bytes(c)
+    s = bytes.finish(out, n)
+    free_internals(c)
+    free(ctx)
+    res = bytes.new(n)
+    bytes.copy_from_string(res, 0, s, n)
+    return res
+}
+
+final_hex(ctx: ptr) -> string {
+    c = ctx as *Blake2Ctx
+    n = c.out_len
+    out = finalize_to_bytes(c)
+    hexbuf = bytes.new(n * 2)
+    i = 0
+    while i < n {
+        b = bytes.get(out, i)
+        hi = (b >> 4) & 15
+        lo = b & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    s = bytes.finish(hexbuf, n * 2)
+    free_internals(c)
+    free(ctx)
+    return s
+}
+
+free_ctx(ctx: ptr) {
+    if ctx == null {
+        return
+    }
+    c = ctx as *Blake2Ctx
+    free_internals(c)
+    free(ctx)
+}
+
+// ---- One-shot, default full digest ----
+blake2b_hex(data: string, len: int) -> string {
+    ctx = new_b(64)
+    if ctx == null {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+blake2b_bytes(data: string, len: int) -> ptr {
+    ctx = new_b(64)
+    if ctx == null {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+blake2s_hex(data: string, len: int) -> string {
+    ctx = new_s(32)
+    if ctx == null {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+blake2s_bytes(data: string, len: int) -> ptr {
+    ctx = new_s(32)
+    if ctx == null {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+
+// ---- One-shot, variable digest length ----
+blake2b_hex_n(data: string, len: int, out_len: int) -> string {
+    ctx = new_b(out_len)
+    if ctx == null {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+blake2b_bytes_n(data: string, len: int, out_len: int) -> ptr {
+    ctx = new_b(out_len)
+    if ctx == null {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+blake2s_hex_n(data: string, len: int, out_len: int) -> string {
+    ctx = new_s(out_len)
+    if ctx == null {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+blake2s_bytes_n(data: string, len: int, out_len: int) -> ptr {
+    ctx = new_s(out_len)
+    if ctx == null {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+
+// ---- One-shot, keyed (MAC) ----
+blake2b_keyed_hex(data: string, len: int, key: ptr, key_len: int, out_len: int) -> string {
+    ctx = new_b_keyed(out_len, key, key_len)
+    if ctx == null {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+blake2b_keyed_bytes(data: string, len: int, key: ptr, key_len: int, out_len: int) -> ptr {
+    ctx = new_b_keyed(out_len, key, key_len)
+    if ctx == null {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+blake2s_keyed_hex(data: string, len: int, key: ptr, key_len: int, out_len: int) -> string {
+    ctx = new_s_keyed(out_len, key, key_len)
+    if ctx == null {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+blake2s_keyed_bytes(data: string, len: int, key: ptr, key_len: int, out_len: int) -> ptr {
+    ctx = new_s_keyed(out_len, key, key_len)
+    if ctx == null {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}

@@ -167,6 +167,30 @@ probe_tinyweb() {
     return 0
 }
 
+probe_factor() {
+    # The bridge .c loads libfactor purely via dlopen (mirrors host/lua,
+    # host/python after their dlopen rewrites) — it needs NO Factor dev
+    # lib at COMPILE time. The aether-lang-org/factor-language fork's
+    # libfactor + bootstrapped factor.image are only required at RUNTIME
+    # (the host_factor integration test gates on AETHER_FACTOR_SONAME /
+    # AETHER_FACTOR_IMAGE and skips when unset). So the archive always
+    # builds; downstream just won't be able to *run* Factor code without
+    # the fork present.
+    echo ""
+    return 0
+}
+
+probe_aether() {
+    # The Aether-hosts-Aether bridge fork+execs a compiled child under
+    # LD_PRELOAD=libaether_sandbox.so. It depends only on the in-tree
+    # sandbox runtime (runtime/aether_sandbox.h) + libc — no third-party
+    # dep, no pkg-config probe. Linux/macOS only (the body is guarded by
+    # `#if defined(__linux__) || defined(__APPLE__)`); on other platforms
+    # it compiles to an empty stub, so the build still succeeds.
+    echo ""
+    return 0
+}
+
 # build_module <module_name> <relative_src_path> <AETHER_HAS_FLAG> <probe_fn>
 # Returns: 0 OK, 1 SKIP (probe failed), 2 FAIL (compile/archive failed)
 # Caller decides whether SKIP or FAIL is fatal (depends on MODULES mode).
@@ -217,6 +241,8 @@ CATALOGUE=(
     "tcl|host_tcl        contrib/host/tcl/aether_host_tcl.c       AETHER_HAS_TCL     probe_tcl"
     "tinygo|host_tinygo  contrib/host/tinygo/aether_host_tinygo.c AETHER_HAS_TINYGO  probe_tinygo"
     "tinyweb|tinyweb     contrib/tinyweb/ws_handshake.c           AETHER_HAS_TINYWEB probe_tinyweb"
+    "factor|host_factor  contrib/host/factor/aether_host_factor.c AETHER_HAS_FACTOR  probe_factor"
+    "aether|host_aether  contrib/host/aether/aether_host_aether.c AETHER_HAS_AETHER_HOST probe_aether"
 )
 
 # Find a catalogue line by short name. Echoes the build_module arg list
