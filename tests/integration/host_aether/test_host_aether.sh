@@ -21,6 +21,19 @@ if [ ! -x "$AE" ]; then
     exit 0
 fi
 
+# The bridge body is `#if defined(__linux__) || defined(__APPLE__)` — it
+# fork+execs a child under LD_PRELOAD=libaether_sandbox.so, which only
+# exists on Linux/macOS. On other platforms (e.g. Windows/MinGW) the .c
+# compiles to an empty stub with no `aether_host_*` symbols, so the link
+# step has nothing to resolve. Skip cleanly there.
+case "$(uname -s 2>/dev/null)" in
+    Linux|Darwin) ;;
+    *)
+        echo "  [SKIP] host_aether: bridge is Linux/macOS only ($(uname -s 2>/dev/null))"
+        exit 0
+        ;;
+esac
+
 # Build the aether-host bridge .a into the dir ae build's host-bridge
 # scanner reads. The bridge needs only libc + the in-tree sandbox runtime,
 # so this always compiles where ae itself builds.
