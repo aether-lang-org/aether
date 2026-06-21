@@ -1,0 +1,49 @@
+// Validate contrib.cryptography.secp256k1 (ECDSA/ECDH), x448 (RFC 7748),
+// and ed448 (RFC 8032) against published test vectors.
+import contrib.cryptography.secp256k1
+import contrib.cryptography.x448
+import contrib.cryptography.ed448
+import std.bytes
+import std.string
+import std.io
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } if c>=65 { if c<=70 { return c-55 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+ck(lbl: string, got: string, want: string) -> int { if got==want { println("ok   ${lbl}"); return 0 } println("FAIL ${lbl}"); println("  got:  ${got}"); println("  want: ${want}"); return 1 }
+
+main() {
+    fails = 0
+
+    // --- secp256k1: priv=2 -> 2G ---
+    two = hb("0000000000000000000000000000000000000000000000000000000000000002")
+    g2x, g2y = secp256k1.scalar_mult_base(two)
+    fails = fails + ck("secp256k1 2G x", bh(g2x), "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5")
+    fails = fails + ck("secp256k1 2G y", bh(g2y), "1ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a")
+
+    // ECDSA sign/verify round-trip
+    d = hb("c477f9f65c22cce20657faa5b2d1d8122336f851a508a1ed04e479c34985bf96")
+    hash = hb("0102030405060708010203040506070801020304050607080102030405060708")
+    k = hb("7a1a7e52797fc8caaa435d2a4dace39158504bf204fbe19f14dbb427faee50ae")
+    px, py = secp256k1.scalar_mult_base(d)
+    r, s = secp256k1.ecdsa_sign(d, hash, k)
+    if secp256k1.ecdsa_verify(px, py, hash, r, s) == 1 { println("ok   secp256k1 sign/verify") } else { println("FAIL secp256k1 sign/verify"); fails = fails + 1 }
+
+    // --- X448 RFC 7748 §6.2 Diffie-Hellman shared secret ---
+    apriv = hb("9a8f4925d1519f5775cf46b04b5800d4ee9ee8bae8bc5565d498c28dd9c9baf574a9419744897391006382a6f127ab1d9ac2d8c0a598726b")
+    bpub  = hb("3eb7a829b0cd20f5bcfc0b599b6feccf6da4627107bdb0d4f345b43027d8b972fc3e34fb4232a13ca706dcb57aec3dae07bdc1c67bf33609")
+    ss = x448.x448(apriv, bpub)
+    fails = fails + ck("x448 dh", bh(ss), "07fff4181ac6cc95ec1c16a94a0f74d12da232ce40a77552281d282bb60c0b56fd2464c335543936521c24403085d59a449a5037514a879d")
+
+    // --- Ed448 RFC 8032 §7.4 Blank (empty message) ---
+    seed = hb("6c82a562cb808d10d632be89c8513ebf6c929f34ddfa8c9f63c9960ef6e348a3528c8a3fcc2f044e39a3fc5b94492f8f032e7549a20098f95b")
+    pub = ed448.publickey(seed)
+    fails = fails + ck("ed448 pubkey", bh(pub), "5fd7449b59b461fd2ce787ec616ad46a1da1342485a70e1f8a0ea75d80e96778edf124769b46c7061bd6783df1e50f6cd1fa1abeafe8256180")
+    e0 = bytes.new(0)
+    sig = ed448.sign(seed, e0, 0)
+    fails = fails + ck("ed448 sign", bh(sig), "533a37f6bbe457251f023c0d88f976ae2dfb504a843e34d2074fd823d41a591f2b233f034f628281f2fd7a22ddd47d7828c59bd0a21bfd3980ff0d2028d4b18a9df63e006c5d1c2d345b925d8dc00b4104852db99ac5c7cdda8530a113a0f4dbb61149f05a7363268c71d95808ff2e652600")
+    if ed448.verify(pub, e0, 0, sig) == 1 { println("ok   ed448 verify") } else { println("FAIL ed448 verify"); fails = fails + 1 }
+
+    if fails == 0 { println("ALL PASS"); return }
+    println("FAILURES"); exit(1)
+}

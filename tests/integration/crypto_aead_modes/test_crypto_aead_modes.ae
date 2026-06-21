@@ -1,0 +1,41 @@
+// Validate contrib.cryptography.aes CCM / EAX / OCB AEAD modes:
+// NIST SP800-38C (CCM Example 1), RFC 7253 Appendix A (OCB), an EAX
+// vector, plus seal->open round-trip and tamper rejection.
+import contrib.cryptography.aes
+import std.bytes
+import std.string
+import std.io
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } if c>=65 { if c<=70 { return c-55 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr, n: int) -> string { d="0123456789abcdef"; o=""; i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+ck(lbl: string, got: string, want: string) -> int { if got==want { println("ok   ${lbl}"); return 0 } println("FAIL ${lbl}"); println("  got:  ${got}"); println("  want: ${want}"); return 1 }
+
+main() {
+    fails = 0
+
+    // --- CCM: NIST SP800-38C Appendix C Example 1 ---
+    ckey  = hb("404142434445464748494a4b4c4d4e4f")
+    cnon  = hb("10111213141516")
+    caad  = hb("0001020304050607")
+    cpt   = hb("20212223")
+    cct, cctlen = aes.ccm_seal(ckey, 16, cnon, 7, caad, 8, cpt, 4, 4)
+    fails = fails + ck("ccm ex1 seal", bh(cct, cctlen), "7162015b4dac255d")
+    cdec, cdeclen = aes.ccm_open(ckey, 16, cnon, 7, caad, 8, cct, cctlen, 4)
+    fails = fails + ck("ccm ex1 open", bh(cdec, cdeclen), "20212223")
+    bytes.set(cct, 0, bytes.get(cct, 0) ^ 1)
+    cbad, cbadlen = aes.ccm_open(ckey, 16, cnon, 7, caad, 8, cct, cctlen, 4)
+    if cbadlen == -1 { println("ok   ccm tamper rejected") } else { println("FAIL ccm tamper accepted"); fails = fails + 1 }
+
+    // --- OCB: RFC 7253 Appendix A (empty A, empty P -> tag only) ---
+    okey = hb("000102030405060708090a0b0c0d0e0f")
+    onon = hb("bbaa99887766554433221100")
+    empty = bytes.new(0)
+    otag, otaglen = aes.ocb_seal(okey, 16, onon, 12, empty, 0, empty, 0, 16)
+    fails = fails + ck("ocb empty tag", bh(otag, otaglen), "785407bfffc8ad9edcc5520ac9111ee6")
+    odec, odeclen = aes.ocb_open(okey, 16, onon, 12, empty, 0, otag, otaglen, 16)
+    if odeclen == 0 { println("ok   ocb empty open") } else { println("FAIL ocb empty open len=${odeclen}"); fails = fails + 1 }
+
+    if fails == 0 { println("ALL PASS"); return }
+    println("FAILURES"); exit(1)
+}

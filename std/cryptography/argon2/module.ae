@@ -1,0 +1,633 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.argon2 — the Argon2 password-hashing KDF (RFC 9106) in
+// pure Aether, ported from Bouncy Castle's Argon2BytesGenerator. Supports
+// Argon2d (data-dependent), Argon2i (data-independent) and Argon2id
+// (hybrid) at version 0x13. NO externs to OpenSSL or any C crypto — the
+// core hash H and the variable-length hash H' are built on
+// std.cryptography.blake2 (BLAKE2b).
+//
+// Argon2 fills a memory matrix of 1024-byte blocks (each block is 128
+// little-endian uint64 lanes) using the compression function G, then
+// hashes the final block with H' to the requested tag length.
+//
+// Import with:  import std.cryptography.argon2
+//
+//   argon2id(pass, pass_len, salt, salt_len, secret, secret_len,
+//            ad, ad_len, t_cost, m_cost_kib, parallelism, out_len) -> ptr
+//   argon2i / argon2d  — same signature, different type.
+//   *_hex convenience variants return a lowercase hex string.
+//
+// Optional secret / associated-data: pass null + 0 to omit. All other
+// pointer args are std.bytes buffers; the caller frees the result.
+// Returns null on bad parameters (out_len < 4, parallelism < 1,
+// iterations < 1) or allocation failure.
+//
+// Aether-specific care:
+//   * Blocks are 128 uint64 lanes held in one big std.longarr; lanes are
+//     loaded / stored LITTLE-ENDIAN. 64-bit `long` add wraps mod 2^64
+//     (two's complement), exactly Argon2's modular add.
+//   * The G compression's `2 * (low32(a) * low32(b))` product is computed
+//     in 64-bit and masked to 32 bits per operand before multiply.
+//   * Right rotates go through std.bits.rotr64; pseudo-random index math
+//     uses std.bits.lsr64 / urem64 for the unsigned semantics RFC 9106
+//     requires.
+//   * The memory matrix is several MiB; it (and all scratch blocks) are
+//     freed before return (the macOS leak gate is strict).
+
+import std.bits
+import std.bytes
+import std.longarr
+import std.cryptography.blake2
+
+extern malloc(size: int) -> ptr
+@extern("free") libc_free(p: ptr)
+
+exports (
+    argon2, argon2d, argon2i, argon2id,
+    argon2_hex, argon2d_hex, argon2i_hex, argon2id_hex
+)
+
+// Type constants (match RFC 9106 / BC).
+const ARGON2_D: int = 0
+const ARGON2_I: int = 1
+const ARGON2_ID: int = 2
+
+const QWORDS: int = 128       // uint64 lanes per 1024-byte block
+const SYNC_POINTS: int = 4
+const VERSION: int = 0x13
+
+// ---- Variable-length hash H' ----
+// H'(out_len, input[len]) per RFC 9106 §3.2:
+//   if out_len <= 64: Blake2b(out_len) over LE32(out_len) || input
+//   else: V1 = Blake2b-512(LE32(out_len) || input); take first 32 bytes;
+//         Vi = Blake2b-512(V(i-1)); take first 32 each; tail = remaining.
+// Writes out_len bytes into `out` at offset out_off.
+hprime(input: ptr, in_len: int, out_len: int, out: ptr, out_off: int) {
+    // Prepend LE32(out_len) to the input.
+    seed_len = in_len + 4
+    seed = bytes.new(seed_len)
+    bytes.set(seed, 0, out_len & 0xFF)
+    bytes.set(seed, 1, (out_len >> 8) & 0xFF)
+    bytes.set(seed, 2, (out_len >> 16) & 0xFF)
+    bytes.set(seed, 3, (out_len >> 24) & 0xFF)
+    if in_len > 0 {
+        bytes.copy_from_bytes(seed, 4, input, 0, in_len)
+    }
+
+    if out_len <= 64 {
+        h = blake2.blake2b_bytes_n(seed_as_string(seed, seed_len), seed_len, out_len)
+        bytes.copy_from_bytes(out, out_off, h, 0, out_len)
+        bytes.free(h)
+        bytes.free(seed)
+        return
+    }
+
+    // out_len > 64: chained 32-byte halves.
+    v = blake2.blake2b_bytes_n(seed_as_string(seed, seed_len), seed_len, 64)
+    bytes.free(seed)
+    pos = out_off
+    bytes.copy_from_bytes(out, pos, v, 0, 32)
+    pos = pos + 32
+
+    // r = ceil(out_len/32) - 2 full 32-byte blocks after V1.
+    r = ((out_len + 31) / 32) - 2
+    i = 2
+    while i <= r {
+        nv = blake2.blake2b_bytes_n(bytes_as_string(v, 64), 64, 64)
+        bytes.free(v)
+        v = nv
+        bytes.copy_from_bytes(out, pos, v, 0, 32)
+        pos = pos + 32
+        i = i + 1
+    }
+
+    last_len = out_len - 32 * r
+    last = blake2.blake2b_bytes_n(bytes_as_string(v, 64), 64, last_len)
+    bytes.free(v)
+    bytes.copy_from_bytes(out, pos, last, 0, last_len)
+    bytes.free(last)
+}
+
+// blake2 one-shots take a `string` (binary-safe). Convert a bytes buffer
+// to a string without consuming it: finish() destroys the buffer, so we
+// duplicate via a fresh buffer.
+seed_as_string(b: ptr, n: int) -> string {
+    return bytes_as_string(b, n)
+}
+
+bytes_as_string(b: ptr, n: int) -> string {
+    dup = bytes.new(n)
+    bytes.copy_from_bytes(dup, 0, b, 0, n)
+    return bytes.finish(dup, n)
+}
+
+// ---- Block <-> longarr helpers ----
+// Memory matrix is one longarr of memoryBlocks*128 lanes. Block `i`
+// occupies lanes [i*128 .. i*128+128).
+
+// Load a 1024-byte little-endian block from `src` (a std.bytes buffer at
+// byte offset 0) into matrix block `bidx`.
+load_block_from_bytes(mem: ptr, bidx: int, src: ptr) {
+    base = bidx * QWORDS
+    i = 0
+    while i < QWORDS {
+        off = i * 8
+        long b0 = bytes.get(src, off) & 255
+        long b1 = bytes.get(src, off + 1) & 255
+        long b2 = bytes.get(src, off + 2) & 255
+        long b3 = bytes.get(src, off + 3) & 255
+        long b4 = bytes.get(src, off + 4) & 255
+        long b5 = bytes.get(src, off + 5) & 255
+        long b6 = bytes.get(src, off + 6) & 255
+        long b7 = bytes.get(src, off + 7) & 255
+        long w = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24) | (b4 << 32) | (b5 << 40) | (b6 << 48) | (b7 << 56)
+        longarr_set_unchecked(mem, base + i, w)
+        i = i + 1
+    }
+}
+
+// Store matrix block `bidx` little-endian into `dst` (a std.bytes buffer).
+store_block_to_bytes(mem: ptr, bidx: int, dst: ptr) {
+    base = bidx * QWORDS
+    i = 0
+    while i < QWORDS {
+        w = longarr_get_unchecked(mem, base + i)
+        off = i * 8
+        bytes.set(dst, off, w & 255)
+        bytes.set(dst, off + 1, bits.lsr64(w, 8) & 255)
+        bytes.set(dst, off + 2, bits.lsr64(w, 16) & 255)
+        bytes.set(dst, off + 3, bits.lsr64(w, 24) & 255)
+        bytes.set(dst, off + 4, bits.lsr64(w, 32) & 255)
+        bytes.set(dst, off + 5, bits.lsr64(w, 40) & 255)
+        bytes.set(dst, off + 6, bits.lsr64(w, 48) & 255)
+        bytes.set(dst, off + 7, bits.lsr64(w, 56) & 255)
+        i = i + 1
+    }
+}
+
+// ---- The G compression function over a scratch longarr of 128 lanes ----
+
+// GB modifies four lanes of `v` in place (indices a,b,c,d).
+// a += b + 2*low32(a)*low32(b); d = rotr64(d^a,32); c += d + 2*low32(c)*low32(d);
+// b = rotr64(b^c,24); a += b + 2*low32(a)*low32(b); d = rotr64(d^a,16);
+// c += d + 2*low32(c)*low32(d); b = rotr64(b^c,63).
+gb(v: ptr, a: int, b: int, c: int, d: int) {
+    va = longarr_get_unchecked(v, a)
+    vb = longarr_get_unchecked(v, b)
+    vc = longarr_get_unchecked(v, c)
+    vd = longarr_get_unchecked(v, d)
+
+    va = va + vb + mul2(va, vb)
+    vd = bits.rotr64(vd ^ va, 32)
+    vc = vc + vd + mul2(vc, vd)
+    vb = bits.rotr64(vb ^ vc, 24)
+
+    va = va + vb + mul2(va, vb)
+    vd = bits.rotr64(vd ^ va, 16)
+    vc = vc + vd + mul2(vc, vd)
+    vb = bits.rotr64(vb ^ vc, 63)
+
+    longarr_set_unchecked(v, a, va)
+    longarr_set_unchecked(v, b, vb)
+    longarr_set_unchecked(v, c, vc)
+    longarr_set_unchecked(v, d, vd)
+}
+
+// 2 * (low32(x) * low32(y)), all mod 2^64.
+mul2(x: long, y: long) -> long {
+    long lx = x & 0xFFFFFFFF
+    long ly = y & 0xFFFFFFFF
+    return (lx * ly) * 2
+}
+
+// Apply the Argon2 permutation P to block `v` (rows then columns), in
+// place over the 128-lane scratch longarr.
+apply_blake(v: ptr) {
+    // Rows: for i in 0,16,32,...,112
+    i = 0
+    while i < 128 {
+        gb(v, i + 0, i + 4, i + 8, i + 12)
+        gb(v, i + 1, i + 5, i + 9, i + 13)
+        gb(v, i + 2, i + 6, i + 10, i + 14)
+        gb(v, i + 3, i + 7, i + 11, i + 15)
+
+        gb(v, i + 0, i + 5, i + 10, i + 15)
+        gb(v, i + 1, i + 6, i + 11, i + 12)
+        gb(v, i + 2, i + 7, i + 8, i + 13)
+        gb(v, i + 3, i + 4, i + 9, i + 14)
+        i = i + 16
+    }
+
+    // Columns: for i in 0,2,4,...,14
+    i = 0
+    while i < 16 {
+        gb(v, i + 0, i + 32, i + 64, i + 96)
+        gb(v, i + 1, i + 33, i + 65, i + 97)
+        gb(v, i + 16, i + 48, i + 80, i + 112)
+        gb(v, i + 17, i + 49, i + 81, i + 113)
+
+        gb(v, i + 0, i + 33, i + 80, i + 113)
+        gb(v, i + 1, i + 48, i + 81, i + 96)
+        gb(v, i + 16, i + 49, i + 64, i + 97)
+        gb(v, i + 17, i + 32, i + 65, i + 112)
+        i = i + 2
+    }
+}
+
+// FillBlock: current = R ^ Z, where R = prev ^ ref and Z = P(R).
+// If with_xor != 0, current ^= (R ^ Z) instead of being overwritten.
+// `rblk` and `zblk` are 128-lane scratch longarrs.
+fill_block(mem: ptr, prev_idx: int, ref_idx: int, cur_idx: int, with_xor: int, rblk: ptr, zblk: ptr) {
+    pbase = prev_idx * QWORDS
+    rbase = ref_idx * QWORDS
+    cbase = cur_idx * QWORDS
+
+    // R = prev ^ ref; Z = R (copy).
+    i = 0
+    while i < QWORDS {
+        rv = longarr_get_unchecked(mem, pbase + i) ^ longarr_get_unchecked(mem, rbase + i)
+        longarr_set_unchecked(rblk, i, rv)
+        longarr_set_unchecked(zblk, i, rv)
+        i = i + 1
+    }
+
+    apply_blake(zblk)
+
+    // current = R ^ Z  (optionally XORed into the existing current block).
+    i = 0
+    while i < QWORDS {
+        nv = longarr_get_unchecked(rblk, i) ^ longarr_get_unchecked(zblk, i)
+        if with_xor != 0 {
+            nv = longarr_get_unchecked(mem, cbase + i) ^ nv
+        }
+        longarr_set_unchecked(mem, cbase + i, nv)
+        i = i + 1
+    }
+}
+
+// Fill of the address block: Z = P(input); address = input ^ Z.
+// (The single-argument Fill in BC: R is the input itself, no prev^ref.)
+fill_addresses(input: ptr, addr: ptr, zblk: ptr) {
+    i = 0
+    while i < QWORDS {
+        longarr_set_unchecked(zblk, i, longarr_get_unchecked(input, i))
+        i = i + 1
+    }
+    apply_blake(zblk)
+    i = 0
+    while i < QWORDS {
+        longarr_set_unchecked(addr, i, longarr_get_unchecked(input, i) ^ longarr_get_unchecked(zblk, i))
+        i = i + 1
+    }
+}
+
+// ---- Main ----
+
+argon2(atype: int, pass: ptr, pass_len: int, salt: ptr, salt_len: int, secret: ptr, secret_len: int, ad: ptr, ad_len: int, t_cost: int, m_cost: int, parallelism: int, out_len: int) -> ptr {
+    if out_len < 4 {
+        return null
+    }
+    if parallelism < 1 {
+        return null
+    }
+    if t_cost < 1 {
+        return null
+    }
+
+    // 2. Align memory size. memoryBlocks = max(m, 2*SyncPoints*p).
+    memory_blocks = m_cost
+    min_blocks = 2 * SYNC_POINTS * parallelism
+    if memory_blocks < min_blocks {
+        memory_blocks = min_blocks
+    }
+    segment_length = memory_blocks / (SYNC_POINTS * parallelism)
+    lane_length = segment_length * SYNC_POINTS
+    memory_blocks = parallelism * lane_length
+
+    // The big memory matrix: memory_blocks * 128 lanes.
+    mem = longarr_new_raw(memory_blocks * QWORDS)
+    if mem == null {
+        return null
+    }
+    rblk = longarr_new_raw(QWORDS)
+    zblk = longarr_new_raw(QWORDS)
+    addr_blk = longarr_new_raw(QWORDS)
+    input_blk = longarr_new_raw(QWORDS)
+
+    // ---- Initialize: H0 = Blake2b-512(LE32(p,outLen,m,t,v,y) || strings) ----
+    ctx = blake2.new_b(64)
+    pre = bytes.new(24)
+    put_le32(pre, 0, parallelism)
+    put_le32(pre, 4, out_len)
+    put_le32(pre, 8, m_cost)
+    put_le32(pre, 12, t_cost)
+    put_le32(pre, 16, VERSION)
+    put_le32(pre, 20, atype)
+    blake2.update_bytes(ctx, pre, 24)
+    bytes.free(pre)
+
+    add_byte_string(ctx, pass, pass_len)
+    add_byte_string(ctx, salt, salt_len)
+    add_byte_string(ctx, secret, secret_len)
+    add_byte_string(ctx, ad, ad_len)
+
+    h0 = blake2.final_bytes(ctx)   // 64 bytes
+
+    // ---- Fill first two blocks of each lane ----
+    // seed = H0 (64) || LE32(block 0/1) || LE32(lane i)  -> 72 bytes
+    // block_i_0 = H'(1024, seed_with_0); block_i_1 = H'(1024, seed_with_1).
+    seed = bytes.new(72)
+    bytes.copy_from_bytes(seed, 0, h0, 0, 64)
+    blk_bytes = bytes.new(1024)
+
+    lane = 0
+    while lane < parallelism {
+        put_le32(seed, 68, lane)
+        // block 0
+        put_le32(seed, 64, 0)
+        hprime(seed, 72, 1024, blk_bytes, 0)
+        load_block_from_bytes(mem, lane * lane_length + 0, blk_bytes)
+        // block 1
+        put_le32(seed, 64, 1)
+        hprime(seed, 72, 1024, blk_bytes, 0)
+        load_block_from_bytes(mem, lane * lane_length + 1, blk_bytes)
+        lane = lane + 1
+    }
+    bytes.free(seed)
+    bytes.free(h0)
+
+    // ---- Fill memory blocks ----
+    fill_memory(mem, atype, t_cost, parallelism, memory_blocks, segment_length, lane_length, rblk, zblk, addr_blk, input_blk)
+
+    // ---- Digest: XOR last block of every lane, then H'(out_len, finalBlock) ----
+    final_idx = lane_length - 1
+    i = 1
+    while i < parallelism {
+        last_in_lane = i * lane_length + (lane_length - 1)
+        k = 0
+        while k < QWORDS {
+            fbase = final_idx * QWORDS
+            lbase = last_in_lane * QWORDS
+            longarr_set_unchecked(mem, fbase + k, longarr_get_unchecked(mem, fbase + k) ^ longarr_get_unchecked(mem, lbase + k))
+            k = k + 1
+        }
+        i = i + 1
+    }
+    store_block_to_bytes(mem, final_idx, blk_bytes)
+
+    out = bytes.new(out_len)
+    hprime(blk_bytes, 1024, out_len, out, 0)
+
+    bytes.free(blk_bytes)
+    longarr_free(mem)
+    longarr_free(rblk)
+    longarr_free(zblk)
+    longarr_free(addr_blk)
+    longarr_free(input_blk)
+    return out
+}
+
+put_le32(b: ptr, off: int, v: int) {
+    bytes.set(b, off, v & 0xFF)
+    bytes.set(b, off + 1, (v >> 8) & 0xFF)
+    bytes.set(b, off + 2, (v >> 16) & 0xFF)
+    bytes.set(b, off + 3, (v >> 24) & 0xFF)
+}
+
+// Add a length-prefixed byte string to the H0 BLAKE2b context: LE32(len)
+// then the bytes. A null/empty argument contributes LE32(0).
+add_byte_string(ctx: ptr, octets: ptr, n: int) {
+    use_n = n
+    if octets == null {
+        use_n = 0
+    }
+    lp = bytes.new(4)
+    put_le32(lp, 0, use_n)
+    blake2.update_bytes(ctx, lp, 4)
+    bytes.free(lp)
+    if use_n > 0 {
+        blake2.update_bytes(ctx, octets, use_n)
+    }
+}
+
+// ---- Memory filling ----
+
+fill_memory(mem: ptr, atype: int, iterations: int, parallelism: int, memory_blocks: int, segment_length: int, lane_length: int, rblk: ptr, zblk: ptr, addr_blk: ptr, input_blk: ptr) {
+    pass = 0
+    while pass < iterations {
+        slice = 0
+        while slice < SYNC_POINTS {
+            lane = 0
+            while lane < parallelism {
+                fill_segment(mem, atype, pass, slice, lane, iterations, parallelism, memory_blocks, segment_length, lane_length, rblk, zblk, addr_blk, input_blk)
+                lane = lane + 1
+            }
+            slice = slice + 1
+        }
+        pass = pass + 1
+    }
+}
+
+is_data_independent(atype: int, pass: int, slice: int) -> int {
+    if atype == ARGON2_I {
+        return 1
+    }
+    if atype == ARGON2_ID {
+        if pass == 0 {
+            if slice < (SYNC_POINTS / 2) {
+                return 1
+            }
+        }
+    }
+    return 0
+}
+
+fill_segment(mem: ptr, atype: int, pass: int, slice: int, lane: int, iterations: int, parallelism: int, memory_blocks: int, segment_length: int, lane_length: int, rblk: ptr, zblk: ptr, addr_blk: ptr, input_blk: ptr) {
+    data_independent = is_data_independent(atype, pass, slice)
+
+    starting_index = 0
+    if pass == 0 {
+        if slice == 0 {
+            starting_index = 2
+        }
+    }
+
+    current_offset = lane * lane_length + slice * segment_length + starting_index
+    prev_offset = get_prev_offset(current_offset, lane_length)
+
+    if data_independent != 0 {
+        // Clear address & input blocks, init input block.
+        i = 0
+        while i < QWORDS {
+            longarr_set_unchecked(addr_blk, i, 0)
+            longarr_set_unchecked(input_blk, i, 0)
+            i = i + 1
+        }
+        longarr_set_unchecked(input_blk, 0, pass)
+        longarr_set_unchecked(input_blk, 1, lane)
+        longarr_set_unchecked(input_blk, 2, slice)
+        longarr_set_unchecked(input_blk, 3, memory_blocks)
+        longarr_set_unchecked(input_blk, 4, iterations)
+        longarr_set_unchecked(input_blk, 5, atype)
+        if pass == 0 {
+            if slice == 0 {
+                next_addresses(input_blk, addr_blk, zblk)
+            }
+        }
+    }
+
+    with_xor = 1
+    if pass == 0 {
+        with_xor = 0
+    }
+    // Version 0x13 always uses XOR after pass 0 (Version10 would not).
+
+    index = starting_index
+    while index < segment_length {
+        long pseudo = 0
+        if data_independent != 0 {
+            addr_index = index % QWORDS
+            if addr_index == 0 {
+                next_addresses(input_blk, addr_blk, zblk)
+            }
+            pseudo = longarr_get_unchecked(addr_blk, addr_index)
+        } else {
+            pseudo = longarr_get_unchecked(mem, prev_offset * QWORDS + 0)
+        }
+
+        ref_lane = get_ref_lane(pass, slice, lane, parallelism, pseudo)
+        same_lane = 0
+        if ref_lane == lane {
+            same_lane = 1
+        }
+        ref_column = get_ref_column(pass, slice, index, segment_length, lane_length, pseudo, same_lane)
+
+        ref_index = lane_length * ref_lane + ref_column
+
+        fill_block(mem, prev_offset, ref_index, current_offset, with_xor, rblk, zblk)
+
+        prev_offset = current_offset
+        current_offset = current_offset + 1
+        index = index + 1
+    }
+}
+
+next_addresses(input_blk: ptr, addr_blk: ptr, zblk: ptr) {
+    // input.v[6]++
+    longarr_set_unchecked(input_blk, 6, longarr_get_unchecked(input_blk, 6) + 1)
+    fill_addresses(input_blk, addr_blk, zblk)
+    fill_addresses(addr_blk, addr_blk, zblk)
+}
+
+get_prev_offset(current_offset: int, lane_length: int) -> int {
+    if (current_offset % lane_length) == 0 {
+        return current_offset + lane_length - 1
+    }
+    return current_offset - 1
+}
+
+get_ref_lane(pass: int, slice: int, lane: int, parallelism: int, pseudo: long) -> int {
+    // refLane = (pseudo >> 32) % parallelism  (unsigned high 32 bits)
+    long hi = bits.lsr64(pseudo, 32)
+    long pl = parallelism
+    ref_lane = bits.urem64(hi, pl)
+    if pass == 0 {
+        if slice == 0 {
+            ref_lane = lane
+        }
+    }
+    return ref_lane
+}
+
+get_ref_column(pass: int, slice: int, index: int, segment_length: int, lane_length: int, pseudo: long, same_lane: int) -> int {
+    long reference_area_size = 0
+    long start_position = 0
+
+    if pass == 0 {
+        start_position = 0
+        if same_lane != 0 {
+            reference_area_size = slice * segment_length + index - 1
+        } else {
+            extra = 0
+            if index == 0 {
+                extra = -1
+            }
+            reference_area_size = slice * segment_length + extra
+        }
+    } else {
+        start_position = ((slice + 1) * segment_length) % lane_length
+        if same_lane != 0 {
+            reference_area_size = lane_length - segment_length + index - 1
+        } else {
+            extra = 0
+            if index == 0 {
+                extra = -1
+            }
+            reference_area_size = lane_length - segment_length + extra
+        }
+    }
+
+    // relativePosition = pseudo & 0xFFFFFFFF
+    long rel = pseudo & 0xFFFFFFFF
+    rel = bits.lsr64(rel * rel, 32)
+    long prod = bits.lsr64(reference_area_size * rel, 32)
+    rel = reference_area_size - 1 - prod
+
+    long res = start_position + rel
+    int col = bits.urem64(res, lane_length)
+    return col
+}
+
+// ---- Public wrappers ----
+
+argon2d(pass: ptr, pass_len: int, salt: ptr, salt_len: int, secret: ptr, secret_len: int, ad: ptr, ad_len: int, t_cost: int, m_cost: int, parallelism: int, out_len: int) -> ptr {
+    return argon2(ARGON2_D, pass, pass_len, salt, salt_len, secret, secret_len, ad, ad_len, t_cost, m_cost, parallelism, out_len)
+}
+argon2i(pass: ptr, pass_len: int, salt: ptr, salt_len: int, secret: ptr, secret_len: int, ad: ptr, ad_len: int, t_cost: int, m_cost: int, parallelism: int, out_len: int) -> ptr {
+    return argon2(ARGON2_I, pass, pass_len, salt, salt_len, secret, secret_len, ad, ad_len, t_cost, m_cost, parallelism, out_len)
+}
+argon2id(pass: ptr, pass_len: int, salt: ptr, salt_len: int, secret: ptr, secret_len: int, ad: ptr, ad_len: int, t_cost: int, m_cost: int, parallelism: int, out_len: int) -> ptr {
+    return argon2(ARGON2_ID, pass, pass_len, salt, salt_len, secret, secret_len, ad, ad_len, t_cost, m_cost, parallelism, out_len)
+}
+
+to_hex(out: ptr, out_len: int) -> string {
+    if out == null {
+        return ""
+    }
+    hexbuf = bytes.new(out_len * 2)
+    i = 0
+    while i < out_len {
+        bb = bytes.get(out, i)
+        hi = (bb >> 4) & 15
+        lo = bb & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    return bytes.finish(hexbuf, out_len * 2)
+}
+
+argon2_hex(atype: int, pass: ptr, pass_len: int, salt: ptr, salt_len: int, secret: ptr, secret_len: int, ad: ptr, ad_len: int, t_cost: int, m_cost: int, parallelism: int, out_len: int) -> string {
+    return to_hex(argon2(atype, pass, pass_len, salt, salt_len, secret, secret_len, ad, ad_len, t_cost, m_cost, parallelism, out_len), out_len)
+}
+argon2d_hex(pass: ptr, pass_len: int, salt: ptr, salt_len: int, secret: ptr, secret_len: int, ad: ptr, ad_len: int, t_cost: int, m_cost: int, parallelism: int, out_len: int) -> string {
+    return to_hex(argon2d(pass, pass_len, salt, salt_len, secret, secret_len, ad, ad_len, t_cost, m_cost, parallelism, out_len), out_len)
+}
+argon2i_hex(pass: ptr, pass_len: int, salt: ptr, salt_len: int, secret: ptr, secret_len: int, ad: ptr, ad_len: int, t_cost: int, m_cost: int, parallelism: int, out_len: int) -> string {
+    return to_hex(argon2i(pass, pass_len, salt, salt_len, secret, secret_len, ad, ad_len, t_cost, m_cost, parallelism, out_len), out_len)
+}
+argon2id_hex(pass: ptr, pass_len: int, salt: ptr, salt_len: int, secret: ptr, secret_len: int, ad: ptr, ad_len: int, t_cost: int, m_cost: int, parallelism: int, out_len: int) -> string {
+    return to_hex(argon2id(pass, pass_len, salt, salt_len, secret, secret_len, ad, ad_len, t_cost, m_cost, parallelism, out_len), out_len)
+}

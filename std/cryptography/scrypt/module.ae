@@ -1,0 +1,307 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.scrypt — the scrypt password-based KDF (RFC 7914) in
+// pure Aether, ported from Bouncy Castle's SCrypt generator. NO externs to
+// OpenSSL or any C crypto.
+//
+// scrypt(P, S, N, r, p, dkLen):
+//   B = PBKDF2-HMAC-SHA256(P, S, 1, p * 128 * r)        // p blocks of 128r
+//   for each of the p blocks: B_i = ROMix(B_i, N)       // sequential memory-hard
+//   return PBKDF2-HMAC-SHA256(P, B, 1, dkLen)
+//
+// ROMix uses BlockMix over the Salsa20/8 core. Memory cost is 128 * r * N
+// bytes (the V array), allocated as one std.bytes buffer and freed after.
+//
+// Import with:  import std.cryptography.scrypt
+//
+//   scrypt(pass, pass_len, salt, salt_len, n, r, p, dklen) -> ptr   (std.bytes)
+//   scrypt_hex(pass, pass_len, salt, salt_len, n, r, p, dklen) -> string
+//
+// All pointer args are std.bytes buffers; the caller frees the result.
+// Returns null on bad parameters (N must be a power of 2 > 1, r >= 1,
+// p >= 1, dkLen >= 1) or allocation failure.
+//
+// Aether-specific care:
+//   * The Salsa core is 32-bit math. Every add is masked with & 0xFFFFFFFF
+//     and the left rotate goes through std.bits.rotl32. Words are read /
+//     written LITTLE-ENDIAN from the byte buffers (bytes.get_le32 /
+//     set_le32 round-trip losslessly for any 32-bit value).
+//   * The V / X / Y working buffers can be many MiB; all are freed before
+//     return (the macOS leak gate is strict).
+
+import std.bits
+import std.bytes
+import std.cryptography.pbkdf2
+
+extern malloc(size: int) -> ptr
+@extern("free") libc_free(p: ptr)
+
+exports (
+    scrypt, scrypt_hex
+)
+
+m32(x: int) -> int {
+    return x & 0xFFFFFFFF
+}
+
+// Salsa20/8 core: 64-byte (16-word) transform, in place over `x`
+// (a std.bytes buffer holding 16 little-endian 32-bit words). Reads the
+// input words once, runs 8 rounds (4 double-rounds) of the quarter-round
+// schedule, then adds the original input back word-by-word.
+salsa20_8(x: ptr) {
+    // Load the 16 input words.
+    int i0 = bytes.get_le32(x, 0)
+    int i1 = bytes.get_le32(x, 4)
+    int i2 = bytes.get_le32(x, 8)
+    int i3 = bytes.get_le32(x, 12)
+    int i4 = bytes.get_le32(x, 16)
+    int i5 = bytes.get_le32(x, 20)
+    int i6 = bytes.get_le32(x, 24)
+    int i7 = bytes.get_le32(x, 28)
+    int i8 = bytes.get_le32(x, 32)
+    int i9 = bytes.get_le32(x, 36)
+    int i10 = bytes.get_le32(x, 40)
+    int i11 = bytes.get_le32(x, 44)
+    int i12 = bytes.get_le32(x, 48)
+    int i13 = bytes.get_le32(x, 52)
+    int i14 = bytes.get_le32(x, 56)
+    int i15 = bytes.get_le32(x, 60)
+
+    int x00 = i0
+    int x01 = i1
+    int x02 = i2
+    int x03 = i3
+    int x04 = i4
+    int x05 = i5
+    int x06 = i6
+    int x07 = i7
+    int x08 = i8
+    int x09 = i9
+    int x10 = i10
+    int x11 = i11
+    int x12 = i12
+    int x13 = i13
+    int x14 = i14
+    int x15 = i15
+
+    rnd = 0
+    while rnd < 4 {
+        // Column round.
+        x04 = x04 ^ bits.rotl32(m32(x00 + x12), 7)
+        x08 = x08 ^ bits.rotl32(m32(x04 + x00), 9)
+        x12 = x12 ^ bits.rotl32(m32(x08 + x04), 13)
+        x00 = x00 ^ bits.rotl32(m32(x12 + x08), 18)
+
+        x09 = x09 ^ bits.rotl32(m32(x05 + x01), 7)
+        x13 = x13 ^ bits.rotl32(m32(x09 + x05), 9)
+        x01 = x01 ^ bits.rotl32(m32(x13 + x09), 13)
+        x05 = x05 ^ bits.rotl32(m32(x01 + x13), 18)
+
+        x14 = x14 ^ bits.rotl32(m32(x10 + x06), 7)
+        x02 = x02 ^ bits.rotl32(m32(x14 + x10), 9)
+        x06 = x06 ^ bits.rotl32(m32(x02 + x14), 13)
+        x10 = x10 ^ bits.rotl32(m32(x06 + x02), 18)
+
+        x03 = x03 ^ bits.rotl32(m32(x15 + x11), 7)
+        x07 = x07 ^ bits.rotl32(m32(x03 + x15), 9)
+        x11 = x11 ^ bits.rotl32(m32(x07 + x03), 13)
+        x15 = x15 ^ bits.rotl32(m32(x11 + x07), 18)
+
+        // Row round.
+        x01 = x01 ^ bits.rotl32(m32(x00 + x03), 7)
+        x02 = x02 ^ bits.rotl32(m32(x01 + x00), 9)
+        x03 = x03 ^ bits.rotl32(m32(x02 + x01), 13)
+        x00 = x00 ^ bits.rotl32(m32(x03 + x02), 18)
+
+        x06 = x06 ^ bits.rotl32(m32(x05 + x04), 7)
+        x07 = x07 ^ bits.rotl32(m32(x06 + x05), 9)
+        x04 = x04 ^ bits.rotl32(m32(x07 + x06), 13)
+        x05 = x05 ^ bits.rotl32(m32(x04 + x07), 18)
+
+        x11 = x11 ^ bits.rotl32(m32(x10 + x09), 7)
+        x08 = x08 ^ bits.rotl32(m32(x11 + x10), 9)
+        x09 = x09 ^ bits.rotl32(m32(x08 + x11), 13)
+        x10 = x10 ^ bits.rotl32(m32(x09 + x08), 18)
+
+        x12 = x12 ^ bits.rotl32(m32(x15 + x14), 7)
+        x13 = x13 ^ bits.rotl32(m32(x12 + x15), 9)
+        x14 = x14 ^ bits.rotl32(m32(x13 + x12), 13)
+        x15 = x15 ^ bits.rotl32(m32(x14 + x13), 18)
+
+        rnd = rnd + 1
+    }
+
+    bytes.set_le32(x, 0, m32(x00 + i0))
+    bytes.set_le32(x, 4, m32(x01 + i1))
+    bytes.set_le32(x, 8, m32(x02 + i2))
+    bytes.set_le32(x, 12, m32(x03 + i3))
+    bytes.set_le32(x, 16, m32(x04 + i4))
+    bytes.set_le32(x, 20, m32(x05 + i5))
+    bytes.set_le32(x, 24, m32(x06 + i6))
+    bytes.set_le32(x, 28, m32(x07 + i7))
+    bytes.set_le32(x, 32, m32(x08 + i8))
+    bytes.set_le32(x, 36, m32(x09 + i9))
+    bytes.set_le32(x, 40, m32(x10 + i10))
+    bytes.set_le32(x, 44, m32(x11 + i11))
+    bytes.set_le32(x, 48, m32(x12 + i12))
+    bytes.set_le32(x, 52, m32(x13 + i13))
+    bytes.set_le32(x, 56, m32(x14 + i14))
+    bytes.set_le32(x, 60, m32(x15 + i15))
+}
+
+// XOR 64 bytes (one Salsa block) from `src` at src_off into `dst` at
+// dst_off, byte-by-byte.
+xor64(dst: ptr, dst_off: int, src: ptr, src_off: int) {
+    k = 0
+    while k < 64 {
+        v = bytes.get(dst, dst_off + k) ^ bytes.get(src, src_off + k)
+        bytes.set(dst, dst_off + k, v & 0xFF)
+        k = k + 1
+    }
+}
+
+// BlockMix: input is 2r Salsa blocks (128r bytes) at `bin`+bin_off; output
+// is 2r blocks at `bout`+bout_off. X = bin[2r-1]; for i in 0..2r-1:
+// X = Salsa(X ^ bin[i]); even-i results go to bout[i/2], odd-i to
+// bout[r + i/2]. `xbuf` is a caller-supplied 64-byte scratch buffer.
+// `bin` and `bout` must be distinct buffers.
+block_mix(bin: ptr, bin_off: int, bout: ptr, bout_off: int, r: int, xbuf: ptr) {
+    blocks = 2 * r
+    // X = last 64-byte block of bin.
+    bytes.copy_from_bytes(xbuf, 0, bin, bin_off + (blocks - 1) * 64, 64)
+
+    i = 0
+    while i < blocks {
+        // X = X xor bin[i]
+        xor64(xbuf, 0, bin, bin_off + i * 64)
+        salsa20_8(xbuf)
+        // Scatter: even i -> bout[i/2], odd i -> bout[r + (i-1)/2].
+        out_idx = i / 2
+        if (i & 1) == 1 {
+            out_idx = r + (i / 2)
+        }
+        bytes.copy_from_bytes(bout, bout_off + out_idx * 64, xbuf, 0, 64)
+        i = i + 1
+    }
+}
+
+// Compute scrypt. Returns a std.bytes buffer of dklen bytes, or null.
+scrypt(pass: ptr, pass_len: int, salt: ptr, salt_len: int, n: int, r: int, p: int, dklen: int) -> ptr {
+    if n <= 1 {
+        return null
+    }
+    // N must be a power of 2.
+    if (n & (n - 1)) != 0 {
+        return null
+    }
+    if r < 1 {
+        return null
+    }
+    if p < 1 {
+        return null
+    }
+    if dklen < 1 {
+        return null
+    }
+
+    block_bytes = 128 * r
+    total = p * block_bytes
+
+    // B = PBKDF2-HMAC-SHA256(P, S, 1, p * 128 * r)
+    b = pbkdf2.pbkdf2("sha256", pass, pass_len, salt, salt_len, 1, total)
+    if b == null {
+        return null
+    }
+
+    // Working buffers.
+    v = bytes.new(block_bytes * n)
+    tmp = bytes.new(block_bytes)
+    xbuf = bytes.new(64)
+    bx = bytes.new(block_bytes)
+    if v == null {
+        bytes.free(b)
+        return null
+    }
+
+    blocks = 2 * r
+    mask = n - 1
+
+    // ROMix each of the p blocks.
+    pi = 0
+    while pi < p {
+        base = pi * block_bytes
+        // Load this block into bx.
+        bytes.copy_from_bytes(bx, 0, b, base, block_bytes)
+
+        // V[0] = X; V[i] = BlockMix(V[i-1]).
+        bytes.copy_from_bytes(v, 0, bx, 0, block_bytes)
+        i = 1
+        while i < n {
+            block_mix(v, (i - 1) * block_bytes, v, i * block_bytes, r, xbuf)
+            i = i + 1
+        }
+        // X = BlockMix(V[N-1]).
+        block_mix(v, (n - 1) * block_bytes, tmp, 0, r, xbuf)
+        bytes.copy_from_bytes(bx, 0, tmp, 0, block_bytes)
+
+        // Second loop: N rounds of indexed XOR + BlockMix.
+        i = 0
+        while i < n {
+            // j = integerify(X) mod N = last 64-byte block's first LE word.
+            j = bytes.get_le32(bx, (blocks - 1) * 64) & mask
+            // X = X xor V[j]
+            k = 0
+            while k < block_bytes {
+                xv = bytes.get(bx, k) ^ bytes.get(v, j * block_bytes + k)
+                bytes.set(bx, k, xv & 0xFF)
+                k = k + 1
+            }
+            block_mix(bx, 0, tmp, 0, r, xbuf)
+            bytes.copy_from_bytes(bx, 0, tmp, 0, block_bytes)
+            i = i + 1
+        }
+
+        // Store the mixed block back into B.
+        bytes.copy_from_bytes(b, base, bx, 0, block_bytes)
+        pi = pi + 1
+    }
+
+    bytes.free(v)
+    bytes.free(tmp)
+    bytes.free(xbuf)
+    bytes.free(bx)
+
+    // DK = PBKDF2-HMAC-SHA256(P, B, 1, dkLen)
+    out = pbkdf2.pbkdf2("sha256", pass, pass_len, b, total, 1, dklen)
+    bytes.free(b)
+    return out
+}
+
+scrypt_hex(pass: ptr, pass_len: int, salt: ptr, salt_len: int, n: int, r: int, p: int, dklen: int) -> string {
+    out = scrypt(pass, pass_len, salt, salt_len, n, r, p, dklen)
+    if out == null {
+        return ""
+    }
+    hexbuf = bytes.new(dklen * 2)
+    i = 0
+    while i < dklen {
+        bb = bytes.get(out, i)
+        hi = (bb >> 4) & 15
+        lo = bb & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    return bytes.finish(hexbuf, dklen * 2)
+}
