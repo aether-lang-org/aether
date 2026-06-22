@@ -257,6 +257,12 @@ typedef struct {
 } _AeLibInfoClosure;
 
 typedef struct {
+    const char* name;
+    const char* type;
+    const char* value;
+} _AeLibInfoConst;
+
+typedef struct {
     const char* schema_version;
     const char* aether_version;
     const char* primary_source;
@@ -264,6 +270,8 @@ typedef struct {
     const _AeLibInfoFn* functions;
     int         closure_count;
     const _AeLibInfoClosure* closures;
+    int         constant_count;
+    const _AeLibInfoConst* constants;
 } _AeLibInfoMeta;
 
 // --coverage: when set, build_gcc_cmd appends `--coverage` to the gcc
@@ -2322,6 +2330,19 @@ static int ae_generate_binimport_stub(const char* so_path, FILE* out) {
             fprintf(out, "@extern(\"%s\") %s(%s) -> %s\n",
                     f->c_symbol, f->aether_name, params, ret);
         }
+    }
+
+    // Constant-table exports → a plain `const NAME = <value>` line per
+    // catalog constant (schema >= 1.2). The catalog `value` is already a
+    // source-ready Aether literal (quoted+escaped for strings, verbatim for
+    // numbers/bools), so it drops in after `const NAME = `. The existing
+    // source-import machinery then namespaces it as `<module>.NAME` for free —
+    // no call-site changes for consumers. Guarded on the typed pointer so a
+    // "1.0"/"1.1" artifact (no constant slot) emits nothing here.
+    for (int i = 0; i < m->constant_count && m->constants; i++) {
+        const _AeLibInfoConst* k = &m->constants[i];
+        if (!k->name || !k->value) continue;
+        fprintf(out, "const %s = %s\n", k->name, k->value);
     }
 
     // Builder DSL entry points → an extern forwarder taking the trailing
@@ -7116,6 +7137,16 @@ static int cmd_lib_info(int argc, char** argv) {
              ? m->primary_source : "(unknown)");
     printf("  Functions:     %d\n", m->function_count);
     printf("  Closures:      %d\n", m->closure_count);
+    /* constant_count lives past the "1.1" layout; guard on schema so a
+     * pre-1.2 artifact (whose struct stops before this field) is never
+     * misread. The codegen always writes "1.<minor>" with minor>=2 when
+     * constants are present. */
+    int has_consts_field = (m->schema_version &&
+                            strcmp(m->schema_version, "1.0") != 0 &&
+                            strcmp(m->schema_version, "1.1") != 0);
+    if (has_consts_field) {
+        printf("  Constants:     %d\n", m->constant_count);
+    }
     printf("\n");
 
     if (m->function_count > 0 && m->functions) {
@@ -7163,6 +7194,20 @@ static int cmd_lib_info(int argc, char** argv) {
                        cap->type ? cap->type : "?");
             }
             printf("        @ %s:%d\n", src, c->source_line);
+        }
+    }
+
+    /* v3 constant records (schema >= 1.2). Self-describing dump of the
+     * exported scalar/string consts that now cross the .so boundary. Guarded
+     * on the schema check above so a pre-1.2 artifact prints nothing extra. */
+    if (has_consts_field && m->constant_count > 0 && m->constants) {
+        printf("\n  Constants:\n");
+        for (int i = 0; i < m->constant_count; i++) {
+            const _AeLibInfoConst* k = &m->constants[i];
+            printf("  - %s: %s = %s\n",
+                   k->name  ? k->name  : "?",
+                   k->type  ? k->type  : "?",
+                   k->value ? k->value : "?");
         }
     }
 
