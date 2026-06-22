@@ -1,8 +1,11 @@
 # contrib.host.factor — Embedded Factor
 
 `import contrib.host.factor` lets an Aether program embed
-[Factor](https://factorcode.org) (a concatenative, stack-based language)
-in-process, with a live, persistent VM:
+[Factor](https://factorcode.org) — a dynamically-typed, image-based
+**concatenative (stack-based)** language in the Forth/Joy tradition, with
+first-class quotations and a CLOS-style object system — in-process, with a
+live, persistent VM (which is why it boots a ~140 MB image and JITs; see
+[Performance](#performance)):
 
 ```aether
 import contrib.host.factor
