@@ -2524,6 +2524,10 @@ static void prepare_binary_imports(const char* main_file) { (void)main_file; }
 // linking the duktape bridge .a transparently here.
 static const char* host_bridge_lang_alias(const char* lang) {
     if (strcmp(lang, "js") == 0) return "duktape";
+    // Rhombus is a #lang on the Racket runtime, so both import paths link
+    // the one shared bridge archive (libaether_host_racket.a — it carries
+    // both the racket_* and rhombus_* ABI). No separate rhombus .a is built.
+    if (strcmp(lang, "rhombus") == 0) return "racket";
     return lang;
 }
 
@@ -2641,6 +2645,29 @@ static void prepare_host_bridge_imports(const char* main_file) {
             off = strlen(g_host_bridge_link);
             snprintf(g_host_bridge_link + off,
                      sizeof(g_host_bridge_link) - off, "%s", trans_flags);
+        }
+
+        // Racket (and rhombus, which aliases to it) is the first STATIC-linked
+        // host: there is no shared libracketcs to dlopen, so the importer must
+        // link the built Racket CS's libracketcs.a + -rdynamic + the runtime's
+        // system deps. The archive path comes from $AETHER_RACKET_LIB (the
+        // orchestrator owns the probe, mirroring AETHER_*_SONAME for the dlopen
+        // bridges). Without it we leave the link as-is — the bridge .a's
+        // unresolved racket_* symbols then produce a clear linker error naming
+        // the missing libracketcs, and the README documents the env var.
+        if (strcmp(effective_alias, "racket") == 0) {
+            const char* rkt_lib = getenv("AETHER_RACKET_LIB");
+            if (rkt_lib && *rkt_lib) {
+                // libracketcs.a + -rdynamic + Racket CS's link deps. The lib
+                // list matches the RKTIO_CONFIGURE_ARGS LIBS of a stock CS
+                // build (-ldl -lm -lrt -lncurses -lz) plus -lpthread; harmless
+                // extras are dropped by the linker if unreferenced.
+                off = strlen(g_host_bridge_link);
+                snprintf(g_host_bridge_link + off,
+                         sizeof(g_host_bridge_link) - off,
+                         " \"%s\" -rdynamic -lm -ldl -lpthread -lz -lncurses",
+                         rkt_lib);
+            }
         }
 
         if (tc.verbose) {

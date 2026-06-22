@@ -180,6 +180,32 @@ probe_factor() {
     return 0
 }
 
+probe_racket() {
+    # Unlike host/factor (whose bridge needs NO headers — the fork's
+    # embedding entry points are plain dlsym'd C-string functions), the
+    # Racket CS value model is macro-based: chezscheme.h's Snil / Scons /
+    # Smake_bytevector / Sbytevector_data are tagged-pointer macros, not
+    # linkable functions, so the bridge's real (-DAETHER_HAS_RACKET) path
+    # needs the embedding headers at COMPILE time. Those headers
+    # (chezscheme.h, racketcsboot.h, api.h) live in a *built* Racket CS
+    # tree, not in any apt package — so this probes for an explicit
+    # include dir and SKIPs (no archive) when absent, rather than building
+    # a bare stub that can never work.
+    #
+    # $AETHER_RACKET_INCLUDE = the built Racket's include/ dir, holding
+    # chezscheme.h + racketcs.h + racketcsboot.h. The bridge STATIC-links
+    # libracketcs.a ($AETHER_RACKET_LIB) into the importer and boots from the
+    # images in $AETHER_RACKET_BOOT_DIR at runtime (the host_racket / _rhombus
+    # integration tests gate on those and skip when unset). Here we only need
+    # the headers to compile the bridge archive; SKIP (no archive) without them.
+    local inc="${AETHER_RACKET_INCLUDE:-}"
+    if [ -n "$inc" ] && [ -f "$inc/chezscheme.h" ] && [ -f "$inc/racketcs.h" ]; then
+        echo "-I$inc"
+        return 0
+    fi
+    return 1
+}
+
 probe_aether() {
     # The Aether-hosts-Aether bridge fork+execs a compiled child under
     # LD_PRELOAD=libaether_sandbox.so. It depends only on the in-tree
@@ -242,6 +268,7 @@ CATALOGUE=(
     "tinygo|host_tinygo  contrib/host/tinygo/aether_host_tinygo.c AETHER_HAS_TINYGO  probe_tinygo"
     "tinyweb|tinyweb     contrib/tinyweb/ws_handshake.c           AETHER_HAS_TINYWEB probe_tinyweb"
     "factor|host_factor  contrib/host/factor/aether_host_factor.c AETHER_HAS_FACTOR  probe_factor"
+    "racket|host_racket  contrib/host/racket/aether_host_racket.c AETHER_HAS_RACKET  probe_racket"
     "aether|host_aether  contrib/host/aether/aether_host_aether.c AETHER_HAS_AETHER_HOST probe_aether"
 )
 
