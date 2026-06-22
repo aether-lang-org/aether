@@ -435,14 +435,7 @@ process_block(t: *TigerCtx) {
 
 // Assemble the 8-byte LE buffer into the next word, process if full.
 process_word(t: *TigerCtx) {
-    long w = 0
-    k = 0
-    while k < 8 {
-        long b = bytes.get(t.buf, k) & 0xFF
-        w = w | (b << (8 * k))
-        k = k + 1
-    }
-    xs(t, t.x_off, w)
+    xs(t, t.x_off, bytes.get_le64(t.buf, 0))
     t.x_off = t.x_off + 1
     if t.x_off == 8 {
         process_block(t)
@@ -528,11 +521,7 @@ finalize_to_bytes(t: *TigerCtx) -> ptr {
 }
 
 emit_le64(out: ptr, off: int, v: long) {
-    k = 0
-    while k < 8 {
-        bytes.set(out, off + k, bits.lsr64(v, 8 * k) & 0xFF)
-        k = k + 1
-    }
+    bytes.set_le64(out, off, v)
 }
 
 free_internals(t: *TigerCtx) {

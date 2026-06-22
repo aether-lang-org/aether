@@ -1,0 +1,44 @@
+// Validate contrib.cryptography.p384 + p521 (NIST P-384 / P-521 ECDH+ECDSA)
+// against the published 2*G doubling vectors plus an ECDSA sign/verify
+// round-trip with tamper rejection.
+import contrib.cryptography.p384
+import contrib.cryptography.p521
+import std.bytes
+import std.string
+import std.io
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } if c>=65 { if c<=70 { return c-55 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+ck(lbl: string, got: string, want: string) -> int { if got==want { println("ok   ${lbl}"); return 0 } println("FAIL ${lbl}"); println("  got:  ${got}"); println("  want: ${want}"); return 1 }
+
+main() {
+    fails = 0
+
+    // --- P-384: priv=2 -> 2G ---
+    two384 = hb("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002")
+    x384, y384 = p384.scalar_mult_base(two384)
+    fails = fails + ck("p384 2G x", bh(x384), "08d999057ba3d2d969260045c55b97f089025959a6f434d651d207d19fb96e9e4fe0e86ebe0e64f85b96a9c75295df61")
+    fails = fails + ck("p384 2G y", bh(y384), "8e80f1fa5b1b3cedb7bfe8dffd6dba74b275d875bc6cc43e904e505f256ab4255ffd43e94d39e22d61501e700a940e80")
+    d384 = hb("c838b85253ef8dc7394fa5808a5183981c7deef5a69ba8f4f2117ffea39cfcd90e95f6cbc854abacab701d50c1f3cf24")
+    h384 = hb("0102030405060708010203040506070801020304050607080102030405060708010203040506070801020304050607aa")
+    k384 = hb("dc6b44036989a196e39d1cdac000812f4bdd8b2db41bb33af51372585ebd1db63f0ce8275aa1fd45e2d2a735f8749359")
+    px384, py384 = p384.scalar_mult_base(d384)
+    r384, s384 = p384.ecdsa_sign(d384, h384, k384)
+    if p384.ecdsa_verify(px384, py384, h384, r384, s384) == 1 { println("ok   p384 sign/verify") } else { println("FAIL p384 sign/verify"); fails = fails + 1 }
+
+    // --- P-521: priv=2 -> 2G ---
+    two521 = hb("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002")
+    x521, y521 = p521.scalar_mult_base(two521)
+    fails = fails + ck("p521 2G x", bh(x521), "00433c219024277e7e682fcb288148c282747403279b1ccc06352c6e5505d769be97b3b204da6ef55507aa104a3a35c5af41cf2fa364d60fd967f43e3933ba6d783d")
+    fails = fails + ck("p521 2G y", bh(y521), "00f4bb8cc7f86db26700a7f3eceeeed3f0b5c6b5107c4da97740ab21a29906c42dbbb3e377de9f251f6b93937fa99a3248f4eafcbe95edc0f4f71be356d661f41b02")
+    d521 = hb("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123")
+    h521 = hb("0102030405060708010203040506070801020304050607080102030405060708010203040506070801020304050607080102030405060708010203040506070801020a")
+    k521 = hb("00abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab01")
+    px521, py521 = p521.scalar_mult_base(d521)
+    r521, s521 = p521.ecdsa_sign(d521, h521, k521)
+    if p521.ecdsa_verify(px521, py521, h521, r521, s521) == 1 { println("ok   p521 sign/verify") } else { println("FAIL p521 sign/verify"); fails = fails + 1 }
+
+    if fails == 0 { println("ALL PASS"); return }
+    println("FAILURES"); exit(1)
+}

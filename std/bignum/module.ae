@@ -22,10 +22,16 @@
 // The full surface: representation + from/to_bytes + compare + add/sub/
 // negate/abs/shift + bit_length + multiply + divide/remainder/mod + mod_pow
 // + gcd + mod_inverse + is_probable_prime. The arithmetic uses textbook
-// algorithms chosen for verifiability (binary long division, square-and-
-// multiply mod_pow, fixed-base Miller-Rabin); the BC-style Montgomery /
-// Barrett / Karatsuba fast paths are deferred perfections, tracked in
-// docs/bignum-deferred-optimizations.md.
+// algorithms chosen for verifiability (binary long division, fixed-base
+// Miller-Rabin). Two BC-style fast paths are layered on top WITHOUT
+// changing any observable result: (1) Karatsuba multiply for large
+// operands (>= karatsuba_threshold() limbs in the smaller operand), with the
+// schoolbook multiply as the sub-threshold base case and fallback; and
+// (2) Montgomery-form square-and-multiply in mod_pow when the modulus is
+// odd (the RSA/DH hot path), falling back to the schoolbook
+// square-and-multiply for even moduli and degenerate cases. Both are pure
+// speed paths gated on size/parity; every result is byte-identical to the
+// slow path.
 //
 // A bignum is an opaque `ptr` to a heap-allocated BN struct. Operations
 // return NEW bignums and never mutate their inputs. There is no GC;
@@ -643,6 +649,259 @@ mag_multiply(x: ptr, xlen: int, y: ptr, ylen: int, z: ptr, zlen: int) {
     }
 }
 
+// ---- Karatsuba fast-path multiply (internal) ----
+//
+// The schoolbook mag_multiply above is O(n*m). For large equal-ish
+// operands (RSA/DH/EC scalars) Karatsuba's 3-way split is a real win.
+// To keep the carry/borrow reasoning bulletproof we do Karatsuba on
+// LITTLE-ENDIAN limb scratch arrays (index 0 = least-significant limb),
+// which makes "low half / high half" a simple index split, then convert
+// back to the module's big-endian magnitude at the public boundary. The
+// RESULT IS BYTE-IDENTICAL to schoolbook (same integer, then stripped by
+// bn_from_mag_checked); this is purely an internal speed path.
+//
+// Threshold: below this many limbs in the smaller operand, recurse falls
+// back to schoolbook. 40 limbs ~= 1280 bits, matching BC's general region
+// for the crossover on 32-bit limbs. Exposed as a 0-arg function because
+// std modules have no module-level constant bindings.
+karatsuba_threshold() -> int {
+    return 40
+}
+
+// Convert a big-endian magnitude (mag[0]=MSB) of `len` limbs into a fresh
+// little-endian limb array (out[0]=LSB) of `len` limbs.
+le_from_mag(mag: ptr, len: int) -> ptr {
+    out = intarr_new_raw(len)
+    i = 0
+    while i < len {
+        intarr_set_raw(out, i, intarr_get_raw(mag, len - 1 - i))
+        i = i + 1
+    }
+    return out
+}
+
+// Convert a little-endian limb array (in[0]=LSB) of `len` limbs into a
+// fresh big-endian magnitude (out[0]=MSB) of `len` limbs.
+mag_from_le(le: ptr, len: int) -> ptr {
+    out = intarr_new_raw(len)
+    i = 0
+    while i < len {
+        intarr_set_raw(out, i, intarr_get_raw(le, len - 1 - i))
+        i = i + 1
+    }
+    return out
+}
+
+// Read LE limb i as unsigned 32-bit in a 64-bit int (0 past the end).
+le_limb(a: ptr, alen: int, i: int) -> long {
+    if i < 0 {
+        return 0
+    }
+    if i >= alen {
+        return 0
+    }
+    return intarr_get_raw(a, i) & 0xFFFFFFFF
+}
+
+// Schoolbook multiply of two LE arrays into a fresh LE array of xn+yn.
+le_schoolbook(x: ptr, xn: int, y: ptr, yn: int) -> ptr {
+    res = intarr_new_raw(xn + yn)   // zero-filled
+    i = 0
+    while i < xn {
+        a = le_limb(x, xn, i)
+        if a != 0 {
+            long carry = 0
+            j = 0
+            while j < yn {
+                long v = a * le_limb(y, yn, j) + (intarr_get_raw(res, i + j) & 0xFFFFFFFF) + carry
+                intarr_set_raw(res, i + j, (v & 0xFFFFFFFF))
+                carry = bits.lsr64(v, 32)
+                j = j + 1
+            }
+            intarr_set_raw(res, i + yn, (carry & 0xFFFFFFFF))
+        }
+        i = i + 1
+    }
+    return res
+}
+
+// LE add: dst[0..dlen) += src[0..slen) (slen <= dlen). dst must have room
+// for the carry (callers size accordingly). Returns the final carry.
+le_add_into(dst: ptr, dlen: int, src: ptr, slen: int, off: int) -> long {
+    long carry = 0
+    i = 0
+    while i < slen {
+        long v = (intarr_get_raw(dst, off + i) & 0xFFFFFFFF) + (intarr_get_raw(src, i) & 0xFFFFFFFF) + carry
+        intarr_set_raw(dst, off + i, (v & 0xFFFFFFFF))
+        carry = bits.lsr64(v, 32)
+        i = i + 1
+    }
+    k = off + slen
+    while carry != 0 {
+        if k >= dlen {
+            break
+        }
+        long v = (intarr_get_raw(dst, k) & 0xFFFFFFFF) + carry
+        intarr_set_raw(dst, k, (v & 0xFFFFFFFF))
+        carry = bits.lsr64(v, 32)
+        k = k + 1
+    }
+    return carry
+}
+
+// Karatsuba multiply of two LE arrays into a fresh LE array of xn+yn.
+// Recurses; falls back to schoolbook below the threshold.
+le_karatsuba(x: ptr, xn: int, y: ptr, yn: int) -> ptr {
+    nmin = xn
+    if yn < nmin {
+        nmin = yn
+    }
+    if nmin < karatsuba_threshold() {
+        return le_schoolbook(x, xn, y, yn)
+    }
+    // split point: half of the larger operand
+    nmax = xn
+    if yn > nmax {
+        nmax = yn
+    }
+    half = (nmax + 1) / 2
+    // x = xh*B^half + xl ; y = yh*B^half + yl   (B = 2^32)
+    xl_len = half
+    if xn < half {
+        xl_len = xn
+    }
+    xh_len = xn - xl_len
+    yl_len = half
+    if yn < half {
+        yl_len = yn
+    }
+    yh_len = yn - yl_len
+
+    // low parts (already in place via offset views — but we need contiguous
+    // arrays for recursion, so build them). xl = x[0..xl_len), xh = x[half..)
+    xl = intarr_new_raw(xl_len)
+    i = 0
+    while i < xl_len {
+        intarr_set_raw(xl, i, intarr_get_raw(x, i))
+        i = i + 1
+    }
+    yl = intarr_new_raw(yl_len)
+    i = 0
+    while i < yl_len {
+        intarr_set_raw(yl, i, intarr_get_raw(y, i))
+        i = i + 1
+    }
+    // high parts may be empty (len 0); guard recursion with len-0 producing 0
+    xh = intarr_new_raw(xh_len)
+    i = 0
+    while i < xh_len {
+        intarr_set_raw(xh, i, intarr_get_raw(x, half + i))
+        i = i + 1
+    }
+    yh = intarr_new_raw(yh_len)
+    i = 0
+    while i < yh_len {
+        intarr_set_raw(yh, i, intarr_get_raw(y, half + i))
+        i = i + 1
+    }
+
+    // z0 = xl*yl, z2 = xh*yh
+    z0 = le_karatsuba(xl, xl_len, yl, yl_len)
+    z2 = le_mul_maybe_zero(xh, xh_len, yh, yh_len)
+
+    // sx = xl + xh, sy = yl + yh
+    sx_len = xl_len
+    if xh_len > sx_len {
+        sx_len = xh_len
+    }
+    sx_len = sx_len + 1
+    sx = intarr_new_raw(sx_len)
+    i = 0
+    while i < xl_len {
+        intarr_set_raw(sx, i, intarr_get_raw(xl, i))
+        i = i + 1
+    }
+    le_add_into(sx, sx_len, xh, xh_len, 0)
+
+    sy_len = yl_len
+    if yh_len > sy_len {
+        sy_len = yh_len
+    }
+    sy_len = sy_len + 1
+    sy = intarr_new_raw(sy_len)
+    i = 0
+    while i < yl_len {
+        intarr_set_raw(sy, i, intarr_get_raw(yl, i))
+        i = i + 1
+    }
+    le_add_into(sy, sy_len, yh, yh_len, 0)
+
+    // z1full = sx*sy ; z1 = z1full - z0 - z2
+    z1 = le_karatsuba(sx, sx_len, sy, sy_len)
+    z1len = sx_len + sy_len
+    le_sub_into(z1, z1len, z0, xl_len + yl_len)
+    le_sub_into(z1, z1len, z2, xh_len + yh_len)
+
+    // result = z0 + z1*B^half + z2*B^(2*half)
+    reslen = xn + yn
+    res = intarr_new_raw(reslen)   // zero
+    // add z0
+    le_add_into(res, reslen, z0, xl_len + yl_len, 0)
+    // add z1 shifted by half
+    le_add_into(res, reslen, z1, z1len, half)
+    // add z2 shifted by 2*half
+    le_add_into(res, reslen, z2, xh_len + yh_len, 2 * half)
+
+    intarr_free(xl); intarr_free(xh); intarr_free(yl); intarr_free(yh)
+    intarr_free(sx); intarr_free(sy)
+    intarr_free(z0); intarr_free(z1); intarr_free(z2)
+    return res
+}
+
+// Karatsuba helper that tolerates zero-length operands (high halves can be
+// empty); returns a fresh LE array of xn+yn limbs (all zero if either is
+// empty).
+le_mul_maybe_zero(x: ptr, xn: int, y: ptr, yn: int) -> ptr {
+    if xn == 0 {
+        return intarr_new_raw(yn)   // all zero, length xn+yn = yn
+    }
+    if yn == 0 {
+        return intarr_new_raw(xn)
+    }
+    return le_karatsuba(x, xn, y, yn)
+}
+
+// LE subtract in place: dst[0..dlen) -= src[0..slen). Assumes dst >= src
+// (true for the Karatsuba z1 reconstruction). slen <= dlen.
+le_sub_into(dst: ptr, dlen: int, src: ptr, slen: int) {
+    long borrow = 0
+    i = 0
+    while i < slen {
+        long v = (intarr_get_raw(dst, i) & 0xFFFFFFFF) - (intarr_get_raw(src, i) & 0xFFFFFFFF) - borrow
+        intarr_set_raw(dst, i, (v & 0xFFFFFFFF))
+        if v < 0 {
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        i = i + 1
+    }
+    k = slen
+    while borrow != 0 {
+        if k >= dlen {
+            break
+        }
+        long v = (intarr_get_raw(dst, k) & 0xFFFFFFFF) - borrow
+        intarr_set_raw(dst, k, (v & 0xFFFFFFFF))
+        if v < 0 {
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        k = k + 1
+    }
+}
+
 multiply(a: ptr, b: ptr) -> ptr {
     ba = a as *BN
     bb = b as *BN
@@ -652,13 +911,28 @@ multiply(a: ptr, b: ptr) -> ptr {
     if bb.sign == 0 {
         return bn_zero()
     }
-    reslen = ba.len + bb.len
-    res = intarr_new_raw(reslen)   // calloc: zero-filled
-    mag_multiply(res, reslen, ba.mag, ba.len, bb.mag, bb.len)
     rsign = 1
     if ba.sign != bb.sign {
         rsign = -1
     }
+    // Karatsuba fast-path for large operands; schoolbook otherwise. Both
+    // compute the identical product; this is purely a speed split.
+    nmin = ba.len
+    if bb.len < nmin {
+        nmin = bb.len
+    }
+    if nmin >= karatsuba_threshold() {
+        xle = le_from_mag(ba.mag, ba.len)
+        yle = le_from_mag(bb.mag, bb.len)
+        zle = le_karatsuba(xle, ba.len, yle, bb.len)
+        reslen = ba.len + bb.len
+        res = mag_from_le(zle, reslen)
+        intarr_free(xle); intarr_free(yle); intarr_free(zle)
+        return bn_from_mag_checked(rsign, res, reslen)
+    }
+    reslen = ba.len + bb.len
+    res = intarr_new_raw(reslen)   // calloc: zero-filled
+    mag_multiply(res, reslen, ba.mag, ba.len, bb.mag, bb.len)
     return bn_from_mag_checked(rsign, res, reslen)
 }
 
@@ -823,6 +1097,195 @@ mod(a: ptr, b: ptr) -> ptr {
 // crypto, and obviously correct against an arbitrary-precision oracle. The
 // constant-time / Montgomery fast paths are a later optimization slice.
 
+// ---- Montgomery reduction (internal, odd-modulus mod_pow fast path) ----
+//
+// REDC-based modular exponentiation. For an ODD modulus m with n limbs,
+// R = 2^(32n). We work in Montgomery form (a*R mod m) and use CIOS
+// Montgomery multiplication so the square-and-multiply ladder never calls
+// the O(bits^2) binary divide. Converting to/from Montgomery form uses the
+// existing mod()/multiply() exactly once each at the boundary, so the final
+// integer result is identical to the schoolbook mod_pow — this is a pure
+// speed path, gated on `m` being odd; even moduli fall back below.
+//
+// All Montgomery limb work is LITTLE-ENDIAN (index 0 = LSB) to keep carry
+// propagation simple; conversions to/from the BN big-endian magnitude
+// happen only at the edges.
+
+// -m^(-1) mod 2^32, where m0 is the least-significant limb of m (m odd).
+// Newton iteration (BC Mod.Inverse32), then negate mod 2^32.
+mont_mdash(m0: long) -> long {
+    long d = m0 & 0xFFFFFFFF
+    long x = d
+    x = (x * (2 - d * x)) & 0xFFFFFFFF
+    x = (x * (2 - d * x)) & 0xFFFFFFFF
+    x = (x * (2 - d * x)) & 0xFFFFFFFF
+    x = (x * (2 - d * x)) & 0xFFFFFFFF
+    // x == m^(-1) mod 2^32; mdash = -x mod 2^32
+    return ((~x) + 1) & 0xFFFFFFFF
+}
+
+// CIOS Montgomery multiply: t = (x * y * R^(-1)) mod m, all LE, n limbs.
+// x, y, mle are LE arrays of exactly n limbs (zero-padded). mdash =
+// -m^(-1) mod 2^32. Returns a fresh LE array of n limbs in [0, m).
+mont_mul(x: ptr, y: ptr, mle: ptr, n: int, mdash: long) -> ptr {
+    // accumulator t has n+2 limbs to hold intermediate carry safely.
+    t = intarr_new_raw(n + 2)   // zero
+    i = 0
+    while i < n {
+        long xi = intarr_get_raw(x, i) & 0xFFFFFFFF
+        // t = t + xi * y
+        long carry = 0
+        j = 0
+        while j < n {
+            long v = (intarr_get_raw(t, j) & 0xFFFFFFFF) + xi * (intarr_get_raw(y, j) & 0xFFFFFFFF) + carry
+            intarr_set_raw(t, j, (v & 0xFFFFFFFF))
+            carry = bits.lsr64(v, 32)
+            j = j + 1
+        }
+        long sum = (intarr_get_raw(t, n) & 0xFFFFFFFF) + carry
+        intarr_set_raw(t, n, (sum & 0xFFFFFFFF))
+        intarr_set_raw(t, n + 1, ((intarr_get_raw(t, n + 1) & 0xFFFFFFFF) + bits.lsr64(sum, 32)) & 0xFFFFFFFF)
+        // u = (t[0] * mdash) mod 2^32 ; t = (t + u * m) / 2^32
+        long u = ((intarr_get_raw(t, 0) & 0xFFFFFFFF) * mdash) & 0xFFFFFFFF
+        long carry2 = 0
+        j = 0
+        while j < n {
+            long v = (intarr_get_raw(t, j) & 0xFFFFFFFF) + u * (intarr_get_raw(mle, j) & 0xFFFFFFFF) + carry2
+            intarr_set_raw(t, j, (v & 0xFFFFFFFF))
+            carry2 = bits.lsr64(v, 32)
+            j = j + 1
+        }
+        long s2 = (intarr_get_raw(t, n) & 0xFFFFFFFF) + carry2
+        intarr_set_raw(t, n, (s2 & 0xFFFFFFFF))
+        intarr_set_raw(t, n + 1, ((intarr_get_raw(t, n + 1) & 0xFFFFFFFF) + bits.lsr64(s2, 32)) & 0xFFFFFFFF)
+        // shift t down by one limb (divide by 2^32)
+        k = 0
+        while k < n + 1 {
+            intarr_set_raw(t, k, intarr_get_raw(t, k + 1))
+            k = k + 1
+        }
+        intarr_set_raw(t, n + 1, 0)
+        i = i + 1
+    }
+    // t now has up to n+1 significant limbs; conditional subtract of m.
+    // Compare (t as n+1 limbs) >= m (n limbs).
+    out = intarr_new_raw(n)
+    ge = 0
+    if (intarr_get_raw(t, n) & 0xFFFFFFFF) != 0 {
+        ge = 1
+    } else {
+        c = n - 1
+        while c >= 0 {
+            long tv = intarr_get_raw(t, c) & 0xFFFFFFFF
+            long mv = intarr_get_raw(mle, c) & 0xFFFFFFFF
+            if tv != mv {
+                if tv > mv {
+                    ge = 1
+                }
+                c = -1
+            } else {
+                c = c - 1
+            }
+        }
+    }
+    if ge == 1 {
+        long borrow = 0
+        j = 0
+        while j < n {
+            long v = (intarr_get_raw(t, j) & 0xFFFFFFFF) - (intarr_get_raw(mle, j) & 0xFFFFFFFF) - borrow
+            intarr_set_raw(out, j, (v & 0xFFFFFFFF))
+            if v < 0 {
+                borrow = 1
+            } else {
+                borrow = 0
+            }
+            j = j + 1
+        }
+    } else {
+        j = 0
+        while j < n {
+            intarr_set_raw(out, j, intarr_get_raw(t, j))
+            j = j + 1
+        }
+    }
+    intarr_free(t)
+    return out
+}
+
+// Build a zero-padded LE array of exactly n limbs from a non-negative BN's
+// magnitude (value assumed < 2^(32n)). For a zero BN, returns all zeros.
+le_padded_from_bn(n_bn: ptr, n: int) -> ptr {
+    bn = n_bn as *BN
+    out = intarr_new_raw(n)   // zero
+    if bn.sign == 0 {
+        return out
+    }
+    // mag is big-endian; copy into LE.
+    i = 0
+    while i < bn.len {
+        intarr_set_raw(out, i, intarr_get_raw(bn.mag, bn.len - 1 - i))
+        i = i + 1
+    }
+    return out
+}
+
+// Make a non-negative BN from an LE limb array (out[0]=LSB) of n limbs.
+bn_from_le(le: ptr, n: int) -> ptr {
+    mag = mag_from_le(le, n)
+    return bn_from_mag_checked(1, mag, n)
+}
+
+// Montgomery mod_pow for ODD modulus m, base/exp/m all positive, m > 1.
+// Returns base^exp mod m. Internal; caller guarantees preconditions.
+mod_pow_monty(base: ptr, exp: ptr, m: ptr) -> ptr {
+    bm = m as *BN
+    n = bm.len
+    long m0 = intarr_get_raw(bm.mag, n - 1) & 0xFFFFFFFF   // LSB limb (BE last)
+    long mdash = mont_mdash(m0)
+    mle = le_padded_from_bn(m, n)
+
+    // R = 2^(32n); R mod m and R^2 mod m via the existing (correct) path.
+    // base_mont = base * R mod m  ; one_mont = R mod m (Montgomery 1).
+    one = from_int(1)
+    rshift = shift_left(one, 32 * n)          // R
+    r_mod = mod(rshift, m)                     // R mod m  == Montgomery(1)
+    base_mod = mod(base, m)                     // base mod m, in [0, m)
+    base_r = multiply(base_mod, rshift)         // base * R
+    base_mont_bn = mod(base_r, m)               // base * R mod m
+
+    one_le = le_padded_from_bn(r_mod, n)        // Montgomery form of 1
+    base_le = le_padded_from_bn(base_mont_bn, n)
+
+    free(one); free(rshift); free(r_mod); free(base_mod)
+    free(base_r); free(base_mont_bn)
+
+    // acc = Montgomery(1); square-and-multiply MSB->LSB over exp bits.
+    acc = mag_clone(one_le, n)
+    be = exp as *BN
+    nbits = mag_bit_length(be.mag, be.len)
+    i = nbits - 1
+    while i >= 0 {
+        sq = mont_mul(acc, acc, mle, n, mdash)
+        intarr_free(acc)
+        acc = sq
+        if mag_test_bit(be.mag, be.len, i) == 1 {
+            pr = mont_mul(acc, base_le, mle, n, mdash)
+            intarr_free(acc)
+            acc = pr
+        }
+        i = i - 1
+    }
+    // convert out of Montgomery form: result = acc * 1 * R^(-1) mod m.
+    one_mont = intarr_new_raw(n)   // value 1 in plain form (LE)
+    intarr_set_raw(one_mont, 0, 1)
+    final_le = mont_mul(acc, one_mont, mle, n, mdash)
+    result = bn_from_le(final_le, n)
+
+    intarr_free(acc); intarr_free(final_le); intarr_free(one_mont)
+    intarr_free(one_le); intarr_free(base_le); intarr_free(mle)
+    return result
+}
+
 // modular exponentiation: base^exp mod m (exp >= 0, m > 0). Square-and-
 // multiply, MSB-to-LSB. Matches BC ModPow for non-negative exponents.
 mod_pow(base: ptr, exp: ptr, m: ptr) -> ptr {
@@ -846,6 +1309,14 @@ mod_pow(base: ptr, exp: ptr, m: ptr) -> ptr {
     if bb.sign == 0 {
         free(one)
         return bn_zero()
+    }
+    // Fast path: ODD modulus -> Montgomery reduction (RSA/DH hot path).
+    // Odd iff the least-significant bit of m is set (BE: last limb bit 0).
+    // Even moduli (and the degenerate handled cases above) fall through to
+    // the schoolbook square-and-multiply, which is unconditionally correct.
+    if mag_test_bit(bm.mag, bm.len, 0) == 1 {
+        free(one)
+        return mod_pow_monty(base, exp, m)
     }
     // square-and-multiply over the exponent's magnitude bits, MSB->LSB.
     // acc starts at 1; base_mod = base mod m handles base >= m / negative base.

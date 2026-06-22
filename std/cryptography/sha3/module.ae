@@ -180,13 +180,7 @@ absorb_block(c: *Sha3Ctx, src: ptr, off: int, n: int) {
     li = 0
     while li < lanes {
         base = off + li * 8
-        long lane = 0
-        k = 0
-        while k < 8 {
-            b = bytes.get(src, base + k) & 255
-            lane = lane | shl64(b, 8 * k)
-            k = k + 1
-        }
+        long lane = bytes.get_le64(src, base)
         longarr_set_unchecked(s, li, longarr_get_unchecked(s, li) ^ lane)
         li = li + 1
     }
