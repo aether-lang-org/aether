@@ -277,6 +277,14 @@ out = bytes.finish(b, 6)                  // "ABABAB"
 - `bytes.get_le16(b, index)` → `int` - Little-endian 16-bit read; -1 if range past current length
 - `bytes.set_le32(b, index, value)` → `int` - Little-endian 32-bit write at index..index+3; grows; 1 on success
 - `bytes.get_le32(b, index)` → `int` - Little-endian 32-bit read; -1 if range past current length
+- `bytes.set_le64(b, index, value: long)` → `int` - Little-endian 64-bit write at index..index+7; grows; 1 on success
+- `bytes.get_le64(b, index)` → `long` - Little-endian 64-bit read; -1 if range past current length; round-trips losslessly with set_le64
+- `bytes.set_be16(b, index, value)` → `int` - Big-endian 16-bit write (MSB first); grows; 1 on success
+- `bytes.get_be16(b, index)` → `int` - Big-endian 16-bit read; -1 if range past current length
+- `bytes.set_be32(b, index, value)` → `int` - Big-endian 32-bit write (MSB first); grows; 1 on success
+- `bytes.get_be32(b, index)` → `int` - Big-endian 32-bit read; -1 if range past current length
+- `bytes.set_be64(b, index, value: long)` → `int` - Big-endian 64-bit write (MSB first); grows; 1 on success
+- `bytes.get_be64(b, index)` → `long` - Big-endian 64-bit read; -1 if range past current length; round-trips losslessly with set_be64
 - `bytes.copy_from_string(b, dst, src, src_len)` → `int` - Copy from a string into the buffer at offset
 - `bytes.copy_from_bytes(dst, dst_off, src, src_off, length)` → `int` - Copy between distinct buffers (memmove semantics); grows `dst` if needed. Use for two-pass algorithms like separable Gaussian blur.
 - `bytes.copy_within(b, dst, src, length)` → `int` - Self-copy, forward byte-by-byte (RLE-safe)

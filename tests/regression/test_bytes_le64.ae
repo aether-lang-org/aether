@@ -1,0 +1,53 @@
+// Regression: std.bytes little-endian 64-bit accessors set_le64 / get_le64
+// (#838) — the LE twin of set_be64/get_be64 and the 64-bit completion of
+// the existing set_le32/get_le32. Many crypto primitives (Keccak lanes,
+// BLAKE2b, Salsa20/Argon2 blocks, Skein/Tiger, X448/Ed448 encoding) load
+// and store little-endian 64-bit words; before this pair, each module
+// hand-assembled them byte-by-byte. Byte ORDER is the property under test.
+
+import std.bytes
+
+main() {
+    print("=== std.bytes LE64 ===\n")
+    fails = 0
+
+    b = bytes.new(0)
+
+    // le64: 0x1122334455667788 -> least-significant byte FIRST [0x88..0x11]
+    _ = bytes.set_le64(b, 0, 0x1122334455667788)
+    if bytes.get(b, 0) != 0x88 { print("FAIL le64 byte0 (LSB)\n"); fails = fails + 1 }
+    if bytes.get(b, 1) != 0x77 { print("FAIL le64 byte1\n"); fails = fails + 1 }
+    if bytes.get(b, 6) != 0x22 { print("FAIL le64 byte6\n"); fails = fails + 1 }
+    if bytes.get(b, 7) != 0x11 { print("FAIL le64 byte7 (MSB)\n"); fails = fails + 1 }
+    if bytes.get_le64(b, 0) != 0x1122334455667788 { print("FAIL le64 roundtrip\n"); fails = fails + 1 }
+
+    // It really is the reverse of be64 for the same value.
+    bb = bytes.new(0)
+    _ = bytes.set_be64(bb, 0, 0x1122334455667788)
+    if bytes.get(bb, 0) != 0x11 { print("FAIL be64 control byte0\n"); fails = fails + 1 }
+    if bytes.get(b, 0) == bytes.get(bb, 0) { print("FAIL le64/be64 not mirrored\n"); fails = fails + 1 }
+    bytes.free(bb)
+
+    // Full-width (all bits set) round-trips losslessly through the signed long.
+    _ = bytes.set_le64(b, 0, 0xFFFFFFFFFFFFFFFF)
+    if bytes.get_le64(b, 0) != 0xFFFFFFFFFFFFFFFF { print("FAIL le64 all-ones\n"); fails = fails + 1 }
+
+    // High-bit-set value (bit 63) round-trips — the signed-long edge case.
+    _ = bytes.set_le64(b, 0, 0x8000000000000001)
+    if bytes.get(b, 0) != 0x01 { print("FAIL le64 hi LSB\n"); fails = fails + 1 }
+    if bytes.get(b, 7) != 0x80 { print("FAIL le64 hi MSB\n"); fails = fails + 1 }
+    if bytes.get_le64(b, 0) != 0x8000000000000001 { print("FAIL le64 hi roundtrip\n"); fails = fails + 1 }
+
+    // Writes at a non-zero offset don't disturb neighbours.
+    _ = bytes.set_le64(b, 16, 0x0102030405060708)
+    if bytes.get_le64(b, 16) != 0x0102030405060708 { print("FAIL le64 offset\n"); fails = fails + 1 }
+
+    bytes.free(b)
+
+    if fails == 0 {
+        print("PASS: std.bytes LE64\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

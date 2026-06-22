@@ -23,6 +23,7 @@ exports (
     aether_bytes_length,
     aether_bytes_set_le16, aether_bytes_get_le16,
     aether_bytes_set_le32, aether_bytes_get_le32,
+    aether_bytes_set_le64, aether_bytes_get_le64,
     aether_bytes_set_be16, aether_bytes_get_be16,
     aether_bytes_set_be32, aether_bytes_get_be32,
     aether_bytes_set_be64, aether_bytes_get_be64,
@@ -30,7 +31,7 @@ exports (
     aether_bytes_copy_within,
     aether_bytes_finish, aether_bytes_free,
     new, set, get, length,
-    set_le16, get_le16, set_le32, get_le32,
+    set_le16, get_le16, set_le32, get_le32, set_le64, get_le64,
     set_be16, get_be16, set_be32, get_be32, set_be64, get_be64,
     copy_from_string, copy_from_bytes, copy_within, finish, free
 )
@@ -44,6 +45,8 @@ extern aether_bytes_set_le16(b: ptr, index: int, value: int) -> int
 extern aether_bytes_get_le16(b: ptr, index: int) -> int
 extern aether_bytes_set_le32(b: ptr, index: int, value: int) -> int
 extern aether_bytes_get_le32(b: ptr, index: int) -> int
+extern aether_bytes_set_le64(b: ptr, index: int, value: long) -> int
+extern aether_bytes_get_le64(b: ptr, index: int) -> long
 extern aether_bytes_set_be16(b: ptr, index: int, value: int) -> int
 extern aether_bytes_get_be16(b: ptr, index: int) -> int
 extern aether_bytes_set_be32(b: ptr, index: int, value: int) -> int
@@ -126,6 +129,20 @@ set_le32(b: ptr, index: int, value: int) -> int {
 // Round-trips losslessly with set_le32 for any int input.
 get_le32(b: ptr, index: int) -> int {
     return aether_bytes_get_le32(b, index)
+}
+
+// Little-endian 64-bit write at `index..index+7` (least-significant
+// byte first). Grows the buffer if needed. Returns 1 on success, 0 on
+// failure.
+set_le64(b: ptr, index: int, value: long) -> int {
+    return aether_bytes_set_le64(b, index, value)
+}
+
+// Little-endian 64-bit read at `index..index+7`. Returns the value as
+// a long, or -1 on failure. Round-trips losslessly with set_le64 for
+// any long input.
+get_le64(b: ptr, index: int) -> long {
+    return aether_bytes_get_le64(b, index)
 }
 
 // Big-endian 16-bit write at `index..index+1` (most-significant byte
