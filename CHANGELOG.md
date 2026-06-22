@@ -5,14 +5,76 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.264.0]` (create it at the top if
-absent). When a release PR merges to `main`, the release pipeline
-(`.github/workflows/release.yml`) automatically replaces `## [0.264.0]`
-with the next version number before tagging. Always use the literal
-`[current]` placeholder — a hardcoded version header here is *not*
-renamed, so it drifts from the tags and can cause the next release's
-notes to be skipped or clobbered (the failure modes documented in
-`docs/notes/changelog-release-drift-note.md`).
+**Workflow**: New changes go under `## [current]`. When a PR merges to
+`main`, the release pipeline automatically replaces `[current]` with the
+next version number before tagging the release.
+
+## [current]
+
+## [0.308.0]
+
+### Fixed
+
+- **Module-level mutable global of `string` type now writes the static, not a
+  local shadow** — a bare `name = expr` inside a function body assigning to a
+  `#701` module-level `global_var` string lowered to a shadowing local instead
+  of the file-scope static, so the write was lost. It now resolves to the
+  module static. (Part of #861.)
+
+## [0.307.0]
+
+### Added
+
+- **`--emit=lib` now exports module-level `const` declarations** (#854). A
+  `--emit=lib` artifact's `aether_lib_meta()` catalog carried functions and
+  closures but not module-level constants, so a consumer importing the `.so`
+  (no source) failed every `foo.SOME_CONST` reference. Exported scalar/string
+  consts (`int`, `long`, `bool`, `float`, `string`) now cross the boundary:
+  they're recorded in the catalog (schema **1.2**, forward-compatible — a
+  1.0/1.1 reader ignores the new slot) and rehydrated as `const NAME = value`
+  in the synthesized binimport stub, so `foo.SOME_CONST` resolves against a
+  `.so` exactly as against source, with no call-site changes. `ae lib-info`
+  gains a `Constants:` section. Function-only artifacts stay byte-identical at
+  schema 1.0. Typed const *arrays* (#745) remain out of scope (skipped, never
+  half-emitted).
+
+### Changed
+
+- **Clearer diagnostic for a non-exported module member** (#854). Referencing
+  a name an imported module doesn't export (e.g. a constant absent from a
+  `.so`'s ABI) reported the misleading `Undefined variable '<module>'`, which
+  pointed at the module rather than the member. It now reports
+  `error[E0200]: module '<module>' has no export '<NAME>' (not part of the
+  module's API / library ABI)`. Scoped to the value/member path; non-exported
+  *function* calls already named `<module>.<fn>` and are unchanged.
+
+## [0.306.0]
+
+### Added
+
+- **Embedded Racket and Rhombus host modules** — `contrib.host.racket` and
+  `contrib.host.rhombus` embed the Racket CS runtime in-process with a live,
+  persistent VM (#852). Racket and Rhombus are the **same VM** (Rhombus is a
+  `#lang` on the Racket runtime), so one shared bridge backs both surfaces and
+  they share one persistent VM and one string-only k-v map (a key set via
+  `racket.set` is read via `rhombus.get`). Surface mirrors the other hosts:
+  `evaluate` / `run` / `set` / `get` / `run_sandboxed` /
+  `run_sandboxed_with_map` (live shared-map interop) / `init` / `finalize`.
+  - **No fork, no patches** — unlike `contrib.host.factor` (which needs a
+    forked libfactor), both upstreams are used as-shipped: Racket via a stock
+    `make cs` build (it exposes a first-class embedding API), Rhombus via
+    stock `raco pkg install rhombus`.
+  - **Static-linked, not dlopen** — Racket CS has no shared `libracketcs`
+    (upstream refuses `--enable-shared`), so a program importing the bridge
+    static-links `libracketcs.a` (from `$AETHER_RACKET_LIB`) plus the runtime's
+    system deps; the VM boots from the petite/scheme/racket boot images in
+    `$AETHER_RACKET_BOOT_DIR`. The result-returning call is `evaluate` (not
+    `eval`) because `libracketcs.a` exports its own `racket_eval`.
+  - Experimental and **not in the default `CONTRIB_HOST_LANGS` set** (needs a
+    built Racket CS); `make contrib` SKIPs the archive when the embedding
+    headers aren't present. Same sandbox caveat as `host/factor`: the VM's own
+    GC/JIT/threads aren't contained by the libc gate — rely on the
+    process-level sandbox. See `contrib/host/racket/README.md`.
 
 ## [0.305.0]
 
@@ -992,10 +1054,7 @@ notes to be skipped or clobbered (the failure modes documented in
 
 ### Documentation
 
-- **Reconciled drifted CHANGELOG version sections** (0.222, 0.234, 0.235,
-  0.257, 0.263). Backfilled clean missing sections and relocated entries that
-  had landed under the wrong version header, restoring a gapless changelog
-  through that range. Docs only — no code change.
+- Docs only change to repair CHANGELOG
 
 ## [0.263.0]
 
