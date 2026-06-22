@@ -195,3 +195,62 @@ TEST_CATEGORY(caps_fs_dir_list_accounting_balances, TEST_CATEGORY_STDLIB) {
         ASSERT_EQ(base, aether_caps_used_bytes());
     }
 }
+
+/* #462 caps-audit, std.fs file handle: file_open_raw now routes the File
+ * struct AND its retained path copy (a sandboxed caller can craft an
+ * enormous filename) through aether_caps_malloc; file_close releases both
+ * with the matching sizes. The accounting must return exactly to baseline
+ * after open + close — a size-mismatched free would drift the counter. */
+TEST_CATEGORY(caps_fs_file_open_close_balances, TEST_CATEGORY_STDLIB) {
+    caps_reset();
+    const char* tp = "/tmp/aether_caps_fopen_test.txt";
+    FILE* w = fopen(tp, "wb");
+    ASSERT_TRUE(w != NULL);
+    fputs("hello", w);
+    fclose(w);
+
+    uint64_t base = aether_caps_used_bytes();
+    for (int rep = 0; rep < 4; rep++) {
+        File* f = file_open_raw(tp, "rb");
+        ASSERT_TRUE(f != NULL);
+        /* The File struct + the path copy sit above baseline. */
+        ASSERT_TRUE(aether_caps_used_bytes() > base);
+        file_close(f);
+        /* ...and both are released with their exact sizes. */
+        ASSERT_EQ(base, aether_caps_used_bytes());
+    }
+    remove(tp);
+}
+
+/* #462 caps-audit acceptance: reading a file whose size exceeds the
+ * sandbox's remaining memory headroom must be refused, not OOM the host.
+ * file_read_all_raw's buffer is cap-allocated (#343); with a cap set
+ * below the file size the alloc is denied (returns NULL) and the counter
+ * does not drift from the refused allocation. The cap surface is what a
+ * plugin host installs to bound filesystem-driven memory. */
+#ifndef _WIN32
+TEST_CATEGORY(caps_fs_read_denied_past_cap, TEST_CATEGORY_STDLIB) {
+    caps_reset();
+    const char* tp = "/tmp/aether_caps_read_test.bin";
+    FILE* w = fopen(tp, "wb");
+    ASSERT_TRUE(w != NULL);
+    char chunk[4096];
+    memset(chunk, 'x', sizeof(chunk));
+    for (int i = 0; i < 32; i++) fwrite(chunk, 1, sizeof(chunk), w);  /* 128 KiB */
+    fclose(w);
+
+    File* f = file_open_raw(tp, "rb");
+    ASSERT_TRUE(f != NULL);
+
+    /* Cap at current usage + 64 KiB — below the 128 KiB read buffer. */
+    uint64_t headroom = aether_caps_used_bytes();
+    aether_caps_set_memory_cap(headroom + 64 * 1024);
+    char* data = file_read_all_raw(f);
+    ASSERT_TRUE(data == NULL);                     /* read refused */
+    ASSERT_EQ(headroom, aether_caps_used_bytes()); /* counter not drifted */
+
+    aether_caps_set_memory_cap(0);
+    file_close(f);
+    remove(tp);
+}
+#endif
