@@ -14,6 +14,22 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Documentation
+
+- **Crypto digest context-ownership contract (#837) is now documented
+  consistently across every streaming hash module.** `final_hex` /
+  `final_bytes` free the context; `free_ctx` is only for abandoning a
+  context *before* finalizing — calling `free_ctx` after a successful
+  `final_*` is a double-free. Previously only `std.cryptography.sha2`
+  stated this. The rule is now on the `final_*` / `free_ctx` doc-comments
+  and in the header usage example of `sha3`, `sm3`, `blake2`,
+  `ripemd128` / `ripemd160` / `ripemd256` / `ripemd320`, `whirlpool`,
+  `tiger`, and `skein`, and the streaming examples that previously invited
+  the broken pattern now carry an explicit `ownership:` note. Comment-only;
+  no behavior change.
+
 ## [0.302.0]
 
 ### Changed

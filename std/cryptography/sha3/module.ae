@@ -19,6 +19,8 @@
 //   streaming:      ctx,_ = new("sha3-256"); update(ctx, data, len)
 //                   final_hex(ctx, 0)        // out_len ignored for fixed
 //                   final_hex(ctx, out_len)  // out_len required for shake
+//   ownership:  final_hex / final_bytes FREE the ctx; call free_ctx
+//               ONLY to abandon a ctx before finalizing (never after).
 //
 // Aether-specific care:
 //   * Lanes are full 64-bit; a `long` holds an entire uint64 lane.
@@ -383,6 +385,9 @@ free_internals(c: *Sha3Ctx) {
     }
 }
 
+// Abandon a context WITHOUT finalizing — the bail-out cleanup path.
+// NULL-safe. final_hex / final_bytes already free the ctx, so free_ctx
+// must be called ONLY when bailing out before a finalize.
 free_ctx(ctx: ptr) {
     if ctx == null {
         return
@@ -394,6 +399,7 @@ free_ctx(ctx: ptr) {
 
 // `out_len` is ignored for fixed digests (uses the variant's length) and
 // required (>0) for SHAKE.
+// FREES the ctx; do NOT call free_ctx after a successful finalize.
 final_bytes(ctx: ptr, out_len: int) -> ptr {
     c = ctx as *Sha3Ctx
     n = c.out_len
@@ -410,6 +416,8 @@ final_bytes(ctx: ptr, out_len: int) -> ptr {
     return res
 }
 
+// Finalize and return the digest as lowercase hex. FREES the ctx; do
+// NOT call free_ctx after a successful finalize (double-free).
 final_hex(ctx: ptr, out_len: int) -> string {
     c = ctx as *Sha3Ctx
     n = c.out_len

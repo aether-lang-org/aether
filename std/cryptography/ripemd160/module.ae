@@ -16,6 +16,8 @@
 // Two shapes are exposed:
 //   one-shot:   ripemd160_hex(data, len) / ripemd160_bytes(data, len)
 //   streaming:  ctx = new(); update(ctx, data, len); final_hex(ctx)
+//   ownership:  final_hex / final_bytes FREE the ctx; call free_ctx
+//               ONLY to abandon a ctx before finalizing (never after).
 //
 // Aether-specific care (this is where digest bugs live):
 //   * RIPEMD works on 32-bit words but Aether int/long are wider, so every
@@ -481,6 +483,9 @@ final_hex(ctx: ptr) -> string {
     return s
 }
 
+// Abandon a context WITHOUT finalizing — the bail-out cleanup path.
+// NULL-safe. final_hex / final_bytes already free the ctx, so free_ctx
+// must be called ONLY when bailing out before a finalize.
 free_ctx(ctx: ptr) {
     if ctx == null {
         return
