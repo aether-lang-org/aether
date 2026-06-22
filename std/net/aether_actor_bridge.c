@@ -84,7 +84,15 @@ void ae_io_cancel(int fd) {
 // ae_pipe_write_fd(). Single-pipe scope is sufficient for the one
 // caller that needs it (the await_io end-to-end test); production code
 // that needs multiple pipes should use its own syscall wrapper.
+/* `_ae_pipe_read_fd` is consumed only on the POSIX path (ae_pipe_open
+ * returns it directly), so guard it out on Windows — there's no pipe()
+ * and no read-fd accessor, and an always-declared static would warn as
+ * unused (-Wunused-variable). `_ae_pipe_write_fd` stays declared on every
+ * platform because ae_pipe_write_fd() reads it unconditionally (it just
+ * returns -1 on Windows). */
+#ifndef _WIN32
 static int _ae_pipe_read_fd = -1;
+#endif
 static int _ae_pipe_write_fd = -1;
 
 int ae_pipe_open(void) {
