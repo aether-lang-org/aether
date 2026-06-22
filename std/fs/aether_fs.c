@@ -177,11 +177,17 @@ File* file_open_raw(const char* path, const char* mode) {
     FILE* fp = fopen(path, mode);
     if (!fp) return NULL;
 
-    File* file = (File*)malloc(sizeof(File));
+    File* file = (File*)aether_caps_malloc(sizeof(File));
     if (!file) { fclose(fp); return NULL; }
     file->handle = fp;
     file->is_open = 1;
-    file->path = strdup(path);
+    /* #462: cap-account the retained path copy — a sandboxed caller can
+     * craft an enormous filename to inflate filesystem-driven memory.
+     * Freed with the matching length in file_close. */
+    size_t plen = strlen(path) + 1;
+    char* pcopy = (char*)aether_caps_malloc(plen);
+    if (pcopy) memcpy(pcopy, path, plen);
+    file->path = pcopy;
     return file;
 }
 
@@ -222,8 +228,8 @@ int file_close(File* file) {
         file->is_open = 0;
     }
 
-    free((void*)file->path);
-    free(file);
+    if (file->path) aether_caps_free((void*)file->path, strlen(file->path) + 1);
+    aether_caps_free(file, sizeof(File));
     return 1;
 }
 

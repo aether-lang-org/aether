@@ -14,6 +14,23 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Changed
+
+- **Caps-audit (#462): the `std.fs` file handle is now memory-cap
+  accounted.** `file_open_raw` routes both the `File` struct and its
+  retained path copy through `aether_caps_malloc` (a sandboxed caller can
+  craft an enormous filename to inflate filesystem-driven memory), and
+  `file_close` releases both with their exact sizes so the accounting
+  returns to baseline. The large-file read buffer was already cap-bounded
+  (#343/#463). Added two runtime tests: `caps_fs_file_open_close_balances`
+  (open + close round-trips to baseline, no accounting drift) and
+  `caps_fs_read_denied_past_cap` (#462's acceptance case — a read whose
+  buffer exceeds the sandbox's remaining headroom is refused with the
+  counter intact). Returned heap strings (path_join/clean/rel results)
+  remain plain `malloc` by design — the Aether heap-string machinery owns
+  and frees them, so cap-allocating them would drift the counter.
 ## [0.301.0]
 
 ### Added
