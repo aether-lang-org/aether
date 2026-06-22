@@ -1,0 +1,19 @@
+// Consumer built against const_lib's .so ONLY (no source on the --lib path).
+// Prints the function result and every exported constant. Pre-fix this fails
+// to type-check (`Undefined variable 'const_lib'`, one per const reference);
+// post-fix it builds and prints the expected lines.
+//
+// `import std.list` first, per the ask's ordering note — a stdlib import
+// before the .so-backed one keeps the binimport prepass from masking the
+// thing under test.
+import std.list
+import const_lib
+
+main() {
+    println("fn=${const_lib.pulse()}")
+    println("int=${const_lib.K_INT}")
+    println("long=${const_lib.K_LONG}")
+    println("str=${const_lib.K_STR}")
+    println("t=${const_lib.K_TRUE}")
+    println("f=${const_lib.K_FALSE}")
+}

@@ -27,14 +27,22 @@
  * fidelity instead of seeing the flattened C ABI. See
  * docs/emit-lib.md → "Two kinds of consumer".
  *
+ * v3 (schema "1.2") fills the `constant_count` / `constants` slots:
+ * one `AetherLibConstant` record per exported module-level `const`
+ * declaration (scalar/string consts — `int`, `long`, `bool`, `float`,
+ * `string`), so a downstream Aether consumer's `foo.SOME_CONST`
+ * resolves against a `.so` exactly as it does against source. Typed
+ * const *arrays* are out of scope (the emitter skips them rather than
+ * emit a half-record). See emit-lib-export-constants-ask.md.
+ *
  * Schema versioning: `schema_version` is "1.0" for function-only
- * artifacts and "1.1" once closure records are present. Hosts that
- * read the metadata should accept any "1.<minor>" — within "1.x"
- * fields are only ever appended, and a reader that predates a field
- * stops at the count/pointer it knows (a "1.0" reader ignores
- * `closures` exactly as before; the slots were always there). The
- * "all-zero / NULL means absent" contract holds for every appended
- * field.
+ * artifacts, "1.1" once closure records are present, and "1.2" once
+ * constant records are present. Hosts that read the metadata should
+ * accept any "1.<minor>" — within "1.x" fields are only ever appended,
+ * and a reader that predates a field stops at the count/pointer it
+ * knows (a "1.0" reader ignores `closures` and `constants` exactly as
+ * before; the slots were always there). The "all-zero / NULL means
+ * absent" contract holds for every appended field.
  */
 
 #ifndef AETHER_LIB_META_H
@@ -92,17 +100,33 @@ typedef struct {
     int         source_line;          /* 1-based                              */
 } AetherLibClosure;
 
+/* One exported module-level scalar/string constant (v3).
+ *
+ * `value` is the rendered source literal, ready to drop verbatim into a
+ * synthesized `const NAME = <value>` stub: an int/long/float as its
+ * digits ("0", "-1", "3.14"), a bool as "true"/"false", a string as a
+ * quoted, escaped Aether string literal ("\"...\""). Typed const arrays
+ * (#745) are out of scope and the emitter skips them. Stable layout —
+ * append only, never reorder. */
+typedef struct {
+    const char* name;    /* "ENTRY_NORMAL"                                  */
+    const char* type;    /* "int" | "long" | "string" | "bool" | "float"   */
+    const char* value;   /* rendered literal: "0", "\"...\"", "true", ...   */
+} AetherLibConstant;
+
 /* Top-level catalog. Stable layout — never reorder fields, only
  * append. New optional fields go at the end with a documented
  * "all-zero means absent" contract. */
 typedef struct {
-    const char* schema_version;   /* "1.0" funcs only; "1.1" with closures */
+    const char* schema_version;   /* "1.0" funcs; "1.1" closures; "1.2" consts */
     const char* aether_version;   /* compiler version that produced this   */
     const char* primary_source;   /* the main .ae file passed to aetherc   */
     int                       function_count;
     const AetherLibFunction*  functions;
     int                       closure_count;   /* 0 if no closure surface   */
     const AetherLibClosure*   closures;        /* NULL when closure_count==0 */
+    int                       constant_count;  /* 0 if no exported consts   */
+    const AetherLibConstant*  constants;       /* NULL when constant_count==0 */
 } AetherLibMeta;
 
 /* The single entry point. Every `--emit=lib` artifact exports this

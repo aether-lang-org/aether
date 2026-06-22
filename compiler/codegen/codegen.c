@@ -1929,6 +1929,68 @@ static int fn_takes_builder_context(ASTNode* fn) {
     return 0;
 }
 
+/* Map an exported const's Type* to the catalog `type` string (v3). Returns
+ * NULL for kinds we don't carry across the boundary (arrays, structs, ptr,
+ * etc.) so the caller skips the record rather than emit a half-truth. */
+static const char* lib_const_type_string(Type* t) {
+    if (!t) return NULL;
+    switch (t->kind) {
+        case TYPE_INT:    return "int";
+        case TYPE_INT64:  return "long";
+        case TYPE_BOOL:   return "bool";
+        case TYPE_STRING: return "string";
+        case TYPE_FLOAT:
+        case TYPE_LONGDOUBLE: return "float";
+        default:          return NULL;
+    }
+}
+
+/* Render an exported const's value expression to a source-ready Aether
+ * literal, written into `out` as a C-string literal (the rehydrated stub
+ * drops it verbatim after `const NAME = `). Strings are re-quoted and
+ * escaped; numbers/bools pass through. Returns 1 if it could render a
+ * scalar/string literal, 0 otherwise (caller skips the const). Only a bare
+ * `AST_LITERAL` is rendered — a const whose RHS is an expression (`A + 1`,
+ * a call) is conservatively skipped rather than mis-rendered. */
+static int emit_lib_const_value_literal(FILE* out, ASTNode* val, Type* t) {
+    if (!val || val->type != AST_LITERAL || !val->value || !t) return 0;
+    if (t->kind == TYPE_STRING) {
+        /* Re-emit as a quoted, escaped Aether string literal — the whole
+         * quoted form goes into the catalog `value` field, so the stub's
+         * `const NAME = "..."` is syntactically a string literal. */
+        fputc('"', out);            /* opening quote of the C-string field   */
+        fputc('\\', out); fputc('"', out);  /* opening quote of the Aether literal */
+        for (const char* p = val->value; *p; p++) {
+            unsigned char ch = (unsigned char)*p;
+            switch (*p) {
+                case '\n': fputs("\\n", out); break;
+                case '\t': fputs("\\t", out); break;
+                case '\r': fputs("\\r", out); break;
+                /* Backslash and double-quote must survive BOTH the C-string
+                 * field and the inner Aether literal, so escape twice. */
+                case '\\': fputs("\\\\\\\\", out); break;
+                case '"':  fputs("\\\\\\\"", out); break;
+                default:
+                    if (ch < 0x20 || ch == 0x7F) fprintf(out, "\\\\x%02x", ch);
+                    else fputc(*p, out);
+                    break;
+            }
+        }
+        fputc('\\', out); fputc('"', out);  /* closing quote of the Aether literal */
+        fputc('"', out);            /* closing quote of the C-string field   */
+        return 1;
+    }
+    if (t->kind == TYPE_BOOL || t->kind == TYPE_INT || t->kind == TYPE_INT64 ||
+        t->kind == TYPE_FLOAT || t->kind == TYPE_LONGDOUBLE) {
+        /* Numeric / bool literal: the source token is already a valid Aether
+         * literal (incl. 0x / 0o / 0b prefixes, which Aether re-accepts).
+         * Emit it as the C-string field via the shared escaper. */
+        emit_lib_metadata_c_string_literal(out, val->value);
+        return 1;
+    }
+    return 0;
+}
+
 static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
     if (!gen || !gen->emit_lib || !program) return;
 
@@ -1978,6 +2040,61 @@ static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
         fns[fn_count++] = fn;
     }
 
+    /* --- v3: collect exported module-level scalar/string consts ---
+     *
+     * Export gate: if the module has an `exports (...)` list, a const is
+     * cataloged only when its name appears there; absent any exports list
+     * (export-everything modules) all top-level consts are eligible — the
+     * same lenient posture the function pass takes. Imported/cloned consts
+     * (is_imported) and typed const ARRAYS (annotation "array_const") and
+     * mutable globals (annotation "global_var") are never cataloged. */
+    const char** export_names = NULL;
+    int export_name_count = 0;
+    int has_exports_list = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (child && child->type == AST_EXPORTS_LIST) {
+            has_exports_list = 1;
+            export_names = (const char**)malloc(
+                sizeof(char*) * (child->child_count > 0 ? child->child_count : 1));
+            for (int j = 0; j < child->child_count; j++) {
+                ASTNode* id = child->children[j];
+                if (id && id->value) export_names[export_name_count++] = id->value;
+            }
+            break;
+        }
+    }
+    /* Gather candidate const decls (name + type both renderable). */
+    int max_consts = program->child_count;
+    ASTNode** consts = (ASTNode**)malloc(sizeof(ASTNode*) * (max_consts > 0 ? max_consts : 1));
+    const char** const_type = (const char**)malloc(sizeof(char*) * (max_consts > 0 ? max_consts : 1));
+    int const_count = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        ASTNode* cd = child;
+        if (child && child->type == AST_EXPORT_STATEMENT && child->child_count > 0) {
+            cd = child->children[0];
+        }
+        if (!cd || cd->type != AST_CONST_DECLARATION || !cd->value) continue;
+        if (cd->is_imported) continue;
+        if (cd->annotation && (strcmp(cd->annotation, "array_const") == 0 ||
+                               strcmp(cd->annotation, "global_var") == 0)) continue;
+        if (cd->child_count < 1) continue;
+        const char* ts = lib_const_type_string(cd->node_type);
+        if (!ts) continue;  /* unsupported const type — skip, no half-record */
+        /* export gate */
+        if (has_exports_list) {
+            int listed = 0;
+            for (int k = 0; k < export_name_count; k++) {
+                if (strcmp(export_names[k], cd->value) == 0) { listed = 1; break; }
+            }
+            if (!listed) continue;
+        }
+        consts[const_count] = cd;
+        const_type[const_count] = ts;
+        const_count++;
+    }
+
     fprintf(gen->output,
         "\n/* --- aether_lib_meta() symbol catalog (issue #403) --- */\n");
     fprintf(gen->output, "#include <stddef.h>\n");
@@ -1998,10 +2115,14 @@ static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
         "    int capture_count; const struct _AetherLibCap* captures;\n"
         "    const char* source_file; int source_line; };\n");
     fprintf(gen->output,
+        "struct _AetherLibConst { const char* name; const char* type;\n"
+        "    const char* value; };\n");
+    fprintf(gen->output,
         "struct _AetherLibMeta { const char* schema_version; const char* aether_version;\n"
         "    const char* primary_source; int function_count;\n"
         "    const struct _AetherLibFn* functions;\n"
-        "    int closure_count; const struct _AetherLibClosure* closures; };\n\n");
+        "    int closure_count; const struct _AetherLibClosure* closures;\n"
+        "    int constant_count; const struct _AetherLibConst* constants; };\n\n");
 
     fprintf(gen->output,
         "static const struct _AetherLibFn _aether_lib_fns[] = {\n");
@@ -2206,6 +2327,27 @@ static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
         fprintf(gen->output, "};\n\n");
     }
 
+    /* --- v3 constant records (schema 1.2) --- */
+    if (const_count > 0) {
+        fprintf(gen->output,
+            "\nstatic const struct _AetherLibConst _aether_lib_consts[] = {\n");
+        for (int i = 0; i < const_count; i++) {
+            ASTNode* cd = consts[i];
+            fprintf(gen->output, "    { ");
+            emit_lib_metadata_c_string_literal(gen->output, cd->value);
+            fprintf(gen->output, ", ");
+            emit_lib_metadata_c_string_literal(gen->output, const_type[i]);
+            fprintf(gen->output, ", ");
+            if (!emit_lib_const_value_literal(gen->output, cd->children[0], cd->node_type)) {
+                /* Shouldn't happen — we gated on a renderable type above —
+                 * but never emit a malformed record: fall back to "". */
+                fputs("\"\"", gen->output);
+            }
+            fprintf(gen->output, " },\n");
+        }
+        fprintf(gen->output, "};\n\n");
+    }
+
     /* Pull the primary source path off the first non-imported fn —
      * approximation of "the .ae the user passed to aetherc". The
      * artifact may bundle multiple sources (concat-ae); naming the
@@ -2214,25 +2356,38 @@ static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
     for (int i = 0; i < fn_count; i++) {
         if (fns[i]->source_file) { primary_src = fns[i]->source_file; break; }
     }
+    /* const-only modules (no exported functions) still want a source path. */
+    if (!primary_src[0]) {
+        for (int i = 0; i < const_count; i++) {
+            if (consts[i]->source_file) { primary_src = consts[i]->source_file; break; }
+        }
+    }
     fprintf(gen->output,
         "static const struct _AetherLibMeta _aether_lib_meta = {\n");
-    /* schema "1.1" once any closure record is present; "1.0" keeps a
-     * function-only artifact byte-identical to v1 for existing readers. */
-    fprintf(gen->output, "    \"%s\", \"", clo_count > 0 ? "1.1" : "1.0");
+    /* Schema is the highest feature level present: "1.2" once any constant
+     * record exists, else "1.1" with closures, else "1.0" — which keeps a
+     * function-only artifact byte-identical to v1 for existing readers. The
+     * trailing slots are always written (the struct always has them); older
+     * readers stop at the count/pointer they know. */
+    const char* schema = (const_count > 0) ? "1.2"
+                       : (clo_count > 0)   ? "1.1"
+                       : "1.0";
+    fprintf(gen->output, "    \"%s\", \"", schema);
     fprintf(gen->output, "%s", "0.0.0-dev");  /* version string filled in by build glue if available */
     fprintf(gen->output, "\", ");
     emit_lib_metadata_c_string_literal(gen->output, primary_src);
-    if (clo_count > 0) {
-        fprintf(gen->output, ", %d, _aether_lib_fns, %d, _aether_lib_closures\n};\n\n",
-                fn_count, clo_count);
-    } else {
-        fprintf(gen->output, ", %d, _aether_lib_fns, 0, NULL\n};\n\n", fn_count);
-    }
+    fprintf(gen->output, ", %d, _aether_lib_fns, ", fn_count);
+    if (clo_count > 0) fprintf(gen->output, "%d, _aether_lib_closures, ", clo_count);
+    else               fprintf(gen->output, "0, NULL, ");
+    if (const_count > 0) fprintf(gen->output, "%d, _aether_lib_consts\n};\n\n", const_count);
+    else                 fprintf(gen->output, "0, NULL\n};\n\n");
 
     for (int r = 0; r < clo_count; r++) free(rec_sig[r]);
     free(cfns);
     free(lit_ci); free(cap_arr_id); free(rec_name); free(rec_role);
     free(rec_encl); free(rec_sig); free(rec_src); free(rec_line);
+    free(consts); free(const_type);
+    if (export_names) free(export_names);
 
     /* The exported entry point. Returns a pointer to the static
      * meta struct. The local `_AetherLibMeta` tag is layout-

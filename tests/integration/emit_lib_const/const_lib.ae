@@ -1,0 +1,17 @@
+// The library under test: a --emit=lib module whose public surface includes
+// exported scalar/string consts alongside a function. Pre-fix, only `pulse`
+// crossed the .so boundary and every `const_lib.K_*` reference in a .so-only
+// consumer failed with `Undefined variable 'const_lib'`. Post-fix the
+// constants are carried in the aether_lib_meta catalog (schema 1.2) and
+// rehydrated in the binimport stub.
+//
+// `make` is reserved, so the function is named `pulse`.
+exports ( K_INT, K_LONG, K_STR, K_TRUE, K_FALSE, pulse )
+
+const K_INT   = 42
+const K_LONG  = 9000000000        // > 2^31, exercises the long path
+const K_STR   = "compaction: index unavailable"
+const K_TRUE  = true
+const K_FALSE = false
+
+pulse() -> int { return 7 }

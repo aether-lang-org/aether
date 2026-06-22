@@ -3828,6 +3828,28 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                     expr->node_type = clone_type(sym->type);
                     return 1;
                 }
+                // The prefix IS a visible imported namespace, but `prefix.member`
+                // resolves to no value/const. Without this, the node falls
+                // through to base-expression handling, where `prefix` can't
+                // resolve as a value and the error is the misleading
+                // `Undefined variable '<prefix>'` — it points at the module,
+                // not the member, which sends you down the wrong path (the
+                // module clearly IS imported; its functions resolve). This
+                // most often bites a `.so`-backed import (`foo.SOME_CONST`
+                // against a library whose ABI omits that name). A bare module
+                // reference (`println(foo)`) legitimately has no member, so
+                // only fire when this is an actual `prefix.member` access.
+                // (Non-exported *functions* are reported separately and
+                // already name `prefix.member` — this covers the value path.)
+                {
+                    char msg[320];
+                    snprintf(msg, sizeof(msg),
+                             "module '%s' has no export '%s' "
+                             "(not part of the module's API / library ABI)",
+                             expr->children[0]->value, expr->value);
+                    type_error(msg, expr->line, expr->column);
+                    return 0;
+                }
             }
             // Type check member access (e.g., msg.type, struct.field)
             if (expr->child_count > 0) {
