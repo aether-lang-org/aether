@@ -24,7 +24,7 @@ Aether uses two allocation mechanisms:
 
 | Layer | What | When |
 |-------|------|------|
-| **Actor arena** | Actor state, message queues | Freed when actor is destroyed |
+| **Actor allocation** | Actor state + inline mailbox | One NUMA-aware allocation per actor, freed when the actor is destroyed |
 | **Stdlib heap** | `map.new()`, `list.new()`, etc. | Freed via `defer` or explicit `.free()` call |
 
 There is **no garbage collector**.
@@ -36,9 +36,9 @@ They solve different problems and are used in different layers:
 | | Arena | defer |
 |---|--------|--------|
 | **What** | A region of memory; many small allocations share one region. One "free" destroys the whole region. | A language construct: run cleanup when leaving the current scope. |
-| **Who uses it** | The **runtime** uses arenas for actor state and message queues. You don't allocate from arenas directly. | **You** use it in Aether code for stdlib types (`list.new`/`list.free`, `map.new`/`map.free`) and FFI buffers. |
-| **Lifetime** | Everything in the arena lives until the arena is destroyed (e.g. when the actor is destroyed). | The resource lives until scope exit; the deferred call runs then. |
-| **Typical use** | Actor internals: the runtime allocates actor state and messages from an arena; when the actor goes away, the arena is freed in one shot. No per-field frees. | Any heap allocation you make: `items = list.new(); defer list.free(items);` so the list is freed when the function (or block) exits. |
+| **Who uses it** | A general-purpose arena allocator backs bulk-allocation use cases such as `std.arena` and JSON parsing. You opt into it explicitly. The actor path does **not** use arenas. | **You** use it in Aether code for stdlib types (`list.new`/`list.free`, `map.new`/`map.free`) and FFI buffers. |
+| **Lifetime** | Everything in the arena lives until the arena is destroyed in one shot. | The resource lives until scope exit; the deferred call runs then. |
+| **Typical use** | Bulk allocation where many objects share one lifetime and are reclaimed together (e.g. all nodes of a parsed JSON document). | Any heap allocation you make: `items = list.new(); defer list.free(items);` so the list is freed when the function (or block) exits. |
 
 ---
 
@@ -157,7 +157,7 @@ actor Cache {
 }
 ```
 
-The actor runtime frees the actor's arena (and its internal state) when the actor is shut down.
+The actor runtime frees the actor's single NUMA-aware allocation (the actor struct and its inline mailbox) when the actor is shut down. Stdlib allocations held in `state` fields are not part of that block — free them yourself, e.g. in the `Stop` handler above.
 
 ---
 
@@ -184,14 +184,15 @@ defer map.free(m)
 
 **Allocating inside a loop:**
 
-`defer` fires at scope exit, not at end of each iteration. If you allocate inside a
-loop, free explicitly at the end of each iteration instead:
+`defer` is block-scoped: a `defer` placed inside a loop body fires at the end of
+each iteration, not just once at function exit. So an allocation made inside the
+loop is reclaimed every pass — no manual per-iteration free is needed:
 
 ```aether
 while i < n {
     item = list.new()
+    defer list.free(item)   // runs at the end of THIS iteration
     // ... use item ...
-    list.free(item)
     i = i + 1
 }
 ```
@@ -359,11 +360,20 @@ extern get_pair(s: string)        -> (string @heap, string @borrow)
 
 ### Stdlib externs annotated `@heap`
 
-The following stdlib externs are audited and annotated. Their tuple destructures auto-free at function exit; you do **not** need to call `string.release` on the resulting strings.
+`@heap` is used across several stdlib externs — it appears today in `std.bytes`,
+`std.io`, `std.regex`, `std.os`, `std.fs`, and `std.strbuilder`. Each is audited
+and annotated so that its return (whether a single `string @heap` or an `@heap`
+tuple position) auto-frees at function exit; you do **not** need to call
+`string.release` on the resulting strings. Representative carriers:
 
 | Extern | Heap position | Notes |
 |---|---|---|
+| `bytes.finish` (`aether_bytes_finish`) | result string | length-aware AetherString constructor |
+| `strbuilder.finish` (`aether_strbuilder_finish`) | result string | caller owns the assembled buffer |
+| `regex.replace` / `regex.replace_all` / capture get | result string | fresh malloc per call |
 | `fs.realpath` (`fs_realpath_raw`) | resolved path | POSIX `realpath(NULL)` / Windows `GetFinalPathNameByHandleW` + UTF-8 malloc |
+| `fs.read_binary` (`fs_read_binary_tuple`) | bytes | fresh buffer |
+| `io.fd_read_n` / `io.fd_read_line` (tuple) | read buffer | fresh buffer per read |
 | `os.run_capture_status` (`os_run_capture_status_raw`) | captured stdout | realloc-grown buffer |
 | `os.run_pipe_drain_and_wait` (`os_run_pipe_drain_and_wait_raw`) | pipe payload | realloc-grown buffer |
 
@@ -373,14 +383,14 @@ Other tuple-returning string-position externs in the stdlib stay at default `@bo
 
 The wrapper-on-reassignment frees the **previous** value when a heap-string variable is assigned to. The function-exit defer-free closes the complementary case: a heap-string variable assigned **once** and never reassigned still has a live allocation when the function exits — without an exit-time free, that allocation leaks per-call.
 
-The codegen now emits `if (_heap_<name>) { free((void*)<name>); <name> = NULL; _heap_<name> = 0; }` at every function-exit and explicit `return` for every hoisted heap-string variable that is **not** escaped. The escape walker — same one the wrapper consults — decides which variables are held by something that outlives the call (return, closure capture, `ptr`-typed param, `@retain`-typed param, recursive escape via another store) and skips the defer for those.
+The codegen now emits `if (_heap_<name>) { aether_heap_str_free(<name>); <name> = NULL; _heap_<name> = 0; }` at every function-exit and explicit `return` for every hoisted heap-string variable that is **not** escaped. `aether_heap_str_free` dispatches on the AetherString magic header — `string_release` for refcounted AetherStrings, plain `free` for malloc'd `char*`. The escape walker — same one the wrapper consults — decides which variables are held by something that outlives the call (return, closure capture, `ptr`-typed param, `@retain`-typed param, recursive escape via another store) and skips the defer for those.
 
 ```aether
 foo(b64: string) -> int {
     raw = decode_b64(b64)         // _heap_raw = 1
     n   = check(raw)              // raw is not escaped (read-only)
     return n
-    // function-exit: if (_heap_raw) free(raw);  ← reclaims the allocation
+    // function-exit: if (_heap_raw) aether_heap_str_free(raw);  ← reclaims the allocation
 }
 ```
 
@@ -388,17 +398,18 @@ Cost: zero on functions that don't allocate heap strings; one inline conditional
 
 ### `@retain` per-parameter annotation on extern declarations
 
-For functions that *store* a string pointer beyond the call (collection adders, map keys, route registrations), the default "string parameter is read-only" treatment from the escape walker is wrong: it would let the function-exit defer-free reclaim the bytes while the recipient still holds the pointer — UAF. The `@retain` annotation fixes this:
+For functions that *store* (or take a strong reference on) a string pointer beyond the call — refcount operations, owning map keys — the default "string parameter is read-only" treatment from the escape walker is wrong: it would let the function-exit defer-free reclaim the bytes while the recipient still holds the pointer — UAF. The `@retain` annotation fixes this:
 
 ```aether
-extern string_list_add(list: ptr, s: @retain string) -> int
+extern string_retain(str: @retain string)
+extern map_put_string_owned(map: ptr, key: @retain string, value: ptr) -> int
 ```
 
 Tells the heap-string-tracker escape walker "this slot stores the pointer; mark the heap-string arg as escaped, skip the function-exit free." Multiple annotations stack (`@aether @retain string` is legal; order doesn't matter). Default for unannotated string parameters remains "read-only" — correct for `string.length` / `string.equals` / `print` / `println` and other consumers that don't outlive the call.
 
-`@retain` is **only** correct when the callee keeps the *caller's* pointer. A function that copies its argument is **not** a retainer: `map_put_raw` interns its key (`string_new(key)` at put time, released at `map_free`) and never holds the caller's key bytes after the call, so its `key` parameter is a plain `string` (borrowed) — a heap key is reclaimed at the caller's scope exit. Marking such a copy-on-store parameter `@retain` leaks the caller's argument (the callee owns only its copy).
+`@retain` is **only** correct when the callee keeps (or takes a strong reference on) the *caller's* pointer. A function that copies its argument is **not** a retainer: `map_put_raw` interns its key (`string_new(key)` at put time, released at `map_free`) and never holds the caller's key bytes after the call, so its `key` parameter is a plain `string` (borrowed) — a heap key is reclaimed at the caller's scope exit. Marking such a copy-on-store parameter `@retain` leaks the caller's argument (the callee owns only its copy). The same goes for `string_list_add` / `string_list_set`: they **copy** the bytes into the list's own storage, so their `s` parameter is a plain `string` (borrowed), deliberately **not** `@retain` — marking it would leak the caller's argument.
 
-Audited stdlib retainers carrying `@retain` today: `string_list_add`, `string_list_set`. Other functions are added as their callers are audited.
+Audited stdlib retainers carrying `@retain` today: the refcount ops `string_retain` / `string_release` / `string_free` (`std.string`, each taking a strong reference on the same buffer), and the `key` parameter of `map_put_string_owned` (`std.collections`). Other functions are added as their callers are audited.
 
 ### Return-ownership contract (uniform-heap return-escape)
 

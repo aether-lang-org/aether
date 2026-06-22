@@ -701,7 +701,7 @@ if kind == fs.KIND_OK {
 }
 ```
 
-The pilot scope is `fs.copy` only in this commit; `fs.move`, `fs.realpath`, and `fs.chmod` join it in the next commit. Existing wrappers keep their `(value, err)` shape unchanged — the structured-error shape sits next to it, not in place of it.
+`fs.copy`, `fs.move`, `fs.realpath`, and `fs.chmod` all ship with this structured-error shape. Existing wrappers keep their `(value, err)` shape unchanged — the structured-error shape sits next to it, not in place of it.
 
 **Constants** (exported from `std.fs`):
 | Constant | Value | Errno |
@@ -844,8 +844,9 @@ main() {
         println("parse failed: ${err}")
         return
     }
-    name = json.object_get(data, "name")
-    println(json.get_string(name))  // "Aether"
+    name, _ = json.object_get(data, "name")
+    text, _ = json.get_string(name)
+    println(text)  // "Aether"
 
     // Create values
     obj = json.create_object()
@@ -858,8 +859,8 @@ main() {
     json.array_add(arr, json.create_number(2.0))
     size = json.array_size(arr)
 
-    // Serialize to string — returns plain char*, print directly
-    output = json.stringify(obj)
+    // Serialize to string — Go-style (output, err) tuple
+    output, _ = json.stringify(obj)
     println("JSON: ${output}")
 
     // Type checking
@@ -879,7 +880,7 @@ main() {
 - `json.parse(json_str)` → `(ptr, string)` - Parse JSON, returns `(value, err)` tuple
 - `json.parse_strict(json_str)` → `(ptr, int, string)` - Structured-error variant of `parse` (issue #392): returns `(value, KIND_OK, "")` on success or `(null, KIND_*, "<reason> at <line>:<col>")` on failure. `kind` discriminates between syntax errors (`KIND_PARSE_ERROR`), out-of-memory (`KIND_OUT_OF_MEMORY`), and invalid input (`KIND_INVALID_INPUT`) without parsing the human message. KIND values match `std.fs`'s pilot so callers can mix the two surfaces in a single switch.
 - `json.last_error_kind()` / `last_error_line()` / `last_error_col()` → `int` - Programmatic accessors for the most recent parse failure on this thread. Read AFTER a `parse` / `parse_strict` returned a failure; undefined after a successful parse. Line/column are 1-based and match the values embedded in the error message.
-- `json.stringify(value)` - Serialize to JSON string (returns plain `char*`, infallible)
+- `json.stringify(value)` → `(string, string)` - Serialize to JSON string; `(output, err)` tuple (`("", "stringify failed")` on failure)
 - `json.free(value)` - Free a JSON value tree
 
 Raw extern: `json_parse_raw`.
@@ -923,10 +924,10 @@ The `parse_strict` shape is the std.fs pilot from issue #392 extended to a secon
 - `json.get_number(value)` - Get float value
 - `json.get_int(value)` - Get integer value
 - `json.get_bool(value)` - Get boolean (1/0)
-- `json.get_string(value)` - Get string value (returns plain `char*`)
+- `json.get_string(value)` → `(string, string)` - Get string value; `(text, err)` tuple, errors with `"not a string"` if `value` is not a `JSON_STRING`
 
 **Object Operations:**
-- `json.object_get(obj, key)` - Get value by key (key is a raw string)
+- `json.object_get(obj, key)` → `(ptr, string)` - Get value by key; `(child, err)` tuple. Absent key returns `(null, "")`, distinct from the error case `(null, "not an object")`
 - `json.object_set(obj, key, value)` - Set key-value pair
 - `json.object_has(obj, key)` - Check if key exists (returns 1/0)
 - `json.object_size(obj)` - Number of entries (`0` for empty, `-1` if not an object)
@@ -935,7 +936,7 @@ The `parse_strict` shape is the std.fs pilot from issue #392 extended to a secon
   `object_set` was called). Mutating `obj` during iteration is not supported.
 
 **Array Operations:**
-- `json.array_get(arr, index)` - Get value at index
+- `json.array_get(arr, index)` → `(ptr, string)` - Get value at index; `(value, err)` tuple. Out-of-range returns `(null, "")`, distinct from `(null, "not an array")`
 - `json.array_add(arr, value)` - Append value
 - `json.array_size(arr)` - Get array length
 
@@ -1102,6 +1103,28 @@ main() {
 - `cryptography.sha256_hex(data, length)` → `(string, string)` - 64-char lowercase hex digest.
 - `cryptography.hash_hex(algo, data, length)` → `(string, string)` - Algorithm-by-name dispatcher. `algo` is `"sha1"`, `"sha256"`, or any other name OpenSSL's `EVP_get_digestbyname()` recognizes (`"sha384"`, `"sha512"`, `"sha3-256"`, ...). Returns `("", "unknown algorithm")` for unrecognized names. Useful when the algorithm is config-driven rather than compile-time.
 - `cryptography.hash_supported(algo)` → `int` - `1` if this build can compute `algo`, `0` otherwise. Always succeeds; never errors. Use at config time to validate user-supplied algorithm names before they hit `hash_hex`.
+- `cryptography.md4_hex(data, length)` / `md5_hex(data, length)` → `(string, string)` - 32-char lowercase hex digest. Legacy interop only (Content-MD5, ETag, zsync, pre-SHA1 fixtures) — NOT collision-resistant, do not use for security. `("", error)` on failure.
+
+**Raw-bytes digests** (same `(bytes, length, error)` tuple as `base64_decode`; `bytes` is an owned AetherString preserving embedded NULs — use when the wire format wants a fixed-width binary digest rather than hex):
+- `cryptography.sha1_bytes(data, length)` / `sha256_bytes(data, length)` → `(string, int, string)`.
+- `cryptography.md4_bytes(data, length)` / `md5_bytes(data, length)` → `(string, int, string)`.
+- `cryptography.hash_bytes(algo, data, length)` → `(string, int, string)` - Algorithm-by-name binary digest. `("", 0, "unknown algorithm")` for unrecognized names.
+
+**HMAC-SHA256** (RFC 2104 / FIPS 198-1; RFC 4231 test vectors):
+- `cryptography.hmac_sha256_hex(key, key_len, msg, msg_len)` → `(string, string)` - Hex digest. Natural shape for opaque-token signing and bearer-token derivation.
+- `cryptography.hmac_sha256_bytes(key, key_len, msg, msg_len)` → `(string, int, string)` - Raw 32-byte digest. Use for chained key derivation (SigV4 / HKDF-shaped flows) where each round's output keys the next.
+
+**Cryptographically-secure random** (OS CSPRNG — `getrandom(2)` / `/dev/urandom` on Linux, `arc4random_buf(3)` on macOS/BSD):
+- `cryptography.random_bytes(n)` → `(string, int, string)` - `n` random bytes as `(bytes, length, error)`; `bytes` preserves embedded NULs.
+- `cryptography.random_hex(n)` → `(string, string)` - `n` random bytes as a `2*n`-char lowercase-hex string. For opaque bearer-token / API-key minting.
+- `cryptography.random_base64(n)` → `(string, string)` - `n` random bytes as RFC 4648 §4 unpadded Base64 (~33% denser than hex).
+
+**Streaming (incremental) digest** - Hash data that arrives in pieces without ever holding it whole (streaming an upload to disk in fixed windows, S3-style multipart ETags). The two `final` variants free the context; call `digest_free` only when bailing out before finalizing.
+- `cryptography.digest_new(algo)` → `(ptr, string)` - Open a context for `algo` (`"md5"`, `"sha256"`, `"sha1"`, `"md4"`, or any name OpenSSL recognizes). `(null, "unknown algorithm")` / `(null, "openssl unavailable")` on failure.
+- `cryptography.digest_update(ctx, data, length)` → `(int, string)` - Feed `length` bytes; `(1, "")` on success, `(0, error)` on failure. Binary-safe. Does NOT free the context.
+- `cryptography.digest_final_hex(ctx)` → `(string, string)` - Finalize to lowercase hex. FREES `ctx`.
+- `cryptography.digest_final_bytes(ctx)` → `(string, int, string)` - Finalize to raw digest bytes. FREES `ctx`.
+- `cryptography.digest_free(ctx)` - Abandon a context without finalizing (NULL-safe). Only for the bail-out-before-final case.
 
 **Base64 (RFC 4648 §4 standard alphabet):**
 - `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes, **unpadded** output.
@@ -1112,15 +1135,13 @@ main() {
 
 Coming from Java's `java.security`, Python's `cryptography`, or Go's `crypto/*`, expect to reach for an external library if you need:
 
-- **HMAC, KDFs, symmetric ciphers, signing, certificate handling.** All out of scope for stdlib — the API surface for "real cryptography" is large enough that one obvious shape doesn't exist. A `contrib/cryptography_advanced/` module is the right home if a downstream user shows up needing them.
-- **Streaming digest API.** The current shape is bytes-in / digest-out one-shot; for multi-gigabyte inputs that don't fit in memory, drop down to OpenSSL `EVP_DigestUpdate` directly.
-- **URL-safe Base64 (RFC 4648 §5).** Standard alphabet only; URL-safe (`-` / `_` instead of `+` / `/`) is a separate variant the wrappers don't expose. Callers needing it can post-process: `string.replace_all(b64, "+", "-")` followed by `"_"` for `"/"`.
-- **MD5.** Weak hash, deliberately not exposed. Reach for `hash_hex("md5", ...)` only if interop with legacy formats forces it — `hash_supported("md5")` will tell you whether the OpenSSL backend has it.
+- **Public-key crypto (RSA, ECDSA, Ed25519, X25519), symmetric ciphers (AES, ChaCha20-Poly1305), and key derivation (KDFs).** All out of scope for stdlib — the API surface for "real cryptography" is large enough that one obvious shape doesn't exist. These live in [`contrib/cryptography/`](../contrib/cryptography/) (`rsa`, `aes`, `chacha20poly1305`, `ed25519`, `x25519`, `p256`, `secp256k1`, `pem`, `asn1`, ...) where each can evolve without the stdlib stability constraint.
+- **URL-safe Base64 (RFC 4648 §5).** Standard alphabet only; URL-safe (`-` / `_` instead of `+` / `/`) is a separate variant the wrappers don't expose.
 - **Constant-time comparison.** Equality checks via `string.equals` are not constant-time; callers comparing hashes for security-sensitive cases need their own constant-time helper.
 
 Raw externs: `cryptography_sha1_hex_raw`, `cryptography_sha256_hex_raw` — return allocated `char*` or NULL on failure. The Go-style wrappers translate the NULL into `("", "openssl unavailable")`.
 
-Streaming, HMAC, key derivation, and symmetric ciphers are out of scope for v1 — see [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion. Callers that need more should link OpenSSL directly.
+Public-key crypto, symmetric ciphers, and key derivation are out of scope for `std.cryptography` — see [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion. They live in `contrib/cryptography/`.
 
 ---
 

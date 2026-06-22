@@ -14,7 +14,15 @@ pi = 3.14           // inferred: float
 name = "Alice"      // inferred: string
 flag = true         // inferred: bool
 p = null            // inferred: ptr
-big = long 0        // inferred: long (int64)
+```
+
+A bare integer literal always infers as `int` — there is no `long`
+literal or `long <value>` prefix. To get a `long` (64-bit) binding,
+annotate the declaration explicitly:
+
+```aether
+big = 0             // inferred: int
+long wide = 0       // explicit: long (64-bit)
 ```
 
 ### From Expressions

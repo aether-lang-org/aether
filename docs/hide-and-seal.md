@@ -1,6 +1,6 @@
 # `hide` and `seal except` — scope-level capability denial
 
-Aether 0.51.0 adds two scope-level directives that let a block decline to
+Aether provides two scope-level directives that let a block decline to
 see selected names from its enclosing lexical scopes. They are the
 language-level expression of the ["Principles of Containment"](
 https://paulhammant.com/2016/12/14/principles-of-containment/) — capability

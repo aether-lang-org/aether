@@ -354,7 +354,7 @@ typedef struct {
 } Scheduler;
 ```
 
-Each scheduler core increments its local counters without atomic operations. The `wait_for_idle()` function (called internally by `scheduler_wait()`) sums across all cores to determine when all in-flight messages have been processed. `scheduler_wait()` is non-destructive -- it only waits for quiescence and does not stop scheduler threads, so it can be called multiple times between phases of message sending.
+Each scheduler core increments its local counters without atomic operations. The `wait_for_idle()` Aether builtin lowers to the C function `scheduler_wait()`, which sums across all cores to determine when all in-flight messages have been processed. `scheduler_wait()` is non-destructive -- it only waits for quiescence and does not stop scheduler threads, so it can be called multiple times between phases of message sending.
 
 ```c
 // Hot path: no atomic contention
@@ -362,7 +362,7 @@ if (current_core_id >= 0) {
     schedulers[current_core_id].messages_sent++;
 }
 
-// wait_for_idle: sum across cores (rare operation)
+// scheduler_wait(): sum across cores (rare operation)
 uint64_t total_sent = 0, total_processed = 0;
 for (int i = 0; i < num_cores; i++) {
     total_sent += schedulers[i].messages_sent;

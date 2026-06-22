@@ -746,8 +746,7 @@ in-flight work to widen the LD_PRELOAD surface.
 |-------------------|-------------|------|
 | `sendto()` / `sendmsg()` | Send data on already-open socket | If socket was opened before sandbox |
 | `recvfrom()` / `recvmsg()` | Receive data | Same — works on pre-existing sockets |
-| `bind()` | Bind to a port | We intercept `connect` (outbound) but not `bind` (inbound) |
-| `accept()` / `accept4()` | Accept incoming connection | Not intercepted |
+| `accept4()` | Accept incoming connection (Linux variant) | Only `accept()` is intercepted; `accept4()` is not |
 | `socketpair()` | Create paired sockets | Local IPC bypass |
 | UDP (`SOCK_DGRAM`) | Connectionless networking | `connect` interception only checks TCP |
 
@@ -1285,7 +1284,7 @@ code can only call functions we explicitly provide.
 |---|--------|-----|-------------|------|------|-----|
 | **Runtime** | CPython 3.x | Lua 5.3 | Duktape 2.x | Perl 5.x | CRuby 3.x | Tcl 8.5+ |
 | **Dev package** | python3-dev | liblua5.3-dev | duktape-dev | (ships with perl) | ruby-dev | tcl-dev |
-| **Compile flag** | AETHER_HAS_PYTHON | AETHER_HAS_LUA | AETHER_HAS_JS | AETHER_HAS_PERL | AETHER_HAS_RUBY | AETHER_HAS_TCL |
+| **Compile flag** | AETHER_HAS_PYTHON | AETHER_HAS_LUA | AETHER_HAS_DUKTAPE | AETHER_HAS_PERL | AETHER_HAS_RUBY | AETHER_HAS_TCL |
 | **Link** | -lpython3.11 | -llua5.3 | -lduktape | -lperl | -lruby-3.1 | -framework Tcl / -ltcl |
 | **Containment model** | LD_PRELOAD | LD_PRELOAD | Native bindings | LD_PRELOAD | LD_PRELOAD | LD_PRELOAD |
 | **Needs LD_PRELOAD .so** | Yes | Yes | No | Yes | Yes | Yes |
@@ -1410,7 +1409,7 @@ Each host module provides two bindings to the hosted language:
 ### Example
 
 ```aether
-import contrib.host.lua
+import contrib.host.python
 
 worker = sandbox("worker") {
     grant_env("HOME")
@@ -1422,13 +1421,13 @@ map = shared_map_new(&token)
 shared_map_put(map, "user", "alice")
 shared_map_put(map, "threshold", "42")
 
-// Run Lua — it reads inputs, writes outputs
-lua.run_sandboxed_with_map(worker, <<LUA
-    local user = aether_map_get("user")
-    local threshold = aether_map_get("threshold")
-    aether_map_put("result", "processed " .. user)
+// Run Python — it reads inputs, writes outputs
+python.run_sandboxed_with_map(worker, <<PY
+    user = aether_map_get("user")
+    threshold = aether_map_get("threshold")
+    aether_map_put("result", "processed " + user)
     aether_map_put("count", "1000")
-LUA
+PY
 , token)
 
 // Read outputs

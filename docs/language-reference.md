@@ -83,10 +83,12 @@ Aether is not, and has no plans to be, a pure FP language (no Hindley-Milner inf
 | `string` | UTF-8 encoded strings | `"Hello"` |
 | `bool` | Boolean type | `true`, `false` |
 | `byte` | Unsigned 8-bit (0..255) | `byte b = 0xFF` |
-| `void` | No value (for functions) | - |
+| `void`¹ | No value (for functions) | `extern free(p: ptr) -> void` |
 | `long` | 64-bit signed integer | `long x = 0` |
 | `longdouble` | C `long double` — widest float (C interop) | `extern strtold(...) -> longdouble` |
 | `ptr` | Raw pointer (for C interop) | `null` |
+
+¹ `void` is **not** a reserved word — there is no `void` token; it is a plain identifier used by convention to spell the absence of a return value. A function that omits its `-> Type` annotation is the canonical void declaration (see [Functions](#functions)). It is never a value type and cannot be used for a variable or field.
 
 #### `byte` — unsigned 8-bit
 
@@ -221,11 +223,13 @@ Variables are inferred from their initialization or usage context.
 
 ### Casting between types
 
-Aether has **no general-purpose cast operator**. The `as` keyword is reserved for two specific cases:
+Aether has **no general-purpose cast operator**. The `as` keyword is reserved for module aliasing and three specific value-cast forms:
 - `import mod as alias` — module aliasing (only inside `import` statements)
-- `expr as *StructName` — pointer-overlay struct cast (only with a leading `*` and a struct name; see [§ Pointer-to-struct type](#pointer-to-struct-type--structname-and-expr-as-structname) below)
+- `expr as *StructName` — pointer-overlay struct cast (a leading `*` then a struct name; see [§ Pointer-to-struct type](#pointer-to-struct-type--structname-and-expr-as-structname) below)
+- `expr as fn(T1, T2, ...) -> R` — function-pointer cast (call a stored pointer with type checking; see [§ Function-pointer parameters](#function-pointer-parameters--fnt1-t2---r) below)
+- `expr as T[]` — typed-array view cast (reinterpret a raw pointer as a `T[]`)
 
-`buf as string`, `n as int`, `p as ptr` and similar primitive casts **do not parse** — `as` strictly requires `* StructName` after it. Convert between primitives this way instead:
+`buf as string`, `n as int`, `p as ptr` and similar primitive casts **do not parse** — after `as`, the parser accepts only `*StructName`, `fn(...) -> R`, or `T[]`. Convert between primitives this way instead:
 
 | From → To | How |
 |---|---|
@@ -234,7 +238,7 @@ Aether has **no general-purpose cast operator**. The `as` keyword is reserved fo
 | `int` → `string` | `string.from_int(n)` (and `string.from_long(n)`, `string.from_float(f)`). |
 | C `const char*` → Aether `string` | Assignment to a `string`-typed variable, or returning from a function declared `-> string`. The returned `ptr` is treated as a borrowed C-string until it crosses into refcounted-string territory. |
 | `int` ↔ `int64` / `byte` ↔ `int` | Implicit safe widenings (`byte → int`, `int → int64`). The narrowing direction (`int → byte`) requires a literal-range check and truncates non-literals at runtime. See [§ `byte`](#byte--unsigned-8-bit). |
-| Reinterpret a raw `ptr` as a typed struct view | `expr as *StructName` (the only `as` form for values). |
+| Reinterpret a raw `ptr` as a typed struct view, function pointer, or array | `expr as *StructName`, `expr as fn(...) -> R`, or `expr as T[]` (the only `as` forms for values). |
 
 ### Null
 
@@ -375,8 +379,12 @@ greet("Ada", "Hi")  // -> "Hi, Ada!"
 ```
 
 Rules:
-- Defaults trail required parameters (Python rule). Once a default
-  appears, every subsequent parameter must also have one.
+- By convention, defaults should trail required parameters (the Python
+  shape): once a default appears, every subsequent parameter should
+  also have one. This is a style convention, not a compiler-enforced
+  rule — the typechecker does not currently reject a default that is
+  followed by a required parameter, but positional calls to such a
+  function are awkward, so don't write them.
 - The default expression is evaluated at the **call site**, not the
   declaration site. Default expressions cannot reference other
   parameters of the same function (they're typechecked in the
@@ -1062,7 +1070,7 @@ main() {
 
 The cast is a view, not an allocation — the operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). Reach for this only when the storage is C-allocated and Aether wants to manipulate fields. For Aether-owned data, use the normal struct-literal form (`Point { x: 1, y: 2 }`) so refcounting and lifetime tracking apply.
 
-**`as` requires `*StructName` — there is no general-purpose primitive cast.** The parser strictly expects a `*` then an identifier after `as`. Forms like `buf as string`, `n as int`, `raw as ptr` do not parse. For converting between primitive types, see the [Casting between types](#casting-between-types) table above — most conversions are either implicit (Aether's type system inserts the necessary cast in the generated C) or use a named helper (`string.from_int`, `string.from_long`, …).
+**`as` accepts `*StructName`, `fn(...) -> R`, or `T[]` — there is no general-purpose primitive cast.** After `as` the parser accepts a struct overlay (`*` then a struct name), a function-pointer cast (`fn(T1, T2, ...) -> R`), or a typed-array view (`T[]`). Forms like `buf as string`, `n as int`, `raw as ptr` do not parse. For converting between primitive types, see the [Casting between types](#casting-between-types) table above — most conversions are either implicit (Aether's type system inserts the necessary cast in the generated C) or use a named helper (`string.from_int`, `string.from_long`, …).
 
 The `as` keyword is the same token used for `import x as y` aliasing; the two parses don't collide because import-aliasing is recognised only inside `import` statements. Full semantics (operand type rules, error cases, the shared-token interaction) are in [c-interop.md § Struct overlay on raw pointers](c-interop.md#struct-overlay-on-raw-pointers--structname-and-expr-as-structname).
 
@@ -1465,21 +1473,18 @@ main() {
 }
 ```
 
-It also applies to contrib modules — useful for test frameworks where
-unqualified `describe(...)` / `it(...)` / `assert_eq(...)` is the
-idiomatic call shape:
+It also applies to any module with a wide, short-named surface — e.g.
+`std.bits`, where unqualified `popcount32(...)` / `rotl32(...)` /
+`clz32(...)` reads better than the namespace-prefixed form:
 
 ```aether
-import contrib.aeocha (*)
+import std.bits (*)
 
 main() {
-    fw = init()
-    describe(fw, "Counter") {
-        it(fw, "starts at zero") callback {
-            assert_eq(fw, 0, 0, "initial count")
-        }
-    }
-    run_summary(fw)
+    println(popcount32(0xFF))    // 8 — one-bits set
+    println(rotl32(1, 4))        // 16 — rotate left
+    println(clz32(1))            // 31 — leading zeros
+    println(bits.lsr32(256, 4))  // 16 — qualified form still works
 }
 ```
 
@@ -1529,7 +1534,7 @@ result = utils.double_value(21);
 | `std.map` | `map` | Hash map (`map.new()`, `map.put()`) |
 | `std.json` | `json` | JSON encoding/decoding (`json.parse()`, `json.free()`) |
 | `std.http` | `http` | HTTP client & server (`http.get()`, `http.server_create()`) |
-| `std.tcp` | `tcp` | TCP sockets (`tcp.connect()`, `tcp.send()`) |
+| `std.tcp` | `tcp` | TCP sockets (`tcp.connect()`, `tcp.write()`) |
 | `std.math` | `math` | Math functions (`math.sqrt()`, `math.sin()`) |
 | `std.log` | `log` | Logging utilities (`log.init()`, `log.write()`) |
 | `std.io` | `io` | Input/output (`io.print()`, `io.getenv()`) |
@@ -1843,9 +1848,11 @@ The following identifiers are reserved:
 | `hide`, `seal`, `except` | Scope-level name denial (see [hide-and-seal.md](hide-and-seal.md)) |
 | `null`, `true`, `false` | Literals |
 | `when` | Guard clauses |
-| `int`, `float`, `string`, `bool`, `void`, `ptr`, `long` | Type names |
+| `int`, `float`, `string`, `bool`, `ptr`, `long` | Type names |
 
 Note: `state` is context-sensitive — it is a keyword only inside actor bodies. In all other code, `state` can be used as a regular variable name.
+
+Note: `void` is **not** a reserved word — there is no `void` token. It is a plain identifier used by convention to *spell* the absence of a return value (e.g. `extern free(p: ptr) -> void`); a function that omits its `-> Type` annotation is the canonical void declaration. See [Functions](#functions).
 
 ---
 
