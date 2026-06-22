@@ -65,7 +65,7 @@ find_user(int id): User {
 **Public APIs and library functions**
 ```aether
 // Export functions should have explicit types
-export calculate_distance(Point p1, Point p2): float {
+export calculate_distance(p1: Point, p2: Point): float {
     dx = p2.x - p1.x
     dy = p2.y - p1.y
     return sqrt(dx * dx + dy * dy)
@@ -88,10 +88,11 @@ int result = parse_number(input)  // Clarifies we want int, not float
 **Actor state declarations**
 ```aether
 actor Counter {
-    state count: int           // Explicit for clarity
-    state name: string
-    state values: int[]
-    state users: ptr
+    state int count            // Explicit prefix form for clarity
+    state string name
+    state int[] values
+    state total = 0            // ...or inferred from an initializer
+    state users = null         //    (inferred: ptr)
     
     // ...
 }
@@ -239,13 +240,13 @@ export struct Point {
     float y
 }
 
-export distance(Point p1, Point p2): float {
+export distance(p1: Point, p2: Point): float {
     float dx = p2.x - p1.x
     float dy = p2.y - p1.y
     return sqrt(dx * dx + dy * dy)
 }
 
-export midpoint(Point p1, Point p2): Point {
+export midpoint(p1: Point, p2: Point): Point {
     return Point{
         x: (p1.x + p2.x) / 2.0,
         y: (p1.y + p2.y) / 2.0
@@ -310,7 +311,7 @@ fibonacci(int n): int {
 | Function parameters | Explicit | `add(int a, int b)` |
 | Function returns | Explicit | `add(...): int` |
 | Struct fields | Explicit | `struct User { int id }` |
-| Actor state | Explicit | `state count: int` |
+| Actor state | Explicit (prefix) | `state int count` |
 | Loop variables | Inference | `for i in 0..10` |
 | Complex types | Explicit | `ptr my_map = map.new()` |
 | Public APIs | Explicit | All types annotated |

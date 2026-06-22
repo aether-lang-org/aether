@@ -62,7 +62,7 @@ cached ASTs — each module file is read and parsed exactly once.
 | `import std.fs` | `file`, `dir`, `path` | Combined module — re-exports `file.*`, `dir.*`, and `path.*` operations |
 | `import std.json` | `json` | `json.parse()`, `json.create_object()`, `json.free()` |
 | `import std.http` | `http` | `http.get()`, `http.server_create()`, `http.server_start()` |
-| `import std.tcp` | `tcp` | `tcp.connect()`, `tcp.send()`, `tcp.listen()` |
+| `import std.tcp` | `tcp` | `tcp.connect()`, `tcp.write()`, `tcp.listen()` |
 | `import std.net` | `tcp`, `http` | Combined module — re-exports `tcp.*` and `http.*` operations |
 | `import std.list` | `list` | `list.new()`, `list.add()`, `list.get()`, `list.set()`, `list.remove()` |
 | `import std.map` | `map` | `map.new()`, `map.put()`, `map.get()`, `map.has()`, `map.remove()` |

@@ -204,7 +204,7 @@ actor Poller {
 }
 ```
 
-Identifiers in the timeout expression resolve against the same scope `receive` arms see — actor state fields and `self` are both in scope.
+Identifiers in the timeout **expression** resolve against actor state fields only. `self` is **not** in scope there: the timeout expression is generated at spawn time (in `spawn_<Actor>`, before `self` exists), so a state-field reference such as `after interval_ms` resolves against the freshly-allocated actor handle. The timeout **body** (above) runs later inside the step function, where `self` *is* in scope — `self ! Tick {}` is fine.
 
 ## Panic and Stack Traces
 
@@ -274,7 +274,7 @@ main() {
 }
 ```
 
-The implementation uses per-core message counters to detect idle state with minimal overhead on the message-passing hot path. Each scheduler core tracks messages sent and processed locally, and `wait_for_idle()` sums across cores to determine when all in-flight messages have been handled.
+The implementation uses per-core message counters to detect idle state with minimal overhead on the message-passing hot path. Each scheduler core tracks messages sent and processed locally. The `wait_for_idle()` builtin lowers to the C function `scheduler_wait()`, which sums across cores to determine when all in-flight messages have been handled.
 
 ### Initialization
 
@@ -313,10 +313,10 @@ Message payloads are managed by thread-local pools. Payloads are returned to the
 
 ## Memory Model
 
-Aether uses arena-based memory management for automatic cleanup:
-- **Actor memory**: NUMA-aware allocation at spawn time
-- **Message payloads**: Thread-local pools with automatic return
-- **Arenas**: Bulk deallocation without per-object tracking
+The actor runtime uses several allocation strategies for automatic cleanup:
+- **Actor memory**: one NUMA-aware allocation per actor at spawn time (`aether_numa_alloc`), freed with `aether_numa_free` when the actor is destroyed. The mailbox is an inline struct member, not a separate allocation.
+- **Message payloads**: thread-local pools with automatic return
+- **Arenas**: a general-purpose arena allocator provides bulk deallocation without per-object tracking for opt-in uses (`std.arena`, JSON parsing). The actor path does not use arenas.
 
 See [Memory Management](memory-management.md) for details on arenas, pools, and allocation strategies.
 

@@ -574,8 +574,8 @@ typedef struct {
 
 typedef struct AetherNamespaceManifest {
     const char* namespace_name;
-    int input_count;     const AetherInputDecl* inputs;
-    int event_count;     const AetherEventDecl* events;
+    int input_count;     AetherInputDecl inputs[AETHER_MANIFEST_MAX_INPUTS];
+    int event_count;     AetherEventDecl events[AETHER_MANIFEST_MAX_EVENTS];
     AetherJavaBinding   java;
     AetherPythonBinding python;
     AetherRubyBinding   ruby;

@@ -50,13 +50,14 @@ Each clears all four rubric questions. Listed roughly by purpose:
 
 | Domain | Modules |
 |---|---|
-| Strings + bytes | `string`, `bytes`, `intarr` |
+| Strings + bytes | `string`, `bytes`, `intarr`, `floatarr` (packed-double twin of `intarr`), `regex` (PCRE2), `url` (RFC 3986 percent-encoding), `xml` |
+| Identifiers | `uuid` (UUID v4/v7, RFC 9562) |
 | Collections | `list`, `map`, `collections` |
 | File system + paths | `file`, `dir`, `path`, `fs` |
 | Networking | `net` (low-level TCP/HTTP client), `tcp`, `http` (high-level: `http.server`, `http.client`, `http.middleware`, `http.server.h2` for HTTP/2) |
 | Numeric + time | `math` |
 | Serialisation | `json` |
-| Hashing + signing | `cryptography` (SHA-1/256, HMAC, RSA — wraps OpenSSL) |
+| Hashing + crypto primitives | `cryptography` (SHA-1/256, MD4/MD5, HMAC-SHA256, Base64, CSPRNG, streaming digests — wraps OpenSSL; public-key/ciphers live in `contrib/cryptography/`) |
 | Compression | `zlib` (deflate/inflate, ambient on POSIX) |
 | Process + env | `os`, `io`, `dl` (dlopen) |
 | Memory primitives | `arena` (bulk allocator), `cas` (content-addressed store, sha256 + atomic-rename) |
@@ -79,8 +80,10 @@ and `zlib` uses for libz.
 | Module | Reason for `contrib/` |
 |---|---|
 | `contrib/sqlite/` | DB driver — fails rubric Q1 (not universal) and Q3 (4 MiB amalgamation). |
-| `contrib/aeocha/` | Aether-on-Aether testing harness — fails Q1 (specific tooling, not a baseline expectation). |
+| `contrib/cryptography/{rsa,aes,chacha20poly1305,ed25519,ed448,p256,secp256k1,x25519,x448,pem,asn1}/` | Public-key crypto, symmetric ciphers, and encodings — each family is a separate sub-decision with its own large API surface; fails Q2 (one obvious shape) and Q4 (stability). The hash/HMAC/Base64/CSPRNG primitives that *do* clear the rubric live in `std.cryptography`. |
 | `contrib/tinyweb/` | Builder DSL for HTTP services — competes with `std.http.server`'s closure-config approach; opinionated shape that's better off evolving without the stability constraint. |
+| `contrib/templating/{native,liquid}/` | Escape-correct output emission — `native` (Aether-as-template-language) and `liquid` (Shopify Liquid port). Opinionated template surfaces; fail Q2. |
+| `contrib/parsers/xml_expat/` | Expat-backed streaming XML parser — third-party C dependency; fails Q3 (`std.xml` covers the in-tree case). |
 | `contrib/host/{python,lua,perl,ruby,js,tcl,go,java,factor,aether,…}/` | Per-language embedding bridges — each one is a separate sub-decision that wouldn't share an API; fails Q2. |
 
 ## Spun out to sibling repos
@@ -119,8 +122,8 @@ landed directly in `std/`.
   reference for every `std.X` module currently shipped.
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — PR process, including
   the `[current]` CHANGELOG convention.
-- [contrib/aeocha/README.md](../contrib/aeocha/README.md),
-  [contrib/tinyweb/README.md](../contrib/tinyweb/README.md) —
+- [contrib/tinyweb/README.md](../contrib/tinyweb/README.md),
+  [contrib/templating/README.md](../contrib/templating/README.md) —
   reference examples of `contrib/` modules that clear three of
   the four rubric questions but failed on opinionated API shape
   (Q2) or specific niche (Q1).

@@ -232,9 +232,10 @@ ae repl
 ```
 
 ```
-Aether 0.27.0 REPL
-Type expressions to evaluate. Enter on empty line to run.
-Commands: :help :reset :show :quit
+  ┌───────────────────────────┐
+  │   Aether <version> REPL   │
+  │   :help for commands      │
+  └───────────────────────────┘
 
 ae> x = 5
 
@@ -438,22 +439,22 @@ Define functions with multiple clauses that match on argument values:
 
 ```aether
 // Match on literal values
-factorial(0) -> 1;
-factorial(n) when n > 0 -> n * factorial(n - 1);
+factorial(0) -> 1
+factorial(n) when n > 0 -> n * factorial(n - 1)
 
 // Fibonacci with multiple base cases
-fib(0) -> 0;
-fib(1) -> 1;
-fib(n) when n > 1 -> fib(n - 1) + fib(n - 2);
+fib(0) -> 0
+fib(1) -> 1
+fib(n) when n > 1 -> fib(n - 1) + fib(n - 2)
 
 // Guards for conditional matching
-classify(x) when x < 0 -> "negative";
-classify(x) when x == 0 -> "zero";
-classify(x) when x > 0 -> "positive";
+classify(x) when x < 0 -> "negative"
+classify(x) when x == 0 -> "zero"
+classify(x) when x > 0 -> "positive"
 
 // Multi-parameter pattern matching
-gcd(a, 0) -> a;
-gcd(a, b) when b > 0 -> gcd(b, a - (a / b) * b);
+gcd(a, 0) -> a
+gcd(a, b) when b > 0 -> gcd(b, a - (a / b) * b)
 ```
 
 This style replaces verbose if/else chains with declarative, readable code.

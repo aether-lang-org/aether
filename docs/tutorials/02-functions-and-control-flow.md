@@ -285,17 +285,30 @@ sum_loop(nums, len) {
 
 **Functional style (recursion + pattern matching):**
 ```aether
-sum_recursive(nums) {
-    nums_len = 3  // Array length variable for pattern matching
-    match (nums) {
-        [] -> { return 0 }
-        [h|t] -> { return h + sum_recursive(t) }
+import std.string
+
+// A *StringSeq is a cons-cell list (head + tail). `[]` matches the
+// empty list; `[h | t]` binds the head `h` and the tail `t`, so the
+// function can recurse on the tail.
+total_length(words: *StringSeq) {
+    match words {
+        []      -> { return 0 }
+        [h | t] -> { return string.length(h) + total_length(t) }
     }
     return 0
 }
+
+main() {
+    words = string.seq_empty()
+    words = string.seq_cons("hi", words)
+    words = string.seq_cons("hello", words)
+    words = string.seq_cons("hey", words)
+    println(total_length(words))  // 10
+    string.seq_free(words)
+}
 ```
 
-The functional style reads like a definition: "The sum of an empty list is 0; the sum of a list is the head plus the sum of the tail."
+The functional style reads like a definition: "The total length of an empty list is 0; the total length of a list is the length of the head plus the total length of the tail."
 
 #### Factorial
 
@@ -336,18 +349,29 @@ max_loop(nums, len) {
 
 **Functional style:**
 ```aether
-max_recursive(nums) {
-    nums_len = 5  // For pattern matching
-    match (nums) {
-        [] -> { return 0 }
-        [x] -> { return x }
-        [h|t] -> {
-            tail_max = max_recursive(t)
-            if (h > tail_max) { return h }
-            return tail_max
+import std.string
+
+// Recurse over the tail, then keep whichever of the head or the
+// best-of-the-tail is longer.
+longest(words: *StringSeq) {
+    match words {
+        []      -> { return "" }
+        [h | t] -> {
+            best_tail = longest(t)
+            if (string.length(h) >= string.length(best_tail)) { return h }
+            return best_tail
         }
     }
-    return 0
+    return ""
+}
+
+main() {
+    words = string.seq_empty()
+    words = string.seq_cons("hi", words)
+    words = string.seq_cons("elephant", words)
+    words = string.seq_cons("cat", words)
+    println(longest(words))  // elephant
+    string.seq_free(words)
 }
 ```
 
