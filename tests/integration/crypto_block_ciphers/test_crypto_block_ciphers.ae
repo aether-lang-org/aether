@@ -1,0 +1,49 @@
+// Validate contrib.cryptography.sm4 (GB/T 32907) and des3 (3DES/TDEA)
+// single-block KATs plus encrypt->decrypt and CBC round-trips.
+import contrib.cryptography.sm4
+import contrib.cryptography.des3
+import std.bytes
+import std.string
+import std.io
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } if c>=65 { if c<=70 { return c-55 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+ck(lbl: string, got: string, want: string) -> int { if got==want { println("ok   ${lbl}"); return 0 } println("FAIL ${lbl}"); println("  got:  ${got}"); println("  want: ${want}"); return 1 }
+
+main() {
+    fails = 0
+
+    // --- SM4 GB/T 32907 example-1 ---
+    sk = hb("0123456789abcdeffedcba9876543210")
+    spt = hb("0123456789abcdeffedcba9876543210")
+    se = sm4.new_encryptor(sk, 16)
+    sct = sm4.process_block(se, spt)
+    fails = fails + ck("sm4 ecb block", bh(sct), "681edf34d206965e86b3e94f536e4246")
+    sd = sm4.new_decryptor(sk, 16)
+    if bh(sm4.process_block(sd, sct)) == "0123456789abcdeffedcba9876543210" { println("ok   sm4 decrypt roundtrip") } else { println("FAIL sm4 decrypt"); fails = fails + 1 }
+
+    // --- 3DES (TDEA) 3-key KAT (BC DesEdeTest) ---
+    dk = hb("0123456789abcdef0123456789abcdef0123456789abcdef")
+    dpt = hb("4e6f77206973207468652074696d6520666f7220616c6c20")
+    de = des3.new_encryptor(dk, 24)
+    // single block (8 bytes)
+    b0 = bytes.new(8); i = 0; while i < 8 { bytes.set(b0, i, bytes.get(dpt, i)); i = i + 1 }
+    dct0 = des3.process_block(de, b0)
+    fails = fails + ck("des3 ecb block0", bh(dct0), "3fa40e8a984d4815")
+    dd = des3.new_decryptor(dk, 24)
+    rt = des3.process_block(dd, dct0)
+    if bh(rt) == bh(b0) { println("ok   des3 decrypt roundtrip") } else { println("FAIL des3 decrypt"); fails = fails + 1 }
+
+    // --- CBC round-trip (SM4) ---
+    iv = hb("00112233445566778899aabbccddeeff")
+    msg = hb("0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210")
+    se2 = sm4.new_encryptor(sk, 16)
+    enc = sm4.cbc_encrypt(se2, iv, msg)
+    sd2 = sm4.new_decryptor(sk, 16)
+    dec = sm4.cbc_decrypt(sd2, iv, enc)
+    if bh(dec) == bh(msg) { println("ok   sm4 cbc roundtrip") } else { println("FAIL sm4 cbc roundtrip"); fails = fails + 1 }
+
+    if fails == 0 { println("ALL PASS"); return }
+    println("FAILURES"); exit(1)
+}

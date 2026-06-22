@@ -1,0 +1,1355 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.mlkem — ML-KEM (FIPS 203, the standardized CRYSTALS-Kyber
+// key-encapsulation mechanism) in pure Aether, ported from Bouncy Castle's
+// Org.BouncyCastle.Crypto.Kems.MLKem engine. NO externs to OpenSSL or any C
+// crypto; all SHA-3/SHAKE primitives come from std.cryptography.sha3.
+//
+// ML-KEM is a Module-LWE KEM over the ring R_q = Z_q[X]/(X^256 + 1) with
+// q = 3329, n = 256. Three parameter sets:
+//   ML-KEM-512  : k=2, eta1=3, eta2=2, du=10, dv=4   (ek 800,  dk 1632, ct 768)
+//   ML-KEM-768  : k=3, eta1=2, eta2=2, du=10, dv=4   (ek 1184, dk 2400, ct 1088)
+//   ML-KEM-1024 : k=4, eta1=2, eta2=2, du=11, dv=5   (ek 1568, dk 3168, ct 1568)
+// Shared secret K is always 32 bytes; seeds d, z, m are each 32 bytes.
+//
+// Import with:  import std.cryptography.mlkem
+//
+//   mlkem768_keygen(d, z)      -> (ek, dk)   // d,z are 32-byte seed buffers
+//   mlkem768_encaps(ek, m)     -> (ct, K)    // m is the 32-byte message coin
+//   mlkem768_decaps(dk, ct)    -> K          // 32-byte shared secret
+//   (and the 512_* / 1024_* equivalents)
+//
+// Determinism: keygen/encaps take caller-supplied seeds so KATs reproduce
+// exactly. All inputs/outputs are std.bytes buffers (ptr); read with
+// bytes.get, hand off / free with bytes.free.
+//
+// Aether-specific care:
+//   * BC works in `short` (signed 16-bit) coefficients; the NTT/reduction
+//     arithmetic depends on that 16-bit wraparound. Here coefficients are
+//     `int`, and every BC `(short)` cast is reproduced by s16() (sign-extend
+//     the low 16 bits). Montgomery/Barrett reduction is exact this way.
+//   * `>>` is arithmetic in Aether (matches C# signed `>>`); logical shifts
+//     for the bit-packing use std.bits.lsr32.
+//   * Left shifts in the d_u/d_v compression packing widen to int first;
+//     masked-byte LEFT shifts past bit 7 would otherwise be 32-bit-unsafe.
+//   * G = SHA3-512, H = SHA3-256, PRF/XOF/J = SHAKE256/SHAKE128 — all from
+//     std.cryptography.sha3. The one-shot wrappers there free their own ctx;
+//     we never double-free.
+
+import std.bits
+import std.bytes
+import std.intarr
+import std.cryptography.sha3
+
+extern malloc(size: int) -> ptr
+@extern("free") libc_free(p: ptr)
+
+exports (
+    mlkem512_keygen, mlkem512_encaps, mlkem512_decaps,
+    mlkem768_keygen, mlkem768_encaps, mlkem768_decaps,
+    mlkem1024_keygen, mlkem1024_encaps, mlkem1024_decaps,
+    mlkem_ek_bytes, mlkem_dk_bytes, mlkem_ct_bytes, mlkem_ss_bytes
+)
+
+// ---- Constants ----
+
+const Q: int = 3329
+const QINV: int = 62209
+const N: int = 256
+const SYM: int = 32          // SymBytes
+const POLY_BYTES: int = 384  // 12-bit packed NTT poly = 256*12/8
+
+// NTT zeta tables (Montgomery domain), Kyber-r3 layout as used by BC.
+const ZETAS: int[128] = [
+    2285, 2571, 2970, 1812, 1493, 1422, 287, 202, 3158, 622, 1577, 182, 962,
+    2127, 1855, 1468, 573, 2004, 264, 383, 2500, 1458, 1727, 3199, 2648, 1017,
+    732, 608, 1787, 411, 3124, 1758, 1223, 652, 2777, 1015, 2036, 1491, 3047,
+    1785, 516, 3321, 3009, 2663, 1711, 2167, 126, 1469, 2476, 3239, 3058, 830,
+    107, 1908, 3082, 2378, 2931, 961, 1821, 2604, 448, 2264, 677, 2054, 2226,
+    430, 555, 843, 2078, 871, 1550, 105, 422, 587, 177, 3094, 3038, 2869, 1574,
+    1653, 3083, 778, 1159, 3182, 2552, 1483, 2727, 1119, 1739, 644, 2457, 349,
+    418, 329, 3173, 3254, 817, 1097, 603, 610, 1322, 2044, 1864, 384, 2114, 3193,
+    1218, 1994, 2455, 220, 2142, 1670, 2144, 1799, 2051, 794, 1819, 2475, 2459,
+    478, 3221, 3021, 996, 991, 958, 1869, 1522, 1628
+]
+
+const ZETAS_INV: int[128] = [
+    1701, 1807, 1460, 2371, 2338, 2333, 308, 108, 2851, 870, 854, 1510, 2535,
+    1278, 1530, 1185, 1659, 1187, 3109, 874, 1335, 2111, 136, 1215, 2945, 1465,
+    1285, 2007, 2719, 2726, 2232, 2512, 75, 156, 3000, 2911, 2980, 872, 2685,
+    1590, 2210, 602, 1846, 777, 147, 2170, 2551, 246, 1676, 1755, 460, 291, 235,
+    3152, 2742, 2907, 3224, 1779, 2458, 1251, 2486, 2774, 2899, 1103, 1275, 2652,
+    1065, 2881, 725, 1508, 2368, 398, 951, 247, 1421, 3222, 2499, 271, 90, 853,
+    1860, 3203, 1162, 1618, 666, 320, 8, 2813, 1544, 282, 1838, 1293, 2314, 552,
+    2677, 2106, 1571, 205, 2918, 1542, 2721, 2597, 2312, 681, 130, 1602, 1871,
+    829, 2946, 3065, 1325, 2756, 1861, 1474, 1202, 2367, 3147, 1752, 2707, 171,
+    3127, 3042, 1907, 1836, 1517, 359, 758, 1441
+]
+
+// ---- Parameter bundle ----
+
+struct Params {
+    k: int
+    eta1: int
+    poly_compressed: int       // dv bytes per poly  (128 for dv=4, 160 for dv=5)
+    polyvec_compressed: int    // du bytes for whole vector (k*320 du=10, k*352 du=11)
+    polyvec_bytes: int         // k * 384
+    indcpa_pk: int             // polyvec_bytes + 32
+    indcpa_sk: int             // polyvec_bytes
+    ek_bytes: int              // = indcpa_pk
+    dk_bytes: int              // indcpa_sk + indcpa_pk + 2*32
+    ct_bytes: int              // polyvec_compressed + poly_compressed
+}
+
+// Allocate + populate a Params on the heap. Caller frees with free_params.
+mk_params(k: int) -> *Params {
+    p = malloc(96) as *Params
+    p.k = k
+    if k == 2 {
+        p.eta1 = 3
+        p.poly_compressed = 128
+        p.polyvec_compressed = k * 320
+    }
+    if k == 3 {
+        p.eta1 = 2
+        p.poly_compressed = 128
+        p.polyvec_compressed = k * 320
+    }
+    if k == 4 {
+        p.eta1 = 2
+        p.poly_compressed = 160
+        p.polyvec_compressed = k * 352
+    }
+    p.polyvec_bytes = k * POLY_BYTES
+    p.indcpa_pk = p.polyvec_bytes + SYM
+    p.indcpa_sk = p.polyvec_bytes
+    p.ek_bytes = p.indcpa_pk
+    p.dk_bytes = p.indcpa_sk + p.indcpa_pk + 2 * SYM
+    p.ct_bytes = p.polyvec_compressed + p.poly_compressed
+    return p
+}
+
+free_params(p: *Params) {
+    libc_free(p)
+}
+
+// ---- Size helpers (public) ----
+
+mlkem_ek_bytes(k: int) -> int {
+    p = mk_params(k)
+    v = p.ek_bytes
+    free_params(p)
+    return v
+}
+mlkem_dk_bytes(k: int) -> int {
+    p = mk_params(k)
+    v = p.dk_bytes
+    free_params(p)
+    return v
+}
+mlkem_ct_bytes(k: int) -> int {
+    p = mk_params(k)
+    v = p.ct_bytes
+    free_params(p)
+    return v
+}
+mlkem_ss_bytes() -> int {
+    return SYM
+}
+
+// ---- Signed 16-bit truncation (BC works in `short`) ----
+
+// Reproduce a C# `(short)x` cast: keep the low 16 bits, sign-extend bit 15.
+s16(x: int) -> int {
+    v = x & 0xFFFF
+    if v >= 0x8000 {
+        v = v - 0x10000
+    }
+    return v
+}
+
+// ---- Modular reduction ----
+
+// Montgomery reduce: input is a full int product, output in (-q, q).
+mont_reduce(a: int) -> int {
+    u = s16(a * QINV)
+    t = u * Q
+    t = a - t
+    t = t >> 16          // arithmetic shift matches C# signed >>
+    return s16(t)
+}
+
+// Barrett reduce a coefficient (already in short range) to (-q/2, q/2].
+barrett_reduce(a: int) -> int {
+    // v = ((1<<26) + q/2)/q = 20159
+    v = 20159
+    t = (v * a) >> 26
+    t = s16(t)
+    t = s16(t * Q)
+    return s16(a - t)
+}
+
+// Conditional subtract q: bring a into [0, q).
+cond_sub_q(a: int) -> int {
+    a = a - Q
+    // (a >> 15) is 0 if a>=0, -1 (all ones) if a<0; & Q adds q back.
+    a = a + ((a >> 15) & Q)
+    return s16(a)
+}
+
+mul_mont(a: int, b: int) -> int {
+    return mont_reduce(a * b)
+}
+
+// ---- Poly = intarr(256) of coefficients ----
+
+poly_new() -> ptr {
+    return intarr_new_raw(N)
+}
+poly_free(p: ptr) {
+    intarr_free(p)
+}
+pg(p: ptr, i: int) -> int {
+    return intarr_get_unchecked(p, i)
+}
+ps(p: ptr, i: int, v: int) {
+    intarr_set_unchecked(p, i, v)
+}
+
+// PolyVec = array of k poly ptrs, stored as intarr(N*k) flat: poly j at j*N.
+polyvec_new(k: int) -> ptr {
+    return intarr_new_raw(N * k)
+}
+polyvec_free(p: ptr) {
+    intarr_free(p)
+}
+// Coefficient i of poly j in a flat polyvec.
+vg(pv: ptr, j: int, i: int) -> int {
+    return intarr_get_unchecked(pv, j * N + i)
+}
+vs(pv: ptr, j: int, i: int, v: int) {
+    intarr_set_unchecked(pv, j * N + i, v)
+}
+
+// ---- NTT (in place on a single poly via flat polyvec slot) ----
+
+ntt(pv: ptr, j: int) {
+    base = j * N
+    k = 1
+    len = 128
+    while len >= 2 {
+        start = 0
+        while start < 256 {
+            zeta = ZETAS[k]
+            k = k + 1
+            jj = start
+            while jj < start + len {
+                t = intarr_get_unchecked(pv, base + jj)
+                u = mul_mont(zeta, intarr_get_unchecked(pv, base + jj + len))
+                intarr_set_unchecked(pv, base + jj + len, s16(t - u))
+                intarr_set_unchecked(pv, base + jj, s16(t + u))
+                jj = jj + 1
+            }
+            start = jj + len
+        }
+        len = len >> 1
+    }
+}
+
+inv_ntt(pv: ptr, j: int) {
+    base = j * N
+    k = 0
+    len = 2
+    while len <= 128 {
+        start = 0
+        while start < 256 {
+            zeta = ZETAS_INV[k]
+            k = k + 1
+            jj = start
+            while jj < start + len {
+                t = intarr_get_unchecked(pv, base + jj)
+                u = intarr_get_unchecked(pv, base + jj + len)
+                intarr_set_unchecked(pv, base + jj, barrett_reduce(s16(t + u)))
+                intarr_set_unchecked(pv, base + jj + len, mul_mont(zeta, s16(t - u)))
+                jj = jj + 1
+            }
+            start = jj + len
+        }
+        len = len << 1
+    }
+    i = 0
+    while i < 256 {
+        intarr_set_unchecked(pv, base + i, mul_mont(intarr_get_unchecked(pv, base + i), ZETAS_INV[127]))
+        i = i + 1
+    }
+}
+
+poly_reduce(pv: ptr, j: int) {
+    base = j * N
+    i = 0
+    while i < 256 {
+        intarr_set_unchecked(pv, base + i, barrett_reduce(intarr_get_unchecked(pv, base + i)))
+        i = i + 1
+    }
+}
+
+poly_ntt(pv: ptr, j: int) {
+    ntt(pv, j)
+    poly_reduce(pv, j)
+}
+
+poly_to_mont(pv: ptr, j: int) {
+    base = j * N
+    // f = (1<<32) % q = 1353
+    f = 1353
+    i = 0
+    while i < 256 {
+        intarr_set_unchecked(pv, base + i, mont_reduce(intarr_get_unchecked(pv, base + i) * f))
+        i = i + 1
+    }
+}
+
+// r[j] += a[j]
+poly_add(rpv: ptr, rj: int, apv: ptr, aj: int) {
+    rb = rj * N
+    ab = aj * N
+    i = 0
+    while i < 256 {
+        intarr_set_unchecked(rpv, rb + i, s16(intarr_get_unchecked(rpv, rb + i) + intarr_get_unchecked(apv, ab + i)))
+        i = i + 1
+    }
+}
+
+// r[j] = a[j] - r[j]   (BC Subtract semantics)
+poly_subtract(rpv: ptr, rj: int, apv: ptr, aj: int) {
+    rb = rj * N
+    ab = aj * N
+    i = 0
+    while i < 256 {
+        intarr_set_unchecked(rpv, rb + i, s16(intarr_get_unchecked(apv, ab + i) - intarr_get_unchecked(rpv, rb + i)))
+        i = i + 1
+    }
+}
+
+// Base multiplication of two degree-1 polys in NTT domain.
+basemul(rpv: ptr, rbase: int, off: int, a0: int, a1: int, b0: int, b1: int, zeta: int) {
+    o0 = mul_mont(a1, b1)
+    o0 = mul_mont(o0, zeta)
+    o0 = s16(o0 + mul_mont(a0, b0))
+    intarr_set_unchecked(rpv, rbase + off, o0)
+    o1 = mul_mont(a0, b1)
+    o1 = s16(o1 + mul_mont(a1, b0))
+    intarr_set_unchecked(rpv, rbase + off + 1, o1)
+}
+
+basemul_mont(rpv: ptr, rj: int, apv: ptr, aj: int, bpv: ptr, bj: int) {
+    rb = rj * N
+    ab = aj * N
+    bb = bj * N
+    i = 0
+    while i < 64 {
+        z = ZETAS[64 + i]
+        basemul(rpv, rb, 4 * i,
+            intarr_get_unchecked(apv, ab + 4 * i), intarr_get_unchecked(apv, ab + 4 * i + 1),
+            intarr_get_unchecked(bpv, bb + 4 * i), intarr_get_unchecked(bpv, bb + 4 * i + 1), z)
+        basemul(rpv, rb, 4 * i + 2,
+            intarr_get_unchecked(apv, ab + 4 * i + 2), intarr_get_unchecked(apv, ab + 4 * i + 3),
+            intarr_get_unchecked(bpv, bb + 4 * i + 2), intarr_get_unchecked(bpv, bb + 4 * i + 3), s16(-z))
+        i = i + 1
+    }
+}
+
+// r[rj] = <a (k polys), b (k polys)> pointwise-accumulated, reduced.
+polyvec_pointwise_acc(rpv: ptr, rj: int, apv: ptr, bpv: ptr, k: int, scratch: ptr) {
+    basemul_mont(rpv, rj, apv, 0, bpv, 0)
+    i = 1
+    while i < k {
+        basemul_mont(scratch, 0, apv, i, bpv, i)
+        poly_add(rpv, rj, scratch, 0)
+        i = i + 1
+    }
+    poly_reduce(rpv, rj)
+}
+
+// ---- 12-bit (de)serialization of NTT polys ----
+
+// Pack poly j into 384 bytes at out[off..].
+poly_to_bytes(pv: ptr, j: int, out: ptr, off: int) {
+    base = j * N
+    i = 0
+    while i < 128 {
+        t0 = cond_sub_q(intarr_get_unchecked(pv, base + 2 * i)) & 0xFFFF
+        t1 = cond_sub_q(intarr_get_unchecked(pv, base + 2 * i + 1)) & 0xFFFF
+        bytes.set(out, off + 3 * i + 0, t0 & 0xFF)
+        bytes.set(out, off + 3 * i + 1, (bits.lsr32(t0, 8) | (t1 << 4)) & 0xFF)
+        bytes.set(out, off + 3 * i + 2, bits.lsr32(t1, 4) & 0xFF)
+        i = i + 1
+    }
+}
+
+poly_from_bytes(pv: ptr, j: int, src: ptr, off: int) {
+    base = j * N
+    i = 0
+    while i < 128 {
+        a0 = bytes.get(src, off + 3 * i + 0) & 0xFF
+        a1 = bytes.get(src, off + 3 * i + 1) & 0xFF
+        a2 = bytes.get(src, off + 3 * i + 2) & 0xFF
+        c0 = ((a0) | (a1 << 8)) & 0xFFF
+        c1 = (bits.lsr32(a1, 4) | (a2 << 4)) & 0xFFF
+        intarr_set_unchecked(pv, base + 2 * i, s16(c0))
+        intarr_set_unchecked(pv, base + 2 * i + 1, s16(c1))
+        i = i + 1
+    }
+}
+
+polyvec_to_bytes(pv: ptr, k: int, out: ptr, off: int) {
+    i = 0
+    while i < k {
+        poly_to_bytes(pv, i, out, off + i * POLY_BYTES)
+        i = i + 1
+    }
+}
+polyvec_from_bytes(pv: ptr, k: int, src: ptr, off: int) {
+    i = 0
+    while i < k {
+        poly_from_bytes(pv, i, src, off + i * POLY_BYTES)
+        i = i + 1
+    }
+}
+
+// ---- Message <-> poly ----
+
+poly_from_msg(pv: ptr, j: int, msg: ptr, off: int) {
+    base = j * N
+    half = (Q + 1) / 2     // 1665
+    i = 0
+    while i < 32 {
+        mi = bytes.get(msg, off + i) & 0xFF
+        b = 0
+        while b < 8 {
+            bit = (bits.lsr32(mi, b)) & 1
+            mask = 0 - bit       // 0 or -1
+            intarr_set_unchecked(pv, base + 8 * i + b, s16(mask & half))
+            b = b + 1
+        }
+        i = i + 1
+    }
+}
+
+poly_to_msg(pv: ptr, j: int, msg: ptr, off: int) {
+    base = j * N
+    lower = Q >> 2          // 832
+    upper = Q - lower       // 2497
+    // cond_sub_q first
+    i = 0
+    while i < 256 {
+        intarr_set_unchecked(pv, base + i, cond_sub_q(intarr_get_unchecked(pv, base + i)))
+        i = i + 1
+    }
+    i = 0
+    while i < 32 {
+        mi = 0
+        b = 0
+        while b < 8 {
+            cj = intarr_get_unchecked(pv, base + 8 * i + b)
+            // t = ((lower - cj) & (cj - upper)) >>> 31  (uint), 1 iff cj in (lower,upper)
+            prod = (lower - cj) & (cj - upper)
+            t = bits.lsr32(prod, 31) & 1
+            mi = mi | (t << b)
+            b = b + 1
+        }
+        bytes.set(msg, off + i, mi & 0xFF)
+        i = i + 1
+    }
+}
+
+// ---- d_v compression of v poly ----
+
+// dv=4: 128 bytes for the whole poly.
+compress_poly_128(pv: ptr, j: int, out: ptr, off: int) {
+    base = j * N
+    // cond_sub_q
+    i = 0
+    while i < 256 {
+        intarr_set_unchecked(pv, base + i, cond_sub_q(intarr_get_unchecked(pv, base + i)))
+        i = i + 1
+    }
+    pos = off
+    i = 0
+    while i < 32 {       // N/8
+        t0 = compress4(intarr_get_unchecked(pv, base + 8 * i + 0))
+        t1 = compress4(intarr_get_unchecked(pv, base + 8 * i + 1))
+        t2 = compress4(intarr_get_unchecked(pv, base + 8 * i + 2))
+        t3 = compress4(intarr_get_unchecked(pv, base + 8 * i + 3))
+        t4 = compress4(intarr_get_unchecked(pv, base + 8 * i + 4))
+        t5 = compress4(intarr_get_unchecked(pv, base + 8 * i + 5))
+        t6 = compress4(intarr_get_unchecked(pv, base + 8 * i + 6))
+        t7 = compress4(intarr_get_unchecked(pv, base + 8 * i + 7))
+        bytes.set(out, pos + 0, (t0 | (t1 << 4)) & 0xFF)
+        bytes.set(out, pos + 1, (t2 | (t3 << 4)) & 0xFF)
+        bytes.set(out, pos + 2, (t4 | (t5 << 4)) & 0xFF)
+        bytes.set(out, pos + 3, (t6 | (t7 << 4)) & 0xFF)
+        pos = pos + 4
+        i = i + 1
+    }
+}
+compress4(c: int) -> int {
+    return (((c + (Q >> 5)) * 315) >> 16) & 0xF
+}
+
+decompress_poly_128(pv: ptr, j: int, src: ptr, off: int) {
+    base = j * N
+    pos = off
+    i = 0
+    while i < 128 {       // N/2
+        byte_v = bytes.get(src, pos) & 0xFF
+        intarr_set_unchecked(pv, base + 2 * i + 0, s16((((byte_v & 15) * Q) + 8) >> 4))
+        intarr_set_unchecked(pv, base + 2 * i + 1, s16(((bits.lsr32(byte_v, 4) * Q) + 8) >> 4))
+        pos = pos + 1
+        i = i + 1
+    }
+}
+
+// dv=5: 160 bytes.
+compress_poly_160(pv: ptr, j: int, out: ptr, off: int) {
+    base = j * N
+    i = 0
+    while i < 256 {
+        intarr_set_unchecked(pv, base + i, cond_sub_q(intarr_get_unchecked(pv, base + i)))
+        i = i + 1
+    }
+    pos = off
+    i = 0
+    while i < 32 {
+        t0 = compress5(intarr_get_unchecked(pv, base + 8 * i + 0))
+        t1 = compress5(intarr_get_unchecked(pv, base + 8 * i + 1))
+        t2 = compress5(intarr_get_unchecked(pv, base + 8 * i + 2))
+        t3 = compress5(intarr_get_unchecked(pv, base + 8 * i + 3))
+        t4 = compress5(intarr_get_unchecked(pv, base + 8 * i + 4))
+        t5 = compress5(intarr_get_unchecked(pv, base + 8 * i + 5))
+        t6 = compress5(intarr_get_unchecked(pv, base + 8 * i + 6))
+        t7 = compress5(intarr_get_unchecked(pv, base + 8 * i + 7))
+        bytes.set(out, pos + 0, (t0 | (t1 << 5)) & 0xFF)
+        bytes.set(out, pos + 1, (bits.lsr32(t1, 3) | (t2 << 2) | (t3 << 7)) & 0xFF)
+        bytes.set(out, pos + 2, (bits.lsr32(t3, 1) | (t4 << 4)) & 0xFF)
+        bytes.set(out, pos + 3, (bits.lsr32(t4, 4) | (t5 << 1) | (t6 << 6)) & 0xFF)
+        bytes.set(out, pos + 4, (bits.lsr32(t6, 2) | (t7 << 3)) & 0xFF)
+        pos = pos + 5
+        i = i + 1
+    }
+}
+compress5(c: int) -> int {
+    return (((c + (Q >> 6)) * 630) >> 16) & 0x1F
+}
+
+decompress_poly_160(pv: ptr, j: int, src: ptr, off: int) {
+    base = j * N
+    pos = off
+    i = 0
+    while i < 32 {       // N/8
+        c0 = bytes.get(src, pos + 0) & 0xFF
+        c1 = bytes.get(src, pos + 1) & 0xFF
+        c2 = bytes.get(src, pos + 2) & 0xFF
+        c3 = bytes.get(src, pos + 3) & 0xFF
+        c4 = bytes.get(src, pos + 4) & 0xFF
+        t0 = c0 & 0x1F
+        t1 = (bits.lsr32(c0, 5) | (c1 << 3)) & 0x1F
+        t2 = bits.lsr32(c1, 2) & 0x1F
+        t3 = (bits.lsr32(c1, 7) | (c2 << 1)) & 0x1F
+        t4 = (bits.lsr32(c2, 4) | (c3 << 4)) & 0x1F
+        t5 = bits.lsr32(c3, 1) & 0x1F
+        t6 = (bits.lsr32(c3, 6) | (c4 << 2)) & 0x1F
+        t7 = bits.lsr32(c4, 3) & 0x1F
+        pos = pos + 5
+        intarr_set_unchecked(pv, base + 8 * i + 0, s16(((t0 * Q) + 16) >> 5))
+        intarr_set_unchecked(pv, base + 8 * i + 1, s16(((t1 * Q) + 16) >> 5))
+        intarr_set_unchecked(pv, base + 8 * i + 2, s16(((t2 * Q) + 16) >> 5))
+        intarr_set_unchecked(pv, base + 8 * i + 3, s16(((t3 * Q) + 16) >> 5))
+        intarr_set_unchecked(pv, base + 8 * i + 4, s16(((t4 * Q) + 16) >> 5))
+        intarr_set_unchecked(pv, base + 8 * i + 5, s16(((t5 * Q) + 16) >> 5))
+        intarr_set_unchecked(pv, base + 8 * i + 6, s16(((t6 * Q) + 16) >> 5))
+        intarr_set_unchecked(pv, base + 8 * i + 7, s16(((t7 * Q) + 16) >> 5))
+        i = i + 1
+    }
+}
+
+// ---- d_u compression of b polyvec ----
+
+// du=10: k*320 bytes.
+compress_polyvec_320(pv: ptr, k: int, out: ptr, off: int) {
+    // cond_sub_q whole vector
+    j = 0
+    while j < k {
+        i = 0
+        while i < 256 {
+            vs(pv, j, i, cond_sub_q(vg(pv, j, i)))
+            i = i + 1
+        }
+        j = j + 1
+    }
+    pos = off
+    j = 0
+    while j < k {
+        i = 0
+        while i < 64 {     // N/4
+            t0 = compress10(vg(pv, j, 4 * i + 0))
+            t1 = compress10(vg(pv, j, 4 * i + 1))
+            t2 = compress10(vg(pv, j, 4 * i + 2))
+            t3 = compress10(vg(pv, j, 4 * i + 3))
+            bytes.set(out, pos + 0, t0 & 0xFF)
+            bytes.set(out, pos + 1, (bits.lsr32(t0, 8) | (t1 << 2)) & 0xFF)
+            bytes.set(out, pos + 2, (bits.lsr32(t1, 6) | (t2 << 4)) & 0xFF)
+            bytes.set(out, pos + 3, (bits.lsr32(t2, 4) | (t3 << 6)) & 0xFF)
+            bytes.set(out, pos + 4, bits.lsr32(t3, 2) & 0xFF)
+            pos = pos + 5
+            i = i + 1
+        }
+        j = j + 1
+    }
+}
+compress10(c: int) -> int {
+    // (((long)((c<<3) + (q>>8)) * 165141429) >> 32) & 0x3FF
+    long base = (c << 3) + (Q >> 8)
+    long mul = 165141429
+    long prod = base * mul
+    int hi = bits.lsr64(prod, 32)
+    return hi & 0x3FF
+}
+
+decompress_polyvec_320(pv: ptr, k: int, src: ptr, off: int) {
+    pos = off
+    j = 0
+    while j < k {
+        i = 0
+        while i < 256 {
+            c0 = bytes.get(src, pos + 0) & 0xFF
+            c1 = bytes.get(src, pos + 1) & 0xFF
+            c2 = bytes.get(src, pos + 2) & 0xFF
+            c3 = bytes.get(src, pos + 3) & 0xFF
+            c4 = bytes.get(src, pos + 4) & 0xFF
+            pos = pos + 5
+            t0 = (c0 | (c1 << 8)) & 0x3FF
+            t1 = (bits.lsr32(c1, 2) | (c2 << 6)) & 0x3FF
+            t2 = (bits.lsr32(c2, 4) | (c3 << 4)) & 0x3FF
+            t3 = (bits.lsr32(c3, 6) | (c4 << 2)) & 0x3FF
+            vs(pv, j, i + 0, s16(((t0 * Q) + 512) >> 10))
+            vs(pv, j, i + 1, s16(((t1 * Q) + 512) >> 10))
+            vs(pv, j, i + 2, s16(((t2 * Q) + 512) >> 10))
+            vs(pv, j, i + 3, s16(((t3 * Q) + 512) >> 10))
+            i = i + 4
+        }
+        j = j + 1
+    }
+}
+
+// du=11: k*352 bytes.
+compress_polyvec_352(pv: ptr, k: int, out: ptr, off: int) {
+    j = 0
+    while j < k {
+        i = 0
+        while i < 256 {
+            vs(pv, j, i, cond_sub_q(vg(pv, j, i)))
+            i = i + 1
+        }
+        j = j + 1
+    }
+    pos = off
+    j = 0
+    while j < k {
+        i = 0
+        while i < 32 {     // N/8
+            t0 = compress11(vg(pv, j, 8 * i + 0))
+            t1 = compress11(vg(pv, j, 8 * i + 1))
+            t2 = compress11(vg(pv, j, 8 * i + 2))
+            t3 = compress11(vg(pv, j, 8 * i + 3))
+            t4 = compress11(vg(pv, j, 8 * i + 4))
+            t5 = compress11(vg(pv, j, 8 * i + 5))
+            t6 = compress11(vg(pv, j, 8 * i + 6))
+            t7 = compress11(vg(pv, j, 8 * i + 7))
+            bytes.set(out, pos + 0, t0 & 0xFF)
+            bytes.set(out, pos + 1, (bits.lsr32(t0, 8) | (t1 << 3)) & 0xFF)
+            bytes.set(out, pos + 2, (bits.lsr32(t1, 5) | (t2 << 6)) & 0xFF)
+            bytes.set(out, pos + 3, bits.lsr32(t2, 2) & 0xFF)
+            bytes.set(out, pos + 4, (bits.lsr32(t2, 10) | (t3 << 1)) & 0xFF)
+            bytes.set(out, pos + 5, (bits.lsr32(t3, 7) | (t4 << 4)) & 0xFF)
+            bytes.set(out, pos + 6, (bits.lsr32(t4, 4) | (t5 << 7)) & 0xFF)
+            bytes.set(out, pos + 7, bits.lsr32(t5, 1) & 0xFF)
+            bytes.set(out, pos + 8, (bits.lsr32(t5, 9) | (t6 << 2)) & 0xFF)
+            bytes.set(out, pos + 9, (bits.lsr32(t6, 6) | (t7 << 5)) & 0xFF)
+            bytes.set(out, pos + 10, bits.lsr32(t7, 3) & 0xFF)
+            pos = pos + 11
+            i = i + 1
+        }
+        j = j + 1
+    }
+}
+compress11(c: int) -> int {
+    long base = (c << 4) + (Q >> 8)
+    long mul = 165141429
+    long prod = base * mul
+    int hi = bits.lsr64(prod, 32)
+    return hi & 0x7FF
+}
+
+decompress_polyvec_352(pv: ptr, k: int, src: ptr, off: int) {
+    pos = off
+    j = 0
+    while j < k {
+        i = 0
+        while i < 256 {
+            c0 = bytes.get(src, pos + 0) & 0xFF
+            c1 = bytes.get(src, pos + 1) & 0xFF
+            c2 = bytes.get(src, pos + 2) & 0xFF
+            c3 = bytes.get(src, pos + 3) & 0xFF
+            c4 = bytes.get(src, pos + 4) & 0xFF
+            c5 = bytes.get(src, pos + 5) & 0xFF
+            c6 = bytes.get(src, pos + 6) & 0xFF
+            c7 = bytes.get(src, pos + 7) & 0xFF
+            c8 = bytes.get(src, pos + 8) & 0xFF
+            c9 = bytes.get(src, pos + 9) & 0xFF
+            c10 = bytes.get(src, pos + 10) & 0xFF
+            pos = pos + 11
+            t0 = (c0 | (c1 << 8)) & 0x7FF
+            t1 = (bits.lsr32(c1, 3) | (c2 << 5)) & 0x7FF
+            t2 = (bits.lsr32(c2, 6) | (c3 << 2) | (c4 << 10)) & 0x7FF
+            t3 = (bits.lsr32(c4, 1) | (c5 << 7)) & 0x7FF
+            t4 = (bits.lsr32(c5, 4) | (c6 << 4)) & 0x7FF
+            t5 = (bits.lsr32(c6, 7) | (c7 << 1) | (c8 << 9)) & 0x7FF
+            t6 = (bits.lsr32(c8, 2) | (c9 << 6)) & 0x7FF
+            t7 = (bits.lsr32(c9, 5) | (c10 << 3)) & 0x7FF
+            vs(pv, j, i + 0, s16(((t0 * Q) + 1024) >> 11))
+            vs(pv, j, i + 1, s16(((t1 * Q) + 1024) >> 11))
+            vs(pv, j, i + 2, s16(((t2 * Q) + 1024) >> 11))
+            vs(pv, j, i + 3, s16(((t3 * Q) + 1024) >> 11))
+            vs(pv, j, i + 4, s16(((t4 * Q) + 1024) >> 11))
+            vs(pv, j, i + 5, s16(((t5 * Q) + 1024) >> 11))
+            vs(pv, j, i + 6, s16(((t6 * Q) + 1024) >> 11))
+            vs(pv, j, i + 7, s16(((t7 * Q) + 1024) >> 11))
+            i = i + 8
+        }
+        j = j + 1
+    }
+}
+
+// ---- CBD noise sampling ----
+
+cbd_eta2(pv: ptr, j: int, buf: ptr) {
+    base = j * N
+    i = 0
+    while i < 32 {       // N/8
+        t = bytes.get_le32(buf, 4 * i) & 0xFFFFFFFF
+        d = t & 0x55555555
+        d = d + (bits.lsr32(t, 1) & 0x55555555)
+        jj = 0
+        while jj < 8 {
+            a = (bits.lsr32(d, 4 * jj + 0)) & 0x3
+            b = (bits.lsr32(d, 4 * jj + 2)) & 0x3
+            intarr_set_unchecked(pv, base + 8 * i + jj, s16(a - b))
+            jj = jj + 1
+        }
+        i = i + 1
+    }
+}
+
+cbd_eta3(pv: ptr, j: int, buf: ptr) {
+    base = j * N
+    i = 0
+    while i < 64 {       // N/4
+        // LE 24-bit load
+        b0 = bytes.get(buf, 3 * i + 0) & 0xFF
+        b1 = bytes.get(buf, 3 * i + 1) & 0xFF
+        b2 = bytes.get(buf, 3 * i + 2) & 0xFF
+        t = (b0 | (b1 << 8) | (b2 << 16)) & 0xFFFFFF
+        d = t & 0x00249249
+        d = d + (bits.lsr32(t, 1) & 0x00249249)
+        d = d + (bits.lsr32(t, 2) & 0x00249249)
+        jj = 0
+        while jj < 4 {
+            a = (bits.lsr32(d, 6 * jj + 0)) & 0x7
+            b = (bits.lsr32(d, 6 * jj + 3)) & 0x7
+            intarr_set_unchecked(pv, base + 4 * i + jj, s16(a - b))
+            jj = jj + 1
+        }
+        i = i + 1
+    }
+}
+
+// PRF: SHAKE256(seed[0..32] || nonce), eta2 -> 128 bytes, eta3 -> 192 bytes.
+get_noise(pv: ptr, j: int, seed: ptr, seed_off: int, nonce: int, eta: int) {
+    in_buf = bytes.new(SYM + 1)
+    i = 0
+    while i < SYM {
+        bytes.set(in_buf, i, bytes.get(seed, seed_off + i) & 0xFF)
+        i = i + 1
+    }
+    bytes.set(in_buf, SYM, nonce & 0xFF)
+    out_len = 128
+    if eta == 3 {
+        out_len = 192
+    }
+    in_str = bytes.finish(in_buf, SYM + 1)
+    out = sha3.shake256_bytes(in_str, SYM + 1, out_len)
+    if eta == 2 {
+        cbd_eta2(pv, j, out)
+    } else {
+        cbd_eta3(pv, j, out)
+    }
+    bytes.free(out)
+}
+
+// ---- Matrix A generation via SHAKE128 rejection sampling ----
+
+// Fill poly a[i][j] (flat) by rejection sampling from SHAKE128(seed || x || y).
+gen_matrix_poly(dest: ptr, dj: int, seed: ptr, x: int, y: int) {
+    in_buf = bytes.new(SYM + 2)
+    i = 0
+    while i < SYM {
+        bytes.set(in_buf, i, bytes.get(seed, i) & 0xFF)
+        i = i + 1
+    }
+    bytes.set(in_buf, SYM, x & 0xFF)
+    bytes.set(in_buf, SYM + 1, y & 0xFF)
+    in_str = bytes.finish(in_buf, SYM + 2)
+
+    // Squeeze plenty: NumMatrixBlocks*168. NumMatrixBlocks for q=3329 is 3.
+    // 3 blocks = 504 bytes gives ~336 candidates; pull extra to be safe.
+    squeeze_len = 504 + 168 * 4
+    buf = sha3.shake128_bytes(in_str, SYM + 2, squeeze_len)
+
+    base = dj * N
+    ctr = 0
+    pos = 0
+    while ctr < N {
+        if pos + 3 > squeeze_len {
+            // Astronomically unlikely with this much output (≈784 candidates
+            // for 256 needed). Stop; remaining coeffs stay zero.
+            bytes.free(buf)
+            return
+        }
+        b0 = bytes.get(buf, pos + 0) & 0xFF
+        b1 = bytes.get(buf, pos + 1) & 0xFF
+        b2 = bytes.get(buf, pos + 2) & 0xFF
+        t = (b0 | (b1 << 8) | (b2 << 16)) & 0xFFFFFF
+        d1 = t & 0xFFF
+        d2 = bits.lsr32(t, 12) & 0xFFF
+        pos = pos + 3
+        if d1 < Q {
+            if ctr < N {
+                intarr_set_unchecked(dest, base + ctr, d1)
+                ctr = ctr + 1
+            }
+        }
+        if d2 < Q {
+            if ctr < N {
+                intarr_set_unchecked(dest, base + ctr, d2)
+                ctr = ctr + 1
+            }
+        }
+    }
+    bytes.free(buf)
+}
+
+// Generate the k*k matrix into `mat` (flat intarr of N*k*k).
+// mat poly (i,j) lives at slot (i*k + j) of N coeffs.
+gen_matrix(mat: ptr, seed: ptr, k: int, transpose: int) {
+    i = 0
+    while i < k {
+        j = 0
+        while j < k {
+            slot = i * k + j
+            if transpose == 1 {
+                gen_matrix_poly(mat, slot, seed, i, j)
+            } else {
+                gen_matrix_poly(mat, slot, seed, j, i)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// ---- K-PKE keygen ----
+
+// Writes IndCpa keypair into kp: [sk polyvec (indcpa_sk)] then [pk (indcpa_pk)].
+indcpa_keygen(p: *Params, d: ptr, kp: ptr) {
+    k = p.k
+
+    // G(d || k) -> 64 bytes = rho(32) || sigma(32)
+    g_in = bytes.new(SYM + 1)
+    i = 0
+    while i < SYM {
+        bytes.set(g_in, i, bytes.get(d, i) & 0xFF)
+        i = i + 1
+    }
+    bytes.set(g_in, SYM, k & 0xFF)
+    g_str = bytes.finish(g_in, SYM + 1)
+    gbuf = sha3.sha3_512_bytes(g_str, SYM + 1)   // 64 bytes; frees own ctx
+
+    // rho = gbuf[0..32], sigma = gbuf[32..64]
+    rho = bytes.new(SYM)
+    sigma = bytes.new(SYM)
+    i = 0
+    while i < SYM {
+        bytes.set(rho, i, bytes.get(gbuf, i) & 0xFF)
+        bytes.set(sigma, i, bytes.get(gbuf, SYM + i) & 0xFF)
+        i = i + 1
+    }
+    bytes.free(gbuf)
+
+    // Matrix A (non-transposed)
+    mat = intarr_new_raw(N * k * k)
+    gen_matrix(mat, rho, k, 0)
+
+    skpv = polyvec_new(k)
+    e = polyvec_new(k)
+    scratch = poly_new()
+
+    nonce = 0
+    i = 0
+    while i < k {
+        get_noise(skpv, i, sigma, 0, nonce, p.eta1)
+        nonce = nonce + 1
+        i = i + 1
+    }
+    i = 0
+    while i < k {
+        get_noise(e, i, sigma, 0, nonce, 2)   // error always eta2
+        nonce = nonce + 1
+        i = i + 1
+    }
+
+    i = 0
+    while i < k {
+        poly_ntt(skpv, i)
+        poly_ntt(e, i)
+        i = i + 1
+    }
+
+    pkpv = polyvec_new(k)
+    i = 0
+    while i < k {
+        // pkpv[i] = <A[i], skpv>
+        row = mat_row(mat, i, k)
+        polyvec_pointwise_acc(pkpv, i, row, skpv, k, scratch)
+        polyvec_free(row)
+        poly_to_mont(pkpv, i)
+        i = i + 1
+    }
+    // pkpv += e ; reduce
+    i = 0
+    while i < k {
+        poly_add(pkpv, i, e, i)
+        poly_reduce(pkpv, i)
+        i = i + 1
+    }
+
+    // pack sk = skpv ; pk = pkpv || rho
+    polyvec_to_bytes(skpv, k, kp, 0)
+    polyvec_to_bytes(pkpv, k, kp, p.indcpa_sk)
+    i = 0
+    while i < SYM {
+        bytes.set(kp, p.indcpa_sk + p.polyvec_bytes + i, bytes.get(rho, i) & 0xFF)
+        i = i + 1
+    }
+
+    bytes.free(rho)
+    bytes.free(sigma)
+    intarr_free(mat)
+    polyvec_free(skpv)
+    polyvec_free(e)
+    polyvec_free(pkpv)
+    poly_free(scratch)
+}
+
+// Matrix `mat` is a flat intarr of N*k*k coefficients; poly (i,j) lives at
+// flat slot (i*k + j). Return a freshly-allocated k-poly polyvec copy of row i
+// (slots i*k .. i*k+k-1) so the standard polyvec accessors apply. The caller
+// MUST free the returned polyvec.
+mat_row(mat: ptr, i: int, k: int) -> ptr {
+    rowpv = polyvec_new(k)
+    j = 0
+    while j < k {
+        src_slot = i * k + j
+        sb = src_slot * N
+        db = j * N
+        c = 0
+        while c < 256 {
+            intarr_set_unchecked(rowpv, db + c, intarr_get_unchecked(mat, sb + c))
+            c = c + 1
+        }
+        j = j + 1
+    }
+    return rowpv
+}
+
+// ---- K-PKE encrypt ----
+
+// pk is the indcpa public key (indcpa_pk bytes) at pk[pk_off..].
+// coins = 32-byte r. Writes ct (ct_bytes) at out[out_off..].
+indcpa_encrypt(p: *Params, pk: ptr, pk_off: int, msg: ptr, msg_off: int, coins: ptr, out: ptr, out_off: int) {
+    k = p.k
+
+    // Unpack pk -> pkpv, seed(rho)
+    pkpv = polyvec_new(k)
+    polyvec_from_bytes(pkpv, k, pk, pk_off)
+    rho = bytes.new(SYM)
+    i = 0
+    while i < SYM {
+        bytes.set(rho, i, bytes.get(pk, pk_off + p.polyvec_bytes + i) & 0xFF)
+        i = i + 1
+    }
+
+    kp_pv = polyvec_new(1)        // message poly (single-poly polyvec slot)
+    poly_from_msg(kp_pv, 0, msg, msg_off)
+
+    // Matrix A transposed
+    mat = intarr_new_raw(N * k * k)
+    gen_matrix(mat, rho, k, 1)
+
+    sp = polyvec_new(k)
+    ep = polyvec_new(k)
+    epp_pv = polyvec_new(1)       // single error poly e''
+    scratch = poly_new()
+
+    nonce = 0
+    i = 0
+    while i < k {
+        get_noise(sp, i, coins, 0, nonce, p.eta1)
+        nonce = nonce + 1
+        i = i + 1
+    }
+    i = 0
+    while i < k {
+        get_noise(ep, i, coins, 0, nonce, 2)
+        nonce = nonce + 1
+        i = i + 1
+    }
+    get_noise(epp_pv, 0, coins, 0, nonce, 2)
+    nonce = nonce + 1
+
+    i = 0
+    while i < k {
+        poly_ntt(sp, i)
+        i = i + 1
+    }
+
+    bp = polyvec_new(k)
+    i = 0
+    while i < k {
+        row = mat_row(mat, i, k)
+        polyvec_pointwise_acc(bp, i, row, sp, k, scratch)
+        polyvec_free(row)
+        i = i + 1
+    }
+
+    v_pv = polyvec_new(1)
+    polyvec_pointwise_acc(v_pv, 0, pkpv, sp, k, scratch)
+
+    i = 0
+    while i < k {
+        inv_ntt(bp, i)
+        i = i + 1
+    }
+    inv_ntt(v_pv, 0)
+
+    // bp += ep
+    i = 0
+    while i < k {
+        poly_add(bp, i, ep, i)
+        i = i + 1
+    }
+    // v += epp + k
+    poly_add(v_pv, 0, epp_pv, 0)
+    poly_add(v_pv, 0, kp_pv, 0)
+
+    // reduce
+    i = 0
+    while i < k {
+        poly_reduce(bp, i)
+        i = i + 1
+    }
+    poly_reduce(v_pv, 0)
+
+    // Pack ct: compress bp (du) then v (dv)
+    if p.k == 4 {
+        compress_polyvec_352(bp, k, out, out_off)
+        compress_poly_160(v_pv, 0, out, out_off + p.polyvec_compressed)
+    } else {
+        compress_polyvec_320(bp, k, out, out_off)
+        compress_poly_128(v_pv, 0, out, out_off + p.polyvec_compressed)
+    }
+
+    bytes.free(rho)
+    intarr_free(mat)
+    polyvec_free(pkpv)
+    polyvec_free(kp_pv)
+    polyvec_free(sp)
+    polyvec_free(ep)
+    polyvec_free(epp_pv)
+    polyvec_free(bp)
+    polyvec_free(v_pv)
+    poly_free(scratch)
+}
+
+// ---- K-PKE decrypt ----
+
+// sk is indcpa secret key bytes at sk[0..]; ct at ct[ct_off..].
+// Writes 32-byte message into msg[0..].
+indcpa_decrypt(p: *Params, ct: ptr, ct_off: int, sk: ptr, msg: ptr) {
+    k = p.k
+
+    bp = polyvec_new(k)
+    v_pv = polyvec_new(1)
+    if p.k == 4 {
+        decompress_polyvec_352(bp, k, ct, ct_off)
+        decompress_poly_160(v_pv, 0, ct, ct_off + p.polyvec_compressed)
+    } else {
+        decompress_polyvec_320(bp, k, ct, ct_off)
+        decompress_poly_128(v_pv, 0, ct, ct_off + p.polyvec_compressed)
+    }
+
+    skpv = polyvec_new(k)
+    polyvec_from_bytes(skpv, k, sk, 0)
+
+    scratch = poly_new()
+    mp_pv = polyvec_new(1)
+
+    i = 0
+    while i < k {
+        poly_ntt(bp, i)
+        i = i + 1
+    }
+
+    polyvec_pointwise_acc(mp_pv, 0, skpv, bp, k, scratch)
+    inv_ntt(mp_pv, 0)
+
+    poly_subtract(mp_pv, 0, v_pv, 0)
+    poly_reduce(mp_pv, 0)
+    poly_to_msg(mp_pv, 0, msg, 0)
+
+    polyvec_free(bp)
+    polyvec_free(v_pv)
+    polyvec_free(skpv)
+    poly_free(scratch)
+    polyvec_free(mp_pv)
+}
+
+// ---- ML-KEM wrappers ----
+
+// keygen: returns (ek, dk). d, z are 32-byte seed buffers.
+mlkem_keygen(p: *Params, d: ptr, z: ptr) -> {
+    dk = bytes.new(p.dk_bytes)
+    // Build indcpa keypair into dk: [sk | pk] occupy first indcpa_sk+indcpa_pk.
+    indcpa_keygen(p, d, dk)
+
+    // ek = the indcpa public key portion = dk[indcpa_sk .. indcpa_sk+indcpa_pk]
+    ek = bytes.new(p.ek_bytes)
+    i = 0
+    while i < p.ek_bytes {
+        bytes.set(ek, i, bytes.get(dk, p.indcpa_sk + i) & 0xFF)
+        i = i + 1
+    }
+
+    // dk layout: indcpa_sk || ek || H(ek) || z
+    // H(ek) at offset indcpa_sk + indcpa_pk
+    ek_str = bytes_to_string(ek, p.ek_bytes)
+    hbuf = sha3.sha3_256_bytes(ek_str, p.ek_bytes)
+    hoff = p.indcpa_sk + p.indcpa_pk
+    i = 0
+    while i < SYM {
+        bytes.set(dk, hoff + i, bytes.get(hbuf, i) & 0xFF)
+        i = i + 1
+    }
+    bytes.free(hbuf)
+    // z at the very end
+    zoff = p.dk_bytes - SYM
+    i = 0
+    while i < SYM {
+        bytes.set(dk, zoff + i, bytes.get(z, i) & 0xFF)
+        i = i + 1
+    }
+
+    free_params(p)
+    return ek, dk
+}
+
+// encaps: returns (ct, K). m is the 32-byte message coin.
+mlkem_encaps(p: *Params, ek: ptr, m: ptr) -> {
+    // buf = m || H(ek)   (64 bytes)
+    buf = bytes.new(2 * SYM)
+    i = 0
+    while i < SYM {
+        bytes.set(buf, i, bytes.get(m, i) & 0xFF)
+        i = i + 1
+    }
+    ek_str = bytes_to_string(ek, p.ek_bytes)
+    hbuf = sha3.sha3_256_bytes(ek_str, p.ek_bytes)
+    i = 0
+    while i < SYM {
+        bytes.set(buf, SYM + i, bytes.get(hbuf, i) & 0xFF)
+        i = i + 1
+    }
+    bytes.free(hbuf)
+
+    // (K, r) = G(buf)
+    buf_str = bytes_to_string(buf, 2 * SYM)
+    kr = sha3.sha3_512_bytes(buf_str, 2 * SYM)   // 64 bytes
+    // r = kr[32..64]
+    coins = bytes.new(SYM)
+    i = 0
+    while i < SYM {
+        bytes.set(coins, i, bytes.get(kr, SYM + i) & 0xFF)
+        i = i + 1
+    }
+
+    ct = bytes.new(p.ct_bytes)
+    indcpa_encrypt(p, ek, 0, m, 0, coins, ct, 0)
+
+    // K = kr[0..32]
+    key = bytes.new(SYM)
+    i = 0
+    while i < SYM {
+        bytes.set(key, i, bytes.get(kr, i) & 0xFF)
+        i = i + 1
+    }
+
+    bytes.free(buf)
+    bytes.free(kr)
+    bytes.free(coins)
+    free_params(p)
+    return ct, key
+}
+
+// decaps: returns K (32 bytes). dk is the ML-KEM private key, ct the ciphertext.
+mlkem_decaps(p: *Params, dk: ptr, ct: ptr) -> ptr {
+    // Decrypt to recover m'
+    mprime = bytes.new(SYM)
+    indcpa_decrypt(p, ct, 0, dk, mprime)
+
+    // buf = m' || H(ek)   where H(ek) is stored in dk at indcpa_sk+indcpa_pk
+    buf = bytes.new(2 * SYM)
+    hoff = p.indcpa_sk + p.indcpa_pk
+    i = 0
+    while i < SYM {
+        bytes.set(buf, i, bytes.get(mprime, i) & 0xFF)
+        bytes.set(buf, SYM + i, bytes.get(dk, hoff + i) & 0xFF)
+        i = i + 1
+    }
+
+    // (K', r') = G(buf)
+    buf_str = bytes_to_string(buf, 2 * SYM)
+    kr = sha3.sha3_512_bytes(buf_str, 2 * SYM)
+    coins = bytes.new(SYM)
+    i = 0
+    while i < SYM {
+        bytes.set(coins, i, bytes.get(kr, SYM + i) & 0xFF)
+        i = i + 1
+    }
+
+    // Re-encrypt with ek (stored in dk at indcpa_sk) and m'
+    cmp = bytes.new(p.ct_bytes)
+    indcpa_encrypt(p, dk, p.indcpa_sk, mprime, 0, coins, cmp, 0)
+
+    // Constant-time compare cmp vs ct
+    diff = 0
+    i = 0
+    while i < p.ct_bytes {
+        diff = diff | ((bytes.get(cmp, i) & 0xFF) ^ (bytes.get(ct, i) & 0xFF))
+        i = i + 1
+    }
+    // fail = 0 if equal, -1 if differ
+    diff = diff | bits.lsr32(diff, 16)
+    diff = diff & 0xFFFF
+    eq = (diff - 1) >> 31            // -1 if equal, 0 if differ
+    fail = ~eq                       // 0 if equal, -1 if differ
+
+    // J(z || c): implicit rejection key
+    zoff = p.dk_bytes - SYM
+    j_in = bytes.new(SYM + p.ct_bytes)
+    i = 0
+    while i < SYM {
+        bytes.set(j_in, i, bytes.get(dk, zoff + i) & 0xFF)
+        i = i + 1
+    }
+    i = 0
+    while i < p.ct_bytes {
+        bytes.set(j_in, SYM + i, bytes.get(ct, i) & 0xFF)
+        i = i + 1
+    }
+    j_str = bytes_to_string(j_in, SYM + p.ct_bytes)
+    reject = sha3.shake256_bytes(j_str, SYM + p.ct_bytes, SYM)
+
+    // key = (fail==0) ? kr[0..32] : reject
+    key = bytes.new(SYM)
+    i = 0
+    while i < SYM {
+        kbyte = bytes.get(kr, i) & 0xFF
+        rbyte = bytes.get(reject, i) & 0xFF
+        // CMov: kbyte ^= (kbyte ^ rbyte) & fail
+        out_b = kbyte ^ ((kbyte ^ rbyte) & fail)
+        bytes.set(key, i, out_b & 0xFF)
+        i = i + 1
+    }
+
+    bytes.free(mprime)
+    bytes.free(buf)
+    bytes.free(kr)
+    bytes.free(coins)
+    bytes.free(cmp)
+    bytes.free(j_in)
+    bytes.free(reject)
+    free_params(p)
+    return key
+}
+
+// Helper: turn the first `len` bytes of a bytes buffer into a string for the
+// sha3 one-shots, without consuming/freeing the original buffer.
+bytes_to_string(b: ptr, len: int) -> string {
+    tmp = bytes.new(len)
+    i = 0
+    while i < len {
+        bytes.set(tmp, i, bytes.get(b, i) & 0xFF)
+        i = i + 1
+    }
+    return bytes.finish(tmp, len)
+}
+
+// ---- Public per-variant API ----
+
+mlkem512_keygen(d: ptr, z: ptr) -> {
+    ek, dk = mlkem_keygen(mk_params(2), d, z)
+    return ek, dk
+}
+mlkem512_encaps(ek: ptr, m: ptr) -> {
+    ct, key = mlkem_encaps(mk_params(2), ek, m)
+    return ct, key
+}
+mlkem512_decaps(dk: ptr, ct: ptr) -> ptr {
+    return mlkem_decaps(mk_params(2), dk, ct)
+}
+
+mlkem768_keygen(d: ptr, z: ptr) -> {
+    ek, dk = mlkem_keygen(mk_params(3), d, z)
+    return ek, dk
+}
+mlkem768_encaps(ek: ptr, m: ptr) -> {
+    ct, key = mlkem_encaps(mk_params(3), ek, m)
+    return ct, key
+}
+mlkem768_decaps(dk: ptr, ct: ptr) -> ptr {
+    return mlkem_decaps(mk_params(3), dk, ct)
+}
+
+mlkem1024_keygen(d: ptr, z: ptr) -> {
+    ek, dk = mlkem_keygen(mk_params(4), d, z)
+    return ek, dk
+}
+mlkem1024_encaps(ek: ptr, m: ptr) -> {
+    ct, key = mlkem_encaps(mk_params(4), ek, m)
+    return ct, key
+}
+mlkem1024_decaps(dk: ptr, ct: ptr) -> ptr {
+    return mlkem_decaps(mk_params(4), dk, ct)
+}

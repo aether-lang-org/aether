@@ -207,14 +207,7 @@ ubi_process_block(c: *SkeinCtx) {
     // load block bytes (LE) into msg words
     i = 0
     while i < NW {
-        long w = 0
-        k = 0
-        while k < 8 {
-            long b = bytes.get(c.block, i * 8 + k) & 0xFF
-            w = w | (b << (8 * k))
-            k = k + 1
-        }
-        longarr_set_unchecked(c.msg, i, w)
+        longarr_set_unchecked(c.msg, i, bytes.get_le64(c.block, i * 8))
         i = i + 1
     }
     // keep a copy of message for feed-forward (msg gets clobbered as scratch)
@@ -310,11 +303,7 @@ create_initial_state(c: *SkeinCtx, out_bits: long) {
     bytes.set(cfg, 4, 1)
     bytes.set(cfg, 5, 0)
     // output length bits, LE 64-bit at offset 8
-    k = 0
-    while k < 8 {
-        bytes.set(cfg, 8 + k, bits.lsr64(out_bits, 8 * k) & 0xFF)
-        k = k + 1
-    }
+    bytes.set_le64(cfg, 8, out_bits)
     ubi_complete(c, PARAM_TYPE_CONFIG, cfg, 32)
     bytes.free(cfg)
 
@@ -404,11 +393,7 @@ finalize_to_bytes(c: *SkeinCtx) -> ptr {
         }
         // output UBI over 8-byte LE counter
         cb = bytes.new(8)
-        k = 0
-        while k < 8 {
-            bytes.set(cb, k, bits.lsr64(seq, 8 * k) & 0xFF)
-            k = k + 1
-        }
+        bytes.set_le64(cb, 0, seq)
         ubi_complete(c, PARAM_TYPE_OUTPUT, cb, 8)
         bytes.free(cb)
 

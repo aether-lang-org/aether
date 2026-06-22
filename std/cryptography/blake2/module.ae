@@ -142,20 +142,8 @@ gs(v: ptr, a: int, b: int, c: int, d: int, x: long, y: long) {
 }
 
 // Load one little-endian 64-bit word from the block at byte offset off.
-// Each byte is widened to a `long` local before shifting so the high
-// shifts (>= 32) are done in 64-bit, not the 32-bit `int` of bytes.get.
 load_le64(b: ptr, off: int) -> long {
-    long r = 0
-    long b0 = bytes.get(b, off) & 255
-    long b1 = bytes.get(b, off + 1) & 255
-    long b2 = bytes.get(b, off + 2) & 255
-    long b3 = bytes.get(b, off + 3) & 255
-    long b4 = bytes.get(b, off + 4) & 255
-    long b5 = bytes.get(b, off + 5) & 255
-    long b6 = bytes.get(b, off + 6) & 255
-    long b7 = bytes.get(b, off + 7) & 255
-    r = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24) | (b4 << 32) | (b5 << 40) | (b6 << 48) | (b7 << 56)
-    return r
+    return bytes.get_le64(b, off)
 }
 
 // last: 1 if this is the final block (set f0 = all-ones).
@@ -426,14 +414,7 @@ update_bytes(ctx: ptr, data: ptr, length: int) {
 
 // Emit a little-endian 64-bit word into out at off.
 store_le64(out: ptr, off: int, v: long) {
-    bytes.set(out, off,     v & 255)
-    bytes.set(out, off + 1, bits.lsr64(v, 8) & 255)
-    bytes.set(out, off + 2, bits.lsr64(v, 16) & 255)
-    bytes.set(out, off + 3, bits.lsr64(v, 24) & 255)
-    bytes.set(out, off + 4, bits.lsr64(v, 32) & 255)
-    bytes.set(out, off + 5, bits.lsr64(v, 40) & 255)
-    bytes.set(out, off + 6, bits.lsr64(v, 48) & 255)
-    bytes.set(out, off + 7, bits.lsr64(v, 56) & 255)
+    bytes.set_le64(out, off, v)
 }
 
 // Finalise: zero-pad the last block, compress with the final flag, then

@@ -60,6 +60,39 @@ notes to be skipped or clobbered (the failure modes documented in
   Tiger, X448/Ed448) each reimplemented. Regression in
   `tests/regression/test_bytes_le64.ae`. (#838)
 
+## [current]
+
+### Added
+
+- **Post-quantum ML-KEM, more NIST curves, and two block ciphers** — a large
+  pure-Aether crypto tranche of the Bouncy Castle port (#739), no externs to
+  OpenSSL.
+  - **`std.cryptography.mlkem`** — ML-KEM / Kyber (FIPS 203), all three
+    parameter sets (512/768/1024): `mlkem{512,768,1024}_{keygen,encaps,decaps}`.
+    NTT over Z_3329 with Montgomery/Barrett reduction; SHAKE128/256 sampling
+    reusing `std.cryptography.sha3`. Aether's first post-quantum primitive.
+    Verified: KEM round-trip (encaps/decaps shared secret) + implicit-rejection
+    on all three sizes, plus a byte-exact keygen KAT for ML-KEM-1024 against the
+    Bouncy Castle vector. (Byte-exact ek/dk/ct/K KATs for 512/768 weren't in the
+    BC tree; those rest on round-trip + the 1024 KAT covering the shared core.)
+  - **`contrib.cryptography.p384` / `p521`** — NIST P-384 and P-521 ECDH +
+    ECDSA, parameter-swaps of the existing P-256 short-Weierstrass module.
+    Validated against the published 2·G doubling vectors + ECDSA round-trips.
+  - **`contrib.cryptography.sm4`** (GB/T 32907) and **`contrib.cryptography.des3`**
+    (3DES / TDEA) block ciphers, with the same ECB/CBC/CTR + PKCS#7 mode layer
+    as `aes`. Validated against the SM4 GB/T 32907 KAT and a BC 3DES KAT.
+
+### Changed
+
+- **`std.bignum` performance** (#233) — internal Karatsuba multiplication (for
+  large operands) and Montgomery `mod_pow` (for odd moduli, the RSA/DH hot
+  path), with the previous schoolbook code retained as the fallback. Public
+  API and all results are unchanged — purely faster. A 2048-bit `mod_pow`
+  drops from ~17 s to ~0.2 s (~90×); speeds up RSA and every elliptic curve.
+- **`std.cryptography` digests now use `std.bytes.get_le64`/`set_le64`** instead
+  of hand-rolled little-endian 64-bit byte assembly (blake2, skein, tiger,
+  sha3, argon2 — 12 sites). Behavior-preserving; follow-up to #838.
+
 ## [0.300.0]
 
 ### Added

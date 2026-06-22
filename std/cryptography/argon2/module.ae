@@ -135,16 +135,7 @@ load_block_from_bytes(mem: ptr, bidx: int, src: ptr) {
     i = 0
     while i < QWORDS {
         off = i * 8
-        long b0 = bytes.get(src, off) & 255
-        long b1 = bytes.get(src, off + 1) & 255
-        long b2 = bytes.get(src, off + 2) & 255
-        long b3 = bytes.get(src, off + 3) & 255
-        long b4 = bytes.get(src, off + 4) & 255
-        long b5 = bytes.get(src, off + 5) & 255
-        long b6 = bytes.get(src, off + 6) & 255
-        long b7 = bytes.get(src, off + 7) & 255
-        long w = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24) | (b4 << 32) | (b5 << 40) | (b6 << 48) | (b7 << 56)
-        longarr_set_unchecked(mem, base + i, w)
+        longarr_set_unchecked(mem, base + i, bytes.get_le64(src, off))
         i = i + 1
     }
 }
@@ -156,14 +147,7 @@ store_block_to_bytes(mem: ptr, bidx: int, dst: ptr) {
     while i < QWORDS {
         w = longarr_get_unchecked(mem, base + i)
         off = i * 8
-        bytes.set(dst, off, w & 255)
-        bytes.set(dst, off + 1, bits.lsr64(w, 8) & 255)
-        bytes.set(dst, off + 2, bits.lsr64(w, 16) & 255)
-        bytes.set(dst, off + 3, bits.lsr64(w, 24) & 255)
-        bytes.set(dst, off + 4, bits.lsr64(w, 32) & 255)
-        bytes.set(dst, off + 5, bits.lsr64(w, 40) & 255)
-        bytes.set(dst, off + 6, bits.lsr64(w, 48) & 255)
-        bytes.set(dst, off + 7, bits.lsr64(w, 56) & 255)
+        bytes.set_le64(dst, off, w)
         i = i + 1
     }
 }
