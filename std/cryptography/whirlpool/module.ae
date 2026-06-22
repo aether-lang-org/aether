@@ -1,0 +1,471 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.whirlpool — the Whirlpool hash (ISO/IEC 10118-3) in pure
+// Aether, ported from Bouncy Castle's WhirlpoolDigest. NO externs to OpenSSL
+// or any C crypto.
+//
+// Whirlpool is a 512-bit hash with a 64-byte block. It applies the
+// Miyaguchi-Preneel construction over a 10-round AES-like block cipher "W"
+// operating on an 8x8 byte st held as eight 64-bit BIG-ENDIAN words, using
+// the eight 256-entry diffusion/S-box tables C0..C7.
+//
+// Following BC, the C0..C7 tables are derived from the 256-entry SBOX at
+// construction time (C_k[i] = rotr64(C0[i], 8*k)), so only the compact SBOX is
+// kept as a constant table here. The round constants _rc are then derived from
+// C0..C7 exactly as BC does.
+//
+// Import with:  import std.cryptography.whirlpool
+//
+//   one-shot:   whirlpool_hex(data, len) / whirlpool_bytes(data, len)
+//   streaming:  ctx,_ = new(); update(ctx, data, len); final_hex(ctx)
+//
+// Aether-specific care:
+//   * Lanes are full 64-bit; a `long` holds an entire uint64 lane.
+//   * BIG-endian lane load (bytes.get_be64) and output.
+//   * A byte widened then left-shifted must be a `long` first; PackInto here
+//     uses bytes.set/get_be64 and rotr64 to avoid raw shift pitfalls.
+//   * The 256-bit (32-byte) message bit length is kept as a byte array and
+//     incremented by 8 per input byte, matching BC's Increment().
+
+import std.bits
+import std.bytes
+import std.longarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+
+exports (
+    new, update, update_bytes, final_hex, final_bytes, free_ctx,
+    whirlpool_hex, whirlpool_bytes
+)
+
+const WP_SBOX: long[256] = [
+    0x18, 0x23, 0xc6, 0xe8, 0x87, 0xb8, 0x01, 0x4f, 0x36, 0xa6, 0xd2, 0xf5, 0x79, 0x6f, 0x91, 0x52,
+    0x60, 0xbc, 0x9b, 0x8e, 0xa3, 0x0c, 0x7b, 0x35, 0x1d, 0xe0, 0xd7, 0xc2, 0x2e, 0x4b, 0xfe, 0x57,
+    0x15, 0x77, 0x37, 0xe5, 0x9f, 0xf0, 0x4a, 0xda, 0x58, 0xc9, 0x29, 0x0a, 0xb1, 0xa0, 0x6b, 0x85,
+    0xbd, 0x5d, 0x10, 0xf4, 0xcb, 0x3e, 0x05, 0x67, 0xe4, 0x27, 0x41, 0x8b, 0xa7, 0x7d, 0x95, 0xd8,
+    0xfb, 0xee, 0x7c, 0x66, 0xdd, 0x17, 0x47, 0x9e, 0xca, 0x2d, 0xbf, 0x07, 0xad, 0x5a, 0x83, 0x33,
+    0x63, 0x02, 0xaa, 0x71, 0xc8, 0x19, 0x49, 0xd9, 0xf2, 0xe3, 0x5b, 0x88, 0x9a, 0x26, 0x32, 0xb0,
+    0xe9, 0x0f, 0xd5, 0x80, 0xbe, 0xcd, 0x34, 0x48, 0xff, 0x7a, 0x90, 0x5f, 0x20, 0x68, 0x1a, 0xae,
+    0xb4, 0x54, 0x93, 0x22, 0x64, 0xf1, 0x73, 0x12, 0x40, 0x08, 0xc3, 0xec, 0xdb, 0xa1, 0x8d, 0x3d,
+    0x97, 0x00, 0xcf, 0x2b, 0x76, 0x82, 0xd6, 0x1b, 0xb5, 0xaf, 0x6a, 0x50, 0x45, 0xf3, 0x30, 0xef,
+    0x3f, 0x55, 0xa2, 0xea, 0x65, 0xba, 0x2f, 0xc0, 0xde, 0x1c, 0xfd, 0x4d, 0x92, 0x75, 0x06, 0x8a,
+    0xb2, 0xe6, 0x0e, 0x1f, 0x62, 0xd4, 0xa8, 0x96, 0xf9, 0xc5, 0x25, 0x59, 0x84, 0x72, 0x39, 0x4c,
+    0x5e, 0x78, 0x38, 0x8c, 0xd1, 0xa5, 0xe2, 0x61, 0xb3, 0x21, 0x9c, 0x1e, 0x43, 0xc7, 0xfc, 0x04,
+    0x51, 0x99, 0x6d, 0x0d, 0xfa, 0xdf, 0x7e, 0x24, 0x3b, 0xab, 0xce, 0x11, 0x8f, 0x4e, 0xb7, 0xeb,
+    0x3c, 0x81, 0x94, 0xf7, 0xb9, 0x13, 0x2c, 0xd3, 0xe7, 0x6e, 0xc4, 0x03, 0x56, 0x44, 0x7f, 0xa9,
+    0x2a, 0xbb, 0xc1, 0x53, 0xdc, 0x0b, 0x9d, 0x6c, 0x31, 0x74, 0xf6, 0x46, 0xac, 0x89, 0x14, 0xe1,
+    0x16, 0x3a, 0x69, 0x09, 0x70, 0xb6, 0xd0, 0xed, 0xcc, 0x42, 0x98, 0xa4, 0x28, 0x5c, 0xf8, 0x86
+]
+
+struct WpCtx {
+    hash: ptr         // longarr(8), chaining st
+    c0: ptr           // longarr(256), diffusion table C0
+    rc: ptr           // longarr(11), round constants rc[0..10]
+    kk: ptr           // longarr(8), round key K
+    ll: ptr           // longarr(8), scratch L
+    block: ptr        // longarr(8), the mu(buffer) words
+    cst: ptr          // longarr(8), cipher st
+    buf: ptr          // bytes(64), byte buffer
+    buf_pos: int
+    bitcount: ptr     // bytes(32), 256-bit big-endian length, incremented by 8
+}
+
+mulx(input: long) -> long {
+    // REDUCTION_POLYNOMIAL = 0x011d; mimic BC's MulX over GF(2^8).
+    long v = input & 0xFF
+    long shifted = (v << 1) & 0xFF
+    long hi = bits.lsr64(v, 7) & 1
+    long red = 0
+    if hi == 1 {
+        red = 0x1d
+    }
+    return (shifted ^ red) & 0xFF
+}
+
+// PackIntoUInt64(b7,b6,b5,b4,b3,b2,b1,b0): assemble eight bytes big-endian.
+pack8(buf: ptr, b7: long, b6: long, b5: long, b4: long, b3: long, b2: long, b1: long, b0: long) -> long {
+    bytes.set(buf, 0, b7 & 0xFF)
+    bytes.set(buf, 1, b6 & 0xFF)
+    bytes.set(buf, 2, b5 & 0xFF)
+    bytes.set(buf, 3, b4 & 0xFF)
+    bytes.set(buf, 4, b3 & 0xFF)
+    bytes.set(buf, 5, b2 & 0xFF)
+    bytes.set(buf, 6, b1 & 0xFF)
+    bytes.set(buf, 7, b0 & 0xFF)
+    return bytes.get_be64(buf, 0)
+}
+
+// C_k[i] = rotr64(C0[i], 8*k).
+ctab(c: *WpCtx, k: int, i: int) -> long {
+    return bits.rotr64(longarr_get_unchecked(c.c0, i), 8 * k)
+}
+
+build_tables(c: *WpCtx) {
+    scratch = bytes.new(8)
+    i = 0
+    while i < 256 {
+        long v1 = WP_SBOX[i] & 0xFF
+        long v2 = mulx(v1)
+        long v4 = mulx(v2)
+        long v5 = v4 ^ v1
+        long v8 = mulx(v4)
+        long v9 = v8 ^ v1
+        // C0[i] = PackIntoUInt64(v1, v1, v4, v1, v8, v5, v2, v9)
+        word = pack8(scratch, v1, v1, v4, v1, v8, v5, v2, v9)
+        longarr_set_unchecked(c.c0, i, word)
+        i = i + 1
+    }
+    bytes.free(scratch)
+
+    // rc[0] = 0; rc[r] gathers byte 8*(r-1) from each C table, masked.
+    longarr_set_unchecked(c.rc, 0, 0)
+    r = 1
+    while r <= 10 {
+        idx = 8 * (r - 1)
+        v = (ctab(c, 0, idx)     & 0xff00000000000000) ^
+            (ctab(c, 1, idx + 1) & 0x00ff000000000000) ^
+            (ctab(c, 2, idx + 2) & 0x0000ff0000000000) ^
+            (ctab(c, 3, idx + 3) & 0x000000ff00000000) ^
+            (ctab(c, 4, idx + 4) & 0x00000000ff000000) ^
+            (ctab(c, 5, idx + 5) & 0x0000000000ff0000) ^
+            (ctab(c, 6, idx + 6) & 0x000000000000ff00) ^
+            (ctab(c, 7, idx + 7) & 0x00000000000000ff)
+        longarr_set_unchecked(c.rc, r, v)
+        r = r + 1
+    }
+}
+
+cbyte(c: *WpCtx, k: int, w: long, shift: int) -> long {
+    idx = bits.lsr64(w, shift) & 0xFF
+    return ctab(c, k, idx)
+}
+
+process_block(c: *WpCtx) {
+    hash = c.hash
+    kk = c.kk
+    ll = c.ll
+    block = c.block
+    st = c.cst
+
+    // compute and apply K^0
+    i = 0
+    while i < 8 {
+        khv = longarr_get_unchecked(hash, i)
+        longarr_set_unchecked(kk, i, khv)
+        longarr_set_unchecked(st, i, longarr_get_unchecked(block, i) ^ khv)
+        i = i + 1
+    }
+
+    round = 1
+    while round <= 10 {
+        // key schedule round
+        i = 0
+        while i < 8 {
+            v = cbyte(c, 0, longarr_get_unchecked(kk, (i - 0) & 7), 56)
+            v = v ^ cbyte(c, 1, longarr_get_unchecked(kk, (i - 1) & 7), 48)
+            v = v ^ cbyte(c, 2, longarr_get_unchecked(kk, (i - 2) & 7), 40)
+            v = v ^ cbyte(c, 3, longarr_get_unchecked(kk, (i - 3) & 7), 32)
+            v = v ^ cbyte(c, 4, longarr_get_unchecked(kk, (i - 4) & 7), 24)
+            v = v ^ cbyte(c, 5, longarr_get_unchecked(kk, (i - 5) & 7), 16)
+            v = v ^ cbyte(c, 6, longarr_get_unchecked(kk, (i - 6) & 7), 8)
+            v = v ^ cbyte(c, 7, longarr_get_unchecked(kk, (i - 7) & 7), 0)
+            longarr_set_unchecked(ll, i, v)
+            i = i + 1
+        }
+        i = 0
+        while i < 8 {
+            longarr_set_unchecked(kk, i, longarr_get_unchecked(ll, i))
+            i = i + 1
+        }
+        longarr_set_unchecked(kk, 0, longarr_get_unchecked(kk, 0) ^ longarr_get_unchecked(c.rc, round))
+
+        // round transformation on st
+        i = 0
+        while i < 8 {
+            v = longarr_get_unchecked(kk, i)
+            v = v ^ cbyte(c, 0, longarr_get_unchecked(st, (i - 0) & 7), 56)
+            v = v ^ cbyte(c, 1, longarr_get_unchecked(st, (i - 1) & 7), 48)
+            v = v ^ cbyte(c, 2, longarr_get_unchecked(st, (i - 2) & 7), 40)
+            v = v ^ cbyte(c, 3, longarr_get_unchecked(st, (i - 3) & 7), 32)
+            v = v ^ cbyte(c, 4, longarr_get_unchecked(st, (i - 4) & 7), 24)
+            v = v ^ cbyte(c, 5, longarr_get_unchecked(st, (i - 5) & 7), 16)
+            v = v ^ cbyte(c, 6, longarr_get_unchecked(st, (i - 6) & 7), 8)
+            v = v ^ cbyte(c, 7, longarr_get_unchecked(st, (i - 7) & 7), 0)
+            longarr_set_unchecked(ll, i, v)
+            i = i + 1
+        }
+        i = 0
+        while i < 8 {
+            longarr_set_unchecked(st, i, longarr_get_unchecked(ll, i))
+            i = i + 1
+        }
+        round = round + 1
+    }
+
+    // Miyaguchi-Preneel: hash ^= st ^ block
+    i = 0
+    while i < 8 {
+        nv = longarr_get_unchecked(hash, i) ^ longarr_get_unchecked(st, i) ^ longarr_get_unchecked(block, i)
+        longarr_set_unchecked(hash, i, nv)
+        i = i + 1
+    }
+}
+
+process_filled_buffer(c: *WpCtx) {
+    // copy 64 bytes into 8 big-endian words then process
+    i = 0
+    while i < 8 {
+        longarr_set_unchecked(c.block, i, bytes.get_be64(c.buf, i * 8))
+        i = i + 1
+    }
+    process_block(c)
+    c.buf_pos = 0
+    j = 0
+    while j < 64 {
+        bytes.set(c.buf, j, 0)
+        j = j + 1
+    }
+}
+
+// Add 8 to the 256-bit big-endian bit count.
+increment(c: *WpCtx) {
+    long carry = 8
+    i = 31
+    while i >= 0 {
+        long sum = bytes.get(c.bitcount, i) + carry
+        bytes.set(c.bitcount, i, sum & 0xFF)
+        carry = bits.lsr64(sum, 8)
+        i = i - 1
+    }
+}
+
+push_byte(c: *WpCtx, b: int) {
+    bytes.set(c.buf, c.buf_pos, b & 0xFF)
+    c.buf_pos = c.buf_pos + 1
+    if c.buf_pos == 64 {
+        process_filled_buffer(c)
+    }
+    increment(c)
+}
+
+new() -> {
+    ctx = malloc(96) as *WpCtx
+    if ctx == null {
+        return null, "allocation failed"
+    }
+    ctx.hash = longarr_new_raw(8)
+    ctx.c0 = longarr_new_raw(256)
+    ctx.rc = longarr_new_raw(11)
+    ctx.kk = longarr_new_raw(8)
+    ctx.ll = longarr_new_raw(8)
+    ctx.block = longarr_new_raw(8)
+    ctx.cst = longarr_new_raw(8)
+    ctx.buf = bytes.new(64)
+    ctx.bitcount = bytes.new(32)
+    ctx.buf_pos = 0
+    i = 0
+    while i < 8 {
+        longarr_set_unchecked(ctx.hash, i, 0)
+        i = i + 1
+    }
+    j = 0
+    while j < 64 {
+        bytes.set(ctx.buf, j, 0)
+        j = j + 1
+    }
+    k = 0
+    while k < 32 {
+        bytes.set(ctx.bitcount, k, 0)
+        k = k + 1
+    }
+    build_tables(ctx)
+    return ctx, ""
+}
+
+update(ctx: ptr, data: string, length: int) {
+    c = ctx as *WpCtx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        b = string_char_at_n(data, length, i)
+        push_byte(c, b & 0xFF)
+        i = i + 1
+    }
+}
+
+update_bytes(ctx: ptr, data: ptr, length: int) {
+    c = ctx as *WpCtx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        push_byte(c, bytes.get(data, i) & 0xFF)
+        i = i + 1
+    }
+}
+
+// Push a zero byte WITHOUT incrementing the length counter (used in padding).
+push_pad_zero(c: *WpCtx) {
+    bytes.set(c.buf, c.buf_pos, 0)
+    c.buf_pos = c.buf_pos + 1
+    if c.buf_pos == 64 {
+        process_filled_buffer(c)
+    }
+}
+
+finalize_to_bytes(c: *WpCtx) -> ptr {
+    // snapshot the current bit length (32 bytes)
+    bitlen = bytes.new(32)
+    i = 0
+    while i < 32 {
+        bytes.set(bitlen, i, bytes.get(c.bitcount, i))
+        i = i + 1
+    }
+
+    // append 0x80 (this advances the counter per BC's Update, but length is
+    // already snapshotted, so the extra increments are harmless).
+    cur = bytes.get(c.buf, c.buf_pos)
+    bytes.set(c.buf, c.buf_pos, cur | 0x80)
+    c.buf_pos = c.buf_pos + 1
+    if c.buf_pos == 64 {
+        process_filled_buffer(c)
+    }
+
+    // ensure room for the 32-byte length; zero-pad to position 32.
+    if c.buf_pos > 32 {
+        while c.buf_pos != 0 {
+            push_pad_zero(c)
+        }
+    }
+    while c.buf_pos <= 32 {
+        push_pad_zero(c)
+    }
+
+    // copy length into bytes 32..63
+    j = 0
+    while j < 32 {
+        bytes.set(c.buf, 32 + j, bytes.get(bitlen, j))
+        j = j + 1
+    }
+    bytes.free(bitlen)
+    process_filled_buffer(c)
+
+    out = bytes.new(64)
+    k = 0
+    while k < 8 {
+        bytes.set_be64(out, k * 8, longarr_get_unchecked(c.hash, k))
+        k = k + 1
+    }
+    return out
+}
+
+free_internals(c: *WpCtx) {
+    if c.hash != null {
+        longarr_free(c.hash)
+        c.hash = null
+    }
+    if c.c0 != null {
+        longarr_free(c.c0)
+        c.c0 = null
+    }
+    if c.rc != null {
+        longarr_free(c.rc)
+        c.rc = null
+    }
+    if c.kk != null {
+        longarr_free(c.kk)
+        c.kk = null
+    }
+    if c.ll != null {
+        longarr_free(c.ll)
+        c.ll = null
+    }
+    if c.block != null {
+        longarr_free(c.block)
+        c.block = null
+    }
+    if c.cst != null {
+        longarr_free(c.cst)
+        c.cst = null
+    }
+    if c.buf != null {
+        bytes.free(c.buf)
+        c.buf = null
+    }
+    if c.bitcount != null {
+        bytes.free(c.bitcount)
+        c.bitcount = null
+    }
+}
+
+final_bytes(ctx: ptr) -> ptr {
+    c = ctx as *WpCtx
+    out = finalize_to_bytes(c)
+    s = bytes.finish(out, 64)
+    free_internals(c)
+    free(ctx)
+    res = bytes.new(64)
+    bytes.copy_from_string(res, 0, s, 64)
+    return res
+}
+
+final_hex(ctx: ptr) -> string {
+    c = ctx as *WpCtx
+    out = finalize_to_bytes(c)
+    hexbuf = bytes.new(128)
+    i = 0
+    while i < 64 {
+        b = bytes.get(out, i)
+        hi = (b >> 4) & 15
+        lo = b & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    s = bytes.finish(hexbuf, 128)
+    free_internals(c)
+    free(ctx)
+    return s
+}
+
+free_ctx(ctx: ptr) {
+    if ctx == null {
+        return
+    }
+    c = ctx as *WpCtx
+    free_internals(c)
+    free(ctx)
+}
+
+whirlpool_hex(data: string, len: int) -> string {
+    ctx, err = new()
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+whirlpool_bytes(data: string, len: int) -> ptr {
+    ctx, err = new()
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}

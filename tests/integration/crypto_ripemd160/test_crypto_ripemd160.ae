@@ -1,0 +1,49 @@
+// Validate std.cryptography.ripemd160 against published RIPEMD-160 test
+// vectors (Bosselaers' reference set).
+import std.cryptography.ripemd160
+import std.io
+
+check(label: string, got: string, want: string) -> int {
+    if got == want {
+        println("ok   ${label}")
+        return 0
+    }
+    println("FAIL ${label}")
+    println("  got:  ${got}")
+    println("  want: ${want}")
+    return 1
+}
+
+main() {
+    fails = 0
+    fails = fails + check("empty",
+        ripemd160.ripemd160_hex("", 0),
+        "9c1185a5c5e9fc54612808977ee8f548b2258d31")
+    fails = fails + check("a",
+        ripemd160.ripemd160_hex("a", 1),
+        "0bdc9d2d256b3ee9daae347be6f4dc835a467ffe")
+    fails = fails + check("abc",
+        ripemd160.ripemd160_hex("abc", 3),
+        "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc")
+    fails = fails + check("message digest",
+        ripemd160.ripemd160_hex("message digest", 14),
+        "5d0689ef49d2fae572b881b123a85ffa21595f36")
+    fails = fails + check("alphabet",
+        ripemd160.ripemd160_hex("abcdefghijklmnopqrstuvwxyz", 26),
+        "f71c27109c692c1b56bbdceb5b9d2865b3708dbc")
+    // 56 chars — crosses into a second block after padding.
+    fails = fails + check("abcdbcde...",
+        ripemd160.ripemd160_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56),
+        "12a053384a9c0c88e405a06c27dcf49ada62eb2b")
+    // 62 chars — A..Z a..z 0..9
+    fails = fails + check("A...Za...z0...9",
+        ripemd160.ripemd160_hex("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", 62),
+        "b0e20b6e3116640286ed3a87a5713079b21f5189")
+
+    if fails == 0 {
+        println("ALL PASS")
+        return
+    }
+    println("FAILURES")
+    exit(1)
+}

@@ -1,0 +1,76 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// Regression: contrib.cryptography.pem (issue #739). Pure-Aether RFC 4648
+// base64 + RFC 7468 PEM envelope. Covers the canonical base64 vectors
+// ("Man"/"TWFu", "Ma"/"TWE=", "M"/"TQ=="), a full encode->parse round-trip
+// over a 256-byte binary payload (exercises 64-col line wrapping and label
+// matching), and a label-mismatch / missing-marker error path.
+
+import contrib.cryptography.pem
+import std.bytes
+import std.string
+
+bstr(s: string) -> ptr {
+    n = string.length(s); b = bytes.new(n); i = 0
+    while i < n { bytes.set(b, i, string_char_at_n(s, n, i)); i = i + 1 }
+    return b
+}
+bascii(b: ptr) -> string {
+    out = ""; n = bytes.length(b); i = 0
+    while i < n { out = string.concat(out, string.from_char(bytes.get(b, i))); i = i + 1 }
+    return out
+}
+
+main() {
+    print("=== contrib.cryptography.pem ===\n")
+    fails = 0
+
+    // base64 known vectors (RFC 4648 §10)
+    man = bstr("Man")
+    if string.equals(pem.base64_encode(man), "TWFu") != 1 { print("FAIL b64 Man\n"); fails = fails + 1 }
+    bytes.free(man)
+    ma = bstr("Ma")
+    if string.equals(pem.base64_encode(ma), "TWE=") != 1 { print("FAIL b64 Ma\n"); fails = fails + 1 }
+    bytes.free(ma)
+    m1 = bstr("M")
+    if string.equals(pem.base64_encode(m1), "TQ==") != 1 { print("FAIL b64 M\n"); fails = fails + 1 }
+    bytes.free(m1)
+
+    // base64 decode of a padded vector
+    dec, derr = pem.base64_decode("TWFu")
+    if string.equals(derr, "") != 1 { print("FAIL b64 decode err\n"); fails = fails + 1 }
+    if string.equals(bascii(dec), "Man") != 1 { print("FAIL b64 decode Man\n"); fails = fails + 1 }
+    bytes.free(dec)
+
+    // full PEM encode -> parse round-trip over 256 binary bytes
+    payload = bytes.new(256); i = 0
+    while i < 256 { bytes.set(payload, i, (i * 31 + 7) & 0xFF); i = i + 1 }
+    text, eerr = pem.encode("TEST KEY", payload)
+    if string.equals(eerr, "") != 1 { print("FAIL encode err\n"); fails = fails + 1 }
+    // header/footer present
+    if string.contains(text, "-----BEGIN TEST KEY-----") != 1 { print("FAIL no begin\n"); fails = fails + 1 }
+    if string.contains(text, "-----END TEST KEY-----") != 1 { print("FAIL no end\n"); fails = fails + 1 }
+    der, label, perr = pem.parse(text)
+    if string.equals(perr, "") != 1 { print("FAIL parse err: ${perr}\n"); fails = fails + 1 }
+    if string.equals(label, "TEST KEY") != 1 { print("FAIL label ${label}\n"); fails = fails + 1 }
+    rt = 1
+    if bytes.length(der) != 256 { rt = 0 }
+    if rt == 1 { j = 0; while j < 256 { if bytes.get(der, j) != ((j * 31 + 7) & 0xFF) { rt = 0 } j = j + 1 } }
+    if rt != 1 { print("FAIL round-trip bytes\n"); fails = fails + 1 }
+    bytes.free(der); bytes.free(payload)
+
+    // error path: missing END marker
+    bad, blabel, berr = pem.parse("-----BEGIN X-----\nTWFu\n")
+    if string.equals(berr, "") == 1 { print("FAIL missing-END not rejected\n"); fails = fails + 1 }
+
+    if fails == 0 {
+        print("PASS: contrib.cryptography.pem\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

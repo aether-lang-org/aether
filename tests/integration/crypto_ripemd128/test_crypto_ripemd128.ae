@@ -1,0 +1,46 @@
+// Validate std.cryptography.ripemd128 against published RIPEMD-128 vectors.
+import std.cryptography.ripemd128
+import std.io
+
+check(label: string, got: string, want: string) -> int {
+    if got == want {
+        println("ok   ${label}")
+        return 0
+    }
+    println("FAIL ${label}")
+    println("  got:  ${got}")
+    println("  want: ${want}")
+    return 1
+}
+
+main() {
+    fails = 0
+    fails = fails + check("empty",
+        ripemd128.ripemd128_hex("", 0),
+        "cdf26213a150dc3ecb610f18f6b38b46")
+    fails = fails + check("a",
+        ripemd128.ripemd128_hex("a", 1),
+        "86be7afa339d0fc7cfc785e72f578d33")
+    fails = fails + check("abc",
+        ripemd128.ripemd128_hex("abc", 3),
+        "c14a12199c66e4ba84636b0f69144c77")
+    fails = fails + check("message digest",
+        ripemd128.ripemd128_hex("message digest", 14),
+        "9e327b3d6e523062afc1132d7df9d1b8")
+    fails = fails + check("alphabet",
+        ripemd128.ripemd128_hex("abcdefghijklmnopqrstuvwxyz", 26),
+        "fd2aa607f71dc8f510714922b371834e")
+    fails = fails + check("abcdbcde... (56)",
+        ripemd128.ripemd128_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56),
+        "a1aa0689d0fafa2ddc22e88b49133a06")
+    fails = fails + check("A...Za...z0...9 (62)",
+        ripemd128.ripemd128_hex("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", 62),
+        "d1e959eb179c911faea4624c60c5c702")
+
+    if fails == 0 {
+        println("ALL PASS")
+        return
+    }
+    println("FAILURES")
+    exit(1)
+}

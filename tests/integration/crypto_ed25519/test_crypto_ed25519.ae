@@ -1,0 +1,47 @@
+// Validate contrib.cryptography.ed25519 against RFC 8032 §7.1 (Tests 1-3).
+import contrib.cryptography.ed25519
+import std.bytes
+import std.string
+import std.io
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+ck(lbl: string, got: string, want: string) -> int { if got==want { println("ok   ${lbl}"); return 0 } println("FAIL ${lbl}\n  ${got}\n  ${want}"); return 1 }
+
+main() {
+    fails = 0
+
+    // Test 1: empty message.
+    s1 = hb("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    e1 = bytes.new(0)
+    fails = fails + ck("t1 pub", bh(ed25519.publickey(s1)),
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+    sig1 = ed25519.sign(s1, e1, 0)
+    fails = fails + ck("t1 sig", bh(sig1),
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
+    if ed25519.verify(ed25519.publickey(s1), e1, 0, sig1) != 1 { println("FAIL t1 verify"); fails = fails + 1 }
+
+    // Test 2: 1-byte message 0x72.
+    s2 = hb("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
+    m2 = hb("72")
+    sig2 = ed25519.sign(s2, m2, 1)
+    fails = fails + ck("t2 sig", bh(sig2),
+        "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00")
+    if ed25519.verify(ed25519.publickey(s2), m2, 1, sig2) != 1 { println("FAIL t2 verify"); fails = fails + 1 }
+
+    // Test 3: 2-byte message 0xaf82.
+    s3 = hb("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7")
+    m3 = hb("af82")
+    sig3 = ed25519.sign(s3, m3, 2)
+    fails = fails + ck("t3 sig", bh(sig3),
+        "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a")
+    if ed25519.verify(ed25519.publickey(s3), m3, 2, sig3) != 1 { println("FAIL t3 verify"); fails = fails + 1 }
+
+    // Tamper check: flipping a signature byte must fail verification.
+    bytes.set(sig3, 10, bytes.get(sig3, 10) ^ 1)
+    if ed25519.verify(ed25519.publickey(s3), m3, 2, sig3) != 0 { println("FAIL tamper not rejected"); fails = fails + 1 } else { println("ok   tamper rejected") }
+
+    if fails == 0 { println("ALL PASS"); return }
+    println("FAILURES"); exit(1)
+}

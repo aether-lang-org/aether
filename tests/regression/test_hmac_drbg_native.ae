@@ -1,0 +1,115 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// Regression: native HMAC (std.cryptography.hmac) + HMAC-DRBG
+// (std.cryptography.drbg), issue #739. HMAC vectors are RFC 4231
+// (cross-checked against `openssl dgst -mac HMAC` during development); the
+// HMAC-DRBG vector is the first SHA-256 vector from Bouncy Castle's own
+// HMacDrbgTest.cs. Pure Aether over the native SHA-2 — no OpenSSL.
+
+import std.cryptography.hmac
+import std.cryptography.drbg
+import std.bytes
+import std.string
+
+hv(c: int) -> int {
+    if c >= 48 { if c <= 57 { return c - 48 } }
+    if c >= 97 { if c <= 102 { return c - 87 } }
+    if c >= 65 { if c <= 70 { return c - 55 } }
+    return 0
+}
+// hex string -> AetherBytes
+hb(h: string) -> ptr {
+    n = string.length(h)
+    b = bytes.new(0)
+    i = 0
+    while i < n {
+        bytes.set(b, i / 2, hv(string_char_at_n(h, n, i)) * 16 + hv(string_char_at_n(h, n, i + 1)))
+        i = i + 2
+    }
+    return b
+}
+// ASCII string -> AetherBytes
+sb(s: string) -> ptr {
+    n = string.length(s)
+    b = bytes.new(0)
+    i = 0
+    while i < n { bytes.set(b, i, string_char_at_n(s, n, i)); i = i + 1 }
+    return b
+}
+// AetherBytes -> lowercase hex of first n bytes
+bh(b: ptr, n: int) -> string {
+    d = "0123456789abcdef"
+    out = ""
+    i = 0
+    while i < n {
+        v = bytes.get(b, i)
+        hi = string.substring(d, (v / 16) & 15, ((v / 16) & 15) + 1)
+        lo = string.substring(d, v & 15, (v & 15) + 1)
+        out = string.concat(out, string.concat(hi, lo))
+        i = i + 1
+    }
+    return out
+}
+
+main() {
+    print("=== std.cryptography hmac + drbg ===\n")
+    fails = 0
+
+    // ---- HMAC-SHA256, RFC 4231 ----
+    k1 = hb("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
+    m1 = sb("Hi There")
+    if string.equals(hmac.hmac_sha256_hex(k1, 20, m1, 8),
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7") != 1 {
+        print("FAIL hmac TC1\n"); fails = fails + 1 }
+    bytes.free(k1)
+    bytes.free(m1)
+
+    k2 = sb("Jefe")
+    m2 = sb("what do ya want for nothing?")
+    if string.equals(hmac.hmac_sha256_hex(k2, 4, m2, 28),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843") != 1 {
+        print("FAIL hmac TC2\n"); fails = fails + 1 }
+    bytes.free(k2)
+    bytes.free(m2)
+
+    // TC6: key longer than block size (131 x 0xaa) -> hashed key path
+    k6 = bytes.new(0)
+    z = 0
+    while z < 131 { bytes.set(k6, z, 0xaa); z = z + 1 }
+    m6 = sb("Test Using Larger Than Block-Size Key - Hash Key First")
+    if string.equals(hmac.hmac_sha256_hex(k6, 131, m6, 54),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54") != 1 {
+        print("FAIL hmac TC6 (long key)\n"); fails = fails + 1 }
+    bytes.free(k6)
+    bytes.free(m6)
+
+    // ---- HMAC-DRBG SHA-256, Bouncy Castle HMacDrbgTest.cs vector #1 ----
+    ent = hb("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343536")
+    non = hb("2021222324252627")
+    d, err = drbg.new("sha256", ent, 55, non, 8, null, 0)
+    if string.equals(err, "") != 1 { print("FAIL drbg new: ${err}\n"); fails = fails + 1 }
+    g1 = drbg.generate(d, 64)
+    if string.equals(bh(g1, 64),
+        "d67b8c1734f46fa3f763cf57c6f9f4f2dc1089bd8bc1f6f023950bfc5617635208c8501238ad7a4400defee46c640b61af77c2d1a3bfaa90ede5d207406e5403") != 1 {
+        print("FAIL drbg generate #1\n"); fails = fails + 1 }
+    g2 = drbg.generate(d, 64)
+    if string.equals(bh(g2, 64),
+        "8fdaec20f8b421407059e3588920da7eda9dce3cf8274dfa1c59c108c1d0aa9b0fa38da5c792037c4d33cd070ca7cd0c5608dba8b885654639de2187b74cb263") != 1 {
+        print("FAIL drbg generate #2\n"); fails = fails + 1 }
+    bytes.free(g1)
+    bytes.free(g2)
+    drbg.free_ctx(d)
+    bytes.free(ent)
+    bytes.free(non)
+
+    if fails == 0 {
+        print("PASS: hmac + drbg\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

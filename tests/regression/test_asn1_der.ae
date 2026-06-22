@@ -1,0 +1,127 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// Regression: contrib.cryptography.asn1 DER parser + emitter (issue #739).
+// The headline case parses a REAL RSA-512 PKCS#1 private key emitted by
+// `openssl rsa -traditional -outform DER`, checks the modulus/exponent
+// against `openssl rsa -text`, then re-encodes all nine INTEGERs back into
+// a SEQUENCE and asserts the result is byte-identical to the original DER.
+// Plus targeted OID / INTEGER / SEQUENCE / length-form encode vectors.
+
+import contrib.cryptography.asn1
+import std.bytes
+import std.bignum
+import std.string
+
+hv(c: int) -> int {
+    if c >= 48 { if c <= 57 { return c - 48 } }
+    if c >= 97 { if c <= 102 { return c - 87 } }
+    return 0
+}
+hb(h: string) -> ptr {
+    n = string.length(h); b = bytes.new(n / 2); i = 0
+    while i < n { bytes.set(b, i / 2, hv(string_char_at_n(h, n, i)) * 16 + hv(string_char_at_n(h, n, i + 1))); i = i + 2 }
+    return b
+}
+bhex(b: ptr) -> string {
+    d = "0123456789abcdef"; out = ""; n = bytes.length(b); i = 0
+    while i < n {
+        v = bytes.get(b, i)
+        out = string.concat(out, string.concat(string.substring(d, (v / 16) & 15, ((v / 16) & 15) + 1), string.substring(d, v & 15, (v & 15) + 1)))
+        i = i + 1
+    }
+    return out
+}
+cat_into(dst: ptr, doff: int, src: ptr) -> int {
+    n = bytes.length(src); i = 0
+    while i < n { bytes.set(dst, doff + i, bytes.get(src, i)); i = i + 1 }
+    return doff + n
+}
+
+// real RSA-512 PKCS#1 RSAPrivateKey DER (openssl genrsa 512 -traditional)
+RSA512_DER() -> string {
+    return "3082013b020100024100c371e9b9bf96ae5babab1d6d4fdc0b9220370dddbeb582047d4db7f84cdd363a4e58d89ca6f7fef8f598d889b066f6d3b889662ef90e77a10777c3d11c1663db020301000102401c7ae7022846fed560e8a87b1b5e07599dd427f31e2d38eb0a8f5eb5920dd22edfaaa1a5aab543a67ed8430c43184453cbc017dada257136bd935d38f9684b41022100e877ee2e62a69a8a07a44493fff6742ee751db2c3d564884b05ccb337bc1798b022100d73a9308c4cd637988123a85195858b7945ea31c69e617f1f7151b221607e8f1022100ae0872e888f41f07acb6de9c49e8908c38a2c0493b56280e2616220dd5dd3f07022059adab542d04535d7127ff4034264e98f776534a64899e1290dc3779056af851022100c3bf2d99dfcd11e6331fd34e027e340ef6e1e6235ba54300f67bc8cb89864ab5"
+}
+
+main() {
+    print("=== contrib.cryptography.asn1 DER ===\n")
+    fails = 0
+
+    // ---- targeted encode vectors ----
+    oidt = asn1.encode_oid("1.2.840.113549.1.1.1")   // rsaEncryption
+    if string.equals(bhex(oidt), "06092a864886f70d010101") != 1 { print("FAIL oid encode\n"); fails = fails + 1 }
+    ro = asn1.reader_new(oidt)
+    od, oerr = asn1.read_oid(ro)
+    if string.equals(oerr, "") != 1 { print("FAIL oid read err\n"); fails = fails + 1 }
+    if string.equals(od, "1.2.840.113549.1.1.1") != 1 { print("FAIL oid decode\n"); fails = fails + 1 }
+    asn1.reader_free(ro); bytes.free(oidt)
+
+    e = bignum.from_int(65537)
+    et = asn1.encode_integer(e)
+    if string.equals(bhex(et), "0203010001") != 1 { print("FAIL int encode\n"); fails = fails + 1 }
+    bignum.free(e); bytes.free(et)
+
+    // length long-form: 200-byte content -> 0x81 0xC8
+    ll = asn1.encode_len(200)
+    if string.equals(bhex(ll), "81c8") != 1 { print("FAIL len long-form\n"); fails = fails + 1 }
+    bytes.free(ll)
+
+    // ---- real RSA key parse + byte-identical re-encode ----
+    orig = hb(RSA512_DER())
+    r = asn1.reader_new(orig)
+    sub, body, serr = asn1.read_sequence(r)
+    if string.equals(serr, "") != 1 { print("FAIL seq: ${serr}\n"); fails = fails + 1 }
+
+    ver, verr = asn1.read_integer(sub)
+    if string.equals(verr, "") != 1 { print("FAIL ver err\n"); fails = fails + 1 }
+    if string.equals(bignum.to_hex(ver), "0") != 1 { print("FAIL version\n"); fails = fails + 1 }
+
+    n, nerr = asn1.read_integer(sub)
+    if string.equals(nerr, "") != 1 { print("FAIL n err\n"); fails = fails + 1 }
+    en = "c371e9b9bf96ae5babab1d6d4fdc0b9220370dddbeb582047d4db7f84cdd363a4e58d89ca6f7fef8f598d889b066f6d3b889662ef90e77a10777c3d11c1663db"
+    if string.equals(bignum.to_hex(n), en) != 1 { print("FAIL modulus\n"); fails = fails + 1 }
+
+    e2, e2err = asn1.read_integer(sub)
+    if string.equals(e2err, "") != 1 { print("FAIL e err\n"); fails = fails + 1 }
+    if string.equals(bignum.to_hex(e2), "10001") != 1 { print("FAIL exponent\n"); fails = fails + 1 }
+
+    // re-encode: version + n + e already read; read the remaining 6 and
+    // rebuild the whole 9-INTEGER SEQUENCE, comparing to the original.
+    out = bytes.new(0); off = 0
+    tv = asn1.encode_integer(ver); off = cat_into(out, off, tv); bytes.free(tv)
+    tn = asn1.encode_integer(n); off = cat_into(out, off, tn); bytes.free(tn)
+    te = asn1.encode_integer(e2); off = cat_into(out, off, te); bytes.free(te)
+    bignum.free(ver); bignum.free(n); bignum.free(e2)
+    cnt = 0
+    while cnt < 6 {
+        m, merr = asn1.read_integer(sub)
+        if string.equals(merr, "") != 1 { print("FAIL int ${cnt}\n"); fails = fails + 1 }
+        tm = asn1.encode_integer(m); off = cat_into(out, off, tm); bytes.free(tm)
+        bignum.free(m)
+        cnt = cnt + 1
+    }
+    reseq = asn1.encode_sequence(out)
+    ok = 1
+    if bytes.length(reseq) != bytes.length(orig) { ok = 0 }
+    if ok == 1 {
+        i = 0
+        while i < bytes.length(orig) {
+            if bytes.get(reseq, i) != bytes.get(orig, i) { ok = 0 }
+            i = i + 1
+        }
+    }
+    if ok != 1 { print("FAIL DER round-trip not byte-identical\n"); fails = fails + 1 }
+
+    asn1.reader_free(sub); bytes.free(body); asn1.reader_free(r)
+    bytes.free(orig); bytes.free(reseq)
+
+    if fails == 0 {
+        print("PASS: contrib.cryptography.asn1 DER\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

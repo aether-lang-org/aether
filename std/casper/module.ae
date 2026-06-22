@@ -1,0 +1,130 @@
+// std.casper — FreeBSD Casper service delegation.
+// Import with: import std.casper
+//
+// A process in Capsicum capability mode (see std.capsicum) can no
+// longer reach global namespaces: no DNS, no /etc/passwd lookups, no
+// sysctl. Casper bridges that gap — a separate, unsandboxed casper
+// daemon performs those operations on the sandboxed process's behalf,
+// over a channel opened *before* the process locks itself down.
+//
+// The model is strictly two-phase, and the ordering is not optional:
+//
+//   1. While still unconfined — open the channels you will need:
+//        c   = casper.init()
+//        net = casper.service(c, "system.net")
+//        casper.close(c)              // keep `net`, drop the parent handle
+//   2. capsicum.enter()               // from std.capsicum
+//   3. Inside capability mode — the service channels still work:
+//        ip = casper.dns_resolve(net, "example.com")
+//
+// A channel opened *after* capsicum.enter() fails — that is how Casper
+// works, and this module cannot paper over it.
+//
+// Three services are bound: system.net (DNS), system.pwd (password
+// database), system.sysctl. Off FreeBSD every call fails cleanly and
+// casper.available() returns 0, so portable code branches on it.
+//
+// Channels are opaque `ptr` handles.
+
+exports (
+    // Raw externs
+    aether_casper_init, aether_casper_service_open, aether_casper_close,
+    aether_casper_available, aether_casper_resolve,
+    aether_casper_pwd_uid, aether_casper_pwd_home,
+    aether_casper_sysctl_str,
+    // Ergonomic wrappers
+    available, init, service, close,
+    dns_resolve, pwd_uid, pwd_home, sysctl
+)
+
+// Detach a borrowed/heap C string into an Aether-owned copy.
+extern string_concat(a: string, b: string) -> string
+
+// ---- Raw externs (over std/casper/aether_casper.c) ----
+
+// 1 if Casper is usable (FreeBSD with the casper daemon reachable).
+extern aether_casper_available() -> int
+
+// Connect to the casper daemon. Returns an opaque channel, or null.
+// Must be called BEFORE capsicum.enter().
+extern aether_casper_init() -> ptr
+
+// Open a named service channel ("system.net" / "system.pwd" /
+// "system.sysctl") from the casper handle. Returns a channel or null.
+// Must be called BEFORE capsicum.enter().
+extern aether_casper_service_open(casper: ptr, service: string) -> ptr
+
+// Close a channel (casper handle or service handle). Safe on null.
+extern aether_casper_close(chan: ptr)
+
+// Resolve a hostname to its first IP via a "system.net" channel.
+// Returns the address string, or null on failure.
+extern aether_casper_resolve(netchan: ptr, hostname: string) -> string
+
+// Look up a username's uid via a "system.pwd" channel. -1 if absent.
+extern aether_casper_pwd_uid(pwdchan: ptr, username: string) -> int
+
+// Look up a username's home directory via a "system.pwd" channel.
+// Returns the path, or null on failure.
+extern aether_casper_pwd_home(pwdchan: ptr, username: string) -> string
+
+// Read a string-valued sysctl via a "system.sysctl" channel.
+// Returns the value, or null on failure.
+extern aether_casper_sysctl_str(sysctlchan: ptr, name: string) -> string
+
+// ---- Ergonomic wrappers (casper.* namespace) ----
+
+// Is Casper service delegation available?
+available() -> int {
+    return aether_casper_available()
+}
+
+// Connect to the casper daemon. Call before capsicum.enter().
+init() -> ptr {
+    return aether_casper_init()
+}
+
+// Open a service channel. Call before capsicum.enter().
+service(casper: ptr, name: string) -> ptr {
+    return aether_casper_service_open(casper, name)
+}
+
+// Close a channel.
+close(chan: ptr) {
+    aether_casper_close(chan)
+}
+
+// Resolve `hostname` via a "system.net" channel. Returns (ip, "") on
+// success, ("", error) on failure. Works inside capability mode.
+dns_resolve(netchan: ptr, hostname: string) -> {
+    ip = aether_casper_resolve(netchan, hostname)
+    if ip == null {
+        return "", "casper: cannot resolve host"
+    }
+    return string_concat(ip, ""), ""
+}
+
+// Look up `username`'s uid via a "system.pwd" channel. -1 if absent.
+pwd_uid(pwdchan: ptr, username: string) -> int {
+    return aether_casper_pwd_uid(pwdchan, username)
+}
+
+// Look up `username`'s home directory via a "system.pwd" channel.
+// Returns (home, "") on success, ("", error) on failure.
+pwd_home(pwdchan: ptr, username: string) -> {
+    home = aether_casper_pwd_home(pwdchan, username)
+    if home == null {
+        return "", "casper: cannot look up user"
+    }
+    return string_concat(home, ""), ""
+}
+
+// Read a string-valued sysctl via a "system.sysctl" channel.
+// Returns (value, "") on success, ("", error) on failure.
+sysctl(sysctlchan: ptr, name: string) -> {
+    v = aether_casper_sysctl_str(sysctlchan, name)
+    if v == null {
+        return "", "casper: cannot read sysctl"
+    }
+    return string_concat(v, ""), ""
+}

@@ -1,0 +1,41 @@
+// Validate contrib.cryptography.p256: known base-point multiples, a NIST
+// ECDH CAVP vector, and an ECDSA sign/verify round-trip (+ tamper).
+import contrib.cryptography.p256
+import std.bytes
+import std.string
+import std.io
+
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
+bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
+ck(lbl: string, got: string, want: string) -> int { if got==want { println("ok   ${lbl}"); return 0 } println("FAIL ${lbl}\n  ${got}\n  ${want}"); return 1 }
+
+main() {
+    fails = 0
+
+    // 2*G doubling.
+    two = hb("0000000000000000000000000000000000000000000000000000000000000002")
+    g2x, g2y = p256.scalar_mult_base(two)
+    fails = fails + ck("2G x", bh(g2x), "7cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc47669978")
+    fails = fails + ck("2G y", bh(g2y), "07775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1")
+
+    // NIST ECDH CAVP vector.
+    priv = hb("7d7dc5f71eb29ddaf80d6214632eeae03d9058af1fb6d22ed80badb62bc1a534")
+    pbx = hb("700c48f77f56584c5cc632ca65640db91b6bacce3a4df6b42ce7cc838833d287")
+    pby = hb("db71e509e3fd9b060ddb20ba5c51dcc5948d46fbf640dfe0441782cab85fa4ac")
+    fails = fails + ck("ecdh", bh(p256.ecdh(priv, pbx, pby)),
+        "46fc62106420ff012e54a434fbdd2d25ccc5852060561e68040dd7778997bd7b")
+
+    // ECDSA sign/verify round-trip.
+    d = hb("c477f9f65c22cce20657faa5b2d1d8122336f851a508a1ed04e479c34985bf96")
+    hash = hb("0102030405060708010203040506070801020304050607080102030405060708")
+    k = hb("7a1a7e52797fc8caaa435d2a4dace39158504bf204fbe19f14dbb427faee50ae")
+    r, s = p256.ecdsa_sign(d, hash, k)
+    px, py = p256.scalar_mult_base(d)
+    if p256.ecdsa_verify(px, py, hash, r, s) != 1 { println("FAIL ecdsa verify"); fails = fails + 1 } else { println("ok   ecdsa sign/verify") }
+    bytes.set(hash, 0, bytes.get(hash, 0) ^ 1)
+    if p256.ecdsa_verify(px, py, hash, r, s) != 0 { println("FAIL ecdsa tamper not rejected"); fails = fails + 1 } else { println("ok   ecdsa tamper rejected") }
+
+    if fails == 0 { println("ALL PASS"); return }
+    println("FAILURES"); exit(1)
+}

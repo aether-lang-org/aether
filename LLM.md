@@ -110,8 +110,8 @@ plays that role), no interfaces.
   a stdlib gap is real** — a porter writing a downstream port may
   not realise the module is there. Today covers: `xml/expat` (SAX
   XML parser via libexpat), `sqlite`, `host/{python,ruby,lua,perl,
-  tcl,duktape,tinygo,go,java}` for embedded interpreters,
-  `climate_http_tests`, `tinyweb`.
+  tcl,duktape,tinygo,factor,aether,go,java}` for embedded
+  interpreters, `tinyweb`.
 - `compiler/aetherc.c` — CLI entry. `--emit=lib`, `--with=`, import
   gate lives around line 590.
 - `build/aetherc`, `build/ae` — the compiled binary. `make && make
@@ -163,7 +163,14 @@ plays that role), no interfaces.
 - **`<<MARKER … MARKER` heredocs.** Literal string, no interpolation/escaping.
   Reach for them to embed another language's source verbatim
   (`contrib.host.*` snippets, SQL) — no `\"` on the guest's own quotes. Use
-  `"…"` when you need `${}`.
+  `"…"` when you need `${}`. **Common-indent dedent (default):** the longest
+  leading-whitespace prefix shared by every non-blank line is stripped, so you
+  can indent the body to match surrounding code without that indent leaking
+  into the string. Blank lines don't constrain the prefix; relative indentation
+  within the block is kept. The match is character-exact — a space-vs-tab
+  mismatch at a column stops the strip there (no shifting past a disagreement),
+  so to keep a literal common indent, indent one line less than the rest. The
+  closing marker must be at column 0. (lexer.c `<<` case.)
 - **Trailing closure brace must be on the call's line.** `f(x) { … }`
   attaches as a trailing closure; `f(x)\n{ … }` is parsed as a
   separate bare-brace block. The compiler warns on the next-line
@@ -321,6 +328,13 @@ plays that role), no interfaces.
 - Iteration order in `std.json` is insertion order across both parse
   and builder paths. Documented contract, several downstream users
   (including svn-aether's server) rely on it.
+- **Any C symbol codegen emits a call to must be linkable in EVERY
+  build, including WASM.** The `ci-wasm` Makefile target uses its own
+  minimal `RUNTIME_FILES` list (not `RUNTIME_SRC`); add new runtime
+  files there too, and keep the symbol self-guarded so it's a no-op
+  object off its target OS. Otherwise `wasm-ld` errors `undefined
+  symbol` while every native platform is green. (Bit us when the
+  Capsicum self-sandbox startup hook landed.)
 
 ## When stuck
 

@@ -194,7 +194,23 @@ endif
 # (most distros already default to PIE); one archive serves both the exe
 # link and the shared-object link.
 CFLAGS = -O2 -fPIC -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_HAS_SANDBOX $(OPENSSL_CFLAGS) $(ZLIB_CFLAGS) $(NGHTTP2_CFLAGS) $(PCRE2_CFLAGS) $(EXTRA_CFLAGS)
-LDFLAGS = -lm $(OPENSSL_LDFLAGS) $(ZLIB_LDFLAGS) $(NGHTTP2_LDFLAGS) $(PCRE2_LDFLAGS)
+# Casper link libraries (FreeBSD only) — std.casper delegates DNS /
+# passwd / sysctl past Capsicum capability mode. libcasper + the
+# per-service libs ship in the FreeBSD base system. We resolve them by
+# globbing the actual shared-object filenames rather than relying on
+# `-lcasper` (the `.so` linker symlinks are absent on some installs,
+# e.g. GhostBSD) or hardcoding a soname version (libcap_sysctl is at
+# .so.2 while its siblings are at .so.1). Empty if the libs aren't
+# present — std.casper then links its non-FreeBSD stub path.
+CASPER_LDFLAGS :=
+ifeq ($(shell uname -s),FreeBSD)
+  CASPER_LDFLAGS := $(firstword $(wildcard /lib/libcasper.so.* /usr/lib/libcasper.so.*)) \
+                    $(firstword $(wildcard /lib/libcap_net.so.* /usr/lib/libcap_net.so.*)) \
+                    $(firstword $(wildcard /lib/libcap_pwd.so.* /usr/lib/libcap_pwd.so.*)) \
+                    $(firstword $(wildcard /lib/libcap_sysctl.so.* /usr/lib/libcap_sysctl.so.*))
+endif
+
+LDFLAGS = -lm $(OPENSSL_LDFLAGS) $(ZLIB_LDFLAGS) $(NGHTTP2_LDFLAGS) $(PCRE2_LDFLAGS) $(CASPER_LDFLAGS)
 
 # Hardening flags (issue #396). Opt-in via `HARDEN=1`. The CI matrix
 # pins a Linux/gcc + HARDEN=1 entry so a hardened-build regression
@@ -254,14 +270,14 @@ endif
 
 COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/analysis/derive.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c lsp/aether_lsp.c
 COMPILER_LIB_SRC = compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/analysis/derive.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c lsp/aether_lsp.c
-RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/aether_spawn_sandboxed.c runtime/aether_shared_map.c runtime/aether_host.c runtime/aether_resource_caps.c runtime/libaether_caps.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c runtime/actors/aether_panic.c
-STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/xml/aether_xml.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c std/os/aether_os.c std/ipc/aether_ipc.c std/mem/aether_mem.c std/cryptography/aether_cryptography.c std/zlib/aether_zlib.c std/lzf/lzf_c.c std/lzf/lzf_d.c std/lzf/aether_lzf.c std/dl/aether_dl.c std/http/middleware/aether_middleware.c std/http/server/h2/aether_h2.c std/http/proxy/aether_proxy_pool.c std/http/proxy/aether_proxy_lb.c std/http/proxy/aether_proxy_breaker.c std/http/proxy/aether_proxy_health.c std/http/proxy/aether_proxy_cache.c std/http/proxy/aether_proxy_opts.c std/http/proxy/aether_proxy_metrics.c std/http/proxy/aether_proxy_middleware.c std/http/script_gateway/aether_script_gateway.c std/bytes/aether_bytes.c std/strbuilder/aether_strbuilder.c std/config/aether_config.c std/actors/aether_actor_registry.c std/regex/aether_regex.c
+RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/sandbox/spawn_sandboxed_linux.c runtime/sandbox/spawn_sandboxed_bsd.c runtime/sandbox/spawn_sandboxed_stub.c runtime/sandbox/capsicum_autosandbox.c runtime/sandbox/aether_audit.c runtime/aether_shared_map.c runtime/aether_host.c runtime/aether_resource_caps.c runtime/libaether_caps.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c runtime/actors/aether_panic.c
+STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/xml/aether_xml.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c std/os/aether_os.c std/ipc/aether_ipc.c std/mem/aether_mem.c std/cryptography/aether_cryptography.c std/zlib/aether_zlib.c std/lzf/lzf_c.c std/lzf/lzf_d.c std/lzf/aether_lzf.c std/dl/aether_dl.c std/http/middleware/aether_middleware.c std/http/server/h2/aether_h2.c std/http/proxy/aether_proxy_pool.c std/http/proxy/aether_proxy_lb.c std/http/proxy/aether_proxy_breaker.c std/http/proxy/aether_proxy_health.c std/http/proxy/aether_proxy_cache.c std/http/proxy/aether_proxy_opts.c std/http/proxy/aether_proxy_metrics.c std/http/proxy/aether_proxy_middleware.c std/http/script_gateway/aether_script_gateway.c std/bytes/aether_bytes.c std/bytes/cursor/aether_bytes_cursor.c std/strbuilder/aether_strbuilder.c std/config/aether_config.c std/actors/aether_actor_registry.c std/regex/aether_regex.c std/capsicum/aether_capsicum.c std/casper/aether_casper.c
 # Stdlib sources that reference scheduler internals (scheduler_io_register,
 # g_sync_step_actor, current_core_id). Excluded from the compiler binary
 # because aetherc does not link the runtime scheduler, but included in
 # libaether.a and user programs where the runtime is present.
 STD_REACTOR_SRC = std/net/aether_actor_bridge.c
-COLLECTIONS_SRC = std/collections/aether_hashmap.c std/collections/aether_set.c std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_floatarr.c std/collections/aether_stringlist.c std/collections/aether_stringseq.c
+COLLECTIONS_SRC = std/collections/aether_hashmap.c std/collections/aether_set.c std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_floatarr.c std/collections/aether_longarr.c std/collections/aether_bits.c std/collections/aether_stringlist.c std/collections/aether_stringseq.c
 
 # I/O poller backends (needed by both compiler and runtime targets)
 IO_POLLER_SRC = runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c
@@ -318,7 +334,7 @@ STANDALONE_TESTS = tests/runtime/test_runtime_manual.c \
 all: compiler ae stdlib
 
 # Create object directories
-$(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/compiler/codegen $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/std/xml $(OBJ_DIR)/std/os $(OBJ_DIR)/std/ipc $(OBJ_DIR)/std/mem $(OBJ_DIR)/std/cryptography $(OBJ_DIR)/std/zlib $(OBJ_DIR)/std/lzf $(OBJ_DIR)/std/dl $(OBJ_DIR)/std/bytes $(OBJ_DIR)/std/strbuilder $(OBJ_DIR)/std/config $(OBJ_DIR)/std/actors $(OBJ_DIR)/std/http $(OBJ_DIR)/std/http/middleware $(OBJ_DIR)/std/http/proxy $(OBJ_DIR)/std/http/script_gateway $(OBJ_DIR)/std/http/server $(OBJ_DIR)/std/http/server/h2 $(OBJ_DIR)/std/regex $(OBJ_DIR)/lsp $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime:
+$(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/compiler/codegen $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/sandbox $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/std/xml $(OBJ_DIR)/std/os $(OBJ_DIR)/std/ipc $(OBJ_DIR)/std/mem $(OBJ_DIR)/std/cryptography $(OBJ_DIR)/std/zlib $(OBJ_DIR)/std/lzf $(OBJ_DIR)/std/dl $(OBJ_DIR)/std/bytes $(OBJ_DIR)/std/bytes/cursor $(OBJ_DIR)/std/strbuilder $(OBJ_DIR)/std/config $(OBJ_DIR)/std/actors $(OBJ_DIR)/std/capsicum $(OBJ_DIR)/std/casper $(OBJ_DIR)/std/http $(OBJ_DIR)/std/http/middleware $(OBJ_DIR)/std/http/proxy $(OBJ_DIR)/std/http/script_gateway $(OBJ_DIR)/std/http/server $(OBJ_DIR)/std/http/server/h2 $(OBJ_DIR)/std/regex $(OBJ_DIR)/lsp $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime:
 ifdef WINDOWS_NATIVE
 	@if not exist "$(subst /,\,$@)" mkdir "$(subst /,\,$@)"
 else
@@ -326,7 +342,7 @@ else
 endif
 
 # Pattern rule for object files
-$(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/compiler/codegen $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/std/xml $(OBJ_DIR)/std/os $(OBJ_DIR)/std/ipc $(OBJ_DIR)/std/mem $(OBJ_DIR)/std/cryptography $(OBJ_DIR)/std/zlib $(OBJ_DIR)/std/lzf $(OBJ_DIR)/std/dl $(OBJ_DIR)/std/bytes $(OBJ_DIR)/std/strbuilder $(OBJ_DIR)/std/config $(OBJ_DIR)/std/actors $(OBJ_DIR)/std/http $(OBJ_DIR)/std/http/middleware $(OBJ_DIR)/std/http/proxy $(OBJ_DIR)/std/http/script_gateway $(OBJ_DIR)/std/http/server $(OBJ_DIR)/std/http/server/h2 $(OBJ_DIR)/std/regex $(OBJ_DIR)/lsp $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime
+$(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/compiler/codegen $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/sandbox $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/std/xml $(OBJ_DIR)/std/os $(OBJ_DIR)/std/ipc $(OBJ_DIR)/std/mem $(OBJ_DIR)/std/cryptography $(OBJ_DIR)/std/zlib $(OBJ_DIR)/std/lzf $(OBJ_DIR)/std/dl $(OBJ_DIR)/std/bytes $(OBJ_DIR)/std/bytes/cursor $(OBJ_DIR)/std/strbuilder $(OBJ_DIR)/std/config $(OBJ_DIR)/std/actors $(OBJ_DIR)/std/capsicum $(OBJ_DIR)/std/casper $(OBJ_DIR)/std/http $(OBJ_DIR)/std/http/middleware $(OBJ_DIR)/std/http/proxy $(OBJ_DIR)/std/http/script_gateway $(OBJ_DIR)/std/http/server $(OBJ_DIR)/std/http/server/h2 $(OBJ_DIR)/std/regex $(OBJ_DIR)/lsp $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime
 	@echo "Compiling $<..."
 	@$(CC) $(CFLAGS) -c $< -o $@
 
@@ -544,7 +560,7 @@ test-ae: compiler ae stdlib
 	printf 'fi\n'                                                                                   >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
-	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/closure_extern_retains_no_uaf/*' -prune -o -path 'tests/integration/closure_builder_ctx_inject_no_uaf/*' -prune -o -path 'tests/integration/closure_qualified_ctx_inject_no_uaf/*' -prune -o -path 'tests/integration/builder_int_factory_void_ptr_cast/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_inspect/*' -prune -o -path 'tests/integration/inferred_narrowing/*' -prune -o -path 'tests/integration/import_error_attribution/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/bin_name_lookup_and_walkup/*' -prune -o -path 'tests/integration/string_plus_reject/*' -prune -o -path 'tests/integration/heap_new_pod/*' -prune -o -path 'tests/integration/aether_string_to_c_extern/*' -prune -o -path 'tests/integration/module_extern_auto_unwrap/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/cryptography_v2/*' -prune -o -path 'tests/integration/cryptography_random_hex/*' -prune -o -path 'tests/integration/long_long_extern/*' -prune -o -path 'tests/integration/json_from_int/*' -prune -o -path 'tests/integration/issue_752_struct_string_tuple/*' -prune -o -path 'tests/integration/extern_annotation/*' -prune -o -path 'tests/integration/c_callback/*' -prune -o -path 'tests/integration/c_import_struct/*' -prune -o -path 'tests/integration/c_import_const/*' -prune -o -path 'tests/integration/c_qualified_ptr/*' -prune -o -path 'tests/integration/extern_single_value_heap/*' -prune -o -path 'tests/integration/extern_tuple_return/*' -prune -o -path 'tests/integration/heap_tracker_return_escape_no_leak/*' -prune -o -path 'tests/integration/std_strbuilder_no_leak/*' -prune -o -path 'tests/integration/std_strbuilder_csv/*' -prune -o -path 'tests/integration/bytes_finish_return_no_leak/*' -prune -o -path 'tests/integration/string_new_with_length_no_leak/*' -prune -o -path 'tests/integration/string_substring_n_no_leak/*' -prune -o -path 'tests/integration/heap_leak_cross_fn_recursion/*' -prune -o -path 'tests/integration/heap_leak_interp_as_arg/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/sqlite_prepared/*' -prune -o -path 'tests/integration/contrib_xml_expat/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -path 'tests/integration/aether_string_ffi_unwrap/*' -prune -o -path 'tests/integration/ptr_return_int_zero_inference/*' -prune -o -path 'tests/integration/string_interp_loop_alias/*' -prune -o -path 'tests/integration/transitive_module_import/*' -prune -o -path 'tests/integration/dsl_receiver_scoping/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_edge/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_nested/*' -prune -o -path 'tests/integration/http_sendfile/*' -prune -o -path 'tests/integration/http_stream_upload/*' -prune -o -path 'tests/integration/emit_lib_deadline/*' -prune -o -path 'tests/integration/derive_eq/*' -prune -o -path 'tests/integration/http_client_redirects/*' -prune -o -path 'tests/integration/source_location/*' -prune -o -path 'tests/integration/std_dl/*' -prune -o -path 'tests/integration/host_tinygo/*' -prune -o -path 'tests/integration/host_factor/*' -prune -o -path 'tests/integration/sealed_namespaces/*' -prune -o -path 'tests/integration/default_arguments/*' -prune -o -path 'tests/integration/source_location_default_capture/*' -prune -o -path 'tests/integration/fn_typed_local_call/*' -prune -o -path 'tests/integration/http_server_tls/*' -prune -o -path 'tests/integration/http_server_keepalive/*' -prune -o -path 'tests/integration/http_server_actor_dispatch/*' -prune -o -path 'tests/integration/http_middleware_d1/*' -prune -o -path 'tests/integration/http_middleware_d2/*' -prune -o -path 'tests/integration/http_server_ops/*' -prune -o -path 'tests/integration/http_server_observability/*' -prune -o -path 'tests/integration/http_server_sse/*' -prune -o -path 'tests/integration/http_server_websocket/*' -prune -o -path 'tests/integration/http_server_h2_tls/*' -prune -o -path 'tests/integration/http_server_h2_middleware/*' -prune -o -path 'tests/integration/http_real_ip/*' -prune -o -path 'tests/integration/http_request_remote_addr/*' -prune -o -path 'tests/integration/http_request_conn_accessors/*' -prune -o -path 'tests/integration/http_auth/*' -prune -o -path 'tests/integration/http_h2_concurrent_dispatch/*' -prune -o -path 'tests/integration/http_reverse_proxy/*' -prune -o -path 'tests/integration/http_reverse_proxy_pool/*' -prune -o -path 'tests/integration/panic_stack_trace/*' -prune -o -path 'tests/integration/cas_roundtrip/*' -prune -o -path 'tests/integration/caller_info/*' -prune -o -path 'tests/integration/std_ipc_roundtrip/*' -prune -o -path 'tests/integration/std_ipc_bash_chain/*' -prune -o -path 'tests/integration/std_mem_byte_access/*' -prune -o -path 'tests/integration/http_script_gateway/*' -prune -o -path 'tests/integration/lib_meta/*' -prune -o -path 'tests/integration/lib_meta_closures/*' -prune -o -path 'tests/integration/binary_import/*' -prune -o -path 'tests/integration/emit_lib_net/*' -prune -o -path 'tests/integration/http_client_dechunk/*' -prune -o -path 'tests/integration/http_request_header_iter/*' -prune -o -path 'tests/integration/http_server_background_quiet/*' -prune -o -path 'tests/integration/run_lib_path/*' -prune -o -path 'tests/integration/selective_import_shadow/*' -prune -o -path 'tests/integration/liquid_include_render/*' -prune -o -path 'tests/integration/liquid_layout_block/*' -prune -o -path 'tests/integration/liquid_extends_super/*' -prune -o -path 'tests/integration/liquid_api_extras/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
+	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/closure_extern_retains_no_uaf/*' -prune -o -path 'tests/integration/closure_builder_ctx_inject_no_uaf/*' -prune -o -path 'tests/integration/closure_qualified_ctx_inject_no_uaf/*' -prune -o -path 'tests/integration/builder_int_factory_void_ptr_cast/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_inspect/*' -prune -o -path 'tests/integration/inferred_narrowing/*' -prune -o -path 'tests/integration/import_error_attribution/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/bin_name_lookup_and_walkup/*' -prune -o -path 'tests/integration/string_plus_reject/*' -prune -o -path 'tests/integration/heap_new_pod/*' -prune -o -path 'tests/integration/aether_string_to_c_extern/*' -prune -o -path 'tests/integration/module_extern_auto_unwrap/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/cryptography_v2/*' -prune -o -path 'tests/integration/cryptography_random_hex/*' -prune -o -path 'tests/integration/long_long_extern/*' -prune -o -path 'tests/integration/json_from_int/*' -prune -o -path 'tests/integration/issue_752_struct_string_tuple/*' -prune -o -path 'tests/integration/extern_annotation/*' -prune -o -path 'tests/integration/c_callback/*' -prune -o -path 'tests/integration/c_import_struct/*' -prune -o -path 'tests/integration/c_import_struct_no_typedef/*' -prune -o -path 'tests/integration/c_import_const/*' -prune -o -path 'tests/integration/c_qualified_ptr/*' -prune -o -path 'tests/integration/extern_single_value_heap/*' -prune -o -path 'tests/integration/extern_tuple_return/*' -prune -o -path 'tests/integration/heap_tracker_return_escape_no_leak/*' -prune -o -path 'tests/integration/std_strbuilder_no_leak/*' -prune -o -path 'tests/integration/std_strbuilder_csv/*' -prune -o -path 'tests/integration/bytes_finish_return_no_leak/*' -prune -o -path 'tests/integration/string_new_with_length_no_leak/*' -prune -o -path 'tests/integration/string_substring_n_no_leak/*' -prune -o -path 'tests/integration/heap_leak_cross_fn_recursion/*' -prune -o -path 'tests/integration/heap_leak_interp_as_arg/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/sqlite_prepared/*' -prune -o -path 'tests/integration/contrib_xml_expat/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -path 'tests/integration/aether_string_ffi_unwrap/*' -prune -o -path 'tests/integration/ptr_return_int_zero_inference/*' -prune -o -path 'tests/integration/string_interp_loop_alias/*' -prune -o -path 'tests/integration/transitive_module_import/*' -prune -o -path 'tests/integration/dsl_receiver_scoping/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_edge/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_nested/*' -prune -o -path 'tests/integration/http_sendfile/*' -prune -o -path 'tests/integration/http_stream_upload/*' -prune -o -path 'tests/integration/emit_lib_deadline/*' -prune -o -path 'tests/integration/derive_eq/*' -prune -o -path 'tests/integration/http_client_redirects/*' -prune -o -path 'tests/integration/source_location/*' -prune -o -path 'tests/integration/std_dl/*' -prune -o -path 'tests/integration/host_tinygo/*' -prune -o -path 'tests/integration/host_factor/*' -prune -o -path 'tests/integration/host_aether/*' -prune -o -path 'tests/integration/module_token_cap/*' -prune -o -path 'tests/integration/sealed_namespaces/*' -prune -o -path 'tests/integration/default_arguments/*' -prune -o -path 'tests/integration/source_location_default_capture/*' -prune -o -path 'tests/integration/fn_typed_local_call/*' -prune -o -path 'tests/integration/http_server_tls/*' -prune -o -path 'tests/integration/http_server_keepalive/*' -prune -o -path 'tests/integration/http_server_actor_dispatch/*' -prune -o -path 'tests/integration/http_middleware_d1/*' -prune -o -path 'tests/integration/http_middleware_d2/*' -prune -o -path 'tests/integration/http_server_ops/*' -prune -o -path 'tests/integration/http_server_observability/*' -prune -o -path 'tests/integration/http_server_sse/*' -prune -o -path 'tests/integration/http_server_websocket/*' -prune -o -path 'tests/integration/http_server_h2_tls/*' -prune -o -path 'tests/integration/http_server_h2_middleware/*' -prune -o -path 'tests/integration/http_real_ip/*' -prune -o -path 'tests/integration/http_request_remote_addr/*' -prune -o -path 'tests/integration/http_request_conn_accessors/*' -prune -o -path 'tests/integration/http_auth/*' -prune -o -path 'tests/integration/http_h2_concurrent_dispatch/*' -prune -o -path 'tests/integration/http_reverse_proxy/*' -prune -o -path 'tests/integration/http_reverse_proxy_pool/*' -prune -o -path 'tests/integration/panic_stack_trace/*' -prune -o -path 'tests/integration/cas_roundtrip/*' -prune -o -path 'tests/integration/caller_info/*' -prune -o -path 'tests/integration/std_ipc_roundtrip/*' -prune -o -path 'tests/integration/std_ipc_bash_chain/*' -prune -o -path 'tests/integration/std_mem_byte_access/*' -prune -o -path 'tests/integration/http_script_gateway/*' -prune -o -path 'tests/integration/lib_meta/*' -prune -o -path 'tests/integration/lib_meta_closures/*' -prune -o -path 'tests/integration/binary_import/*' -prune -o -path 'tests/integration/emit_lib_net/*' -prune -o -path 'tests/integration/http_client_dechunk/*' -prune -o -path 'tests/integration/http_request_header_iter/*' -prune -o -path 'tests/integration/http_server_background_quiet/*' -prune -o -path 'tests/integration/run_lib_path/*' -prune -o -path 'tests/integration/selective_import_shadow/*' -prune -o -path 'tests/integration/liquid_include_render/*' -prune -o -path 'tests/integration/liquid_layout_block/*' -prune -o -path 'tests/integration/liquid_extends_super/*' -prune -o -path 'tests/integration/liquid_api_extras/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	sh_script="$$tmpdir/run_sh_dir.sh"; \
 	printf '#!/bin/sh\n'                                                                                          > "$$sh_script"; \
@@ -647,7 +663,7 @@ test-release-archive: compiler ae stdlib
 	           runtime/memory runtime/config std std/string std/io std/math \
 	           std/net std/collections std/json std/xml std/fs std/log std/http \
 	           std/file std/dir std/path std/tcp std/list std/map std/dl \
-	           std/config std/actors; do \
+	           std/config std/actors std/capsicum std/casper; do \
 	  if [ -d "$$dir" ]; then \
 	    mkdir -p "$$reldir/include/aether/$$dir"; \
 	    cp "$$dir"/*.h "$$reldir/include/aether/$$dir/" 2>/dev/null || true; \
@@ -939,7 +955,7 @@ ae: compiler
 	@echo "==================================="
 	@echo "Building ae command-line tool ($(DETECTED_OS)) v$(VERSION)"
 	@echo "==================================="
-	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_OPENSSL_LIBS='"$(OPENSSL_LDFLAGS)"' -DAETHER_ZLIB_LIBS='"$(ZLIB_LDFLAGS)"' -DAETHER_NGHTTP2_LIBS='"$(NGHTTP2_LDFLAGS)"' -DAETHER_PCRE2_LIBS='"$(PCRE2_LDFLAGS)"' $(if $(AETHER_ENABLE_LLM),-DAETHER_ENABLE_LLM=1) -Itools tools/ae.c tools/ae_help.c tools/apkg/toml_parser.c $(if $(AETHER_ENABLE_LLM),tools/llm_shim.c $(LLM_LDFLAGS)) -o build/ae$(EXE_EXT) $(LDFLAGS)
+	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_OPENSSL_LIBS='"$(OPENSSL_LDFLAGS)"' -DAETHER_ZLIB_LIBS='"$(ZLIB_LDFLAGS)"' -DAETHER_NGHTTP2_LIBS='"$(NGHTTP2_LDFLAGS)"' -DAETHER_PCRE2_LIBS='"$(PCRE2_LDFLAGS)"' -DAETHER_CASPER_LIBS='"$(CASPER_LDFLAGS)"' $(if $(AETHER_ENABLE_LLM),-DAETHER_ENABLE_LLM=1) -Itools tools/ae.c tools/ae_help.c tools/apkg/toml_parser.c $(if $(AETHER_ENABLE_LLM),tools/llm_shim.c $(LLM_LDFLAGS)) -o build/ae$(EXE_EXT) $(LDFLAGS)
 	@echo "✓ Built successfully: build/ae$(EXE_EXT)"
 	@echo ""
 	@echo "Usage:"
@@ -1033,10 +1049,21 @@ build/MANIFEST: Makefile | $(BUILD_DIR)
 	  for f in $(STD_SRC); do echo "$$f"; done; \
 	) > build/MANIFEST
 	@echo "✓ MANIFEST: $$(grep -c -v -E '^(#|$$)' build/MANIFEST) link-suitable files"
+# Sandbox preload library (libaether_sandbox.so) — the LD_PRELOAD
+# interception layer used by spawn_sandboxed for cross-process
+# containment. Built on Linux and FreeBSD; both have an rtld that
+# honours LD_PRELOAD + dlsym(RTLD_NEXT, ...). Link flags differ:
+# glibc needs -ldl -lrt; FreeBSD folds dlopen/shm_open into libc.
+# Other platforms (macOS hardened runtime, Windows) have no preload
+# path — spawn_sandboxed there is a stub.
 ifeq ($(shell uname -s),Linux)
 	@echo "Building sandbox preload library..."
 	@$(CC) -shared -fPIC -o build/libaether_sandbox.so runtime/libaether_sandbox_preload.c -ldl -lrt 2>/dev/null || true
-	@test -f build/libaether_sandbox.so && echo "✓ Sandbox preload: build/libaether_sandbox.so" || true
+	@test -f build/libaether_sandbox.so && echo "✓ Sandbox preload: build/libaether_sandbox.so" || echo "⚠ Sandbox preload: build failed (spawn_sandboxed will be unavailable)"
+else ifeq ($(shell uname -s),FreeBSD)
+	@echo "Building sandbox preload library..."
+	@$(CC) -shared -fPIC -o build/libaether_sandbox.so runtime/libaether_sandbox_preload.c 2>/dev/null || true
+	@test -f build/libaether_sandbox.so && echo "✓ Sandbox preload: build/libaether_sandbox.so" || echo "⚠ Sandbox preload: build failed (spawn_sandboxed will be unavailable)"
 endif
 
 # Compiler-as-library archive — COMPILER_LIB_SRC without aetherc.c's main().
@@ -1356,12 +1383,20 @@ install: release ae stdlib
 # Modules covered (v1):
 #   - sqlite                    (-lsqlite3)
 #   - host/{python,lua,perl,ruby,duktape,tcl,tinygo}
+#   - host/factor               (dlopen libfactor; archive builds bare,
+#                                runtime needs the factor-language fork)
+#   - host/aether               (fork+exec sandboxed child via LD_PRELOAD;
+#                                libc + in-tree sandbox runtime only)
 #   - tinyweb                   (libc only — SHA-1 + base64 for WebSocket
 #                                handshake; no third-party dep)
 # Out of scope for v1: host/{java,go} (separate-process or JNI-style
-# bridges, different build shape), climate_http_tests. The widget toolkit
+# bridges, different build shape — javac/jar and cgo c-archive don't fit
+# the cc→ar pipeline). The widget toolkit
 # (formerly contrib/aether_ui) spun out to
 # https://github.com/aether-lang-org/aether-ui and is no longer in this repo.
+# The Servirtium climate-API record/replay harness (formerly
+# contrib/climate_http_tests) moved to the servirtium-vcr repo's
+# integration/climate_interop, where the VCR tapes + replay tests live.
 # -----------------------------------------------------------------
 contrib:
 	@bash tests/scripts/contrib_build.sh
@@ -1397,13 +1432,11 @@ install-contrib: contrib
 	@# Mirror the contrib source tree for module.ae + headers.
 	@# Trim noise: tests, benchmarks, example .ae, build scripts,
 	@# CI scripts, and the modules we don't ship in v1
-	@# (climate_http_tests, host/{java,go} — see contrib: target
-	@# comment). host/tinygo and tinyweb ARE shipped.
+	@# (host/{java,go} — see contrib: target comment).
+	@# host/{tinygo,factor,aether} and tinyweb ARE shipped.
 	@cp -R contrib $(PREFIX)/share/aether/
-	@rm -rf $(PREFIX)/share/aether/contrib/climate_http_tests
 	@rm -rf $(PREFIX)/share/aether/contrib/host/java
 	@rm -rf $(PREFIX)/share/aether/contrib/host/go
-	@rm -rf $(PREFIX)/share/aether/contrib/host/aether
 	@find $(PREFIX)/share/aether/contrib -type d -name tests       -exec rm -rf {} + 2>/dev/null || true
 	@find $(PREFIX)/share/aether/contrib -type d -name benchmarks  -exec rm -rf {} + 2>/dev/null || true
 	@find $(PREFIX)/share/aether/contrib -type f -name 'example_*.ae' -delete 2>/dev/null || true
@@ -1799,9 +1832,11 @@ ci: clean
 #     "skipped" status, never a failure.
 # -----------------------------------------------------------------
 
-# The 7 in-process host bridges. (The aether host is separate-process
-# and doesn't follow this pattern — it's covered by the main build.)
-CONTRIB_HOST_LANGS = js lua perl python ruby tcl go tinygo
+# The in-process host bridges, syntax-checked (stub mode) by
+# contrib-host-check. `js` builds as duktape; `factor` and `aether` are
+# dlopen / fork+exec bridges that still compile bare against libc + the
+# in-tree sandbox runtime, so they belong in the syntax gate too.
+CONTRIB_HOST_LANGS = js lua perl python ruby tcl go tinygo factor aether
 
 contrib-host-check: compiler ae stdlib
 	@echo "==================================="
@@ -1985,7 +2020,8 @@ ci-wasm: clean compiler ae
 		std/collections/aether_collections.c \
 		std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c \
 		std/os/aether_os.c std/collections/aether_hashmap.c std/collections/aether_set.c \
-		std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c"; \
+		std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_longarr.c std/collections/aether_bits.c \
+		runtime/sandbox/capsicum_autosandbox.c"; \
 	for src in build/wasm/hello.c build/wasm/counter.c build/wasm/test_platform_caps.c \
 	           build/wasm/test_coop_chain.c; do \
 		name=$$(basename $$src .c); \

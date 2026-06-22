@@ -81,8 +81,7 @@ and `zlib` uses for libz.
 | `contrib/sqlite/` | DB driver — fails rubric Q1 (not universal) and Q3 (4 MiB amalgamation). |
 | `contrib/aeocha/` | Aether-on-Aether testing harness — fails Q1 (specific tooling, not a baseline expectation). |
 | `contrib/tinyweb/` | Builder DSL for HTTP services — competes with `std.http.server`'s closure-config approach; opinionated shape that's better off evolving without the stability constraint. |
-| `contrib/climate_http_tests/` | HTTP test harness — fails Q1 (specific to one ecosystem). |
-| `contrib/host/{python,lua,perl,ruby,js,tcl,go,java,…}/` | Per-language embedding bridges — each one is a separate sub-decision that wouldn't share an API; fails Q2. |
+| `contrib/host/{python,lua,perl,ruby,js,tcl,go,java,factor,aether,…}/` | Per-language embedding bridges — each one is a separate sub-decision that wouldn't share an API; fails Q2. |
 
 ## Spun out to sibling repos
 
@@ -95,6 +94,7 @@ project iterates on its own release cadence.
 |---|---|
 | [aether-lang-org/aether-ui](https://github.com/aether-lang-org/aether-ui) | The widget toolkit (GTK4 / AppKit / Win32 backends + AetherUIDriver HTTP test server), formerly `contrib/aether_ui/`. |
 | [aether-lang-org/aeb](https://github.com/aether-lang-org/aeb) | The build system (formerly aetherBuild / `aeb-link`); a downstream consumer of `share/aether/MANIFEST` and the runtime sources. |
+| servirtium-vcr (`integration/climate_interop/`) | The Servirtium climate-API record/replay harness, formerly `contrib/climate_http_tests/`. The VCR tapes + record-then-replay tests live alongside the other-language reference impls there. |
 
 ## Migration test
 

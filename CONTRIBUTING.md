@@ -275,6 +275,8 @@ make ci-portability
 
 **No OS can locally test another OS natively.** macOS cannot be virtualized on Linux/Windows. Windows build+run requires MSYS2. Docker targets provide cross-compilation syntax checking only. If your changes touch platform-specific code (`_WIN32`, `__APPLE__`, `system()`, file paths, symlinks, PATH lookup, process spawning, sockets), wait for CI results before merging.
 
+> **Gotcha — new runtime C symbols and the WASM build.** The `ci-wasm` target compiles a *hand-curated minimal* runtime source list (`RUNTIME_FILES` in the Makefile), **not** the main `RUNTIME_SRC`. If you add a `runtime/`/`std/` C file whose symbol the compiler *emits a call to* (e.g. a codegen startup hook), you must also add that file to the WASM list, or `wasm-ld` fails with `undefined symbol: …` even though every native platform links fine. Keep such symbols self-guarded so the WASM object is a portable no-op. Run `make docker-ci-wasm` whenever you add a runtime symbol that codegen references unconditionally.
+
 ### CI permutations run on every PR
 
 GitHub Actions runs a matrix of builds on every pull request. Every target

@@ -1,0 +1,547 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.skein — the Skein hash (Skein 1.3, NIST SHA-3 submission)
+// in pure Aether, ported from Bouncy Castle's SkeinEngine + ThreefishEngine.
+// NO externs to OpenSSL or any C crypto.
+//
+// This implementation provides Skein-512 (512-bit internal state) with
+// arbitrary byte-multiple output size, built on the Threefish-512 tweakable
+// block cipher (72 rounds) under UBI (Unique Block Iteration) chaining with
+// config / message / output tweaks. The initial chaining value is computed by
+// running UBI over the configuration block (no precomputed-state table is
+// needed). Skein-256 and Skein-1024 state sizes are NOT implemented here; see
+// the deferred note at the bottom.
+//
+// Import with:  import std.cryptography.skein
+//
+//   one-shot:   skein512_hex(data, len)  / skein512_bytes(data, len)   -> 64 bytes
+//   sized:      skein512_n_hex(data, len, out_bytes) / ..._bytes(...)
+//   streaming:  ctx,_ = new(out_bits); update(ctx, data, len); final_hex(ctx)
+//
+// Aether-specific care:
+//   * Words are full 64-bit `long`; Threefish add/sub wrap in two's complement.
+//   * Rotations use bits.rotl64.
+//   * LITTLE-endian byte<->word assembly widens the byte to a `long` before
+//     shifting to avoid the 32-bit-shift trap.
+
+import std.bits
+import std.bytes
+import std.longarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+
+exports (
+    new, update, update_bytes, final_hex, final_bytes, free_ctx,
+    skein512_hex, skein512_bytes,
+    skein512_n_hex, skein512_n_bytes
+)
+
+// Threefish-512 mix rotation constants, R[round%8][j], 8x4.
+const SKEIN_ROT: long[32] = [
+    46, 36, 19, 37,
+    33, 27, 14, 42,
+    17, 49, 36, 39,
+    44,  9, 54, 56,
+    39, 30, 34, 24,
+    13, 50, 10, 17,
+    25, 29, 39, 43,
+     8, 35, 56, 22
+]
+
+// Threefish-512 word permutation pi.
+const SKEIN_PERM: long[8] = [ 2, 1, 4, 7, 6, 5, 0, 3 ]
+
+// Key schedule parity constant.
+const SKEIN_C240: long = 0x1BD11BDAA9FC1A22
+
+// Tweak type values.
+const PARAM_TYPE_CONFIG: int = 4
+const PARAM_TYPE_MESSAGE: int = 48
+const PARAM_TYPE_OUTPUT: int = 63
+
+const NW: int = 8        // state words for Skein-512
+const NBYTES: int = 64   // block size in bytes
+
+struct SkeinCtx {
+    chain: ptr        // longarr(8), current chaining value
+    initial: ptr      // longarr(8), saved initial state (post-config)
+    msg: ptr          // longarr(8), scratch message words
+    tf_out: ptr       // longarr(8), threefish output
+    ks: ptr           // longarr(9), extended key words
+    tw: ptr           // longarr(3), extended tweak words (t0,t1,t2)
+    block: ptr        // bytes(64), current UBI block buffer
+    block_off: int
+    out_bytes: int
+    // tweak (128-bit) maintained as two longs + position
+    t0: long          // bits 0..63 = position low
+    t1: long          // bits 64..127 = type/first/final/position-high
+}
+
+// ---- Threefish-512 encrypt: msg words -> out words, using chain as key ----
+
+// Build the extended key schedule from key words (the chain) into ks[0..8].
+threefish_setkey(c: *SkeinCtx) {
+    ks = c.ks
+    long parity = SKEIN_C240
+    i = 0
+    while i < NW {
+        kv = longarr_get_unchecked(c.chain, i)
+        longarr_set_unchecked(ks, i, kv)
+        parity = parity ^ kv
+        i = i + 1
+    }
+    longarr_set_unchecked(ks, NW, parity)
+}
+
+// Build extended tweak t[0..2] from (t0,t1): t2 = t0 ^ t1.
+threefish_settweak(c: *SkeinCtx) {
+    longarr_set_unchecked(c.tw, 0, c.t0)
+    longarr_set_unchecked(c.tw, 1, c.t1)
+    longarr_set_unchecked(c.tw, 2, c.t0 ^ c.t1)
+}
+
+// Encrypt c.msg under the current key schedule + tweak into c.tf_out.
+threefish_encrypt(c: *SkeinCtx) {
+    ks = c.ks
+    tw = c.tw
+    v = c.tf_out
+
+    // load plaintext
+    i = 0
+    while i < NW {
+        longarr_set_unchecked(v, i, longarr_get_unchecked(c.msg, i))
+        i = i + 1
+    }
+
+    // 72 rounds = 18 key-injection groups of 4 rounds.
+    s = 0
+    while s <= 18 {
+        // subkey injection at the start of every 4 rounds (s = round/4)
+        i = 0
+        while i < NW {
+            ksw = longarr_get_unchecked(ks, (s + i) % (NW + 1))
+            add = ksw
+            if i == NW - 3 {
+                add = add + longarr_get_unchecked(tw, s % 3)
+            }
+            if i == NW - 2 {
+                add = add + longarr_get_unchecked(tw, (s + 1) % 3)
+            }
+            if i == NW - 1 {
+                add = add + s
+            }
+            longarr_set_unchecked(v, i, longarr_get_unchecked(v, i) + add)
+            i = i + 1
+        }
+        if s == 18 {
+            return
+        }
+        // 4 rounds of mix + permute
+        r = 0
+        while r < 4 {
+            round = s * 4 + r
+            // mix: for j in 0..3, pair (2j, 2j+1)
+            j = 0
+            while j < 4 {
+                x0 = longarr_get_unchecked(v, 2 * j)
+                x1 = longarr_get_unchecked(v, 2 * j + 1)
+                y0 = x0 + x1
+                rot = SKEIN_ROT[(round % 8) * 4 + j]
+                y1 = bits.rotl64(x1, rot) ^ y0
+                longarr_set_unchecked(v, 2 * j, y0)
+                longarr_set_unchecked(v, 2 * j + 1, y1)
+                j = j + 1
+            }
+            // permute into msg as scratch, then copy back
+            j = 0
+            while j < NW {
+                longarr_set_unchecked(c.msg, j, longarr_get_unchecked(v, SKEIN_PERM[j]))
+                j = j + 1
+            }
+            j = 0
+            while j < NW {
+                longarr_set_unchecked(v, j, longarr_get_unchecked(c.msg, j))
+                j = j + 1
+            }
+            r = r + 1
+        }
+        s = s + 1
+    }
+}
+
+// ---- UBI ----
+
+ubi_reset(c: *SkeinCtx, type: int) {
+    c.t0 = 0
+    // type in bits 120..125, first bit = 126
+    long tv = type & 0x3F
+    long first_bit = 0x4000000000000000
+    c.t1 = (tv << 56) | first_bit   // set First (bit 62)
+    c.block_off = 0
+}
+
+ubi_set_final(c: *SkeinCtx) {
+    long final_bit = 0x8000000000000000
+    c.t1 = c.t1 | final_bit
+}
+
+ubi_clear_first(c: *SkeinCtx) {
+    long first_bit2 = 0x4000000000000000
+    c.t1 = c.t1 & (~first_bit2)
+}
+
+ubi_advance(c: *SkeinCtx, n: int) {
+    // 96-bit position is enough for all practical inputs; track in t0 plus the
+    // low 32 bits of t1. Simple 64-bit add into t0 (no input exceeds 2^64).
+    c.t0 = c.t0 + n
+}
+
+// Process the current full block: chain = threefish(chain, block) ^ block.
+ubi_process_block(c: *SkeinCtx) {
+    // load block bytes (LE) into msg words
+    i = 0
+    while i < NW {
+        long w = 0
+        k = 0
+        while k < 8 {
+            long b = bytes.get(c.block, i * 8 + k) & 0xFF
+            w = w | (b << (8 * k))
+            k = k + 1
+        }
+        longarr_set_unchecked(c.msg, i, w)
+        i = i + 1
+    }
+    // keep a copy of message for feed-forward (msg gets clobbered as scratch)
+    // We snapshot into tf_out-adjacent storage: reuse block? Instead store in
+    // a local longarr-like via initial? Simpler: copy to chain-sized scratch.
+    // Save message words first.
+    save = longarr_new_raw(NW)
+    j = 0
+    while j < NW {
+        longarr_set_unchecked(save, j, longarr_get_unchecked(c.msg, j))
+        j = j + 1
+    }
+
+    threefish_setkey(c)
+    threefish_settweak(c)
+    threefish_encrypt(c)
+
+    // chain = tf_out ^ original message
+    j = 0
+    while j < NW {
+        nv = longarr_get_unchecked(c.tf_out, j) ^ longarr_get_unchecked(save, j)
+        longarr_set_unchecked(c.chain, j, nv)
+        j = j + 1
+    }
+    longarr_free(save)
+}
+
+// Feed `len` bytes from src (bytes ptr) at offset into the UBI, flushing only
+// complete blocks that are followed by more data.
+ubi_update_bytes(c: *SkeinCtx, src: ptr, off: int, len: int) {
+    copied = 0
+    while len > copied {
+        if c.block_off == NBYTES {
+            ubi_process_block(c)
+            ubi_clear_first(c)
+            c.block_off = 0
+        }
+        to_copy = len - copied
+        room = NBYTES - c.block_off
+        if to_copy > room {
+            to_copy = room
+        }
+        i = 0
+        while i < to_copy {
+            bytes.set(c.block, c.block_off + i, bytes.get(src, off + copied + i) & 0xFF)
+            i = i + 1
+        }
+        copied = copied + to_copy
+        c.block_off = c.block_off + to_copy
+        ubi_advance(c, to_copy)
+    }
+}
+
+ubi_final(c: *SkeinCtx) {
+    // zero-pad remainder of block
+    i = c.block_off
+    while i < NBYTES {
+        bytes.set(c.block, i, 0)
+        i = i + 1
+    }
+    ubi_set_final(c)
+    ubi_process_block(c)
+}
+
+// Run a complete UBI pass over a small byte buffer (config / output seq).
+ubi_complete(c: *SkeinCtx, type: int, data: ptr, len: int) {
+    ubi_reset(c, type)
+    ubi_update_bytes(c, data, 0, len)
+    ubi_final(c)
+}
+
+// ---- Initial state via UBI(config) ----
+
+create_initial_state(c: *SkeinCtx, out_bits: long) {
+    i = 0
+    while i < NW {
+        longarr_set_unchecked(c.chain, i, 0)
+        i = i + 1
+    }
+    // configuration block, 32 bytes
+    cfg = bytes.new(32)
+    j = 0
+    while j < 32 {
+        bytes.set(cfg, j, 0)
+        j = j + 1
+    }
+    // "SHA3"
+    bytes.set(cfg, 0, 0x53)
+    bytes.set(cfg, 1, 0x48)
+    bytes.set(cfg, 2, 0x41)
+    bytes.set(cfg, 3, 0x33)
+    // version 1 (LSB), 0
+    bytes.set(cfg, 4, 1)
+    bytes.set(cfg, 5, 0)
+    // output length bits, LE 64-bit at offset 8
+    k = 0
+    while k < 8 {
+        bytes.set(cfg, 8 + k, bits.lsr64(out_bits, 8 * k) & 0xFF)
+        k = k + 1
+    }
+    ubi_complete(c, PARAM_TYPE_CONFIG, cfg, 32)
+    bytes.free(cfg)
+
+    // save initial state
+    i = 0
+    while i < NW {
+        longarr_set_unchecked(c.initial, i, longarr_get_unchecked(c.chain, i))
+        i = i + 1
+    }
+}
+
+new(out_bits: int) -> {
+    if out_bits <= 0 {
+        return null, "output size must be positive"
+    }
+    if (out_bits % 8) != 0 {
+        return null, "output size must be a multiple of 8 bits"
+    }
+    ctx = malloc(128) as *SkeinCtx
+    if ctx == null {
+        return null, "allocation failed"
+    }
+    ctx.chain = longarr_new_raw(NW)
+    ctx.initial = longarr_new_raw(NW)
+    ctx.msg = longarr_new_raw(NW)
+    ctx.tf_out = longarr_new_raw(NW)
+    ctx.ks = longarr_new_raw(NW + 1)
+    ctx.tw = longarr_new_raw(3)
+    ctx.block = bytes.new(NBYTES)
+    ctx.block_off = 0
+    ctx.out_bytes = out_bits / 8
+    ctx.t0 = 0
+    ctx.t1 = 0
+    create_initial_state(ctx, out_bits)
+    // start the message UBI
+    ubi_reset(ctx, PARAM_TYPE_MESSAGE)
+    return ctx, ""
+}
+
+update(ctx: ptr, data: string, length: int) {
+    c = ctx as *SkeinCtx
+    if length <= 0 {
+        return
+    }
+    // copy string into a bytes buffer once, then feed
+    buf = bytes.new(length)
+    i = 0
+    while i < length {
+        bytes.set(buf, i, string_char_at_n(data, length, i) & 0xFF)
+        i = i + 1
+    }
+    ubi_update_bytes(c, buf, 0, length)
+    bytes.free(buf)
+}
+
+update_bytes(ctx: ptr, data: ptr, length: int) {
+    c = ctx as *SkeinCtx
+    if length <= 0 {
+        return
+    }
+    ubi_update_bytes(c, data, 0, length)
+}
+
+// Produce the output transform into a fresh bytes(out_bytes).
+finalize_to_bytes(c: *SkeinCtx) -> ptr {
+    // finalise message block
+    ubi_final(c)
+
+    n = c.out_bytes
+    out = bytes.new(n)
+    blocks = (n + NBYTES - 1) / NBYTES
+    // preserve the pre-output chain (each output UBI uses & preserves it)
+    pre = longarr_new_raw(NW)
+    p = 0
+    while p < NW {
+        longarr_set_unchecked(pre, p, longarr_get_unchecked(c.chain, p))
+        p = p + 1
+    }
+
+    seq = 0
+    while seq < blocks {
+        // restore chain to pre-output state
+        p = 0
+        while p < NW {
+            longarr_set_unchecked(c.chain, p, longarr_get_unchecked(pre, p))
+            p = p + 1
+        }
+        // output UBI over 8-byte LE counter
+        cb = bytes.new(8)
+        k = 0
+        while k < 8 {
+            bytes.set(cb, k, bits.lsr64(seq, 8 * k) & 0xFF)
+            k = k + 1
+        }
+        ubi_complete(c, PARAM_TYPE_OUTPUT, cb, 8)
+        bytes.free(cb)
+
+        // emit up to NBYTES of the resulting chain (LE words)
+        base = seq * NBYTES
+        to_write = n - base
+        if to_write > NBYTES {
+            to_write = NBYTES
+        }
+        w = 0
+        while w * 8 < to_write {
+            word = longarr_get_unchecked(c.chain, w)
+            kk = 0
+            while kk < 8 {
+                pos = w * 8 + kk
+                if pos < to_write {
+                    bytes.set(out, base + pos, bits.lsr64(word, 8 * kk) & 0xFF)
+                }
+                kk = kk + 1
+            }
+            w = w + 1
+        }
+        seq = seq + 1
+    }
+    longarr_free(pre)
+    return out
+}
+
+free_internals(c: *SkeinCtx) {
+    if c.chain != null {
+        longarr_free(c.chain)
+        c.chain = null
+    }
+    if c.initial != null {
+        longarr_free(c.initial)
+        c.initial = null
+    }
+    if c.msg != null {
+        longarr_free(c.msg)
+        c.msg = null
+    }
+    if c.tf_out != null {
+        longarr_free(c.tf_out)
+        c.tf_out = null
+    }
+    if c.ks != null {
+        longarr_free(c.ks)
+        c.ks = null
+    }
+    if c.tw != null {
+        longarr_free(c.tw)
+        c.tw = null
+    }
+    if c.block != null {
+        bytes.free(c.block)
+        c.block = null
+    }
+}
+
+final_bytes(ctx: ptr) -> ptr {
+    c = ctx as *SkeinCtx
+    n = c.out_bytes
+    out = finalize_to_bytes(c)
+    s = bytes.finish(out, n)
+    free_internals(c)
+    free(ctx)
+    res = bytes.new(n)
+    bytes.copy_from_string(res, 0, s, n)
+    return res
+}
+
+final_hex(ctx: ptr) -> string {
+    c = ctx as *SkeinCtx
+    n = c.out_bytes
+    out = finalize_to_bytes(c)
+    hexbuf = bytes.new(n * 2)
+    i = 0
+    while i < n {
+        b = bytes.get(out, i)
+        hi = (b >> 4) & 15
+        lo = b & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    s = bytes.finish(hexbuf, n * 2)
+    free_internals(c)
+    free(ctx)
+    return s
+}
+
+free_ctx(ctx: ptr) {
+    if ctx == null {
+        return
+    }
+    c = ctx as *SkeinCtx
+    free_internals(c)
+    free(ctx)
+}
+
+// ---- one-shots ----
+
+skein512_n_hex(data: string, len: int, out_bytes: int) -> string {
+    ctx, err = new(out_bytes * 8)
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx)
+}
+skein512_n_bytes(data: string, len: int, out_bytes: int) -> ptr {
+    ctx, err = new(out_bytes * 8)
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx)
+}
+skein512_hex(data: string, len: int) -> string {
+    return skein512_n_hex(data, len, 64)
+}
+skein512_bytes(data: string, len: int) -> ptr {
+    return skein512_n_bytes(data, len, 64)
+}
+
+// Deferred: Skein-256 (4-word) and Skein-1024 (16-word) state sizes, which
+// require the Threefish-256 / Threefish-1024 ciphers (different word counts,
+// rotation tables and permutations) and additional keyed / tree-hashing
+// parameters. Skein-512 with arbitrary output size is implemented above.

@@ -128,6 +128,122 @@ int aether_bytes_get_le32(AetherBytes* b, int index) {
     return (int)v;
 }
 
+int aether_bytes_set_le64(AetherBytes* b, int index, long long value) {
+    if (!b || index < 0) return 0;
+    size_t needed = (size_t)index + 8;
+    if (needed < (size_t)index) return 0;  /* overflow */
+    if (!bytes_reserve(b, needed)) return 0;
+    unsigned long long u = (unsigned long long)value;
+    b->data[index]     = (char)(u & 0xff);
+    b->data[index + 1] = (char)((u >> 8) & 0xff);
+    b->data[index + 2] = (char)((u >> 16) & 0xff);
+    b->data[index + 3] = (char)((u >> 24) & 0xff);
+    b->data[index + 4] = (char)((u >> 32) & 0xff);
+    b->data[index + 5] = (char)((u >> 40) & 0xff);
+    b->data[index + 6] = (char)((u >> 48) & 0xff);
+    b->data[index + 7] = (char)((u >> 56) & 0xff);
+    if (needed > b->length) b->length = needed;
+    return 1;
+}
+
+long long aether_bytes_get_le64(AetherBytes* b, int index) {
+    if (!b || index < 0) return -1;
+    if ((size_t)index + 8 > b->length) return -1;
+    unsigned long long v =
+          (unsigned long long)(unsigned char)b->data[index]
+        | ((unsigned long long)(unsigned char)b->data[index + 1] << 8)
+        | ((unsigned long long)(unsigned char)b->data[index + 2] << 16)
+        | ((unsigned long long)(unsigned char)b->data[index + 3] << 24)
+        | ((unsigned long long)(unsigned char)b->data[index + 4] << 32)
+        | ((unsigned long long)(unsigned char)b->data[index + 5] << 40)
+        | ((unsigned long long)(unsigned char)b->data[index + 6] << 48)
+        | ((unsigned long long)(unsigned char)b->data[index + 7] << 56);
+    return (long long)v;
+}
+
+/* Big-endian accessors (set_be16/32/64, get_be16/32/64).
+ * Modelled on Bouncy Castle's crypto/src/crypto/util/Pack.cs
+ * (UInt16/32/64_To_BE / BE_To_UInt16/32/64).
+ *   MIT License (https://opensource.org/licenses/MIT)
+ *   Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc.
+ *     (https://www.bouncycastle.org)
+ *   Portions copyright (c) 2026 Aether Developers. */
+int aether_bytes_set_be16(AetherBytes* b, int index, int value) {
+    if (!b || index < 0) return 0;
+    size_t needed = (size_t)index + 2;
+    if (needed < (size_t)index) return 0;  /* overflow */
+    if (!bytes_reserve(b, needed)) return 0;
+    b->data[index]     = (char)((value >> 8) & 0xff);
+    b->data[index + 1] = (char)(value & 0xff);
+    if (needed > b->length) b->length = needed;
+    return 1;
+}
+
+int aether_bytes_get_be16(AetherBytes* b, int index) {
+    if (!b || index < 0) return -1;
+    if ((size_t)index + 2 > b->length) return -1;
+    unsigned int v = ((unsigned int)(unsigned char)b->data[index] << 8)
+                   | (unsigned char)b->data[index + 1];
+    return (int)v;
+}
+
+int aether_bytes_set_be32(AetherBytes* b, int index, int value) {
+    if (!b || index < 0) return 0;
+    size_t needed = (size_t)index + 4;
+    if (needed < (size_t)index) return 0;  /* overflow */
+    if (!bytes_reserve(b, needed)) return 0;
+    unsigned int u = (unsigned int)value;
+    b->data[index]     = (char)((u >> 24) & 0xff);
+    b->data[index + 1] = (char)((u >> 16) & 0xff);
+    b->data[index + 2] = (char)((u >> 8) & 0xff);
+    b->data[index + 3] = (char)(u & 0xff);
+    if (needed > b->length) b->length = needed;
+    return 1;
+}
+
+int aether_bytes_get_be32(AetherBytes* b, int index) {
+    if (!b || index < 0) return -1;
+    if ((size_t)index + 4 > b->length) return -1;
+    unsigned int v = ((unsigned int)(unsigned char)b->data[index] << 24)
+                   | ((unsigned int)(unsigned char)b->data[index + 1] << 16)
+                   | ((unsigned int)(unsigned char)b->data[index + 2] << 8)
+                   | (unsigned int)(unsigned char)b->data[index + 3];
+    return (int)v;
+}
+
+int aether_bytes_set_be64(AetherBytes* b, int index, long long value) {
+    if (!b || index < 0) return 0;
+    size_t needed = (size_t)index + 8;
+    if (needed < (size_t)index) return 0;  /* overflow */
+    if (!bytes_reserve(b, needed)) return 0;
+    unsigned long long u = (unsigned long long)value;
+    b->data[index]     = (char)((u >> 56) & 0xff);
+    b->data[index + 1] = (char)((u >> 48) & 0xff);
+    b->data[index + 2] = (char)((u >> 40) & 0xff);
+    b->data[index + 3] = (char)((u >> 32) & 0xff);
+    b->data[index + 4] = (char)((u >> 24) & 0xff);
+    b->data[index + 5] = (char)((u >> 16) & 0xff);
+    b->data[index + 6] = (char)((u >> 8) & 0xff);
+    b->data[index + 7] = (char)(u & 0xff);
+    if (needed > b->length) b->length = needed;
+    return 1;
+}
+
+long long aether_bytes_get_be64(AetherBytes* b, int index) {
+    if (!b || index < 0) return -1;
+    if ((size_t)index + 8 > b->length) return -1;
+    unsigned long long v =
+          ((unsigned long long)(unsigned char)b->data[index]     << 56)
+        | ((unsigned long long)(unsigned char)b->data[index + 1] << 48)
+        | ((unsigned long long)(unsigned char)b->data[index + 2] << 40)
+        | ((unsigned long long)(unsigned char)b->data[index + 3] << 32)
+        | ((unsigned long long)(unsigned char)b->data[index + 4] << 24)
+        | ((unsigned long long)(unsigned char)b->data[index + 5] << 16)
+        | ((unsigned long long)(unsigned char)b->data[index + 6] << 8)
+        | (unsigned long long)(unsigned char)b->data[index + 7];
+    return (long long)v;
+}
+
 int aether_bytes_copy_from_string(AetherBytes* b, int dst,
                                   const void* src, int src_len) {
     if (!b || dst < 0 || !src || src_len < 0) return 0;

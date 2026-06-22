@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Aether Developers.
+//
+// Regression: std.longarr — fixed-size 64-bit packed array (the long twin of
+// std.intarr). Aether-native foundation for SHA-512 / Skein / Keccak / GCM /
+// Poly1305 / lattice-PQC NTT state. No upstream — this is the intarr shape
+// with long long cells, so the key property under test is full 64-bit
+// fidelity (no truncation through the get/set path).
+
+import std.longarr
+import std.string
+
+main() {
+    print("=== std.longarr ===\n")
+    fails = 0
+
+    // allocation + size + zero-init
+    a, err = longarr.new(5)
+    if string.equals(err, "") != 1 { print("FAIL new: ${err}\n"); fails = fails + 1 }
+    if longarr_size(a) != 5 { print("FAIL size\n"); fails = fails + 1 }
+    i = 0
+    while i < 5 {
+        if longarr_get_raw(a, i) != 0 { print("FAIL zero-init [${i}]\n"); fails = fails + 1 }
+        i = i + 1
+    }
+
+    // full 64-bit round trip — a value that loses high bits if truncated to int
+    longarr_set_raw(a, 0, 0x1122334455667788)
+    longarr_set_raw(a, 1, 0xFFFFFFFFFFFFFFFF)
+    longarr_set_raw(a, 4, 0x8000000000000000)
+    if longarr_get_raw(a, 0) != 0x1122334455667788 { print("FAIL roundtrip hi\n"); fails = fails + 1 }
+    if longarr_get_raw(a, 1) != 0xFFFFFFFFFFFFFFFF { print("FAIL roundtrip all-ones\n"); fails = fails + 1 }
+    if longarr_get_raw(a, 4) != 0x8000000000000000 { print("FAIL roundtrip msb\n"); fails = fails + 1 }
+    if longarr_get_raw(a, 2) != 0 { print("FAIL untouched slot\n"); fails = fails + 1 }
+    longarr_free(a)
+
+    // new_filled sets every slot to a 64-bit value
+    b, err2 = longarr.new_filled(3, 0x0123456789ABCDEF)
+    if string.equals(err2, "") != 1 { print("FAIL new_filled: ${err2}\n"); fails = fails + 1 }
+    j = 0
+    while j < 3 {
+        if longarr_get_raw(b, j) != 0x0123456789ABCDEF { print("FAIL filled [${j}]\n"); fails = fails + 1 }
+        j = j + 1
+    }
+
+    // fill resets every slot
+    longarr_fill(b, 0x00000000DEADBEEF)
+    k = 0
+    while k < 3 {
+        if longarr_get_raw(b, k) != 0x00000000DEADBEEF { print("FAIL refill [${k}]\n"); fails = fails + 1 }
+        k = k + 1
+    }
+    longarr_free(b)
+
+    // Go-style wrapper error shapes
+    nn, e_neg = longarr.new(-1)
+    if string.equals(e_neg, "") == 1 { print("FAIL negative-size should error\n"); fails = fails + 1 }
+    z, _ = longarr.new(0)            // empty array is legal
+    if longarr_size(z) != 0 { print("FAIL empty size\n"); fails = fails + 1 }
+    longarr_free(z)
+
+    if fails == 0 {
+        print("PASS: std.longarr\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

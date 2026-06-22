@@ -1,0 +1,145 @@
+// Copyright (c) 2026 Aether Developers.
+//
+// std.bytes.cursor — a forward read-position over an existing
+// std.bytes buffer.
+//
+// Binary parsers (cryptography wire formats, codec headers) want to walk a
+// buffer left-to-right pulling fixed-width big-endian fields and
+// length-prefixed slices, bounds-checking each read against a tracked
+// position. A cursor packages that.
+//
+// BORROW SEMANTICS: the cursor BORROWS the AetherBytes it reads from —
+// it does not own it and must NOT outlive it. `free` reclaims only the
+// cursor struct, never the underlying buffer; free the buffer
+// separately (and after the cursor). Reads return -1 / null at EOF and
+// leave the cursor unchanged so callers can detect "insufficient bytes"
+// without losing their place.
+
+import std.bytes
+
+exports (
+    bytes_cursor_new,
+    bytes_cursor_read_u8,
+    bytes_cursor_read_be_u16, bytes_cursor_read_be_u32, bytes_cursor_read_be_u64,
+    bytes_cursor_read_slice,
+    bytes_cursor_remaining, bytes_cursor_peek, bytes_cursor_eof,
+    bytes_cursor_pos, bytes_cursor_seek, bytes_cursor_free,
+    new, read_u8, read_be_u16, read_be_u32, read_be_u64, read_slice,
+    remaining, peek, eof, pos, seek, free
+)
+
+// ---- Raw externs ----
+
+// Create a cursor positioned at offset 0 over the AetherBytes `b`.
+// Returns null if `b` is null or allocation fails. Borrows `b`.
+extern bytes_cursor_new(b: ptr) -> ptr
+
+// Read one byte (0..255), advancing by 1. -1 at EOF (cursor unchanged).
+extern bytes_cursor_read_u8(c: ptr) -> int
+
+// Read a big-endian 16/32-bit value, advancing by 2/4. -1 if too few
+// bytes remain (cursor unchanged). The 32-bit read returns the value's
+// bit pattern as an int (top bit becomes the sign bit) — use
+// std.bits.lsr32 etc. for the unsigned interpretation.
+extern bytes_cursor_read_be_u16(c: ptr) -> int
+extern bytes_cursor_read_be_u32(c: ptr) -> int
+
+// Read a big-endian 64-bit value, advancing by 8. -1 if fewer than 8
+// bytes remain (cursor unchanged).
+extern bytes_cursor_read_be_u64(c: ptr) -> long
+
+// Read the next `n` bytes into a fresh AetherBytes, advancing by `n`.
+// Returns null if fewer than `n` bytes remain (cursor unchanged), `n`
+// is negative, or allocation fails. The caller owns the returned buffer.
+extern bytes_cursor_read_slice(c: ptr, n: int) -> ptr
+
+// Bytes left to read: len - pos. 0 if `c` is null.
+extern bytes_cursor_remaining(c: ptr) -> int
+
+// Next byte (0..255) without advancing. -1 at EOF.
+extern bytes_cursor_peek(c: ptr) -> int
+
+// 1 if at or past the end, else 0. (1 if `c` is null.)
+extern bytes_cursor_eof(c: ptr) -> int
+
+// Current read offset. -1 if `c` is null.
+extern bytes_cursor_pos(c: ptr) -> int
+
+// Move the read offset to `pos`, clamped to [0, len]. No-op if null.
+extern bytes_cursor_seek(c: ptr, pos: int)
+
+// Free the cursor struct only — NOT the borrowed AetherBytes.
+// Idempotent on null.
+extern bytes_cursor_free(c: ptr)
+
+// ---- Go-style / friendly wrappers ----
+
+// Create a cursor over `b`, positioned at offset 0. Returns (ptr, "")
+// on success, (null, error) on null buffer or allocation failure.
+new(b: ptr) -> {
+    if b == null {
+        return null, "null bytes"
+    }
+    c = bytes_cursor_new(b)
+    if c == null {
+        return null, "allocation failed"
+    }
+    return c, ""
+}
+
+// Read one byte (0..255), advancing by 1. -1 at EOF.
+read_u8(c: ptr) -> int {
+    return bytes_cursor_read_u8(c)
+}
+
+// Read a big-endian 16-bit value, advancing by 2. -1 if too few bytes.
+read_be_u16(c: ptr) -> int {
+    return bytes_cursor_read_be_u16(c)
+}
+
+// Read a big-endian 32-bit value (as an int bit pattern), advancing by
+// 4. -1 if too few bytes.
+read_be_u32(c: ptr) -> int {
+    return bytes_cursor_read_be_u32(c)
+}
+
+// Read a big-endian 64-bit value, advancing by 8. -1 if too few bytes.
+read_be_u64(c: ptr) -> long {
+    return bytes_cursor_read_be_u64(c)
+}
+
+// Read the next `n` bytes into a fresh AetherBytes (caller owns it),
+// advancing by `n`. Returns null if too few bytes / negative n / OOM.
+read_slice(c: ptr, n: int) -> ptr {
+    return bytes_cursor_read_slice(c, n)
+}
+
+// Bytes left to read. 0 if `c` is null.
+remaining(c: ptr) -> int {
+    return bytes_cursor_remaining(c)
+}
+
+// Next byte without advancing. -1 at EOF.
+peek(c: ptr) -> int {
+    return bytes_cursor_peek(c)
+}
+
+// 1 if at or past the end, else 0.
+eof(c: ptr) -> int {
+    return bytes_cursor_eof(c)
+}
+
+// Current read offset. -1 if `c` is null.
+pos(c: ptr) -> int {
+    return bytes_cursor_pos(c)
+}
+
+// Move the read offset to `pos`, clamped to [0, len].
+seek(c: ptr, pos: int) {
+    bytes_cursor_seek(c, pos)
+}
+
+// Free the cursor struct only (NOT the borrowed AetherBytes).
+free(c: ptr) {
+    bytes_cursor_free(c)
+}

@@ -1,0 +1,62 @@
+// MIT License (https://opensource.org/licenses/MIT)
+//
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+//
+// Portions copyright (c) 2026 Aether Developers.
+//
+// Regression: std.bytes big-endian accessors (set_be16/32/64, get_be16/32/64),
+// the BE twin of the existing _le family. Modelled on bc-csharp's
+// crypto/src/crypto/util/Pack.cs (UInt16/32/64_To_BE / BE_To_UInt*). Crypto
+// wire formats are mostly big-endian, so byte ORDER is the property under test
+// — not just round-trip.
+
+import std.bytes
+
+main() {
+    print("=== std.bytes BE ===\n")
+    fails = 0
+
+    b = bytes.new(0)
+
+    // be16: 0xABCD -> [0xAB, 0xCD]
+    _ = bytes.set_be16(b, 0, 0xABCD)
+    if bytes.get(b, 0) != 0xAB { print("FAIL be16 byte0\n"); fails = fails + 1 }
+    if bytes.get(b, 1) != 0xCD { print("FAIL be16 byte1\n"); fails = fails + 1 }
+    if bytes.get_be16(b, 0) != 0xABCD { print("FAIL be16 roundtrip\n"); fails = fails + 1 }
+
+    // be32: 0x01020304 -> [0x01,0x02,0x03,0x04] (MSB first)
+    _ = bytes.set_be32(b, 0, 0x01020304)
+    if bytes.get(b, 0) != 0x01 { print("FAIL be32 byte0\n"); fails = fails + 1 }
+    if bytes.get(b, 1) != 0x02 { print("FAIL be32 byte1\n"); fails = fails + 1 }
+    if bytes.get(b, 2) != 0x03 { print("FAIL be32 byte2\n"); fails = fails + 1 }
+    if bytes.get(b, 3) != 0x04 { print("FAIL be32 byte3\n"); fails = fails + 1 }
+    if bytes.get_be32(b, 0) != 0x01020304 { print("FAIL be32 roundtrip\n"); fails = fails + 1 }
+
+    // be32 with the high bit set (verify it's treated as a 32-bit pattern)
+    _ = bytes.set_be32(b, 0, 0xDEADBEEF)
+    if bytes.get(b, 0) != 0xDE { print("FAIL be32 hi byte0\n"); fails = fails + 1 }
+    if bytes.get_be32(b, 0) != 0xDEADBEEF { print("FAIL be32 hi roundtrip\n"); fails = fails + 1 }
+
+    // be64: 0x1122334455667788 -> [0x11..0x88]
+    _ = bytes.set_be64(b, 0, 0x1122334455667788)
+    if bytes.get(b, 0) != 0x11 { print("FAIL be64 byte0\n"); fails = fails + 1 }
+    if bytes.get(b, 7) != 0x88 { print("FAIL be64 byte7\n"); fails = fails + 1 }
+    if bytes.get_be64(b, 0) != 0x1122334455667788 { print("FAIL be64 roundtrip\n"); fails = fails + 1 }
+
+    // be64 full-width (all bits set) round trip
+    _ = bytes.set_be64(b, 0, 0xFFFFFFFFFFFFFFFF)
+    if bytes.get_be64(b, 0) != 0xFFFFFFFFFFFFFFFF { print("FAIL be64 all-ones\n"); fails = fails + 1 }
+
+    // writes at a non-zero offset don't disturb neighbours
+    _ = bytes.set_be16(b, 10, 0x1234)
+    if bytes.get_be16(b, 10) != 0x1234 { print("FAIL be16 offset\n"); fails = fails + 1 }
+
+    bytes.free(b)
+
+    if fails == 0 {
+        print("PASS: std.bytes BE\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

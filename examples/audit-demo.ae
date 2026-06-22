@@ -1,0 +1,62 @@
+// audit-demo.ae — querying the sandbox audit trail with std.audit.
+//
+// Aether's in-process permission layer records every grant check —
+// allowed and denied — into a ring buffer. std.audit reads it back, so
+// a program can see exactly what its sandboxed code touched.
+//
+// Run it:                    ae run examples/audit-demo.ae
+// With the live sink too:    AETHER_SANDBOX_AUDIT=stderr ae run examples/audit-demo.ae
+
+import std.list
+import std.os
+import std.audit
+
+// Minimal sandbox helpers (same shape as examples/sandbox-demo.ae).
+add_perm(target: ptr, cat: string, pat: string) {
+    list.add(target, cat)
+    list.add(target, pat)
+}
+
+run_sandboxed(perms: ptr, code: fn) {
+    sandbox_push(perms)
+    sandbox_install()
+    call(code, perms)
+    sandbox_uninstall()
+    sandbox_pop()
+}
+
+main() {
+    println("=== sandbox audit demo ===")
+    println("")
+
+    // A worker granted exactly one env var.
+    perms = list.new()
+    add_perm(perms, "env", "HOME")
+
+    // Start the audit query from a clean slate.
+    audit.clear()
+
+    // Contained code: three env reads — one granted, two not.
+    worker = |_ctx: ptr| {
+        os_getenv("HOME")            // granted   -> allowed
+        os_getenv("AWS_SECRET_KEY")  // not granted -> denied
+        os_getenv("DATABASE_URL")    // not granted -> denied
+    }
+    run_sandboxed(perms, worker)
+
+    // Replay what the sandbox decided.
+    n = audit.count()
+    println("audit recorded ${n} permission check(s):")
+    for (i = 0; i < n; i = i + 1) {
+        cat, res, allowed = audit.entry(i)
+        verdict = "DENY "
+        if allowed == 1 {
+            verdict = "ALLOW"
+        }
+        println("  [${verdict}] ${cat} ${res}")
+    }
+
+    println("")
+    println("denied: ${audit.denied_count()} of ${n}")
+    list.free(perms)
+}

@@ -1,6 +1,7 @@
-// aether_spawn_sandboxed.c — spawn a child process under Aether sandbox
+// spawn_sandboxed_linux.c — spawn a child process under Aether sandbox (Linux)
 //
-// Linux-only: uses fork, shm_open, LD_PRELOAD, and seccomp-bpf (the
+// Linux backend (companions: spawn_sandboxed_bsd.c, spawn_sandboxed_stub.c).
+// Uses fork, shm_open, LD_PRELOAD, and seccomp-bpf (the
 // latter for the kernel-level fence on clone/clone3/fork/vfork).
 // Other platforms get a stub that returns -1 with a clear message.
 
@@ -268,12 +269,5 @@ int aether_spawn_sandboxed(void* grant_list, const char* program, const char* ar
     return -1;
 }
 
-#else
-// Non-Linux stub
-#include <stdio.h>
-int aether_spawn_sandboxed(void* grant_list, const char* program, const char* arg) {
-    (void)grant_list; (void)program; (void)arg;
-    fprintf(stderr, "[aether] spawn_sandboxed is only available on Linux\n");
-    return -1;
-}
-#endif
+#endif // __linux__
+// Non-Linux backends live in spawn_sandboxed_bsd.c / spawn_sandboxed_stub.c.

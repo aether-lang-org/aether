@@ -66,6 +66,23 @@ int aether_bytes_set_le16(AetherBytes* b, int index, int value);
 int aether_bytes_get_le16(AetherBytes* b, int index);
 int aether_bytes_set_le32(AetherBytes* b, int index, int value);
 int aether_bytes_get_le32(AetherBytes* b, int index);
+int       aether_bytes_set_le64(AetherBytes* b, int index, long long value);
+long long aether_bytes_get_le64(AetherBytes* b, int index);
+
+/* Big-endian packed-int read/write helpers. Same bounds-check and
+ * grow-on-write policy as the little-endian variants, but the bytes at
+ * `index .. index + N - 1` are stored most-significant-first. The 32-bit
+ * getter returns the value in an `int` (so the top bit reads back as the
+ * sign bit — fine for round-tripping); the 64-bit getter returns a
+ * `long long` and `set_be64` takes a `long long` value. `get_*` return
+ * -1 if any byte in the range is past the buffer's logical length, the
+ * buffer is NULL, or `index` is negative. */
+int       aether_bytes_set_be16(AetherBytes* b, int index, int value);
+int       aether_bytes_get_be16(AetherBytes* b, int index);
+int       aether_bytes_set_be32(AetherBytes* b, int index, int value);
+int       aether_bytes_get_be32(AetherBytes* b, int index);
+int       aether_bytes_set_be64(AetherBytes* b, int index, long long value);
+long long aether_bytes_get_be64(AetherBytes* b, int index);
 
 /* Copy `src_len` bytes from `src` into the buffer starting at offset
  * `dst`. Grows the buffer if needed. `src` may be either a plain

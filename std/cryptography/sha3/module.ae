@@ -1,0 +1,520 @@
+// MIT License (https://opensource.org/licenses/MIT)
+// Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+// Portions copyright (c) 2026 Aether Developers.
+//
+// std.cryptography.sha3 — the SHA-3 / SHAKE (FIPS 202) hash family in pure
+// Aether, ported from Bouncy Castle's KeccakDigest / SHA3Digest / SHAKEDigest.
+// NO externs to OpenSSL or any C crypto.
+//
+// SHA-3 is a sponge construction over the Keccak-f[1600] permutation: a
+// 25-lane (5x5) state of 64-bit LITTLE-ENDIAN lanes, 24 rounds of
+// theta/rho/pi/chi/iota. Fixed-length digests (SHA3-224/256/384/512) use
+// domain byte 0x06; the SHAKE128/256 extendable-output functions (XOFs)
+// use domain byte 0x1f and squeeze an arbitrary number of bytes.
+//
+// Import with:  import std.cryptography.sha3
+//
+//   fixed one-shot: sha3_256_hex(data, len) / sha3_256_bytes(data, len)
+//   shake one-shot: shake128_hex(data, len, out_len) / shake128_bytes(...)
+//   streaming:      ctx,_ = new("sha3-256"); update(ctx, data, len)
+//                   final_hex(ctx, 0)        // out_len ignored for fixed
+//                   final_hex(ctx, out_len)  // out_len required for shake
+//
+// Aether-specific care:
+//   * Lanes are full 64-bit; a `long` holds an entire uint64 lane.
+//   * Rotations are rotl64 (std.bits). The chi step's NOT uses `~` which
+//     produces the full 64-bit complement on a long.
+//   * Lanes are absorbed/squeezed LITTLE-ENDIAN; std.bytes has no
+//     get_le64/set_le64, so lanes are (dis)assembled byte-by-byte here.
+//   * Round constants with the top bit set are written as full uint64
+//     hex literals (Aether accepts the whole range).
+
+import std.bits
+import std.bytes
+import std.longarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+
+exports (
+    new, update, update_bytes, final_hex, final_bytes, free_ctx,
+    sha3_224_hex, sha3_224_bytes,
+    sha3_256_hex, sha3_256_bytes,
+    sha3_384_hex, sha3_384_bytes,
+    sha3_512_hex, sha3_512_bytes,
+    shake128_hex, shake128_bytes,
+    shake256_hex, shake256_bytes
+)
+
+// Keccak-f[1600] round constants (24 rounds), little-endian lane values.
+const RC_K: long[24] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
+    0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+    0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003,
+    0x8000000000008002, 0x8000000000000080, 0x000000000000800a, 0x800000008000000a,
+    0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008
+]
+
+// Rho rotation offsets, indexed [x + 5*y].
+const RHO: long[25] = [
+    0,  1,  62, 28, 27,
+    36, 44, 6,  55, 20,
+    3,  10, 43, 25, 39,
+    41, 45, 15, 21, 8,
+    18, 2,  61, 56, 14
+]
+
+struct Sha3Ctx {
+    s: ptr            // longarr(25), 5x5 lane state, lane[x+5y]
+    bb: ptr           // longarr(25), scratch for rho/pi (B)
+    cc: ptr           // longarr(5),  scratch column parities
+    dd: ptr           // longarr(5),  scratch theta D
+    buf: ptr          // std.bytes rate buffer (max 168 bytes)
+    buf_len: int      // bytes currently in buf
+    rate: int         // rate in bytes (block size)
+    out_len: int      // fixed digest length in bytes (0 for shake)
+    pad: int          // domain/padding byte (0x06 fixed, 0x1f shake)
+    is_shake: int
+}
+
+// ---- Keccak-f[1600] permutation ----
+
+keccak_f(c: *Sha3Ctx) {
+    s = c.s
+    bb = c.bb
+    col = c.cc
+    dee = c.dd
+
+    rnd = 0
+    while rnd < 24 {
+        // theta
+        x = 0
+        while x < 5 {
+            v = longarr_get_unchecked(s, x) ^
+                longarr_get_unchecked(s, x + 5) ^
+                longarr_get_unchecked(s, x + 10) ^
+                longarr_get_unchecked(s, x + 15) ^
+                longarr_get_unchecked(s, x + 20)
+            longarr_set_unchecked(col, x, v)
+            x = x + 1
+        }
+        x = 0
+        while x < 5 {
+            xm1 = (x + 4) % 5
+            xp1 = (x + 1) % 5
+            d = longarr_get_unchecked(col, xm1) ^
+                bits.rotl64(longarr_get_unchecked(col, xp1), 1)
+            longarr_set_unchecked(dee, x, d)
+            x = x + 1
+        }
+        x = 0
+        while x < 5 {
+            d = longarr_get_unchecked(dee, x)
+            y = 0
+            while y < 5 {
+                idx = x + 5 * y
+                longarr_set_unchecked(s, idx, longarr_get_unchecked(s, idx) ^ d)
+                y = y + 1
+            }
+            x = x + 1
+        }
+
+        // rho + pi: B[y][2x+3y] = rotl64(A[x][y], RHO[x+5y])
+        x = 0
+        while x < 5 {
+            y = 0
+            while y < 5 {
+                src = x + 5 * y
+                lane = longarr_get_unchecked(s, src)
+                n = RHO[src]
+                rotated = bits.rotl64(lane, n)
+                nx = y
+                ny = (2 * x + 3 * y) % 5
+                dst = nx + 5 * ny
+                longarr_set_unchecked(bb, dst, rotated)
+                y = y + 1
+            }
+            x = x + 1
+        }
+
+        // chi: A[x][y] = B[x][y] ^ ((~B[x+1][y]) & B[x+2][y])
+        y = 0
+        while y < 5 {
+            x = 0
+            while x < 5 {
+                b0 = longarr_get_unchecked(bb, x + 5 * y)
+                b1 = longarr_get_unchecked(bb, ((x + 1) % 5) + 5 * y)
+                b2 = longarr_get_unchecked(bb, ((x + 2) % 5) + 5 * y)
+                longarr_set_unchecked(s, x + 5 * y, b0 ^ ((~b1) & b2))
+                x = x + 1
+            }
+            y = y + 1
+        }
+
+        // iota
+        longarr_set_unchecked(s, 0, longarr_get_unchecked(s, 0) ^ RC_K[rnd])
+
+        rnd = rnd + 1
+    }
+}
+
+// ---- Lane <-> byte helpers (little-endian) ----
+
+// Left shift forcing 64-bit arithmetic. A bare `b << n` where `b` came
+// from a literal / bytes.get is treated as a 32-bit int shift by the C
+// backend (it overflows for n >= 32 and sign-extends a byte with bit 7
+// set), so the value must be widened to `long` first.
+shl64(v: long, n: int) -> long {
+    return v << n
+}
+
+// XOR `n` little-endian bytes from `src` (at offset off) into the lane
+// state, lane by lane. n must be a multiple of 8 here (full rate block).
+absorb_block(c: *Sha3Ctx, src: ptr, off: int, n: int) {
+    s = c.s
+    lanes = n / 8
+    li = 0
+    while li < lanes {
+        base = off + li * 8
+        long lane = 0
+        k = 0
+        while k < 8 {
+            b = bytes.get(src, base + k) & 255
+            lane = lane | shl64(b, 8 * k)
+            k = k + 1
+        }
+        longarr_set_unchecked(s, li, longarr_get_unchecked(s, li) ^ lane)
+        li = li + 1
+    }
+    keccak_f(c)
+}
+
+// Process the pending buffered bytes assuming a complete rate block,
+// then clear the buffer.
+absorb_buffer(c: *Sha3Ctx) {
+    absorb_block(c, c.buf, 0, c.rate)
+    c.buf_len = 0
+}
+
+feed_byte(c: *Sha3Ctx, b: int) {
+    bytes.set(c.buf, c.buf_len, b & 255)
+    c.buf_len = c.buf_len + 1
+    if c.buf_len == c.rate {
+        absorb_buffer(c)
+    }
+}
+
+// ---- Construction ----
+
+config_variant(c: *Sha3Ctx, variant: string) -> int {
+    if variant == "sha3-224" {
+        c.rate = 144
+        c.out_len = 28
+        c.pad = 0x06
+        c.is_shake = 0
+        return 1
+    }
+    if variant == "sha3-256" {
+        c.rate = 136
+        c.out_len = 32
+        c.pad = 0x06
+        c.is_shake = 0
+        return 1
+    }
+    if variant == "sha3-384" {
+        c.rate = 104
+        c.out_len = 48
+        c.pad = 0x06
+        c.is_shake = 0
+        return 1
+    }
+    if variant == "sha3-512" {
+        c.rate = 72
+        c.out_len = 64
+        c.pad = 0x06
+        c.is_shake = 0
+        return 1
+    }
+    if variant == "shake128" {
+        c.rate = 168
+        c.out_len = 0
+        c.pad = 0x1f
+        c.is_shake = 1
+        return 1
+    }
+    if variant == "shake256" {
+        c.rate = 136
+        c.out_len = 0
+        c.pad = 0x1f
+        c.is_shake = 1
+        return 1
+    }
+    return 0
+}
+
+new(variant: string) -> {
+    ctx = malloc(96) as *Sha3Ctx
+    if ctx == null {
+        return null, "allocation failed"
+    }
+    ctx.s = longarr_new_raw(25)
+    ctx.bb = longarr_new_raw(25)
+    ctx.cc = longarr_new_raw(5)
+    ctx.dd = longarr_new_raw(5)
+    ctx.buf = bytes.new(168)
+    ctx.buf_len = 0
+    ok = config_variant(ctx, variant)
+    if ok == 0 {
+        longarr_free(ctx.s)
+        longarr_free(ctx.bb)
+        longarr_free(ctx.cc)
+        longarr_free(ctx.dd)
+        bytes.free(ctx.buf)
+        free(ctx)
+        return null, "unknown sha3 variant"
+    }
+    i = 0
+    while i < 25 {
+        longarr_set_unchecked(ctx.s, i, 0)
+        i = i + 1
+    }
+    return ctx, ""
+}
+
+update(ctx: ptr, data: string, length: int) {
+    c = ctx as *Sha3Ctx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        b = string_char_at_n(data, length, i)
+        feed_byte(c, b & 255)
+        i = i + 1
+    }
+}
+
+update_bytes(ctx: ptr, data: ptr, length: int) {
+    c = ctx as *Sha3Ctx
+    if length <= 0 {
+        return
+    }
+    i = 0
+    while i < length {
+        b = bytes.get(data, i)
+        feed_byte(c, b & 255)
+        i = i + 1
+    }
+}
+
+// Apply pad10*1 with the domain byte into the rate buffer, absorb the
+// final block. After this the state is ready to squeeze.
+do_pad(c: *Sha3Ctx) {
+    // Domain byte at current position.
+    bytes.set(c.buf, c.buf_len, c.pad & 255)
+    // Zero-fill the rest of the rate block.
+    j = c.buf_len + 1
+    while j < c.rate {
+        bytes.set(c.buf, j, 0)
+        j = j + 1
+    }
+    // Set the high bit of the last rate byte.
+    last = bytes.get(c.buf, c.rate - 1)
+    bytes.set(c.buf, c.rate - 1, last | 0x80)
+    absorb_block(c, c.buf, 0, c.rate)
+    c.buf_len = 0
+}
+
+// Squeeze `n` bytes into a fresh bytes buffer (caller owns it).
+squeeze(c: *Sha3Ctx, n: int) -> ptr {
+    out = bytes.new(n)
+    produced = 0
+    while produced < n {
+        // Read up to one rate block of LE lane bytes.
+        avail = c.rate
+        if n - produced < avail {
+            avail = n - produced
+        }
+        li = 0
+        while li * 8 < avail {
+            lane = longarr_get_unchecked(c.s, li)
+            base = li * 8
+            k = 0
+            while k < 8 {
+                pos = base + k
+                if pos < avail {
+                    b = bits.lsr64(lane, 8 * k) & 255
+                    bytes.set(out, produced + pos, b)
+                }
+                k = k + 1
+            }
+            li = li + 1
+        }
+        produced = produced + avail
+        if produced < n {
+            keccak_f(c)
+        }
+    }
+    return out
+}
+
+free_internals(c: *Sha3Ctx) {
+    if c.s != null {
+        longarr_free(c.s)
+        c.s = null
+    }
+    if c.bb != null {
+        longarr_free(c.bb)
+        c.bb = null
+    }
+    if c.cc != null {
+        longarr_free(c.cc)
+        c.cc = null
+    }
+    if c.dd != null {
+        longarr_free(c.dd)
+        c.dd = null
+    }
+    if c.buf != null {
+        bytes.free(c.buf)
+        c.buf = null
+    }
+}
+
+free_ctx(ctx: ptr) {
+    if ctx == null {
+        return
+    }
+    c = ctx as *Sha3Ctx
+    free_internals(c)
+    free(ctx)
+}
+
+// `out_len` is ignored for fixed digests (uses the variant's length) and
+// required (>0) for SHAKE.
+final_bytes(ctx: ptr, out_len: int) -> ptr {
+    c = ctx as *Sha3Ctx
+    n = c.out_len
+    if c.is_shake == 1 {
+        n = out_len
+    }
+    do_pad(c)
+    out = squeeze(c, n)
+    s = bytes.finish(out, n)
+    free_internals(c)
+    free(ctx)
+    res = bytes.new(n)
+    bytes.copy_from_string(res, 0, s, n)
+    return res
+}
+
+final_hex(ctx: ptr, out_len: int) -> string {
+    c = ctx as *Sha3Ctx
+    n = c.out_len
+    if c.is_shake == 1 {
+        n = out_len
+    }
+    do_pad(c)
+    out = squeeze(c, n)
+    hexbuf = bytes.new(n * 2)
+    i = 0
+    while i < n {
+        b = bytes.get(out, i)
+        hi = (b >> 4) & 15
+        lo = b & 15
+        c_hi = 48 + hi
+        if hi >= 10 {
+            c_hi = 87 + hi
+        }
+        c_lo = 48 + lo
+        if lo >= 10 {
+            c_lo = 87 + lo
+        }
+        bytes.set(hexbuf, i * 2, c_hi)
+        bytes.set(hexbuf, i * 2 + 1, c_lo)
+        i = i + 1
+    }
+    bytes.free(out)
+    s = bytes.finish(hexbuf, n * 2)
+    free_internals(c)
+    free(ctx)
+    return s
+}
+
+// ---- Fixed-length one-shots ----
+
+oneshot_hex(variant: string, data: string, len: int) -> string {
+    ctx, err = new(variant)
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx, 0)
+}
+oneshot_bytes(variant: string, data: string, len: int) -> ptr {
+    ctx, err = new(variant)
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx, 0)
+}
+
+sha3_224_hex(data: string, len: int) -> string {
+    return oneshot_hex("sha3-224", data, len)
+}
+sha3_224_bytes(data: string, len: int) -> ptr {
+    return oneshot_bytes("sha3-224", data, len)
+}
+sha3_256_hex(data: string, len: int) -> string {
+    return oneshot_hex("sha3-256", data, len)
+}
+sha3_256_bytes(data: string, len: int) -> ptr {
+    return oneshot_bytes("sha3-256", data, len)
+}
+sha3_384_hex(data: string, len: int) -> string {
+    return oneshot_hex("sha3-384", data, len)
+}
+sha3_384_bytes(data: string, len: int) -> ptr {
+    return oneshot_bytes("sha3-384", data, len)
+}
+sha3_512_hex(data: string, len: int) -> string {
+    return oneshot_hex("sha3-512", data, len)
+}
+sha3_512_bytes(data: string, len: int) -> ptr {
+    return oneshot_bytes("sha3-512", data, len)
+}
+
+// ---- SHAKE XOF one-shots ----
+
+shake_hex(variant: string, data: string, len: int, out_len: int) -> string {
+    ctx, err = new(variant)
+    if err != "" {
+        return ""
+    }
+    update(ctx, data, len)
+    return final_hex(ctx, out_len)
+}
+shake_bytes(variant: string, data: string, len: int, out_len: int) -> ptr {
+    ctx, err = new(variant)
+    if err != "" {
+        return null
+    }
+    update(ctx, data, len)
+    return final_bytes(ctx, out_len)
+}
+
+shake128_hex(data: string, len: int, out_len: int) -> string {
+    return shake_hex("shake128", data, len, out_len)
+}
+shake128_bytes(data: string, len: int, out_len: int) -> ptr {
+    return shake_bytes("shake128", data, len, out_len)
+}
+shake256_hex(data: string, len: int, out_len: int) -> string {
+    return shake_hex("shake256", data, len, out_len)
+}
+shake256_bytes(data: string, len: int, out_len: int) -> ptr {
+    return shake_bytes("shake256", data, len, out_len)
+}
