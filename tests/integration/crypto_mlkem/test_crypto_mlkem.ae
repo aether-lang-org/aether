@@ -1,18 +1,32 @@
-// Validate std.cryptography.mlkem (ML-KEM / Kyber, FIPS 203): the KEM
-// correctness property — encapsulated and decapsulated shared secrets
-// match — across all three parameter sets, plus implicit-rejection
-// (a corrupted ciphertext yields a different, stable secret, not the
-// encaps key, and never crashes).
+// Validate std.cryptography.mlkem (ML-KEM / Kyber, FIPS 203):
+//  1. A byte-exact NIST ACVP keyGen known-answer (ML-KEM-512 tcId 1) —
+//     pins FIPS 203 conformance, not just internal self-consistency.
+//  2. The KEM correctness property (encaps secret == decaps secret) on
+//     all three parameter sets, plus implicit rejection.
 import std.cryptography.mlkem
 import std.bytes
 import std.string
 import std.io
 
+hv(c: int) -> int { if c>=48 { if c<=57 { return c-48 } } if c>=97 { if c<=102 { return c-87 } } if c>=65 { if c<=70 { return c-55 } } return 0 }
+hb(h: string) -> ptr { n=string.length(h); b=bytes.new(n/2); i=0; while i<n { bytes.set(b,i/2,hv(string_char_at_n(h,n,i))*16+hv(string_char_at_n(h,n,i+1))); i=i+2 } return b }
 bh(b: ptr) -> string { d="0123456789abcdef"; o=""; n=bytes.length(b); i=0; while i<n { v=bytes.get(b,i); o=string.concat(o,string.concat(string.substring(d,(v/16)&15,((v/16)&15)+1),string.substring(d,v&15,(v&15)+1))); i=i+1 } return o }
 seed(byte_val: int) -> ptr { b = bytes.new(32); i = 0; while i < 32 { bytes.set(b, i, (byte_val + i) & 0xFF); i = i + 1 } return b }
 
 main() {
     fails = 0
+
+    // --- NIST ACVP ML-KEM-512 keyGen, tcId 1 (byte-exact KAT) ---
+    kd = hb("47b893474672ba92e4b12ee44fb32953af8e8503b5fb471d1614fb8a021a660a")
+    kz = hb("1f8cb39e9e30bc458a0dc5408884b1187fb217018df760fa57317703b844a0a9")
+    kek, kdk = mlkem.mlkem512_keygen(kd, kz)
+    want_ek = "28266a088b3482439bca01afb7ca5c6136a979b5159985a9484b36b679a5f7b9819eb63577891f7bb9cb98413ccc434adc79a16d6ab3076569ce6291c59b5d64612a7fb0c15013200bc8bebb03a570174b5e4363aed86eb02a220d281fb5457f0a549fc5051d49a6b2015259a2c3084f405e1769952260675586a584904059275a265234ef3abf88c171a80898fc783358bbc9803c8789027d917c9ebacbc568cc18de84c85454b94249586c0c6e2b8a16fa789c51212dd1728ee9b8c6c40528bf93826fa82368419623032af27b5694305816811d3ca85805100e9c1a9621e5089e54cb47f5a8fea0b49ef81c6b5187f48924c7947d6b61697a4a8a18452ef803336ad4be503275bcacc03c181405f7b1dc9b47fb169eb37bbe27e29c763a4e52b9a42520388cf09b8edbcdf41ccf6537190e6156c37cc1aac63c0f90ce78d0b9b190c548d71b6f26cc8f585ea14004b5b30aaa100b2adc1263828833b24e46163b41446f98c882092a39941867b80632e2097674a793935227db0b8577e03a69c50a514c7473c892e3fba7c4316bdabc952a70644176687d4191323bad93d85a3ca250868c0747e6c44f6126c874afbec0bdd4503cb2c59a69816e7d4109941467579a1ffe6a4f50fa379051729dab6e2f61432f15be67d667c7cc1054742b2b953078a5cf88d9133087309d88c61da240d99c59137329907b47865321ecd5564e987333b4cb607b0afca86769dc95b2f921357213fcb80c3b152918e9bab2228c0a1b77897ac68ce55088165f87f397da9790873b62c5383c0ccc370f0267cbe195651ccf336182c22ac3924b76c9e779b7a271d166b6d24b84242b7e73cc723f764039f6c851744034c3304db0c091a5764fdc9d593556ff734b82a87ccbc38ca99564d988bbd2d1bf071bb160722d365104fb27610651a8ed817f2742a6b5a1273a61acaf4460b0ab1456a9922351400a1c7d95d856d6e3370622c9c4164bc6b401435624a98b95caeb274f34ce92038d785068cdd8cf44c38d84acb2c466a2756c870ee78c26e738cc451002304eb8c90ab24b6463eb124d779f937a2e3692611d2e34d57b36cc4b2cd3b31ff485c6684d408b972e0d5ca7d2224aae4e"
+    if bh(kek) == want_ek { println("ok   mlkem512 keygen KAT (ACVP tcId 1, byte-exact)") } else { println("FAIL mlkem512 keygen KAT"); fails = fails + 1 }
+    // dk must end with ek || H(ek) || z; spot-check the z tail.
+    dklen = bytes.length(kdk)
+    ztail_ok = 1; i = 0
+    while i < 32 { if bytes.get(kdk, dklen - 32 + i) != bytes.get(kz, i) { ztail_ok = 0 } i = i + 1 }
+    if ztail_ok == 1 { println("ok   mlkem512 dk z-tail") } else { println("FAIL mlkem512 dk z-tail"); fails = fails + 1 }
 
     // ML-KEM-768 round-trip with fixed seeds.
     d = seed(1); z = seed(100); m = seed(200)

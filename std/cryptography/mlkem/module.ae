@@ -915,7 +915,9 @@ indcpa_keygen(p: *Params, d: ptr, kp: ptr) {
     }
     i = 0
     while i < k {
-        get_noise(e, i, sigma, 0, nonce, 2)   // error always eta2
+        // FIPS 203: keygen error e uses eta1 (BC GenerateKeyPair uses the same
+        // GetNoiseEta as skpv — Eta3 when Eta1==3, else Eta2), NOT a fixed eta2.
+        get_noise(e, i, sigma, 0, nonce, p.eta1)
         nonce = nonce + 1
         i = i + 1
     }
