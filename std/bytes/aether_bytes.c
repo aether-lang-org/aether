@@ -128,6 +128,39 @@ int aether_bytes_get_le32(AetherBytes* b, int index) {
     return (int)v;
 }
 
+int aether_bytes_set_le64(AetherBytes* b, int index, long long value) {
+    if (!b || index < 0) return 0;
+    size_t needed = (size_t)index + 8;
+    if (needed < (size_t)index) return 0;  /* overflow */
+    if (!bytes_reserve(b, needed)) return 0;
+    unsigned long long u = (unsigned long long)value;
+    b->data[index]     = (char)(u & 0xff);
+    b->data[index + 1] = (char)((u >> 8) & 0xff);
+    b->data[index + 2] = (char)((u >> 16) & 0xff);
+    b->data[index + 3] = (char)((u >> 24) & 0xff);
+    b->data[index + 4] = (char)((u >> 32) & 0xff);
+    b->data[index + 5] = (char)((u >> 40) & 0xff);
+    b->data[index + 6] = (char)((u >> 48) & 0xff);
+    b->data[index + 7] = (char)((u >> 56) & 0xff);
+    if (needed > b->length) b->length = needed;
+    return 1;
+}
+
+long long aether_bytes_get_le64(AetherBytes* b, int index) {
+    if (!b || index < 0) return -1;
+    if ((size_t)index + 8 > b->length) return -1;
+    unsigned long long v =
+          (unsigned long long)(unsigned char)b->data[index]
+        | ((unsigned long long)(unsigned char)b->data[index + 1] << 8)
+        | ((unsigned long long)(unsigned char)b->data[index + 2] << 16)
+        | ((unsigned long long)(unsigned char)b->data[index + 3] << 24)
+        | ((unsigned long long)(unsigned char)b->data[index + 4] << 32)
+        | ((unsigned long long)(unsigned char)b->data[index + 5] << 40)
+        | ((unsigned long long)(unsigned char)b->data[index + 6] << 48)
+        | ((unsigned long long)(unsigned char)b->data[index + 7] << 56);
+    return (long long)v;
+}
+
 /* Big-endian accessors (set_be16/32/64, get_be16/32/64).
  * Modelled on Bouncy Castle's crypto/src/crypto/util/Pack.cs
  * (UInt16/32/64_To_BE / BE_To_UInt16/32/64).

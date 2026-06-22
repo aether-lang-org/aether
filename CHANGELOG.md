@@ -14,6 +14,19 @@ renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
 `changelog-release-drift-note.md`).
 
+## [current]
+
+### Added
+
+- **`std.bytes` little-endian 64-bit accessors** — `set_le64(b, index, value)`
+  / `get_le64(b, index)`, completing the LE/BE × 16/32/64 matrix (the only
+  cell that was missing; `be64` and `le32` already existed). Mirrors the
+  `be64` shape: grow-on-write, `-1` on out-of-range read, lossless round-trip
+  for any `long`. Removes the hand-rolled byte-by-byte LE64 word assembly that
+  6+ crypto modules (Keccak/SHA-3, BLAKE2b, Salsa20/scrypt, Argon2, Skein/
+  Tiger, X448/Ed448) each reimplemented. Regression in
+  `tests/regression/test_bytes_le64.ae`. (#838)
+
 ## [0.300.0]
 
 ### Added

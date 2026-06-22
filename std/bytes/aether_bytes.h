@@ -66,6 +66,8 @@ int aether_bytes_set_le16(AetherBytes* b, int index, int value);
 int aether_bytes_get_le16(AetherBytes* b, int index);
 int aether_bytes_set_le32(AetherBytes* b, int index, int value);
 int aether_bytes_get_le32(AetherBytes* b, int index);
+int       aether_bytes_set_le64(AetherBytes* b, int index, long long value);
+long long aether_bytes_get_le64(AetherBytes* b, int index);
 
 /* Big-endian packed-int read/write helpers. Same bounds-check and
  * grow-on-write policy as the little-endian variants, but the bytes at
