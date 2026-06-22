@@ -16,6 +16,8 @@
 // Import with:  import std.cryptography.ripemd256
 //   one-shot:   ripemd256_hex(data, len) / ripemd256_bytes(data, len)
 //   streaming:  ctx = new(); update(ctx, data, len); final_hex(ctx)
+//   ownership:  final_hex / final_bytes FREE the ctx; call free_ctx
+//               ONLY to abandon a ctx before finalizing (never after).
 //
 // Little-endian word load/store/length; 32-bit adds masked; left rotates.
 
@@ -399,6 +401,8 @@ free_internals(c: *Rmd256Ctx) {
     }
 }
 
+// Finalize and return the raw digest as a std.bytes buffer. FREES the
+// ctx; do NOT call free_ctx after a successful finalize (double-free).
 final_bytes(ctx: ptr) -> ptr {
     c = ctx as *Rmd256Ctx
     out = finalize_to_bytes(c)
@@ -410,6 +414,8 @@ final_bytes(ctx: ptr) -> ptr {
     return res
 }
 
+// Finalize and return the digest as lowercase hex. FREES the ctx; do
+// NOT call free_ctx after a successful finalize (double-free).
 final_hex(ctx: ptr) -> string {
     c = ctx as *Rmd256Ctx
     out = finalize_to_bytes(c)
@@ -438,6 +444,9 @@ final_hex(ctx: ptr) -> string {
     return s
 }
 
+// Abandon a context WITHOUT finalizing — the bail-out cleanup path.
+// NULL-safe. final_hex / final_bytes already free the ctx, so free_ctx
+// must be called ONLY when bailing out before a finalize.
 free_ctx(ctx: ptr) {
     if ctx == null {
         return
