@@ -203,7 +203,9 @@ TEST_CATEGORY(caps_fs_dir_list_accounting_balances, TEST_CATEGORY_STDLIB) {
  * after open + close — a size-mismatched free would drift the counter. */
 TEST_CATEGORY(caps_fs_file_open_close_balances, TEST_CATEGORY_STDLIB) {
     caps_reset();
-    const char* tp = "/tmp/aether_caps_fopen_test.txt";
+    /* CWD-relative so it works on Windows too (no /tmp). The test runner
+     * runs from a writable directory — the dir-list test reads "." here. */
+    const char* tp = "aether_caps_fopen_test.tmp";
     FILE* w = fopen(tp, "wb");
     ASSERT_TRUE(w != NULL);
     fputs("hello", w);
@@ -231,7 +233,7 @@ TEST_CATEGORY(caps_fs_file_open_close_balances, TEST_CATEGORY_STDLIB) {
 #ifndef _WIN32
 TEST_CATEGORY(caps_fs_read_denied_past_cap, TEST_CATEGORY_STDLIB) {
     caps_reset();
-    const char* tp = "/tmp/aether_caps_read_test.bin";
+    const char* tp = "aether_caps_read_test.tmp";  /* CWD-relative; see above */
     FILE* w = fopen(tp, "wb");
     ASSERT_TRUE(w != NULL);
     char chunk[4096];
