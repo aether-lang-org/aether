@@ -127,3 +127,38 @@ main() {
 - Ruby's `subst.h` `#define snprintf ruby_snprintf` is undef'd
   immediately after `#include <ruby.h>` — the bridge uses libc
   snprintf for plain string assembly, not Ruby's format extensions.
+
+## Testing
+
+Three tests exercise the Ruby host; all SKIP cleanly when Ruby isn't
+installed, so they no-op on hosts without it.
+
+- **Namespace / FFI SDK** —
+  [`tests/integration/namespace_ruby/`](../../../tests/integration/namespace_ruby/).
+  [`test_namespace_ruby.sh`](../../../tests/integration/namespace_ruby/test_namespace_ruby.sh)
+  runs `ae build --namespace .` on
+  [`calc.ae`](../../../tests/integration/namespace_ruby/calc.ae) (a tiny
+  `double_it` / `label` / `is_positive` namespace that emits `Computed` /
+  `Overflow` events), which emits both the `.so` and a
+  `calc_generated_sdk.rb`. The generated SDK is loaded over Fiddle (ships
+  with MRI 1.9.2+, no gem install) by
+  [`check.rb`](../../../tests/integration/namespace_ruby/check.rb), which
+  exercises the full surface — discovery (`describe`), input setters, event
+  handlers, and function calls — asserts the round-trip values, and checks
+  that the Aether script's `[ae]`-tagged stdout reaches the host.
+
+- **Shared-map interop** —
+  [`tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh).
+  Its Ruby case calls `ruby_run_sandboxed_with_map` against a live
+  Aether-owned shared map: the Ruby snippet reads input keys
+  (`name`/`level`), writes a new `rank` key, and attempts to overwrite a
+  frozen input. The test asserts the reads (`secret` is `nil`) and that the
+  frozen input is untampered — the cross-host round-trip every bridge shares.
+
+- **Build smoke** —
+  [`tests/scripts/contrib_build.sh`](../../../tests/scripts/contrib_build.sh).
+  `make contrib` (or `make contrib MODULES=ruby`) drives this; the `ruby`
+  catalogue entry compiles `aether_host_ruby.c` and archives
+  `libaether_host_ruby.a`. The `probe_ruby` step pkg-config-probes
+  `ruby-3.2 / 3.1 / 3.0 / ruby` — a missing dev kit SKIPs in default mode
+  but is a hard failure under explicit `MODULES=ruby`.

@@ -125,3 +125,40 @@ main() {
 - The `Py_RETURN_NONE` / `Py_INCREF` macros are replaced with
   explicit `g_py.Py_IncRef(g_py.py_none); return g_py.py_none;`
   to avoid the macros' direct struct-field access.
+
+## Testing
+
+Three tests exercise this host, each covering a different facet:
+
+- **Namespace / FFI** —
+  [`tests/integration/namespace_python/`](../../../tests/integration/namespace_python/),
+  driven by
+  [`test_namespace_python.sh`](../../../tests/integration/namespace_python/test_namespace_python.sh).
+  This goes the *other* direction from embedding: `ae build --namespace`
+  compiles [`calc.ae`](../../../tests/integration/namespace_python/calc.ae)
+  into a `.so` plus a generated `calc_generated_sdk.py` wrapper, then
+  [`check.py`](../../../tests/integration/namespace_python/check.py)
+  imports the SDK and round-trips the full surface — `describe()`
+  metadata (inputs `limit`/`name`, events `Computed`/`Overflow`), the
+  input setters, the event handlers, and the script functions
+  (`double_it`, `label`, `is_positive`), including the overflow path. It
+  also asserts the Aether-side `[ae]` `println` output reaches the host's
+  stdout. SKIPs on Windows or when `python3` is absent.
+
+- **Shared-map interop** —
+  [`tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh),
+  the cross-host round-trip for `run_sandboxed_with_map`. The Python
+  case hands the guest a frozen input map (`name=Charlie`, `factor=5`),
+  the script reads those keys plus an absent `secret` (which comes back
+  as `None`), writes `product=50` (`factor * 10`), and tries to overwrite
+  the frozen `name` to `TAMPERED`; Aether reads the map back and asserts
+  the write landed and the frozen input is untampered. SKIPs when the
+  Python dev package isn't installed.
+
+- **Build smoke** —
+  [`tests/scripts/contrib_build.sh`](../../../tests/scripts/contrib_build.sh),
+  run by `make contrib`. It probes for Python via `python3-config` and,
+  when present, compiles + archives the bridge as
+  `build/contrib/libaether_host_python.a` (the `python` catalogue entry).
+  In the default build-all mode a missing dep is a silent SKIP; under
+  `make contrib MODULES=python` it's a hard failure.

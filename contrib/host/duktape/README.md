@@ -97,3 +97,21 @@ containment model of the host bridges.
 - The `DUK_COMPILE_*` flag constants used by `duk_peval_string` are
   baked directly (public ABI of Duktape's compile-flags interface;
   same shape as Ruby's `Qnil`-as-literal in that bridge).
+
+## Testing
+
+There's no dedicated `host_duktape/` end-to-end test (no fib-style
+set-piece). Coverage comes from two cross-cutting tests instead:
+
+- [`tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh)
+  — the `run_sandboxed_with_map` shared-map round-trip run across
+  ALL host bridges. Its JS (Duktape) case compiles
+  `aether_host_duktape.c`, seeds a map (`name`=Bob, `count`=7),
+  runs JS that reads those keys, writes back `doubled`, and tries to
+  tamper with `name`; it asserts the read, the write (`result=14`),
+  and that the frozen `name` stays `Bob`. SKIPs when Duktape's dev
+  headers aren't installed.
+- [`tests/scripts/contrib_build.sh`](../../../tests/scripts/contrib_build.sh)
+  — the `make contrib` smoke test; its `duktape` catalogue entry
+  verifies the bridge archive `libaether_host_duktape.a` compiles and
+  archives cleanly.

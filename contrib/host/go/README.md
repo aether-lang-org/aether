@@ -71,3 +71,32 @@ Mode 2 (`go.run_sandboxed`) skips all of that: compile with `go
 build -o bin script.go` ahead of time, then run just `bin` under
 tight grants. Much smaller attack surface if the intent is to
 contain *the script's* effects, not the toolchain's.
+
+## Testing
+
+This host has no dedicated integration test of its own. The closest
+end-to-end coverage of the Go path lives at
+[`tests/integration/host_tinygo/`](../../../tests/integration/host_tinygo/),
+the sibling [`tinygo`](../tinygo/) host — which is built with the same
+Go toolchain (`CGO_ENABLED=1 go build -buildmode=c-shared`, despite
+the "tinygo" brand on the bridge).
+[`uses_tinygo.ae`](../../../tests/integration/host_tinygo/uses_tinygo.ae)
+is the driver (it `dlopen`s the c-shared `.so` and exercises five
+wrapper signatures — `Answer`, `Add`, `Negate`, `Greet`), and
+[`test_host_tinygo.sh`](../../../tests/integration/host_tinygo/test_host_tinygo.sh)
+is the runner.
+
+Like this host, that test **SKIPs** (never fails) when `go` is not on
+`$PATH` — so it no-ops on CI machines without the Go toolchain. With
+`go` available it builds the `.so` from a tmpdir copy of the example
+source, runs the driver, and asserts each expected output line.
+
+```sh
+tests/integration/host_tinygo/test_host_tinygo.sh
+```
+
+Note the difference in embedding model: the tinygo test loads Go
+*in-process* as a c-shared library, whereas this `go` host shells out
+to a **separate subprocess** (see "Containment model" above). The
+toolchain-on-`$PATH` gate and the build command are the shared parts;
+the runtime invocation path is not.

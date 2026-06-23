@@ -77,3 +77,28 @@ and `AETHER_RACKET_COLLECTS` must include where that package landed. The
 `rhombus.*` call, so programs that only use `racket.*` never pay for it. In a
 fire-once tool the combined Racket-boot + Rhombus-require cost dominates — this
 host is meant for long-lived processes that amortize it.
+
+## Testing
+
+The end-to-end test lives at
+[`tests/integration/host_rhombus/`](../../../tests/integration/host_rhombus/) —
+[`uses_rhombus.ae`](../../../tests/integration/host_rhombus/uses_rhombus.ae) is
+the driver (same shape as [contrib.host.racket](../racket/)'s fib(10)=55
+set-piece): it evaluates recursive `fib` in Rhombus's infix shrubbery syntax and
+checks the result, exercises the `error:` contract with an unbound name, and —
+because Rhombus and Racket are one VM and one map — has a Racket script write
+`fib0..fib9` into the shared hash, then reads all ten terms back through
+`rhombus.get`, and finally round-trips a scalar key each direction
+(`racket.set`→`rhombus.get` and back).
+[`test_host_rhombus.sh`](../../../tests/integration/host_rhombus/test_host_rhombus.sh)
+is the runner.
+
+Because Rhombus is a `#lang` on the same embedded Racket CS, the test shares the
+`$AETHER_RACKET_*` env-var gate with [host_racket](../racket/): it **SKIPs**
+(never fails) when `AETHER_RACKET_INCLUDE` / `_LIB` / `_BOOT_DIR` are unset, so
+it no-ops on CI machines without a built Racket CS. With them set it compiles
+the driver with `aetherc`, links the shared Racket bridge + `libracketcs.a`,
+runs it, and asserts the `PASS:` line. It additionally **SKIPs** (rather than
+fails) when the `rhombus` package isn't installed in that Racket — the first
+eval comes back as an `error:` naming the missing `#lang`, which the runner
+detects.
