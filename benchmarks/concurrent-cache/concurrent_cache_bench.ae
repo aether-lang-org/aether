@@ -1,0 +1,314 @@
+// Concurrent Cache Designs — a scaling study, the Aether way (issue #841).
+//
+// Replicates the classic "concurrent cache designs" study (single global
+// lock negatively scales; lock striping is the general winner; copy-on-
+// write wins read-mostly) using the concurrency models Aether ships. It
+// compares THREE designs for a string -> int map across four read/write
+// mixes and reports throughput in ops/sec.
+//
+//   1. SINGLE-OWNER ACTOR — one actor owns the whole map. Every op funnels
+//      through ONE mailbox: the actor-native "one mutex" trap.
+//      (docs/sharded-actor-map.md)
+//   2. SHARDED ACTOR MAP  — lock striping, actor-native: N owner actors,
+//      key routed by hash(key) % N, so unrelated keys hit different
+//      mailboxes. Fire-and-forget writes to distinct shards drain in
+//      parallel. (examples/actors/sharded-map.ae)
+//   3. COW SNAPSHOT CELL  — std.snapshot. One atomic pointer to an
+//      immutable map; reads are LOCK-FREE acquire loads with NO mailbox
+//      round-trip; a write rebuilds the map and publishes with store(),
+//      deferring the displaced snapshot's free by one generation (the RCU
+//      grace-period discipline). (docs/snapshot-cell.md)
+//
+// Methodology: a fixed op budget per design x mix over a fixed key space,
+// driven by one deterministic LCG so every design sees the SAME op stream.
+// Timing is the monotonic clock; throughput = ops * 1e9 / elapsed_ns in
+// long math. Reads on the actor designs are `?` asks (mailbox round-trip);
+// COW reads are direct lock-free loads. Every handler uses a SINGLE
+// trailing `reply` (multiple branch replies corrupt the `?` result).
+//
+// HONESTY (see docs/concurrent-cache-benchmark.md): this is a single,
+// non-core-pinned run on whatever machine executes it — it prints the
+// numbers it actually measures, nothing is hardcoded. The full refinement
+// (pin threads to cores 1..N, sweep core counts, add concurrent read
+// drivers to expose shard parallelism on the read path, and a Zipfian
+// hot-key distribution) is documented there as the next step and is out of
+// scope for this self-contained, runnable smoke test.
+//
+// Run: AETHER_HOME=. ae run benchmarks/concurrent-cache/concurrent_cache_bench.ae
+
+import std.os
+import std.string
+import std.map
+import std.snapshot
+
+// ---- Tunables ----------------------------------------------------------
+ops_budget() -> int { return 100000 }
+nkeys()      -> int { return 64 }
+nshards()    -> int { return 8 }
+
+// ---- Messages ----------------------------------------------------------
+// Map values are boxed as decimal strings (map values are pointers) and
+// parsed back on read. The ask reply puts the value first (the asker
+// receives the first field); ABSENT (-1) signals a missing key.
+message Set { key: string, val: int }
+message Get { key: string }
+message GetReply { value: int }
+
+// ---- Design 1: single-owner actor (the "one mutex" trap) ---------------
+actor SingleOwner {
+    state store = map_new()
+    receive {
+        Set(key, val) -> {
+            map_put_string_owned(store, key, string.from_int(val))
+        }
+        Get(key) -> {
+            result = 0 - 1                       // ABSENT
+            v = map_get_raw(store, key)
+            if v != null {
+                n, _ = string.to_int(v)
+                result = n
+            }
+            reply GetReply { value: result }     // single trailing reply
+        }
+    }
+}
+
+// ---- Design 2: sharded actor map (lock striping) -----------------------
+// Identical handler to SingleOwner; the only difference is that main()
+// routes each key to shards[hash(key) % N], so unrelated keys hit
+// different mailboxes and fire-and-forget writes drain in parallel.
+actor Shard {
+    state store = map_new()
+    receive {
+        Set(key, val) -> {
+            map_put_string_owned(store, key, string.from_int(val))
+        }
+        Get(key) -> {
+            result = 0 - 1
+            v = map_get_raw(store, key)
+            if v != null {
+                n, _ = string.to_int(v)
+                result = n
+            }
+            reply GetReply { value: result }
+        }
+    }
+}
+
+// ---- Helpers -----------------------------------------------------------
+
+// FNV-1a over the key bytes, masked non-negative, mod n. A standard fast
+// non-cryptographic hash — the right tool for routing (crypto hashes
+// return hex strings; far too heavy here).
+shard_for(key: string, n: int) -> int {
+    h = 2166136261
+    len = string.length(key)
+    i = 0
+    while i < len {
+        c = string.char_at(key, i)
+        h = (h ^ c) * 16777619
+        h = h & 2147483647
+        i = i + 1
+    }
+    return h % n
+}
+
+// key index -> key string ("key0", "key1", ...). Both the driver and the
+// COW writer regenerate keys from indices, so no shared key array exists.
+key_at(i: int) -> string {
+    return string.concat("key", string.from_int(i))
+}
+
+// 31-bit LCG step. Threading one seed through the loop gives every design
+// the IDENTICAL stream of (key, read/write) decisions.
+next_rng(seed: int) -> int {
+    return (seed * 1103515245 + 12345) & 2147483647
+}
+
+// ops/sec from an op count and an elapsed-ns duration. The numerator
+// `ops * 1e9` reaches ~1e14, so it MUST be 64-bit: widen `ops` to long
+// first (int*int would overflow 32 bits). Guards a zero/negative interval.
+ops_per_sec(ops: int, elapsed_ns: long) -> long {
+    if elapsed_ns <= 0 {
+        return 0
+    }
+    long total = ops                             // widen int -> long
+    total = total * 1000000000                   // long * int -> long, no overflow
+    return total / elapsed_ns                    // long / long
+}
+
+// Rebuild a fresh immutable snapshot map from `master` over the whole key
+// space. Readers still holding the old snapshot are unaffected.
+build_snapshot(master: ptr, nk: int) -> ptr {
+    next = map_new()
+    i = 0
+    while i < nk {
+        k = key_at(i)
+        v = map_get_raw(master, k)
+        if v != null {
+            map_put_string_owned(next, k, string.copy(v))
+        }
+        i = i + 1
+    }
+    return next
+}
+
+// ---- Main --------------------------------------------------------------
+// Actors are spawned ONCE here (before the mix loop) and the shard
+// ref-array is built once — re-binding an actor-ref array literal inside a
+// loop is not expressible. All four mixes reuse the same actors; each mix
+// re-seeds the deterministic stream so the comparison stays apples-to-
+// apples across designs.
+
+main() {
+    ops = ops_budget()
+    nk  = nkeys()
+    ns  = nshards()
+
+    println("=============================================================")
+    println("  Concurrent Cache Designs — Aether scaling study (#841)")
+    println("=============================================================")
+    println("  ops/design/mix : ${ops}")
+    println("  key space      : ${nk} keys")
+    println("  shards (D2)    : ${ns} actors")
+    println("  timing         : os.now_monotonic_ns (monotonic clock)")
+    println("  note           : single non-core-pinned run; see")
+    println("                   docs/concurrent-cache-benchmark.md")
+    println("")
+
+    // Spawn the actor designs ONCE.
+    owner = spawn(SingleOwner())
+    s0 = spawn(Shard())
+    s1 = spawn(Shard())
+    s2 = spawn(Shard())
+    s3 = spawn(Shard())
+    s4 = spawn(Shard())
+    s5 = spawn(Shard())
+    s6 = spawn(Shard())
+    s7 = spawn(Shard())
+    shards = [s0, s1, s2, s3, s4, s5, s6, s7]
+
+    // COW: a private master map (the writer's working copy) + the cell.
+    master = map_new()
+    cell = snapshot.new(build_snapshot(master, nk))
+    cow_prev = null
+
+    // Pre-populate all three designs with the full key space.
+    i = 0
+    while i < nk {
+        k = key_at(i)
+        owner ! Set { key: k, val: i }
+        shards[shard_for(k, ns)] ! Set { key: k, val: i }
+        map_put_string_owned(master, k, string.from_int(i))
+        i = i + 1
+    }
+    // Publish the initial COW snapshot.
+    cow_prev = snapshot.store(cell, build_snapshot(master, nk))
+    wait_for_idle()
+
+    base_seed = 2463534242 & 2147483647
+    mix_reads = [100, 90, 50, 10]
+    mi = 0
+    while mi < 4 {
+        read_pct = mix_reads[mi]
+        seed = next_rng(base_seed + mi * 7919)
+
+        mname = "read-only   (100% read)"
+        if read_pct == 90 { mname = "read-heavy  ( 90% read)" }
+        if read_pct == 50 { mname = "balanced    ( 50% read)" }
+        if read_pct == 10 { mname = "write-heavy ( 10% read)" }
+
+        println("-------------------------------------------------------------")
+        println("  Workload: ${mname}")
+        println("-------------------------------------------------------------")
+
+        // ---- Design 1: single-owner actor ----
+        t0 = os.now_monotonic_ns()
+        rng = seed
+        n = 0
+        sink = 0
+        while n < ops {
+            rng = next_rng(rng)
+            ki = rng % nk
+            rng = next_rng(rng)
+            roll = rng % 100
+            k = key_at(ki)
+            if roll < read_pct {
+                got = owner ? Get { key: k }            // serializes at one mailbox
+                sink = sink + got
+            } else {
+                owner ! Set { key: k, val: n }
+            }
+            n = n + 1
+        }
+        wait_for_idle()
+        t1 = os.now_monotonic_ns()
+        if sink < 0 { println("  (checksum ${sink})") }
+        println("  single-owner actor :  ${ops_per_sec(ops, t1 - t0)} ops/sec")
+
+        // ---- Design 2: sharded actor map ----
+        t0 = os.now_monotonic_ns()
+        rng = seed
+        n = 0
+        sink = 0
+        while n < ops {
+            rng = next_rng(rng)
+            ki = rng % nk
+            rng = next_rng(rng)
+            roll = rng % 100
+            k = key_at(ki)
+            idx = shard_for(k, ns)
+            if roll < read_pct {
+                got = shards[idx] ? Get { key: k }
+                sink = sink + got
+            } else {
+                shards[idx] ! Set { key: k, val: n }    // distinct shards drain in parallel
+            }
+            n = n + 1
+        }
+        wait_for_idle()
+        t1 = os.now_monotonic_ns()
+        if sink < 0 { println("  (checksum ${sink})") }
+        println("  sharded actor map  :  ${ops_per_sec(ops, t1 - t0)} ops/sec")
+
+        // ---- Design 3: COW snapshot cell ----
+        // Reads are direct lock-free loads (no mailbox). A write updates
+        // the master, rebuilds + publishes a fresh snapshot, and defers
+        // the displaced snapshot's free by one generation (RCU).
+        t0 = os.now_monotonic_ns()
+        rng = seed
+        n = 0
+        sink = 0
+        while n < ops {
+            rng = next_rng(rng)
+            ki = rng % nk
+            rng = next_rng(rng)
+            roll = rng % 100
+            k = key_at(ki)
+            if roll < read_pct {
+                snap = snapshot.load(cell)              // LOCK-FREE, no round-trip
+                v = map_get_raw(snap, k)
+                if v != null {
+                    m, _ = string.to_int(v)
+                    sink = sink + m
+                }
+            } else {
+                map_put_string_owned(master, k, string.from_int(n))
+                displaced = snapshot.store(cell, build_snapshot(master, nk))
+                if cow_prev != null {
+                    map_free(cow_prev)                  // free N-1 (grace period elapsed)
+                }
+                cow_prev = displaced
+            }
+            n = n + 1
+        }
+        t1 = os.now_monotonic_ns()
+        if sink < 0 { println("  (checksum ${sink})") }
+        println("  COW snapshot cell  :  ${ops_per_sec(ops, t1 - t0)} ops/sec")
+
+        mi = mi + 1
+    }
+
+    println("")
+    println("PASS concurrent_cache_bench")
+}

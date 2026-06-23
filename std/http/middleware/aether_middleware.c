@@ -613,11 +613,17 @@ void aether_gzip_opts_free(AetherGzipOpts* o) { free(o); }
 
 #ifdef AETHER_HAS_ZLIB
 /* Compress `in_data` (in_len bytes) into a freshly allocated gzip
- * stream. Returns the buffer (caller frees) and writes its length
- * into *out_len. NULL on failure. Uses windowBits=15+16 to produce
- * gzip framing (header + deflate + CRC + ISIZE). */
+ * stream. Returns the buffer and writes its compressed length into
+ * *out_len and the underlying allocation size into *out_cap. NULL on
+ * failure. Uses windowBits=15+16 to produce gzip framing (header +
+ * deflate + CRC + ISIZE).
+ *
+ * Cap-aware (#343): the buffer is allocated via aether_caps_malloc,
+ * so the caller MUST free it with aether_caps_free(buf, *out_cap) —
+ * passing the allocation size (not out_len) keeps the cap counter
+ * balanced. */
 static unsigned char* gzip_compress(const unsigned char* in_data, size_t in_len,
-                                    int level, size_t* out_len) {
+                                    int level, size_t* out_len, size_t* out_cap) {
     z_stream strm;
     memset(&strm, 0, sizeof(strm));
     /* 15+16: max window + gzip wrapper. -15 alone would be raw
@@ -627,13 +633,13 @@ static unsigned char* gzip_compress(const unsigned char* in_data, size_t in_len,
         return NULL;
     }
     uLong bound = deflateBound(&strm, (uLong)in_len);
-    /* Cap-aware (#343): bound is derived from in_len which is the
-     * response body length — caller-controlled but plugin-reachable.
-     * Caller frees with plain libc free per the caller-owned-return
-     * contract (aether_resource_caps.h:89-94). */
+    /* bound is derived from in_len which is the response body length
+     * — caller-controlled but plugin-reachable, so the alloc is
+     * gated by the cap. */
     size_t alloc_cap = bound > 0 ? (size_t)bound : 1;
     unsigned char* out = (unsigned char*)aether_caps_malloc(alloc_cap);
     if (!out) { deflateEnd(&strm); return NULL; }
+    *out_cap = alloc_cap;
     strm.next_in = (Bytef*)in_data;
     strm.avail_in = (uInt)in_len;
     strm.next_out = out;
@@ -677,31 +683,44 @@ void aether_xform_gzip(HttpRequest* req, HttpServerResponse* res, void* user_dat
 
 #ifdef AETHER_HAS_ZLIB
     size_t out_len = 0;
+    size_t comp_cap = 0;
     unsigned char* compressed = gzip_compress((const unsigned char*)res->body,
-                                              res->body_length, o->level, &out_len);
+                                              res->body_length, o->level,
+                                              &out_len, &comp_cap);
     if (!compressed) return;  /* leave response untouched on compression failure */
     if (out_len >= res->body_length) {
         /* Compression didn't help (already-compressed body, e.g.
-         * already-gzipped image). Discard and leave alone. */
-        free(compressed);
+         * already-gzipped image). Discard and leave alone. Free the
+         * caps-allocated buffer with its allocation size. */
+        aether_caps_free(compressed, comp_cap);
         return;
     }
     /* Replace body in place. The response struct owns the body
-     * string via its own free path (http_server_response_free).
+     * string via its own free path (http_server_response_free),
+     * which calls aether_caps_free(res->body, res->body_cap) — so
+     * the replacement must go through the cap allocator and keep
+     * res->body_cap in sync, otherwise the cap counter drifts and
+     * the eventual free passes a wrong size. Free the old body the
+     * same way the server does (caps-aware with the tracked cap;
+     * heap-safe even when the body was a libc strdup from
+     * http_response_set_body, where body_cap is 0).
      * Body is binary (deflate stream); the trailing NUL is
      * defensive only — the wire path uses res->body_length, not
      * strlen(res->body). */
-    free(res->body);
-    res->body = (char*)malloc(out_len + 1);
+    aether_caps_free(res->body, res->body_cap);
+    size_t body_cap = out_len + 1;
+    res->body = (char*)aether_caps_malloc(body_cap);
     if (!res->body) {
-        free(compressed);
+        aether_caps_free(compressed, comp_cap);
         res->body_length = 0;
+        res->body_cap = 0;
         return;
     }
     memcpy(res->body, compressed, out_len);
     res->body[out_len] = '\0';
     res->body_length = out_len;
-    free(compressed);
+    res->body_cap = body_cap;
+    aether_caps_free(compressed, comp_cap);
 
     /* Sync Content-Length to the post-compression size, replacing
      * the value the route handler set via http_response_set_body.

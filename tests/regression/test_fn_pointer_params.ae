@@ -16,6 +16,7 @@
 import std.mem
 extern exit(code: int)
 extern malloc(n: long) -> ptr
+extern free(p: ptr)
 
 // void-returning fn-ptr param — writes through the out-pointers.
 fill_pair(cb: fn(ptr, ptr) -> void, a: ptr, b: ptr) {
@@ -45,6 +46,11 @@ main() {
 
     r = combine(add as fn(int, int) -> int, dbl as fn(int) -> int, 3, 4)
     if r != 13 { println("FAIL: two-callback combine (got ${r}, want 13)"); exit(1) }
+
+    // Reclaim the scratch buffers — a well-behaved program frees what it
+    // allocates (keeps the macOS leaks / ASan-LSan gates clean).
+    free(p)
+    free(q)
 
     println("  PASS: fn-ptr params lower to typed indirect calls")
     println("OK")

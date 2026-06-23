@@ -1,0 +1,120 @@
+// std.snapshot — copy-on-write snapshot cell for read-mostly shared data.
+// Import with: import std.snapshot
+//
+// Issue #840.
+//
+// A snapshot cell holds one atomic pointer to an immutable value (the
+// "snapshot"). Many actors read the current snapshot concurrently while
+// a single writer occasionally publishes a freshly-built replacement.
+// Reads are LOCK-FREE — a bare atomic acquire load — so readers never
+// block, never spin, never coordinate. This is the read-mostly answer
+// for config, routing tables, feature flags: data read on every request
+// but rebuilt rarely.
+//
+//   cell = snapshot.new(initial)          // wrap an immutable value
+//   cur  = snapshot.load(cell)            // lock-free read
+//   old  = snapshot.store(cell, new_val)  // publish, get displaced back
+//   ok   = snapshot.cas(cell, exp, new)   // read-modify-write CAS
+//   snapshot.free(cell)                   // free the cell, NOT snapshots
+//
+// RECLAMATION CONTRACT (Aether has no GC — this is the critical part):
+//
+//   The cell stores ONLY the pointer; it never owns or frees the
+//   snapshot values. `store` / `cas` return the DISPLACED (old) snapshot
+//   so the WRITER can reclaim it. But that old snapshot may still be in
+//   use by an in-flight reader that loaded it just before the swap —
+//   freeing it immediately is a use-after-free. The writer must defer
+//   the free until a grace period has passed during which every reader
+//   that could hold the old pointer has finished. This is the standard
+//   RCU synchronize / call_rcu discipline, not a workaround — it is the
+//   correct approach for a non-GC language.
+//
+//   In Aether's actor model the natural pattern is a single owning
+//   writer-actor that defers ONE generation: when it publishes snapshot
+//   N+1 it frees snapshot N-1 (by which point readers that loaded N-1
+//   have completed). See docs/snapshot-cell.md for the full pattern and
+//   the CAS retry loop.
+//
+// USE / DON'T-USE:
+//   * Use for read-mostly data: tiny rebuild rate, huge read rate.
+//   * Do NOT use for write-heavy data or large values that change often
+//     — each publish rebuilds the whole value (write cost is O(size)).
+//   * RWMutex is the trap this replaces (per #840): a read lock still
+//     contends a cache line; a write lock starves readers. The COW
+//     cell's reads touch nothing shared but the pointer.
+
+exports (
+    // Raw externs (over std/snapshot/aether_snapshot.c).
+    aether_snapshot_new, aether_snapshot_load, aether_snapshot_store,
+    aether_snapshot_cas, aether_snapshot_free,
+    // Ergonomic wrappers — call as snapshot.new / .load / .store /
+    // .cas / .free.
+    new, load, store, cas, free
+)
+
+// ---- Raw externs ----
+
+// Create a cell pointing at `initial` (may be null). Returns the cell
+// handle, or null on allocation failure / memory-cap exceeded. Does NOT
+// take ownership of `initial`.
+extern aether_snapshot_new(initial: ptr) -> ptr
+
+// Lock-free read: atomic acquire load of the current snapshot. Returns
+// null for a null cell.
+extern aether_snapshot_load(cell: ptr) -> ptr
+
+// Publish `new_value` and return the displaced (old) snapshot. The
+// writer now owns the returned pointer and must reclaim it only after a
+// grace period (see the contract above). Null cell returns null.
+extern aether_snapshot_store(cell: ptr, new_value: ptr) -> ptr
+
+// Compare-and-swap. If the cell holds `expected`, swap in `new_value`
+// and return 1; otherwise return 0 and leave the cell unchanged. On
+// success the caller owns `expected` (reclaim after a grace period); on
+// failure re-load and retry. Null cell returns 0.
+extern aether_snapshot_cas(cell: ptr, expected: ptr, new_value: ptr) -> int
+
+// Free the cell itself. Does NOT free the snapshot it points at — that
+// value is caller-owned. Null-safe.
+extern aether_snapshot_free(cell: ptr)
+
+// ---- Ergonomic wrappers ----
+
+// snapshot.new(initial) — wrap an immutable value pointer in a cell.
+new(initial: ptr) -> ptr {
+    return aether_snapshot_new(initial)
+}
+
+// snapshot.load(cell) — lock-free read of the current snapshot.
+load(cell: ptr) -> ptr {
+    return aether_snapshot_load(cell)
+}
+
+// snapshot.store(cell, new_value) — publish `new_value`, returning the
+// displaced snapshot for the writer to reclaim after a grace period.
+store(cell: ptr, new_value: ptr) -> ptr {
+    return aether_snapshot_store(cell, new_value)
+}
+
+// snapshot.cas(cell, expected, new_value) — read-modify-write CAS;
+// returns 1 on success, 0 on failure. Loop pattern (writer-actor):
+//
+//     loop {
+//         cur = snapshot.load(cell)
+//         next = build_next_from(cur)   // pure, allocates `next`
+//         if snapshot.cas(cell, cur, next) == 1 {
+//             // `cur` is now displaced — reclaim it after a grace
+//             // period (e.g. defer one generation), NOT immediately.
+//             break
+//         }
+//         // lost the race: free our unused `next` and retry
+//         free_value(next)
+//     }
+cas(cell: ptr, expected: ptr, new_value: ptr) -> int {
+    return aether_snapshot_cas(cell, expected, new_value)
+}
+
+// snapshot.free(cell) — free the cell. Does NOT free the snapshots.
+free(cell: ptr) {
+    aether_snapshot_free(cell)
+}

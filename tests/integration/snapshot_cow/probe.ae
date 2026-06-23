@@ -1,0 +1,246 @@
+// std.snapshot copy-on-write cell regression test (issue #840).
+//
+// std.snapshot is a lock-free read / rare-write snapshot cell for
+// read-mostly shared data (config, routing tables, feature flags). The
+// cell holds one atomic pointer to an immutable value; readers do a
+// lock-free acquire load, the writer publishes a new value with store /
+// cas and gets the displaced value back to reclaim.
+//
+// This driver exercises:
+//   1. new / load round-trip: the cell hands back exactly what it holds.
+//   2. store publishes the new value AND returns the displaced old one.
+//   3. load after store sees the new value (publish visibility).
+//   4. cas success swaps when `expected` matches, returns the displaced
+//      pointer for the caller to reclaim.
+//   5. cas failure leaves the cell unchanged when `expected` is stale.
+//   6. The writer-side reclamation pattern: the CAS retry loop plus
+//      deferring the free of the previous snapshot by one generation
+//      (free N-1 when publishing N+1) — the RCU grace-period discipline.
+//   7. null-cell defence on load / store / cas.
+//   8. new(null) is legal (empty cell) and free is null-safe.
+//
+// Each snapshot "value" is a 4-byte heap buffer holding an int written
+// via std.mem, so the test touches real publish/acquire memory, not just
+// pointer identity. The driver self-reports a PASS/FAIL tally on the
+// last line so the shell wrapper can assert on it.
+
+import std.snapshot
+import std.mem
+
+extern malloc(n: int) -> ptr
+extern free(p: ptr)
+
+// Allocate a 4-byte snapshot value holding `v`.
+make_value(v: int) -> ptr {
+    p = malloc(4)
+    if p != null {
+        mem.set_int(p, 0, v)
+    }
+    return p
+}
+
+value_of(p: ptr) -> int {
+    if p == null {
+        return -1
+    }
+    return mem.get_int(p, 0)
+}
+
+main() {
+    println("std.snapshot copy-on-write cell tests")
+    println("")
+
+    passed = 0
+    failed = 0
+
+    // Case 1: new / load round-trip.
+    {
+        v0 = make_value(100)
+        cell = snapshot.new(v0)
+        got = snapshot.load(cell)
+        if value_of(got) == 100 {
+            println("  [1] PASS new/load round-trip")
+            passed = passed + 1
+        } else {
+            println("  [1] FAIL: load returned ${value_of(got)}, expected 100")
+            failed = failed + 1
+        }
+        snapshot.free(cell)
+        free(v0)
+    }
+
+    // Case 2: store publishes new, returns displaced old; load sees new.
+    {
+        v0 = make_value(1)
+        v1 = make_value(2)
+        cell = snapshot.new(v0)
+        old = snapshot.store(cell, v1)
+        cur = snapshot.load(cell)
+        if value_of(old) == 1 {
+            if value_of(cur) == 2 {
+                println("  [2] PASS store returns displaced + load sees new")
+                passed = passed + 1
+            } else {
+                println("  [2] FAIL: load after store = ${value_of(cur)}, want 2")
+                failed = failed + 1
+            }
+        } else {
+            println("  [2] FAIL: store returned displaced ${value_of(old)}, want 1")
+            failed = failed + 1
+        }
+        // Writer reclaims the displaced value (safe here: single thread,
+        // no in-flight readers).
+        free(old)
+        snapshot.free(cell)
+        free(v1)
+    }
+
+    // Case 3: cas success — swaps when expected matches.
+    {
+        v0 = make_value(10)
+        v1 = make_value(20)
+        cell = snapshot.new(v0)
+        cur = snapshot.load(cell)
+        rc = snapshot.cas(cell, cur, v1)
+        seen = snapshot.load(cell)
+        if rc == 1 {
+            if value_of(seen) == 20 {
+                println("  [3] PASS cas success swaps value")
+                passed = passed + 1
+            } else {
+                println("  [3] FAIL: after cas = ${value_of(seen)}, want 20")
+                failed = failed + 1
+            }
+        } else {
+            println("  [3] FAIL: cas with matching expected returned 0")
+            failed = failed + 1
+        }
+        // On cas success the displaced value is `cur` (== v0).
+        free(cur)
+        snapshot.free(cell)
+        free(v1)
+    }
+
+    // Case 4: cas failure — stale expected leaves the cell unchanged.
+    {
+        v0 = make_value(10)
+        stale = make_value(999)
+        v1 = make_value(20)
+        cell = snapshot.new(v0)
+        // `stale` is not what the cell holds, so the cas must fail and
+        // publish nothing.
+        rc = snapshot.cas(cell, stale, v1)
+        seen = snapshot.load(cell)
+        if rc == 0 {
+            if value_of(seen) == 10 {
+                println("  [4] PASS cas failure leaves cell unchanged")
+                passed = passed + 1
+            } else {
+                println("  [4] FAIL: cell changed on failed cas = ${value_of(seen)}")
+                failed = failed + 1
+            }
+        } else {
+            println("  [4] FAIL: cas with stale expected returned 1")
+            failed = failed + 1
+        }
+        // Nothing was published, so the caller still owns v1 and stale.
+        free(v1)
+        free(stale)
+        snapshot.free(cell)
+        free(v0)
+    }
+
+    // Case 5: writer-side reclamation pattern — CAS retry loop with a
+    // one-generation deferred free (free snapshot N-1 when publishing
+    // N+1). This is the RCU grace-period discipline the docs describe;
+    // single-threaded here, but it exercises the exact ownership moves a
+    // writer-actor makes.
+    {
+        cell = snapshot.new(make_value(0))
+        prev = null            // snapshot N-1, freed when we publish N+1
+        ok_all = 1
+        gen = 1
+        while gen <= 5 {
+            // Read-build-publish loop. Single writer => one attempt
+            // suffices, but the loop is the real pattern: re-load on a
+            // lost race, free the unused candidate, retry.
+            published = 0
+            while published == 0 {
+                cur = snapshot.load(cell)
+                next = make_value(gen)
+                if snapshot.cas(cell, cur, next) == 1 {
+                    // `cur` is now displaced. Do NOT free it now — an
+                    // in-flight reader might still hold it. Defer one
+                    // generation: free the PREVIOUS displaced snapshot
+                    // (prev), whose readers have all completed.
+                    if prev != null {
+                        free(prev)
+                    }
+                    prev = cur
+                    published = 1
+                } else {
+                    // Lost the race: discard our unused candidate, retry.
+                    free(next)
+                }
+            }
+            gen = gen + 1
+        }
+        final = snapshot.load(cell)
+        if value_of(final) != 5 {
+            ok_all = 0
+        }
+        // Drain: free the still-deferred snapshot, the live snapshot,
+        // and the cell.
+        if prev != null {
+            free(prev)
+        }
+        free(final)
+        snapshot.free(cell)
+        if ok_all == 1 {
+            println("  [5] PASS deferred-reclamation CAS loop (5 publishes)")
+            passed = passed + 1
+        } else {
+            println("  [5] FAIL: final snapshot = ${value_of(final)}, want 5")
+            failed = failed + 1
+        }
+    }
+
+    // Case 6: null-cell defence.
+    {
+        ok = 1
+        if snapshot.load(null) != null {
+            ok = 0
+        }
+        if snapshot.store(null, null) != null {
+            ok = 0
+        }
+        if snapshot.cas(null, null, null) != 0 {
+            ok = 0
+        }
+        // free(null) must not crash.
+        snapshot.free(null)
+        if ok == 1 {
+            println("  [6] PASS null-cell defence (load/store/cas/free)")
+            passed = passed + 1
+        } else {
+            println("  [6] FAIL: null-cell defence")
+            failed = failed + 1
+        }
+    }
+
+    // Case 7: new(null) is a legal empty cell.
+    {
+        cell = snapshot.new(null)
+        if snapshot.load(cell) == null {
+            println("  [7] PASS new(null) is an empty cell")
+            passed = passed + 1
+        } else {
+            println("  [7] FAIL: new(null) load not null")
+            failed = failed + 1
+        }
+        snapshot.free(cell)
+    }
+
+    println("")
+    println("snapshot_cow: ${passed} passing, ${failed} failing")
+}

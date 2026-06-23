@@ -1,0 +1,139 @@
+// Sharded Actor Map — lock striping, the actor-native way.
+//
+// A single actor that owns a hot shared map is the "one mutex" trap:
+// every get/set funnels through ONE mailbox and serializes, so it cannot
+// scale past a single core no matter how many threads call it. The
+// actor-native fix is the same idea as lock striping: spawn N owner
+// actors ("shards"), route each key to `hash(key) % N`, and operations on
+// different keys land on different mailboxes — contention drops ~N×.
+//
+// This builds on Aether's existing ask/reply primitive (the `?` ask
+// operator + `reply` statement). It is NOT a sync.Map-style API; that
+// runs against the actor grain. See docs/sharded-actor-map.md for the
+// full rationale and shard-count guidance.
+//
+// Run with: ae run examples/actors/sharded-map.ae
+
+import std.string
+import std.map
+
+// ---- Messages ----
+// The map is string-keyed with int values. Values are boxed into the
+// per-shard std.map as strings (map values are pointers) and parsed back
+// out on read.
+message Set { key: string, val: int }
+message Delete { key: string }
+message Get { key: string }
+
+// Reply for an ask. The asker receives the FIRST field of the reply, so
+// `value` must come first. ABSENT (-1) signals a missing key.
+message GetReply { value: int }
+
+// ---- Shard actor: owns one partition of the key space ----
+actor Shard {
+    state store = map_new()
+
+    receive {
+        Set(key, val) -> {
+            // map_put_string_owned retains the boxed value and frees it
+            // on overwrite / map_free, so there is no leak on re-set.
+            map_put_string_owned(store, key, string.from_int(val))
+        }
+        Delete(key) -> {
+            map_remove(store, key)
+        }
+        Get(key) -> {
+            // Compute into one variable and reply ONCE at the end of the
+            // handler. A single trailing reply is the robust ask pattern.
+            result = 0 - 1                    // ABSENT sentinel
+            v = map_get_raw(store, key)
+            if v != null {
+                n, _ = string.to_int(v)
+                result = n
+            }
+            reply GetReply { value: result }
+        }
+    }
+}
+
+// ---- Routing: which shard owns this key? ----
+// FNV-1a over the key bytes, masked to a non-negative 31-bit value so the
+// `% nshards` lands in [0, nshards). FNV-1a is a well-known, fast,
+// well-distributing non-cryptographic hash — the right tool for routing
+// (a crypto hash would be wasteful here).
+shard_for(key: string, nshards: int) -> int {
+    h = 2166136261                            // FNV offset basis
+    n = string.length(key)
+    i = 0
+    while i < n {
+        c = string.char_at(key, i)
+        h = h ^ c
+        h = h * 16777619                      // FNV prime
+        h = h & 2147483647                    // keep it non-negative
+        i = i + 1
+    }
+    return h % nshards
+}
+
+main() {
+    println("=== Sharded Actor Map ===\n")
+
+    // Shard count for actors should track core-count, not the 256 from
+    // the Go ConcurrentHashMap study — actors carry a higher per-shard
+    // cost (a mailbox + scheduler slot) than a plain striped lock. A
+    // small multiple of the core count is the sweet spot. We use 4 here
+    // so the demo is easy to read.
+    nshards = 4
+    s0 = spawn(Shard())
+    s1 = spawn(Shard())
+    s2 = spawn(Shard())
+    s3 = spawn(Shard())
+    shards = [s0, s1, s2, s3]
+
+    keys = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
+    vals = [10, 20, 30, 40, 50, 60]
+
+    // SET: route each key by its hash and fire-and-forget to its shard.
+    // Different keys land on different mailboxes — that is the point.
+    println("set (key -> owning shard):")
+    i = 0
+    while i < 6 {
+        k = keys[i]
+        idx = shard_for(k, nshards)
+        print("  ")
+        print(k)
+        print(" -> shard ")
+        println(idx)
+        shards[idx] ! Set { key: k, val: vals[i] }
+        i = i + 1
+    }
+    wait_for_idle()
+
+    // GET: route by the same hash and ask the owning shard synchronously.
+    println("\nget (round-trip via ? ask):")
+    i = 0
+    while i < 6 {
+        k = keys[i]
+        idx = shard_for(k, nshards)
+        got = shards[idx] ? Get { key: k }
+        print("  ")
+        print(k)
+        print(" = ")
+        println(got)
+        i = i + 1
+    }
+
+    // DELETE: route, remove, then confirm the key is gone (ABSENT = -1).
+    println("\ndelete then get (expect -1 = absent):")
+    dk = "gamma"
+    didx = shard_for(dk, nshards)
+    shards[didx] ! Delete { key: dk }
+    wait_for_idle()
+    gone = shards[didx] ? Get { key: dk }
+    print("  ")
+    print(dk)
+    print(" = ")
+    println(gone)
+
+    println("\n=== Done ===")
+}
