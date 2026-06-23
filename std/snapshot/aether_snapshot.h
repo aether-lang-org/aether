@@ -51,7 +51,7 @@
  * readers; the COW cell's reads touch nothing shared but the pointer.)
  */
 
-#include "aether_resource_caps.h" /* aether_caps_malloc / aether_caps_free */
+#include "../../runtime/aether_resource_caps.h" /* aether_caps_malloc / aether_caps_free */
 
 #ifdef __cplusplus
 extern "C" {
