@@ -5,6 +5,24 @@ for Aether maintainers planning language/runtime work to accelerate the in-situ
 Redis-to-Aether migration in sibling repo `aedis/`. It intentionally excludes
 features already present in `0.169`.*
 
+> **Status update (as of v0.303.0).** This is a historical wishlist written
+> at v0.169.0; the original analysis below is preserved verbatim. Several of
+> the P0/P1/P2 items have since landed in the compiler and stdlib. Each
+> delivered item is annotated inline with a `✅ DELIVERED` marker and the
+> implementing evidence — do not read the unmarked gap text as still-missing.
+> Quick index of what has shipped:
+>
+> - P0 Header-Defined C Struct Interop — **DELIVERED** (`extern struct … @c_import`)
+> - P0 Typed And Qualified C Pointers — **DELIVERED** (`extern type`, `*T`, `const ptr`, `cstring`/`cstring_const`)
+> - P0 C ABI Scalar Aliases — **DELIVERED** (`size_t`/`ssize_t`/`uint32_t`/… builtins)
+> - P1 Long Double — **DELIVERED** (`longdouble`, #749)
+> - P1 Function Pointer Fields And Parameters — **DELIVERED** (#749 / #750)
+> - P1 C Constants And Macros — **DELIVERED** (`extern const NAME: type @c_import`, #702)
+> - P2 `std.mem` Bulk And Endian Helpers — **DELIVERED** (`mem.copy/move/compare/set`, LE/BE 16/32/64)
+>
+> Still open at v0.303.0: P2 SDS And Length-Aware String Boundary, and the
+> P3/P4 build-integration and ergonomics items.
+
 ## Current Port Shape
 
 The Redis port is dependency-first: small, widely used helpers move before
@@ -43,6 +61,18 @@ Do not treat these as outstanding requirements:
 The remaining asks below are narrower than the older wishlist.
 
 ## P0: Header-Defined C Struct Interop
+
+> **✅ DELIVERED (as of v0.303.0):** the second spelling proposed below —
+> `extern struct client @c_import { argc: int; argv: ptr }` — is implemented.
+> The `@c_import` attribute marks a struct whose layout is *imported from a C
+> header*: Aether typechecks field access and `*client` overlays against the
+> declared fields, but codegen emits **no** `typedef struct client { … }
+> client;` and no forward typedef, so it cannot collide with the header's.
+> Parser: `compiler/parser/parser.c:3547` (attribute → annotation
+> `extern_c_import`, mutually exclusive with `@packed`). Codegen suppresses
+> the body/typedef at `compiler/codegen/codegen_func.c:1727`, and emits the
+> portable `struct Name*` pointer form at `compiler/codegen/codegen_func.c:607`.
+> *(Original gap analysis preserved below.)*
 
 ### Problem
 
@@ -125,6 +155,19 @@ Primary targets:
 
 ## P0: Typed And Qualified C Pointers
 
+> **✅ DELIVERED (as of v0.303.0):** opaque header-defined pointee types and
+> qualified C pointers are implemented. `extern type Name` declares an opaque,
+> header-defined C type (emits a forward `typedef struct Name Name;`, no field
+> access); `*Name` is its typed pointer, and `const ptr` (→ `const void*`),
+> `const *T` (→ `const T*`), `cstring` (→ `char*`) and `cstring_const`
+> (→ `const char*`) cover the qualified surface. Parser: `extern type`
+> at `compiler/parser/parser.c:3521` (annotation `extern_opaque`).
+> Documented in `docs/language-reference.md:1577`. Regression test:
+> `tests/regression/test_c_typed_pointers.ae` exercises the doc's acceptance
+> list (`uint64_t h(const void *, size_t)`, `int f(const char *)`, opaque
+> `*handle` param, no conflicting-declaration warnings).
+> *(Original gap analysis preserved below.)*
+
 ### Problem
 
 Aether `ptr` emits as `void *`. That is too lossy for Redis APIs. It causes
@@ -186,6 +229,17 @@ directly. It is prerequisite for larger ports of `dict.c`, ACL helpers,
 command handlers, networking, module APIs, and storage code.
 
 ## P0: C ABI Scalar Aliases
+
+> **✅ DELIVERED (as of v0.303.0):** the built-in-alias spelling proposed below
+> (`size_t n = 0`, `uint32_t flags = 0`) is implemented. The fixed-width and
+> platform C type names are recognised as type keywords and mapped to Aether's
+> integer types, which emit the matching exact C spelling. Mappings at
+> `compiler/parser/parser.c:137-153`, including `uint8_t`→`TYPE_UINT8`,
+> `uint16_t`→`TYPE_UINT16`, `uint32_t`→`TYPE_UINT32`, `int64_t`/`uint64_t`→
+> `TYPE_INT64`/`TYPE_UINT64`, `intptr_t`/`uintptr_t`→`TYPE_INT64`/`TYPE_UINT64`,
+> `size_t`→`TYPE_UINT64`, `ssize_t`/`off_t`/`time_t`→`TYPE_INT64`. Used directly
+> by the `test_c_typed_pointers.ae` externs (`len: size_t`, `-> uint64_t`).
+> *(Original gap analysis preserved below.)*
 
 ### Problem
 
@@ -252,6 +306,14 @@ RDB/AOF, process helpers, and platform-specific code.
 
 ## P1: Long Double
 
+> **✅ DELIVERED (as of v0.303.0):** the `longdouble` ABI type is implemented
+> (#749). The `longdouble` type name parses to `TYPE_LONGDOUBLE`
+> (`compiler/parser/parser.c:531`, declared in `compiler/ast.h:196`) and lowers
+> to C `long double` in every codegen position (`compiler/codegen/codegen.c:65`,
+> `:1217`, `:1430`, `:1584`). It works in extern params/returns, locals, and
+> arithmetic, so direct libc externs such as `strtold` are expressible.
+> *(Original gap analysis preserved below.)*
+
 ### Problem
 
 Aether `float` now maps to C `double`, which is good for many Redis paths.
@@ -291,6 +353,21 @@ parsing. It is not the same as the old "need double" request; C `double` is
 largely covered by Aether `float` as of `0.169`.
 
 ## P1: Function Pointer Fields And Parameters
+
+> **✅ DELIVERED (as of v0.303.0):** typed function-pointer struct **fields**
+> (#749 Ask A) and function-pointer **parameters** (#750) are both implemented,
+> with the `fn(T1, T2) -> R` spelling used in the requirement below. A struct
+> field typed `fn(int) -> int` emits the C field `int (*name)(int)` and is
+> callable as `o.field(args)` (value) or `p.field(args)` → `p->field(args)`
+> (pointer-to-struct), and is assignable through a pointer — this is the
+> `dictType` vtable shape. A `fn(...) -> R` parameter lowers to the exact C
+> function-pointer parameter type and a call through it is a real indirect call.
+> Regression tests: `tests/regression/test_fn_pointer_struct_fields.ae`
+> (value + pointer dispatch, field assignment) and
+> `tests/regression/test_fn_pointer_params.ae` (void/int callbacks, two
+> callback params). Aether functions are turned into C-ABI function pointers
+> for these via the `<fn> as fn(...) -> R` cast (and exported with
+> `@c_callback`). *(Original gap analysis preserved below.)*
 
 ### Problem
 
@@ -364,6 +441,21 @@ C trampoline code:
 
 ## P1: C Constants And Macros
 
+> **✅ DELIVERED (as of v0.303.0):** the "minimum viable path" — importing an
+> object-like C macro as a typed constant — is implemented (#702), with the
+> spelling `extern const NAME: type @c_import` (e.g.
+> `extern const EAGAIN: int @c_import`,
+> `extern const REDIS_GIT_SHA1: ptr @c_import`). The declaration teaches the
+> typechecker a name + Aether type (trusted as declared, like an extern fn);
+> codegen emits the macro name **verbatim** at each use site and emits nothing
+> for the declaration itself, so per-platform macro values come out right by
+> construction (the including TU's headers are the source of truth). Object-like
+> macros only; function-like macros stay wrapped in a C extern. Parser:
+> `compiler/parser/parser.c:3624` (annotation `c_import_const`, `@c_import`
+> required). Documented in `docs/language-reference.md:1599`. The header-driven
+> codegen tool described under "Better path" is not part of this; constants
+> are imported by name, not generated. *(Original gap analysis preserved below.)*
+
 ### Problem
 
 Redis logic relies on constants and macro expressions from headers:
@@ -416,6 +508,16 @@ This reduces duplicated constants in ACLs, object/type code, networking,
 RDB/AOF, module APIs, and platform conditionals.
 
 ## P2: `std.mem` Bulk And Endian Helpers
+
+> **✅ DELIVERED (as of v0.303.0):** `std.mem` now exposes the bulk and endian
+> surface proposed below. Bulk: `mem.copy` (memcpy), `mem.move` (memmove),
+> `mem.compare` (memcmp), `mem.set` (memset). Endian: `get_/set_u16_le`,
+> `get_/set_u16_be`, `get_/set_u32_le`, `get_/set_u32_be`, `get_/set_u64_le`,
+> `get_/set_u64_be` — full LE/BE 16/32/64. All defined and exported in
+> `std/mem/module.ae` (wrappers at lines ~318-334 over the `aether_mem_*`
+> externs ~251-276), backed by libc/intrinsics in `std/mem/aether_mem.c`.
+> The length parameter is `long` here rather than the `size_t` shown in the
+> sketch. *(Original gap analysis preserved below.)*
 
 ### Problem
 

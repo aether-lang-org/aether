@@ -57,6 +57,22 @@ Ask: either Aether-side `va_list` consumption, or a blessed
 
 ## 3. No portable `sizeof`/`INTPTR_MAX` / compile-time platform width
 
+RESOLVED (as of v0.303.0): the `sizeof(T)` and `offsetof(T, field)`
+layout builtins are implemented. `sizeof(Foo)` lowers to
+`((int)sizeof(struct Foo))` and `offsetof(Foo, b)` to
+`((int)offsetof(struct Foo, b))`, so the value can never disagree with
+the struct the C compiler actually lays out — exactly the brittleness
+that broke this session (a wrong guessed size segfaulted). The call
+shape `sizeof(` / `offsetof(` is what triggers the builtins; the names
+stay usable as ordinary identifiers elsewhere. Parser:
+`compiler/parser/parser.c:876` (AST_SIZEOF / AST_OFFSETOF). Regression:
+`tests/regression/test_sizeof_offsetof.ae` (sizeof of an extern struct,
+offsetof of each field, results used in arithmetic). This retires the C
+`memset(s, 0, sizeof(T))` shim. (The companion `INTPTR_MAX` /
+pointer-width platform constant is now also expressible via
+`extern const … @c_import` — see redis-porting-language-gaps.md "P1: C
+Constants And Macros".) Original ask text kept for context.
+
 Aether code that must zero or stack-allocate a C struct needs the
 struct's byte size, and there is no portable Aether-side `sizeof`.
 Hardcoding (e.g. `mem.set(s, 0, 408)` for `sizeof(JSParseState)`)

@@ -7,9 +7,11 @@
 > `tests/integration/test_http_client_v2.ae` and pass. v3 streaming
 > remains intentionally deferred per this document.
 >
-> Most thoroughly stress-tested by the Servirtium record/replay work
-> in `std/http/server/vcr/` (12 of 16 roadmap steps shipped). See
-> [`docs/http-vcr.md`](../http-vcr.md) for the full surface summary.
+> Most thoroughly stress-tested by the Servirtium record/replay work,
+> which has since moved out of the Aether stdlib (it used to ship as
+> `std.http.server.vcr`) to its own repository,
+> `github.com/aether-lang-org/servirtium-vcr`. See
+> [`docs/http-vcr.md`](../http-vcr.md) for where it went and why.
 
 
 `std.http` v1 client is a great starting shape: `http.get(url) -> (body, err)`
