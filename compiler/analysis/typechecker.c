@@ -1648,13 +1648,37 @@ static void collect_references(ASTNode* node, TrackedVar* vars, int var_count) {
     }
 }
 
+/* Is `name` a module-level `var` global? Such a name, when it appears
+ * as the LHS of a bare `name = expr` inside a function, parses as an
+ * AST_VARIABLE_DECLARATION but is NOT a new local — it is a WRITE to
+ * the file-scope `static` (#701). Treating it as a local declaration
+ * makes the unused-variable pass flag pure-setter functions
+ * (`set_x(v) { x = v }`) with a spurious "unused variable 'x'": the
+ * write-only assignment never reads the name, and collect_references
+ * deliberately skips a declaration's LHS. The scalar case escaped
+ * notice only because its setters read-modify-write (`x = x + 1`).
+ * Caller passes the module-global name set so these writes are not
+ * mistaken for unused local declarations. */
+static int is_module_global_name(const char** global_names, int global_count,
+                                 const char* name) {
+    if (!name || !global_names) return 0;
+    for (int i = 0; i < global_count; i++) {
+        if (global_names[i] && strcmp(global_names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
 // Collect variable declarations from a block (non-recursive into nested functions)
-static int collect_declarations(ASTNode* node, TrackedVar* vars, int var_count) {
+static int collect_declarations(ASTNode* node, TrackedVar* vars, int var_count,
+                                const char** global_names, int global_count) {
     if (!node || var_count >= MAX_TRACKED_VARS) return var_count;
 
     if (node->type == AST_VARIABLE_DECLARATION && node->value) {
-        // Skip _ prefixed names (intentional discard)
-        if (node->value[0] != '_') {
+        // Skip _ prefixed names (intentional discard) and writes to a
+        // module-level `var` global (a store to the file-scope static,
+        // not a local declaration).
+        if (node->value[0] != '_' &&
+            !is_module_global_name(global_names, global_count, node->value)) {
             vars[var_count].name = node->value;
             vars[var_count].line = node->line;
             vars[var_count].col = node->column;
@@ -1669,12 +1693,14 @@ static int collect_declarations(ASTNode* node, TrackedVar* vars, int var_count) 
     }
 
     for (int i = 0; i < node->child_count; i++) {
-        var_count = collect_declarations(node->children[i], vars, var_count);
+        var_count = collect_declarations(node->children[i], vars, var_count,
+                                         global_names, global_count);
     }
     return var_count;
 }
 
-static void check_unused_variables(ASTNode* body) {
+static void check_unused_variables(ASTNode* body, const char** global_names,
+                                   int global_count) {
     if (!body) return;
 
     TrackedVar vars[MAX_TRACKED_VARS];
@@ -1682,7 +1708,8 @@ static void check_unused_variables(ASTNode* body) {
 
     // Collect declarations
     for (int i = 0; i < body->child_count; i++) {
-        var_count = collect_declarations(body->children[i], vars, var_count);
+        var_count = collect_declarations(body->children[i], vars, var_count,
+                                         global_names, global_count);
     }
 
     if (var_count == 0) return;
@@ -2385,17 +2412,35 @@ int typecheck_program(ASTNode* program) {
         typecheck_node(program->children[i], global_table);
     }
 
+    // Collect module-level `var` global names (#701). A bare
+    // `name = expr` inside a function whose `name` is one of these is a
+    // write to the file-scope static, not a local declaration — the
+    // unused-variable pass must not flag write-only setters for them.
+    const char* global_var_names[MAX_TRACKED_VARS];
+    int global_var_count = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (child && child->type == AST_EXPORT_STATEMENT && child->child_count > 0) {
+            child = child->children[0];  // unwrap `export var ...`
+        }
+        if (child && child->type == AST_CONST_DECLARATION && child->value &&
+            child->annotation && strcmp(child->annotation, "global_var") == 0 &&
+            global_var_count < MAX_TRACKED_VARS) {
+            global_var_names[global_var_count++] = child->value;
+        }
+    }
+
     // Third pass: unused variable + unreachable code analysis
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
         if ((child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) && child->child_count > 0) {
             ASTNode* body = child->children[child->child_count - 1];
-            check_unused_variables(body);
+            check_unused_variables(body, global_var_names, global_var_count);
             check_unreachable_code(body);
         } else if (child->type == AST_MAIN_FUNCTION && child->child_count > 0) {
             // main() has a BLOCK child containing the actual statements
             ASTNode* main_body = child->children[0];
-            check_unused_variables(main_body);
+            check_unused_variables(main_body, global_var_names, global_var_count);
             check_unreachable_code(main_body);
         }
     }
