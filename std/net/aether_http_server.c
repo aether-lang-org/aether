@@ -468,7 +468,11 @@ static void conn_close(HttpConn* c) {
         c->fd = -1;
     }
     if (c->buf) {
-        free(c->buf);
+        /* Cap-aware (#343): the per-connection read buffer is grown
+         * via conn_buf_ensure (caps_realloc) and freed only here; its
+         * exact size lives in c->buf_cap at both sites. Request sizes
+         * drive the growth, so route it through the caps allocator. */
+        aether_caps_free(c->buf, (size_t)c->buf_cap);
         c->buf = NULL;
         c->buf_cap = 0;
         c->read_pos = 0;
@@ -494,7 +498,13 @@ static int conn_buf_ensure(HttpConn* c, int needed) {
     if (c->buf_cap >= needed) return 0;
     int new_cap = c->buf_cap > 0 ? c->buf_cap : HTTP_CONN_BUF_CAP;
     while (new_cap < needed) new_cap *= 2;
-    char* nb = realloc(c->buf, (size_t)new_cap);
+    /* Cap-aware (#343): old size is the prior c->buf_cap (0 on the
+     * first grow from NULL); the matching free in conn_close passes
+     * the same c->buf_cap. On cap-exceed caps_realloc returns NULL
+     * and leaves the original buffer intact, which the NULL-check
+     * below preserves. */
+    char* nb = (char*)aether_caps_realloc(c->buf, (size_t)c->buf_cap,
+                                          (size_t)new_cap);
     if (!nb) return -1;
     c->buf = nb;
     c->buf_cap = new_cap;
@@ -1003,9 +1013,13 @@ static void metrics_handler(HttpRequest* req, HttpServerResponse* res, void* use
     }
 
     /* Build into a heap buffer; size grows with route count. 64KB
-     * suffices for hundreds of routes. */
+     * suffices for hundreds of routes. Cap-aware (#343): the buffer
+     * is allocated and freed entirely within this handler, so the
+     * exact byte count (`cap`) is in scope at the matching free
+     * below — route it through the caps allocator so a plugin host's
+     * memory budget bounds the /metrics scrape allocation. */
     size_t cap = 64 * 1024;
-    char* buf = (char*)malloc(cap);
+    char* buf = (char*)aether_caps_malloc(cap);
     if (!buf) {
         http_response_set_status(res, 500);
         http_response_set_body(res, "metrics: oom");
@@ -1061,7 +1075,7 @@ static void metrics_handler(HttpRequest* req, HttpServerResponse* res, void* use
     http_response_set_status(res, 200);
     http_response_set_header(res, "Content-Type", "text/plain; version=0.0.4");
     http_response_set_body(res, buf);
-    free(buf);
+    aether_caps_free(buf, cap);
 }
 
 const char* http_server_set_metrics_raw(HttpServer* server,
@@ -1961,10 +1975,15 @@ int http_sse_send_event_id(HttpSseConn* sse,
     /* Worst case: data is N bytes, every byte is \n -> N "data: \n"
      * lines plus the constant overhead. Round generously to 4*N + 256. */
     size_t data_len = data ? strlen(data) : 0;
+    /* Cap-aware (#343): `cap` is driven by the handler-supplied event
+     * payload (`data`/`event_name`/`id`), so an SSE-emitting plugin
+     * can size this allocation. The buffer is built and freed wholly
+     * inside this function — `cap` is in scope at the matching free
+     * below — so it threads cleanly through the caps allocator. */
     size_t cap = data_len * 4 + 256
                + (event_name ? strlen(event_name) + 16 : 0)
                + (id ? strlen(id) + 16 : 0);
-    char* buf = (char*)malloc(cap);
+    char* buf = (char*)aether_caps_malloc(cap);
     if (!buf) return -1;
     size_t off = 0;
 
@@ -2000,7 +2019,7 @@ int http_sse_send_event_id(HttpSseConn* sse,
     }
 
     int n = conn_send(sse->conn, buf, (int)off);
-    free(buf);
+    aether_caps_free(buf, cap);
     if (n < (int)off) {
         sse->closed = 1;
         return -1;
@@ -2125,7 +2144,12 @@ static int ws_msg_grow(HttpWsConn* ws, int need) {
     if (ws->msg_cap >= need) return 0;
     int new_cap = ws->msg_cap > 0 ? ws->msg_cap : 4096;
     while (new_cap < need) new_cap *= 2;
-    char* nb = (char*)realloc(ws->msg_buf, new_cap);
+    /* Cap-aware (#343): WebSocket message reassembly is driven by the
+     * peer's frame sizes — untrusted. Old size is the prior
+     * ws->msg_cap (0 on the first grow from NULL); the matching free
+     * at the end of the WS dispatch passes the same msg_cap. */
+    char* nb = (char*)aether_caps_realloc(ws->msg_buf, (size_t)ws->msg_cap,
+                                          (size_t)new_cap);
     if (!nb) return -1;
     ws->msg_buf = nb;
     ws->msg_cap = new_cap;
@@ -2778,7 +2802,10 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
                     if (!ws_handle.closed) {
                         http_ws_close(&ws_handle, 1000, "");
                     }
-                    free(ws_handle.msg_buf);
+                    /* Cap-aware (#343): msg_buf was grown via
+                     * ws_msg_grow (caps_realloc); msg_cap is the exact
+                     * tracked size. NULL when no message arrived. */
+                    aether_caps_free(ws_handle.msg_buf, (size_t)ws_handle.msg_cap);
                     http_request_free(req);
                     http_server_response_free(res);
                     return 0;
@@ -4306,7 +4333,12 @@ static __thread size_t         g_rbr_cap = 0;
 static __thread int            g_rbr_len = 0;
 
 static void release_rbr_locked(void) {
-    if (g_rbr_buf) free(g_rbr_buf);
+    /* Cap-aware (#343): every g_rbr_buf allocation records its exact
+     * byte count in g_rbr_cap, so the matching free recovers the size
+     * here. The buffer is allocated and freed entirely within this
+     * module's request-body-read accessor surface; an upload-reading
+     * plugin drives `max`/`want`, so the caps allocator bounds it. */
+    if (g_rbr_buf) aether_caps_free(g_rbr_buf, g_rbr_cap);
     g_rbr_buf = NULL;
     g_rbr_cap = 0;
     g_rbr_len = 0;
@@ -4326,7 +4358,7 @@ int http_get_request_body_read_length(void) {
 
 /* Yield an EOF result (1-byte buffer, length 0) into the TLS slot. */
 static int rbr_yield_eof(void) {
-    g_rbr_buf = (unsigned char*)malloc(1);
+    g_rbr_buf = (unsigned char*)aether_caps_malloc(1);
     if (!g_rbr_buf) return 0;
     g_rbr_cap = 1;
     g_rbr_buf[0] = 0;
@@ -4359,7 +4391,7 @@ int http_request_body_read_raw(HttpRequest* req, int offset, int max) {
 
         long want = (max < remaining) ? (long)max : remaining;
         if (want <= 0) return rbr_yield_eof();
-        g_rbr_buf = (unsigned char*)malloc((size_t)want);
+        g_rbr_buf = (unsigned char*)aether_caps_malloc((size_t)want);
         if (!g_rbr_buf) return 0;
         g_rbr_cap = (size_t)want;
 
@@ -4393,7 +4425,7 @@ int http_request_body_read_raw(HttpRequest* req, int offset, int max) {
     int avail = total - offset;
     int want = (max < avail) ? max : avail;
     size_t alloc = want > 0 ? (size_t)want : 1;
-    g_rbr_buf = (unsigned char*)malloc(alloc);
+    g_rbr_buf = (unsigned char*)aether_caps_malloc(alloc);
     if (!g_rbr_buf) return 0;
     g_rbr_cap = alloc;
     if (want > 0) memcpy(g_rbr_buf, req->body + offset, (size_t)want);
