@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>arena - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search arena..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#create">create</a></li>
+    <li><a href="#alloc">alloc</a></li>
+    <li><a href="#alloc_aligned">alloc_aligned</a></li>
+    <li><a href="#reset">reset</a></li>
+    <li><a href="#destroy">destroy</a></li>
+    <li><a href="#get_used">get_used</a></li>
+    <li><a href="#get_size">get_size</a></li>
+    <li><a href="#used">used</a></li>
+    <li><a href="#size">size</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li class="active"><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>arena</h1>
+    <p class="module-desc">std.arena - Arena (bulk) allocator An arena owns a growable block of memory that it hands out via arena.alloc().</p>
+    <p class="import-line"><code>import std.arena</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="create" data-name="create">
+      <h3 class="function-name">create <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create(size) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">size: int</span></p>
+      <p class="doc">C-style externs (the escape hatch).</p>
+    </div>
+    <div class="function" id="alloc" data-name="alloc">
+      <h3 class="function-name">alloc <span class="kind">extern</span></h3>
+      <pre class="usage"><code>alloc(arena, bytes) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">arena: ptr, bytes: int</span></p>
+    </div>
+    <div class="function" id="alloc_aligned" data-name="alloc_aligned">
+      <h3 class="function-name">alloc_aligned <span class="kind">extern</span></h3>
+      <pre class="usage"><code>alloc_aligned(arena, bytes, alignment) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">arena: ptr, bytes: int, alignment: int</span></p>
+    </div>
+    <div class="function" id="reset" data-name="reset">
+      <h3 class="function-name">reset <span class="kind">extern</span></h3>
+      <pre class="usage"><code>reset(arena)</code></pre>
+      <p class="signature"><span class="sig-params">arena: ptr</span></p>
+    </div>
+    <div class="function" id="destroy" data-name="destroy">
+      <h3 class="function-name">destroy <span class="kind">extern</span></h3>
+      <pre class="usage"><code>destroy(arena)</code></pre>
+      <p class="signature"><span class="sig-params">arena: ptr</span></p>
+    </div>
+    <div class="function" id="get_used" data-name="get_used">
+      <h3 class="function-name">get_used <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_used(arena) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arena: ptr</span></p>
+    </div>
+    <div class="function" id="get_size" data-name="get_size">
+      <h3 class="function-name">get_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_size(arena) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arena: ptr</span></p>
+    </div>
+    <div class="function" id="used" data-name="used">
+      <h3 class="function-name">used <span class="kind">fn</span></h3>
+      <pre class="usage"><code>used(arena) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arena: ptr</span></p>
+      <p class="doc">Bytes currently allocated from the arena (sum across overflow blocks).</p>
+    </div>
+    <div class="function" id="size" data-name="size">
+      <h3 class="function-name">size <span class="kind">fn</span></h3>
+      <pre class="usage"><code>size(arena) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arena: ptr</span></p>
+      <p class="doc">Total capacity (sum across overflow blocks).</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>zlib - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search zlib..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#backend_available">backend_available</a></li>
+    <li><a href="#try_deflate">try_deflate</a></li>
+    <li><a href="#get_deflate_bytes">get_deflate_bytes</a></li>
+    <li><a href="#get_deflate_length">get_deflate_length</a></li>
+    <li><a href="#release_deflate">release_deflate</a></li>
+    <li><a href="#try_inflate">try_inflate</a></li>
+    <li><a href="#get_inflate_bytes">get_inflate_bytes</a></li>
+    <li><a href="#get_inflate_length">get_inflate_length</a></li>
+    <li><a href="#release_inflate">release_inflate</a></li>
+    <li><a href="#try_gzip_deflate">try_gzip_deflate</a></li>
+    <li><a href="#try_gzip_inflate">try_gzip_inflate</a></li>
+    <li><a href="#available">available</a></li>
+    <li><a href="#deflate">deflate</a></li>
+    <li><a href="#inflate">inflate</a></li>
+    <li><a href="#gzip_deflate">gzip_deflate</a></li>
+    <li><a href="#gzip_inflate">gzip_inflate</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li class="active"><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>zlib</h1>
+    <p class="module-desc">std.zlib - One-shot zlib and gzip deflate/inflate.</p>
+    <p class="import-line"><code>import std.zlib</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="backend_available" data-name="backend_available">
+      <h3 class="function-name">backend_available <span class="kind">extern</span></h3>
+      <pre class="usage"><code>backend_available() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Probe: returns 1 when the toolchain was built with zlib detected, 0 otherwise. Lets callers / tests distinguish &quot;no backend&quot; from &quot;backend returned an error at runtime&quot;. C-side name is `zlib_backend_available` to avoid colliding with the Aether-side `zlib.available()` wrapper's mangled name.</p>
+    </div>
+    <div class="function" id="try_deflate" data-name="try_deflate">
+      <h3 class="function-name">try_deflate <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_deflate(data, length, level) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int, level: int</span></p>
+      <p class="doc">Split-accessor boundary: try_ performs the op and stashes the result in a TLS buffer; get_ returns a borrowed pointer and length; release_ frees early (otherwise the buffer is freed on the next try_ call on the same thread).</p>
+    </div>
+    <div class="function" id="get_deflate_bytes" data-name="get_deflate_bytes">
+      <h3 class="function-name">get_deflate_bytes <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_deflate_bytes() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="get_deflate_length" data-name="get_deflate_length">
+      <h3 class="function-name">get_deflate_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_deflate_length() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="release_deflate" data-name="release_deflate">
+      <h3 class="function-name">release_deflate <span class="kind">extern</span></h3>
+      <pre class="usage"><code>release_deflate()</code></pre>
+    </div>
+    <div class="function" id="try_inflate" data-name="try_inflate">
+      <h3 class="function-name">try_inflate <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_inflate(data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+    </div>
+    <div class="function" id="get_inflate_bytes" data-name="get_inflate_bytes">
+      <h3 class="function-name">get_inflate_bytes <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_inflate_bytes() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="get_inflate_length" data-name="get_inflate_length">
+      <h3 class="function-name">get_inflate_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_inflate_length() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="release_inflate" data-name="release_inflate">
+      <h3 class="function-name">release_inflate <span class="kind">extern</span></h3>
+      <pre class="usage"><code>release_inflate()</code></pre>
+    </div>
+    <div class="function" id="try_gzip_deflate" data-name="try_gzip_deflate">
+      <h3 class="function-name">try_gzip_deflate <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_gzip_deflate(data, length, level) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int, level: int</span></p>
+    </div>
+    <div class="function" id="try_gzip_inflate" data-name="try_gzip_inflate">
+      <h3 class="function-name">try_gzip_inflate <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_gzip_inflate(data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+    </div>
+    <div class="function" id="available" data-name="available">
+      <h3 class="function-name">available <span class="kind">fn</span></h3>
+      <pre class="usage"><code>available() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Compress `length` bytes of `data` at the given level (0..9, or -1 for the library default). Returns (bytes, byte_count, &quot;&quot;) on success, (&quot;&quot;, 0, error) on failure. The returned string is length-aware: string.length(bytes) == byte_count. Alias for the capability probe. Use when skipping a test or choosing a fallback path.</p>
+    </div>
+    <div class="function" id="deflate" data-name="deflate">
+      <h3 class="function-name">deflate <span class="kind">fn</span></h3>
+      <pre class="usage"><code>deflate(data, length, level) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int, level: int</span></p>
+    </div>
+    <div class="function" id="inflate" data-name="inflate">
+      <h3 class="function-name">inflate <span class="kind">fn</span></h3>
+      <pre class="usage"><code>inflate(data, length) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+      <p class="doc">Decompress `length` bytes of `data` (a zlib stream — RFC 1950). Returns (bytes, byte_count, &quot;&quot;) on success, (&quot;&quot;, 0, error) on corruption, truncation, or empty input. The output buffer grows geometrically — callers don't need to know the decompressed size in advance.</p>
+    </div>
+    <div class="function" id="gzip_deflate" data-name="gzip_deflate">
+      <h3 class="function-name">gzip_deflate <span class="kind">fn</span></h3>
+      <pre class="usage"><code>gzip_deflate(data, length, level) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int, level: int</span></p>
+      <p class="doc">gzip-framed siblings (RFC 1952), intended for HTTP Content-Encoding: gzip.</p>
+    </div>
+    <div class="function" id="gzip_inflate" data-name="gzip_inflate">
+      <h3 class="function-name">gzip_inflate <span class="kind">fn</span></h3>
+      <pre class="usage"><code>gzip_inflate(data, length) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

@@ -13,70 +13,458 @@
     <p class="tagline">Standard Library</p>
   </div>
   <input type="text" id="search" placeholder="Search os..." onkeyup="searchModule()">
-  <h2>Functions</h2>
+  <h2>Exports</h2>
   <ul class="function-nav">
-    <li><a href="#os_system">os_system</a></li>
-    <li><a href="#os_exec_raw">os_exec_raw</a></li>
-    <li><a href="#os_getenv">os_getenv</a></li>
-    <li><a href="#os_execv">os_execv</a></li>
-    <li><a href="#os_which">os_which</a></li>
-    <li><a href="#os_run">os_run</a></li>
-    <li><a href="#os_run_capture_raw">os_run_capture_raw</a></li>
+    <li><a href="#system">system</a></li>
+    <li><a href="#exec_raw">exec_raw</a></li>
+    <li><a href="#run">run</a></li>
+    <li><a href="#run_capture_raw">run_capture_raw</a></li>
+    <li><a href="#run_capture_status_raw">run_capture_status_raw</a></li>
+    <li><a href="#run_pipe_raw">run_pipe_raw</a></li>
+    <li><a href="#wait_pid_raw">wait_pid_raw</a></li>
+    <li><a href="#run_pipe_drain_and_wait_raw">run_pipe_drain_and_wait_raw</a></li>
+    <li><a href="#getenv">getenv</a></li>
+    <li><a href="#which">which</a></li>
+    <li><a href="#aether_args_count">aether_args_count</a></li>
+    <li><a href="#aether_args_get">aether_args_get</a></li>
+    <li><a href="#aether_argv0">aether_argv0</a></li>
+    <li><a href="#aether_argv_raw">aether_argv_raw</a></li>
+    <li><a href="#aether_args_seal">aether_args_seal</a></li>
+    <li><a href="#aether_args_sealed">aether_args_sealed</a></li>
+    <li><a href="#args_seal">args_seal</a></li>
+    <li><a href="#args_sealed">args_sealed</a></li>
+    <li><a href="#execv">execv</a></li>
+    <li><a href="#now_utc_iso8601_raw">now_utc_iso8601_raw</a></li>
+    <li><a href="#getpid_raw">getpid_raw</a></li>
+    <li><a href="#exit">exit</a></li>
+    <li><a href="#wall_seconds_raw">wall_seconds_raw</a></li>
+    <li><a href="#wall_micros_raw">wall_micros_raw</a></li>
+    <li><a href="#now_monotonic_ms_raw">now_monotonic_ms_raw</a></li>
+    <li><a href="#now_monotonic_ns_raw">now_monotonic_ns_raw</a></li>
+    <li><a href="#now_unix_ms_raw">now_unix_ms_raw</a></li>
+    <li><a href="#now_local_fill_raw">now_local_fill_raw</a></li>
+    <li><a href="#now_local_iso8601_raw">now_local_iso8601_raw</a></li>
+    <li><a href="#platform_raw">platform_raw</a></li>
+    <li><a href="#io_setenv_raw">io_setenv_raw</a></li>
+    <li><a href="#io_unsetenv_raw">io_unsetenv_raw</a></li>
+    <li><a href="#exec">exec</a></li>
+    <li><a href="#run_capture">run_capture</a></li>
+    <li><a href="#argv0">argv0</a></li>
+    <li><a href="#now_utc_iso8601">now_utc_iso8601</a></li>
+    <li><a href="#getpid">getpid</a></li>
+    <li><a href="#wall_seconds">wall_seconds</a></li>
+    <li><a href="#wall_micros">wall_micros</a></li>
+    <li><a href="#now_monotonic_ms">now_monotonic_ms</a></li>
+    <li><a href="#now_monotonic_ns">now_monotonic_ns</a></li>
+    <li><a href="#now_unix_ms">now_unix_ms</a></li>
+    <li><a href="#now_local">now_local</a></li>
+    <li><a href="#now_local_iso8601">now_local_iso8601</a></li>
+    <li><a href="#LocalTime">LocalTime</a></li>
+    <li><a href="#platform">platform</a></li>
+    <li><a href="#setenv">setenv</a></li>
+    <li><a href="#unsetenv">unsetenv</a></li>
+    <li><a href="#run_pipe">run_pipe</a></li>
+    <li><a href="#wait_pid">wait_pid</a></li>
+    <li><a href="#run_pipe_drain_and_wait">run_pipe_drain_and_wait</a></li>
+    <li><a href="#kill_raw">kill_raw</a></li>
+    <li><a href="#wait_pid_timeout_raw">wait_pid_timeout_raw</a></li>
+    <li><a href="#run_supervised_raw">run_supervised_raw</a></li>
+    <li><a href="#kill">kill</a></li>
+    <li><a href="#wait_pid_timeout">wait_pid_timeout</a></li>
+    <li><a href="#run_supervised">run_supervised</a></li>
+    <li><a href="#run_full_raw">run_full_raw</a></li>
+    <li><a href="#run_full">run_full</a></li>
+    <li><a href="#chdir_raw">chdir_raw</a></li>
+    <li><a href="#getcwd_raw">getcwd_raw</a></li>
+    <li><a href="#chdir">chdir</a></li>
+    <li><a href="#getcwd">getcwd</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
   <ul class="module-list">
-    <li><a href="net.html">net</a></li>
-    <li><a href="io.html">io</a></li>
-    <li><a href="math.html">math</a></li>
-    <li><a href="json.html">json</a></li>
-    <li><a href="log.html">log</a></li>
-    <li class="active"><a href="os.html">os</a></li>
-    <li><a href="string.html">string</a></li>
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
     <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
     <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li class="active"><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
   </ul>
 </nav>
 <main class="content">
   <div class="module-header">
     <h1>os</h1>
-    <p class="module-desc"></p>
+    <p class="module-desc">std.os - Shell &amp; Process Execution Import with: import std.os</p>
+    <p class="import-line"><code>import std.os</code></p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="os_system" data-name="os_system">
-      <h3 class="function-name">os_system</h3>
-      <pre class="usage"><code>os_system(cmd)</code></pre>
-      <p class="doc">Run a shell command, return exit code</p>
+    <div class="function" id="system" data-name="system">
+      <h3 class="function-name">system <span class="kind">extern</span></h3>
+      <pre class="usage"><code>system(cmd) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">cmd: string</span></p>
+      <p class="doc">Run a shell command, returns exit code (0 = success)</p>
     </div>
-    <div class="function" id="os_exec_raw" data-name="os_exec_raw">
-      <h3 class="function-name">os_exec_raw</h3>
-      <pre class="usage"><code>os_exec_raw(cmd)</code></pre>
-      <p class="doc">Run a command and capture stdout as a string Returns heap-allocated string (caller must free), or NULL on failure</p>
+    <div class="function" id="exec_raw" data-name="exec_raw">
+      <h3 class="function-name">exec_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>exec_raw(cmd) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">cmd: string</span></p>
+      <p class="doc">Run a command and capture stdout as a string. Raw extern returns NULL on failure. Use the Go-style wrapper `os.exec` below in most code.</p>
     </div>
-    <div class="function" id="os_getenv" data-name="os_getenv">
-      <h3 class="function-name">os_getenv</h3>
-      <pre class="usage"><code>os_getenv(name)</code></pre>
+    <div class="function" id="run" data-name="run">
+      <h3 class="function-name">run <span class="kind">extern</span></h3>
+      <pre class="usage"><code>run(prog, argv, env) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr</span></p>
+      <p class="doc">Run a child process directly via fork+execvp+waitpid (POSIX). NO SHELL is interpreted: argv items are passed verbatim, so paths-with-spaces, $variables, |, ;, *, and other shell metacharacters in arguments are not metachars. Returns the child's exit code, or -1 on spawn failure. prog  — program to execute (resolved via PATH if it has no '/') argv  — list of strings to pass as arguments AFTER argv[0]=prog, or null/empty list for no arguments env   — list of &quot;KEY=VALUE&quot; strings to pass as the child's environment, or null to inherit the parent's environment</p>
+    </div>
+    <div class="function" id="run_capture_raw" data-name="run_capture_raw">
+      <h3 class="function-name">run_capture_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>run_capture_raw(prog, argv, env) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr</span></p>
+      <p class="doc">Same as os_run but captures the child's stdout. Raw extern returns null on spawn failure. Use the Go-style wrapper `os.run_capture` in most code. The child's exit code is discarded — use os_run, or the tuple-returning `os_run_capture_status_raw` below, if you need both.</p>
+    </div>
+    <div class="function" id="run_capture_status_raw" data-name="run_capture_status_raw">
+      <h3 class="function-name">run_capture_status_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>run_capture_status_raw(prog, argv, env) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr</span></p>
+      <p class="doc">Tuple sibling that exposes the child's exit code. Returns (stdout, status, err) — see the Aether-side `run_capture` wrapper for the per-slot semantics. Issue #289. Position 0 (stdout) is `@heap`: the C side accumulates the child's output into a malloc'd buffer that grows via realloc as bytes arrive. The destructured LHS owns it; the heap-string-tracker frees it on reassignment / at function exit. Position 2 (err) stays default-borrow — error messages are static string literals in aether_os.c. Audited callers: only the Aether wrapper `run_capture` at line ~150 passes the tuple through; no manual string.release on the captured stdout anywhere in stdlib, tests/, examples/, tools/, or contrib/. See #420 follow-up.</p>
+    </div>
+    <div class="function" id="run_pipe_raw" data-name="run_pipe_raw">
+      <h3 class="function-name">run_pipe_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>run_pipe_raw(prog, argv, env) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr</span></p>
+      <p class="doc">std.ipc back-channel spawn. Spawns a child with an inherited pipe at fd 3 (write end, child side). Sets AETHER_IPC_FD=3 in the child's environment so the child can locate the fd via std.ipc.parent_channel(). Returns (parent_read_fd, child_pid, err). Caller MUST call os.wait_pid(child_pid) to reap, or use the os.run_pipe_drain_and_wait convenience. Pipe-buffer deadlock window: if the child writes more than the OS pipe buffer (~16K macOS, ~64K Linux) without the parent reading concurrently, the child blocks on its write call and never exits. For payload-at-exit usage with small reports (e.g. Aeocha test summaries), this is fine; for larger or streaming payloads, prefer run_pipe_drain_and_wait. On Windows, returns (-1, -1, &quot;unsupported on Windows&quot;) — fall back to the file-marker pattern there.</p>
+    </div>
+    <div class="function" id="wait_pid_raw" data-name="wait_pid_raw">
+      <h3 class="function-name">wait_pid_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>wait_pid_raw(pid) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">pid: int</span></p>
+      <p class="doc">Wait for a child to exit and reap it. Companion to os_run_pipe_raw. Returns (exit_code, err). Calling this once per spawn is required to avoid zombies; the run_pipe_drain_and_wait convenience does it internally for callers who don't need the read-fd loop. On Windows, returns (-1, &quot;unsupported on Windows&quot;).</p>
+    </div>
+    <div class="function" id="run_pipe_drain_and_wait_raw" data-name="run_pipe_drain_and_wait_raw">
+      <h3 class="function-name">run_pipe_drain_and_wait_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>run_pipe_drain_and_wait_raw(prog, argv, env) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr</span></p>
+      <p class="doc">Convenience: spawn child with back-channel pipe, drain pipe to EOF concurrently with the child running, wait for child, reap. Returns (channel_payload, exit_code, err). No deadlock regardless of payload size — the read loop drains continuously so the pipe buffer never fills. This is the recommended entry point for the common case &quot;child writes a structured report at exit, parent reads it after.&quot; Streaming consumers (parent reading mid-run) should use the lower-level os_run_pipe_raw + os_wait_pid_raw pair instead. On Windows, returns (&quot;&quot;, -1, &quot;unsupported on Windows&quot;). Position 0 (channel_payload) is `@heap`: the C side accumulates the drained pipe contents into a malloc'd buffer that grows via realloc. The destructured LHS owns it; the heap-string-tracker frees it on reassignment / at function exit. Position 2 (err) stays default-borrow — every error path returns a static string literal. Audited callers: no manual string.release on the channel payload anywhere in stdlib, tests/, examples/, tools/, or contrib/. See #420 follow-up.</p>
+    </div>
+    <div class="function" id="getenv" data-name="getenv">
+      <h3 class="function-name">getenv <span class="kind">extern</span></h3>
+      <pre class="usage"><code>getenv(name) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
       <p class="doc">Get environment variable, returns string or NULL if not set</p>
     </div>
-    <div class="function" id="os_execv" data-name="os_execv">
-      <h3 class="function-name">os_execv</h3>
-      <pre class="usage"><code>os_execv(prog, argv_list)</code></pre>
-      <p class="doc">Replace the current process image with `prog`, passing each element of `argv_list` as an argv entry. `argv_list` is an Aether `list&lt;ptr&gt;` whose entries must be C strings; element 0 is argv[0] for the new program and need not match `prog`. Does NOT return on success — on failure returns -1 and leaves the current process running. `prog` is looked up on PATH if it does not contain a slash (POSIX `execvp`). Not available on Windows (returns -1).</p>
+    <div class="function" id="which" data-name="which">
+      <h3 class="function-name">which <span class="kind">extern</span></h3>
+      <pre class="usage"><code>which(name) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+      <p class="doc">Search PATH for an executable. Returns the absolute path to the first hit, or &quot;&quot; if not found. If `name` already contains '/', it's returned as-is when it's executable.</p>
     </div>
-    <div class="function" id="os_which" data-name="os_which">
-      <h3 class="function-name">os_which</h3>
-      <pre class="usage"><code>os_which(name)</code></pre>
-      <p class="doc">Search PATH for an executable named `name`. Returns the absolute path to the first executable hit, or NULL if not found. If `name` already contains '/', it's returned as-is when it's executable (matches POSIX `command -v` semantics for absolute/relative paths). Caller owns the returned string.</p>
+    <div class="function" id="aether_args_count" data-name="aether_args_count">
+      <h3 class="function-name">aether_args_count <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_args_count() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Command-line arguments</p>
     </div>
-    <div class="function" id="os_run" data-name="os_run">
-      <h3 class="function-name">os_run</h3>
-      <pre class="usage"><code>os_run(prog, argv, env)</code></pre>
-      <p class="doc">Run a child process directly via fork+execvp+waitpid (POSIX) or CreateProcessW (Windows — TODO). NO SHELL is interpreted: argv items are passed verbatim, so paths-with-spaces, $vars, |, ;, *, etc. in arguments are not metachars. Returns the child's exit code, or -1 on failure to spawn (program not found, etc.).  prog    — program to execute. Resolved via PATH if it has no '/'. argv    — Aether list (ArrayList*) of strings; argv[0] should be the program name itself. May be NULL (treated as empty list). env     — Aether list (ArrayList*) of &quot;KEY=VALUE&quot; strings, or NULL to inherit the parent's environment.</p>
+    <div class="function" id="aether_args_get" data-name="aether_args_get">
+      <h3 class="function-name">aether_args_get <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_args_get(index) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">index: int</span></p>
     </div>
-    <div class="function" id="os_run_capture_raw" data-name="os_run_capture_raw">
-      <h3 class="function-name">os_run_capture_raw</h3>
-      <pre class="usage"><code>os_run_capture_raw(prog, argv, env)</code></pre>
-      <p class="doc">Same as os_run but captures the child's stdout into a heap-allocated string the caller must free. Returns NULL on spawn failure. The child's exit code is discarded — if you need it, use os_run instead (or a future os_run_capture_with_status() if demand arises).</p>
+    <div class="function" id="aether_argv0" data-name="aether_argv0">
+      <h3 class="function-name">aether_argv0 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_argv0() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">argv[0] — the path the OS launched the current process with. Returns null when aether_args_init has not been called (e.g. unit tests that bypass `main`). The return value is a borrowed pointer into the OS argv storage; do not free. Idiomatic Aether callers should use `os.argv0()` which returns &quot;&quot; instead of null for convenience.</p>
+    </div>
+    <div class="function" id="aether_argv_raw" data-name="aether_argv_raw">
+      <h3 class="function-name">aether_argv_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_argv_raw() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">Raw argv vector captured by the generated process entrypoint. This is for C interop with APIs that need argc/argv exactly as the OS supplied them. Borrowed pointer; do not free.</p>
+    </div>
+    <div class="function" id="aether_args_seal" data-name="aether_args_seal">
+      <h3 class="function-name">aether_args_seal <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_args_seal()</code></pre>
+      <p class="doc">One-shot runtime seal of the argv accessors. After this returns, `os.aether_args_count()` reports 0, `os.aether_args_get(i)` returns null, `os.argv0()` returns &quot;&quot;, and `os.aether_argv_raw()` returns null — as if argv had never been initialised. Idempotent (calling twice is a no-op); there is no unseal. Intended use: once `main()` has parsed command-line flags into its own config state, call `os.args_seal()` to prevent any later code in the process (imported libraries, plugin callbacks, untrusted Aether modules) from reading the original argv. Complements the compile-time `hide` / `seal except` scope directives: those deny LEXICAL access; this denies RUNTIME access. Caveat: this is a co-operative Aether-side gate, not a kernel boundary. The OS still has the original argv in process memory (Linux /proc/self/cmdline, macOS sysctl) and code that goes around the Aether accessors can still read it. The seal defends against accidental late-stage Aether code touching argv, not against an attacker with arbitrary execution. Pair with the LD_PRELOAD libc sandbox if the threat model demands true inaccessibility.</p>
+    </div>
+    <div class="function" id="aether_args_sealed" data-name="aether_args_sealed">
+      <h3 class="function-name">aether_args_sealed <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_args_sealed() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="args_seal" data-name="args_seal">
+      <h3 class="function-name">args_seal <span class="kind">fn</span></h3>
+      <pre class="usage"><code>args_seal()</code></pre>
+      <p class="doc">Aether-side convenience wrappers — short names for the canonical &quot;consumed argv; seal it now&quot; pattern.</p>
+    </div>
+    <div class="function" id="args_sealed" data-name="args_sealed">
+      <h3 class="function-name">args_sealed <span class="kind">fn</span></h3>
+      <pre class="usage"><code>args_sealed() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="execv" data-name="execv">
+      <h3 class="function-name">execv <span class="kind">extern</span></h3>
+      <pre class="usage"><code>execv(prog, argv_list) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv_list: ptr</span></p>
+      <p class="doc">Replace the current process image with `prog`. `argv_list` is a list&lt;ptr&gt; of C strings (element 0 is argv[0] for the new program and does NOT need to match `prog`). On success this call never returns; on failure it returns -1 with the current process still running. `prog` is looked up on PATH if it does not contain a slash. Not available on Windows — returns -1 there.</p>
+    </div>
+    <div class="function" id="now_utc_iso8601_raw" data-name="now_utc_iso8601_raw">
+      <h3 class="function-name">now_utc_iso8601_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>now_utc_iso8601_raw() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">Current UTC time as an ISO-8601 timestamp: &quot;YYYY-MM-DDThh:mm:ssZ&quot; (20 chars). Thread-safe (gmtime_r on POSIX, gmtime_s on Windows). On clock / format failure returns an empty string — never null. Typical use: &quot;when did this event happen&quot; fields where a sortable, human-readable UTC timestamp is wanted (rev-blob date fields, JSON response timestamps, log-line prefixes). Sub-second precision and timezone offsets are out of scope; additive variants can land later.</p>
+    </div>
+    <div class="function" id="getpid_raw" data-name="getpid_raw">
+      <h3 class="function-name">getpid_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>getpid_raw() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Process identifier of the current process. Useful for tmpfile names (`/tmp/myprog.${os.getpid()}.tmp`), per-process locks, log prefixes, and stable tagging across forked children. POSIX `getpid(2)`; Windows `_getpid()`. Returns 0 on platforms compiled without filesystem support (no-op stub).</p>
+    </div>
+    <div class="function" id="exit" data-name="exit">
+      <h3 class="function-name">exit <span class="kind">extern</span></h3>
+      <pre class="usage"><code>exit(code)</code></pre>
+      <p class="signature"><span class="sig-params">code: int</span></p>
+      <p class="doc">Terminate the current process with `code`.</p>
+    </div>
+    <div class="function" id="wall_seconds_raw" data-name="wall_seconds_raw">
+      <h3 class="function-name">wall_seconds_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>wall_seconds_raw() <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="doc">Wall-clock time, split into whole seconds since the Unix epoch and the sub-second microsecond fraction (0..999999) — the two fields of POSIX `struct timeval`.  Kept as two plain-integer accessors so the `struct timeval` layout never has to cross into Aether (it is platform-dependent; raw int64/int do not).  POSIX `gettimeofday(2)`; Windows uses `GetSystemTimeAsFileTime`.  Both return 0 on platforms compiled without filesystem support (no-op stub). Typical uses: a wall-clock millisecond timestamp (`wall_seconds()*1000 + wall_micros()/1000`), or seeding a PRNG (`(wall_seconds() &lt;&lt; 32) ^ wall_micros()`).</p>
+    </div>
+    <div class="function" id="wall_micros_raw" data-name="wall_micros_raw">
+      <h3 class="function-name">wall_micros_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>wall_micros_raw() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="now_monotonic_ms_raw" data-name="now_monotonic_ms_raw">
+      <h3 class="function-name">now_monotonic_ms_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>now_monotonic_ms_raw() <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="doc">Monotonic-clock primitives.  Unlike wall_seconds / wall_micros (UTC, NTP-jumpable, useful for &quot;when did this event happen&quot; timestamps), these are tied to a monotonic per-platform counter whose value-domain is opaque — only *deltas* are meaningful.  Use them for animation tick loops, frame-time budgets, microbenchmarks, and elapsed-time measurements that must survive a wall-clock jump. ms — milliseconds since some fixed epoch (boot / process start / arbitrary).  Wraparound at ~292 million years; no concern. ns — nanoseconds since the same epoch.  Useful for sub-millisecond timing (animation t-curves, microbenchmarks). Implementation: clock_gettime(CLOCK_MONOTONIC) on POSIX, QueryPerformanceCounter on Windows.  Returns 0 on no-filesystem builds (the same stub-policy as wall_seconds / wall_micros). Return type is `long` (Aether's 64-bit on every platform); the C signature is int64_t, not C `long`, to avoid the LLP64 / 32-bit-long truncation hazard PR #562 caught for string_to_long_raw.</p>
+    </div>
+    <div class="function" id="now_monotonic_ns_raw" data-name="now_monotonic_ns_raw">
+      <h3 class="function-name">now_monotonic_ns_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>now_monotonic_ns_raw() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="now_unix_ms_raw" data-name="now_unix_ms_raw">
+      <h3 class="function-name">now_unix_ms_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>now_unix_ms_raw() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="now_local_fill_raw" data-name="now_local_fill_raw">
+      <h3 class="function-name">now_local_fill_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>now_local_fill_raw(out)</code></pre>
+      <p class="signature"><span class="sig-params">out: ptr</span></p>
+    </div>
+    <div class="function" id="now_local_iso8601_raw" data-name="now_local_iso8601_raw">
+      <h3 class="function-name">now_local_iso8601_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>now_local_iso8601_raw() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="platform_raw" data-name="platform_raw">
+      <h3 class="function-name">platform_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>platform_raw() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">Current OS platform as a flat lowercase string. Picked at compile time from the toolchain's predefined macros. Matches Go's runtime.GOOS and Rust's std::env::consts::OS: &quot;linux&quot;      Linux kernel (any libc) &quot;darwin&quot;     macOS / iOS / any Darwin kernel &quot;windows&quot;    Windows (any toolchain) &quot;freebsd&quot;    FreeBSD &quot;openbsd&quot;    OpenBSD &quot;netbsd&quot;     NetBSD &quot;dragonfly&quot;  DragonFly BSD &quot;solaris&quot;    Solaris / illumos &quot;wasm&quot;       WebAssembly (Emscripten or wasi) &quot;unknown&quot;    None of the above matched at compile time Typical use: if os.platform() == &quot;windows&quot; { // Windows-specific path } For &quot;do I have POSIX features?&quot; the rule of thumb is `os.platform() != &quot;windows&quot; &amp;&amp; os.platform() != &quot;wasm&quot;` — but usually probing the specific capability (e.g. net.pipe_open() &lt; 0) gives a sharper answer than the platform name alone. See CONTRIBUTING.md &quot;Coding for portability&quot; for the broader pattern.</p>
+    </div>
+    <div class="function" id="io_setenv_raw" data-name="io_setenv_raw">
+      <h3 class="function-name">io_setenv_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>io_setenv_raw(name, value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">name: string, value: string</span></p>
+      <p class="doc">Set / unset environment variable. The C-side functions live in std.io for legacy reasons; std.os re-exposes them so callers reaching for `os.setenv` (alongside `os.getenv`) find them where POSIX groups them under &lt;stdlib.h&gt;. Issue #342.</p>
+    </div>
+    <div class="function" id="io_unsetenv_raw" data-name="io_unsetenv_raw">
+      <h3 class="function-name">io_unsetenv_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>io_unsetenv_raw(name) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+    </div>
+    <div class="function" id="exec" data-name="exec">
+      <h3 class="function-name">exec <span class="kind">fn</span></h3>
+      <pre class="usage"><code>exec(cmd) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">cmd: string</span></p>
+      <p class="doc">Execute a shell command and capture stdout. Returns (output, &quot;&quot;) on success, (&quot;&quot;, error) on failure.</p>
+    </div>
+    <div class="function" id="run_capture" data-name="run_capture">
+      <h3 class="function-name">run_capture <span class="kind">fn</span></h3>
+      <pre class="usage"><code>run_capture(prog, argv, env) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr</span></p>
+      <p class="doc">Run a child process and capture its stdout. Returns `(output, status, err)`: - output: child's stdout. Empty string on spawn failure. - status: child's exit code (WEXITSTATUS) on normal exit; -1 when killed by signal or the spawn itself failed. - err:    &quot;&quot; on successful spawn regardless of exit code; non-empty only when the fork/exec couldn't run. Argv-based — no shell, no quoting issues. The status slot lets callers distinguish &quot;ran cleanly&quot; (status == 0) from &quot;ran but exited non-zero&quot; (e.g. `diff3 -m` returning 1 to signal conflicts, `grep` returning 1 for no-match, `gcc` returning non-zero on compile errors). Issue #289.</p>
+    </div>
+    <div class="function" id="argv0" data-name="argv0">
+      <h3 class="function-name">argv0 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>argv0() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">argv[0] — path the OS launched the current process with. Returns &quot;&quot; if aether_args_init has not been called or argv[0] is NULL. The raw form is also accessible as `aether_argv0()` for callers that want explicit null handling (e.g. to distinguish &quot;not initialised&quot; from &quot;empty&quot;).</p>
+    </div>
+    <div class="function" id="now_utc_iso8601" data-name="now_utc_iso8601">
+      <h3 class="function-name">now_utc_iso8601 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>now_utc_iso8601() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="getpid" data-name="getpid">
+      <h3 class="function-name">getpid <span class="kind">fn</span></h3>
+      <pre class="usage"><code>getpid() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="wall_seconds" data-name="wall_seconds">
+      <h3 class="function-name">wall_seconds <span class="kind">fn</span></h3>
+      <pre class="usage"><code>wall_seconds() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="wall_micros" data-name="wall_micros">
+      <h3 class="function-name">wall_micros <span class="kind">fn</span></h3>
+      <pre class="usage"><code>wall_micros() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="now_monotonic_ms" data-name="now_monotonic_ms">
+      <h3 class="function-name">now_monotonic_ms <span class="kind">fn</span></h3>
+      <pre class="usage"><code>now_monotonic_ms() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="now_monotonic_ns" data-name="now_monotonic_ns">
+      <h3 class="function-name">now_monotonic_ns <span class="kind">fn</span></h3>
+      <pre class="usage"><code>now_monotonic_ns() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="now_unix_ms" data-name="now_unix_ms">
+      <h3 class="function-name">now_unix_ms <span class="kind">fn</span></h3>
+      <pre class="usage"><code>now_unix_ms() <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="doc">Wall-clock Unix epoch ms. NTP-sensitive; use this for time-ordered identifiers (UUIDv7, ULID, KSUID, TSID) and for &quot;when did this happen&quot; timestamps, NOT for measuring durations — use now_monotonic_ms / now_monotonic_ns for that.</p>
+    </div>
+    <div class="function" id="now_local" data-name="now_local">
+      <h3 class="function-name">now_local <span class="kind">fn</span></h3>
+      <pre class="usage"><code>now_local() <span class="arrow">-&gt;</span> *LocalTime</code></pre>
+      <p class="doc">Returns a heap-allocated LocalTime populated with the current local wall-clock time. ONE localtime_r call inside the filler, so all eight fields agree with each other. On clock / format failure the struct is zeroed — check `t.year == 0` to detect. Caller-owns; caller must `free()` when done (LocalTime is a plain struct, no nested heap allocations to release).</p>
+    </div>
+    <div class="function" id="now_local_iso8601" data-name="now_local_iso8601">
+      <h3 class="function-name">now_local_iso8601 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>now_local_iso8601() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="LocalTime" data-name="LocalTime">
+      <h3 class="function-name">LocalTime <span class="kind">struct</span></h3>
+      <pre class="usage"><code>struct LocalTime</code></pre>
+      <p class="doc">Current local wall-clock time, broken into integer fields. Use `now_local()` to get a populated `LocalTime` struct in one call; the individual raw getters are exposed for callers that want only one field. Companion: `now_local_iso8601()` returns the same data formatted as an RFC-3339 / ISO-8601 string with explicit timezone offset (&quot;YYYY-MM-DDThh:mm:ss±HH:MM&quot;, or &quot;...Z&quot; when offset is 0). POSIX: `localtime_r` + `tm_gmtoff`. Windows: `localtime_s` + `_get_timezone` with DST correction. Both return zeroes on platforms compiled without filesystem support. LocalTime field ranges: year:                1970.. month:               1..12 day:                 1..31 hour:                0..23 minute:              0..59 second:              0..60 (60 on leap-second-aware systems) nanos:               0..999_999_999 tz_offset_minutes:   -720..+840 from UTC (negative = west)</p>
+    </div>
+    <div class="function" id="platform" data-name="platform">
+      <h3 class="function-name">platform <span class="kind">fn</span></h3>
+      <pre class="usage"><code>platform() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="setenv" data-name="setenv">
+      <h3 class="function-name">setenv <span class="kind">fn</span></h3>
+      <pre class="usage"><code>setenv(name, value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">name: string, value: string</span></p>
+      <p class="doc">Set an environment variable. Returns &quot;&quot; on success, error on failure. Mirrors std.io.setenv — both modules expose the same C-side function. Issue #342.</p>
+    </div>
+    <div class="function" id="unsetenv" data-name="unsetenv">
+      <h3 class="function-name">unsetenv <span class="kind">fn</span></h3>
+      <pre class="usage"><code>unsetenv(name) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+      <p class="doc">Unset an environment variable. Returns &quot;&quot; on success, error on failure. Mirrors std.io.unsetenv. Issue #342.</p>
+    </div>
+    <div class="function" id="run_pipe" data-name="run_pipe">
+      <h3 class="function-name">run_pipe <span class="kind">fn</span></h3>
+      <pre class="usage"><code>run_pipe(prog, argv, env) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr</span></p>
+      <p class="doc">Spawn child with std.ipc back-channel pipe. Returns (parent_read_fd, child_pid, err). Child sees AETHER_IPC_FD=3 in its env; std.ipc.parent_channel() inside the child resolves to fd 3. Caller MUST call os.wait_pid(child_pid) to reap the child; reading from parent_read_fd is the caller's responsibility. For the common &quot;spawn + read report + wait&quot; case, use os.run_pipe_drain_and_wait — same parent surface but no pipe-buffer deadlock risk and no manual wait_pid call needed. On Windows, returns (-1, -1, &quot;unsupported on Windows&quot;).</p>
+    </div>
+    <div class="function" id="wait_pid" data-name="wait_pid">
+      <h3 class="function-name">wait_pid <span class="kind">fn</span></h3>
+      <pre class="usage"><code>wait_pid(pid) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">pid: int</span></p>
+      <p class="doc">Wait for and reap a child spawned via os.run_pipe. Returns (exit_code, err). Calling this is required after os.run_pipe to avoid leaving the child as a zombie process.</p>
+    </div>
+    <div class="function" id="run_pipe_drain_and_wait" data-name="run_pipe_drain_and_wait">
+      <h3 class="function-name">run_pipe_drain_and_wait <span class="kind">fn</span></h3>
+      <pre class="usage"><code>run_pipe_drain_and_wait(prog, argv, env) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr</span></p>
+      <p class="doc">Convenience: spawn + drain back-channel pipe + wait + reap, all in one call. Returns (channel_payload, exit_code, err). Recommended entry point for &quot;child writes structured report at exit; parent reads it after.&quot; No pipe-buffer deadlock risk regardless of payload size. On Windows, returns (&quot;&quot;, -1, &quot;unsupported on Windows&quot;).</p>
+    </div>
+    <div class="function" id="kill_raw" data-name="kill_raw">
+      <h3 class="function-name">kill_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>kill_raw(pid, sig) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pid: int, sig: int</span></p>
+      <p class="doc">Send signal `sig` to `pid` — POSIX kill(2). Returns 0 on success, -1 on failure. Two conventions are deliberately exposed: - a NEGATIVE pid signals the whole process group abs(pid), the building block for tearing down a build and all it spawned; - `sig == 0` delivers nothing but still runs the existence / permission checks — the canonical &quot;is this pid/group alive?&quot; probe (0 = alive, -1 = gone). Signal numbers live in `std.signal` (SIGINT / SIGTERM / SIGKILL …) so callers needn't hard-code 2 / 15 / 9. Windows: `sig == 0` probes via OpenProcess; any other signal maps to a forced TerminateProcess (no catchable SIGTERM); a negative pid (group signalling) returns -1 — there is no pgid-by-negative-pid.</p>
+    </div>
+    <div class="function" id="wait_pid_timeout_raw" data-name="wait_pid_timeout_raw">
+      <h3 class="function-name">wait_pid_timeout_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>wait_pid_timeout_raw(pid, secs) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">pid: int, secs: int</span></p>
+      <p class="doc">Bounded wait for one child. Returns (status, timed_out, err): - status:    WEXITSTATUS on normal exit, 128+signo when signalled, -1 on timeout or error. - timed_out: 1 if `secs` elapsed before exit (the child is left RUNNING — caller decides whether to os.kill it), else 0. - err:       &quot;&quot; on a clean reap or clean timeout; non-empty on a waitpid error / invalid pid. `secs &lt;= 0` blocks indefinitely (like os.wait_pid, timed_out always 0). Lets a supervisor bound a wait without a separate watchdog process. Windows: OpenProcess + WaitForSingleObject(secs); status is the process exit code (no signal concept).</p>
+    </div>
+    <div class="function" id="run_supervised_raw" data-name="run_supervised_raw">
+      <h3 class="function-name">run_supervised_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>run_supervised_raw(prog, argv, env, new_process_group, forward_signals, timeout_secs, reap_group) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr, new_process_group: int, forward_signals: int, timeout_secs: int, reap_group: int</span></p>
+      <p class="doc">One-call supervised run — the whole job-control pattern in one primitive. Returns (exit_code, outcome). Options are int flags (1 = on, 0 = off) rather than a stringly-typed map, matching the rest of std.os. - new_process_group: child runs in its own group (POSIX pgid == pid; Windows: its own Job Object + CREATE_NEW_PROCESS_GROUP) so signals and reaping address the whole subtree. - forward_signals:   POSIX — parent SIGINT/SIGTERM forward to the child's group; Windows — a console Ctrl-C/Ctrl-Break handler terminates the job tree. Needs new_process_group; one supervised run at a time. - timeout_secs &gt; 0:  POSIX — TERM the group on deadline, 5s grace, then KILL; Windows — TerminateJobObject. Reports exit_code 124 (GNU `timeout` convention). - reap_group:        after the child exits, clean up anything it leaked into the group (POSIX TERM→grace→KILL + reap; Windows JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE). Needs new_process_group. outcome ∈ {&quot;exited&quot;,&quot;signalled&quot;,&quot;timeout&quot;,&quot;error&quot;}. Windows never reports &quot;signalled&quot; (no signal concept) — a killed child reads as &quot;exited&quot; with its terminate code.</p>
+    </div>
+    <div class="function" id="kill" data-name="kill">
+      <h3 class="function-name">kill <span class="kind">fn</span></h3>
+      <pre class="usage"><code>kill(pid, sig) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pid: int, sig: int</span></p>
+      <p class="doc">Send `sig` to `pid` (POSIX kill(2)). 0 = success, -1 = failure. Negative pid = whole group; sig 0 = existence probe. See os_kill_raw for the full contract; signal numbers are in std.signal.</p>
+    </div>
+    <div class="function" id="wait_pid_timeout" data-name="wait_pid_timeout">
+      <h3 class="function-name">wait_pid_timeout <span class="kind">fn</span></h3>
+      <pre class="usage"><code>wait_pid_timeout(pid, secs) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">pid: int, secs: int</span></p>
+      <p class="doc">Bounded wait — (status, timed_out, err). See os_wait_pid_timeout_raw.</p>
+    </div>
+    <div class="function" id="run_supervised" data-name="run_supervised">
+      <h3 class="function-name">run_supervised <span class="kind">fn</span></h3>
+      <pre class="usage"><code>run_supervised(prog, argv, env, new_process_group, forward_signals, timeout_secs, reap_group) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr, new_process_group: int, forward_signals: int, timeout_secs: int, reap_group: int</span></p>
+      <p class="doc">Supervised run — (exit_code, outcome). See os_run_supervised_raw for the per-flag semantics. The common build-orchestrator shape is `run_supervised(prog, argv, env, 1, 1, timeout, 1)`: own group, forward Ctrl-C, enforce a timeout, group-reap leaks.</p>
+    </div>
+    <div class="function" id="run_full_raw" data-name="run_full_raw">
+      <h3 class="function-name">run_full_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>run_full_raw(prog, argv, env, stdin_data, stdin_len) <span class="arrow">-&gt;</span> (string, string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr, stdin_data: string, stdin_len: int</span></p>
+      <p class="doc">Full three-way child stdio — the gap os.run_capture leaves open. Feeds `stdin_data` to the child's stdin (binary-safe: exactly its stored length is written, embedded NULs included) and captures stdout and stderr SEPARATELY. Returns (stdout, stderr, exit_code, err): - stdout / stderr: the child's two streams, captured independently (the `2&gt;&amp;1`-merged shape is not this call). &quot;&quot; when empty. Like os.run_capture they are NUL-terminated, so a capture holding an embedded NUL reads as truncated through the string ops — the stdin direction has no such limit. - exit_code: WEXITSTATUS on normal exit, 128+signo if signalled, 127 on exec failure, -1 on spawn/IO error. - err: &quot;&quot; on a successful spawn (regardless of exit code); non-empty only when the fork/exec/pipe itself failed. No pipe-buffer deadlock regardless of stream sizes: POSIX pumps all three fds in one poll(2) loop; Windows drains stdout/stderr on reader threads while the main thread writes stdin (Win32 anonymous pipes aren't pollable). An empty `stdin_data` gives the child an immediately-closed stdin (it can't block on the terminal).</p>
+    </div>
+    <div class="function" id="run_full" data-name="run_full">
+      <h3 class="function-name">run_full <span class="kind">fn</span></h3>
+      <pre class="usage"><code>run_full(prog, argv, env, stdin_data) <span class="arrow">-&gt;</span> (string, string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">prog: string, argv: ptr, env: ptr, stdin_data: string</span></p>
+      <p class="doc">(stdout, stderr, exit_code, err) — feed `stdin_data` and capture both streams. Pass &quot;&quot; for stdin_data when the child reads no input. See os_run_full_raw for the full contract.</p>
+    </div>
+    <div class="function" id="chdir_raw" data-name="chdir_raw">
+      <h3 class="function-name">chdir_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>chdir_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="getcwd_raw" data-name="getcwd_raw">
+      <h3 class="function-name">getcwd_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>getcwd_raw() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="chdir" data-name="chdir">
+      <h3 class="function-name">chdir <span class="kind">fn</span></h3>
+      <pre class="usage"><code>chdir(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Change the process working directory. Returns &quot;&quot; on success, an error message on failure (e.g. directory missing or not a directory).</p>
+    </div>
+    <div class="function" id="getcwd" data-name="getcwd">
+      <h3 class="function-name">getcwd <span class="kind">fn</span></h3>
+      <pre class="usage"><code>getcwd() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">Current working directory, or &quot;&quot; on failure. Returns a fresh refcounted string the caller owns (the raw strdup is reclaimed by the heap-string tracker — os_getcwd_raw is classified owned-heap in codegen).</p>
     </div>
   </div>
 </main>

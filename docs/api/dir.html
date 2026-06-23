@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dir - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search dir..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#exists">exists</a></li>
+    <li><a href="#create_raw">create_raw</a></li>
+    <li><a href="#delete_raw">delete_raw</a></li>
+    <li><a href="#list_raw">list_raw</a></li>
+    <li><a href="#list_free">list_free</a></li>
+    <li><a href="#create">create</a></li>
+    <li><a href="#delete">delete</a></li>
+    <li><a href="#list">list</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li class="active"><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>dir</h1>
+    <p class="module-desc">std.dir - Directory Operations (alias for std.fs) Raw externs end in `_raw`.</p>
+    <p class="import-line"><code>import std.dir</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="exists" data-name="exists">
+      <h3 class="function-name">exists <span class="kind">extern</span></h3>
+      <pre class="usage"><code>exists(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="create_raw" data-name="create_raw">
+      <h3 class="function-name">create_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="delete_raw" data-name="delete_raw">
+      <h3 class="function-name">delete_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>delete_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="list_raw" data-name="list_raw">
+      <h3 class="function-name">list_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>list_raw(path) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="list_free" data-name="list_free">
+      <h3 class="function-name">list_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>list_free(list)</code></pre>
+      <p class="signature"><span class="sig-params">list: ptr</span></p>
+    </div>
+    <div class="function" id="create" data-name="create">
+      <h3 class="function-name">create <span class="kind">fn</span></h3>
+      <pre class="usage"><code>create(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Create a directory. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="delete" data-name="delete">
+      <h3 class="function-name">delete <span class="kind">fn</span></h3>
+      <pre class="usage"><code>delete(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Delete a directory. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="list" data-name="list">
+      <h3 class="function-name">list <span class="kind">fn</span></h3>
+      <pre class="usage"><code>list(path) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">List directory contents. Returns (DirList ptr, &quot;&quot;) on success, (null, error) on failure. Caller must free the returned ptr with dir.list_free.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

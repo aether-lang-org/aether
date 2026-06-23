@@ -54,7 +54,7 @@ Two consumption shapes, in priority order:
    `<prefix>/lib/aether/libaether.a` (under the `aether/` subdir, not
    flat under `<prefix>/lib/`), so a bare `-laether` will fail to
    resolve without the explicit `-L<prefix>/lib/aether`. `tools/ae.c`
-   itself uses this same path — see `print_cflags` for the
+   itself uses this same path — see `cmd_cflags` for the
    construction.
 
 2. **Compile from source**, falling through to the `.c` files in
@@ -153,7 +153,7 @@ disagree. The two flags that matter today:
   built with it, you'll see linker errors for the sandbox
   symbols (or worse — silent loss of sandbox enforcement). The
   shipped `libaether.a` is always built with this flag (see
-  `Makefile:154` `CFLAGS`), so downstream consumers should
+  `Makefile:196` `CFLAGS`), so downstream consumers should
   compile with it too.
 
 - Any future `AETHER_HAS_*` flags introduced for optional

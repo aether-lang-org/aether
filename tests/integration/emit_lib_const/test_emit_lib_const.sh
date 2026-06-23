@@ -10,6 +10,18 @@
 #
 # Also asserts `ae lib-info` reports the constants (schema 1.2).
 
+# Skip on Windows — `--emit=lib` artifact hosting consumes the .so through the
+# POSIX dlopen + lib<module>.so binimport path (DLL hosting is a follow-up, see
+# tools/ae.c). The sibling .so-consume tests (emit_lib, emit_lib_composite,
+# emit_lib_dual_build) all skip here for the same reason; this one was added
+# without the guard and so failed the Windows matrix instead of skipping.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        echo "  [SKIP] test_emit_lib_const on Windows (POSIX dlopen / .so hosting)"
+        exit 0
+        ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"

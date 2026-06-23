@@ -176,12 +176,15 @@ Look for operations with the highest cycle counts and compare them across runs:
 
 ### 3. Monitor Production
 
-Enable in staging environment to catch regressions before production:
+Build your staging binary with profiling enabled to catch regressions before
+production. Profiling is a **compile-time** switch (`-DAETHER_PROFILE`), not a
+runtime setting — the `AETHER_PROFILE` *environment variable* is unrelated (it
+selects a runtime memory profile and does **not** enable profiling output).
 
 ```bash
-# Staging with profiling
-export AETHER_PROFILE=1
-./run_staging_tests.sh
+# Staging binary, built with profiling instrumentation
+gcc -O2 -march=native -DAETHER_PROFILE your_app.c -o staging_app
+./run_staging_tests.sh   # exercises the instrumented staging_app
 
 # Check for regressions against a saved baseline. Pick TOLERANCE to
 # match your run-to-run noise floor; CV% in the benchmark suite is a

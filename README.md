@@ -14,23 +14,20 @@ Aether is a compiled language that brings actor-based concurrency to systems pro
 **Where it sits on the OO ↔ FP spectrum:** structs are plain data, behaviour is free functions, closures + trailing blocks are first-class — Aether leans **closer to functional than OO**, sitting near Go and Rust in the hybrid middle of the paradigm spectrum. There are no classes, no inheritance, no method dispatch; the one piece of OO machinery present is the actor (stateful, encapsulated behind a message boundary, no polymorphism). See [Language Reference § Paradigm placement](docs/language-reference.md#paradigm-placement).
 
 **Core Features:**
-- Actor-based concurrency with automatic multi-core scheduling
-- Type inference with optional annotations
-- Compiles to readable C for portability and C library interop
-- Lock-free message passing with adaptive optimizations
-- Three-layer capability model for sandboxing untrusted code and hosting other languages in-process — `--emit=lib` gates stdlib at compile time, `hide`/`seal except` gates scopes, LD_PRELOAD gates libc
-- Go-style result types: `a, err = func()` with `_` discard
-- Package management: `ae add host/user/repo[@version]` (GitHub, GitLab, Bitbucket, any git host)
-- **PATH-style module search** — `--lib ./lib:./vendor/stdlib` (or `AETHER_LIB_DIR=...`) layers project-local modules over vendored / shared roots, left-to-right; `ae lib-path` shows the resolved chain. Selectively-imported names that shadow a local def now error (`E1000`) instead of silently recursing. See [Module System](docs/module-system-design.md).
-- Production-grade HTTP server in stdlib — TLS, HTTP/1.1 keep-alive, **HTTP/2** (h2 + h2c via libnghttp2 with ALPN, GOAWAY graceful shutdown, server-level pthread pool for concurrent stream dispatch), WebSocket (RFC 6455), Server-Sent Events, **zero-copy `sendfile(2)` static-file serving** (Linux + macOS, with TCP_CORK / TCP_NOPUSH coalescing), plus a stack of composable middleware (CORS, basic/bearer/session-cookie auth, rate limiting, real-IP, vhost, gzip, static files, rewrite, error pages), `/healthz` + `/readyz` health probes, structured access logs, and Prometheus metrics. See [HTTP Server](docs/http-server.md).
-- nginx-class **reverse proxy** in stdlib — `std.http.proxy` forwards inbound requests to a pool of upstream servers with five load-balancing algorithms (round-robin / least-conn / ip-hash / smooth weighted RR / cookie-hash sticky), active health checks, in-memory LRU response cache with Vary-aware keying and RFC 7234 cacheability rules, per-upstream circuit breaker, idempotent retry with `proxy_next_upstream` semantics, per-upstream token-bucket rate limit, active drain, W3C Trace-Context propagation, and a Prometheus 0.0.4 metrics endpoint. Hop-by-Hop header handling per RFC 7230. See [Reverse Proxy](docs/http-reverse-proxy.md).
-- **`--emit=lib` symbol catalog (`aether_lib_meta`) + `ae lib-info` reflection** — every shared library Aether emits exports a single zero-allocation, layout-stable `static const AetherLibMeta*` describing every exported function (Aether name, C symbol, signature, source file, source line). Walks straight from Python ctypes / Java Panama / Ruby Fiddle / Go cgo / hand-rolled `dlsym` — no JSON, no parsing, the catalog literally lives in `.rodata`. Schema is versioned (`"1.0"`) with explicit append-only growth at the struct tail (closure-context records reserved for v2). `ae lib-info <path>` is a turnkey reader: dlopen → format-print the catalog. See [Reflection: the symbol catalog](docs/emit-lib.md#reflection-the-symbol-catalog-aether_lib_meta--403).
-- **`--emit=lib` resource caps** — sandbox untrusted Aether plugins inside trusted hosts. Embedders set a process-wide memory ceiling (`aether_set_memory_cap`) and per-thread wall-clock deadline (`aether_set_call_deadline`) via the public C surface in `include/libaether.h`. The codegen emits a tripwire at every loop head under `--emit=lib` (zero overhead on `--emit=exe`), so guests that allocate uncapped or spin in infinite loops are bounded predictably. Memory accounting tracks current usage, not high-water-mark, so long-running guests aren't tripped by cumulative churn.
-- **DSL block receiver scoping** — inside `receiver.method(args) { body }`, bare-name function references resolve through the receiver's namespace before erroring. SDK builders no longer require an `import X (setter1, setter2, ...)` line to make trailing-block setters resolve.
-- **`@derive(eq)` on structs** — annotate a struct with `@derive(eq)` to synthesize `int T_eq(T a, T b)` automatically (field-by-field `==` chain); supports primitive numeric and string fields.
-- **Automatic string-ownership tracking** — every string variable carries a compiler-emitted `_heap_<name>` companion that flips on every reassignment, so heap-allocated buffers are reclaimed eagerly without an explicit `defer string.free(s)`. Covers single-value reassignment, tuple destructure, cross-block flow, function-exit cleanup, and escape detection through call-args (`@retain` annotation marks "stored" parameters; default `string`-param treatment is read-only). Recognised heap sources include the stdlib buffer-minting primitives — `string.concat` / `substring` / `substring_n` / `to_upper` / `to_lower` / `trim`, the length-aware constructor `string_new_with_length` (and `bytes.finish`, built on it), and `string.from_int` / `from_long` / `from_float` / `from_char` — string interpolation, user-defined `-> string` functions whose body provably returns heap (recursive structural escape analysis with cycle detection), and tuple-returning functions and `@heap`-annotated externs (each tuple position classified independently, with a uniform-heap wrap so mixed heap/literal return paths free uniformly). See [String memory model](docs/memory-management.md#string-memory-model-heap-string-tracker) for the full picture.
-- **Eiffel-style runtime contracts** — `requires` and `ensures` clauses attach pre/postconditions directly to function declarations: `add(a, b) -> int requires a >= 0 ensures result >= a { return a + b }`. Each clause lowers to `if (!(<expr>)) aether_panic("<role> violation: <text> in <fn>");` — preconditions at function entry, postconditions before every `return` (with `result` bound to the about-to-be-returned value). Multiple clauses, freely interleaved, each checked independently so the panic message names the specific failed predicate. `--no-contracts` build flag suppresses emission entirely (zero per-call cost — the analog of C's `-DNDEBUG`). See [Function contracts](docs/language-reference.md#function-contracts-requires--ensures-issue-348).
-- **`ae help <script>` — offline diagnostics for closure-DSL config scripts.** Translates the typer's terse `error[E0301]: Undefined function 'super_token'` into an operator-friendly suggestion (`Did you mean: superuser_token (in avnserver)?`). Six heuristics: Levenshtein-matched suggestions over the imported export sets, YAML/HCL pattern detection inside builder blocks (`port: 9990` → `port(9990)`), type-mismatch-with-English, missing-import detection against the stdlib catalog, library-author-shipped `*.help.md` hint matching, and top-level closure-DSL detection (wrap-in-`main()` suggestion). `--fix` applies the safe rewrites with explicit confirmation; `--json` is machine-readable. Hard privacy contract: **no network calls** (verified by an `strace -e network` CI guard), no file reads outside the script + its resolvable imports, no script execution. Optional `--llm <weights.gguf>` escalation links a local llama.cpp shim when the binary is built with `AETHER_ENABLE_LLM=1`; default builds omit it. See [Config-IS-Code Diagnostics](docs/cic-help.md).
+- **Actor-based concurrency** — automatic multi-core scheduling, lock-free message passing, and adaptive batching/migration. See [Actor Concurrency](docs/actor-concurrency.md).
+- **Type inference** with optional annotations, plus Go-style multi-value returns — `a, err = func()` with `_` discard.
+- **Compiles to readable C** — native performance and seamless C-library interop. See [Architecture](docs/architecture.md).
+- **Three-layer capability sandbox** — `--emit=lib` gates the stdlib at compile time, `hide`/`seal except` gate lexical scopes, and an `LD_PRELOAD` shim gates libc. See [Containment Sandbox](docs/containment-sandbox.md).
+- **Embeds in (and hosts) other languages** — `--emit=lib` emits a `.so` + typed SDK and a `.rodata` symbol catalog read by `ae lib-info`; the same grant list runs Lua / Python / Perl / Ruby / Tcl / JS in-process. See [Embedding & emit=lib](docs/emit-lib.md).
+- **Per-guest resource caps** — embedders set a process memory ceiling and per-thread wall-clock deadline; the codegen tripwires every loop head under `--emit=lib` (zero overhead on `--emit=exe`).
+- **Production HTTP server** in the stdlib — TLS, HTTP/1.1 keep-alive, HTTP/2 (h2 + h2c), WebSocket, Server-Sent Events, zero-copy `sendfile(2)`, and a stack of composable middleware. See [HTTP Server](docs/http-server.md).
+- **nginx-class reverse proxy** in the stdlib — five load-balancing algorithms, active health checks, an LRU response cache, per-upstream circuit breaker, idempotent retries, and rate limiting. See [Reverse Proxy](docs/http-reverse-proxy.md).
+- **Automatic string-ownership tracking** — heap strings are freed on reassignment and at scope exit with no manual `defer`; `@retain` marks parameters that store the pointer. See [String memory model](docs/memory-management.md#string-memory-model-heap-string-tracker).
+- **Runtime contracts** — `requires` / `ensures` pre- and postconditions on any function; `--no-contracts` compiles them out at zero per-call cost. See [Function contracts](docs/language-reference.md#function-contracts-requires--ensures-issue-348).
+- **`@derive(eq)` on structs** — synthesize a field-by-field equality helper automatically.
+- **PATH-style module search** — `--lib ./lib:./vendor` layers project, vendored, and shared module roots left-to-right; `ae lib-path` shows the resolved chain. See [Module System](docs/module-system-design.md).
+- **Package management** — `ae add host/user/repo[@version]` from GitHub, GitLab, Bitbucket, or any git host.
+- **Offline config-script diagnostics** — `ae help <script>` suggests fixes for closure-DSL config errors with no network access and no code execution. See [Config-IS-Code Diagnostics](docs/cic-help.md).
 
 ## Runtime Features
 
@@ -212,8 +209,8 @@ In a project directory (with `aether.toml`), `ae run` and `ae build` compile `sr
 ```bash
 make compiler                    # Build compiler only
 make ae                          # Build ae CLI tool
-make test                        # Run runtime C test suite (166 tests)
-make test-ae                     # Run .ae source tests (95 tests)
+make test                        # Run runtime C test suite
+make test-ae                     # Run .ae source tests
 make test-all                    # Run all tests
 make examples                    # Build all examples
 make -j8                         # Parallel build
@@ -276,11 +273,10 @@ aether/
 │   │   ├── client/         # Builder client (request builder, full response, JSON sugar)
 │   │   ├── middleware/     # CORS, basic/bearer/session auth, rate-limit, real-IP, vhost, gzip, static, rewrite, error pages
 │   │   ├── proxy/          # Reverse proxy: upstream pool, LB (RR/LC/iphash/WRR), health, cache, circuit breaker
-│   │   ├── server/h2/      # HTTP/2 framing via libnghttp2 (h2 + h2c + ALPN + GOAWAY + concurrent dispatch)
-│   │   └── server/vcr/     # Servirtium-format record/replay for HTTP tests
+│   │   └── server/h2/      # HTTP/2 framing via libnghttp2 (h2 + h2c + ALPN + GOAWAY + concurrent dispatch)
 │   ├── tcp/            # TCP client and server
 │   ├── net/            # Combined TCP/HTTP networking module
-│   ├── cryptography/   # SHA-1, SHA-256
+│   ├── cryptography/   # Hash family (SHA-2/3, BLAKE2, RIPEMD, Whirlpool, Tiger, Skein, SM3), HMAC, HKDF/PBKDF2/scrypt/Argon2, DRBG
 │   ├── zlib/           # One-shot deflate/inflate
 │   ├── math/           # Math functions and random numbers
 │   ├── io/             # Console I/O, environment variables
@@ -496,16 +492,16 @@ make examples
 ### Testing
 
 ```bash
-# Full CI suite (8 steps, -Werror) — runs on your current platform
+# Full CI suite (9 steps, -Werror) — runs on your current platform
 make ci
 
-# Unit tests only (215 tests)
+# Unit tests only (runtime C test suite)
 make test
 
-# Integration + regression .ae tests (463 tests)
+# Integration + regression .ae tests
 make test-ae
 
-# Build all examples (89 programs)
+# Build all example programs
 make examples
 
 # Full CI + Valgrind + ASan in Docker (Linux)

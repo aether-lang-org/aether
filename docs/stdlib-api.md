@@ -549,8 +549,23 @@ main() {
 - `cryptography.sha256_hex(data, length)` → `(string, string)` - 64-char lowercase hex digest.
 - `cryptography.hash_hex(algo, data, length)` → `(string, string)` - Algorithm-by-name dispatcher. `algo` is `"sha1"`, `"sha256"`, or any name `EVP_get_digestbyname()` recognizes (`"sha384"`, `"sha512"`, `"sha3-256"`, ...). Returns `("", "unknown algorithm")` for unrecognized names.
 - `cryptography.hash_supported(algo)` → `int` - `1` if this build can compute `algo`, `0` otherwise. Always succeeds. Use to validate user-supplied algorithm names before calling `hash_hex`.
+- `cryptography.md4_hex(data, length)` / `md5_hex(data, length)` → `(string, string)` - 32-char hex digest. Legacy interop only (Content-MD5, ETag, zsync) — NOT collision-resistant.
+- `cryptography.sha1_bytes(data, length)` / `sha256_bytes(data, length)` / `md4_bytes(data, length)` / `md5_bytes(data, length)` → `(string, int, string)` - Raw-bytes digest, `(bytes, length, err)`; `bytes` preserves embedded NULs.
+- `cryptography.hash_bytes(algo, data, length)` → `(string, int, string)` - Algorithm-by-name binary digest.
 
 `length` is explicit so binary payloads with embedded NULs survive. `data` may be either a plain string literal or an AetherString from `fs.read_binary` — the runtime unwraps automatically.
+
+### HMAC, Random, and Streaming Digests
+
+- `cryptography.hmac_sha256_hex(key, key_len, msg, msg_len)` → `(string, string)` - HMAC-SHA256 hex digest (RFC 2104 / FIPS 198-1).
+- `cryptography.hmac_sha256_bytes(key, key_len, msg, msg_len)` → `(string, int, string)` - Raw 32-byte HMAC for chained key derivation (SigV4 / HKDF-shaped flows).
+- `cryptography.random_bytes(n)` → `(string, int, string)` - `n` CSPRNG bytes from the OS (`getrandom` / `arc4random_buf`).
+- `cryptography.random_hex(n)` → `(string, string)` - `n` random bytes as `2*n` hex chars.
+- `cryptography.random_base64(n)` → `(string, string)` - `n` random bytes as unpadded Base64.
+- `cryptography.digest_new(algo)` → `(ptr, string)` - Open a streaming digest context (`"md5"`, `"sha256"`, ...).
+- `cryptography.digest_update(ctx, data, length)` → `(int, string)` - Feed bytes incrementally; does not free `ctx`.
+- `cryptography.digest_final_hex(ctx)` → `(string, string)` / `digest_final_bytes(ctx)` → `(string, int, string)` - Finalize; both FREE `ctx`.
+- `cryptography.digest_free(ctx)` - Abandon a context without finalizing (NULL-safe).
 
 ### Base64 (RFC 4648 §4 standard alphabet)
 
@@ -560,7 +575,7 @@ main() {
 
 ### What's not in `std.cryptography`
 
-HMAC, key derivation, symmetric ciphers, signing, certificate handling, streaming digests, URL-safe Base64 (RFC 4648 §5), MD5, and constant-time comparison are all out of scope. See [stdlib-reference.md](stdlib-reference.md) §"What `std.cryptography` doesn't do" for the rationale.
+Public-key crypto (RSA, ECDSA, Ed25519, X25519), symmetric ciphers (AES, ChaCha20-Poly1305), key derivation (KDFs), URL-safe Base64 (RFC 4648 §5), and constant-time comparison are out of scope — the public-key and cipher families live in `contrib/cryptography/`. See [stdlib-reference.md](stdlib-reference.md) §"What `std.cryptography` doesn't do" for the rationale.
 
 ---
 

@@ -62,8 +62,9 @@ nothing else:
 | **Network** | Never | **Never** |
 | **Environment** | A short fixed list (`CC`, `PATH`, `AETHER_*`, install-layout vars) | **No** |
 
-The recommendation: a documented, opt-in `--sandboxed-build` mode that runs
-`aetherc` under a grant list matching exactly the table above. Anything
+The recommendation: a documented, opt-in `--sandboxed-build` mode (not yet
+implemented) that runs `aetherc` under a grant list matching exactly the
+table above. Anything
 outside it — a network handle, a read outside the two roots, an `exec` of a
 non-toolchain binary — is a hard build failure, not a warning. This turns
 "could a malicious `import` or a hostile build script reach the network

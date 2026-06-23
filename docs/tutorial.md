@@ -203,18 +203,18 @@ Define functions with multiple clauses that match on argument values:
 
 ```aether
 // Recursive factorial with pattern matching
-factorial(0) -> 1;
-factorial(n) when n > 0 -> n * factorial(n - 1);
+factorial(0) -> 1
+factorial(n) when n > 0 -> n * factorial(n - 1)
 
 // Fibonacci
-fib(0) -> 0;
-fib(1) -> 1;
-fib(n) when n > 1 -> fib(n - 1) + fib(n - 2);
+fib(0) -> 0
+fib(1) -> 1
+fib(n) when n > 1 -> fib(n - 1) + fib(n - 2)
 
 // Classify a number
-classify(x) when x < 0 -> "negative";
-classify(x) when x == 0 -> "zero";
-classify(x) when x > 0 -> "positive";
+classify(x) when x < 0 -> "negative"
+classify(x) when x == 0 -> "zero"
+classify(x) when x > 0 -> "positive"
 
 main() {
     println("5! = ${factorial(5)}")
@@ -485,8 +485,8 @@ main() {
 | Spawn actor | `a = spawn(ActorName())` |
 | Send message | `a ! MessageName { field: value }` |
 | Wait for all | `wait_for_idle()` |
-| Pattern clause | `fn(0) -> result;` |
-| Guard | `fn(n) when n > 0 -> ...;` |
+| Pattern clause | `fn(0) -> result` |
+| Guard | `fn(n) when n > 0 -> ...` |
 | Match | `match (x) { 0 -> {...} _ -> {...} }` |
 | Interpolation | `"text ${variable}"` |
 | Constant | `const NAME = value` |

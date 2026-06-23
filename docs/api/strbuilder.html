@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>strbuilder - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search strbuilder..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_strbuilder_new">aether_strbuilder_new</a></li>
+    <li><a href="#aether_strbuilder_append">aether_strbuilder_append</a></li>
+    <li><a href="#aether_strbuilder_append_n">aether_strbuilder_append_n</a></li>
+    <li><a href="#aether_strbuilder_append_byte">aether_strbuilder_append_byte</a></li>
+    <li><a href="#aether_strbuilder_append_int">aether_strbuilder_append_int</a></li>
+    <li><a href="#aether_strbuilder_append_long">aether_strbuilder_append_long</a></li>
+    <li><a href="#aether_strbuilder_append_hex">aether_strbuilder_append_hex</a></li>
+    <li><a href="#aether_strbuilder_append_codepoint">aether_strbuilder_append_codepoint</a></li>
+    <li><a href="#aether_strbuilder_length">aether_strbuilder_length</a></li>
+    <li><a href="#aether_strbuilder_capacity">aether_strbuilder_capacity</a></li>
+    <li><a href="#aether_strbuilder_reserve">aether_strbuilder_reserve</a></li>
+    <li><a href="#aether_strbuilder_truncate">aether_strbuilder_truncate</a></li>
+    <li><a href="#aether_strbuilder_clear">aether_strbuilder_clear</a></li>
+    <li><a href="#aether_strbuilder_finish">aether_strbuilder_finish</a></li>
+    <li><a href="#aether_strbuilder_finish_with_length">aether_strbuilder_finish_with_length</a></li>
+    <li><a href="#aether_strbuilder_free">aether_strbuilder_free</a></li>
+    <li><a href="#new">new</a></li>
+    <li><a href="#append">append</a></li>
+    <li><a href="#append_n">append_n</a></li>
+    <li><a href="#append_byte">append_byte</a></li>
+    <li><a href="#append_int">append_int</a></li>
+    <li><a href="#append_long">append_long</a></li>
+    <li><a href="#append_hex">append_hex</a></li>
+    <li><a href="#append_codepoint">append_codepoint</a></li>
+    <li><a href="#append_format">append_format</a></li>
+    <li><a href="#length">length</a></li>
+    <li><a href="#capacity">capacity</a></li>
+    <li><a href="#reserve">reserve</a></li>
+    <li><a href="#truncate">truncate</a></li>
+    <li><a href="#clear">clear</a></li>
+    <li><a href="#finish">finish</a></li>
+    <li><a href="#finish_with_length">finish_with_length</a></li>
+    <li><a href="#free">free</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li class="active"><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>strbuilder</h1>
+    <p class="module-desc">std.strbuilder — amortised-O(1) string append.</p>
+    <p class="import-line"><code>import std.strbuilder</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_strbuilder_new" data-name="aether_strbuilder_new">
+      <h3 class="function-name">aether_strbuilder_new <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_new(cap_hint) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cap_hint: int</span></p>
+      <p class="doc">---- Raw externs ----</p>
+    </div>
+    <div class="function" id="aether_strbuilder_append" data-name="aether_strbuilder_append">
+      <h3 class="function-name">aether_strbuilder_append <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_append(b, s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, s: string</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_append_n" data-name="aether_strbuilder_append_n">
+      <h3 class="function-name">aether_strbuilder_append_n <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_append_n(b, s, n) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, s: string, n: int</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_append_byte" data-name="aether_strbuilder_append_byte">
+      <h3 class="function-name">aether_strbuilder_append_byte <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_append_byte(b, c) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, c: int</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_append_int" data-name="aether_strbuilder_append_int">
+      <h3 class="function-name">aether_strbuilder_append_int <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_append_int(b, v) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, v: int</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_append_long" data-name="aether_strbuilder_append_long">
+      <h3 class="function-name">aether_strbuilder_append_long <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_append_long(b, v) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, v: long</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_append_hex" data-name="aether_strbuilder_append_hex">
+      <h3 class="function-name">aether_strbuilder_append_hex <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_append_hex(b, v, width) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, v: long, width: int</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_append_codepoint" data-name="aether_strbuilder_append_codepoint">
+      <h3 class="function-name">aether_strbuilder_append_codepoint <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_append_codepoint(b, cp) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, cp: int</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_length" data-name="aether_strbuilder_length">
+      <h3 class="function-name">aether_strbuilder_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_length(b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_capacity" data-name="aether_strbuilder_capacity">
+      <h3 class="function-name">aether_strbuilder_capacity <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_capacity(b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_reserve" data-name="aether_strbuilder_reserve">
+      <h3 class="function-name">aether_strbuilder_reserve <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_reserve(b, additional) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, additional: int</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_truncate" data-name="aether_strbuilder_truncate">
+      <h3 class="function-name">aether_strbuilder_truncate <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_truncate(b, new_length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, new_length: int</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_clear" data-name="aether_strbuilder_clear">
+      <h3 class="function-name">aether_strbuilder_clear <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_clear(b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_finish" data-name="aether_strbuilder_finish">
+      <h3 class="function-name">aether_strbuilder_finish <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_finish(b) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_finish_with_length" data-name="aether_strbuilder_finish_with_length">
+      <h3 class="function-name">aether_strbuilder_finish_with_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_finish_with_length(b) <span class="arrow">-&gt;</span> (ptr, int)</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+    </div>
+    <div class="function" id="aether_strbuilder_free" data-name="aether_strbuilder_free">
+      <h3 class="function-name">aether_strbuilder_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_strbuilder_free(b)</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+    </div>
+    <div class="function" id="new" data-name="new">
+      <h3 class="function-name">new <span class="kind">fn</span></h3>
+      <pre class="usage"><code>new(cap_hint) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cap_hint: int</span></p>
+      <p class="doc">---- Aether-side wrappers ---- Allocate a new builder with at least `cap_hint` bytes reserved. If `cap_hint` is &lt;= 0, a small default is used. Returns null on OOM or cap exceeded. Initial logical length is 0.</p>
+    </div>
+    <div class="function" id="append" data-name="append">
+      <h3 class="function-name">append <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append(b, s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, s: string</span></p>
+      <p class="doc">Append a string. Length is taken from the AetherString header if present, else via strlen — so a plain `const char*` containing embedded NULs truncates at the first NUL. For binary-safe content, use `append_n` with an explicit length. Returns 1 on success, 0 on failure.</p>
+    </div>
+    <div class="function" id="append_n" data-name="append_n">
+      <h3 class="function-name">append_n <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append_n(b, s, n) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, s: string, n: int</span></p>
+      <p class="doc">Append exactly `n` bytes from `s`. Binary-safe — embedded NULs round-trip cleanly. Returns 1 on success, 0 on failure.</p>
+    </div>
+    <div class="function" id="append_byte" data-name="append_byte">
+      <h3 class="function-name">append_byte <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append_byte(b, c) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, c: int</span></p>
+      <p class="doc">Append a single byte (low 8 bits of `c`). Useful for separators — '\n' (10), ',' (44), 0x02, etc. — without the round-trip through a 1-byte string. Returns 1 on success, 0 on failure.</p>
+    </div>
+    <div class="function" id="append_int" data-name="append_int">
+      <h3 class="function-name">append_int <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append_int(b, v) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, v: int</span></p>
+      <p class="doc">Append the decimal representation of `v` (no padding, leading '-' on negatives). Avoids constructing an intermediate AetherString from string.from_int. Returns 1 on success, 0 on failure.</p>
+    </div>
+    <div class="function" id="append_long" data-name="append_long">
+      <h3 class="function-name">append_long <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append_long(b, v) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, v: long</span></p>
+      <p class="doc">Append the decimal representation of a 64-bit `v`. Use for IDs, timestamps, and offsets that overflow 32 bits. Returns 1 on success, 0 on failure.</p>
+    </div>
+    <div class="function" id="append_hex" data-name="append_hex">
+      <h3 class="function-name">append_hex <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append_hex(b, v, width) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, v: long, width: int</span></p>
+      <p class="doc">Append `v` as lowercase hexadecimal. `width` is a minimum nibble count — 0 for natural width, &gt;0 to zero-pad; a value wider than `width` grows rather than truncating. Negative `v` is encoded as its unsigned bit pattern. Returns 1 on success, 0 on failure.</p>
+    </div>
+    <div class="function" id="append_codepoint" data-name="append_codepoint">
+      <h3 class="function-name">append_codepoint <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append_codepoint(b, cp) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, cp: int</span></p>
+      <p class="doc">UTF-8 encode the Unicode code point `cp` and append it (1–4 bytes). Returns 0 — appending nothing — for invalid code points (negative, surrogate halves 0xD800–0xDFFF, or above 0x10FFFF); 1 on success.</p>
+    </div>
+    <div class="function" id="append_format" data-name="append_format">
+      <h3 class="function-name">append_format <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append_format()</code></pre>
+    </div>
+    <div class="function" id="length" data-name="length">
+      <h3 class="function-name">length <span class="kind">fn</span></h3>
+      <pre class="usage"><code>length(b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+      <p class="doc">Current accumulated length in bytes. Returns -1 if `b` is null.</p>
+    </div>
+    <div class="function" id="capacity" data-name="capacity">
+      <h3 class="function-name">capacity <span class="kind">fn</span></h3>
+      <pre class="usage"><code>capacity(b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+      <p class="doc">Current buffer capacity in bytes. Companion to `length` — useful for confirming a `reserve` hint took or observing growth. Returns -1 if `b` is null.</p>
+    </div>
+    <div class="function" id="reserve" data-name="reserve">
+      <h3 class="function-name">reserve <span class="kind">fn</span></h3>
+      <pre class="usage"><code>reserve(b, additional) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, additional: int</span></p>
+      <p class="doc">Pre-grow the buffer so the next `additional` bytes of appends do not reallocate. A performance hint only — the builder grows on demand regardless. `additional` counts from the current length. Returns 1 on success, 0 on failure.</p>
+    </div>
+    <div class="function" id="truncate" data-name="truncate">
+      <h3 class="function-name">truncate <span class="kind">fn</span></h3>
+      <pre class="usage"><code>truncate(b, new_length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr, new_length: int</span></p>
+      <p class="doc">Pop accumulated content back to `new_length` bytes. Only shrinks — a `new_length` past the current length is rejected. The buffer is retained, so a truncate-then-append reuse loop keeps the growth amortisation. Returns 1 on success, 0 on failure (null builder, out-of-range `new_length`).</p>
+    </div>
+    <div class="function" id="clear" data-name="clear">
+      <h3 class="function-name">clear <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clear(b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+      <p class="doc">Reset accumulated content to empty (truncate to 0). The buffer is retained for reuse across loop iterations. Returns 1 on success, 0 if `b` is null.</p>
+    </div>
+    <div class="function" id="finish" data-name="finish">
+      <h3 class="function-name">finish <span class="kind">fn</span></h3>
+      <pre class="usage"><code>finish(b) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+      <p class="doc">Finalise into a refcounted AetherString and destroy the builder. After this call, `b` is invalid — do not call append, length, or free on it. The returned string is heap-owned by the caller; the codegen's heap-string-tracker reclaims the buffer at scope exit.</p>
+    </div>
+    <div class="function" id="finish_with_length" data-name="finish_with_length">
+      <h3 class="function-name">finish_with_length <span class="kind">fn</span></h3>
+      <pre class="usage"><code>finish_with_length(b) <span class="arrow">-&gt;</span> (ptr, int)</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+      <p class="doc">Binary-safe finalise: returns the raw data buffer and its exact byte length as `(ptr, int)`, with NO NUL terminator appended — embedded NULs are preserved as content. Use this for binary protocol assembly (CBOR, msgpack, frames, packed records) where the v1 `finish`'s NUL-terminated `string` would be truncated by a strlen-based consumer downstream. The caller owns the returned pointer and MUST free it with a raw libc free (e.g. via `mem`-style handling) — position 0 is `ptr`, so it is not codegen-heap-tracked. An empty builder yields a non-null buffer with length 0. After this call `b` is invalid.</p>
+    </div>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">fn</span></h3>
+      <pre class="usage"><code>free(b)</code></pre>
+      <p class="signature"><span class="sig-params">b: ptr</span></p>
+      <p class="doc">Discard the builder without producing a string. Idempotent on null. Use on error paths where the in-progress output is no longer wanted.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

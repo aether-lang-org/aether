@@ -1,12 +1,15 @@
 # `aether help <script>` — Offline diagnostics for config-IS-code
 
-A proposed companion command to `aether run` and `aetherc`. Goal:
+A companion command to `aether run` and `aetherc`. Goal:
 catch the common mistakes a less-experienced operator makes when
 authoring a closure-DSL config script (`my_server.ae`-shaped files in
 the [`config-is-code.md`](config-is-code.md) sense), and translate the
 compiler's terse output into something an operator can act on.
 
-**Status:** proposed; not implemented. This doc is the design sketch.
+**Status:** implemented and shipped. `ae help <script>` is built into
+the `ae` driver (`tools/ae_help.c`, dispatched from `tools/ae.c`) and
+compiled by the default `make` target. This doc describes the design;
+the sections below note where behaviour matches the implementation.
 
 > Closely scoped: this is not a general "make my Aether code work"
 > assistant. It targets the narrow band of mistakes people make when
@@ -277,7 +280,7 @@ These are deliberately out of scope:
 
 Past a point, heuristic pattern-matching has diminishing returns.
 A small on-device language model — llama.cpp-flavoured, a 3-7B
-weights file the user supplies — could push the diagnostic quality
+weights file the user supplies — pushes the diagnostic quality
 further by:
 
 - Synthesising plain-English explanations for errors the heuristics
@@ -301,32 +304,39 @@ The flag does three things and only three things:
 
 No network. No "we'll cache your queries." If the user doesn't pass
 `--llm`, the LLM code path doesn't run at all — the embedded shim
-is gated behind a feature flag at compile time, so a stripped
-distribution can omit the binary cost entirely.
+is gated behind the `AETHER_ENABLE_LLM` compile-time flag, so a
+stripped distribution (the default build) omits the binary cost
+entirely. Without that flag the `--llm` option prints a build-time
+hint and exits rather than loading any model.
 
 The recommendation in the help command's own usage banner is plain:
 heuristics are sufficient for ~80% of novice mistakes; the LLM
 escalation is a sharp tool for the long tail, and you bring your
 own weights.
 
-## Implementation sketch
+## Implementation
 
-The pieces, roughly:
+The pieces, as built in `tools/ae_help.c`:
 
-- **Hook into the typer.** Reuse the existing AST + symbol-table
-  passes. Add a "diagnose" mode that collects findings instead of
-  aborting on first error.
-- **Hint loader.** Walk the imported libraries, find any
-  `<name>.help.md` next to their `module.ae` / source, parse the
-  structured sections.
-- **Pattern matcher.** Run the per-pattern AST predicates. Keep this
-  set small and high-precision — additions need a real-world repro,
-  not just a hypothetical.
-- **Renderer.** Pretty-print findings: line, original, suggestion,
-  doc cross-ref, diff if applicable.
-- **`--fix` applicator.** Take findings flagged "safe-fix," apply to
-  source, write back atomically (write-then-rename), print
-  before/after diff.
+- **Error source.** Rather than carving a "diagnose" mode into the
+  typer, `ae help` runs the real `aetherc` as a subprocess, captures
+  its stderr, and parses the already-structured `error[Eabcd]: …`
+  lines into findings. This avoids any risk of typer regressions
+  from a parallel code path; the tradeoff is that it only sees the
+  errors `aetherc` already surfaces.
+- **Hint loader.** Walks the imported libraries, finds any
+  `<name>.help.md` next to their `module.ae` / source, and parses the
+  structured sections into synthetic findings.
+- **Pattern matchers.** Per-pattern predicates over the script text:
+  Levenshtein-1 name suggestions, YAML/HCL shape detection inside
+  DSL blocks, and top-level-DSL detection. The set is kept small and
+  high-precision.
+- **Renderer.** Pretty-prints findings — line, original, suggestion,
+  doc cross-ref, diff if applicable — in human form, or as `--json`.
+- **`--fix` applicator.** Takes findings flagged "safe-fix," applies
+  them to the source, and writes back atomically (write to a temp
+  file, then `rename` over the original), printing a before/after
+  diff. It refuses to run non-interactively (requires a TTY).
 
 Total surface: comparable in size to a moderately-featured linter.
 The `--llm` mode is an additive feature gate; the heuristic core

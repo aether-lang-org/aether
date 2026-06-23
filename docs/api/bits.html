@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bits - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search bits..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#lsr32">lsr32</a></li>
+    <li><a href="#lsr64">lsr64</a></li>
+    <li><a href="#rotr32">rotr32</a></li>
+    <li><a href="#rotl32">rotl32</a></li>
+    <li><a href="#rotr64">rotr64</a></li>
+    <li><a href="#rotl64">rotl64</a></li>
+    <li><a href="#popcount32">popcount32</a></li>
+    <li><a href="#popcount64">popcount64</a></li>
+    <li><a href="#clz32">clz32</a></li>
+    <li><a href="#clz64">clz64</a></li>
+    <li><a href="#udiv32">udiv32</a></li>
+    <li><a href="#urem32">urem32</a></li>
+    <li><a href="#udiv64">udiv64</a></li>
+    <li><a href="#urem64">urem64</a></li>
+    <li><a href="#ucmp64">ucmp64</a></li>
+    <li><a href="#aether_bits_lsr32">aether_bits_lsr32</a></li>
+    <li><a href="#aether_bits_lsr64">aether_bits_lsr64</a></li>
+    <li><a href="#aether_bits_rotr32">aether_bits_rotr32</a></li>
+    <li><a href="#aether_bits_rotl32">aether_bits_rotl32</a></li>
+    <li><a href="#aether_bits_rotr64">aether_bits_rotr64</a></li>
+    <li><a href="#aether_bits_rotl64">aether_bits_rotl64</a></li>
+    <li><a href="#aether_bits_popcount32">aether_bits_popcount32</a></li>
+    <li><a href="#aether_bits_popcount64">aether_bits_popcount64</a></li>
+    <li><a href="#aether_bits_clz32">aether_bits_clz32</a></li>
+    <li><a href="#aether_bits_clz64">aether_bits_clz64</a></li>
+    <li><a href="#aether_bits_udiv32">aether_bits_udiv32</a></li>
+    <li><a href="#aether_bits_urem32">aether_bits_urem32</a></li>
+    <li><a href="#aether_bits_udiv64">aether_bits_udiv64</a></li>
+    <li><a href="#aether_bits_urem64">aether_bits_urem64</a></li>
+    <li><a href="#aether_bits_ucmp64">aether_bits_ucmp64</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li class="active"><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>bits</h1>
+    <p class="module-desc">MIT License (https://opensource.org/licenses/MIT) Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc.</p>
+    <p class="import-line"><code>import std.bits</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="lsr32" data-name="lsr32">
+      <h3 class="function-name">lsr32 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>lsr32(x, n) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int, n: int</span></p>
+      <p class="doc">Logical (unsigned) right shift of `x` by `n` bits. The shift count is masked by (W-1), so n is taken mod 32 (lsr32) / mod 64 (lsr64).</p>
+    </div>
+    <div class="function" id="lsr64" data-name="lsr64">
+      <h3 class="function-name">lsr64 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>lsr64(x, n) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">x: long, n: int</span></p>
+    </div>
+    <div class="function" id="rotr32" data-name="rotr32">
+      <h3 class="function-name">rotr32 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>rotr32(x, n) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int, n: int</span></p>
+      <p class="doc">Bit rotates. Count masked by (W-1); a count of 0 returns x unchanged.</p>
+    </div>
+    <div class="function" id="rotl32" data-name="rotl32">
+      <h3 class="function-name">rotl32 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>rotl32(x, n) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int, n: int</span></p>
+    </div>
+    <div class="function" id="rotr64" data-name="rotr64">
+      <h3 class="function-name">rotr64 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>rotr64(x, n) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">x: long, n: int</span></p>
+    </div>
+    <div class="function" id="rotl64" data-name="rotl64">
+      <h3 class="function-name">rotl64 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>rotl64(x, n) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">x: long, n: int</span></p>
+    </div>
+    <div class="function" id="popcount32" data-name="popcount32">
+      <h3 class="function-name">popcount32 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>popcount32(x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int</span></p>
+      <p class="doc">Count of set bits over the unsigned value.</p>
+    </div>
+    <div class="function" id="popcount64" data-name="popcount64">
+      <h3 class="function-name">popcount64 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>popcount64(x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: long</span></p>
+    </div>
+    <div class="function" id="clz32" data-name="clz32">
+      <h3 class="function-name">clz32 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clz32(x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int</span></p>
+      <p class="doc">Count leading zeros over the unsigned value, MSB-first. Returns the width (32 / 64) for a zero input.</p>
+    </div>
+    <div class="function" id="clz64" data-name="clz64">
+      <h3 class="function-name">clz64 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clz64(x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: long</span></p>
+    </div>
+    <div class="function" id="udiv32" data-name="udiv32">
+      <h3 class="function-name">udiv32 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>udiv32(a, b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">a: int, b: int</span></p>
+      <p class="doc">Unsigned division / remainder. Returns 0 if the divisor is 0.</p>
+    </div>
+    <div class="function" id="urem32" data-name="urem32">
+      <h3 class="function-name">urem32 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>urem32(a, b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">a: int, b: int</span></p>
+    </div>
+    <div class="function" id="udiv64" data-name="udiv64">
+      <h3 class="function-name">udiv64 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>udiv64(a, b) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">a: long, b: long</span></p>
+    </div>
+    <div class="function" id="urem64" data-name="urem64">
+      <h3 class="function-name">urem64 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>urem64(a, b) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">a: long, b: long</span></p>
+    </div>
+    <div class="function" id="ucmp64" data-name="ucmp64">
+      <h3 class="function-name">ucmp64 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>ucmp64(a, b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">a: long, b: long</span></p>
+      <p class="doc">Unsigned compare of two 64-bit values. Returns -1 / 0 / 1.</p>
+    </div>
+    <div class="function" id="aether_bits_lsr32" data-name="aether_bits_lsr32">
+      <h3 class="function-name">aether_bits_lsr32 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_lsr32(x, n) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int, n: int</span></p>
+      <p class="doc">---- Raw externs ----</p>
+    </div>
+    <div class="function" id="aether_bits_lsr64" data-name="aether_bits_lsr64">
+      <h3 class="function-name">aether_bits_lsr64 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_lsr64(x, n) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">x: long, n: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_rotr32" data-name="aether_bits_rotr32">
+      <h3 class="function-name">aether_bits_rotr32 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_rotr32(x, n) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int, n: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_rotl32" data-name="aether_bits_rotl32">
+      <h3 class="function-name">aether_bits_rotl32 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_rotl32(x, n) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int, n: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_rotr64" data-name="aether_bits_rotr64">
+      <h3 class="function-name">aether_bits_rotr64 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_rotr64(x, n) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">x: long, n: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_rotl64" data-name="aether_bits_rotl64">
+      <h3 class="function-name">aether_bits_rotl64 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_rotl64(x, n) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">x: long, n: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_popcount32" data-name="aether_bits_popcount32">
+      <h3 class="function-name">aether_bits_popcount32 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_popcount32(x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_popcount64" data-name="aether_bits_popcount64">
+      <h3 class="function-name">aether_bits_popcount64 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_popcount64(x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: long</span></p>
+    </div>
+    <div class="function" id="aether_bits_clz32" data-name="aether_bits_clz32">
+      <h3 class="function-name">aether_bits_clz32 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_clz32(x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_clz64" data-name="aether_bits_clz64">
+      <h3 class="function-name">aether_bits_clz64 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_clz64(x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">x: long</span></p>
+    </div>
+    <div class="function" id="aether_bits_udiv32" data-name="aether_bits_udiv32">
+      <h3 class="function-name">aether_bits_udiv32 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_udiv32(a, b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">a: int, b: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_urem32" data-name="aether_bits_urem32">
+      <h3 class="function-name">aether_bits_urem32 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_urem32(a, b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">a: int, b: int</span></p>
+    </div>
+    <div class="function" id="aether_bits_udiv64" data-name="aether_bits_udiv64">
+      <h3 class="function-name">aether_bits_udiv64 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_udiv64(a, b) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">a: long, b: long</span></p>
+    </div>
+    <div class="function" id="aether_bits_urem64" data-name="aether_bits_urem64">
+      <h3 class="function-name">aether_bits_urem64 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_urem64(a, b) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">a: long, b: long</span></p>
+    </div>
+    <div class="function" id="aether_bits_ucmp64" data-name="aether_bits_ucmp64">
+      <h3 class="function-name">aether_bits_ucmp64 <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_bits_ucmp64(a, b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">a: long, b: long</span></p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

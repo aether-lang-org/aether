@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>map - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search map..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#new">new</a></li>
+    <li><a href="#put_raw">put_raw</a></li>
+    <li><a href="#put_string_owned">put_string_owned</a></li>
+    <li><a href="#get_raw">get_raw</a></li>
+    <li><a href="#has">has</a></li>
+    <li><a href="#remove">remove</a></li>
+    <li><a href="#size">size</a></li>
+    <li><a href="#clear">clear</a></li>
+    <li><a href="#free">free</a></li>
+    <li><a href="#keys_raw">keys_raw</a></li>
+    <li><a href="#keys_free">keys_free</a></li>
+    <li><a href="#put">put</a></li>
+    <li><a href="#get">get</a></li>
+    <li><a href="#keys">keys</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li class="active"><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>map</h1>
+    <p class="module-desc">std.map - HashMap Operations (alias for std.collections) API shape: - Raw externs end in `_raw` and return ptr/int in the old C-style convention.</p>
+    <p class="import-line"><code>import std.map</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="new" data-name="new">
+      <h3 class="function-name">new <span class="kind">extern</span></h3>
+      <pre class="usage"><code>new() <span class="arrow">-&gt;</span> ptr</code></pre>
+    </div>
+    <div class="function" id="put_raw" data-name="put_raw">
+      <h3 class="function-name">put_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>put_raw(map, key, value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr, key: string, value: ptr</span></p>
+    </div>
+    <div class="function" id="put_string_owned" data-name="put_string_owned">
+      <h3 class="function-name">put_string_owned <span class="kind">extern</span></h3>
+      <pre class="usage"><code>put_string_owned(map, key, value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr, key: string, value: ptr</span></p>
+      <p class="doc">Heap-string-aware put (#467). Retains the value and tags the map so map_free releases each string value before freeing. Codegen auto-routes `map.put(m, k, heap_string_expr)` here.</p>
+    </div>
+    <div class="function" id="get_raw" data-name="get_raw">
+      <h3 class="function-name">get_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_raw(map, key) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr, key: string</span></p>
+    </div>
+    <div class="function" id="has" data-name="has">
+      <h3 class="function-name">has <span class="kind">extern</span></h3>
+      <pre class="usage"><code>has(map, key) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr, key: string</span></p>
+    </div>
+    <div class="function" id="remove" data-name="remove">
+      <h3 class="function-name">remove <span class="kind">extern</span></h3>
+      <pre class="usage"><code>remove(map, key)</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr, key: string</span></p>
+    </div>
+    <div class="function" id="size" data-name="size">
+      <h3 class="function-name">size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>size(map) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr</span></p>
+    </div>
+    <div class="function" id="clear" data-name="clear">
+      <h3 class="function-name">clear <span class="kind">extern</span></h3>
+      <pre class="usage"><code>clear(map)</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr</span></p>
+    </div>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>free(map)</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr</span></p>
+    </div>
+    <div class="function" id="keys_raw" data-name="keys_raw">
+      <h3 class="function-name">keys_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>keys_raw(map) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr</span></p>
+    </div>
+    <div class="function" id="keys_free" data-name="keys_free">
+      <h3 class="function-name">keys_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>keys_free(keys)</code></pre>
+      <p class="signature"><span class="sig-params">keys: ptr</span></p>
+    </div>
+    <div class="function" id="put" data-name="put">
+      <h3 class="function-name">put <span class="kind">fn</span></h3>
+      <pre class="usage"><code>put(map, key, value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr, key: string, value: ptr</span></p>
+      <p class="doc">Insert or update a key-value pair. Returns &quot;&quot; on success, error on failure (null map/key or OOM).</p>
+    </div>
+    <div class="function" id="get" data-name="get">
+      <h3 class="function-name">get <span class="kind">fn</span></h3>
+      <pre class="usage"><code>get(map, key) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr, key: string</span></p>
+      <p class="doc">Look up a key. - (value, &quot;&quot;)          : key present - (null, &quot;&quot;)           : key absent (not an error — use map.has) - (null, &quot;null map&quot;)   : `map` is null</p>
+    </div>
+    <div class="function" id="keys" data-name="keys">
+      <h3 class="function-name">keys <span class="kind">fn</span></h3>
+      <pre class="usage"><code>keys(map) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">map: ptr</span></p>
+      <p class="doc">Snapshot a map's keys. Returns (MapKeys ptr, &quot;&quot;) on success, (null, error) on allocation failure. Caller must free with map.keys_free.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

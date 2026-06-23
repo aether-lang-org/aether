@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ipc - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search ipc..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#parent_channel_raw">parent_channel_raw</a></li>
+    <li><a href="#parent_channel">parent_channel</a></li>
+    <li><a href="#write">write</a></li>
+    <li><a href="#write_close">write_close</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li class="active"><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>ipc</h1>
+    <p class="module-desc">std.ipc — child-to-parent back-channel IPC.</p>
+    <p class="import-line"><code>import std.ipc</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="parent_channel_raw" data-name="parent_channel_raw">
+      <h3 class="function-name">parent_channel_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>parent_channel_raw() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Returns the parent-channel fd if the parent spawned this process via os.run_pipe (i.e. AETHER_IPC_FD is set in env and the named fd is open); -1 otherwise. Children of os.run / os.run_capture see -1 — those don't open a back-channel. On Windows always -1 (v1 stub). The fd value is whatever the parent picked; current parent-side default is 3 but consumers MUST NOT hardcode that.</p>
+    </div>
+    <div class="function" id="parent_channel" data-name="parent_channel">
+      <h3 class="function-name">parent_channel <span class="kind">fn</span></h3>
+      <pre class="usage"><code>parent_channel() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Aether-side wrappers. parent_channel returns the raw int from the extern; -1 sentinel for &quot;no parent channel.&quot;</p>
+    </div>
+    <div class="function" id="write" data-name="write">
+      <h3 class="function-name">write <span class="kind">fn</span></h3>
+      <pre class="usage"><code>write(fd, bytes) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, bytes: string</span></p>
+      <p class="doc">Write `bytes` to the back-channel `fd`. Returns &quot;&quot; on success, non-empty error string on failure. Wraps std.net.fd_write — the underlying transport is an inherited pipe, so the same byte-stream semantics apply (partial writes are possible on interrupted system calls; the wrapped C extern handles EINTR). For the common case where the child writes one payload and exits, prefer write_close so the parent's read_all loop sees EOF promptly.</p>
+    </div>
+    <div class="function" id="write_close" data-name="write_close">
+      <h3 class="function-name">write_close <span class="kind">fn</span></h3>
+      <pre class="usage"><code>write_close(fd, bytes) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, bytes: string</span></p>
+      <p class="doc">Write `bytes` then close the channel. The common case: child produces one structured report at exit and closes the fd so the parent's drain loop sees EOF and stops. Calling close releases the writer's reference on the pipe; the parent sees EOF only after every writer has closed. If the child is itself going to exit immediately after, the kernel will close the fd anyway during process teardown — explicit close is still preferred because it lets the parent's reader unblock before the child exits, useful when the parent's reader runs in the same thread as the child-wait loop.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

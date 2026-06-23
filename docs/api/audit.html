@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>audit - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search audit..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_audit_count">aether_audit_count</a></li>
+    <li><a href="#aether_audit_entry_category">aether_audit_entry_category</a></li>
+    <li><a href="#aether_audit_entry_resource">aether_audit_entry_resource</a></li>
+    <li><a href="#aether_audit_entry_allowed">aether_audit_entry_allowed</a></li>
+    <li><a href="#aether_audit_clear">aether_audit_clear</a></li>
+    <li><a href="#count">count</a></li>
+    <li><a href="#entry">entry</a></li>
+    <li><a href="#clear">clear</a></li>
+    <li><a href="#denied_count">denied_count</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li class="active"><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>audit</h1>
+    <p class="module-desc">std.audit — query the sandbox audit trail.</p>
+    <p class="import-line"><code>import std.audit</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_audit_count" data-name="aether_audit_count">
+      <h3 class="function-name">aether_audit_count <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_audit_count() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Number of checks currently in the ring buffer.</p>
+    </div>
+    <div class="function" id="aether_audit_entry_category" data-name="aether_audit_entry_category">
+      <h3 class="function-name">aether_audit_entry_category <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_audit_entry_category(i) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">i: int</span></p>
+      <p class="doc">Field accessors for buffered entry `i` (0-based, oldest first). The category/resource strings are borrowed — copy before the slot is overwritten. The `entry()` wrapper below does that for you.</p>
+    </div>
+    <div class="function" id="aether_audit_entry_resource" data-name="aether_audit_entry_resource">
+      <h3 class="function-name">aether_audit_entry_resource <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_audit_entry_resource(i) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">i: int</span></p>
+    </div>
+    <div class="function" id="aether_audit_entry_allowed" data-name="aether_audit_entry_allowed">
+      <h3 class="function-name">aether_audit_entry_allowed <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_audit_entry_allowed(i) <span class="arrow">-&gt;</span> int // 1 allowed, 0 denied, -1 out of range</code></pre>
+      <p class="signature"><span class="sig-params">i: int</span></p>
+    </div>
+    <div class="function" id="aether_audit_clear" data-name="aether_audit_clear">
+      <h3 class="function-name">aether_audit_clear <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_audit_clear()</code></pre>
+      <p class="doc">Drop all buffered entries.</p>
+    </div>
+    <div class="function" id="count" data-name="count">
+      <h3 class="function-name">count <span class="kind">fn</span></h3>
+      <pre class="usage"><code>count() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">How many permission checks are currently buffered.</p>
+    </div>
+    <div class="function" id="entry" data-name="entry">
+      <h3 class="function-name">entry <span class="kind">fn</span></h3>
+      <pre class="usage"><code>entry(i) <span class="arrow">-&gt;</span> (_0, _1, _2)</code></pre>
+      <p class="signature"><span class="sig-params">i: int</span></p>
+      <p class="doc">Buffered check `i` as a tuple (category, resource, allowed). `allowed` is 1 (passed) or 0 (denied); for an out-of-range index the tuple is (&quot;&quot;, &quot;&quot;, -1). The strings are Aether-owned copies, safe to keep after further audit activity.</p>
+    </div>
+    <div class="function" id="clear" data-name="clear">
+      <h3 class="function-name">clear <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clear()</code></pre>
+      <p class="doc">Empty the audit buffer. Scope a later query to just the work that follows by clearing first.</p>
+    </div>
+    <div class="function" id="denied_count" data-name="denied_count">
+      <h3 class="function-name">denied_count <span class="kind">fn</span></h3>
+      <pre class="usage"><code>denied_count() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Convenience: how many of the buffered checks were denials.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

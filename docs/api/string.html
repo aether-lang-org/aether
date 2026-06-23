@@ -13,241 +13,580 @@
     <p class="tagline">Standard Library</p>
   </div>
   <input type="text" id="search" placeholder="Search string..." onkeyup="searchModule()">
-  <h2>Functions</h2>
+  <h2>Exports</h2>
   <ul class="function-nav">
-    <li><a href="#=">=</a></li>
-    <li><a href="#string_new">string_new</a></li>
-    <li><a href="#string_from_cstr">string_from_cstr</a></li>
-    <li><a href="#string_from_literal">string_from_literal</a></li>
-    <li><a href="#string_new_with_length">string_new_with_length</a></li>
-    <li><a href="#string_empty">string_empty</a></li>
-    <li><a href="#string_retain">string_retain</a></li>
-    <li><a href="#string_release">string_release</a></li>
-    <li><a href="#string_free">string_free</a></li>
-    <li><a href="#string_concat">string_concat</a></li>
-    <li><a href="#string_length">string_length</a></li>
-    <li><a href="#string_char_at">string_char_at</a></li>
-    <li><a href="#string_equals">string_equals</a></li>
-    <li><a href="#string_compare">string_compare</a></li>
-    <li><a href="#string_starts_with">string_starts_with</a></li>
-    <li><a href="#string_ends_with">string_ends_with</a></li>
-    <li><a href="#string_contains">string_contains</a></li>
-    <li><a href="#string_index_of">string_index_of</a></li>
-    <li><a href="#string_substring">string_substring</a></li>
-    <li><a href="#string_to_upper">string_to_upper</a></li>
-    <li><a href="#string_to_lower">string_to_lower</a></li>
-    <li><a href="#string_trim">string_trim</a></li>
-    <li><a href="#string_split">string_split</a></li>
-    <li><a href="#string_array_size">string_array_size</a></li>
-    <li><a href="#string_array_get">string_array_get</a></li>
-    <li><a href="#string_array_free">string_array_free</a></li>
-    <li><a href="#string_to_cstr">string_to_cstr</a></li>
-    <li><a href="#string_from_int">string_from_int</a></li>
-    <li><a href="#string_from_float">string_from_float</a></li>
-    <li><a href="#string_to_int_raw">string_to_int_raw</a></li>
-    <li><a href="#string_to_long_raw">string_to_long_raw</a></li>
-    <li><a href="#string_to_float_raw">string_to_float_raw</a></li>
-    <li><a href="#string_to_double_raw">string_to_double_raw</a></li>
-    <li><a href="#string_try_int">string_try_int</a></li>
-    <li><a href="#string_get_int">string_get_int</a></li>
-    <li><a href="#string_try_long">string_try_long</a></li>
-    <li><a href="#string_try_float">string_try_float</a></li>
-    <li><a href="#string_get_float">string_get_float</a></li>
-    <li><a href="#string_try_double">string_try_double</a></li>
-    <li><a href="#string_get_double">string_get_double</a></li>
-    <li><a href="#string_format">string_format</a></li>
+    <li><a href="#new">new</a></li>
+    <li><a href="#from_cstr">from_cstr</a></li>
+    <li><a href="#from_literal">from_literal</a></li>
+    <li><a href="#new_with_length">new_with_length</a></li>
+    <li><a href="#empty">empty</a></li>
+    <li><a href="#retain">retain</a></li>
+    <li><a href="#release">release</a></li>
+    <li><a href="#free">free</a></li>
+    <li><a href="#concat">concat</a></li>
+    <li><a href="#concat_wrapped">concat_wrapped</a></li>
+    <li><a href="#length">length</a></li>
+    <li><a href="#char_at">char_at</a></li>
+    <li><a href="#equals">equals</a></li>
+    <li><a href="#compare">compare</a></li>
+    <li><a href="#starts_with">starts_with</a></li>
+    <li><a href="#ends_with">ends_with</a></li>
+    <li><a href="#contains">contains</a></li>
+    <li><a href="#index_of">index_of</a></li>
+    <li><a href="#index_of_from">index_of_from</a></li>
+    <li><a href="#substring">substring</a></li>
+    <li><a href="#substring_n">substring_n</a></li>
+    <li><a href="#length_n">length_n</a></li>
+    <li><a href="#char_at_n">char_at_n</a></li>
+    <li><a href="#index_of_from_n">index_of_from_n</a></li>
+    <li><a href="#from_char">from_char</a></li>
+    <li><a href="#to_upper">to_upper</a></li>
+    <li><a href="#to_lower">to_lower</a></li>
+    <li><a href="#trim">trim</a></li>
+    <li><a href="#split">split</a></li>
+    <li><a href="#array_size">array_size</a></li>
+    <li><a href="#array_get">array_get</a></li>
+    <li><a href="#array_free">array_free</a></li>
+    <li><a href="#split_to_seq">split_to_seq</a></li>
+    <li><a href="#seq_empty">seq_empty</a></li>
+    <li><a href="#seq_cons">seq_cons</a></li>
+    <li><a href="#seq_head">seq_head</a></li>
+    <li><a href="#seq_tail">seq_tail</a></li>
+    <li><a href="#seq_is_empty">seq_is_empty</a></li>
+    <li><a href="#seq_length">seq_length</a></li>
+    <li><a href="#seq_retain">seq_retain</a></li>
+    <li><a href="#seq_free">seq_free</a></li>
+    <li><a href="#seq_from_array">seq_from_array</a></li>
+    <li><a href="#seq_to_array">seq_to_array</a></li>
+    <li><a href="#seq_reverse">seq_reverse</a></li>
+    <li><a href="#seq_concat">seq_concat</a></li>
+    <li><a href="#seq_take">seq_take</a></li>
+    <li><a href="#seq_drop">seq_drop</a></li>
+    <li><a href="#to_cstr">to_cstr</a></li>
+    <li><a href="#from_int">from_int</a></li>
+    <li><a href="#from_long">from_long</a></li>
+    <li><a href="#from_float">from_float</a></li>
+    <li><a href="#from_int_radix">from_int_radix</a></li>
+    <li><a href="#pad_start">pad_start</a></li>
+    <li><a href="#pad_end">pad_end</a></li>
+    <li><a href="#to_int_raw">to_int_raw</a></li>
+    <li><a href="#to_long_raw">to_long_raw</a></li>
+    <li><a href="#to_float_raw">to_float_raw</a></li>
+    <li><a href="#to_double_raw">to_double_raw</a></li>
+    <li><a href="#try_int">try_int</a></li>
+    <li><a href="#get_int">get_int</a></li>
+    <li><a href="#try_long">try_long</a></li>
+    <li><a href="#get_long">get_long</a></li>
+    <li><a href="#try_float">try_float</a></li>
+    <li><a href="#get_float">get_float</a></li>
+    <li><a href="#try_double">try_double</a></li>
+    <li><a href="#get_double">get_double</a></li>
+    <li><a href="#to_int_radix_raw">to_int_radix_raw</a></li>
+    <li><a href="#try_int_radix">try_int_radix</a></li>
+    <li><a href="#get_int_radix">get_int_radix</a></li>
+    <li><a href="#to_int">to_int</a></li>
+    <li><a href="#to_long">to_long</a></li>
+    <li><a href="#to_float">to_float</a></li>
+    <li><a href="#to_double">to_double</a></li>
+    <li><a href="#to_int_radix">to_int_radix</a></li>
+    <li><a href="#strip_prefix">strip_prefix</a></li>
+    <li><a href="#copy">copy</a></li>
+    <li><a href="#format_list">format_list</a></li>
+    <li><a href="#format">format</a></li>
+    <li><a href="#glob_match_raw">glob_match_raw</a></li>
+    <li><a href="#glob_match">glob_match</a></li>
+    <li><a href="#glob_match_pathname">glob_match_pathname</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
   <ul class="module-list">
-    <li><a href="net.html">net</a></li>
-    <li><a href="io.html">io</a></li>
-    <li><a href="math.html">math</a></li>
-    <li><a href="json.html">json</a></li>
-    <li><a href="log.html">log</a></li>
-    <li><a href="os.html">os</a></li>
-    <li class="active"><a href="string.html">string</a></li>
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
     <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
     <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li class="active"><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
   </ul>
 </nav>
 <main class="content">
   <div class="module-header">
     <h1>string</h1>
-    <p class="module-desc">String manipulation and formatting</p>
+    <p class="module-desc">std.string - String Module Import with: import std.string</p>
+    <p class="import-line"><code>import std.string</code></p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="=" data-name="=">
-      <h3 class="function-name">=</h3>
-      <pre class="usage"><code>=()</code></pre>
-    </div>
-    <div class="function" id="string_new" data-name="string_new">
-      <h3 class="function-name">string_new</h3>
-      <pre class="usage"><code>string_new(cstr)</code></pre>
+    <div class="function" id="new" data-name="new">
+      <h3 class="function-name">new <span class="kind">extern</span></h3>
+      <pre class="usage"><code>new(cstr) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cstr: string</span></p>
       <p class="doc">String creation</p>
     </div>
-    <div class="function" id="string_from_cstr" data-name="string_from_cstr">
-      <h3 class="function-name">string_from_cstr</h3>
-      <pre class="usage"><code>string_from_cstr(cstr)</code></pre>
+    <div class="function" id="from_cstr" data-name="from_cstr">
+      <h3 class="function-name">from_cstr <span class="kind">extern</span></h3>
+      <pre class="usage"><code>from_cstr(cstr) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cstr: string</span></p>
     </div>
-    <div class="function" id="string_from_literal" data-name="string_from_literal">
-      <h3 class="function-name">string_from_literal</h3>
-      <pre class="usage"><code>string_from_literal(cstr)</code></pre>
+    <div class="function" id="from_literal" data-name="from_literal">
+      <h3 class="function-name">from_literal <span class="kind">extern</span></h3>
+      <pre class="usage"><code>from_literal(cstr) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cstr: string</span></p>
     </div>
-    <div class="function" id="string_new_with_length" data-name="string_new_with_length">
-      <h3 class="function-name">string_new_with_length</h3>
-      <pre class="usage"><code>string_new_with_length(data, length)</code></pre>
+    <div class="function" id="new_with_length" data-name="new_with_length">
+      <h3 class="function-name">new_with_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>new_with_length(data, length) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
     </div>
-    <div class="function" id="string_empty" data-name="string_empty">
-      <h3 class="function-name">string_empty</h3>
-      <pre class="usage"><code>string_empty()</code></pre>
+    <div class="function" id="empty" data-name="empty">
+      <h3 class="function-name">empty <span class="kind">extern</span></h3>
+      <pre class="usage"><code>empty() <span class="arrow">-&gt;</span> ptr</code></pre>
     </div>
-    <div class="function" id="string_retain" data-name="string_retain">
-      <h3 class="function-name">string_retain</h3>
-      <pre class="usage"><code>string_retain(str)</code></pre>
-      <p class="doc">Reference counting — safe to call with plain char* (no-op)</p>
+    <div class="function" id="retain" data-name="retain">
+      <h3 class="function-name">retain <span class="kind">extern</span></h3>
+      <pre class="usage"><code>retain(str)</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
+      <p class="doc">Reference counting. `str` is `@retain` on every refcount call: each one takes ownership of the lifetime decision (release decrements + frees at refcount 0; retain bumps the refcount; free drops the allocation immediately). The escape walker marks any heap- string variable passed at this slot as escaped, so the function-exit defer-free does not also call free() on the same buffer — without `@retain` here, a `defer string.release(s)` paired with the new auto-cleanup (issue #420 v2) would double-free the underlying allocation. After the call the caller's `_heap_&lt;name&gt;` tracker is conservatively kept at its previous value; the var is treated as dead from the reclamation system's perspective.</p>
     </div>
-    <div class="function" id="string_release" data-name="string_release">
-      <h3 class="function-name">string_release</h3>
-      <pre class="usage"><code>string_release(str)</code></pre>
+    <div class="function" id="release" data-name="release">
+      <h3 class="function-name">release <span class="kind">extern</span></h3>
+      <pre class="usage"><code>release(str)</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
     </div>
-    <div class="function" id="string_free" data-name="string_free">
-      <h3 class="function-name">string_free</h3>
-      <pre class="usage"><code>string_free(str)</code></pre>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>free(str)</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
     </div>
-    <div class="function" id="string_concat" data-name="string_concat">
-      <h3 class="function-name">string_concat</h3>
-      <pre class="usage"><code>string_concat(a, b)</code></pre>
-      <p class="doc">String operations — accept both AetherString* and plain char*</p>
+    <div class="function" id="concat" data-name="concat">
+      <h3 class="function-name">concat <span class="kind">extern</span></h3>
+      <pre class="usage"><code>concat(a, b) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">a: string, b: string</span></p>
+      <p class="doc">String operations</p>
     </div>
-    <div class="function" id="string_length" data-name="string_length">
-      <h3 class="function-name">string_length</h3>
-      <pre class="usage"><code>string_length(str)</code></pre>
+    <div class="function" id="concat_wrapped" data-name="concat_wrapped">
+      <h3 class="function-name">concat_wrapped <span class="kind">extern</span></h3>
+      <pre class="usage"><code>concat_wrapped(a, b) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">a: string, b: string</span></p>
+      <p class="doc">Length-bearing concat. Returns a refcounted AetherString; downstream string.length() honours the stored length rather than falling through to strlen() and silently truncating at the first NUL. Use when joining inputs that may contain binary bytes (base64-decoded payloads, fs.read_binary output, …). Issue #270. Returns `string`: the C function yields an owned, refcounted AetherString*, which is exactly the magic `string` representation. Typing it `string` (not `ptr`) lets the codegen track the result as an owned heap string and release it at scope exit, and unwrap it to its payload bytes at naive-C-extern boundaries (#297). The C ABI is unchanged — the header still declares `AetherString*`.</p>
     </div>
-    <div class="function" id="string_char_at" data-name="string_char_at">
-      <h3 class="function-name">string_char_at</h3>
-      <pre class="usage"><code>string_char_at(str, index)</code></pre>
+    <div class="function" id="length" data-name="length">
+      <h3 class="function-name">length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>length(str) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
     </div>
-    <div class="function" id="string_equals" data-name="string_equals">
-      <h3 class="function-name">string_equals</h3>
-      <pre class="usage"><code>string_equals(a, b)</code></pre>
+    <div class="function" id="char_at" data-name="char_at">
+      <h3 class="function-name">char_at <span class="kind">extern</span></h3>
+      <pre class="usage"><code>char_at(str, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, index: int</span></p>
     </div>
-    <div class="function" id="string_compare" data-name="string_compare">
-      <h3 class="function-name">string_compare</h3>
-      <pre class="usage"><code>string_compare(a, b)</code></pre>
+    <div class="function" id="equals" data-name="equals">
+      <h3 class="function-name">equals <span class="kind">extern</span></h3>
+      <pre class="usage"><code>equals(a, b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">a: string, b: string</span></p>
     </div>
-    <div class="function" id="string_starts_with" data-name="string_starts_with">
-      <h3 class="function-name">string_starts_with</h3>
-      <pre class="usage"><code>string_starts_with(str, prefix)</code></pre>
-      <p class="doc">String methods — accept both AetherString* and plain char* Return plain char* (caller owns memory, free with free())</p>
+    <div class="function" id="compare" data-name="compare">
+      <h3 class="function-name">compare <span class="kind">extern</span></h3>
+      <pre class="usage"><code>compare(a, b) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">a: string, b: string</span></p>
     </div>
-    <div class="function" id="string_ends_with" data-name="string_ends_with">
-      <h3 class="function-name">string_ends_with</h3>
-      <pre class="usage"><code>string_ends_with(str, suffix)</code></pre>
+    <div class="function" id="starts_with" data-name="starts_with">
+      <h3 class="function-name">starts_with <span class="kind">extern</span></h3>
+      <pre class="usage"><code>starts_with(str, prefix) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, prefix: string</span></p>
+      <p class="doc">String methods</p>
     </div>
-    <div class="function" id="string_contains" data-name="string_contains">
-      <h3 class="function-name">string_contains</h3>
-      <pre class="usage"><code>string_contains(str, substring)</code></pre>
+    <div class="function" id="ends_with" data-name="ends_with">
+      <h3 class="function-name">ends_with <span class="kind">extern</span></h3>
+      <pre class="usage"><code>ends_with(str, suffix) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, suffix: string</span></p>
     </div>
-    <div class="function" id="string_index_of" data-name="string_index_of">
-      <h3 class="function-name">string_index_of</h3>
-      <pre class="usage"><code>string_index_of(str, substring)</code></pre>
+    <div class="function" id="contains" data-name="contains">
+      <h3 class="function-name">contains <span class="kind">extern</span></h3>
+      <pre class="usage"><code>contains(str, substring) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, substring: string</span></p>
     </div>
-    <div class="function" id="string_substring" data-name="string_substring">
-      <h3 class="function-name">string_substring</h3>
-      <pre class="usage"><code>string_substring(str, start, end)</code></pre>
+    <div class="function" id="index_of" data-name="index_of">
+      <h3 class="function-name">index_of <span class="kind">extern</span></h3>
+      <pre class="usage"><code>index_of(str, substring) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, substring: string</span></p>
     </div>
-    <div class="function" id="string_to_upper" data-name="string_to_upper">
-      <h3 class="function-name">string_to_upper</h3>
-      <pre class="usage"><code>string_to_upper(str)</code></pre>
+    <div class="function" id="index_of_from" data-name="index_of_from">
+      <h3 class="function-name">index_of_from <span class="kind">extern</span></h3>
+      <pre class="usage"><code>index_of_from(str, substring, start) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, substring: string, start: int</span></p>
+      <p class="doc">Like index_of but starts scanning at byte offset `start`. Returns the absolute offset of the hit (not relative to `start`), or -1. Saves the substring+index_of allocation dance in hot loops that scan a packed string record-by-record.</p>
     </div>
-    <div class="function" id="string_to_lower" data-name="string_to_lower">
-      <h3 class="function-name">string_to_lower</h3>
-      <pre class="usage"><code>string_to_lower(str)</code></pre>
+    <div class="function" id="substring" data-name="substring">
+      <h3 class="function-name">substring <span class="kind">extern</span></h3>
+      <pre class="usage"><code>substring(str, start, end) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">str: string, start: int, end: int</span></p>
     </div>
-    <div class="function" id="string_trim" data-name="string_trim">
-      <h3 class="function-name">string_trim</h3>
-      <pre class="usage"><code>string_trim(str)</code></pre>
+    <div class="function" id="substring_n" data-name="substring_n">
+      <h3 class="function-name">substring_n <span class="kind">extern</span></h3>
+      <pre class="usage"><code>substring_n(str, str_len_bytes, start, end) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">str: string, str_len_bytes: int, start: int, end: int</span></p>
+      <p class="doc">Length-aware sibling — caller supplies the source length explicitly. Reach for this when `str` arrives as a `string` parameter at a function boundary (where #297's auto-unwrap may have stripped the AetherString header) AND the content may contain embedded NULs. The plain string_substring would call str_len() on the unwrapped data and fall through to strlen, truncating at the first NUL. Trusts the caller's `str_len_bytes` parameter — does NOT consult the AetherString header even if one happens to be present. start / end are clamped to [0, str_len_bytes].</p>
     </div>
-    <div class="function" id="string_split" data-name="string_split">
-      <h3 class="function-name">string_split</h3>
-      <pre class="usage"><code>string_split(str, delimiter)</code></pre>
+    <div class="function" id="length_n" data-name="length_n">
+      <h3 class="function-name">length_n <span class="kind">extern</span></h3>
+      <pre class="usage"><code>length_n(str, known_length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, known_length: int</span></p>
+      <p class="doc">Identity helper documenting intent: in code that receives a `string` parameter plus an explicit length, the explicit length IS the truth — don't consult the AetherString header. This function exists so `n = string.length_n(s, n)` reads as &quot;yes I know my length&quot; at the source level instead of looking like a forgotten `string.length(s)` that would have truncated at NUL. Pure no-op at the C level; clamps negative input to 0.</p>
     </div>
-    <div class="function" id="string_array_size" data-name="string_array_size">
-      <h3 class="function-name">string_array_size</h3>
-      <pre class="usage"><code>string_array_size(arr)</code></pre>
+    <div class="function" id="char_at_n" data-name="char_at_n">
+      <h3 class="function-name">char_at_n <span class="kind">extern</span></h3>
+      <pre class="usage"><code>char_at_n(str, known_length, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, known_length: int, index: int</span></p>
+      <p class="doc">Length-aware sibling of string_char_at. Caller supplies the haystack length explicitly so the bounds check skips the per-call strlen that string_char_at pays when `str` arrives as a plain `const char*` (the auto-unwrap at function-parameter boundary strips the AetherString header). Returns the byte at `index` as an int 0..255, or 0 on out-of-range. Reach for this in hot iterator-walk loops over a multi-KB body whose length the caller has already cached. Filed in string-length-aware-accessors.md after avn's bench profile showed __strlen_avx2 dominating CPU.</p>
     </div>
-    <div class="function" id="string_array_get" data-name="string_array_get">
-      <h3 class="function-name">string_array_get</h3>
-      <pre class="usage"><code>string_array_get(arr, index)</code></pre>
+    <div class="function" id="index_of_from_n" data-name="index_of_from_n">
+      <h3 class="function-name">index_of_from_n <span class="kind">extern</span></h3>
+      <pre class="usage"><code>index_of_from_n(str, known_length, substring, start) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, known_length: int, substring: string, start: int</span></p>
+      <p class="doc">Length-aware sibling of string_index_of_from. Same motivation as string_char_at_n — caller has already cached the haystack length. Needle is still strlen'd (small / fixed). Returns the absolute offset of the first match at or after `start`, or -1 on miss. `start` clamped to [0, known_length]; needle longer than the searchable range returns -1.</p>
     </div>
-    <div class="function" id="string_array_free" data-name="string_array_free">
-      <h3 class="function-name">string_array_free</h3>
-      <pre class="usage"><code>string_array_free(arr)</code></pre>
+    <div class="function" id="from_char" data-name="from_char">
+      <h3 class="function-name">from_char <span class="kind">extern</span></h3>
+      <pre class="usage"><code>from_char(code) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">code: int</span></p>
+      <p class="doc">Construct a 1-byte string from a byte code (0..255). Typical use is emitting known single-byte separators (\x01, \x02) into packed formats without routing through a NUL-terminated string literal. Always length 1 — code=0 returns a 1-byte NUL string, not &quot;&quot;.</p>
     </div>
-    <div class="function" id="string_to_cstr" data-name="string_to_cstr">
-      <h3 class="function-name">string_to_cstr</h3>
-      <pre class="usage"><code>string_to_cstr(str)</code></pre>
+    <div class="function" id="to_upper" data-name="to_upper">
+      <h3 class="function-name">to_upper <span class="kind">extern</span></h3>
+      <pre class="usage"><code>to_upper(str) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
+    </div>
+    <div class="function" id="to_lower" data-name="to_lower">
+      <h3 class="function-name">to_lower <span class="kind">extern</span></h3>
+      <pre class="usage"><code>to_lower(str) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
+    </div>
+    <div class="function" id="trim" data-name="trim">
+      <h3 class="function-name">trim <span class="kind">extern</span></h3>
+      <pre class="usage"><code>trim(str) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
+    </div>
+    <div class="function" id="split" data-name="split">
+      <h3 class="function-name">split <span class="kind">extern</span></h3>
+      <pre class="usage"><code>split(str, delimiter) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">str: string, delimiter: string</span></p>
+      <p class="doc">String array operations. LIFETIME WARNING — `string_array_get` returns a *borrowed* pointer into the array's internal storage, NOT an owned copy. After `string_array_free(arr)` every pointer previously handed out by `string_array_get(arr, ...)` is dangling. The natural-looking pattern below silently use-after-frees: v = string.array_get(parts, idx) string.array_free(parts) return v                 // &lt;- v dangles Symptom is garbage bytes / random crashes downstream — the array's backing storage is gone but the pointer still reads. Safe options when you need a value to outlive the array: 1. Copy first:  v = string.concat(string.array_get(parts, idx), &quot;&quot;) then string.array_free(parts) — the concat made an owned, refcounted copy. 2. Use `string_split_to_seq` (declared further down) — returns a refcounted `*StringSeq` whose cells own their data independently of any backing array, so there's no array-wide free to worry about. This is the RECOMMENDED shape: a `*StringSeq` local is reclaimed DETERMINISTICALLY by the compiler — freed automatically at scope exit via the refcount-decrementing `string_seq_free`, the same way heap strings are. No manual free, and (because the free is a decrement) structurally-shared tails stay safe. A piece you pull from a sequence and let escape transfers ownership cleanly, with no dangling-into-a-backing-array hazard. If your access pattern is &quot;build, walk once, free&quot; within a single scope, the borrowed-pointer form is fine and the cheapest. Reach for option 1/2 only when a piece needs to escape the array's lifetime.</p>
+    </div>
+    <div class="function" id="array_size" data-name="array_size">
+      <h3 class="function-name">array_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>array_size(arr) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr</span></p>
+    </div>
+    <div class="function" id="array_get" data-name="array_get">
+      <h3 class="function-name">array_get <span class="kind">extern</span></h3>
+      <pre class="usage"><code>array_get(arr, index) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="array_free" data-name="array_free">
+      <h3 class="function-name">array_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>array_free(arr)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr</span></p>
+    </div>
+    <div class="function" id="split_to_seq" data-name="split_to_seq">
+      <h3 class="function-name">split_to_seq <span class="kind">extern</span></h3>
+      <pre class="usage"><code>split_to_seq(str, delimiter) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">str: string, delimiter: string</span></p>
+      <p class="doc">Producers — sibling of string_split that returns a *StringSeq directly. Same split semantics: empty input → single-cell list with &quot;&quot;, delimiter longer than input → single-cell list with the whole input, trailing/leading delimiters produce empty pieces.</p>
+    </div>
+    <div class="function" id="seq_empty" data-name="seq_empty">
+      <h3 class="function-name">seq_empty <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_empty() <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="doc">Cons-cell construction + destructuring. Names mirror the C runtime symbols; users call them via dot-notation `string.seq_X(...)` (the qualified-name resolver joins `string` + `seq_X` → `string_seq_X`).</p>
+    </div>
+    <div class="function" id="seq_cons" data-name="seq_cons">
+      <h3 class="function-name">seq_cons <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_cons(head, tail) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">head: string, tail: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_head" data-name="seq_head">
+      <h3 class="function-name">seq_head <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_head(s) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_tail" data-name="seq_tail">
+      <h3 class="function-name">seq_tail <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_tail(s) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_is_empty" data-name="seq_is_empty">
+      <h3 class="function-name">seq_is_empty <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_is_empty(s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_length" data-name="seq_length">
+      <h3 class="function-name">seq_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_length(s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_retain" data-name="seq_retain">
+      <h3 class="function-name">seq_retain <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_retain(s) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_free" data-name="seq_free">
+      <h3 class="function-name">seq_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_free(s)</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_from_array" data-name="seq_from_array">
+      <h3 class="function-name">seq_from_array <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_from_array(arr, count) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, count: int</span></p>
+    </div>
+    <div class="function" id="seq_to_array" data-name="seq_to_array">
+      <h3 class="function-name">seq_to_array <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_to_array(s) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_reverse" data-name="seq_reverse">
+      <h3 class="function-name">seq_reverse <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_reverse(s) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq</span></p>
+      <p class="doc">Closure-free combinators. The shape deliberately avoids passing Aether functions across the FFI — that's its own design question (closure-bearing combinators map / filter / foldl will land in a separate change set once the callback bridge is settled). The four below are pure structural ops over the cons cells, all refcount-correct on shared tails, all O(min(n, length)) or O(length) work with no auxiliary stack.</p>
+    </div>
+    <div class="function" id="seq_concat" data-name="seq_concat">
+      <h3 class="function-name">seq_concat <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_concat(a, b) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">a: *StringSeq, b: *StringSeq</span></p>
+    </div>
+    <div class="function" id="seq_take" data-name="seq_take">
+      <h3 class="function-name">seq_take <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_take(s, n) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq, n: int</span></p>
+    </div>
+    <div class="function" id="seq_drop" data-name="seq_drop">
+      <h3 class="function-name">seq_drop <span class="kind">extern</span></h3>
+      <pre class="usage"><code>seq_drop(s, n) <span class="arrow">-&gt;</span> *StringSeq</code></pre>
+      <p class="signature"><span class="sig-params">s: *StringSeq, n: int</span></p>
+    </div>
+    <div class="function" id="to_cstr" data-name="to_cstr">
+      <h3 class="function-name">to_cstr <span class="kind">extern</span></h3>
+      <pre class="usage"><code>to_cstr(str) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
       <p class="doc">Conversion</p>
     </div>
-    <div class="function" id="string_from_int" data-name="string_from_int">
-      <h3 class="function-name">string_from_int</h3>
-      <pre class="usage"><code>string_from_int(value)</code></pre>
+    <div class="function" id="from_int" data-name="from_int">
+      <h3 class="function-name">from_int <span class="kind">extern</span></h3>
+      <pre class="usage"><code>from_int(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: int</span></p>
     </div>
-    <div class="function" id="string_from_float" data-name="string_from_float">
-      <h3 class="function-name">string_from_float</h3>
-      <pre class="usage"><code>string_from_float(value)</code></pre>
+    <div class="function" id="from_long" data-name="from_long">
+      <h3 class="function-name">from_long <span class="kind">extern</span></h3>
+      <pre class="usage"><code>from_long(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: long</span></p>
     </div>
-    <div class="function" id="string_to_int_raw" data-name="string_to_int_raw">
-      <h3 class="function-name">string_to_int_raw</h3>
-      <pre class="usage"><code>string_to_int_raw(str, out_value)</code></pre>
-      <p class="doc">Parsing (string -&gt; number) — raw form with out-parameter. Returns 1 on success, 0 on failure. Result stored in out_value. Aether code should prefer the Go-style wrappers in std.string (`string.to_int`, etc.) which return `(value, error)` tuples.</p>
+    <div class="function" id="from_float" data-name="from_float">
+      <h3 class="function-name">from_float <span class="kind">extern</span></h3>
+      <pre class="usage"><code>from_float(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: float</span></p>
     </div>
-    <div class="function" id="string_to_long_raw" data-name="string_to_long_raw">
-      <h3 class="function-name">string_to_long_raw</h3>
-      <pre class="usage"><code>string_to_long_raw(str, out_value)</code></pre>
+    <div class="function" id="from_int_radix" data-name="from_int_radix">
+      <h3 class="function-name">from_int_radix <span class="kind">extern</span></h3>
+      <pre class="usage"><code>from_int_radix(value, radix) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: long, radix: int</span></p>
+      <p class="doc">Inverse of to_int_radix. Render `value` in base `radix` (2..36). Returns an empty string for radix outside [2, 36]; otherwise the digit string (lowercase a-z for radix 11..36), with a leading '-' for negatives. No &quot;0x&quot; / &quot;0b&quot; prefix. Headline use: hex emit for color round-trips (RGB → #rrggbb). Pair with `string.pad_start(s, 2, 48)` to get the JS `r.toString(16).padStart(2, '0')` shape.</p>
     </div>
-    <div class="function" id="string_to_float_raw" data-name="string_to_float_raw">
-      <h3 class="function-name">string_to_float_raw</h3>
-      <pre class="usage"><code>string_to_float_raw(str, out_value)</code></pre>
+    <div class="function" id="pad_start" data-name="pad_start">
+      <h3 class="function-name">pad_start <span class="kind">extern</span></h3>
+      <pre class="usage"><code>pad_start(s, total_width, pad_char) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">s: string, total_width: int, pad_char: int</span></p>
+      <p class="doc">Pad to a fixed width with `pad_char` (single-byte char code — `48` for '0', `32` for ' '). If `s` is already &gt;= total_width chars, returns a fresh copy (no truncation). total_width &lt;= 0 also returns a fresh copy. pad_start prepends; pad_end appends.</p>
     </div>
-    <div class="function" id="string_to_double_raw" data-name="string_to_double_raw">
-      <h3 class="function-name">string_to_double_raw</h3>
-      <pre class="usage"><code>string_to_double_raw(str, out_value)</code></pre>
+    <div class="function" id="pad_end" data-name="pad_end">
+      <h3 class="function-name">pad_end <span class="kind">extern</span></h3>
+      <pre class="usage"><code>pad_end(s, total_width, pad_char) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">s: string, total_width: int, pad_char: int</span></p>
     </div>
-    <div class="function" id="string_try_int" data-name="string_try_int">
-      <h3 class="function-name">string_try_int</h3>
-      <pre class="usage"><code>string_try_int(s)</code></pre>
-      <p class="doc">Split-return helpers used by the Go-style wrappers. `_try` returns 1 if parseable, 0 otherwise. `_get` returns the parsed value or zero-value on failure.</p>
+    <div class="function" id="to_int_raw" data-name="to_int_raw">
+      <h3 class="function-name">to_int_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>to_int_raw(str, out_value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, out_value: ptr</span></p>
+      <p class="doc">Parsing — raw externs (escape hatch)</p>
     </div>
-    <div class="function" id="string_get_int" data-name="string_get_int">
-      <h3 class="function-name">string_get_int</h3>
-      <pre class="usage"><code>string_get_int(s)</code></pre>
+    <div class="function" id="to_long_raw" data-name="to_long_raw">
+      <h3 class="function-name">to_long_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>to_long_raw(str, out_value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, out_value: ptr</span></p>
     </div>
-    <div class="function" id="string_try_long" data-name="string_try_long">
-      <h3 class="function-name">string_try_long</h3>
-      <pre class="usage"><code>string_try_long(s)</code></pre>
+    <div class="function" id="to_float_raw" data-name="to_float_raw">
+      <h3 class="function-name">to_float_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>to_float_raw(str, out_value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, out_value: ptr</span></p>
     </div>
-    <div class="function" id="string_try_float" data-name="string_try_float">
-      <h3 class="function-name">string_try_float</h3>
-      <pre class="usage"><code>string_try_float(s)</code></pre>
+    <div class="function" id="to_double_raw" data-name="to_double_raw">
+      <h3 class="function-name">to_double_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>to_double_raw(str, out_value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, out_value: ptr</span></p>
     </div>
-    <div class="function" id="string_get_float" data-name="string_get_float">
-      <h3 class="function-name">string_get_float</h3>
-      <pre class="usage"><code>string_get_float(s)</code></pre>
+    <div class="function" id="try_int" data-name="try_int">
+      <h3 class="function-name">try_int <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_int(s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Parsing — split-return helpers for the Go-style wrappers.</p>
     </div>
-    <div class="function" id="string_try_double" data-name="string_try_double">
-      <h3 class="function-name">string_try_double</h3>
-      <pre class="usage"><code>string_try_double(s)</code></pre>
+    <div class="function" id="get_int" data-name="get_int">
+      <h3 class="function-name">get_int <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_int(s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
     </div>
-    <div class="function" id="string_get_double" data-name="string_get_double">
-      <h3 class="function-name">string_get_double</h3>
-      <pre class="usage"><code>string_get_double(s)</code></pre>
+    <div class="function" id="try_long" data-name="try_long">
+      <h3 class="function-name">try_long <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_long(s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
     </div>
-    <div class="function" id="string_format" data-name="string_format">
-      <h3 class="function-name">string_format</h3>
-      <pre class="usage"><code>string_format(fmt)</code></pre>
-      <p class="doc">Formatting (printf-style)</p>
+    <div class="function" id="get_long" data-name="get_long">
+      <h3 class="function-name">get_long <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_long(s) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+    </div>
+    <div class="function" id="try_float" data-name="try_float">
+      <h3 class="function-name">try_float <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_float(s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+    </div>
+    <div class="function" id="get_float" data-name="get_float">
+      <h3 class="function-name">get_float <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_float(s) <span class="arrow">-&gt;</span> float</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+    </div>
+    <div class="function" id="try_double" data-name="try_double">
+      <h3 class="function-name">try_double <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_double(s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+    </div>
+    <div class="function" id="get_double" data-name="get_double">
+      <h3 class="function-name">get_double <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_double(s) <span class="arrow">-&gt;</span> float</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+    </div>
+    <div class="function" id="to_int_radix_raw" data-name="to_int_radix_raw">
+      <h3 class="function-name">to_int_radix_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>to_int_radix_raw(str, radix, out_value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">str: string, radix: int, out_value: ptr</span></p>
+    </div>
+    <div class="function" id="try_int_radix" data-name="try_int_radix">
+      <h3 class="function-name">try_int_radix <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_int_radix(s, radix) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">s: string, radix: int</span></p>
+      <p class="doc">Base-N parse split-return. The value slot is `long` (int64) because radix-36 can exceed int32 quickly and because callers parsing hex often want the full 64-bit width (32-bit ARGB colors, file offsets, flag masks). Callers that only want an int can downcast at the call site.</p>
+    </div>
+    <div class="function" id="get_int_radix" data-name="get_int_radix">
+      <h3 class="function-name">get_int_radix <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_int_radix(s, radix) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">s: string, radix: int</span></p>
+    </div>
+    <div class="function" id="to_int" data-name="to_int">
+      <h3 class="function-name">to_int <span class="kind">fn</span></h3>
+      <pre class="usage"><code>to_int(s) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Parse a string to an integer. Returns (value, &quot;&quot;) on success, (0, error) on invalid input. Handles leading whitespace, sign, base-10 digits. Trailing whitespace is ignored; trailing garbage produces an error.</p>
+    </div>
+    <div class="function" id="to_long" data-name="to_long">
+      <h3 class="function-name">to_long <span class="kind">fn</span></h3>
+      <pre class="usage"><code>to_long(s) <span class="arrow">-&gt;</span> (long, string)</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Parse a string to a long (int64). Returns (value, &quot;&quot;) on success, (0, error) on invalid input.</p>
+    </div>
+    <div class="function" id="to_float" data-name="to_float">
+      <h3 class="function-name">to_float <span class="kind">fn</span></h3>
+      <pre class="usage"><code>to_float(s) <span class="arrow">-&gt;</span> (float, string)</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Parse a string to a float. Returns (value, &quot;&quot;) on success, (0.0, error) on invalid input.</p>
+    </div>
+    <div class="function" id="to_double" data-name="to_double">
+      <h3 class="function-name">to_double <span class="kind">fn</span></h3>
+      <pre class="usage"><code>to_double(s) <span class="arrow">-&gt;</span> (float, string)</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Parse a string to a double. Returns (value, &quot;&quot;) on success, (0.0, error) on invalid input.</p>
+    </div>
+    <div class="function" id="to_int_radix" data-name="to_int_radix">
+      <h3 class="function-name">to_int_radix <span class="kind">fn</span></h3>
+      <pre class="usage"><code>to_int_radix(s, radix) <span class="arrow">-&gt;</span> (long, string)</code></pre>
+      <p class="signature"><span class="sig-params">s: string, radix: int</span></p>
+      <p class="doc">Base-N parse: like `to_long` but accepts a radix in [2, 36]. Headline use cases: hex color decode (`parseInt(hex, 16)` patterns), hex byte fields in config files, binary masks, octal mode bits. Returns (value, &quot;&quot;) on success; (0, error) on: - radix outside [2, 36] - empty string or unparseable digits - overflow (the int64 range) - trailing non-whitespace garbage No &quot;0x&quot; / &quot;0b&quot; prefix recognition — pass the digit-only substring. The value is `long` (int64) because radix-16/36 can exceed int32 quickly and because callers often want the full 64-bit width (32-bit ARGB colors, file offsets, flag masks). Downcast at the call site if you only want an int.</p>
+    </div>
+    <div class="function" id="strip_prefix" data-name="strip_prefix">
+      <h3 class="function-name">strip_prefix <span class="kind">fn</span></h3>
+      <pre class="usage"><code>strip_prefix(s, prefix) <span class="arrow">-&gt;</span> (_0, int, _2, int)</code></pre>
+      <p class="signature"><span class="sig-params">s: string, prefix: string</span></p>
+      <p class="doc">If `s` starts with `prefix`, return (s-after-prefix, 1). Otherwise return (s, 0). An empty prefix is treated as always matching and leaves `s` unchanged — callers can use the 1/0 flag to tell &quot;matched and stripped&quot; from &quot;no match&quot;.</p>
+    </div>
+    <div class="function" id="copy" data-name="copy">
+      <h3 class="function-name">copy <span class="kind">fn</span></h3>
+      <pre class="usage"><code>copy(s) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Return an independently-owned copy of `s`. Useful when `s` is borrowed from a TLS buffer or arena that the next C call will overwrite — calling `copy` guarantees the returned string outlives such a handoff. Equivalent to `string_concat(s, &quot;&quot;)` but with a discoverable name.</p>
+    </div>
+    <div class="function" id="format_list" data-name="format_list">
+      <h3 class="function-name">format_list <span class="kind">extern</span></h3>
+      <pre class="usage"><code>format_list(fmt, args) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">fmt: string, args: ptr</span></p>
+      <p class="doc">Format a string by substituting `{}` placeholders with the corresponding entries of `args` (an `std.list` of strings). `{{` and `}}` are literal braces. Returns a refcounted AetherString. Closes #272. Use this for runtime-built strings of N parts where literal `${...}` interpolation isn't usable (e.g. when the format string itself comes from a config file or message-template lookup): args = list_new() list_add(args, &quot;PUT&quot;) list_add(args, &quot;/foo/bar&quot;) list_add(args, &quot;alice&quot;) msg = string.format(&quot;{} {} by {}&quot;, args)   // &quot;PUT /foo/bar by alice&quot; Non-string values (ints, floats) need explicit conversion via `string.from_int(n)` etc. before being added to the list.</p>
+    </div>
+    <div class="function" id="format" data-name="format">
+      <h3 class="function-name">format <span class="kind">fn</span></h3>
+      <pre class="usage"><code>format(fmt, args) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">fmt: string, args: ptr</span></p>
+    </div>
+    <div class="function" id="glob_match_raw" data-name="glob_match_raw">
+      <h3 class="function-name">glob_match_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>glob_match_raw(pattern, s, flags) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string, s: string, flags: int</span></p>
+      <p class="doc">Glob-pattern matching: does `pattern` match `s`? Aether-side equivalent of POSIX fnmatch(3) — string-pattern matching, distinct from `fs.glob` (which enumerates files on disk). Pattern syntax: `*`      — zero or more characters `?`      — exactly one character `[abc]`  — any of the listed characters (char class) `[a-z]`  — character range `[!abc]` — negated class (also `[^abc]`) `\*` / `\?` — literal `*` / `?` Returns 1 on match, 0 on no-match, -1 on glob-syntax error (unmatched bracket). Section A.2 of aether_changes_needed.md. Use `glob_match` for the plain form (svn:ignore matching, message routing). Use `glob_match_pathname` when `*` and `?` should NOT cross a `/` separator — the right form for matching path patterns like `src/*.c` (matches `src/foo.c` but not `src/sub/foo.c`).</p>
+    </div>
+    <div class="function" id="glob_match" data-name="glob_match">
+      <h3 class="function-name">glob_match <span class="kind">fn</span></h3>
+      <pre class="usage"><code>glob_match(pattern, s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string, s: string</span></p>
+    </div>
+    <div class="function" id="glob_match_pathname" data-name="glob_match_pathname">
+      <h3 class="function-name">glob_match_pathname <span class="kind">fn</span></h3>
+      <pre class="usage"><code>glob_match_pathname(pattern, s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string, s: string</span></p>
     </div>
   </div>
 </main>

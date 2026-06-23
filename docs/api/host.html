@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>host - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search host..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#notify">notify</a></li>
+    <li><a href="#describe">describe</a></li>
+    <li><a href="#input">input</a></li>
+    <li><a href="#event">event</a></li>
+    <li><a href="#bindings">bindings</a></li>
+    <li><a href="#java">java</a></li>
+    <li><a href="#python">python</a></li>
+    <li><a href="#ruby">ruby</a></li>
+    <li><a href="#go">go</a></li>
+    <li><a href="#manifest_get">manifest_get</a></li>
+    <li><a href="#manifest_clear">manifest_clear</a></li>
+    <li><a href="#aether_caller_identity">aether_caller_identity</a></li>
+    <li><a href="#aether_caller_attribute">aether_caller_attribute</a></li>
+    <li><a href="#aether_caller_deadline_ms">aether_caller_deadline_ms</a></li>
+    <li><a href="#caller_identity">caller_identity</a></li>
+    <li><a href="#caller_attribute">caller_attribute</a></li>
+    <li><a href="#caller_deadline_ms">caller_deadline_ms</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li class="active"><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>host</h1>
+    <p class="module-desc">std.host — primitives for Aether scripts embedded in a host application.</p>
+    <p class="import-line"><code>import std.host</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="notify" data-name="notify">
+      <h3 class="function-name">notify <span class="kind">extern</span></h3>
+      <pre class="usage"><code>notify(event, id) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">event: string, id: long</span></p>
+      <p class="doc">Emit an event to the host process. Returns 1 if a handler was found and invoked, 0 if no listener is registered for this event name. `long` is Aether's 64-bit integer (TOKEN_INT64); the C-side ABI is int64_t per the public host header (runtime/aether_host.h).</p>
+    </div>
+    <div class="function" id="describe" data-name="describe">
+      <h3 class="function-name">describe <span class="kind">extern</span></h3>
+      <pre class="usage"><code>describe(_ctx, name)</code></pre>
+      <p class="signature"><span class="sig-params">_ctx: ptr, name: string</span></p>
+      <p class="doc">Begin a namespace declaration. The trailing block contains input(), event(), and bindings() calls.</p>
+    </div>
+    <div class="function" id="input" data-name="input">
+      <h3 class="function-name">input <span class="kind">extern</span></h3>
+      <pre class="usage"><code>input(_ctx, name, type_signature)</code></pre>
+      <p class="signature"><span class="sig-params">_ctx: ptr, name: string, type_signature: string</span></p>
+      <p class="doc">Inside a `describe() { }` block.</p>
+    </div>
+    <div class="function" id="event" data-name="event">
+      <h3 class="function-name">event <span class="kind">extern</span></h3>
+      <pre class="usage"><code>event(_ctx, name, carries_type)</code></pre>
+      <p class="signature"><span class="sig-params">_ctx: ptr, name: string, carries_type: string</span></p>
+    </div>
+    <div class="function" id="bindings" data-name="bindings">
+      <h3 class="function-name">bindings <span class="kind">extern</span></h3>
+      <pre class="usage"><code>bindings(_ctx)</code></pre>
+      <p class="signature"><span class="sig-params">_ctx: ptr</span></p>
+      <p class="doc">Bindings — visual grouping for the per-language binding builders. Each binding extern appends to its slot in the manifest.</p>
+    </div>
+    <div class="function" id="java" data-name="java">
+      <h3 class="function-name">java <span class="kind">extern</span></h3>
+      <pre class="usage"><code>java(_ctx, package_name, class_name)</code></pre>
+      <p class="signature"><span class="sig-params">_ctx: ptr, package_name: string, class_name: string</span></p>
+    </div>
+    <div class="function" id="python" data-name="python">
+      <h3 class="function-name">python <span class="kind">extern</span></h3>
+      <pre class="usage"><code>python(_ctx, module_name)</code></pre>
+      <p class="signature"><span class="sig-params">_ctx: ptr, module_name: string</span></p>
+    </div>
+    <div class="function" id="ruby" data-name="ruby">
+      <h3 class="function-name">ruby <span class="kind">extern</span></h3>
+      <pre class="usage"><code>ruby(_ctx, module_name)</code></pre>
+      <p class="signature"><span class="sig-params">_ctx: ptr, module_name: string</span></p>
+    </div>
+    <div class="function" id="go" data-name="go">
+      <h3 class="function-name">go <span class="kind">extern</span></h3>
+      <pre class="usage"><code>go(_ctx, package_name)</code></pre>
+      <p class="signature"><span class="sig-params">_ctx: ptr, package_name: string</span></p>
+    </div>
+    <div class="function" id="manifest_get" data-name="manifest_get">
+      <h3 class="function-name">manifest_get <span class="kind">extern</span></h3>
+      <pre class="usage"><code>manifest_get() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">Read the captured manifest. Returns a ptr to an opaque AetherManifest struct (see runtime/aether_host.h). Used by tests and the dlopen pipeline; user code rarely calls this.</p>
+    </div>
+    <div class="function" id="manifest_clear" data-name="manifest_clear">
+      <h3 class="function-name">manifest_clear <span class="kind">extern</span></h3>
+      <pre class="usage"><code>manifest_clear()</code></pre>
+      <p class="doc">Reset the captured manifest. Intended for tests and for the pipeline to start each compilation from a clean slate.</p>
+    </div>
+    <div class="function" id="aether_caller_identity" data-name="aether_caller_identity">
+      <h3 class="function-name">aether_caller_identity <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_caller_identity() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="aether_caller_attribute" data-name="aether_caller_attribute">
+      <h3 class="function-name">aether_caller_attribute <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_caller_attribute(key) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">key: string</span></p>
+    </div>
+    <div class="function" id="aether_caller_deadline_ms" data-name="aether_caller_deadline_ms">
+      <h3 class="function-name">aether_caller_deadline_ms <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_caller_deadline_ms() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="caller_identity" data-name="caller_identity">
+      <h3 class="function-name">caller_identity <span class="kind">fn</span></h3>
+      <pre class="usage"><code>caller_identity() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="caller_attribute" data-name="caller_attribute">
+      <h3 class="function-name">caller_attribute <span class="kind">fn</span></h3>
+      <pre class="usage"><code>caller_attribute(key) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">key: string</span></p>
+    </div>
+    <div class="function" id="caller_deadline_ms" data-name="caller_deadline_ms">
+      <h3 class="function-name">caller_deadline_ms <span class="kind">fn</span></h3>
+      <pre class="usage"><code>caller_deadline_ms() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

@@ -48,7 +48,7 @@ make stdlib PLATFORM=wasm
 
 ## Actor Timeouts
 
-Actors with a `receive ... after N` clause have `timeout_ns` and `last_activity_ns` fields in `ActorBase`. The generated step function checks the clock before `mailbox_receive()`:
+Actors with a `receive ... after N` clause have `timeout_ns` and `last_activity_ns` fields in `ActorBase`. The generated step function checks the clock via `_aether_clock_ns()` before `mailbox_receive()`:
 
 1. If the mailbox is empty and `timeout_ns > 0`, `last_activity_ns` is set to the current time (start countdown)
 2. On the next poll, if `(now - last_activity_ns) >= timeout_ns`, the timeout handler fires and the timeout is disabled (one-shot)

@@ -13,147 +13,712 @@
     <p class="tagline">Standard Library</p>
   </div>
   <input type="text" id="search" placeholder="Search fs..." onkeyup="searchModule()">
-  <h2>Functions</h2>
+  <h2>Exports</h2>
   <ul class="function-nav">
+    <li><a href="#file_open_raw">file_open_raw</a></li>
+    <li><a href="#file_close">file_close</a></li>
     <li><a href="#file_read_all_raw">file_read_all_raw</a></li>
     <li><a href="#file_write_raw">file_write_raw</a></li>
-    <li><a href="#file_close">file_close</a></li>
     <li><a href="#file_exists">file_exists</a></li>
+    <li><a href="#path_exists">path_exists</a></li>
     <li><a href="#file_delete_raw">file_delete_raw</a></li>
     <li><a href="#file_size_raw">file_size_raw</a></li>
     <li><a href="#file_mtime">file_mtime</a></li>
     <li><a href="#dir_exists">dir_exists</a></li>
     <li><a href="#dir_create_raw">dir_create_raw</a></li>
     <li><a href="#dir_delete_raw">dir_delete_raw</a></li>
-    <li><a href="#fs_mkdir_p_raw">fs_mkdir_p_raw</a></li>
-    <li><a href="#fs_symlink_raw">fs_symlink_raw</a></li>
-    <li><a href="#fs_readlink_raw">fs_readlink_raw</a></li>
-    <li><a href="#fs_is_symlink">fs_is_symlink</a></li>
-    <li><a href="#fs_unlink_raw">fs_unlink_raw</a></li>
+    <li><a href="#dir_list_raw">dir_list_raw</a></li>
+    <li><a href="#mkdir_p_raw">mkdir_p_raw</a></li>
+    <li><a href="#symlink_raw">symlink_raw</a></li>
+    <li><a href="#readlink_raw">readlink_raw</a></li>
+    <li><a href="#is_symlink">is_symlink</a></li>
+    <li><a href="#unlink_raw">unlink_raw</a></li>
+    <li><a href="#write_binary_raw">write_binary_raw</a></li>
+    <li><a href="#write_atomic_raw">write_atomic_raw</a></li>
+    <li><a href="#rename_raw">rename_raw</a></li>
+    <li><a href="#try_stat">try_stat</a></li>
+    <li><a href="#get_stat_kind">get_stat_kind</a></li>
+    <li><a href="#get_stat_size">get_stat_size</a></li>
+    <li><a href="#get_stat_mtime">get_stat_mtime</a></li>
+    <li><a href="#try_read_binary">try_read_binary</a></li>
+    <li><a href="#get_read_binary">get_read_binary</a></li>
+    <li><a href="#get_read_binary_length">get_read_binary_length</a></li>
+    <li><a href="#release_read_binary">release_read_binary</a></li>
+    <li><a href="#read_binary_tuple">read_binary_tuple</a></li>
+    <li><a href="#dir_list_count">dir_list_count</a></li>
+    <li><a href="#dir_list_get">dir_list_get</a></li>
+    <li><a href="#dir_list_free">dir_list_free</a></li>
     <li><a href="#path_join">path_join</a></li>
     <li><a href="#path_dirname">path_dirname</a></li>
     <li><a href="#path_basename">path_basename</a></li>
     <li><a href="#path_extension">path_extension</a></li>
     <li><a href="#path_is_absolute">path_is_absolute</a></li>
-    <li><a href="#dir_list_count">dir_list_count</a></li>
-    <li><a href="#dir_list_get">dir_list_get</a></li>
-    <li><a href="#dir_list_free">dir_list_free</a></li>
+    <li><a href="#path_clean">path_clean</a></li>
+    <li><a href="#path_is_within_base">path_is_within_base</a></li>
+    <li><a href="#path_rel">path_rel</a></li>
+    <li><a href="#clean">clean</a></li>
+    <li><a href="#is_within_base">is_within_base</a></li>
+    <li><a href="#rel">rel</a></li>
+    <li><a href="#join_clean">join_clean</a></li>
+    <li><a href="#first_element">first_element</a></li>
+    <li><a href="#pwrite_raw">pwrite_raw</a></li>
+    <li><a href="#pread_raw">pread_raw</a></li>
+    <li><a href="#get_pread">get_pread</a></li>
+    <li><a href="#get_pread_length">get_pread_length</a></li>
+    <li><a href="#release_pread">release_pread</a></li>
+    <li><a href="#ftruncate_raw">ftruncate_raw</a></li>
+    <li><a href="#fsync_raw">fsync_raw</a></li>
+    <li><a href="#pwrite">pwrite</a></li>
+    <li><a href="#pread">pread</a></li>
+    <li><a href="#ftruncate">ftruncate</a></li>
+    <li><a href="#fsync">fsync</a></li>
+    <li><a href="#glob_raw">glob_raw</a></li>
+    <li><a href="#glob_multi_raw">glob_multi_raw</a></li>
+    <li><a href="#open">open</a></li>
+    <li><a href="#read">read</a></li>
+    <li><a href="#write">write</a></li>
+    <li><a href="#delete">delete</a></li>
+    <li><a href="#size">size</a></li>
+    <li><a href="#mtime">mtime</a></li>
+    <li><a href="#exists">exists</a></li>
+    <li><a href="#create_dir">create_dir</a></li>
+    <li><a href="#create_dir_with_mode">create_dir_with_mode</a></li>
+    <li><a href="#delete_dir">delete_dir</a></li>
+    <li><a href="#mkdir_p">mkdir_p</a></li>
+    <li><a href="#symlink">symlink</a></li>
+    <li><a href="#readlink">readlink</a></li>
+    <li><a href="#unlink">unlink</a></li>
+    <li><a href="#list_dir">list_dir</a></li>
+    <li><a href="#glob">glob</a></li>
+    <li><a href="#glob_multi">glob_multi</a></li>
+    <li><a href="#write_binary">write_binary</a></li>
+    <li><a href="#write_atomic">write_atomic</a></li>
+    <li><a href="#rename">rename</a></li>
+    <li><a href="#file_stat">file_stat</a></li>
+    <li><a href="#read_binary">read_binary</a></li>
+    <li><a href="#copy_raw">copy_raw</a></li>
+    <li><a href="#move_raw">move_raw</a></li>
+    <li><a href="#realpath_raw">realpath_raw</a></li>
+    <li><a href="#chmod_raw">chmod_raw</a></li>
+    <li><a href="#copy">copy</a></li>
+    <li><a href="#move">move</a></li>
+    <li><a href="#realpath">realpath</a></li>
+    <li><a href="#chmod">chmod</a></li>
+    <li><a href="#KIND_OK">KIND_OK</a></li>
+    <li><a href="#KIND_NOT_FOUND">KIND_NOT_FOUND</a></li>
+    <li><a href="#KIND_PERMISSION_DENIED">KIND_PERMISSION_DENIED</a></li>
+    <li><a href="#KIND_EXISTS">KIND_EXISTS</a></li>
+    <li><a href="#KIND_CROSS_DEVICE">KIND_CROSS_DEVICE</a></li>
+    <li><a href="#KIND_IO">KIND_IO</a></li>
+    <li><a href="#KIND_INVALID">KIND_INVALID</a></li>
+    <li><a href="#KIND_LOOP">KIND_LOOP</a></li>
+    <li><a href="#KIND_NAME_TOO_LONG">KIND_NAME_TOO_LONG</a></li>
+    <li><a href="#KIND_NO_SPACE">KIND_NO_SPACE</a></li>
+    <li><a href="#KIND_IS_DIR">KIND_IS_DIR</a></li>
+    <li><a href="#KIND_NOT_DIR">KIND_NOT_DIR</a></li>
+    <li><a href="#KIND_UNAVAILABLE">KIND_UNAVAILABLE</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
   <ul class="module-list">
-    <li><a href="net.html">net</a></li>
-    <li><a href="io.html">io</a></li>
-    <li><a href="math.html">math</a></li>
-    <li><a href="json.html">json</a></li>
-    <li><a href="log.html">log</a></li>
-    <li><a href="os.html">os</a></li>
-    <li><a href="string.html">string</a></li>
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
     <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
     <li class="active"><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
   </ul>
 </nav>
 <main class="content">
   <div class="module-header">
     <h1>fs</h1>
-    <p class="module-desc">File system operations</p>
+    <p class="module-desc">std.fs - File System Module Import with: import std.fs Provides file, directory, path, glob, and copy/move/realpath/chmod operations.</p>
+    <p class="import-line"><code>import std.fs</code></p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="file_read_all_raw" data-name="file_read_all_raw">
-      <h3 class="function-name">file_read_all_raw</h3>
-      <pre class="usage"><code>file_read_all_raw(file)</code></pre>
-    </div>
-    <div class="function" id="file_write_raw" data-name="file_write_raw">
-      <h3 class="function-name">file_write_raw</h3>
-      <pre class="usage"><code>file_write_raw(file, data, length)</code></pre>
+    <div class="function" id="file_open_raw" data-name="file_open_raw">
+      <h3 class="function-name">file_open_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_open_raw(path, mode) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">path: string, mode: string</span></p>
+      <p class="doc">File operations - raw externs</p>
     </div>
     <div class="function" id="file_close" data-name="file_close">
-      <h3 class="function-name">file_close</h3>
-      <pre class="usage"><code>file_close(file)</code></pre>
+      <h3 class="function-name">file_close <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_close(file) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr</span></p>
+    </div>
+    <div class="function" id="file_read_all_raw" data-name="file_read_all_raw">
+      <h3 class="function-name">file_read_all_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_read_all_raw(file) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr</span></p>
+    </div>
+    <div class="function" id="file_write_raw" data-name="file_write_raw">
+      <h3 class="function-name">file_write_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_write_raw(file, data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, data: string, length: int</span></p>
     </div>
     <div class="function" id="file_exists" data-name="file_exists">
-      <h3 class="function-name">file_exists</h3>
-      <pre class="usage"><code>file_exists(path)</code></pre>
+      <h3 class="function-name">file_exists <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_exists(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="path_exists" data-name="path_exists">
+      <h3 class="function-name">path_exists <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_exists(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Path-agnostic existence check: 1 if anything is at `path` (regular file, directory, symlink, fifo, ...), 0 otherwise. Distinct from `file_exists` (regular-file-only) and `dir_exists` (directory-only). Use this when the caller doesn't care what kind of thing is there — only whether the path is bound. Matches POSIX `test -e`.</p>
     </div>
     <div class="function" id="file_delete_raw" data-name="file_delete_raw">
-      <h3 class="function-name">file_delete_raw</h3>
-      <pre class="usage"><code>file_delete_raw(path)</code></pre>
+      <h3 class="function-name">file_delete_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_delete_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
     <div class="function" id="file_size_raw" data-name="file_size_raw">
-      <h3 class="function-name">file_size_raw</h3>
-      <pre class="usage"><code>file_size_raw(path)</code></pre>
+      <h3 class="function-name">file_size_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_size_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
     <div class="function" id="file_mtime" data-name="file_mtime">
-      <h3 class="function-name">file_mtime</h3>
-      <pre class="usage"><code>file_mtime(path)</code></pre>
+      <h3 class="function-name">file_mtime <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_mtime(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Get file modification time as a Unix timestamp. Infallible — returns 0 for missing files, null paths, or stat failure. Kept as a raw extern with no Go-style wrapper because callers already use the 0 sentinel for &quot;no mtime&quot;.</p>
     </div>
     <div class="function" id="dir_exists" data-name="dir_exists">
-      <h3 class="function-name">dir_exists</h3>
-      <pre class="usage"><code>dir_exists(path)</code></pre>
-      <p class="doc">Directory operations</p>
+      <h3 class="function-name">dir_exists <span class="kind">extern</span></h3>
+      <pre class="usage"><code>dir_exists(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Directory operations - raw externs</p>
     </div>
     <div class="function" id="dir_create_raw" data-name="dir_create_raw">
-      <h3 class="function-name">dir_create_raw</h3>
-      <pre class="usage"><code>dir_create_raw(path)</code></pre>
+      <h3 class="function-name">dir_create_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>dir_create_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
     <div class="function" id="dir_delete_raw" data-name="dir_delete_raw">
-      <h3 class="function-name">dir_delete_raw</h3>
-      <pre class="usage"><code>dir_delete_raw(path)</code></pre>
+      <h3 class="function-name">dir_delete_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>dir_delete_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
-    <div class="function" id="fs_mkdir_p_raw" data-name="fs_mkdir_p_raw">
-      <h3 class="function-name">fs_mkdir_p_raw</h3>
-      <pre class="usage"><code>fs_mkdir_p_raw(path)</code></pre>
-      <p class="doc">`mkdir -p` semantics: create `path` and any missing parent directories. Treats already-existing directories as success. Returns 1 on success, 0 on failure. Raw extern — use the `mkdir_p` Go-style wrapper in std/fs/module.ae from most code.</p>
+    <div class="function" id="dir_list_raw" data-name="dir_list_raw">
+      <h3 class="function-name">dir_list_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>dir_list_raw(path) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
-    <div class="function" id="fs_symlink_raw" data-name="fs_symlink_raw">
-      <h3 class="function-name">fs_symlink_raw</h3>
-      <pre class="usage"><code>fs_symlink_raw(target, link_path)</code></pre>
-      <p class="doc">Symbolic-link operations. The *_raw functions are the low-level externs; idiomatic callers use the Go-style `symlink` / `readlink` / `unlink` wrappers in std/fs/module.ae which return `(value, err)`.  fs_symlink_raw: create a symlink at `link_path` pointing to `target`. Returns 1 on success, 0 on failure (e.g. link already exists). `target` is recorded verbatim — NOT resolved at create time, so a relative target stays relative.  fs_readlink_raw: read a symlink. Returns a heap-allocated string containing the link target, or NULL if `path` is not a symlink (or cannot be read). Caller frees.  fs_is_symlink: returns 1 if `path` is itself a symlink (does not follow), 0 otherwise. Pure boolean query — no wrapper needed, matches file_exists / dir_exists shape.  fs_unlink_raw: remove a file or symlink. Will NOT remove a directory — use dir_delete_raw for that. Returns 1 on success, 0 on failure.</p>
+    <div class="function" id="mkdir_p_raw" data-name="mkdir_p_raw">
+      <h3 class="function-name">mkdir_p_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>mkdir_p_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">`mkdir -p` semantics: create `path` and any missing parent directories. Treats already-existing directories as success. Raw extern — use the `mkdir_p` wrapper below in most code.</p>
     </div>
-    <div class="function" id="fs_readlink_raw" data-name="fs_readlink_raw">
-      <h3 class="function-name">fs_readlink_raw</h3>
-      <pre class="usage"><code>fs_readlink_raw(path)</code></pre>
+    <div class="function" id="symlink_raw" data-name="symlink_raw">
+      <h3 class="function-name">symlink_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>symlink_raw(target, link_path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">target: string, link_path: string</span></p>
+      <p class="doc">Symbolic-link operations (raw externs). fs_symlink_raw   — create a symlink at `link_path` pointing to `target`. `target` is recorded verbatim (relative stays relative). fs_readlink_raw  — read a symlink's target. Returns null if not a symlink. fs_is_symlink    — does NOT follow; returns 1 only for the link itself. Pure boolean query, no wrapper (matches file_exists). fs_unlink_raw    — remove a file or symlink (NOT a directory).</p>
     </div>
-    <div class="function" id="fs_is_symlink" data-name="fs_is_symlink">
-      <h3 class="function-name">fs_is_symlink</h3>
-      <pre class="usage"><code>fs_is_symlink(path)</code></pre>
+    <div class="function" id="readlink_raw" data-name="readlink_raw">
+      <h3 class="function-name">readlink_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>readlink_raw(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
-    <div class="function" id="fs_unlink_raw" data-name="fs_unlink_raw">
-      <h3 class="function-name">fs_unlink_raw</h3>
-      <pre class="usage"><code>fs_unlink_raw(path)</code></pre>
+    <div class="function" id="is_symlink" data-name="is_symlink">
+      <h3 class="function-name">is_symlink <span class="kind">extern</span></h3>
+      <pre class="usage"><code>is_symlink(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
-    <div class="function" id="path_join" data-name="path_join">
-      <h3 class="function-name">path_join</h3>
-      <pre class="usage"><code>path_join(path1, path2)</code></pre>
-      <p class="doc">Path operations</p>
+    <div class="function" id="unlink_raw" data-name="unlink_raw">
+      <h3 class="function-name">unlink_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>unlink_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
-    <div class="function" id="path_dirname" data-name="path_dirname">
-      <h3 class="function-name">path_dirname</h3>
-      <pre class="usage"><code>path_dirname(path)</code></pre>
+    <div class="function" id="write_binary_raw" data-name="write_binary_raw">
+      <h3 class="function-name">write_binary_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>write_binary_raw(path, data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string, data: string, length: int</span></p>
+      <p class="doc">Non-atomic binary write: fopen(&quot;wb&quot;) + fwrite(len bytes) + fclose. Binary-safe because length is explicit. Cheaper than fs_write_atomic_raw when a partial file on crash is acceptable — scratch writes, caches, and anywhere the destination isn't load-bearing for another process.</p>
     </div>
-    <div class="function" id="path_basename" data-name="path_basename">
-      <h3 class="function-name">path_basename</h3>
-      <pre class="usage"><code>path_basename(path)</code></pre>
+    <div class="function" id="write_atomic_raw" data-name="write_atomic_raw">
+      <h3 class="function-name">write_atomic_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>write_atomic_raw(path, data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string, data: string, length: int</span></p>
+      <p class="doc">Durable write: write-to-tmp + fsync + rename over destination. Binary-safe — takes an explicit length so embedded NULs survive.</p>
     </div>
-    <div class="function" id="path_extension" data-name="path_extension">
-      <h3 class="function-name">path_extension</h3>
-      <pre class="usage"><code>path_extension(path)</code></pre>
+    <div class="function" id="rename_raw" data-name="rename_raw">
+      <h3 class="function-name">rename_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>rename_raw(from, to) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">from: string, to: string</span></p>
+      <p class="doc">POSIX rename(2). Callers pairing with write_atomic should keep `from` on the same filesystem as `to` for atomicity.</p>
     </div>
-    <div class="function" id="path_is_absolute" data-name="path_is_absolute">
-      <h3 class="function-name">path_is_absolute</h3>
-      <pre class="usage"><code>path_is_absolute(path)</code></pre>
+    <div class="function" id="try_stat" data-name="try_stat">
+      <h3 class="function-name">try_stat <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_stat(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Split-accessor stat: call fs_try_stat first, then read the getters. kind encoding: 1=file, 2=dir, 3=symlink, 4=other. Pair is thread-local so back-to-back calls on one thread are safe.</p>
+    </div>
+    <div class="function" id="get_stat_kind" data-name="get_stat_kind">
+      <h3 class="function-name">get_stat_kind <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_stat_kind() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="get_stat_size" data-name="get_stat_size">
+      <h3 class="function-name">get_stat_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_stat_size() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="get_stat_mtime" data-name="get_stat_mtime">
+      <h3 class="function-name">get_stat_mtime <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_stat_mtime() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="try_read_binary" data-name="try_read_binary">
+      <h3 class="function-name">try_read_binary <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_read_binary(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Split-accessor binary read: fs_try_read_binary reads the file into a TLS-owned buffer; fs_get_read_binary / fs_get_read_binary_length read that buffer borrowed. fs_release_read_binary frees early (otherwise it's released on the next fs_try_read_binary call).</p>
+    </div>
+    <div class="function" id="get_read_binary" data-name="get_read_binary">
+      <h3 class="function-name">get_read_binary <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_read_binary() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="get_read_binary_length" data-name="get_read_binary_length">
+      <h3 class="function-name">get_read_binary_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_read_binary_length() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="release_read_binary" data-name="release_read_binary">
+      <h3 class="function-name">release_read_binary <span class="kind">extern</span></h3>
+      <pre class="usage"><code>release_read_binary()</code></pre>
+    </div>
+    <div class="function" id="read_binary_tuple" data-name="read_binary_tuple">
+      <h3 class="function-name">read_binary_tuple <span class="kind">extern</span></h3>
+      <pre class="usage"><code>read_binary_tuple(path) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Unified tuple-return shape (#271 + #273) — the canonical entry point that fs.read_binary wraps. Returns (bytes, length, err): (AetherString*, int, &quot;&quot;) on success, (empty, 0, &quot;&lt;reason&gt;&quot;) on failure. Position 0 (bytes) is `@heap`: the C side allocates a fresh AetherString via `string_new_with_length`. The destructured LHS owns the buffer; the heap-string-tracker frees it at function exit (or on reassignment) — same machinery `fs_realpath_raw` below relies on. Position 2 (err) stays default-borrow — the error message is a static C string literal. Earlier shape used `(ptr, int, string)` for position 0, which suppressed heap classification at every tuple-destructure site and silently leaked the bytes buffer at scope exit. Reported by the avn port (tuple-destructure-heap-classification.md) where it drove O(N²) RSS retention in avnserver.</p>
     </div>
     <div class="function" id="dir_list_count" data-name="dir_list_count">
-      <h3 class="function-name">dir_list_count</h3>
-      <pre class="usage"><code>dir_list_count(list)</code></pre>
+      <h3 class="function-name">dir_list_count <span class="kind">extern</span></h3>
+      <pre class="usage"><code>dir_list_count(list) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">list: ptr</span></p>
     </div>
     <div class="function" id="dir_list_get" data-name="dir_list_get">
-      <h3 class="function-name">dir_list_get</h3>
-      <pre class="usage"><code>dir_list_get(list, index)</code></pre>
+      <h3 class="function-name">dir_list_get <span class="kind">extern</span></h3>
+      <pre class="usage"><code>dir_list_get(list, index) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">list: ptr, index: int</span></p>
     </div>
     <div class="function" id="dir_list_free" data-name="dir_list_free">
-      <h3 class="function-name">dir_list_free</h3>
+      <h3 class="function-name">dir_list_free <span class="kind">extern</span></h3>
       <pre class="usage"><code>dir_list_free(list)</code></pre>
+      <p class="signature"><span class="sig-params">list: ptr</span></p>
+    </div>
+    <div class="function" id="path_join" data-name="path_join">
+      <h3 class="function-name">path_join <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_join(path1, path2) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path1: string, path2: string</span></p>
+      <p class="doc">Path utilities - pure functions, never fail</p>
+    </div>
+    <div class="function" id="path_dirname" data-name="path_dirname">
+      <h3 class="function-name">path_dirname <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_dirname(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="path_basename" data-name="path_basename">
+      <h3 class="function-name">path_basename <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_basename(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="path_extension" data-name="path_extension">
+      <h3 class="function-name">path_extension <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_extension(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="path_is_absolute" data-name="path_is_absolute">
+      <h3 class="function-name">path_is_absolute <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_is_absolute(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="path_clean" data-name="path_clean">
+      <h3 class="function-name">path_clean <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_clean(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Lexical path ops (#632). Pure-string; never touch the filesystem.</p>
+    </div>
+    <div class="function" id="path_is_within_base" data-name="path_is_within_base">
+      <h3 class="function-name">path_is_within_base <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_is_within_base(base, target) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">base: string, target: string</span></p>
+    </div>
+    <div class="function" id="path_rel" data-name="path_rel">
+      <h3 class="function-name">path_rel <span class="kind">extern</span></h3>
+      <pre class="usage"><code>path_rel(base, target) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">base: string, target: string</span></p>
+    </div>
+    <div class="function" id="clean" data-name="clean">
+      <h3 class="function-name">clean <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clean(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Lexically clean `path` per POSIX filepath.Clean semantics — collapse `//` and `./`, resolve `..` against a segment stack (drop the parent), preserve a leading `/`, preserve unresolved leading `..` on relative paths. Empty input → &quot;.&quot;. Pure-string, no filesystem access. Examples: fs.clean(&quot;/a//b/./c/../d&quot;) → &quot;/a/b/d&quot; fs.clean(&quot;../../x&quot;)        → &quot;../../x&quot;   (relative, unresolved) fs.clean(&quot;/..&quot;)            → &quot;/&quot;         (rooted) fs.clean(&quot;&quot;)               → &quot;.&quot;</p>
+    </div>
+    <div class="function" id="is_within_base" data-name="is_within_base">
+      <h3 class="function-name">is_within_base <span class="kind">fn</span></h3>
+      <pre class="usage"><code>is_within_base(base, target) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">base: string, target: string</span></p>
+      <p class="doc">Lexical containment: does cleaned `target` lie under cleaned `base`? Returns 1 yes, 0 no. SECURITY-CRITICAL primitive for any code that resolves a user-supplied path against a data dir / static-asset root / archive extraction prefix — call this BEFORE open(2) to reject `../../etc/passwd` at the door. Pure-string: does NOT follow symlinks. A symlink under `base` pointing outside is an open-time concern this function does not address. For symlink-aware containment, use realpath on both sides first (one extra syscall per request) then call this. Examples: fs.is_within_base(&quot;/data&quot;, &quot;/data/x/y&quot;)    → 1 fs.is_within_base(&quot;/data&quot;, &quot;/data&quot;)        → 1   (identical) fs.is_within_base(&quot;/data&quot;, &quot;/data/../x&quot;)   → 0   (cleans to /x) fs.is_within_base(&quot;/data&quot;, &quot;/datax/y&quot;)     → 0   (prefix but not subdir)</p>
+    </div>
+    <div class="function" id="rel" data-name="rel">
+      <h3 class="function-name">rel <span class="kind">fn</span></h3>
+      <pre class="usage"><code>rel(base, target) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">base: string, target: string</span></p>
+      <p class="doc">Relative path from cleaned `base` to cleaned `target` (Go filepath.Rel). Returns the relative path on success, &quot;&quot; when one is absolute and the other relative (no relative path exists). `base == target` returns &quot;.&quot;. Useful for showing paths relative to a project root in logs / UI. Less security-critical than is_within_base — same lexical computation in a different shape.</p>
+    </div>
+    <div class="function" id="join_clean" data-name="join_clean">
+      <h3 class="function-name">join_clean <span class="kind">fn</span></h3>
+      <pre class="usage"><code>join_clean(a, b) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">a: string, b: string</span></p>
+      <p class="doc">Lexically-cleaned join. `path_join(a, b)` followed by `clean` in one call — the path that actually hits the filesystem after a user- supplied segment is appended. Use this (not bare `path_join`) wherever `b` may contain `..` or `.` — object keys, archive entry names, any caller-controlled tail — so `join_clean(&quot;bucket&quot;, &quot;a/../b&quot;)` collapses to &quot;bucket/b&quot; rather than leaving the traversal in place. Pair with `is_within_base` for the containment check. Empty-segment handling mirrors path_join's identity behaviour: an empty `a` or `b` cleans the other side alone (so the result is never a spurious &quot;./x&quot; or &quot;x/.&quot;). Examples: fs.join_clean(&quot;bucket&quot;, &quot;a/../b&quot;) → &quot;bucket/b&quot; fs.join_clean(&quot;/data&quot;, &quot;x/./y&quot;)   → &quot;/data/x/y&quot; fs.join_clean(&quot;&quot;, &quot;a/../b&quot;)       → &quot;b&quot; fs.join_clean(&quot;bucket&quot;, &quot;&quot;)       → &quot;bucket&quot;</p>
+    </div>
+    <div class="function" id="first_element" data-name="first_element">
+      <h3 class="function-name">first_element <span class="kind">fn</span></h3>
+      <pre class="usage"><code>first_element(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">First cleaned path segment. Cleans `path` then returns the leading component up to (but not including) the first &quot;/&quot;. For a rooted path the leading &quot;/&quot; is dropped first, so `first_element(&quot;/a/b&quot;)` is &quot;a&quot;. A path that cleans to &quot;.&quot; or &quot;/&quot; yields &quot;&quot;. Useful for splitting an object key into its top-level bucket/prefix after traversal has been neutralised. Examples: fs.first_element(&quot;a/b/c&quot;)     → &quot;a&quot; fs.first_element(&quot;/a/b&quot;)      → &quot;a&quot; fs.first_element(&quot;x/../y/z&quot;)  → &quot;y&quot; fs.first_element(&quot;only&quot;)      → &quot;only&quot; fs.first_element(&quot;/&quot;)         → &quot;&quot;</p>
+    </div>
+    <div class="function" id="pwrite_raw" data-name="pwrite_raw">
+      <h3 class="function-name">pwrite_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>pwrite_raw(file, data, length, offset) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, data: string, length: int, offset: long</span></p>
+      <p class="doc">Positional I/O (#640).</p>
+    </div>
+    <div class="function" id="pread_raw" data-name="pread_raw">
+      <h3 class="function-name">pread_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>pread_raw(file, length, offset) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, length: int, offset: long</span></p>
+    </div>
+    <div class="function" id="get_pread" data-name="get_pread">
+      <h3 class="function-name">get_pread <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_pread() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="get_pread_length" data-name="get_pread_length">
+      <h3 class="function-name">get_pread_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_pread_length() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="release_pread" data-name="release_pread">
+      <h3 class="function-name">release_pread <span class="kind">extern</span></h3>
+      <pre class="usage"><code>release_pread()</code></pre>
+    </div>
+    <div class="function" id="ftruncate_raw" data-name="ftruncate_raw">
+      <h3 class="function-name">ftruncate_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>ftruncate_raw(file, length) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, length: long</span></p>
+    </div>
+    <div class="function" id="fsync_raw" data-name="fsync_raw">
+      <h3 class="function-name">fsync_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>fsync_raw(file) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr</span></p>
+    </div>
+    <div class="function" id="pwrite" data-name="pwrite">
+      <h3 class="function-name">pwrite <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pwrite(file, data, length, offset) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, data: string, length: int, offset: long</span></p>
+      <p class="doc">Positional binary-safe write. Writes `length` bytes from `data` at `offset` bytes from the start of the file. Returns (written, &quot;&quot;) on success, (-1, error) on failure. Loops on short writes (POSIX permits returning fewer bytes than asked). The file must be opened in a mode admitting writes — &quot;r+&quot;, &quot;w+&quot;, &quot;w&quot;, &quot;a+&quot;, &quot;wb+&quot;, etc. — via `fs.open(path, mode)`. This is the &quot;scatter-write&quot; primitive — reconstructing a file from blocks fetched out of order (rsync, zsync, parallel downloads, sparse-file build). For sequential append, `fs.write` is simpler.</p>
+    </div>
+    <div class="function" id="pread" data-name="pread">
+      <h3 class="function-name">pread <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pread(file, length, offset) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, length: int, offset: long</span></p>
+      <p class="doc">Positional binary-safe read. Reads up to `length` bytes from `offset` into an owned AetherString. Returns (bytes, n, &quot;&quot;) on success — `n` may be less than `length` if EOF was reached (short reads are NOT an error per the POSIX convention for sparse-file I/O). Returns (&quot;&quot;, 0, error) on failure. Same tuple shape as fs.read_binary so destructuring stays consistent.</p>
+    </div>
+    <div class="function" id="ftruncate" data-name="ftruncate">
+      <h3 class="function-name">ftruncate <span class="kind">fn</span></h3>
+      <pre class="usage"><code>ftruncate(file, length) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, length: long</span></p>
+      <p class="doc">Set the file length to `length` bytes. Extends with zero bytes if the new length is greater than the current size. Returns &quot;&quot; on success, an error message on failure. Required at the end of an out-of-order reconstruction to clip trailing padding.</p>
+    </div>
+    <div class="function" id="fsync" data-name="fsync">
+      <h3 class="function-name">fsync <span class="kind">fn</span></h3>
+      <pre class="usage"><code>fsync(file) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr</span></p>
+      <p class="doc">Flush kernel buffers for `file` to durable storage (POSIX fsync / Windows _commit). Required AFTER pwrite for the data-survives-crash guarantee — pwrite alone makes the bytes visible to other handles on the same machine but doesn't promise they reach the disk. Returns &quot;&quot; on success.</p>
+    </div>
+    <div class="function" id="glob_raw" data-name="glob_raw">
+      <h3 class="function-name">glob_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>glob_raw(pattern) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string</span></p>
+      <p class="doc">Glob: match files by pattern. Raw externs return ptr, NULL on failure.</p>
+    </div>
+    <div class="function" id="glob_multi_raw" data-name="glob_multi_raw">
+      <h3 class="function-name">glob_multi_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>glob_multi_raw(patterns) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">patterns: ptr</span></p>
+    </div>
+    <div class="function" id="open" data-name="open">
+      <h3 class="function-name">open <span class="kind">fn</span></h3>
+      <pre class="usage"><code>open(path, mode) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string, mode: string</span></p>
+      <p class="doc">Open a file. Returns (handle, &quot;&quot;) on success, (null, error) on failure.</p>
+    </div>
+    <div class="function" id="read" data-name="read">
+      <h3 class="function-name">read <span class="kind">fn</span></h3>
+      <pre class="usage"><code>read(path) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Read the entire contents of a file at `path`. Opens, reads, closes. Returns (content, &quot;&quot;) on success, (&quot;&quot;, error) on failure.</p>
+    </div>
+    <div class="function" id="write" data-name="write">
+      <h3 class="function-name">write <span class="kind">fn</span></h3>
+      <pre class="usage"><code>write(path, content) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string, content: string</span></p>
+      <p class="doc">Write `content` to a file at `path`. Opens in write mode, writes, closes. Returns &quot;&quot; on success, error string on failure.</p>
+    </div>
+    <div class="function" id="delete" data-name="delete">
+      <h3 class="function-name">delete <span class="kind">fn</span></h3>
+      <pre class="usage"><code>delete(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Delete the file at `path`. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="size" data-name="size">
+      <h3 class="function-name">size <span class="kind">fn</span></h3>
+      <pre class="usage"><code>size(path) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Return the size of the file at `path` in bytes. Returns (size, &quot;&quot;) on success, (0, error) on failure.</p>
+    </div>
+    <div class="function" id="mtime" data-name="mtime">
+      <h3 class="function-name">mtime <span class="kind">fn</span></h3>
+      <pre class="usage"><code>mtime(path) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Return the file's mtime as Unix epoch seconds. Returns (mtime, &quot;&quot;) on success, (0, error) on failure. Distinguishes &quot;stat failed&quot; from &quot;file's mtime is 0&quot; (which the older `file_mtime` extern collapses into a single sentinel). Prefer this wrapper for new code; `file_mtime` stays for back-compat.</p>
+    </div>
+    <div class="function" id="exists" data-name="exists">
+      <h3 class="function-name">exists <span class="kind">fn</span></h3>
+      <pre class="usage"><code>exists(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Does anything exist at `path`? Returns 1 for any kind of filesystem entry (regular file, directory, symlink, fifo, ...), 0 if nothing is there or `path` is empty. Use this when you don't care whether the target is a file or a directory — for type- specific checks reach for `file.exists` (regular-file-only) or `dir.exists` (directory-only). Matches POSIX `test -e`.</p>
+    </div>
+    <div class="function" id="create_dir" data-name="create_dir">
+      <h3 class="function-name">create_dir <span class="kind">fn</span></h3>
+      <pre class="usage"><code>create_dir(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Create a directory. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="create_dir_with_mode" data-name="create_dir_with_mode">
+      <h3 class="function-name">create_dir_with_mode <span class="kind">fn</span></h3>
+      <pre class="usage"><code>create_dir_with_mode(path, mode) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string, mode: int</span></p>
+      <p class="doc">Like `create_dir` but with an explicit POSIX-style mode (0777-masked). Use this when the directory needs to be private — e.g. `fs.create_dir_with_mode(&quot;/run/myapp/keys&quot;, 448)` for 0o700 — without the mkdir-then-chmod race the &quot;always 0755 + shell out to chmod&quot; workaround would open. Windows ignores the mode at the directory layer; the parameter is accepted for API portability.</p>
+    </div>
+    <div class="function" id="delete_dir" data-name="delete_dir">
+      <h3 class="function-name">delete_dir <span class="kind">fn</span></h3>
+      <pre class="usage"><code>delete_dir(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Delete a directory. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="mkdir_p" data-name="mkdir_p">
+      <h3 class="function-name">mkdir_p <span class="kind">fn</span></h3>
+      <pre class="usage"><code>mkdir_p(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">`mkdir -p`: create `path` and any missing parent directories. Treats already-existing directories as success. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="symlink" data-name="symlink">
+      <h3 class="function-name">symlink <span class="kind">fn</span></h3>
+      <pre class="usage"><code>symlink(target, link_path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">target: string, link_path: string</span></p>
+      <p class="doc">Create a symbolic link at `link_path` pointing to `target`. The target is recorded verbatim — relative targets stay relative. Returns &quot;&quot; on success, error on failure (e.g. `link_path` already exists).</p>
+    </div>
+    <div class="function" id="readlink" data-name="readlink">
+      <h3 class="function-name">readlink <span class="kind">fn</span></h3>
+      <pre class="usage"><code>readlink(path) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Read a symbolic link. Returns (target, &quot;&quot;) on success, (&quot;&quot;, error) if `path` is not a symlink or can't be read.</p>
+    </div>
+    <div class="function" id="unlink" data-name="unlink">
+      <h3 class="function-name">unlink <span class="kind">fn</span></h3>
+      <pre class="usage"><code>unlink(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Remove a file or symlink. Refuses to remove a directory — use `delete_dir` for that. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="list_dir" data-name="list_dir">
+      <h3 class="function-name">list_dir <span class="kind">fn</span></h3>
+      <pre class="usage"><code>list_dir(path) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">List directory contents. Returns (DirList ptr, &quot;&quot;) on success, (null, error) on failure. Caller must free the returned ptr with dir_list_free.</p>
+    </div>
+    <div class="function" id="glob" data-name="glob">
+      <h3 class="function-name">glob <span class="kind">fn</span></h3>
+      <pre class="usage"><code>glob(pattern) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string</span></p>
+      <p class="doc">Glob for files matching a pattern. Returns (DirList ptr, &quot;&quot;) on success, (null, error) on failure.</p>
+    </div>
+    <div class="function" id="glob_multi" data-name="glob_multi">
+      <h3 class="function-name">glob_multi <span class="kind">fn</span></h3>
+      <pre class="usage"><code>glob_multi(patterns) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">patterns: ptr</span></p>
+      <p class="doc">Multi-pattern glob.</p>
+    </div>
+    <div class="function" id="write_binary" data-name="write_binary">
+      <h3 class="function-name">write_binary <span class="kind">fn</span></h3>
+      <pre class="usage"><code>write_binary(path, data, length) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string, data: string, length: int</span></p>
+      <p class="doc">Non-atomic binary write: open, write exactly `length` bytes, close. Binary-safe — embedded NULs in `data` survive because the length is explicit (unlike `fs.write` which also works for AetherString inputs but trusts `string.length(content)` to report the right count). When you want the write to be crash-safe, use `fs.write_atomic` instead (stage + fsync + rename). `write_binary` skips that machinery for cheaper writes to scratch paths, caches, or any destination where a partial file on crash is acceptable. Returns &quot;&quot; on success, error on failure (open / write / close). On failure, whatever bytes were written stay on disk — caller removes the partial file if needed.</p>
+    </div>
+    <div class="function" id="write_atomic" data-name="write_atomic">
+      <h3 class="function-name">write_atomic <span class="kind">fn</span></h3>
+      <pre class="usage"><code>write_atomic(path, data, length) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string, data: string, length: int</span></p>
+      <p class="doc">Durable write: stage `data` into a sibling tmp file, fsync, then rename(2) over `path`. On crash between write and rename, the destination is either the old contents or the new — never a partial write. Binary-safe: pass the explicit byte length so embedded NULs survive (the Aether string's own length is used at the call site, so callers normally just pass string.length(data)). Returns &quot;&quot; on success, error on failure (tmp create, write, fsync, rename — the tmp is removed if any step fails so the filesystem isn't littered with aborted writes).</p>
+    </div>
+    <div class="function" id="rename" data-name="rename">
+      <h3 class="function-name">rename <span class="kind">fn</span></h3>
+      <pre class="usage"><code>rename(from, to) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">from: string, to: string</span></p>
+      <p class="doc">Rename `from` to `to` — thin POSIX rename(2) wrapper. Atomic when both sides are on the same filesystem. Returns &quot;&quot; on success, error on failure (e.g. cross-filesystem rename, destination dir not writable, source missing).</p>
+    </div>
+    <div class="function" id="file_stat" data-name="file_stat">
+      <h3 class="function-name">file_stat <span class="kind">fn</span></h3>
+      <pre class="usage"><code>file_stat(path) <span class="arrow">-&gt;</span> (int, int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Single-stat accessor. Returns (kind, size, mtime, &quot;&quot;) on success, (0, 0, 0, error) on failure. `kind` is one of: 1 = file, 2 = directory, 3 = symlink, 4 = other (FIFO, socket, device, ...). `mtime` is a Unix timestamp, `size` is in bytes. Uses lstat(2) — symlinks report kind 3, the target is NOT followed. Cheaper than the existing file_exists + fs_is_symlink + size + file_mtime quartet when callers need more than one field.</p>
+    </div>
+    <div class="function" id="read_binary" data-name="read_binary">
+      <h3 class="function-name">read_binary <span class="kind">fn</span></h3>
+      <pre class="usage"><code>read_binary(path) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Binary-safe file read. Preserves embedded NULs and reports the exact byte length. Returns (content, length, &quot;&quot;) on success, (&quot;&quot;, 0, error) on failure. The returned string is a length-aware copy: `string.length(content)` equals the returned `length` even when the payload contains NULs. Under the hood the copy goes through `string_new_with_length` rather than `string_concat`, which is strlen-based and would silently truncate at the first embedded NUL. The TLS buffer inside the runtime is released after the copy completes, so the caller doesn't have to manage lifetime.</p>
+    </div>
+    <div class="function" id="copy_raw" data-name="copy_raw">
+      <h3 class="function-name">copy_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>copy_raw(src, dst) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">src: string, dst: string</span></p>
+      <p class="doc">Structured-error pilot (issue #392) — these externs return (value, kind, message) where kind is one of the KIND_* constants at the top of this module. fs_copy_raw zero-copies via the platform's best primitive (copy_file_range / sendfile / fcopyfile / CopyFileExW); falls back to an 8 MiB read/write loop on filesystems that reject the kernel primitives. See aether_fs.c for the full performance hierarchy.</p>
+    </div>
+    <div class="function" id="move_raw" data-name="move_raw">
+      <h3 class="function-name">move_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>move_raw(src, dst) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">src: string, dst: string</span></p>
+      <p class="doc">fs_move_raw — atomic rename(2) when same-fs, transparent copy + unlink fallback on EXDEV. Returns (1, KIND_OK, &quot;&quot;) on success, (0, KIND_*, msg) on failure.</p>
+    </div>
+    <div class="function" id="realpath_raw" data-name="realpath_raw">
+      <h3 class="function-name">realpath_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>realpath_raw(path) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">fs_realpath_raw — OS-canonicalise the path (deref every symlink, remove ./.. components). Returns (resolved_path, KIND_OK, &quot;&quot;) on success, (&quot;&quot;, KIND_*, msg) on failure. Position 0 (resolved_path) is `@heap`: realpath(3) on POSIX allocates a fresh buffer (POSIX.1-2008 extension); on Windows the GetFinalPathNameByHandleW result is converted to UTF-8 via a fresh malloc. The destructured LHS owns the buffer; the heap-string-tracker frees it at function exit (or on reassignment). Position 2 (msg) stays default-borrow — error message is a static string literal in the C source. Audited callers: only `fs.realpath` (the Aether wrapper below) passes the tuple through; no manual string.release on the resolved path anywhere in stdlib, tests/, examples/, tools/, or contrib/. See #420 follow-up.</p>
+    </div>
+    <div class="function" id="chmod_raw" data-name="chmod_raw">
+      <h3 class="function-name">chmod_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>chmod_raw(path, mode) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string, mode: int</span></p>
+      <p class="doc">fs_chmod_raw — POSIX chmod(2). On Windows only the user-write bit (0o200) is honoured (matches Python's os.chmod docs). Returns (1, KIND_OK, &quot;&quot;) or (0, KIND_*, msg).</p>
+    </div>
+    <div class="function" id="copy" data-name="copy">
+      <h3 class="function-name">copy <span class="kind">fn</span></h3>
+      <pre class="usage"><code>copy(src, dst) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">src: string, dst: string</span></p>
+      <p class="doc">Copy file contents from `src` to `dst`, preserving source mode bits (file owner is NOT changed). Returns (bytes_copied, kind, message): on success: (n, KIND_OK, &quot;&quot;) on failure: (bytes_so_far, KIND_*, &quot;&lt;reason&gt;&quot;) Symlinks in `src` are followed (matches POSIX `cp` without -P). `dst` is overwritten if it exists; if `dst` is an existing directory the call returns KIND_IS_DIR — we do not nest into it. `src` and `dst` must differ lexically; the call returns KIND_INVALID otherwise. Performance: zero-copy primitives are tried in order (copy_file_range → sendfile on Linux; fcopyfile on macOS; CopyFileExW on Windows). An 8 MiB read/write loop is the portable fallback for filesystems that reject the kernel primitives. The reported byte count saturates at INT_MAX for files larger than 2^31 bytes — the data is still copied correctly; only the count is truncated.</p>
+    </div>
+    <div class="function" id="move" data-name="move">
+      <h3 class="function-name">move <span class="kind">fn</span></h3>
+      <pre class="usage"><code>move(src, dst) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">src: string, dst: string</span></p>
+      <p class="doc">Move file from `src` to `dst`. Atomic on the same filesystem; transparently falls back to copy + unlink across filesystems (EXDEV). Returns (1, KIND_OK, &quot;&quot;) on success, (0, KIND_*, msg) on failure. Cross-device directory moves surface as KIND_IS_DIR (the underlying copy refuses to recurse into directories — that needs a higher-level walker).</p>
+    </div>
+    <div class="function" id="realpath" data-name="realpath">
+      <h3 class="function-name">realpath <span class="kind">fn</span></h3>
+      <pre class="usage"><code>realpath(path) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">OS-canonicalise the path: deref every symlink, fold . and .. components. Returns (resolved_path, KIND_OK, &quot;&quot;) on success, (&quot;&quot;, KIND_*, msg) on failure (KIND_NOT_FOUND if a component is missing, KIND_LOOP for symlink cycles, KIND_NAME_TOO_LONG if the resolved form exceeds the OS limit). The returned path is owned by the runtime; the caller does not need to free it.</p>
+    </div>
+    <div class="function" id="chmod" data-name="chmod">
+      <h3 class="function-name">chmod <span class="kind">fn</span></h3>
+      <pre class="usage"><code>chmod(path, mode) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string, mode: int</span></p>
+      <p class="doc">Change the permission bits at `path`. POSIX chmod(2) — follows symlinks. On Windows only the user-write bit (0o200) is honoured; every other bit is silently ignored (matches Python's os.chmod docs). `mode` is masked with 07777 internally. Returns (1, KIND_OK, &quot;&quot;) or (0, KIND_*, msg).</p>
+    </div>
+    <div class="function" id="KIND_OK" data-name="KIND_OK">
+      <h3 class="function-name">KIND_OK <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_OK = 0</code></pre>
+      <p class="doc">---- Structured-error kinds (pilot — issue #392) ---- Returned as the second element of the (value, kind, message) tuple from `copy`, `move`, `realpath`, and `chmod`. Switch on these to programmatically discriminate between common failure modes without parsing the human-readable message. Non-fs callers should treat any non-zero kind as &quot;an error happened&quot; — the message remains the authoritative human-readable diagnostic. Values are stable; new kinds may be appended (always with a fresh integer above the existing range) but existing values are part of the surface contract. Mirror these in std/fs/aether_fs.h as AETHER_FS_KIND_* macros so the C side and the Aether surface remain in lock-step.</p>
+    </div>
+    <div class="function" id="KIND_NOT_FOUND" data-name="KIND_NOT_FOUND">
+      <h3 class="function-name">KIND_NOT_FOUND <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_NOT_FOUND = 1</code></pre>
+    </div>
+    <div class="function" id="KIND_PERMISSION_DENIED" data-name="KIND_PERMISSION_DENIED">
+      <h3 class="function-name">KIND_PERMISSION_DENIED <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_PERMISSION_DENIED = 2</code></pre>
+    </div>
+    <div class="function" id="KIND_EXISTS" data-name="KIND_EXISTS">
+      <h3 class="function-name">KIND_EXISTS <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_EXISTS = 3</code></pre>
+    </div>
+    <div class="function" id="KIND_CROSS_DEVICE" data-name="KIND_CROSS_DEVICE">
+      <h3 class="function-name">KIND_CROSS_DEVICE <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_CROSS_DEVICE = 4</code></pre>
+    </div>
+    <div class="function" id="KIND_IO" data-name="KIND_IO">
+      <h3 class="function-name">KIND_IO <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_IO = 5</code></pre>
+    </div>
+    <div class="function" id="KIND_INVALID" data-name="KIND_INVALID">
+      <h3 class="function-name">KIND_INVALID <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_INVALID = 6</code></pre>
+    </div>
+    <div class="function" id="KIND_LOOP" data-name="KIND_LOOP">
+      <h3 class="function-name">KIND_LOOP <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_LOOP = 7</code></pre>
+    </div>
+    <div class="function" id="KIND_NAME_TOO_LONG" data-name="KIND_NAME_TOO_LONG">
+      <h3 class="function-name">KIND_NAME_TOO_LONG <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_NAME_TOO_LONG = 8</code></pre>
+    </div>
+    <div class="function" id="KIND_NO_SPACE" data-name="KIND_NO_SPACE">
+      <h3 class="function-name">KIND_NO_SPACE <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_NO_SPACE = 9</code></pre>
+    </div>
+    <div class="function" id="KIND_IS_DIR" data-name="KIND_IS_DIR">
+      <h3 class="function-name">KIND_IS_DIR <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_IS_DIR = 10</code></pre>
+    </div>
+    <div class="function" id="KIND_NOT_DIR" data-name="KIND_NOT_DIR">
+      <h3 class="function-name">KIND_NOT_DIR <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_NOT_DIR = 11</code></pre>
+    </div>
+    <div class="function" id="KIND_UNAVAILABLE" data-name="KIND_UNAVAILABLE">
+      <h3 class="function-name">KIND_UNAVAILABLE <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_UNAVAILABLE = 99</code></pre>
     </div>
   </div>
 </main>
