@@ -5,7 +5,7 @@
 # dispatching every call to whichever definition the linker resolves
 # first (clean compile, clean link, wrong function body, exit 0).
 #
-# See builder-function-name-collision-silent-dispatch.md.
+# See docs/notes/builder-function-name-collision-silent-dispatch.md.
 #
 # Also asserts the two NON-collisions still compile:
 #   - a plain multi-clause function (same name, pattern-matching form)

@@ -12,7 +12,7 @@ with the next version number before tagging. Always use the literal
 `[current]` placeholder — a hardcoded version header here is *not*
 renamed, so it drifts from the tags and can cause the next release's
 notes to be skipped or clobbered (the failure modes documented in
-`changelog-release-drift-note.md`).
+`docs/notes/changelog-release-drift-note.md`).
 
 ## [0.302.0]
 
