@@ -209,8 +209,8 @@ In a project directory (with `aether.toml`), `ae run` and `ae build` compile `sr
 ```bash
 make compiler                    # Build compiler only
 make ae                          # Build ae CLI tool
-make test                        # Run runtime C test suite (166 tests)
-make test-ae                     # Run .ae source tests (95 tests)
+make test                        # Run runtime C test suite
+make test-ae                     # Run .ae source tests
 make test-all                    # Run all tests
 make examples                    # Build all examples
 make -j8                         # Parallel build
@@ -273,11 +273,10 @@ aether/
 │   │   ├── client/         # Builder client (request builder, full response, JSON sugar)
 │   │   ├── middleware/     # CORS, basic/bearer/session auth, rate-limit, real-IP, vhost, gzip, static, rewrite, error pages
 │   │   ├── proxy/          # Reverse proxy: upstream pool, LB (RR/LC/iphash/WRR), health, cache, circuit breaker
-│   │   ├── server/h2/      # HTTP/2 framing via libnghttp2 (h2 + h2c + ALPN + GOAWAY + concurrent dispatch)
-│   │   └── server/vcr/     # Servirtium-format record/replay for HTTP tests
+│   │   └── server/h2/      # HTTP/2 framing via libnghttp2 (h2 + h2c + ALPN + GOAWAY + concurrent dispatch)
 │   ├── tcp/            # TCP client and server
 │   ├── net/            # Combined TCP/HTTP networking module
-│   ├── cryptography/   # SHA-1, SHA-256
+│   ├── cryptography/   # Hash family (SHA-2/3, BLAKE2, RIPEMD, Whirlpool, Tiger, Skein, SM3), HMAC, HKDF/PBKDF2/scrypt/Argon2, DRBG
 │   ├── zlib/           # One-shot deflate/inflate
 │   ├── math/           # Math functions and random numbers
 │   ├── io/             # Console I/O, environment variables
@@ -493,16 +492,16 @@ make examples
 ### Testing
 
 ```bash
-# Full CI suite (8 steps, -Werror) — runs on your current platform
+# Full CI suite (9 steps, -Werror) — runs on your current platform
 make ci
 
-# Unit tests only (215 tests)
+# Unit tests only (runtime C test suite)
 make test
 
-# Integration + regression .ae tests (463 tests)
+# Integration + regression .ae tests
 make test-ae
 
-# Build all examples (89 programs)
+# Build all example programs
 make examples
 
 # Full CI + Valgrind + ASan in Docker (Linux)

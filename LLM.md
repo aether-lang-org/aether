@@ -95,8 +95,9 @@ plays that role), no interfaces.
   Library authors with a "start the thing" surface should expose
   it as a trailing-block DSL, not a config-file format. Pair with
   `docs/closures-and-builder-dsl.md` for the mechanism. `docs/cic-help.md`
-  is the (proposed, unimplemented) `ae help <script>` companion that
-  catches operator-side mistakes in those scripts.
+  is the (implemented and shipped) `ae help <script>` companion that
+  catches operator-side mistakes in those scripts — built into the `ae`
+  driver via `tools/ae_help.c`, dispatched from `tools/ae.c`.
 - `docs/next-steps.md` — roadmap. P1/P2/P3/P4 are ordered; `fs.copy` /
   `fs.move` / `fs.chmod` / `fs.symlink` / `fs.realpath` are P4. Check
   here before speccing a new stdlib addition.
@@ -112,8 +113,9 @@ plays that role), no interfaces.
   XML parser via libexpat), `sqlite`, `host/{python,ruby,lua,perl,
   tcl,duktape,tinygo,factor,aether,go,java}` for embedded
   interpreters, `tinyweb`.
-- `compiler/aetherc.c` — CLI entry. `--emit=lib`, `--with=`, import
-  gate lives around line 590.
+- `compiler/aetherc.c` — CLI entry. `--emit=lib`, `--with=`, and the
+  capability import gate (search for `--with=` argv parsing and the
+  "Step 2.7: --emit=lib capability-empty check" enforcement block).
 - `build/aetherc`, `build/ae` — the compiled binary. `make && make
   install` to rebuild. The binary is SHA-pinned per commit; if the
   CHANGELOG `[current]` mentions features not in `aetherc --help`,
@@ -283,9 +285,9 @@ plays that role), no interfaces.
 - Full build: `make` (from repo root). Rebuilds `build/aetherc` and
   `build/ae`. Incremental builds sometimes miss `aetherc` reshapes;
   `make clean && make -j$(nproc)` when in doubt.
-- All regression tests: `make test` or `make check`. Hot inner loop
-  during feature work: `make test-ae` (parallel runner for
-  `tests/regression/*.ae`).
+- C unit tests: `make test` (builds and runs `build/test_runner`). Hot
+  inner loop during feature work: `make test-ae` (parallel runner for the
+  `.ae` regression/integration tests). `make ci` runs both as steps 4 and 5.
 - JSON conformance: `make test-json-conformance` — must pass 95/95
   `y_*` + 188/188 `n_*` for JSONTestSuite.
 - Sanitizers: `make test-json-asan` / `make test-json-valgrind`.
