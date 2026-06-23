@@ -1,0 +1,66 @@
+// #701 follow-up — a STRING-typed module-level `var` global.
+//
+// The scalar case (int/long/uint64/ptr) worked, but a string-typed
+// module global was miscompiled: codegen's heap-string tracker hoisted
+// a function-LOCAL `const char* token = NULL;` shadow over the file-
+// scope `static`, so a setter wrote the shadow and cross-function reads
+// never saw the new value (it always returned the initializer). The
+// fix makes the heap-string collection/hoist path consult the module-
+// global registry — exactly like the scalar #701/#744 paths — so the
+// write targets the file-scope static (a real lvalue) with no shadow
+// and no defer-free of the process-lifetime global.
+//
+// Behavioural gate: exit(1) if a cross-call read of the global does not
+// observe the setter's write. A scalar global is exercised in the same
+// program to guard against regressing #701.
+
+import std.string
+
+extern exit(code: int)
+
+var token: string = "none"   // STRING module global (the #701 string gap)
+var calls = 0                // scalar module global (guards #701)
+
+set_token(s: string) {
+    token = s                // pure write — must hit the file-scope static
+    calls = calls + 1
+}
+
+get_token() -> string {
+    return token             // cross-function read of the same static
+}
+
+call_count() -> int {
+    return calls
+}
+
+main() {
+    // Initializer is observable before any setter runs.
+    if !string.equals(get_token(), "none") {
+        print("FAIL: initial value not observed\n")
+        exit(1)
+    }
+
+    set_token("secret-xyz")
+    if !string.equals(get_token(), "secret-xyz") {
+        print("FAIL: setter write not observed cross-call (string shadow)\n")
+        exit(1)
+    }
+
+    // Reassign again: the latest value persists; the previous value is
+    // not double-freed (a module global is process-lifetime, never freed
+    // by the function-exit defer / reassignment-free path).
+    set_token("third")
+    if !string.equals(get_token(), "third") {
+        print("FAIL: second setter write not observed\n")
+        exit(1)
+    }
+
+    // Scalar global still accumulates across calls (#701 guard).
+    if call_count() != 2 {
+        print("FAIL: scalar module global did not persist (#701 regression)\n")
+        exit(1)
+    }
+
+    print("PASS: string module-global setter writes the global cross-call\n")
+}

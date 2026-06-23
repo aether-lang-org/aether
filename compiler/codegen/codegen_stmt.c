@@ -1645,7 +1645,23 @@ static void collect_heap_string_var_names(CodeGenerator* gen, ASTNode* node,
     if (!node || *count >= cap) return;
 
     if (node->type == AST_VARIABLE_DECLARATION && node->value &&
-        strcmp(node->value, "_") != 0) {
+        strcmp(node->value, "_") != 0 &&
+        !is_module_global_var(gen, node->value)) {
+        /* #701/#744: a module-level string `var` is a file-scope
+         * `static const char*`, not a function local. It must NOT be
+         * collected as a heap-tracked local — doing so would (a) hoist
+         * a shadowing `const char* <name> = NULL;` over the global,
+         * (b) route the write through the reassignment wrapper into
+         * that shadow (so cross-function reads never see the new
+         * value), and (c) push a function-exit defer-free that frees
+         * the process-lifetime global (a UAF/double-free across
+         * calls). Skipping the name here leaves is_var_declared false,
+         * so the AST_VARIABLE_DECLARATION emitter routes the write to
+         * the static (is_module_global_var branch) exactly like the
+         * scalar case, and the global is never freed — the latest
+         * value persists for the process lifetime, mirroring the
+         * scalar/#701 model. This matches how hoist_loop_vars and the
+         * if-branch hoists already skip module globals by name. */
         // Decide whether this declaration's LHS deserves a tracker.
         // Bare `_` is a per-use discard, never a tracked variable —
         // skipped here so a string-typed `_` destructure slot doesn't
