@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>signal - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search signal..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#SIGHUP">SIGHUP</a></li>
+    <li><a href="#SIGINT">SIGINT</a></li>
+    <li><a href="#SIGQUIT">SIGQUIT</a></li>
+    <li><a href="#SIGILL">SIGILL</a></li>
+    <li><a href="#SIGABRT">SIGABRT</a></li>
+    <li><a href="#SIGFPE">SIGFPE</a></li>
+    <li><a href="#SIGKILL">SIGKILL</a></li>
+    <li><a href="#SIGSEGV">SIGSEGV</a></li>
+    <li><a href="#SIGPIPE">SIGPIPE</a></li>
+    <li><a href="#SIGALRM">SIGALRM</a></li>
+    <li><a href="#SIGTERM">SIGTERM</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li class="active"><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>signal</h1>
+    <p class="module-desc">std.signal — POSIX signal-number constants.</p>
+    <p class="import-line"><code>import std.signal</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="SIGHUP" data-name="SIGHUP">
+      <h3 class="function-name">SIGHUP <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGHUP() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Hangup — controlling terminal closed / daemon reload convention.</p>
+    </div>
+    <div class="function" id="SIGINT" data-name="SIGINT">
+      <h3 class="function-name">SIGINT <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGINT() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Interrupt — what Ctrl-C raises. Forwarded to the build group by os.run_supervised when forward_signals is on.</p>
+    </div>
+    <div class="function" id="SIGQUIT" data-name="SIGQUIT">
+      <h3 class="function-name">SIGQUIT <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGQUIT() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Quit — Ctrl-\, like SIGINT but with a core dump.</p>
+    </div>
+    <div class="function" id="SIGILL" data-name="SIGILL">
+      <h3 class="function-name">SIGILL <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGILL() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Illegal instruction.</p>
+    </div>
+    <div class="function" id="SIGABRT" data-name="SIGABRT">
+      <h3 class="function-name">SIGABRT <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGABRT() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Abort — what abort(3) / assert(3) raise.</p>
+    </div>
+    <div class="function" id="SIGFPE" data-name="SIGFPE">
+      <h3 class="function-name">SIGFPE <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGFPE() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Floating-point exception (also integer divide-by-zero).</p>
+    </div>
+    <div class="function" id="SIGKILL" data-name="SIGKILL">
+      <h3 class="function-name">SIGKILL <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGKILL() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Kill — cannot be caught, blocked, or ignored. The &quot;grace expired, take it down now&quot; signal os.run_supervised sends after SIGTERM.</p>
+    </div>
+    <div class="function" id="SIGSEGV" data-name="SIGSEGV">
+      <h3 class="function-name">SIGSEGV <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGSEGV() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Invalid memory reference.</p>
+    </div>
+    <div class="function" id="SIGPIPE" data-name="SIGPIPE">
+      <h3 class="function-name">SIGPIPE <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGPIPE() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Write to a pipe with no reader.</p>
+    </div>
+    <div class="function" id="SIGALRM" data-name="SIGALRM">
+      <h3 class="function-name">SIGALRM <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGALRM() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Timer signal from alarm(2).</p>
+    </div>
+    <div class="function" id="SIGTERM" data-name="SIGTERM">
+      <h3 class="function-name">SIGTERM <span class="kind">fn</span></h3>
+      <pre class="usage"><code>SIGTERM() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Termination — the polite &quot;please shut down&quot; request. The default signal os.run_supervised sends first on timeout / group teardown.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

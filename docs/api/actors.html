@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>actors - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search actors..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_actor_register">aether_actor_register</a></li>
+    <li><a href="#aether_actor_whereis">aether_actor_whereis</a></li>
+    <li><a href="#aether_actor_unregister">aether_actor_unregister</a></li>
+    <li><a href="#aether_actor_is_registered">aether_actor_is_registered</a></li>
+    <li><a href="#aether_actor_registry_size">aether_actor_registry_size</a></li>
+    <li><a href="#aether_actor_registry_clear">aether_actor_registry_clear</a></li>
+    <li><a href="#register">register</a></li>
+    <li><a href="#whereis">whereis</a></li>
+    <li><a href="#unregister">unregister</a></li>
+    <li><a href="#is_registered">is_registered</a></li>
+    <li><a href="#registry_size">registry_size</a></li>
+    <li><a href="#registry_clear">registry_clear</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li class="active"><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>actors</h1>
+    <p class="module-desc">std.actors — process-global name → actor_ref registry.</p>
+    <p class="import-line"><code>import std.actors</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_actor_register" data-name="aether_actor_register">
+      <h3 class="function-name">aether_actor_register <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_actor_register(name, ref)</code></pre>
+      <p class="signature"><span class="sig-params">name: string, ref: actor_ref</span></p>
+      <p class="doc">---- Raw externs ---- `actor_ref` lowers to `void*` at the C level, so the registry's `void* ref` slot accepts and returns the same shape Aether code passes / receives.</p>
+    </div>
+    <div class="function" id="aether_actor_whereis" data-name="aether_actor_whereis">
+      <h3 class="function-name">aether_actor_whereis <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_actor_whereis(name) <span class="arrow">-&gt;</span> actor_ref</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+    </div>
+    <div class="function" id="aether_actor_unregister" data-name="aether_actor_unregister">
+      <h3 class="function-name">aether_actor_unregister <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_actor_unregister(name) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+    </div>
+    <div class="function" id="aether_actor_is_registered" data-name="aether_actor_is_registered">
+      <h3 class="function-name">aether_actor_is_registered <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_actor_is_registered(name) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+    </div>
+    <div class="function" id="aether_actor_registry_size" data-name="aether_actor_registry_size">
+      <h3 class="function-name">aether_actor_registry_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_actor_registry_size() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="aether_actor_registry_clear" data-name="aether_actor_registry_clear">
+      <h3 class="function-name">aether_actor_registry_clear <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_actor_registry_clear()</code></pre>
+    </div>
+    <div class="function" id="register" data-name="register">
+      <h3 class="function-name">register <span class="kind">fn</span></h3>
+      <pre class="usage"><code>register(name, ref)</code></pre>
+      <p class="signature"><span class="sig-params">name: string, ref: actor_ref</span></p>
+      <p class="doc">Bind `name` → `ref`. Overwrites any prior binding of the same name (no error). The name is duplicated internally; the actor_ref is stored as-is.</p>
+    </div>
+    <div class="function" id="whereis" data-name="whereis">
+      <h3 class="function-name">whereis <span class="kind">fn</span></h3>
+      <pre class="usage"><code>whereis(name) <span class="arrow">-&gt;</span> actor_ref</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+      <p class="doc">Look up by name. Returns the registered actor_ref, or null (when cast to actor_ref) if no binding exists. Pattern: spawn at startup, register with a stable name, look up from any context (including from inside C-callback handlers that can't take an Aether-typed parameter).</p>
+    </div>
+    <div class="function" id="unregister" data-name="unregister">
+      <h3 class="function-name">unregister <span class="kind">fn</span></h3>
+      <pre class="usage"><code>unregister(name) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+      <p class="doc">Remove a binding. Returns 1 if a binding was removed, 0 if `name` wasn't registered.</p>
+    </div>
+    <div class="function" id="is_registered" data-name="is_registered">
+      <h3 class="function-name">is_registered <span class="kind">fn</span></h3>
+      <pre class="usage"><code>is_registered(name) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+      <p class="doc">1 if `name` is bound, 0 otherwise.</p>
+    </div>
+    <div class="function" id="registry_size" data-name="registry_size">
+      <h3 class="function-name">registry_size <span class="kind">fn</span></h3>
+      <pre class="usage"><code>registry_size() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Number of currently-registered names. Mostly for tests / debug.</p>
+    </div>
+    <div class="function" id="registry_clear" data-name="registry_clear">
+      <h3 class="function-name">registry_clear <span class="kind">fn</span></h3>
+      <pre class="usage"><code>registry_clear()</code></pre>
+      <p class="doc">Wipe all bindings. Tests use this for isolation.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

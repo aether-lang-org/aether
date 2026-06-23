@@ -13,76 +13,122 @@
     <p class="tagline">Standard Library</p>
   </div>
   <input type="text" id="search" placeholder="Search log..." onkeyup="searchModule()">
-  <h2>Functions</h2>
+  <h2>Exports</h2>
   <ul class="function-nav">
-    <li><a href="#log_init_raw">log_init_raw</a></li>
-    <li><a href="#log_init_with_config">log_init_with_config</a></li>
-    <li><a href="#log_shutdown">log_shutdown</a></li>
-    <li><a href="#log_write">log_write</a></li>
-    <li><a href="#log_set_level">log_set_level</a></li>
-    <li><a href="#log_set_colors">log_set_colors</a></li>
-    <li><a href="#log_set_timestamps">log_set_timestamps</a></li>
-    <li><a href="#log_set_format">log_set_format</a></li>
-    <li><a href="#log_print_stats">log_print_stats</a></li>
+    <li><a href="#init_raw">init_raw</a></li>
+    <li><a href="#shutdown">shutdown</a></li>
+    <li><a href="#write">write</a></li>
+    <li><a href="#set_level">set_level</a></li>
+    <li><a href="#set_colors">set_colors</a></li>
+    <li><a href="#set_timestamps">set_timestamps</a></li>
+    <li><a href="#get_stats">get_stats</a></li>
+    <li><a href="#print_stats">print_stats</a></li>
+    <li><a href="#init">init</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
   <ul class="module-list">
-    <li><a href="net.html">net</a></li>
-    <li><a href="io.html">io</a></li>
-    <li><a href="math.html">math</a></li>
-    <li><a href="json.html">json</a></li>
-    <li class="active"><a href="log.html">log</a></li>
-    <li><a href="os.html">os</a></li>
-    <li><a href="string.html">string</a></li>
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
     <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
     <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li class="active"><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
   </ul>
 </nav>
 <main class="content">
   <div class="module-header">
     <h1>log</h1>
-    <p class="module-desc">Logging and diagnostics</p>
+    <p class="module-desc">std.log - Logging Module Import with: import std.log Log level constants LOG_LEVEL_DEBUG = 0, LOG_LEVEL_INFO = 1, LOG_LEVEL_WARN = 2 LOG_LEVEL_ERROR = 3, LOG_LEVEL_FATAL = 4</p>
+    <p class="import-line"><code>import std.log</code></p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="log_init_raw" data-name="log_init_raw">
-      <h3 class="function-name">log_init_raw</h3>
-      <pre class="usage"><code>log_init_raw(filename, min_level)</code></pre>
-      <p class="doc">Initialize logging system. Returns 1 on success, 0 if the requested log file could not be opened (logging still works via stderr).</p>
+    <div class="function" id="init_raw" data-name="init_raw">
+      <h3 class="function-name">init_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>init_raw(filename, min_level) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">filename: string, min_level: int</span></p>
+      <p class="doc">Initialize and shutdown. Raw init returns 1/0 for ok/file-open-failed.</p>
     </div>
-    <div class="function" id="log_init_with_config" data-name="log_init_with_config">
-      <h3 class="function-name">log_init_with_config</h3>
-      <pre class="usage"><code>log_init_with_config(config)</code></pre>
+    <div class="function" id="shutdown" data-name="shutdown">
+      <h3 class="function-name">shutdown <span class="kind">extern</span></h3>
+      <pre class="usage"><code>shutdown()</code></pre>
     </div>
-    <div class="function" id="log_shutdown" data-name="log_shutdown">
-      <h3 class="function-name">log_shutdown</h3>
-      <pre class="usage"><code>log_shutdown()</code></pre>
+    <div class="function" id="write" data-name="write">
+      <h3 class="function-name">write <span class="kind">extern</span></h3>
+      <pre class="usage"><code>write(level, msg)</code></pre>
+      <p class="signature"><span class="sig-params">level: int, msg: string</span></p>
+      <p class="doc">Core logging (variadic not fully supported, use with format string)</p>
     </div>
-    <div class="function" id="log_write" data-name="log_write">
-      <h3 class="function-name">log_write</h3>
-      <pre class="usage"><code>log_write(level, fmt)</code></pre>
-      <p class="doc">Core logging functions</p>
-    </div>
-    <div class="function" id="log_set_level" data-name="log_set_level">
-      <h3 class="function-name">log_set_level</h3>
-      <pre class="usage"><code>log_set_level(level)</code></pre>
+    <div class="function" id="set_level" data-name="set_level">
+      <h3 class="function-name">set_level <span class="kind">extern</span></h3>
+      <pre class="usage"><code>set_level(level)</code></pre>
+      <p class="signature"><span class="sig-params">level: int</span></p>
       <p class="doc">Configuration</p>
     </div>
-    <div class="function" id="log_set_colors" data-name="log_set_colors">
-      <h3 class="function-name">log_set_colors</h3>
-      <pre class="usage"><code>log_set_colors(enabled)</code></pre>
+    <div class="function" id="set_colors" data-name="set_colors">
+      <h3 class="function-name">set_colors <span class="kind">extern</span></h3>
+      <pre class="usage"><code>set_colors(enabled)</code></pre>
+      <p class="signature"><span class="sig-params">enabled: int</span></p>
     </div>
-    <div class="function" id="log_set_timestamps" data-name="log_set_timestamps">
-      <h3 class="function-name">log_set_timestamps</h3>
-      <pre class="usage"><code>log_set_timestamps(enabled)</code></pre>
+    <div class="function" id="set_timestamps" data-name="set_timestamps">
+      <h3 class="function-name">set_timestamps <span class="kind">extern</span></h3>
+      <pre class="usage"><code>set_timestamps(enabled)</code></pre>
+      <p class="signature"><span class="sig-params">enabled: int</span></p>
     </div>
-    <div class="function" id="log_set_format" data-name="log_set_format">
-      <h3 class="function-name">log_set_format</h3>
-      <pre class="usage"><code>log_set_format(format)</code></pre>
+    <div class="function" id="get_stats" data-name="get_stats">
+      <h3 class="function-name">get_stats <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_stats() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">Statistics</p>
     </div>
-    <div class="function" id="log_print_stats" data-name="log_print_stats">
-      <h3 class="function-name">log_print_stats</h3>
-      <pre class="usage"><code>log_print_stats()</code></pre>
+    <div class="function" id="print_stats" data-name="print_stats">
+      <h3 class="function-name">print_stats <span class="kind">extern</span></h3>
+      <pre class="usage"><code>print_stats()</code></pre>
+    </div>
+    <div class="function" id="init" data-name="init">
+      <h3 class="function-name">init <span class="kind">fn</span></h3>
+      <pre class="usage"><code>init(filename, min_level) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">filename: string, min_level: int</span></p>
+      <p class="doc">Initialize logging. Returns &quot;&quot; on success, error string if the requested log file could not be opened (in which case logging still works via stderr as a fallback).</p>
     </div>
   </div>
 </main>

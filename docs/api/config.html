@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>config - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search config..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_config_put">aether_config_put</a></li>
+    <li><a href="#aether_config_get">aether_config_get</a></li>
+    <li><a href="#aether_config_get_or">aether_config_get_or</a></li>
+    <li><a href="#aether_config_has">aether_config_has</a></li>
+    <li><a href="#aether_config_size">aether_config_size</a></li>
+    <li><a href="#aether_config_clear">aether_config_clear</a></li>
+    <li><a href="#put">put</a></li>
+    <li><a href="#get">get</a></li>
+    <li><a href="#get_or">get_or</a></li>
+    <li><a href="#has">has</a></li>
+    <li><a href="#size">size</a></li>
+    <li><a href="#clear">clear</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li class="active"><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>config</h1>
+    <p class="module-desc">std.config — process-global immutable string→string KV store.</p>
+    <p class="import-line"><code>import std.config</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_config_put" data-name="aether_config_put">
+      <h3 class="function-name">aether_config_put <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_config_put(key, value)</code></pre>
+      <p class="signature"><span class="sig-params">key: string, value: string</span></p>
+      <p class="doc">---- Raw externs ----</p>
+    </div>
+    <div class="function" id="aether_config_get" data-name="aether_config_get">
+      <h3 class="function-name">aether_config_get <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_config_get(key) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">key: string</span></p>
+    </div>
+    <div class="function" id="aether_config_get_or" data-name="aether_config_get_or">
+      <h3 class="function-name">aether_config_get_or <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_config_get_or(key, default_value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">key: string, default_value: string</span></p>
+    </div>
+    <div class="function" id="aether_config_has" data-name="aether_config_has">
+      <h3 class="function-name">aether_config_has <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_config_has(key) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">key: string</span></p>
+    </div>
+    <div class="function" id="aether_config_size" data-name="aether_config_size">
+      <h3 class="function-name">aether_config_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_config_size() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="aether_config_clear" data-name="aether_config_clear">
+      <h3 class="function-name">aether_config_clear <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_config_clear()</code></pre>
+    </div>
+    <div class="function" id="put" data-name="put">
+      <h3 class="function-name">put <span class="kind">fn</span></h3>
+      <pre class="usage"><code>put(key, value)</code></pre>
+      <p class="signature"><span class="sig-params">key: string, value: string</span></p>
+      <p class="doc">Insert / overwrite. Both `key` and `value` are duplicated internally; the caller's string lifetimes don't matter.</p>
+    </div>
+    <div class="function" id="get" data-name="get">
+      <h3 class="function-name">get <span class="kind">fn</span></h3>
+      <pre class="usage"><code>get(key) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">key: string</span></p>
+      <p class="doc">Retrieve. Returns &quot;&quot; if the key isn't set (matches Aether's Go-style &quot;&quot; = absent convention).</p>
+    </div>
+    <div class="function" id="get_or" data-name="get_or">
+      <h3 class="function-name">get_or <span class="kind">fn</span></h3>
+      <pre class="usage"><code>get_or(key, default_value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">key: string, default_value: string</span></p>
+      <p class="doc">Retrieve with a fallback. Returns the registered value if set, otherwise `default_value`.</p>
+    </div>
+    <div class="function" id="has" data-name="has">
+      <h3 class="function-name">has <span class="kind">fn</span></h3>
+      <pre class="usage"><code>has(key) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">key: string</span></p>
+      <p class="doc">1 if `key` has been put, 0 otherwise.</p>
+    </div>
+    <div class="function" id="size" data-name="size">
+      <h3 class="function-name">size <span class="kind">fn</span></h3>
+      <pre class="usage"><code>size() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Number of keys currently registered. Mostly for tests / debug.</p>
+    </div>
+    <div class="function" id="clear" data-name="clear">
+      <h3 class="function-name">clear <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clear()</code></pre>
+      <p class="doc">Wipe all keys. Tests use this for isolation; production code almost never needs it.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>
