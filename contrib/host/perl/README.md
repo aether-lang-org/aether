@@ -87,3 +87,24 @@ Perl's own `perl_run`/`perl_init` symbols.
 - `ERRSV` macro replaced with `Perl_get_sv(my_perl, "@", 0)` which
   fetches the `$@` SV via Perl's symbol-table lookup (no
   `PL_errgv`-struct-field access).
+
+## Testing
+
+Perl has **no dedicated fib-style end-to-end test** like
+[contrib.host.factor](../factor/) or
+[contrib.host.racket](../racket/). Its coverage is the cross-host
+shared-map test plus a contrib-build smoke check:
+
+- [`tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh)
+  exercises `aether_perl_run_sandboxed_with_map` in the same
+  shared-map round-trip it runs across **all** hosts: it hands Perl a
+  map (`name`/`score`), the script reads it (`aether_map_get`), writes
+  a key back (`aether_map_put('grade', 'A')`), and tries to tamper a
+  frozen input key — the test asserts Perl read the values and that
+  the frozen input stayed **untampered**. It **SKIPs** Perl (never
+  fails) when `$PERL_AVAILABLE` is 0, i.e. when no Perl is detected.
+- [`tests/scripts/contrib_build.sh`](../../../tests/scripts/contrib_build.sh)
+  verifies `make contrib` builds the `host_perl` archive
+  (`libaether_host_perl.a`). It SKIPs the perl module when `perl
+  -MExtUtils::Embed` isn't usable, and hard-fails it only under
+  `make contrib MODULES=perl` (the explicit `--with=perl` path).

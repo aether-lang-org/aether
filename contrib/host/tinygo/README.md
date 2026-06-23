@@ -161,6 +161,22 @@ window.
   TinyGo exports package-level `Name` automatically — you must
   annotate each function you want callable from C / Aether.
 
+## Testing
+
+The end-to-end test lives at
+[`tests/integration/host_tinygo/`](../../../tests/integration/host_tinygo/) —
+[`uses_tinygo.ae`](../../../tests/integration/host_tinygo/uses_tinygo.ae)
+is the driver (loads the c-shared `.so` at `$TINYGO_LIB`, built from
+`examples/greet.go`, and exercises one call per wrapper shape:
+`Answer = 42`, `Add(2, 40) = 42`, `Negate(7) = -7`, `hello, world`),
+and
+[`test_host_tinygo.sh`](../../../tests/integration/host_tinygo/test_host_tinygo.sh)
+is the runner. The runner **SKIPs** (never fails) when `go` is not on
+PATH, matching `contrib/host/go`'s pattern so CI stays green on machines
+without the toolchain. When `go` is present it builds a c-shared `.so`
+with `CGO_ENABLED=1 go build -buildmode=c-shared`, loads it via
+`contrib.host.tinygo`, and asserts each expected line.
+
 ## See also
 
 - [`contrib/host/go/`](../go/) — full Go via subprocess + LD_PRELOAD

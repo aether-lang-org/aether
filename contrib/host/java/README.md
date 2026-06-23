@@ -61,6 +61,46 @@ during class loading and TLS init, and nothing more. Source paths were
 captured empirically via `strace java -version` on Corretto 24 (Debian)
 and Temurin 21 (Ubuntu).
 
+## Testing
+
+Three tests exercise the Java host. All **SKIP** (never fail) on Windows or
+when `javac`/`java` aren't on `PATH`; the two FFI tests additionally SKIP
+unless the JDK is 22+, the version that stabilized Panama
+(`java.lang.foreign.*`).
+
+The end-to-end test is
+[`tests/integration/embedded_java_trading_e2e/`](../../../tests/integration/embedded_java_trading_e2e/)
+— [`test_embedded_java_trading_e2e.sh`](../../../tests/integration/embedded_java_trading_e2e/test_embedded_java_trading_e2e.sh)
+copies `examples/embedded-java/trading/` to a temp dir, runs its `build.sh`
+(namespace build + `javac` + `java`), and asserts the full trading set-piece:
+each event fires with the right id (`OrderPlaced 100`, `OrderRejected 101`,
+`UnknownTicker 102`, `TradeKilled 100`), the book ends at `{100=KILLED}`, and
+both the Java host's `[event]` lines and the Aether library's `[ae]` lines
+reach stdout in order.
+
+The namespace/FFI test is
+[`tests/integration/namespace_java/`](../../../tests/integration/namespace_java/)
+— [`test_namespace_java.sh`](../../../tests/integration/namespace_java/test_namespace_java.sh)
+runs `ae build --namespace .` on [`calc.ae`](../../../tests/integration/namespace_java/calc.ae)
+to emit both the `.so` and a generated Java SDK
+(`com/example/calc/CalcGeneratedSdk.java`), then compiles and runs
+[`Check.java`](../../../tests/integration/namespace_java/Check.java) against it
+to confirm the generated SDK round-trips a call and the `[ae]` script-side
+output is visible to the host.
+
+The shared-map round-trip is
+[`tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh)
+— its Java case gates on `build/aether-sandbox.jar` (built by
+[`build.sh`](build.sh) above) plus a JDK, then spawns `java` with the
+`-javaagent` jar from a C parent that froze a shared map into shm, asserting
+the agent reads and writes it back (`result=processed Frank`, `status=ok`) and
+that the frozen input is untampered.
+
+Note the Java host is a JVM-side jar, not a C bridge archive, so it is **not**
+part of `make contrib` ([`tests/scripts/contrib_build.sh`](../../../tests/scripts/contrib_build.sh),
+which archives the dlopen/Panama C hosts); build its jar with
+[`build.sh`](build.sh) instead.
+
 ## Notes
 
 - Requires `--enable-native-access=ALL-UNNAMED` for Panama FFI

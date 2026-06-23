@@ -79,3 +79,18 @@ main() {
   rewrites.
 - `TCL_OK = 0` / `TCL_ERROR = 1` constants are stable across Tcl
   8.x and 9.x.
+
+## Testing
+
+Automated coverage today is the contrib-build smoke test at
+[`tests/scripts/contrib_build.sh`](../../../tests/scripts/contrib_build.sh) —
+the `tcl|host_tcl …` catalogue entry builds `aether_host_tcl.c` (gated on its
+`probe_tcl` Tcl-headers probe) so `make contrib` produces and links the
+`libaether_host_tcl.a` bridge archive. It confirms the bridge compiles and has
+no unresolved Tcl symbols, but exercises nothing at runtime.
+
+There is **no dedicated end-to-end test** for tcl — no `host_tcl/` driver in
+the shape of [contrib.host.racket](../racket/)'s fib(10)=55 set-piece — and tcl
+is **not** in the cross-host shared-map test
+([`tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh)).
+Both are gaps worth filling.

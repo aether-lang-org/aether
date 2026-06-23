@@ -217,3 +217,28 @@ experiment:
    ```
 3. `ae build` an Aether program with `import contrib.host.factor` — the
    bridge `.a` is auto-linked by the generic host-bridge scanner.
+
+## Testing
+
+The dedicated end-to-end test lives at
+[`tests/integration/host_factor/`](../../../tests/integration/host_factor/) —
+[`uses_factor.ae`](../../../tests/integration/host_factor/uses_factor.ae) is the
+driver (the fib(10)=55 set-piece: a Factor script defines a recursive `fib`,
+`eval` captures its printed output, and a second script writes the first ten
+terms into the shared namespace under `fib0..fib9` for Aether to read back as a
+k-v map — also pinning the stack-effect error contract, a read-mutate-write
+round-trip, and the absent-key `""` shape), and
+[`test_host_factor.sh`](../../../tests/integration/host_factor/test_host_factor.sh)
+is the runner: it builds the factor host `.a` (skipped by the default contrib
+build), runs the driver, and greps for `PASS`. Because this host needs the fork,
+it **SKIPs** (never fails) when `$AETHER_FACTOR_SONAME` / `$AETHER_FACTOR_IMAGE`
+are unset or don't point at real files — CI machines without the runtime no-op
+cleanly.
+
+Factor is also covered by the cross-host shared-map test
+[`tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh),
+which runs the same `run_sandboxed_with_map` round-trip across every available
+host. Its Factor case hands in the text `the cat sat on the mat the cat` and
+map-reduces a word-frequency histogram into the shared map under keys discovered
+at runtime, then reads them back (`the=3`, `cat=2`, six keys total). It too
+**SKIPs** Factor when the two env vars are unset or missing.

@@ -77,3 +77,24 @@ main() {
 - Symbol versioning (`lua_close@@LUA_5.4`): dlsym strips version
   tags, so `dlsym(h, "lua_close")` works against 5.3 or 5.4
   indifferently.
+
+## Testing
+
+Lua has no dedicated fib-style end-to-end test like factor or racket
+do. Its coverage comes from two cross-cutting tests:
+
+- [`../../../tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh)
+  — the cross-host shared-map round-trip. The Lua case seeds a shared
+  map with `name=Alice` / `age=30`, runs Lua under
+  `lua_run_sandboxed_with_map`, and asserts the script reads both keys
+  (and gets `nil` for an absent `secret`), writes back
+  `greeting=hello Alice`, and that a tamper attempt
+  (`aether_map_put('name', 'TAMPERED')`) is rejected once the input
+  token is revoked — `name` stays `Alice`. SKIPs when no liblua /
+  `lua5.x` dev package is detected.
+- [`../../../tests/scripts/contrib_build.sh`](../../../tests/scripts/contrib_build.sh)
+  — the `make contrib` smoke test. Confirms the `host_lua` bridge
+  archive (`build/contrib/libaether_host_lua.a`) builds from
+  `aether_host_lua.c`. SKIPs the module when `pkg-config` finds no
+  `lua5.4` / `lua5.3` / `lua` dev kit (hard-fails only in explicit
+  `MODULES=lua` mode).

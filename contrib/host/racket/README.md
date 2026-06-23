@@ -191,3 +191,28 @@ Then `ae build` an Aether program with `import contrib.host.racket`, with
 import scanner, and `libracketcs.a` is added alongside it. `import
 contrib.host.rhombus` links the **same** archive (it carries both the
 `racket_*` and `rhombus_*` ABI; Rhombus is a `#lang` on this VM).
+
+## Testing
+
+The end-to-end test lives at
+[`tests/integration/host_racket/`](../../../tests/integration/host_racket/) —
+[`uses_racket.ae`](../../../tests/integration/host_racket/uses_racket.ae) is the
+driver (the fib(10)=55 set-piece, the same shape as
+[contrib.host.factor](../factor/)'s test: it evaluates Racket, checks the error
+contract, and round-trips a scalar k-v map), and
+[`test_host_racket.sh`](../../../tests/integration/host_racket/test_host_racket.sh)
+is the runner.
+
+Like the build, the test gates on the four `$AETHER_RACKET_*` env vars above: it
+**SKIPs** (never fails) when they're unset — so it no-ops on CI machines without
+a built Racket CS. With them set it compiles the driver with `aetherc`, links
+the bridge + `libracketcs.a`, runs it, and asserts the `PASS:` line. Run it
+directly once the env vars point at your Racket CS tree:
+
+```sh
+AETHER_RACKET_INCLUDE=/path/to/racket/racket/include \
+AETHER_RACKET_LIB=/path/to/racket/racket/lib/libracketcs.a \
+AETHER_RACKET_BOOT_DIR=/path/to/racket/racket/lib \
+AETHER_RACKET_COLLECTS=/path/to/racket/racket/collects \
+  tests/integration/host_racket/test_host_racket.sh
+```
