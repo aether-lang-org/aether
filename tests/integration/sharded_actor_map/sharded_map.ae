@@ -1,0 +1,147 @@
+// Regression: sharded actor map — lock striping via N owner actors.
+//
+// A single actor owning a hot map serializes every access through one
+// mailbox (the "one mutex" trap). The actor-native fix is to spawn N
+// shard actors and route each key to `hash(key) % N`, built on the
+// existing `?` ask + `reply` primitive. See docs/sharded-actor-map.md.
+//
+// This test builds a sharded map, sets keys that hash onto DIFFERENT
+// shards, reads every key back through the owning shard, deletes one,
+// and asserts correctness. Exits 0 on success, 1 (with a FAIL line) on
+// any mismatch.
+import std.string
+import std.map
+
+message Set { key: string, val: int }
+message Delete { key: string }
+message Get { key: string }
+message GetReply { value: int }   // first field = the int the asker receives
+
+actor Shard {
+    state store = map_new()
+    receive {
+        Set(key, val) -> {
+            map_put_string_owned(store, key, string.from_int(val))
+        }
+        Delete(key) -> {
+            map_remove(store, key)
+        }
+        Get(key) -> {
+            // One trailing reply per handler: compute, then reply once.
+            result = 0 - 1                    // ABSENT sentinel
+            v = map_get_raw(store, key)
+            if v != null {
+                n, _ = string.to_int(v)
+                result = n
+            }
+            reply GetReply { value: result }
+        }
+    }
+}
+
+// FNV-1a over the key bytes, masked non-negative, then mod N.
+shard_for(key: string, nshards: int) -> int {
+    h = 2166136261
+    n = string.length(key)
+    i = 0
+    while i < n {
+        c = string.char_at(key, i)
+        h = h ^ c
+        h = h * 16777619
+        h = h & 2147483647
+        i = i + 1
+    }
+    return h % nshards
+}
+
+main() {
+    nshards = 4
+    s0 = spawn(Shard())
+    s1 = spawn(Shard())
+    s2 = spawn(Shard())
+    s3 = spawn(Shard())
+    shards = [s0, s1, s2, s3]
+
+    keys = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
+    vals = [10, 20, 30, 40, 50, 60]
+
+    // Set every key on its owning shard, and track how many distinct
+    // shards we touched so the test proves striping (not all-on-one).
+    seen0 = 0
+    seen1 = 0
+    seen2 = 0
+    seen3 = 0
+    i = 0
+    while i < 6 {
+        k = keys[i]
+        idx = shard_for(k, nshards)
+        if idx == 0 { seen0 = 1 }
+        else if idx == 1 { seen1 = 1 }
+        else if idx == 2 { seen2 = 1 }
+        else { seen3 = 1 }
+        shards[idx] ! Set { key: k, val: vals[i] }
+        i = i + 1
+    }
+    wait_for_idle()
+
+    // Correctness: every key reads back its value through the shard the
+    // hash routes it to.
+    failures = 0
+    i = 0
+    while i < 6 {
+        k = keys[i]
+        idx = shard_for(k, nshards)
+        got = shards[idx] ? Get { key: k }
+        if got != vals[i] {
+            print("FAIL: key ")
+            print(k)
+            print(" expected ")
+            print(vals[i])
+            print(" got ")
+            println(got)
+            failures = failures + 1
+        }
+        i = i + 1
+    }
+
+    // Missing key returns the ABSENT sentinel.
+    missing = shards[shard_for("nope", nshards)] ? Get { key: "nope" }
+    if missing != (0 - 1) {
+        print("FAIL: missing key expected -1 got ")
+        println(missing)
+        failures = failures + 1
+    }
+
+    // Delete removes the entry; a subsequent get reports ABSENT.
+    dk = "delta"
+    didx = shard_for(dk, nshards)
+    shards[didx] ! Delete { key: dk }
+    wait_for_idle()
+    after_delete = shards[didx] ? Get { key: dk }
+    if after_delete != (0 - 1) {
+        print("FAIL: deleted key expected -1 got ")
+        println(after_delete)
+        failures = failures + 1
+    }
+
+    // Striping check: the 6 keys must spread over more than one shard,
+    // otherwise this would just be the single-mailbox trap again.
+    distinct = seen0 + seen1 + seen2 + seen3
+    if distinct < 2 {
+        print("FAIL: keys collapsed onto ")
+        print(distinct)
+        println(" shard(s) — no striping")
+        failures = failures + 1
+    }
+
+    if failures == 0 {
+        print("PASS: sharded map correct across ")
+        print(distinct)
+        println(" shards")
+    } else {
+        print("FAILED with ")
+        print(failures)
+        println(" error(s)")
+        exit(1)
+    }
+}
