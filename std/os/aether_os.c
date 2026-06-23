@@ -2179,12 +2179,16 @@ char* os_getcwd_raw(void) {
     /* GetCurrentDirectoryW(0, NULL) returns the buffer size (incl. NUL). */
     DWORD need = GetCurrentDirectoryW(0, NULL);
     if (need == 0) return NULL;
-    wchar_t* w = (wchar_t*)malloc(sizeof(wchar_t) * need);
+    /* #462: transient wide-char cwd scratch — alloc'd and freed locally,
+     * sized by the (plugin-influenced) path length. The returned UTF-8
+     * `utf8` stays raw (caller-owned). */
+    size_t w_bytes = sizeof(wchar_t) * (size_t)need;
+    wchar_t* w = (wchar_t*)aether_caps_malloc(w_bytes);
     if (!w) return NULL;
     DWORD got = GetCurrentDirectoryW(need, w);
-    if (got == 0 || got >= need) { free(w); return NULL; }
+    if (got == 0 || got >= need) { aether_caps_free(w, w_bytes); return NULL; }
     char* utf8 = wide_to_utf8(w);
-    free(w);
+    aether_caps_free(w, w_bytes);
     return utf8;
 }
 

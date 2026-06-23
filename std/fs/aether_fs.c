@@ -1133,10 +1133,16 @@ _tuple_int_int_string fs_copy_raw(const char* src, const char* dst) {
     if (wsrc_len <= 0 || wdst_len <= 0) {
         return aether_fs_iks_err(AETHER_FS_KIND_INVALID, "path UTF-8 invalid");
     }
-    wchar_t* wsrc = (wchar_t*)malloc((size_t)wsrc_len * sizeof(wchar_t));
-    wchar_t* wdst = (wchar_t*)malloc((size_t)wdst_len * sizeof(wchar_t));
+    /* #462: transient UTF-8 → UTF-16 path scratch — alloc'd and freed
+     * locally on every path through this function, sized by the
+     * (plugin-supplied) path length. Gate it and free through the cap
+     * with the exact byte count so accounting balances. */
+    size_t wsrc_bytes = (size_t)wsrc_len * sizeof(wchar_t);
+    size_t wdst_bytes = (size_t)wdst_len * sizeof(wchar_t);
+    wchar_t* wsrc = (wchar_t*)aether_caps_malloc(wsrc_bytes);
+    wchar_t* wdst = (wchar_t*)aether_caps_malloc(wdst_bytes);
     if (!wsrc || !wdst) {
-        free(wsrc); free(wdst);
+        aether_caps_free(wsrc, wsrc_bytes); aether_caps_free(wdst, wdst_bytes);
         return aether_fs_iks_err(AETHER_FS_KIND_IO, "allocation failed");
     }
     MultiByteToWideChar(CP_UTF8, 0, src, -1, wsrc, wsrc_len);
@@ -1150,19 +1156,19 @@ _tuple_int_int_string fs_copy_raw(const char* src, const char* dst) {
     DWORD src_attr = GetFileAttributesW(wsrc);
     if (src_attr != INVALID_FILE_ATTRIBUTES &&
         (src_attr & FILE_ATTRIBUTE_DIRECTORY)) {
-        free(wsrc); free(wdst);
+        aether_caps_free(wsrc, wsrc_bytes); aether_caps_free(wdst, wdst_bytes);
         return aether_fs_iks_err(AETHER_FS_KIND_IS_DIR, "src is a directory");
     }
     DWORD dst_attr = GetFileAttributesW(wdst);
     if (dst_attr != INVALID_FILE_ATTRIBUTES &&
         (dst_attr & FILE_ATTRIBUTE_DIRECTORY)) {
-        free(wsrc); free(wdst);
+        aether_caps_free(wsrc, wsrc_bytes); aether_caps_free(wdst, wdst_bytes);
         return aether_fs_iks_err(AETHER_FS_KIND_IS_DIR, "dst is a directory");
     }
     /* bFailIfExists=FALSE → match POSIX cp: overwrite. */
     BOOL ok = CopyFileExW(wsrc, wdst, NULL, NULL, NULL, 0);
     DWORD win_err = GetLastError();
-    free(wsrc); free(wdst);
+    aether_caps_free(wsrc, wsrc_bytes); aether_caps_free(wdst, wdst_bytes);
     if (!ok) {
         int kind = AETHER_FS_KIND_IO;
         const char* msg = "CopyFileExW failed";
@@ -1347,10 +1353,13 @@ _tuple_int_int_string fs_move_raw(const char* src, const char* dst) {
     if (wsrc_len <= 0 || wdst_len <= 0) {
         return aether_fs_iks_err(AETHER_FS_KIND_INVALID, "path UTF-8 invalid");
     }
-    wchar_t* wsrc = (wchar_t*)malloc((size_t)wsrc_len * sizeof(wchar_t));
-    wchar_t* wdst = (wchar_t*)malloc((size_t)wdst_len * sizeof(wchar_t));
+    /* #462: transient UTF-8 → UTF-16 path scratch — see fs_copy_raw. */
+    size_t wsrc_bytes = (size_t)wsrc_len * sizeof(wchar_t);
+    size_t wdst_bytes = (size_t)wdst_len * sizeof(wchar_t);
+    wchar_t* wsrc = (wchar_t*)aether_caps_malloc(wsrc_bytes);
+    wchar_t* wdst = (wchar_t*)aether_caps_malloc(wdst_bytes);
     if (!wsrc || !wdst) {
-        free(wsrc); free(wdst);
+        aether_caps_free(wsrc, wsrc_bytes); aether_caps_free(wdst, wdst_bytes);
         return aether_fs_iks_err(AETHER_FS_KIND_IO, "allocation failed");
     }
     MultiByteToWideChar(CP_UTF8, 0, src, -1, wsrc, wsrc_len);
@@ -1358,7 +1367,7 @@ _tuple_int_int_string fs_move_raw(const char* src, const char* dst) {
     BOOL ok = MoveFileExW(wsrc, wdst,
                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
     DWORD win_err = GetLastError();
-    free(wsrc); free(wdst);
+    aether_caps_free(wsrc, wsrc_bytes); aether_caps_free(wdst, wdst_bytes);
     if (!ok) {
         int kind = AETHER_FS_KIND_IO;
         const char* msg = "MoveFileExW failed";
@@ -1463,7 +1472,12 @@ _tuple_string_int_string fs_realpath_raw(const char* path) {
     if (wpath_len <= 0) {
         return aether_fs_sks_err(AETHER_FS_KIND_INVALID, "path UTF-8 invalid");
     }
-    wchar_t* wpath = (wchar_t*)malloc((size_t)wpath_len * sizeof(wchar_t));
+    /* #462: transient UTF-8 → UTF-16 path scratch — alloc'd and freed
+     * locally, sized by the (plugin-supplied) path length. The eventual
+     * UTF-8 result `u8` below stays raw because it escapes as the
+     * caller-owned path string (PR #845 returned-string contract). */
+    size_t wpath_bytes = (size_t)wpath_len * sizeof(wchar_t);
+    wchar_t* wpath = (wchar_t*)aether_caps_malloc(wpath_bytes);
     if (!wpath) {
         return aether_fs_sks_err(AETHER_FS_KIND_IO, "allocation failed");
     }
@@ -1472,7 +1486,7 @@ _tuple_string_int_string fs_realpath_raw(const char* path) {
                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            NULL, OPEN_EXISTING,
                            FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    free(wpath);
+    aether_caps_free(wpath, wpath_bytes);
     if (h == INVALID_HANDLE_VALUE) {
         DWORD win_err = GetLastError();
         int kind = (win_err == ERROR_FILE_NOT_FOUND ||
@@ -1489,7 +1503,10 @@ _tuple_string_int_string fs_realpath_raw(const char* path) {
         CloseHandle(h);
         return aether_fs_sks_err(AETHER_FS_KIND_IO, "GetFinalPathNameByHandleW failed");
     }
-    wchar_t* wresult = (wchar_t*)malloc((size_t)need * sizeof(wchar_t));
+    /* #462: transient wide-char result buffer — freed locally on every
+     * path; only the UTF-8 `u8` conversion below escapes (stays raw). */
+    size_t wresult_bytes = (size_t)need * sizeof(wchar_t);
+    wchar_t* wresult = (wchar_t*)aether_caps_malloc(wresult_bytes);
     if (!wresult) {
         CloseHandle(h);
         return aether_fs_sks_err(AETHER_FS_KIND_IO, "allocation failed");
@@ -1497,7 +1514,7 @@ _tuple_string_int_string fs_realpath_raw(const char* path) {
     DWORD got = GetFinalPathNameByHandleW(h, wresult, need, FILE_NAME_NORMALIZED);
     CloseHandle(h);
     if (got == 0 || got >= need) {
-        free(wresult);
+        aether_caps_free(wresult, wresult_bytes);
         return aether_fs_sks_err(AETHER_FS_KIND_IO, "GetFinalPathNameByHandleW size race");
     }
     /* Strip the \\?\ prefix (4 wchars) so callers see a plain path. */
@@ -1508,16 +1525,19 @@ _tuple_string_int_string fs_realpath_raw(const char* path) {
     }
     int u8_len = WideCharToMultiByte(CP_UTF8, 0, wstart, -1, NULL, 0, NULL, NULL);
     if (u8_len <= 0) {
-        free(wresult);
+        aether_caps_free(wresult, wresult_bytes);
         return aether_fs_sks_err(AETHER_FS_KIND_IO, "UTF-16 → UTF-8 failed");
     }
+    /* RAW BY DESIGN (PR #845): `u8` is the resolved-path result handed
+     * back to Aether and freed by the heap-string machinery, not by
+     * aether_caps_free. Cap-accounting it would drift the counter. */
     char* u8 = (char*)malloc((size_t)u8_len);
     if (!u8) {
-        free(wresult);
+        aether_caps_free(wresult, wresult_bytes);
         return aether_fs_sks_err(AETHER_FS_KIND_IO, "allocation failed");
     }
     WideCharToMultiByte(CP_UTF8, 0, wstart, -1, u8, u8_len, NULL, NULL);
-    free(wresult);
+    aether_caps_free(wresult, wresult_bytes);
     return aether_fs_sks_ok(u8);
 #else
     char* resolved = realpath(path, NULL);
@@ -1556,14 +1576,16 @@ _tuple_int_int_string fs_chmod_raw(const char* path, int mode) {
     if (wpath_len <= 0) {
         return aether_fs_iks_err(AETHER_FS_KIND_INVALID, "path UTF-8 invalid");
     }
-    wchar_t* wpath = (wchar_t*)malloc((size_t)wpath_len * sizeof(wchar_t));
+    /* #462: transient UTF-8 → UTF-16 path scratch — see fs_copy_raw. */
+    size_t wpath_bytes = (size_t)wpath_len * sizeof(wchar_t);
+    wchar_t* wpath = (wchar_t*)aether_caps_malloc(wpath_bytes);
     if (!wpath) {
         return aether_fs_iks_err(AETHER_FS_KIND_IO, "allocation failed");
     }
     MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, wpath_len);
     DWORD attrs = GetFileAttributesW(wpath);
     if (attrs == INVALID_FILE_ATTRIBUTES) {
-        free(wpath);
+        aether_caps_free(wpath, wpath_bytes);
         DWORD win_err = GetLastError();
         int kind = (win_err == ERROR_FILE_NOT_FOUND ||
                     win_err == ERROR_PATH_NOT_FOUND)
@@ -1578,7 +1600,7 @@ _tuple_int_int_string fs_chmod_raw(const char* path, int mode) {
         attrs |= FILE_ATTRIBUTE_READONLY;
     }
     BOOL ok = SetFileAttributesW(wpath, attrs);
-    free(wpath);
+    aether_caps_free(wpath, wpath_bytes);
     if (!ok) {
         int kind = (GetLastError() == ERROR_ACCESS_DENIED)
                    ? AETHER_FS_KIND_PERMISSION_DENIED
