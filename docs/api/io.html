@@ -13,96 +13,328 @@
     <p class="tagline">Standard Library</p>
   </div>
   <input type="text" id="search" placeholder="Search io..." onkeyup="searchModule()">
-  <h2>Functions</h2>
+  <h2>Exports</h2>
   <ul class="function-nav">
-    <li><a href="#io_print">io_print</a></li>
-    <li><a href="#io_print_line">io_print_line</a></li>
-    <li><a href="#io_print_int">io_print_int</a></li>
-    <li><a href="#io_print_float">io_print_float</a></li>
-    <li><a href="#io_read_file_raw">io_read_file_raw</a></li>
-    <li><a href="#io_write_file_raw">io_write_file_raw</a></li>
-    <li><a href="#io_append_file_raw">io_append_file_raw</a></li>
-    <li><a href="#io_file_exists">io_file_exists</a></li>
-    <li><a href="#io_delete_file_raw">io_delete_file_raw</a></li>
-    <li><a href="#io_file_info_free">io_file_info_free</a></li>
-    <li><a href="#io_getenv">io_getenv</a></li>
-    <li><a href="#io_setenv_raw">io_setenv_raw</a></li>
-    <li><a href="#io_unsetenv_raw">io_unsetenv_raw</a></li>
+    <li><a href="#print">print</a></li>
+    <li><a href="#print_line">print_line</a></li>
+    <li><a href="#print_int">print_int</a></li>
+    <li><a href="#print_float">print_float</a></li>
+    <li><a href="#read_file_raw">read_file_raw</a></li>
+    <li><a href="#write_file_raw">write_file_raw</a></li>
+    <li><a href="#append_file_raw">append_file_raw</a></li>
+    <li><a href="#file_exists">file_exists</a></li>
+    <li><a href="#delete_file_raw">delete_file_raw</a></li>
+    <li><a href="#file_info_raw">file_info_raw</a></li>
+    <li><a href="#file_info_free">file_info_free</a></li>
+    <li><a href="#getenv">getenv</a></li>
+    <li><a href="#setenv_raw">setenv_raw</a></li>
+    <li><a href="#unsetenv_raw">unsetenv_raw</a></li>
+    <li><a href="#stderr_write_raw">stderr_write_raw</a></li>
+    <li><a href="#stdout_write_raw">stdout_write_raw</a></li>
+    <li><a href="#perror_raw">perror_raw</a></li>
+    <li><a href="#errno_message_raw">errno_message_raw</a></li>
+    <li><a href="#fd_open_read_tuple">fd_open_read_tuple</a></li>
+    <li><a href="#fd_open_write_tuple">fd_open_write_tuple</a></li>
+    <li><a href="#fd_close_raw">fd_close_raw</a></li>
+    <li><a href="#fd_write_n">fd_write_n</a></li>
+    <li><a href="#fd_read_n_tuple">fd_read_n_tuple</a></li>
+    <li><a href="#fd_read_line_tuple">fd_read_line_tuple</a></li>
+    <li><a href="#read_file">read_file</a></li>
+    <li><a href="#write_file">write_file</a></li>
+    <li><a href="#append_file">append_file</a></li>
+    <li><a href="#delete_file">delete_file</a></li>
+    <li><a href="#file_info">file_info</a></li>
+    <li><a href="#setenv">setenv</a></li>
+    <li><a href="#unsetenv">unsetenv</a></li>
+    <li><a href="#stderr_write">stderr_write</a></li>
+    <li><a href="#stdout_write">stdout_write</a></li>
+    <li><a href="#perror">perror</a></li>
+    <li><a href="#errno_message">errno_message</a></li>
+    <li><a href="#fd_open_read">fd_open_read</a></li>
+    <li><a href="#fd_open_write">fd_open_write</a></li>
+    <li><a href="#fd_close">fd_close</a></li>
+    <li><a href="#fd_read_n">fd_read_n</a></li>
+    <li><a href="#fd_read_line">fd_read_line</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
   <ul class="module-list">
-    <li><a href="net.html">net</a></li>
-    <li class="active"><a href="io.html">io</a></li>
-    <li><a href="math.html">math</a></li>
-    <li><a href="json.html">json</a></li>
-    <li><a href="log.html">log</a></li>
-    <li><a href="os.html">os</a></li>
-    <li><a href="string.html">string</a></li>
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
     <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
     <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li class="active"><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
   </ul>
 </nav>
 <main class="content">
   <div class="module-header">
     <h1>io</h1>
-    <p class="module-desc">Input/output and console</p>
+    <p class="module-desc">std.io - Input/Output Module Import with: import std.io Raw externs end in `_raw` and return the C-style NULL/0/1 convention.</p>
+    <p class="import-line"><code>import std.io</code></p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="io_print" data-name="io_print">
-      <h3 class="function-name">io_print</h3>
-      <pre class="usage"><code>io_print(str)</code></pre>
-      <p class="doc">Console I/O</p>
+    <div class="function" id="print" data-name="print">
+      <h3 class="function-name">print <span class="kind">extern</span></h3>
+      <pre class="usage"><code>print(str)</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
+      <p class="doc">Console I/O — infallible in practice</p>
     </div>
-    <div class="function" id="io_print_line" data-name="io_print_line">
-      <h3 class="function-name">io_print_line</h3>
-      <pre class="usage"><code>io_print_line(str)</code></pre>
+    <div class="function" id="print_line" data-name="print_line">
+      <h3 class="function-name">print_line <span class="kind">extern</span></h3>
+      <pre class="usage"><code>print_line(str)</code></pre>
+      <p class="signature"><span class="sig-params">str: string</span></p>
     </div>
-    <div class="function" id="io_print_int" data-name="io_print_int">
-      <h3 class="function-name">io_print_int</h3>
-      <pre class="usage"><code>io_print_int(value)</code></pre>
+    <div class="function" id="print_int" data-name="print_int">
+      <h3 class="function-name">print_int <span class="kind">extern</span></h3>
+      <pre class="usage"><code>print_int(value)</code></pre>
+      <p class="signature"><span class="sig-params">value: int</span></p>
     </div>
-    <div class="function" id="io_print_float" data-name="io_print_float">
-      <h3 class="function-name">io_print_float</h3>
-      <pre class="usage"><code>io_print_float(value)</code></pre>
+    <div class="function" id="print_float" data-name="print_float">
+      <h3 class="function-name">print_float <span class="kind">extern</span></h3>
+      <pre class="usage"><code>print_float(value)</code></pre>
+      <p class="signature"><span class="sig-params">value: float</span></p>
     </div>
-    <div class="function" id="io_read_file_raw" data-name="io_read_file_raw">
-      <h3 class="function-name">io_read_file_raw</h3>
-      <pre class="usage"><code>io_read_file_raw(path)</code></pre>
-      <p class="doc">File I/O (raw)</p>
+    <div class="function" id="read_file_raw" data-name="read_file_raw">
+      <h3 class="function-name">read_file_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>read_file_raw(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">File I/O — raw externs</p>
     </div>
-    <div class="function" id="io_write_file_raw" data-name="io_write_file_raw">
-      <h3 class="function-name">io_write_file_raw</h3>
-      <pre class="usage"><code>io_write_file_raw(path, content)</code></pre>
+    <div class="function" id="write_file_raw" data-name="write_file_raw">
+      <h3 class="function-name">write_file_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>write_file_raw(path, content) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string, content: string</span></p>
     </div>
-    <div class="function" id="io_append_file_raw" data-name="io_append_file_raw">
-      <h3 class="function-name">io_append_file_raw</h3>
-      <pre class="usage"><code>io_append_file_raw(path, content)</code></pre>
+    <div class="function" id="append_file_raw" data-name="append_file_raw">
+      <h3 class="function-name">append_file_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>append_file_raw(path, content) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string, content: string</span></p>
     </div>
-    <div class="function" id="io_file_exists" data-name="io_file_exists">
-      <h3 class="function-name">io_file_exists</h3>
-      <pre class="usage"><code>io_file_exists(path)</code></pre>
+    <div class="function" id="file_exists" data-name="file_exists">
+      <h3 class="function-name">file_exists <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_exists(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
-    <div class="function" id="io_delete_file_raw" data-name="io_delete_file_raw">
-      <h3 class="function-name">io_delete_file_raw</h3>
-      <pre class="usage"><code>io_delete_file_raw(path)</code></pre>
+    <div class="function" id="delete_file_raw" data-name="delete_file_raw">
+      <h3 class="function-name">delete_file_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>delete_file_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
-    <div class="function" id="io_file_info_free" data-name="io_file_info_free">
-      <h3 class="function-name">io_file_info_free</h3>
-      <pre class="usage"><code>io_file_info_free(info)</code></pre>
+    <div class="function" id="file_info_raw" data-name="file_info_raw">
+      <h3 class="function-name">file_info_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_info_raw(path) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">File info</p>
     </div>
-    <div class="function" id="io_getenv" data-name="io_getenv">
-      <h3 class="function-name">io_getenv</h3>
-      <pre class="usage"><code>io_getenv(name)</code></pre>
+    <div class="function" id="file_info_free" data-name="file_info_free">
+      <h3 class="function-name">file_info_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_info_free(info)</code></pre>
+      <p class="signature"><span class="sig-params">info: ptr</span></p>
+    </div>
+    <div class="function" id="getenv" data-name="getenv">
+      <h3 class="function-name">getenv <span class="kind">extern</span></h3>
+      <pre class="usage"><code>getenv(name) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
       <p class="doc">Environment variables</p>
     </div>
-    <div class="function" id="io_setenv_raw" data-name="io_setenv_raw">
-      <h3 class="function-name">io_setenv_raw</h3>
-      <pre class="usage"><code>io_setenv_raw(name, value)</code></pre>
+    <div class="function" id="setenv_raw" data-name="setenv_raw">
+      <h3 class="function-name">setenv_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>setenv_raw(name, value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">name: string, value: string</span></p>
     </div>
-    <div class="function" id="io_unsetenv_raw" data-name="io_unsetenv_raw">
-      <h3 class="function-name">io_unsetenv_raw</h3>
-      <pre class="usage"><code>io_unsetenv_raw(name)</code></pre>
+    <div class="function" id="unsetenv_raw" data-name="unsetenv_raw">
+      <h3 class="function-name">unsetenv_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>unsetenv_raw(name) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+    </div>
+    <div class="function" id="stderr_write_raw" data-name="stderr_write_raw">
+      <h3 class="function-name">stderr_write_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>stderr_write_raw(data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+      <p class="doc">Unbuffered fd-1 / fd-2 writes — bypass stdio buffering so output is guaranteed on the wire before the process exits / crashes / aborts. Returns bytes written, -1 on error. Loops on partial writes and retries on EINTR.</p>
+    </div>
+    <div class="function" id="stdout_write_raw" data-name="stdout_write_raw">
+      <h3 class="function-name">stdout_write_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>stdout_write_raw(data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+    </div>
+    <div class="function" id="perror_raw" data-name="perror_raw">
+      <h3 class="function-name">perror_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>perror_raw(name)</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+      <p class="doc">errno-based error reporting — see the perror / errno_message wrappers below.</p>
+    </div>
+    <div class="function" id="errno_message_raw" data-name="errno_message_raw">
+      <h3 class="function-name">errno_message_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>errno_message_raw() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="fd_open_read_tuple" data-name="fd_open_read_tuple">
+      <h3 class="function-name">fd_open_read_tuple <span class="kind">extern</span></h3>
+      <pre class="usage"><code>fd_open_read_tuple(path) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Full fd-level I/O surface. Section 1 of nuther-ask-of-aether-team.md. fd_open_read       → POSIX O_RDONLY  / Win _O_RDONLY | _O_BINARY fd_open_write      → POSIX O_WRONLY|O_CREAT|O_TRUNC, mode 0644 / Win _O_WRONLY|_O_CREAT|_O_TRUNC|_O_BINARY fd_close           → close(fd) or _close(fd) fd_write_n         → looped write, retries EINTR; 0 ok / -1 fail fd_read_n          → looped read of up to `n` bytes; (bytes, count, err); bytes is a refcounted AetherString (binary-safe; embedded NULs survive) fd_read_line       → reads until '\n', stripping trailing CR/LF; (&quot;&quot;, &quot;&quot;) on clean EOF before any byte; partial line returned on EOF mid-line</p>
+    </div>
+    <div class="function" id="fd_open_write_tuple" data-name="fd_open_write_tuple">
+      <h3 class="function-name">fd_open_write_tuple <span class="kind">extern</span></h3>
+      <pre class="usage"><code>fd_open_write_tuple(path) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+    </div>
+    <div class="function" id="fd_close_raw" data-name="fd_close_raw">
+      <h3 class="function-name">fd_close_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>fd_close_raw(fd) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">fd: int</span></p>
+    </div>
+    <div class="function" id="fd_write_n" data-name="fd_write_n">
+      <h3 class="function-name">fd_write_n <span class="kind">extern</span></h3>
+      <pre class="usage"><code>fd_write_n(fd, data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, data: string, length: int</span></p>
+    </div>
+    <div class="function" id="fd_read_n_tuple" data-name="fd_read_n_tuple">
+      <h3 class="function-name">fd_read_n_tuple <span class="kind">extern</span></h3>
+      <pre class="usage"><code>fd_read_n_tuple(fd, n) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, n: int</span></p>
+      <p class="doc">Position 0 (the read buffer) is `@heap`: the C side returns a fresh AetherString (string_new_with_length, &quot;&quot; on EOF/error) that the caller owns and must release — without the annotation the destructured local was never reclaimed, leaking one buffer per read. aether_heap_str_free dispatches on the magic header (string_release here); never a literal.</p>
+    </div>
+    <div class="function" id="fd_read_line_tuple" data-name="fd_read_line_tuple">
+      <h3 class="function-name">fd_read_line_tuple <span class="kind">extern</span></h3>
+      <pre class="usage"><code>fd_read_line_tuple(fd) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">fd: int</span></p>
+    </div>
+    <div class="function" id="read_file" data-name="read_file">
+      <h3 class="function-name">read_file <span class="kind">fn</span></h3>
+      <pre class="usage"><code>read_file(path) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Read the entire contents of a file at `path`. Returns (content, &quot;&quot;) on success, (&quot;&quot;, error) on failure.</p>
+    </div>
+    <div class="function" id="write_file" data-name="write_file">
+      <h3 class="function-name">write_file <span class="kind">fn</span></h3>
+      <pre class="usage"><code>write_file(path, content) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string, content: string</span></p>
+      <p class="doc">Write `content` to a file at `path`. Overwrites if exists. Returns &quot;&quot; on success, error string on failure.</p>
+    </div>
+    <div class="function" id="append_file" data-name="append_file">
+      <h3 class="function-name">append_file <span class="kind">fn</span></h3>
+      <pre class="usage"><code>append_file(path, content) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string, content: string</span></p>
+      <p class="doc">Append `content` to a file at `path`. Creates if missing. Returns &quot;&quot; on success, error string on failure.</p>
+    </div>
+    <div class="function" id="delete_file" data-name="delete_file">
+      <h3 class="function-name">delete_file <span class="kind">fn</span></h3>
+      <pre class="usage"><code>delete_file(path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Delete the file at `path`. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="file_info" data-name="file_info">
+      <h3 class="function-name">file_info <span class="kind">fn</span></h3>
+      <pre class="usage"><code>file_info(path) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Get file info (FileInfo ptr with size, is_directory, modified_time). Returns (info, &quot;&quot;) on success, (null, error) on failure. Caller must free the returned ptr with io.file_info_free.</p>
+    </div>
+    <div class="function" id="setenv" data-name="setenv">
+      <h3 class="function-name">setenv <span class="kind">fn</span></h3>
+      <pre class="usage"><code>setenv(name, value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">name: string, value: string</span></p>
+      <p class="doc">Set an environment variable. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="unsetenv" data-name="unsetenv">
+      <h3 class="function-name">unsetenv <span class="kind">fn</span></h3>
+      <pre class="usage"><code>unsetenv(name) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+      <p class="doc">Unset an environment variable. Returns &quot;&quot; on success, error on failure.</p>
+    </div>
+    <div class="function" id="stderr_write" data-name="stderr_write">
+      <h3 class="function-name">stderr_write <span class="kind">fn</span></h3>
+      <pre class="usage"><code>stderr_write(data) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string</span></p>
+      <p class="doc">Unbuffered write to stderr (fd 2). Writes the whole of `data`; the byte count comes from the string itself via string.length — which reads an AetherString's stored length (NUL-safe) or falls back to strlen for a bare C string. Returns bytes written, -1 on error. Reach for this in crash-trace paths where println's buffering would lose output. io.stderr_write(&quot;PANIC: ${msg}\n&quot;) Distinct from `println` (line-buffered, lost on abort) and `eprintln` (block-buffered when stderr is piped). API note: the former two-arg form (data, length) was removed — `string` already carries its own length, so a caller-supplied count was redundant and a source of mismatch bugs.</p>
+    </div>
+    <div class="function" id="stdout_write" data-name="stdout_write">
+      <h3 class="function-name">stdout_write <span class="kind">fn</span></h3>
+      <pre class="usage"><code>stdout_write(data) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string</span></p>
+      <p class="doc">Unbuffered write to stdout (fd 1). Same shape as stderr_write. Useful for shell-pipe-friendly tools that need to flush each record before the next stage reads.</p>
+    </div>
+    <div class="function" id="perror" data-name="perror">
+      <h3 class="function-name">perror <span class="kind">fn</span></h3>
+      <pre class="usage"><code>perror(name)</code></pre>
+      <p class="signature"><span class="sig-params">name: string</span></p>
+      <p class="doc">Print &quot;name: &lt;errno message&gt;\n&quot; to stderr — the POSIX perror(3). Call it immediately after a failing libc-backed operation, while errno is still live (same constraint as C's perror). fd, err = io.fd_open_read(path) if fd &lt; 0 { io.perror(&quot;open&quot;) ; exit(1) }</p>
+    </div>
+    <div class="function" id="errno_message" data-name="errno_message">
+      <h3 class="function-name">errno_message <span class="kind">fn</span></h3>
+      <pre class="usage"><code>errno_message() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">The current errno as a human-readable message string — strerror(3) for `errno`. Same &quot;call right after the failure&quot; rule as perror. Use this when you want the message in a string (to wrap in a Go-style error tuple, log it, etc.) rather than printed to stderr.</p>
+    </div>
+    <div class="function" id="fd_open_read" data-name="fd_open_read">
+      <h3 class="function-name">fd_open_read <span class="kind">fn</span></h3>
+      <pre class="usage"><code>fd_open_read(path) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Open `path` for reading. Returns (fd, err): success → (fd &gt;= 0, &quot;&quot;); failure → (-1, &quot;...&quot;). Use with fd_read_n / fd_read_line / fd_close. fd, err = io.fd_open_read(&quot;data.bin&quot;) if err != &quot;&quot; { return err } defer io.fd_close(fd)</p>
+    </div>
+    <div class="function" id="fd_open_write" data-name="fd_open_write">
+      <h3 class="function-name">fd_open_write <span class="kind">fn</span></h3>
+      <pre class="usage"><code>fd_open_write(path) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Open `path` for writing — implicit O_CREAT + O_TRUNC, mode 0644 on POSIX. Returns (fd, err) like fd_open_read. The truncate-on-open matches std.fs.write_binary semantics; if you need O_APPEND or open-without-truncate, file an issue (the porter says no svn-aether site needs them today).</p>
+    </div>
+    <div class="function" id="fd_close" data-name="fd_close">
+      <h3 class="function-name">fd_close <span class="kind">fn</span></h3>
+      <pre class="usage"><code>fd_close(fd) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">fd: int</span></p>
+      <p class="doc">Close `fd`. Returns &quot;&quot; on success, error string on failure.</p>
+    </div>
+    <div class="function" id="fd_read_n" data-name="fd_read_n">
+      <h3 class="function-name">fd_read_n <span class="kind">fn</span></h3>
+      <pre class="usage"><code>fd_read_n(fd, n) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, n: int</span></p>
+      <p class="doc">Read up to `n` bytes from `fd`. Returns (bytes, count, err): - On success: (bytes, count, &quot;&quot;) with `count` between 1 and `n`. - On clean EOF before any byte: (&quot;&quot;, 0, &quot;&quot;). - On error: (&quot;&quot;, 0, &quot;&lt;reason&gt;&quot;). `bytes` is a refcounted AetherString carrying the explicit byte count, so embedded NULs survive (binary-safe). Inferred return type (`-&gt; {`) so the extern's `@heap` tuple flag on position 0 propagates to callers' destructure sites — an explicit tuple type can't carry the per-position annotation. Mirrors std.fs's read_binary / realpath wrappers.</p>
+    </div>
+    <div class="function" id="fd_read_line" data-name="fd_read_line">
+      <h3 class="function-name">fd_read_line <span class="kind">fn</span></h3>
+      <pre class="usage"><code>fd_read_line(fd) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">fd: int</span></p>
+      <p class="doc">Read one '\n'-delimited line from `fd`. The trailing '\n' is stripped (and a '\r' before it for CRLF input). Returns (line, err): - Normal line: (content, &quot;&quot;). - Clean EOF before any byte: (&quot;&quot;, &quot;&quot;). - EOF mid-line: returns the partial line and (&quot;&quot;, &quot;&quot;) — server- side dump streams sometimes end without a trailing '\n'. - Read error: (&quot;&quot;, &quot;&lt;reason&gt;&quot;).</p>
     </div>
   </div>
 </main>

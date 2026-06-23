@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>url - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search url..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#encode">encode</a></li>
+    <li><a href="#encode_path">encode_path</a></li>
+    <li><a href="#encode_strict">encode_strict</a></li>
+    <li><a href="#decode">decode</a></li>
+    <li><a href="#parse_query">parse_query</a></li>
+    <li><a href="#query_get">query_get</a></li>
+    <li><a href="#query_get_all">query_get_all</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li class="active"><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>url</h1>
+    <p class="module-desc">std.url — RFC 3986 percent-encoding + query-string parsing (#629).</p>
+    <p class="import-line"><code>import std.url</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="encode" data-name="encode">
+      <h3 class="function-name">encode <span class="kind">fn</span></h3>
+      <pre class="usage"><code>encode(s) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">RFC 3986 query-component encoding (Go's url.QueryEscape). Space encoded as '+'.</p>
+    </div>
+    <div class="function" id="encode_path" data-name="encode_path">
+      <h3 class="function-name">encode_path <span class="kind">fn</span></h3>
+      <pre class="usage"><code>encode_path(s) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">RFC 3986 path-segment encoding (Go's url.PathEscape). Keeps unreserved plus $&amp;+:=@; '+' is preserved literally (it is NOT a space in path-context).</p>
+    </div>
+    <div class="function" id="encode_strict" data-name="encode_strict">
+      <h3 class="function-name">encode_strict <span class="kind">fn</span></h3>
+      <pre class="usage"><code>encode_strict(s) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Strict unreserved-only encoding — encodes everything except [A-Za-z0-9-._~]. Required for AWS SigV4 canonical-request signing where any kept-character deviation invalidates the signature.</p>
+    </div>
+    <div class="function" id="decode" data-name="decode">
+      <h3 class="function-name">decode <span class="kind">fn</span></h3>
+      <pre class="usage"><code>decode(s) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Percent-decode a URL component. '+' is decoded as space (the query-component reading); literal '+' in path components should have been encoded as %2B by a conforming encoder. Returns (&quot;&quot;, &quot;malformed encoding&quot;) on a stray '%' not followed by two hex chars. Otherwise returns (decoded, &quot;&quot;).</p>
+    </div>
+    <div class="function" id="parse_query" data-name="parse_query">
+      <h3 class="function-name">parse_query <span class="kind">fn</span></h3>
+      <pre class="usage"><code>parse_query(s) <span class="arrow">-&gt;</span> (_0, string)</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Parse a query string. Returns (list, &quot;&quot;), where list is a std.collections.string_list of decoded &quot;key=value&quot; entries. Returns (&quot;&quot;, error) on a malformed percent-encoding inside any key or value. Leading '?' is tolerated (stripped before parsing) so callers can pass the raw `request.query_string` or a string they hand-built with `?` retained.</p>
+    </div>
+    <div class="function" id="query_get" data-name="query_get">
+      <h3 class="function-name">query_get <span class="kind">fn</span></h3>
+      <pre class="usage"><code>query_get(list, name) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">list: ptr, name: string</span></p>
+      <p class="doc">Get the first value for `name` from a parsed query list. Returns &quot;&quot; if the key is absent.</p>
+    </div>
+    <div class="function" id="query_get_all" data-name="query_get_all">
+      <h3 class="function-name">query_get_all <span class="kind">fn</span></h3>
+      <pre class="usage"><code>query_get_all(list, name) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">list: ptr, name: string</span></p>
+      <p class="doc">Get every value for `name` (for repeated-key queries like `?a=1&amp;a=2`). Returns a fresh string_list. Empty list if absent.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

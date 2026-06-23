@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>casper - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search casper..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_casper_init">aether_casper_init</a></li>
+    <li><a href="#aether_casper_service_open">aether_casper_service_open</a></li>
+    <li><a href="#aether_casper_close">aether_casper_close</a></li>
+    <li><a href="#aether_casper_available">aether_casper_available</a></li>
+    <li><a href="#aether_casper_resolve">aether_casper_resolve</a></li>
+    <li><a href="#aether_casper_pwd_uid">aether_casper_pwd_uid</a></li>
+    <li><a href="#aether_casper_pwd_home">aether_casper_pwd_home</a></li>
+    <li><a href="#aether_casper_sysctl_str">aether_casper_sysctl_str</a></li>
+    <li><a href="#available">available</a></li>
+    <li><a href="#init">init</a></li>
+    <li><a href="#service">service</a></li>
+    <li><a href="#close">close</a></li>
+    <li><a href="#dns_resolve">dns_resolve</a></li>
+    <li><a href="#pwd_uid">pwd_uid</a></li>
+    <li><a href="#pwd_home">pwd_home</a></li>
+    <li><a href="#sysctl">sysctl</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li class="active"><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>casper</h1>
+    <p class="module-desc">std.casper — FreeBSD Casper service delegation.</p>
+    <p class="import-line"><code>import std.casper</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_casper_init" data-name="aether_casper_init">
+      <h3 class="function-name">aether_casper_init <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_casper_init() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">Connect to the casper daemon. Returns an opaque channel, or null. Must be called BEFORE capsicum.enter().</p>
+    </div>
+    <div class="function" id="aether_casper_service_open" data-name="aether_casper_service_open">
+      <h3 class="function-name">aether_casper_service_open <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_casper_service_open(casper, service) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">casper: ptr, service: string</span></p>
+      <p class="doc">Open a named service channel (&quot;system.net&quot; / &quot;system.pwd&quot; / &quot;system.sysctl&quot;) from the casper handle. Returns a channel or null. Must be called BEFORE capsicum.enter().</p>
+    </div>
+    <div class="function" id="aether_casper_close" data-name="aether_casper_close">
+      <h3 class="function-name">aether_casper_close <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_casper_close(chan)</code></pre>
+      <p class="signature"><span class="sig-params">chan: ptr</span></p>
+      <p class="doc">Close a channel (casper handle or service handle). Safe on null.</p>
+    </div>
+    <div class="function" id="aether_casper_available" data-name="aether_casper_available">
+      <h3 class="function-name">aether_casper_available <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_casper_available() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">1 if Casper is usable (FreeBSD with the casper daemon reachable).</p>
+    </div>
+    <div class="function" id="aether_casper_resolve" data-name="aether_casper_resolve">
+      <h3 class="function-name">aether_casper_resolve <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_casper_resolve(netchan, hostname) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">netchan: ptr, hostname: string</span></p>
+      <p class="doc">Resolve a hostname to its first IP via a &quot;system.net&quot; channel. Returns the address string, or null on failure.</p>
+    </div>
+    <div class="function" id="aether_casper_pwd_uid" data-name="aether_casper_pwd_uid">
+      <h3 class="function-name">aether_casper_pwd_uid <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_casper_pwd_uid(pwdchan, username) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pwdchan: ptr, username: string</span></p>
+      <p class="doc">Look up a username's uid via a &quot;system.pwd&quot; channel. -1 if absent.</p>
+    </div>
+    <div class="function" id="aether_casper_pwd_home" data-name="aether_casper_pwd_home">
+      <h3 class="function-name">aether_casper_pwd_home <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_casper_pwd_home(pwdchan, username) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">pwdchan: ptr, username: string</span></p>
+      <p class="doc">Look up a username's home directory via a &quot;system.pwd&quot; channel. Returns the path, or null on failure.</p>
+    </div>
+    <div class="function" id="aether_casper_sysctl_str" data-name="aether_casper_sysctl_str">
+      <h3 class="function-name">aether_casper_sysctl_str <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_casper_sysctl_str(sysctlchan, name) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">sysctlchan: ptr, name: string</span></p>
+      <p class="doc">Read a string-valued sysctl via a &quot;system.sysctl&quot; channel. Returns the value, or null on failure.</p>
+    </div>
+    <div class="function" id="available" data-name="available">
+      <h3 class="function-name">available <span class="kind">fn</span></h3>
+      <pre class="usage"><code>available() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Is Casper service delegation available?</p>
+    </div>
+    <div class="function" id="init" data-name="init">
+      <h3 class="function-name">init <span class="kind">fn</span></h3>
+      <pre class="usage"><code>init() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">Connect to the casper daemon. Call before capsicum.enter().</p>
+    </div>
+    <div class="function" id="service" data-name="service">
+      <h3 class="function-name">service <span class="kind">fn</span></h3>
+      <pre class="usage"><code>service(casper, name) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">casper: ptr, name: string</span></p>
+      <p class="doc">Open a service channel. Call before capsicum.enter().</p>
+    </div>
+    <div class="function" id="close" data-name="close">
+      <h3 class="function-name">close <span class="kind">fn</span></h3>
+      <pre class="usage"><code>close(chan)</code></pre>
+      <p class="signature"><span class="sig-params">chan: ptr</span></p>
+      <p class="doc">Close a channel.</p>
+    </div>
+    <div class="function" id="dns_resolve" data-name="dns_resolve">
+      <h3 class="function-name">dns_resolve <span class="kind">fn</span></h3>
+      <pre class="usage"><code>dns_resolve(netchan, hostname) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">netchan: ptr, hostname: string</span></p>
+      <p class="doc">Resolve `hostname` via a &quot;system.net&quot; channel. Returns (ip, &quot;&quot;) on success, (&quot;&quot;, error) on failure. Works inside capability mode.</p>
+    </div>
+    <div class="function" id="pwd_uid" data-name="pwd_uid">
+      <h3 class="function-name">pwd_uid <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pwd_uid(pwdchan, username) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pwdchan: ptr, username: string</span></p>
+      <p class="doc">Look up `username`'s uid via a &quot;system.pwd&quot; channel. -1 if absent.</p>
+    </div>
+    <div class="function" id="pwd_home" data-name="pwd_home">
+      <h3 class="function-name">pwd_home <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pwd_home(pwdchan, username) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">pwdchan: ptr, username: string</span></p>
+      <p class="doc">Look up `username`'s home directory via a &quot;system.pwd&quot; channel. Returns (home, &quot;&quot;) on success, (&quot;&quot;, error) on failure.</p>
+    </div>
+    <div class="function" id="sysctl" data-name="sysctl">
+      <h3 class="function-name">sysctl <span class="kind">fn</span></h3>
+      <pre class="usage"><code>sysctl(sysctlchan, name) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">sysctlchan: ptr, name: string</span></p>
+      <p class="doc">Read a string-valued sysctl via a &quot;system.sysctl&quot; channel. Returns (value, &quot;&quot;) on success, (&quot;&quot;, error) on failure.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cas - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search cas..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#root">root</a></li>
+    <li><a href="#path">path</a></li>
+    <li><a href="#has">has</a></li>
+    <li><a href="#put">put</a></li>
+    <li><a href="#get">get</a></li>
+    <li><a href="#root_raw">root_raw</a></li>
+    <li><a href="#path_raw">path_raw</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li class="active"><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>cas</h1>
+    <p class="module-desc">std.cas - Content-addressed artifact store A small content-addressed store (CAS) for sharing built artifacts (`.so` files from `--emit=lib`, eventually anything content- addressable).</p>
+    <p class="import-line"><code>import std.cas</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="root" data-name="root">
+      <h3 class="function-name">root <span class="kind">fn</span></h3>
+      <pre class="usage"><code>root() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="path" data-name="path">
+      <h3 class="function-name">path <span class="kind">fn</span></h3>
+      <pre class="usage"><code>path(digest) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">digest: string</span></p>
+    </div>
+    <div class="function" id="has" data-name="has">
+      <h3 class="function-name">has <span class="kind">fn</span></h3>
+      <pre class="usage"><code>has(digest) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">digest: string</span></p>
+      <p class="doc">Test whether a digest is present in the local store. Pure existence check on `&lt;root&gt;/&lt;digest&gt;`. NULL-safe — passing an empty or NULL digest returns 0.</p>
+    </div>
+    <div class="function" id="put" data-name="put">
+      <h3 class="function-name">put <span class="kind">fn</span></h3>
+      <pre class="usage"><code>put(file_path) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">file_path: string</span></p>
+      <p class="doc">Insert a file into the store. Reads the file's content, computes the hex sha256, and atomically renames into place at `&lt;root&gt;/&lt;digest&gt;`. Returns `(digest, &quot;&quot;)` on success, `(&quot;&quot;, err)` on any failure (file missing, OOM, mkdir failure, write failure). Idempotent: putting a file whose contents already exist in the store re-writes the entry (the content is the same — the store stays well-formed) and returns the same digest. Callers comparing digests to detect &quot;is this the same artifact?&quot; never need to special-case &quot;already present.&quot;</p>
+    </div>
+    <div class="function" id="get" data-name="get">
+      <h3 class="function-name">get <span class="kind">fn</span></h3>
+      <pre class="usage"><code>get(digest, dest_path) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">digest: string, dest_path: string</span></p>
+      <p class="doc">Copy an entry out of the store to `dest_path`, verifying that the bytes hash back to `digest` before declaring success. The re-hash protects callers from a corrupted store entry quietly handing back the wrong content (filesystem bit-rot, an out-of-band tool that wrote something with a wrong name, etc.). `dest_path` is overwritten via atomic rename. Returns &quot;&quot; on success, error string on: - digest not in store - read failure - dest write failure - digest mismatch (corrupted entry)</p>
+    </div>
+    <div class="function" id="root_raw" data-name="root_raw">
+      <h3 class="function-name">root_raw <span class="kind">fn</span></h3>
+      <pre class="usage"><code>root_raw() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">Resolve the CAS root directory. Reads AETHER_CAS first; falls back to $HOME/.aether/cas. Always returns a non-empty string — callers don't have to handle a NULL root. Note that the directory may not yet exist; ensure_root_exists below creates it on demand.</p>
+    </div>
+    <div class="function" id="path_raw" data-name="path_raw">
+      <h3 class="function-name">path_raw <span class="kind">fn</span></h3>
+      <pre class="usage"><code>path_raw(digest) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">digest: string</span></p>
+      <p class="doc">Compose the CAS file path for a digest: &lt;root&gt;/&lt;digest&gt;. Pure function — does not touch the filesystem.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

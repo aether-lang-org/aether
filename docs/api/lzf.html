@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>lzf - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search lzf..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#max_compressed_size">max_compressed_size</a></li>
+    <li><a href="#try_compress">try_compress</a></li>
+    <li><a href="#get_compress_bytes">get_compress_bytes</a></li>
+    <li><a href="#get_compress_length">get_compress_length</a></li>
+    <li><a href="#release_compress">release_compress</a></li>
+    <li><a href="#try_decompress">try_decompress</a></li>
+    <li><a href="#get_decompress_bytes">get_decompress_bytes</a></li>
+    <li><a href="#get_decompress_length">get_decompress_length</a></li>
+    <li><a href="#release_decompress">release_decompress</a></li>
+    <li><a href="#compress">compress</a></li>
+    <li><a href="#decompress">decompress</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li class="active"><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>lzf</h1>
+    <p class="module-desc">std.lzf - One-shot LZF compression/decompression.</p>
+    <p class="import-line"><code>import std.lzf</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="max_compressed_size" data-name="max_compressed_size">
+      <h3 class="function-name">max_compressed_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>max_compressed_size(length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">length: int</span></p>
+    </div>
+    <div class="function" id="try_compress" data-name="try_compress">
+      <h3 class="function-name">try_compress <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_compress(data, length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+    </div>
+    <div class="function" id="get_compress_bytes" data-name="get_compress_bytes">
+      <h3 class="function-name">get_compress_bytes <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_compress_bytes() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="get_compress_length" data-name="get_compress_length">
+      <h3 class="function-name">get_compress_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_compress_length() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="release_compress" data-name="release_compress">
+      <h3 class="function-name">release_compress <span class="kind">extern</span></h3>
+      <pre class="usage"><code>release_compress()</code></pre>
+    </div>
+    <div class="function" id="try_decompress" data-name="try_decompress">
+      <h3 class="function-name">try_decompress <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_decompress(data, length, output_length) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int, output_length: int</span></p>
+    </div>
+    <div class="function" id="get_decompress_bytes" data-name="get_decompress_bytes">
+      <h3 class="function-name">get_decompress_bytes <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_decompress_bytes() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="get_decompress_length" data-name="get_decompress_length">
+      <h3 class="function-name">get_decompress_length <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_decompress_length() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="release_decompress" data-name="release_decompress">
+      <h3 class="function-name">release_decompress <span class="kind">extern</span></h3>
+      <pre class="usage"><code>release_decompress()</code></pre>
+    </div>
+    <div class="function" id="compress" data-name="compress">
+      <h3 class="function-name">compress <span class="kind">fn</span></h3>
+      <pre class="usage"><code>compress(data, length) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+    </div>
+    <div class="function" id="decompress" data-name="decompress">
+      <h3 class="function-name">decompress <span class="kind">fn</span></h3>
+      <pre class="usage"><code>decompress(data, length, output_length) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int, output_length: int</span></p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

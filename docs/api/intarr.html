@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>intarr - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search intarr..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#new">new</a></li>
+    <li><a href="#new_filled">new_filled</a></li>
+    <li><a href="#get">get</a></li>
+    <li><a href="#set">set</a></li>
+    <li><a href="#new_raw">new_raw</a></li>
+    <li><a href="#new_filled_raw">new_filled_raw</a></li>
+    <li><a href="#size">size</a></li>
+    <li><a href="#get_raw">get_raw</a></li>
+    <li><a href="#set_raw">set_raw</a></li>
+    <li><a href="#get_unchecked">get_unchecked</a></li>
+    <li><a href="#set_unchecked">set_unchecked</a></li>
+    <li><a href="#fill">fill</a></li>
+    <li><a href="#free">free</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li class="active"><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>intarr</h1>
+    <p class="module-desc">std.intarr - Fixed-size packed-int buffer (alias for std.collections) For DP tables, flat int-keyed lookup, and other hot paths where std.list's void*-boxed items cost an allocation per entry.</p>
+    <p class="import-line"><code>import std.intarr</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="new" data-name="new">
+      <h3 class="function-name">new <span class="kind">fn</span></h3>
+      <pre class="usage"><code>new(size) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">size: int</span></p>
+      <p class="doc">Allocate an IntArray of `size` elements, zero-initialised. Returns (ptr, &quot;&quot;) on success, (null, error) on failure.</p>
+    </div>
+    <div class="function" id="new_filled" data-name="new_filled">
+      <h3 class="function-name">new_filled <span class="kind">fn</span></h3>
+      <pre class="usage"><code>new_filled(size, init) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">size: int, init: int</span></p>
+      <p class="doc">Allocate and fill with `init` at every index.</p>
+    </div>
+    <div class="function" id="get" data-name="get">
+      <h3 class="function-name">get <span class="kind">fn</span></h3>
+      <pre class="usage"><code>get(arr, i) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, i: int</span></p>
+      <p class="doc">Bounds-checked read. Returns (value, &quot;&quot;) on success, (0, error) for null array or OOB index. Use the raw `intarr_get_raw` directly (imported above) when you don't need to tell absent apart from stored-zero — it's one fewer function call and one fewer branch.</p>
+    </div>
+    <div class="function" id="set" data-name="set">
+      <h3 class="function-name">set <span class="kind">fn</span></h3>
+      <pre class="usage"><code>set(arr, i, value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, i: int, value: int</span></p>
+      <p class="doc">Bounds-checked write. Returns &quot;&quot; on success, error for null array or OOB index. Use the raw `intarr_set_raw` directly in hot paths where a no-op-on-OOB is acceptable.</p>
+    </div>
+    <div class="function" id="new_raw" data-name="new_raw">
+      <h3 class="function-name">new_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>new_raw(size) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">size: int</span></p>
+      <p class="doc">Allocate an IntArray of `size` ints, zero-initialised. Returns null if `size` is negative or allocation fails.</p>
+    </div>
+    <div class="function" id="new_filled_raw" data-name="new_filled_raw">
+      <h3 class="function-name">new_filled_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>new_filled_raw(size, init) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">size: int, init: int</span></p>
+      <p class="doc">Allocate and fill every index with `init`.</p>
+    </div>
+    <div class="function" id="size" data-name="size">
+      <h3 class="function-name">size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>size(arr) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr</span></p>
+      <p class="doc">Number of elements. -1 if `arr` is null.</p>
+    </div>
+    <div class="function" id="get_raw" data-name="get_raw">
+      <h3 class="function-name">get_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_raw(arr, i) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, i: int</span></p>
+      <p class="doc">Read at `i`. Returns 0 if `arr` is null or `i` is out-of-range. Use `intarr.get` (below) to distinguish stored-zero from OOB.</p>
+    </div>
+    <div class="function" id="set_raw" data-name="set_raw">
+      <h3 class="function-name">set_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>set_raw(arr, i, value)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, i: int, value: int</span></p>
+      <p class="doc">Write `value` at `i`. No-op if `arr` is null or `i` is out-of-range. Use `intarr.set` (below) if you need an error on OOB.</p>
+    </div>
+    <div class="function" id="get_unchecked" data-name="get_unchecked">
+      <h3 class="function-name">get_unchecked <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_unchecked(arr, i) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, i: int</span></p>
+      <p class="doc">Hot-path variants — caller guarantees index is in [0, size). OOB access is undefined behaviour. Don't use from outside a tight loop.</p>
+    </div>
+    <div class="function" id="set_unchecked" data-name="set_unchecked">
+      <h3 class="function-name">set_unchecked <span class="kind">extern</span></h3>
+      <pre class="usage"><code>set_unchecked(arr, i, value)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, i: int, value: int</span></p>
+    </div>
+    <div class="function" id="fill" data-name="fill">
+      <h3 class="function-name">fill <span class="kind">extern</span></h3>
+      <pre class="usage"><code>fill(arr, value)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, value: int</span></p>
+      <p class="doc">Fill every element with `value`. Useful for resetting a DP table.</p>
+    </div>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>free(arr)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr</span></p>
+      <p class="doc">Release. Idempotent on null.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

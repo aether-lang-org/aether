@@ -13,133 +13,392 @@
     <p class="tagline">Standard Library</p>
   </div>
   <input type="text" id="search" placeholder="Search json..." onkeyup="searchModule()">
-  <h2>Functions</h2>
+  <h2>Exports</h2>
   <ul class="function-nav">
-    <li><a href="#json_parse_raw">json_parse_raw</a></li>
-    <li><a href="#json_stringify">json_stringify</a></li>
-    <li><a href="#json_free">json_free</a></li>
-    <li><a href="#json_type">json_type</a></li>
-    <li><a href="#json_is_null">json_is_null</a></li>
-    <li><a href="#json_get_bool">json_get_bool</a></li>
-    <li><a href="#json_get_number">json_get_number</a></li>
-    <li><a href="#json_get_int">json_get_int</a></li>
-    <li><a href="#json_get_string">json_get_string</a></li>
-    <li><a href="#json_object_get">json_object_get</a></li>
-    <li><a href="#json_object_set">json_object_set</a></li>
-    <li><a href="#json_object_has">json_object_has</a></li>
-    <li><a href="#json_array_get">json_array_get</a></li>
-    <li><a href="#json_array_add">json_array_add</a></li>
-    <li><a href="#json_array_size">json_array_size</a></li>
-    <li><a href="#json_create_null">json_create_null</a></li>
-    <li><a href="#json_create_bool">json_create_bool</a></li>
-    <li><a href="#json_create_number">json_create_number</a></li>
-    <li><a href="#json_create_string">json_create_string</a></li>
-    <li><a href="#json_create_array">json_create_array</a></li>
-    <li><a href="#json_create_object">json_create_object</a></li>
+    <li><a href="#parse_raw">parse_raw</a></li>
+    <li><a href="#last_error">last_error</a></li>
+    <li><a href="#stringify_raw">stringify_raw</a></li>
+    <li><a href="#free">free</a></li>
+    <li><a href="#type">type</a></li>
+    <li><a href="#is_null">is_null</a></li>
+    <li><a href="#get_bool">get_bool</a></li>
+    <li><a href="#get_number">get_number</a></li>
+    <li><a href="#get_int">get_int</a></li>
+    <li><a href="#get_string_raw">get_string_raw</a></li>
+    <li><a href="#object_get_raw">object_get_raw</a></li>
+    <li><a href="#object_set_raw">object_set_raw</a></li>
+    <li><a href="#object_has">object_has</a></li>
+    <li><a href="#object_size_raw">object_size_raw</a></li>
+    <li><a href="#object_key_at">object_key_at</a></li>
+    <li><a href="#object_value_at">object_value_at</a></li>
+    <li><a href="#array_get_raw">array_get_raw</a></li>
+    <li><a href="#array_add_raw">array_add_raw</a></li>
+    <li><a href="#array_size">array_size</a></li>
+    <li><a href="#create_null">create_null</a></li>
+    <li><a href="#create_bool">create_bool</a></li>
+    <li><a href="#create_number">create_number</a></li>
+    <li><a href="#create_int">create_int</a></li>
+    <li><a href="#create_string">create_string</a></li>
+    <li><a href="#create_array">create_array</a></li>
+    <li><a href="#create_object">create_object</a></li>
+    <li><a href="#parse">parse</a></li>
+    <li><a href="#stringify">stringify</a></li>
+    <li><a href="#get_string">get_string</a></li>
+    <li><a href="#object_get">object_get</a></li>
+    <li><a href="#object_set">object_set</a></li>
+    <li><a href="#object_size">object_size</a></li>
+    <li><a href="#object_entry">object_entry</a></li>
+    <li><a href="#array_get">array_get</a></li>
+    <li><a href="#array_add">array_add</a></li>
+    <li><a href="#obj">obj</a></li>
+    <li><a href="#arr">arr</a></li>
+    <li><a href="#str">str</a></li>
+    <li><a href="#num">num</a></li>
+    <li><a href="#from_int">from_int</a></li>
+    <li><a href="#boolean">boolean</a></li>
+    <li><a href="#null_value">null_value</a></li>
+    <li><a href="#set">set</a></li>
+    <li><a href="#push">push</a></li>
+    <li><a href="#encode">encode</a></li>
+    <li><a href="#parse_strict">parse_strict</a></li>
+    <li><a href="#last_error_kind">last_error_kind</a></li>
+    <li><a href="#last_error_line">last_error_line</a></li>
+    <li><a href="#last_error_col">last_error_col</a></li>
+    <li><a href="#KIND_OK">KIND_OK</a></li>
+    <li><a href="#KIND_PARSE_ERROR">KIND_PARSE_ERROR</a></li>
+    <li><a href="#KIND_OUT_OF_MEMORY">KIND_OUT_OF_MEMORY</a></li>
+    <li><a href="#KIND_INVALID_INPUT">KIND_INVALID_INPUT</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
   <ul class="module-list">
-    <li><a href="net.html">net</a></li>
-    <li><a href="io.html">io</a></li>
-    <li><a href="math.html">math</a></li>
-    <li class="active"><a href="json.html">json</a></li>
-    <li><a href="log.html">log</a></li>
-    <li><a href="os.html">os</a></li>
-    <li><a href="string.html">string</a></li>
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
     <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
     <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li class="active"><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
   </ul>
 </nav>
 <main class="content">
   <div class="module-header">
     <h1>json</h1>
-    <p class="module-desc">JSON parsing and serialization</p>
+    <p class="module-desc">std.json - JSON Module Import with: import std.json Parses and serializes JSON per RFC 8259.</p>
+    <p class="import-line"><code>import std.json</code></p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="json_parse_raw" data-name="json_parse_raw">
-      <h3 class="function-name">json_parse_raw</h3>
-      <pre class="usage"><code>json_parse_raw(json_str)</code></pre>
+    <div class="function" id="parse_raw" data-name="parse_raw">
+      <h3 class="function-name">parse_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>parse_raw(json_str) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">json_str: string</span></p>
+      <p class="doc">---- parsing and serialization (raw externs) ----</p>
     </div>
-    <div class="function" id="json_stringify" data-name="json_stringify">
-      <h3 class="function-name">json_stringify</h3>
-      <pre class="usage"><code>json_stringify(value)</code></pre>
+    <div class="function" id="last_error" data-name="last_error">
+      <h3 class="function-name">last_error <span class="kind">extern</span></h3>
+      <pre class="usage"><code>last_error() <span class="arrow">-&gt;</span> string</code></pre>
     </div>
-    <div class="function" id="json_free" data-name="json_free">
-      <h3 class="function-name">json_free</h3>
-      <pre class="usage"><code>json_free(value)</code></pre>
+    <div class="function" id="stringify_raw" data-name="stringify_raw">
+      <h3 class="function-name">stringify_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>stringify_raw(value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
     </div>
-    <div class="function" id="json_type" data-name="json_type">
-      <h3 class="function-name">json_type</h3>
-      <pre class="usage"><code>json_type(value)</code></pre>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>free(value)</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
     </div>
-    <div class="function" id="json_is_null" data-name="json_is_null">
-      <h3 class="function-name">json_is_null</h3>
-      <pre class="usage"><code>json_is_null(value)</code></pre>
+    <div class="function" id="type" data-name="type">
+      <h3 class="function-name">type <span class="kind">extern</span></h3>
+      <pre class="usage"><code>type(value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
+      <p class="doc">---- type introspection (infallible, no wrapper needed) ----</p>
     </div>
-    <div class="function" id="json_get_bool" data-name="json_get_bool">
-      <h3 class="function-name">json_get_bool</h3>
-      <pre class="usage"><code>json_get_bool(value)</code></pre>
+    <div class="function" id="is_null" data-name="is_null">
+      <h3 class="function-name">is_null <span class="kind">extern</span></h3>
+      <pre class="usage"><code>is_null(value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
     </div>
-    <div class="function" id="json_get_number" data-name="json_get_number">
-      <h3 class="function-name">json_get_number</h3>
-      <pre class="usage"><code>json_get_number(value)</code></pre>
+    <div class="function" id="get_bool" data-name="get_bool">
+      <h3 class="function-name">get_bool <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_bool(value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
+      <p class="doc">---- typed getters (infallible — sentinel 0/0.0 on wrong type) ----</p>
     </div>
-    <div class="function" id="json_get_int" data-name="json_get_int">
-      <h3 class="function-name">json_get_int</h3>
-      <pre class="usage"><code>json_get_int(value)</code></pre>
+    <div class="function" id="get_number" data-name="get_number">
+      <h3 class="function-name">get_number <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_number(value) <span class="arrow">-&gt;</span> float</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
     </div>
-    <div class="function" id="json_get_string" data-name="json_get_string">
-      <h3 class="function-name">json_get_string</h3>
-      <pre class="usage"><code>json_get_string(value)</code></pre>
+    <div class="function" id="get_int" data-name="get_int">
+      <h3 class="function-name">get_int <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_int(value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
     </div>
-    <div class="function" id="json_object_get" data-name="json_object_get">
-      <h3 class="function-name">json_object_get</h3>
-      <pre class="usage"><code>json_object_get(obj, key)</code></pre>
+    <div class="function" id="get_string_raw" data-name="get_string_raw">
+      <h3 class="function-name">get_string_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_string_raw(value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
     </div>
-    <div class="function" id="json_object_set" data-name="json_object_set">
-      <h3 class="function-name">json_object_set</h3>
-      <pre class="usage"><code>json_object_set(obj, key, value)</code></pre>
+    <div class="function" id="object_get_raw" data-name="object_get_raw">
+      <h3 class="function-name">object_get_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>object_get_raw(obj, key) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, key: string</span></p>
+      <p class="doc">---- object operations (raw externs) ----</p>
     </div>
-    <div class="function" id="json_object_has" data-name="json_object_has">
-      <h3 class="function-name">json_object_has</h3>
-      <pre class="usage"><code>json_object_has(obj, key)</code></pre>
+    <div class="function" id="object_set_raw" data-name="object_set_raw">
+      <h3 class="function-name">object_set_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>object_set_raw(obj, key, value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, key: string, value: ptr</span></p>
     </div>
-    <div class="function" id="json_array_get" data-name="json_array_get">
-      <h3 class="function-name">json_array_get</h3>
-      <pre class="usage"><code>json_array_get(arr, index)</code></pre>
+    <div class="function" id="object_has" data-name="object_has">
+      <h3 class="function-name">object_has <span class="kind">extern</span></h3>
+      <pre class="usage"><code>object_has(obj, key) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, key: string</span></p>
     </div>
-    <div class="function" id="json_array_add" data-name="json_array_add">
-      <h3 class="function-name">json_array_add</h3>
-      <pre class="usage"><code>json_array_add(arr, value)</code></pre>
+    <div class="function" id="object_size_raw" data-name="object_size_raw">
+      <h3 class="function-name">object_size_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>object_size_raw(obj) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr</span></p>
     </div>
-    <div class="function" id="json_array_size" data-name="json_array_size">
-      <h3 class="function-name">json_array_size</h3>
-      <pre class="usage"><code>json_array_size(arr)</code></pre>
+    <div class="function" id="object_key_at" data-name="object_key_at">
+      <h3 class="function-name">object_key_at <span class="kind">extern</span></h3>
+      <pre class="usage"><code>object_key_at(obj, i) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, i: int</span></p>
     </div>
-    <div class="function" id="json_create_null" data-name="json_create_null">
-      <h3 class="function-name">json_create_null</h3>
-      <pre class="usage"><code>json_create_null()</code></pre>
+    <div class="function" id="object_value_at" data-name="object_value_at">
+      <h3 class="function-name">object_value_at <span class="kind">extern</span></h3>
+      <pre class="usage"><code>object_value_at(obj, i) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, i: int</span></p>
     </div>
-    <div class="function" id="json_create_bool" data-name="json_create_bool">
-      <h3 class="function-name">json_create_bool</h3>
-      <pre class="usage"><code>json_create_bool(value)</code></pre>
+    <div class="function" id="array_get_raw" data-name="array_get_raw">
+      <h3 class="function-name">array_get_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>array_get_raw(arr, index) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, index: int</span></p>
+      <p class="doc">---- array operations (raw externs) ----</p>
     </div>
-    <div class="function" id="json_create_number" data-name="json_create_number">
-      <h3 class="function-name">json_create_number</h3>
-      <pre class="usage"><code>json_create_number(value)</code></pre>
+    <div class="function" id="array_add_raw" data-name="array_add_raw">
+      <h3 class="function-name">array_add_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>array_add_raw(arr, value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, value: ptr</span></p>
     </div>
-    <div class="function" id="json_create_string" data-name="json_create_string">
-      <h3 class="function-name">json_create_string</h3>
-      <pre class="usage"><code>json_create_string(value)</code></pre>
+    <div class="function" id="array_size" data-name="array_size">
+      <h3 class="function-name">array_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>array_size(arr) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr</span></p>
     </div>
-    <div class="function" id="json_create_array" data-name="json_create_array">
-      <h3 class="function-name">json_create_array</h3>
-      <pre class="usage"><code>json_create_array()</code></pre>
+    <div class="function" id="create_null" data-name="create_null">
+      <h3 class="function-name">create_null <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create_null() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">---- value creation (infallible — OOM treated as crash) ----</p>
     </div>
-    <div class="function" id="json_create_object" data-name="json_create_object">
-      <h3 class="function-name">json_create_object</h3>
-      <pre class="usage"><code>json_create_object()</code></pre>
+    <div class="function" id="create_bool" data-name="create_bool">
+      <h3 class="function-name">create_bool <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create_bool(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: int</span></p>
+    </div>
+    <div class="function" id="create_number" data-name="create_number">
+      <h3 class="function-name">create_number <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create_number(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: float</span></p>
+    </div>
+    <div class="function" id="create_int" data-name="create_int">
+      <h3 class="function-name">create_int <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create_int(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: long long</span></p>
+    </div>
+    <div class="function" id="create_string" data-name="create_string">
+      <h3 class="function-name">create_string <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create_string(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: string</span></p>
+    </div>
+    <div class="function" id="create_array" data-name="create_array">
+      <h3 class="function-name">create_array <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create_array() <span class="arrow">-&gt;</span> ptr</code></pre>
+    </div>
+    <div class="function" id="create_object" data-name="create_object">
+      <h3 class="function-name">create_object <span class="kind">extern</span></h3>
+      <pre class="usage"><code>create_object() <span class="arrow">-&gt;</span> ptr</code></pre>
+    </div>
+    <div class="function" id="parse" data-name="parse">
+      <h3 class="function-name">parse <span class="kind">fn</span></h3>
+      <pre class="usage"><code>parse(json_str) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">json_str: string</span></p>
+      <p class="doc">Parse a JSON string. Returns (value, &quot;&quot;) on success, (null, error) on failure. The error is a position-qualified message like &quot;expected ':' at 3:17&quot;. Caller owns the returned value and must free with json.free. Heap-classification shape: position 1 (the error message) is heap on both return paths so the destructure wrapper at the call site fires uniformly. The failure path uses string_concat(json_last_error(), &quot;&quot;) for an owned copy; the success path uses string_concat(&quot;&quot;, &quot;&quot;) for a (tiny) empty heap string. Without both paths returning heap, function_def_returns_heap_at's AND-fold would mark position 1 non-heap and every destructure of `_, err = json.parse(...)` would leak the success-path &quot;&quot; allocation — except the success &quot;&quot; was already a literal so there'd be nothing TO leak, only an over-free risk on the failure path. The uniform-heap shape sidesteps the classifier's mixed-path conservatism. See # further-bug-fix4 for the wider context.</p>
+    </div>
+    <div class="function" id="stringify" data-name="stringify">
+      <h3 class="function-name">stringify <span class="kind">fn</span></h3>
+      <pre class="usage"><code>stringify(value) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
+      <p class="doc">Serialize a JSON value to a compact string. Returns (string, &quot;&quot;) on success, (&quot;&quot;, error) on failure. The returned string is a refcounted Aether string — no manual free required. Uniform-heap shape on both positions: see `parse` for the rationale.</p>
+    </div>
+    <div class="function" id="get_string" data-name="get_string">
+      <h3 class="function-name">get_string <span class="kind">fn</span></h3>
+      <pre class="usage"><code>get_string(value) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
+      <p class="doc">Read the string payload out of a JSON value. Returns (string, &quot;&quot;) on success, (&quot;&quot;, error) if `value` is not a JSON_STRING. The returned string is an owned copy — safe to hold past a json.free of the value. Uniform-heap shape on both positions. This is the high-volume avn hot-path identified in `further-bug-fix4.md`: every `b64, _ = json.get_string(jcontent)` in a commit loop is a ~133 KB allocation per call. Pre-refactor the failure-path literal `&quot;&quot;` at position 0 made `function_def_returns_heap_at` AND-fold to non-heap, so the destructure wrapper at the call site never set `_heap_b64 = 1` and the function-exit defer-free never ran. avn's 5000-commit bench retained ~666 MB just from this site.</p>
+    </div>
+    <div class="function" id="object_get" data-name="object_get">
+      <h3 class="function-name">object_get <span class="kind">fn</span></h3>
+      <pre class="usage"><code>object_get(obj, key) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, key: string</span></p>
+      <p class="doc">Look up `key` in a JSON object. - (value, &quot;&quot;)             : key present - (null, &quot;&quot;)              : key absent (not an error — use json.object_has to disambiguate) - (null, &quot;not an object&quot;) : `obj` is not a JSON_OBJECT The returned value is borrowed from `obj` — don't json.free it, and don't use it after `obj` is freed.</p>
+    </div>
+    <div class="function" id="object_set" data-name="object_set">
+      <h3 class="function-name">object_set <span class="kind">fn</span></h3>
+      <pre class="usage"><code>object_set(obj, key, value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, key: string, value: ptr</span></p>
+      <p class="doc">Insert or update a key-value pair on a JSON object. Returns &quot;&quot; on success, error if `obj` is not a JSON_OBJECT. The object takes ownership of `value` — don't json.free it separately.</p>
+    </div>
+    <div class="function" id="object_size" data-name="object_size">
+      <h3 class="function-name">object_size <span class="kind">fn</span></h3>
+      <pre class="usage"><code>object_size(obj) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr</span></p>
+      <p class="doc">Number of entries in a JSON object. Returns 0 for an empty object, -1 if `obj` is not a JSON_OBJECT.</p>
+    </div>
+    <div class="function" id="object_entry" data-name="object_entry">
+      <h3 class="function-name">object_entry <span class="kind">fn</span></h3>
+      <pre class="usage"><code>object_entry(obj, i) <span class="arrow">-&gt;</span> (string, ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, i: int</span></p>
+      <p class="doc">Read the (key, value) pair at index `i` in iteration order. Keys are yielded in insertion order — the order they appeared in parsed JSON input, or the order `object_set` was called for a built object. - (key, value, &quot;&quot;)                  : index in range - (&quot;&quot;, null, &quot;index out of range&quot;)  : i &lt; 0 or i &gt;= object_size(obj) - (&quot;&quot;, null, &quot;not an object&quot;)       : `obj` is not a JSON_OBJECT The key is an owned string; the value is borrowed from `obj` and must not be json.free'd separately, nor used after `obj` is freed. Mutating `obj` during iteration is not supported: order becomes unpredictable and entries may be skipped or revisited. Uniform-heap shape on positions 0 (key) and 2 (error message): all return paths use string_concat so the per-position structural analyzer marks both as heap. The success path's `owned_key` is the big one — iterating a large object via object_entry without this would leak a key allocation per iteration. See `parse` for the wider rationale.</p>
+    </div>
+    <div class="function" id="array_get" data-name="array_get">
+      <h3 class="function-name">array_get <span class="kind">fn</span></h3>
+      <pre class="usage"><code>array_get(arr, index) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, index: int</span></p>
+      <p class="doc">Index into a JSON array. - (value, &quot;&quot;)             : index in range - (null, &quot;&quot;)              : index out of range (not an error) - (null, &quot;not an array&quot;)  : `arr` is not a JSON_ARRAY The returned value is borrowed from `arr`.</p>
+    </div>
+    <div class="function" id="array_add" data-name="array_add">
+      <h3 class="function-name">array_add <span class="kind">fn</span></h3>
+      <pre class="usage"><code>array_add(arr, value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, value: ptr</span></p>
+      <p class="doc">Append a value to a JSON array. Returns &quot;&quot; on success, error if `arr` is not a JSON_ARRAY. The array takes ownership of `value`.</p>
+    </div>
+    <div class="function" id="obj" data-name="obj">
+      <h3 class="function-name">obj <span class="kind">fn</span></h3>
+      <pre class="usage"><code>obj() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">New empty JSON object / array.</p>
+    </div>
+    <div class="function" id="arr" data-name="arr">
+      <h3 class="function-name">arr <span class="kind">fn</span></h3>
+      <pre class="usage"><code>arr() <span class="arrow">-&gt;</span> ptr</code></pre>
+    </div>
+    <div class="function" id="str" data-name="str">
+      <h3 class="function-name">str <span class="kind">fn</span></h3>
+      <pre class="usage"><code>str(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: string</span></p>
+      <p class="doc">Scalar value constructors. `num` takes a float (JSON has one numeric type); pass `1.0` etc. `from_int` is the integer-flavoured sibling — serialised as a bare integer (no decimal point, no scientific notation, full int64 range), the right shape for byte-counts / IDs / totals where the consumer expects a plain integer. `boolean` takes 0/1; `null_value` is JSON null.</p>
+    </div>
+    <div class="function" id="num" data-name="num">
+      <h3 class="function-name">num <span class="kind">fn</span></h3>
+      <pre class="usage"><code>num(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: float</span></p>
+    </div>
+    <div class="function" id="from_int" data-name="from_int">
+      <h3 class="function-name">from_int <span class="kind">fn</span></h3>
+      <pre class="usage"><code>from_int(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: long</span></p>
+    </div>
+    <div class="function" id="boolean" data-name="boolean">
+      <h3 class="function-name">boolean <span class="kind">fn</span></h3>
+      <pre class="usage"><code>boolean(value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">value: int</span></p>
+    </div>
+    <div class="function" id="null_value" data-name="null_value">
+      <h3 class="function-name">null_value <span class="kind">fn</span></h3>
+      <pre class="usage"><code>null_value() <span class="arrow">-&gt;</span> ptr</code></pre>
+    </div>
+    <div class="function" id="set" data-name="set">
+      <h3 class="function-name">set <span class="kind">fn</span></h3>
+      <pre class="usage"><code>set(obj, key, value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">obj: ptr, key: string, value: ptr</span></p>
+      <p class="doc">Set a key on an object / append to an array. Aliases for `object_set` / `array_add` (same ownership + error contract): &quot;&quot; on success, an error string if the target is the wrong kind (and the orphaned value is reclaimed so it can't leak).</p>
+    </div>
+    <div class="function" id="push" data-name="push">
+      <h3 class="function-name">push <span class="kind">fn</span></h3>
+      <pre class="usage"><code>push(arr, value) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, value: ptr</span></p>
+    </div>
+    <div class="function" id="encode" data-name="encode">
+      <h3 class="function-name">encode <span class="kind">fn</span></h3>
+      <pre class="usage"><code>encode(value) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
+      <p class="doc">Encode a JSON value tree to a compact string with all escaping handled internally. Returns (string, &quot;&quot;) on success, (&quot;&quot;, error) on failure — an alias for `stringify`.</p>
+    </div>
+    <div class="function" id="parse_strict" data-name="parse_strict">
+      <h3 class="function-name">parse_strict <span class="kind">fn</span></h3>
+      <pre class="usage"><code>parse_strict(json_str) <span class="arrow">-&gt;</span> (ptr, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">json_str: string</span></p>
+      <p class="doc">Issue #392 — structured-error variant of `parse`. Returns the canonical (value, kind, message) tuple: on success: (value, KIND_OK, &quot;&quot;) on failure: (null,  KIND_*, &quot;&lt;reason&gt; at &lt;line&gt;:&lt;col&gt;&quot;) `kind` is one of the KIND_* constants exported from this module — switch on it to discriminate between syntax errors, OOM, and invalid-input failures without parsing the human-readable message. Use `last_error_line` / `last_error_col` to pull the position programmatically (the message also carries it as text, but the accessors avoid a regex).</p>
+    </div>
+    <div class="function" id="last_error_kind" data-name="last_error_kind">
+      <h3 class="function-name">last_error_kind <span class="kind">fn</span></h3>
+      <pre class="usage"><code>last_error_kind() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Programmatic accessors for the most recent parse failure on this thread (issue #392). Read these AFTER a `parse` / `parse_strict` call returned a failure; they're undefined after a successful parse. The line/col are 1-based and match the values embedded in the error message.</p>
+    </div>
+    <div class="function" id="last_error_line" data-name="last_error_line">
+      <h3 class="function-name">last_error_line <span class="kind">fn</span></h3>
+      <pre class="usage"><code>last_error_line() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="last_error_col" data-name="last_error_col">
+      <h3 class="function-name">last_error_col <span class="kind">fn</span></h3>
+      <pre class="usage"><code>last_error_col() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="KIND_OK" data-name="KIND_OK">
+      <h3 class="function-name">KIND_OK <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_OK = 0</code></pre>
+      <p class="doc">---- Structured-error pilot (issue #392) ---- A non-breaking extension of `json.parse` that returns the canonical (value, kind, message) tuple from the std.fs pilot. Existing `parse` callers (with the (value, err) shape) keep working unchanged; new callers that want to switch on the failure reason without parsing English use `parse_strict`. Kinds match std.fs's where applicable so callers can mix the two surfaces in the same switch.</p>
+    </div>
+    <div class="function" id="KIND_PARSE_ERROR" data-name="KIND_PARSE_ERROR">
+      <h3 class="function-name">KIND_PARSE_ERROR <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_PARSE_ERROR = 1</code></pre>
+    </div>
+    <div class="function" id="KIND_OUT_OF_MEMORY" data-name="KIND_OUT_OF_MEMORY">
+      <h3 class="function-name">KIND_OUT_OF_MEMORY <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_OUT_OF_MEMORY = 2</code></pre>
+    </div>
+    <div class="function" id="KIND_INVALID_INPUT" data-name="KIND_INVALID_INPUT">
+      <h3 class="function-name">KIND_INVALID_INPUT <span class="kind">const</span></h3>
+      <pre class="usage"><code>KIND_INVALID_INPUT = 3</code></pre>
     </div>
   </div>
 </main>

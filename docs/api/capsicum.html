@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>capsicum - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search capsicum..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#CAP_OK">CAP_OK</a></li>
+    <li><a href="#CAP_ERR">CAP_ERR</a></li>
+    <li><a href="#CAP_UNSUPPORTED">CAP_UNSUPPORTED</a></li>
+    <li><a href="#aether_capsicum_available">aether_capsicum_available</a></li>
+    <li><a href="#aether_capsicum_enter">aether_capsicum_enter</a></li>
+    <li><a href="#aether_capsicum_in_mode">aether_capsicum_in_mode</a></li>
+    <li><a href="#aether_capsicum_rights_limit">aether_capsicum_rights_limit</a></li>
+    <li><a href="#aether_capsicum_fcntls_limit">aether_capsicum_fcntls_limit</a></li>
+    <li><a href="#available">available</a></li>
+    <li><a href="#enter">enter</a></li>
+    <li><a href="#in_mode">in_mode</a></li>
+    <li><a href="#rights_limit">rights_limit</a></li>
+    <li><a href="#fcntls_limit">fcntls_limit</a></li>
+    <li><a href="#R_READ">R_READ</a></li>
+    <li><a href="#R_WRITE">R_WRITE</a></li>
+    <li><a href="#R_SEEK">R_SEEK</a></li>
+    <li><a href="#R_FSTAT">R_FSTAT</a></li>
+    <li><a href="#R_FTRUNCATE">R_FTRUNCATE</a></li>
+    <li><a href="#R_FSYNC">R_FSYNC</a></li>
+    <li><a href="#R_MMAP">R_MMAP</a></li>
+    <li><a href="#R_ACCEPT">R_ACCEPT</a></li>
+    <li><a href="#R_CONNECT">R_CONNECT</a></li>
+    <li><a href="#R_BIND">R_BIND</a></li>
+    <li><a href="#R_LISTEN">R_LISTEN</a></li>
+    <li><a href="#R_RECV">R_RECV</a></li>
+    <li><a href="#R_SEND">R_SEND</a></li>
+    <li><a href="#R_EVENT">R_EVENT</a></li>
+    <li><a href="#R_IOCTL">R_IOCTL</a></li>
+    <li><a href="#R_FCNTL">R_FCNTL</a></li>
+    <li><a href="#F_GETFL">F_GETFL</a></li>
+    <li><a href="#F_SETFL">F_SETFL</a></li>
+    <li><a href="#F_GETOWN">F_GETOWN</a></li>
+    <li><a href="#F_SETOWN">F_SETOWN</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li class="active"><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>capsicum</h1>
+    <p class="module-desc">std.capsicum — FreeBSD Capsicum capability-mode bindings.</p>
+    <p class="import-line"><code>import std.capsicum</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="CAP_OK" data-name="CAP_OK">
+      <h3 class="function-name">CAP_OK <span class="kind">const</span></h3>
+      <pre class="usage"><code>CAP_OK = 0</code></pre>
+    </div>
+    <div class="function" id="CAP_ERR" data-name="CAP_ERR">
+      <h3 class="function-name">CAP_ERR <span class="kind">const</span></h3>
+      <pre class="usage"><code>CAP_ERR = -1</code></pre>
+    </div>
+    <div class="function" id="CAP_UNSUPPORTED" data-name="CAP_UNSUPPORTED">
+      <h3 class="function-name">CAP_UNSUPPORTED <span class="kind">const</span></h3>
+      <pre class="usage"><code>CAP_UNSUPPORTED = -2</code></pre>
+    </div>
+    <div class="function" id="aether_capsicum_available" data-name="aether_capsicum_available">
+      <h3 class="function-name">aether_capsicum_available <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_capsicum_available() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">1 if Capsicum is usable in this process, 0 otherwise.</p>
+    </div>
+    <div class="function" id="aether_capsicum_enter" data-name="aether_capsicum_enter">
+      <h3 class="function-name">aether_capsicum_enter <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_capsicum_enter() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Enter capability mode. Irreversible. Returns CAP_OK / CAP_ERR / CAP_UNSUPPORTED.</p>
+    </div>
+    <div class="function" id="aether_capsicum_in_mode" data-name="aether_capsicum_in_mode">
+      <h3 class="function-name">aether_capsicum_in_mode <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_capsicum_in_mode() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">1 if already in capability mode, 0 if not, CAP_UNSUPPORTED off FreeBSD.</p>
+    </div>
+    <div class="function" id="aether_capsicum_rights_limit" data-name="aether_capsicum_rights_limit">
+      <h3 class="function-name">aether_capsicum_rights_limit <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_capsicum_rights_limit(fd, rights_mask) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, rights_mask: int</span></p>
+      <p class="doc">Limit `fd` to the rights in `rights_mask` (OR of R_* values). Rights only ever narrow. Returns CAP_OK / CAP_ERR / CAP_UNSUPPORTED.</p>
+    </div>
+    <div class="function" id="aether_capsicum_fcntls_limit" data-name="aether_capsicum_fcntls_limit">
+      <h3 class="function-name">aether_capsicum_fcntls_limit <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_capsicum_fcntls_limit(fd, fcntl_mask) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, fcntl_mask: int</span></p>
+      <p class="doc">Limit which fcntl(2) commands `fd` permits (OR of F_* values).</p>
+    </div>
+    <div class="function" id="available" data-name="available">
+      <h3 class="function-name">available <span class="kind">fn</span></h3>
+      <pre class="usage"><code>available() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Is Capsicum enforcement available right now?</p>
+    </div>
+    <div class="function" id="enter" data-name="enter">
+      <h3 class="function-name">enter <span class="kind">fn</span></h3>
+      <pre class="usage"><code>enter() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Enter capability mode — irreversible, inherited by children.</p>
+    </div>
+    <div class="function" id="in_mode" data-name="in_mode">
+      <h3 class="function-name">in_mode <span class="kind">fn</span></h3>
+      <pre class="usage"><code>in_mode() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Is the current process already sandboxed by Capsicum?</p>
+    </div>
+    <div class="function" id="rights_limit" data-name="rights_limit">
+      <h3 class="function-name">rights_limit <span class="kind">fn</span></h3>
+      <pre class="usage"><code>rights_limit(fd, rights_mask) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, rights_mask: int</span></p>
+      <p class="doc">Narrow an fd to `rights_mask`.</p>
+    </div>
+    <div class="function" id="fcntls_limit" data-name="fcntls_limit">
+      <h3 class="function-name">fcntls_limit <span class="kind">fn</span></h3>
+      <pre class="usage"><code>fcntls_limit(fd, fcntl_mask) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fd: int, fcntl_mask: int</span></p>
+      <p class="doc">Narrow the fcntl commands allowed on an fd.</p>
+    </div>
+    <div class="function" id="R_READ" data-name="R_READ">
+      <h3 class="function-name">R_READ <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_READ = 0x0001</code></pre>
+    </div>
+    <div class="function" id="R_WRITE" data-name="R_WRITE">
+      <h3 class="function-name">R_WRITE <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_WRITE = 0x0002</code></pre>
+    </div>
+    <div class="function" id="R_SEEK" data-name="R_SEEK">
+      <h3 class="function-name">R_SEEK <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_SEEK = 0x0004</code></pre>
+    </div>
+    <div class="function" id="R_FSTAT" data-name="R_FSTAT">
+      <h3 class="function-name">R_FSTAT <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_FSTAT = 0x0008</code></pre>
+    </div>
+    <div class="function" id="R_FTRUNCATE" data-name="R_FTRUNCATE">
+      <h3 class="function-name">R_FTRUNCATE <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_FTRUNCATE = 0x0010</code></pre>
+    </div>
+    <div class="function" id="R_FSYNC" data-name="R_FSYNC">
+      <h3 class="function-name">R_FSYNC <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_FSYNC = 0x0020</code></pre>
+    </div>
+    <div class="function" id="R_MMAP" data-name="R_MMAP">
+      <h3 class="function-name">R_MMAP <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_MMAP = 0x0040</code></pre>
+    </div>
+    <div class="function" id="R_ACCEPT" data-name="R_ACCEPT">
+      <h3 class="function-name">R_ACCEPT <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_ACCEPT = 0x0080</code></pre>
+    </div>
+    <div class="function" id="R_CONNECT" data-name="R_CONNECT">
+      <h3 class="function-name">R_CONNECT <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_CONNECT = 0x0100</code></pre>
+    </div>
+    <div class="function" id="R_BIND" data-name="R_BIND">
+      <h3 class="function-name">R_BIND <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_BIND = 0x0200</code></pre>
+    </div>
+    <div class="function" id="R_LISTEN" data-name="R_LISTEN">
+      <h3 class="function-name">R_LISTEN <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_LISTEN = 0x0400</code></pre>
+    </div>
+    <div class="function" id="R_RECV" data-name="R_RECV">
+      <h3 class="function-name">R_RECV <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_RECV = 0x0800</code></pre>
+    </div>
+    <div class="function" id="R_SEND" data-name="R_SEND">
+      <h3 class="function-name">R_SEND <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_SEND = 0x1000</code></pre>
+    </div>
+    <div class="function" id="R_EVENT" data-name="R_EVENT">
+      <h3 class="function-name">R_EVENT <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_EVENT = 0x2000</code></pre>
+    </div>
+    <div class="function" id="R_IOCTL" data-name="R_IOCTL">
+      <h3 class="function-name">R_IOCTL <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_IOCTL = 0x4000</code></pre>
+    </div>
+    <div class="function" id="R_FCNTL" data-name="R_FCNTL">
+      <h3 class="function-name">R_FCNTL <span class="kind">const</span></h3>
+      <pre class="usage"><code>R_FCNTL = 0x8000</code></pre>
+    </div>
+    <div class="function" id="F_GETFL" data-name="F_GETFL">
+      <h3 class="function-name">F_GETFL <span class="kind">const</span></h3>
+      <pre class="usage"><code>F_GETFL = 0x01</code></pre>
+    </div>
+    <div class="function" id="F_SETFL" data-name="F_SETFL">
+      <h3 class="function-name">F_SETFL <span class="kind">const</span></h3>
+      <pre class="usage"><code>F_SETFL = 0x02</code></pre>
+    </div>
+    <div class="function" id="F_GETOWN" data-name="F_GETOWN">
+      <h3 class="function-name">F_GETOWN <span class="kind">const</span></h3>
+      <pre class="usage"><code>F_GETOWN = 0x04</code></pre>
+    </div>
+    <div class="function" id="F_SETOWN" data-name="F_SETOWN">
+      <h3 class="function-name">F_SETOWN <span class="kind">const</span></h3>
+      <pre class="usage"><code>F_SETOWN = 0x08</code></pre>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

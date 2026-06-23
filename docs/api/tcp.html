@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tcp - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search tcp..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#connect_raw">connect_raw</a></li>
+    <li><a href="#send_raw">send_raw</a></li>
+    <li><a href="#receive_raw">receive_raw</a></li>
+    <li><a href="#close">close</a></li>
+    <li><a href="#listen_raw">listen_raw</a></li>
+    <li><a href="#accept_raw">accept_raw</a></li>
+    <li><a href="#server_close">server_close</a></li>
+    <li><a href="#connect">connect</a></li>
+    <li><a href="#write">write</a></li>
+    <li><a href="#read">read</a></li>
+    <li><a href="#listen">listen</a></li>
+    <li><a href="#accept">accept</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li class="active"><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>tcp</h1>
+    <p class="module-desc">std.tcp - TCP Socket Operations (alias for std.net) Raw externs end in `_raw` and return NULL/int in C-style.</p>
+    <p class="import-line"><code>import std.tcp</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="connect_raw" data-name="connect_raw">
+      <h3 class="function-name">connect_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>connect_raw(host, port) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">host: string, port: int</span></p>
+      <p class="doc">Raw externs - escape hatch</p>
+    </div>
+    <div class="function" id="send_raw" data-name="send_raw">
+      <h3 class="function-name">send_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>send_raw(sock, data) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">sock: ptr, data: string</span></p>
+    </div>
+    <div class="function" id="receive_raw" data-name="receive_raw">
+      <h3 class="function-name">receive_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>receive_raw(sock, max_bytes) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">sock: ptr, max_bytes: int</span></p>
+    </div>
+    <div class="function" id="close" data-name="close">
+      <h3 class="function-name">close <span class="kind">extern</span></h3>
+      <pre class="usage"><code>close(sock) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">sock: ptr</span></p>
+    </div>
+    <div class="function" id="listen_raw" data-name="listen_raw">
+      <h3 class="function-name">listen_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>listen_raw(port) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">port: int</span></p>
+    </div>
+    <div class="function" id="accept_raw" data-name="accept_raw">
+      <h3 class="function-name">accept_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>accept_raw(server) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">server: ptr</span></p>
+    </div>
+    <div class="function" id="server_close" data-name="server_close">
+      <h3 class="function-name">server_close <span class="kind">extern</span></h3>
+      <pre class="usage"><code>server_close(server) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">server: ptr</span></p>
+    </div>
+    <div class="function" id="connect" data-name="connect">
+      <h3 class="function-name">connect <span class="kind">fn</span></h3>
+      <pre class="usage"><code>connect(host, port) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">host: string, port: int</span></p>
+      <p class="doc">Connect to host:port. Returns (socket, &quot;&quot;) on success, (null, error) on failure. Caller must tcp.close the returned socket.</p>
+    </div>
+    <div class="function" id="write" data-name="write">
+      <h3 class="function-name">write <span class="kind">fn</span></h3>
+      <pre class="usage"><code>write(sock, data) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">sock: ptr, data: string</span></p>
+      <p class="doc">Write data to a socket. Returns (bytes_sent, &quot;&quot;) on success, (0, error) on failure. Note: named `write`/`read` (not `send`/`receive`) because `send` and `receive` are reserved actor keywords in Aether. The `tcp.send_raw` extern is still available under the old name for direct use.</p>
+    </div>
+    <div class="function" id="read" data-name="read">
+      <h3 class="function-name">read <span class="kind">fn</span></h3>
+      <pre class="usage"><code>read(sock, max_bytes) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <p class="signature"><span class="sig-params">sock: ptr, max_bytes: int</span></p>
+      <p class="doc">Read up to max_bytes from a socket. Returns (data, &quot;&quot;) on success, (&quot;&quot;, error) on transport failure or connection close.</p>
+    </div>
+    <div class="function" id="listen" data-name="listen">
+      <h3 class="function-name">listen <span class="kind">fn</span></h3>
+      <pre class="usage"><code>listen(port) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">port: int</span></p>
+      <p class="doc">Listen on a port. Returns (server, &quot;&quot;) on success, (null, error) on failure. Caller must tcp.server_close the returned server.</p>
+    </div>
+    <div class="function" id="accept" data-name="accept">
+      <h3 class="function-name">accept <span class="kind">fn</span></h3>
+      <pre class="usage"><code>accept(server) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">server: ptr</span></p>
+      <p class="doc">Accept an incoming connection. Returns (socket, &quot;&quot;) on success, (null, error) on failure or shutdown.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

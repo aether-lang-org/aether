@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>regex - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search regex..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_regex_compile">aether_regex_compile</a></li>
+    <li><a href="#aether_regex_free">aether_regex_free</a></li>
+    <li><a href="#aether_regex_matches">aether_regex_matches</a></li>
+    <li><a href="#aether_regex_captures">aether_regex_captures</a></li>
+    <li><a href="#aether_regex_captures_count">aether_regex_captures_count</a></li>
+    <li><a href="#aether_regex_captures_get">aether_regex_captures_get</a></li>
+    <li><a href="#aether_regex_captures_start">aether_regex_captures_start</a></li>
+    <li><a href="#aether_regex_captures_end">aether_regex_captures_end</a></li>
+    <li><a href="#aether_regex_captures_free">aether_regex_captures_free</a></li>
+    <li><a href="#aether_regex_find_all">aether_regex_find_all</a></li>
+    <li><a href="#aether_regex_find_all_count">aether_regex_find_all_count</a></li>
+    <li><a href="#aether_regex_find_all_start">aether_regex_find_all_start</a></li>
+    <li><a href="#aether_regex_find_all_end">aether_regex_find_all_end</a></li>
+    <li><a href="#aether_regex_find_all_free">aether_regex_find_all_free</a></li>
+    <li><a href="#aether_regex_replace">aether_regex_replace</a></li>
+    <li><a href="#aether_regex_replace_all">aether_regex_replace_all</a></li>
+    <li><a href="#aether_regex_last_error">aether_regex_last_error</a></li>
+    <li><a href="#aether_regex_clear_last_error">aether_regex_clear_last_error</a></li>
+    <li><a href="#compile">compile</a></li>
+    <li><a href="#compile_flags">compile_flags</a></li>
+    <li><a href="#free">free</a></li>
+    <li><a href="#last_error">last_error</a></li>
+    <li><a href="#clear_last_error">clear_last_error</a></li>
+    <li><a href="#matches">matches</a></li>
+    <li><a href="#find">find</a></li>
+    <li><a href="#captures">captures</a></li>
+    <li><a href="#capture_count">capture_count</a></li>
+    <li><a href="#capture">capture</a></li>
+    <li><a href="#capture_start">capture_start</a></li>
+    <li><a href="#capture_end">capture_end</a></li>
+    <li><a href="#captures_free">captures_free</a></li>
+    <li><a href="#find_all">find_all</a></li>
+    <li><a href="#find_all_count">find_all_count</a></li>
+    <li><a href="#find_all_start">find_all_start</a></li>
+    <li><a href="#find_all_end">find_all_end</a></li>
+    <li><a href="#find_all_free">find_all_free</a></li>
+    <li><a href="#replace">replace</a></li>
+    <li><a href="#replace_all">replace_all</a></li>
+    <li><a href="#matches_lit">matches_lit</a></li>
+    <li><a href="#find_lit">find_lit</a></li>
+    <li><a href="#FLAG_CASELESS">FLAG_CASELESS</a></li>
+    <li><a href="#FLAG_MULTILINE">FLAG_MULTILINE</a></li>
+    <li><a href="#FLAG_DOTALL">FLAG_DOTALL</a></li>
+    <li><a href="#FLAG_EXTENDED">FLAG_EXTENDED</a></li>
+    <li><a href="#FLAG_UNGREEDY">FLAG_UNGREEDY</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li class="active"><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>regex</h1>
+    <p class="module-desc">std.regex — Perl-compatible regular expressions (PCRE2-backed).</p>
+    <p class="import-line"><code>import std.regex</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_regex_compile" data-name="aether_regex_compile">
+      <h3 class="function-name">aether_regex_compile <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_compile(pattern, flags) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string, flags: int</span></p>
+    </div>
+    <div class="function" id="aether_regex_free" data-name="aether_regex_free">
+      <h3 class="function-name">aether_regex_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_free(re)</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr</span></p>
+    </div>
+    <div class="function" id="aether_regex_matches" data-name="aether_regex_matches">
+      <h3 class="function-name">aether_regex_matches <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_matches(re, s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string</span></p>
+    </div>
+    <div class="function" id="aether_regex_captures" data-name="aether_regex_captures">
+      <h3 class="function-name">aether_regex_captures <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_captures(re, s) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string</span></p>
+    </div>
+    <div class="function" id="aether_regex_captures_count" data-name="aether_regex_captures_count">
+      <h3 class="function-name">aether_regex_captures_count <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_captures_count(caps) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr</span></p>
+    </div>
+    <div class="function" id="aether_regex_captures_get" data-name="aether_regex_captures_get">
+      <h3 class="function-name">aether_regex_captures_get <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_captures_get(caps, index) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="aether_regex_captures_start" data-name="aether_regex_captures_start">
+      <h3 class="function-name">aether_regex_captures_start <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_captures_start(caps, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="aether_regex_captures_end" data-name="aether_regex_captures_end">
+      <h3 class="function-name">aether_regex_captures_end <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_captures_end(caps, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="aether_regex_captures_free" data-name="aether_regex_captures_free">
+      <h3 class="function-name">aether_regex_captures_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_captures_free(caps)</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr</span></p>
+    </div>
+    <div class="function" id="aether_regex_find_all" data-name="aether_regex_find_all">
+      <h3 class="function-name">aether_regex_find_all <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_find_all(re, s) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string</span></p>
+    </div>
+    <div class="function" id="aether_regex_find_all_count" data-name="aether_regex_find_all_count">
+      <h3 class="function-name">aether_regex_find_all_count <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_find_all_count(fa) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fa: ptr</span></p>
+    </div>
+    <div class="function" id="aether_regex_find_all_start" data-name="aether_regex_find_all_start">
+      <h3 class="function-name">aether_regex_find_all_start <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_find_all_start(fa, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fa: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="aether_regex_find_all_end" data-name="aether_regex_find_all_end">
+      <h3 class="function-name">aether_regex_find_all_end <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_find_all_end(fa, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fa: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="aether_regex_find_all_free" data-name="aether_regex_find_all_free">
+      <h3 class="function-name">aether_regex_find_all_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_find_all_free(fa)</code></pre>
+      <p class="signature"><span class="sig-params">fa: ptr</span></p>
+    </div>
+    <div class="function" id="aether_regex_replace" data-name="aether_regex_replace">
+      <h3 class="function-name">aether_regex_replace <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_replace(re, s, repl) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string, repl: string</span></p>
+    </div>
+    <div class="function" id="aether_regex_replace_all" data-name="aether_regex_replace_all">
+      <h3 class="function-name">aether_regex_replace_all <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_replace_all(re, s, repl) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string, repl: string</span></p>
+    </div>
+    <div class="function" id="aether_regex_last_error" data-name="aether_regex_last_error">
+      <h3 class="function-name">aether_regex_last_error <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_last_error() <span class="arrow">-&gt;</span> string</code></pre>
+    </div>
+    <div class="function" id="aether_regex_clear_last_error" data-name="aether_regex_clear_last_error">
+      <h3 class="function-name">aether_regex_clear_last_error <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_regex_clear_last_error()</code></pre>
+    </div>
+    <div class="function" id="compile" data-name="compile">
+      <h3 class="function-name">compile <span class="kind">fn</span></h3>
+      <pre class="usage"><code>compile(pattern) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string</span></p>
+      <p class="doc">Compile a pattern. Returns (re, &quot;&quot;) on success; (null, error) on a pattern-syntax error or when the build lacks libpcre2-8.</p>
+    </div>
+    <div class="function" id="compile_flags" data-name="compile_flags">
+      <h3 class="function-name">compile_flags <span class="kind">fn</span></h3>
+      <pre class="usage"><code>compile_flags(pattern, flags) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string, flags: int</span></p>
+      <p class="doc">As compile, with PCRE2 option bits (FLAG_CASELESS | FLAG_MULTILINE …).</p>
+    </div>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">fn</span></h3>
+      <pre class="usage"><code>free(re)</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr</span></p>
+      <p class="doc">Free a compiled regex. Safe to call with null.</p>
+    </div>
+    <div class="function" id="last_error" data-name="last_error">
+      <h3 class="function-name">last_error <span class="kind">fn</span></h3>
+      <pre class="usage"><code>last_error() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">The last error message set by compile / captures / find_all / replace*. &quot;&quot; if none. Diagnostics for the no-match case are NOT errors — captures returns null with last_error == &quot;&quot; when the pattern simply didn't match.</p>
+    </div>
+    <div class="function" id="clear_last_error" data-name="clear_last_error">
+      <h3 class="function-name">clear_last_error <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clear_last_error()</code></pre>
+    </div>
+    <div class="function" id="matches" data-name="matches">
+      <h3 class="function-name">matches <span class="kind">fn</span></h3>
+      <pre class="usage"><code>matches(re, s) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string</span></p>
+      <p class="doc">Does the pattern match anywhere in s? 1 if yes, 0 if no.</p>
+    </div>
+    <div class="function" id="find" data-name="find">
+      <h3 class="function-name">find <span class="kind">fn</span></h3>
+      <pre class="usage"><code>find(re, s) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string</span></p>
+      <p class="doc">First match span: returns (start_byte, end_byte, err). start = -1 when there's no match (err == &quot;&quot;) OR a real error (err != &quot;&quot;).</p>
+    </div>
+    <div class="function" id="captures" data-name="captures">
+      <h3 class="function-name">captures <span class="kind">fn</span></h3>
+      <pre class="usage"><code>captures(re, s) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string</span></p>
+    </div>
+    <div class="function" id="capture_count" data-name="capture_count">
+      <h3 class="function-name">capture_count <span class="kind">fn</span></h3>
+      <pre class="usage"><code>capture_count(caps) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr</span></p>
+    </div>
+    <div class="function" id="capture" data-name="capture">
+      <h3 class="function-name">capture <span class="kind">fn</span></h3>
+      <pre class="usage"><code>capture(caps, index) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="capture_start" data-name="capture_start">
+      <h3 class="function-name">capture_start <span class="kind">fn</span></h3>
+      <pre class="usage"><code>capture_start(caps, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="capture_end" data-name="capture_end">
+      <h3 class="function-name">capture_end <span class="kind">fn</span></h3>
+      <pre class="usage"><code>capture_end(caps, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="captures_free" data-name="captures_free">
+      <h3 class="function-name">captures_free <span class="kind">fn</span></h3>
+      <pre class="usage"><code>captures_free(caps)</code></pre>
+      <p class="signature"><span class="sig-params">caps: ptr</span></p>
+    </div>
+    <div class="function" id="find_all" data-name="find_all">
+      <h3 class="function-name">find_all <span class="kind">fn</span></h3>
+      <pre class="usage"><code>find_all(re, s) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string</span></p>
+    </div>
+    <div class="function" id="find_all_count" data-name="find_all_count">
+      <h3 class="function-name">find_all_count <span class="kind">fn</span></h3>
+      <pre class="usage"><code>find_all_count(fa) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fa: ptr</span></p>
+    </div>
+    <div class="function" id="find_all_start" data-name="find_all_start">
+      <h3 class="function-name">find_all_start <span class="kind">fn</span></h3>
+      <pre class="usage"><code>find_all_start(fa, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fa: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="find_all_end" data-name="find_all_end">
+      <h3 class="function-name">find_all_end <span class="kind">fn</span></h3>
+      <pre class="usage"><code>find_all_end(fa, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">fa: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="find_all_free" data-name="find_all_free">
+      <h3 class="function-name">find_all_free <span class="kind">fn</span></h3>
+      <pre class="usage"><code>find_all_free(fa)</code></pre>
+      <p class="signature"><span class="sig-params">fa: ptr</span></p>
+    </div>
+    <div class="function" id="replace" data-name="replace">
+      <h3 class="function-name">replace <span class="kind">fn</span></h3>
+      <pre class="usage"><code>replace(re, s, repl) <span class="arrow">-&gt;</span> (_0, _1)</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string, repl: string</span></p>
+      <p class="doc">Inferred return type (`-&gt; {`) so the heap-ownership of `out` (the extern is `-&gt; string @heap`) propagates to the caller's destructured result — an explicit `(string, string)` return marks position 0 as a borrow, so the caller never frees the substituted buffer and it leaks. `e` is the borrowed static last-error buffer (position 1, non-heap).</p>
+    </div>
+    <div class="function" id="replace_all" data-name="replace_all">
+      <h3 class="function-name">replace_all <span class="kind">fn</span></h3>
+      <pre class="usage"><code>replace_all(re, s, repl) <span class="arrow">-&gt;</span> (_0, _1)</code></pre>
+      <p class="signature"><span class="sig-params">re: ptr, s: string, repl: string</span></p>
+    </div>
+    <div class="function" id="matches_lit" data-name="matches_lit">
+      <h3 class="function-name">matches_lit <span class="kind">fn</span></h3>
+      <pre class="usage"><code>matches_lit(pattern, s) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string, s: string</span></p>
+    </div>
+    <div class="function" id="find_lit" data-name="find_lit">
+      <h3 class="function-name">find_lit <span class="kind">fn</span></h3>
+      <pre class="usage"><code>find_lit(pattern, s) <span class="arrow">-&gt;</span> (int, int, string)</code></pre>
+      <p class="signature"><span class="sig-params">pattern: string, s: string</span></p>
+    </div>
+    <div class="function" id="FLAG_CASELESS" data-name="FLAG_CASELESS">
+      <h3 class="function-name">FLAG_CASELESS <span class="kind">const</span></h3>
+      <pre class="usage"><code>FLAG_CASELESS = 0x00000008</code></pre>
+      <p class="doc">PCRE2 option bits — kept in sync with &lt;pcre2.h&gt;.</p>
+    </div>
+    <div class="function" id="FLAG_MULTILINE" data-name="FLAG_MULTILINE">
+      <h3 class="function-name">FLAG_MULTILINE <span class="kind">const</span></h3>
+      <pre class="usage"><code>FLAG_MULTILINE = 0x00000400</code></pre>
+    </div>
+    <div class="function" id="FLAG_DOTALL" data-name="FLAG_DOTALL">
+      <h3 class="function-name">FLAG_DOTALL <span class="kind">const</span></h3>
+      <pre class="usage"><code>FLAG_DOTALL = 0x00000020</code></pre>
+    </div>
+    <div class="function" id="FLAG_EXTENDED" data-name="FLAG_EXTENDED">
+      <h3 class="function-name">FLAG_EXTENDED <span class="kind">const</span></h3>
+      <pre class="usage"><code>FLAG_EXTENDED = 0x00000080</code></pre>
+    </div>
+    <div class="function" id="FLAG_UNGREEDY" data-name="FLAG_UNGREEDY">
+      <h3 class="function-name">FLAG_UNGREEDY <span class="kind">const</span></h3>
+      <pre class="usage"><code>FLAG_UNGREEDY = 0x00040000</code></pre>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>
