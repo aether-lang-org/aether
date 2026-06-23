@@ -3022,7 +3022,7 @@ is required.
 _Docs only._ CHANGELOG version-drift reconciliation — restored the
 `[0.180.0]` and `[0.177.0]` sections the release-rename had mislabeled
 when `[current]` was absent at tag time — plus
-`changelog-release-drift-note.md`, a handoff for the release-workflow
+`docs/notes/changelog-release-drift-note.md`, a handoff for the release-workflow
 owner. No code changes.
 
 ## [0.181.0]

@@ -1965,7 +1965,7 @@ int typecheck_program(ASTNode* program) {
                 // link, wrong function body (no diagnostic). The check
                 // runs on the post-merge program, so it catches the
                 // cross-module case too. See
-                // builder-function-name-collision-silent-dispatch.md.
+                // docs/notes/builder-function-name-collision-silent-dispatch.md.
                 // Only a builder-vs-plain-function clash is a true
                 // collision. Two plain functions sharing a name is the
                 // legal multi-clause / pattern-matching form (Erlang-
