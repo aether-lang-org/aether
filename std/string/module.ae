@@ -18,6 +18,8 @@ exports (
     string_seq_is_empty, string_seq_length, string_seq_retain, string_seq_free,
     string_seq_from_array, string_seq_to_array,
     string_seq_reverse, string_seq_concat, string_seq_take, string_seq_drop,
+    string_seq_each, string_seq_map, string_seq_filter, string_seq_reduce,
+    string_seq_zip_each,
     string_to_cstr, string_from_int, string_from_long, string_from_float,
     string_from_int_radix, string_pad_start, string_pad_end,
     string_to_int_raw, string_to_long_raw, string_to_float_raw, string_to_double_raw,
@@ -252,6 +254,31 @@ extern string_seq_reverse(s: *StringSeq) -> *StringSeq
 extern string_seq_concat(a: *StringSeq, b: *StringSeq) -> *StringSeq
 extern string_seq_take(s: *StringSeq, n: int) -> *StringSeq
 extern string_seq_drop(s: *StringSeq, n: int) -> *StringSeq
+
+// Closure-bearing combinators (#421 — multi-sequence iteration). Each
+// takes an Aether closure as the per-element callback. The callback
+// params are declared `ptr` so the codegen heap-BOXES the closure
+// (`_aether_box_closure`) into the slot; the C runtime unboxes, invokes
+// the body with the captured env as the implicit first argument, and
+// frees the box (+ its env) when the walk completes — so a one-shot
+// `string.seq_map(s, |x| ...)` does not leak the closure. All five are
+// a single iterative spine walk: O(n) time, O(1) auxiliary stack (no
+// recursion — that's the O(N^2)->O(N) point of the issue).
+//
+//   string.seq_each(s, |x| { ... })          // side effects, per element
+//   string.seq_map(s, |x| -> string)         // fresh seq, order preserved
+//   string.seq_filter(s, |x| -> int)         // fresh seq of truthy elems
+//   string.seq_reduce(s, init, |acc, x| ...) // left fold, returns acc
+//   string.seq_zip_each(a, b, |x, y| { ... })// implicit zip to shorter
+//
+// `map`/`filter` return a fresh, caller-owned *StringSeq (reclaimed
+// automatically at scope exit like any seq local). `reduce` returns the
+// caller's accumulator (`ptr`). `each`/`zip_each` return nothing.
+extern string_seq_each(s: *StringSeq, f: ptr)
+extern string_seq_map(s: *StringSeq, f: ptr) -> *StringSeq
+extern string_seq_filter(s: *StringSeq, pred: ptr) -> *StringSeq
+extern string_seq_reduce(s: *StringSeq, init: ptr, f: ptr) -> ptr
+extern string_seq_zip_each(a: *StringSeq, b: *StringSeq, f: ptr)
 
 // Conversion
 extern string_to_cstr(str: string) -> string

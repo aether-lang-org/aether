@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../string/aether_string.h"
+#include "../../runtime/aether_resource_caps.h"
 
 /* Mirror the file-static helpers in aether_string.c so we accept both
  * AetherString* and plain const char* at the FFI boundary, identically
@@ -105,7 +106,7 @@ void* aether_regex_compile(const void* pattern_s, int flags) {
     if (!code) { set_pcre2_error(errnum, offset); return NULL; }
     uint32_t ngroups = 0;
     pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &ngroups);
-    RegexHandle* h = (RegexHandle*)calloc(1, sizeof(RegexHandle));
+    RegexHandle* h = (RegexHandle*)aether_caps_calloc(1, sizeof(RegexHandle));
     if (!h) { pcre2_code_free(code); set_last_error("regex: out of memory"); return NULL; }
     h->code = code;
     h->ngroups = (int)ngroups + 1;
@@ -116,7 +117,7 @@ void aether_regex_free(void* h_) {
     if (!h_) return;
     RegexHandle* h = (RegexHandle*)h_;
     if (h->code) pcre2_code_free(h->code);
-    free(h);
+    aether_caps_free(h, sizeof(RegexHandle));
 }
 
 int aether_regex_matches(void* h_, const void* s_) {
@@ -148,7 +149,7 @@ void* aether_regex_captures(void* h_, const void* s_) {
     char* copy = (char*)malloc(slen + 1);
     if (!copy) { pcre2_match_data_free(md); set_last_error("regex: out of memory"); return NULL; }
     memcpy(copy, s, slen); copy[slen] = '\0';
-    RegexCaptures* c = (RegexCaptures*)calloc(1, sizeof(RegexCaptures));
+    RegexCaptures* c = (RegexCaptures*)aether_caps_calloc(1, sizeof(RegexCaptures));
     if (!c) { free(copy); pcre2_match_data_free(md); set_last_error("regex: out of memory"); return NULL; }
     c->md = md;
     c->subject = copy;
@@ -195,7 +196,7 @@ void aether_regex_captures_free(void* c_) {
     RegexCaptures* c = (RegexCaptures*)c_;
     if (c->md) pcre2_match_data_free(c->md);
     if (c->subject) free(c->subject);
-    free(c);
+    aether_caps_free(c, sizeof(RegexCaptures));
 }
 
 void* aether_regex_find_all(void* h_, const void* s_) {
@@ -238,7 +239,7 @@ void* aether_regex_find_all(void* h_, const void* s_) {
     if (!copy) { free(spans); set_last_error("regex: out of memory"); return NULL; }
     memcpy(copy, s, slen); copy[slen] = '\0';
 
-    RegexFindAll* fa = (RegexFindAll*)calloc(1, sizeof(RegexFindAll));
+    RegexFindAll* fa = (RegexFindAll*)aether_caps_calloc(1, sizeof(RegexFindAll));
     if (!fa) { free(copy); free(spans); set_last_error("regex: out of memory"); return NULL; }
     fa->count = count;
     fa->spans = spans;
@@ -265,7 +266,7 @@ void aether_regex_find_all_free(void* fa_) {
     RegexFindAll* fa = (RegexFindAll*)fa_;
     if (fa->spans) free(fa->spans);
     if (fa->subject) free(fa->subject);
-    free(fa);
+    aether_caps_free(fa, sizeof(RegexFindAll));
 }
 
 /* Internal substitute: shared by replace and replace_all (option toggles

@@ -1,0 +1,46 @@
+// Regression: constant array literals as const initializers
+// (issue #482, compile-time-eval phase-1).
+//
+// Both the typed form `const A: T[N] = [...]` and the untyped form
+// `const A[] = [...]` lower to a file-scope `static const T A[] = {...}`.
+// Every element must itself be a compile-time constant; a non-const
+// element is rejected at typecheck (see test_const_call_reject.sh).
+
+// Typed const array — element type/size pinned by `: int[3]`.
+const TRIPLE: int[3] = [1, 2, 3]
+
+// Untyped const array — element type inferred from the literals.
+const SIZES[] = [4, 8, 16, 32, 64]
+
+// Const array of strings.
+const NAMES[] = ["alice", "bob", "carol"]
+
+main() {
+    fails = 0
+
+    if TRIPLE[0] != 1  { print("FAIL TRIPLE[0]\n"); fails = fails + 1 }
+    if TRIPLE[2] != 3  { print("FAIL TRIPLE[2]\n"); fails = fails + 1 }
+
+    if SIZES[0] != 4   { print("FAIL SIZES[0]\n"); fails = fails + 1 }
+    if SIZES[4] != 64  { print("FAIL SIZES[4]\n"); fails = fails + 1 }
+
+    // Sum the int array in a loop (indexes the static const table).
+    sum = 0
+    for (i = 0; i < 5; i = i + 1) {
+        sum = sum + SIZES[i]
+    }
+    if sum != 124 { print("FAIL SIZES sum\n"); fails = fails + 1 }
+
+    if NAMES[0] != "alice" { print("FAIL NAMES[0]\n"); fails = fails + 1 }
+    if NAMES[2] != "carol" { print("FAIL NAMES[2]\n"); fails = fails + 1 }
+
+    println(TRIPLE[1])  // expect: 2
+    println(NAMES[1])   // expect: bob
+
+    if fails == 0 {
+        print("PASS: const fold array\n")
+    } else {
+        print("FAILED: ${fails}\n")
+        exit(1)
+    }
+}

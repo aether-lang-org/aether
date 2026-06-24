@@ -56,7 +56,7 @@ AetherProxyCache* aether_proxy_cache_new(int max_entries,
     if (default_ttl_sec < 0) return NULL;
     if (key_strategy < 0 || key_strategy > AETHER_PROXY_CACHE_KEY_METHOD_URL_VARY) return NULL;
 
-    AetherProxyCache* c = (AetherProxyCache*)calloc(1, sizeof(*c));
+    AetherProxyCache* c = (AetherProxyCache*)aether_caps_calloc(1, sizeof(*c));
     if (!c) return NULL;
     c->max_entries     = max_entries;
     c->max_body_bytes  = max_body_bytes;
@@ -68,7 +68,7 @@ AetherProxyCache* aether_proxy_cache_new(int max_entries,
     if (c->bucket_count < 16) c->bucket_count = 16;
     c->buckets = (AetherProxyCacheEntry**)calloc((size_t)c->bucket_count,
                                                   sizeof(AetherProxyCacheEntry*));
-    if (!c->buckets) { free(c); return NULL; }
+    if (!c->buckets) { aether_caps_free(c, sizeof(*c)); return NULL; }
 
     pthread_mutex_init(&c->lock, NULL);
     return c;
@@ -91,7 +91,7 @@ static void entry_free_one(AetherProxyCacheEntry* e) {
     free(e->etag);
     free(e->last_modified);
     free(e->vary_header);
-    free(e);
+    aether_caps_free(e, sizeof(*e));
 }
 
 void aether_proxy_cache_free(AetherProxyCache* cache) {
@@ -108,7 +108,7 @@ void aether_proxy_cache_free(AetherProxyCache* cache) {
     free(cache->buckets);
     pthread_mutex_unlock(&cache->lock);
     pthread_mutex_destroy(&cache->lock);
-    free(cache);
+    aether_caps_free(cache, sizeof(*cache));
 }
 
 /* FNV-1a 64-bit. */
@@ -447,7 +447,7 @@ void aether_proxy_cache_store(AetherProxyCache* cache,
     }
 
     /* Allocate the new entry. */
-    AetherProxyCacheEntry* e = (AetherProxyCacheEntry*)calloc(1, sizeof(*e));
+    AetherProxyCacheEntry* e = (AetherProxyCacheEntry*)aether_caps_calloc(1, sizeof(*e));
     if (!e) {
         free(base_key);
         free(full_key);

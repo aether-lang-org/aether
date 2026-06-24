@@ -1,0 +1,56 @@
+// #736 regression — synchronous ask/reply (`?`) with the `reply` statement
+// nested in if/else / nested-if branches, not just at the handler top level.
+//
+// The request->reply type-map pre-pass used to scan only the receive arm's
+// DIRECT children for a `reply`, so a branched reply left the request
+// unmapped and the `?` ask read a garbage reply slot (it returned a random
+// pointer instead of the replied value). The pre-pass now searches the whole
+// arm body recursively. This test pins the behaviour: every branch's reply
+// value must come back exactly.
+
+extern exit(code: int)
+
+message Q { x: int }
+message R { value: int }
+
+actor Svc {
+    state hits = 0
+    receive {
+        // Reply lives in BOTH branches of an if/else, and one branch nests
+        // another if/else — none of these are top-level statements of the
+        // arm body.
+        Q(x) -> {
+            hits = hits + 1
+            if x > 0 {
+                if x > 10 {
+                    reply R { value: 999 }
+                } else {
+                    reply R { value: x * 2 }
+                }
+            } else {
+                reply R { value: 0 - 1 }
+            }
+        }
+    }
+}
+
+check(label: string, got: int, want: int) {
+    if got != want {
+        println("FAIL: ${label} got ${got}, want ${want}")
+        exit(1)
+    }
+}
+
+main() {
+    s = spawn(Svc())
+
+    check("nested-if high branch", s ? Q { x: 50 }, 999)
+    check("nested-if low branch",  s ? Q { x: 4 },  8)
+    check("else branch",           s ? Q { x: 0 },  0 - 1)
+
+    // Repeat to confirm the reply slot is per-message, not stale across asks.
+    check("repeat high", s ? Q { x: 20 }, 999)
+    check("repeat low",  s ? Q { x: 1 },  2)
+
+    println("PASS: branched ask/reply returns each branch's value (#736)")
+}

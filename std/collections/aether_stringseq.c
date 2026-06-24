@@ -214,6 +214,148 @@ StringSeq* string_seq_drop(StringSeq* s, int n) {
     return string_seq_retain(cur);
 }
 
+/* ---- Closure-bearing combinators (issue #421) -----------------------
+ *
+ * Layout-compatible view of the codegen's `_AeClosure` box. The fields
+ * mirror the prologue typedef
+ *     typedef struct { void (*fn)(void); void* env; } _AeClosure;
+ * exactly; this TU never sees that typedef (it lives in the generated
+ * program's prologue), so we name our own. A function pointer and a
+ * data pointer are the same width on every target we build for, so the
+ * by-value layout matches byte-for-byte. Same approach as
+ * `AeClosureBox` in aether_collections.c. */
+typedef struct { void (*fn)(void); void* env; } AeSeqClosure;
+
+/* Reclaim a boxed closure handed in through a `ptr`-typed parameter.
+ * `_aether_box_closure` malloc'd both the box and (for a capturing
+ * closure) the env it points at; ownership transferred to us, so we
+ * free env first, then the box. NULL-safe — a non-capturing closure
+ * has env == NULL, and an absent callback has box == NULL. */
+static void seq_closure_free(void* box) {
+    if (!box) return;
+    AeSeqClosure* clo = (AeSeqClosure*)box;
+    if (clo->env) free(clo->env);
+    free(box);
+}
+
+void string_seq_each(StringSeq* s, void* f) {
+    if (!f) return;
+    AeSeqClosure clo = *(AeSeqClosure*)f;
+    /* `f(elem)` returns void; invoke through a void(env, const char*)
+     * signature. Iterative spine walk — O(n) time, O(1) stack. */
+    void (*body)(void*, const char*) = (void (*)(void*, const char*))clo.fn;
+    StringSeq* cur = s;
+    while (cur) {
+        body(clo.env, (const char*)cur->head);
+        cur = cur->tail;
+    }
+    seq_closure_free(f);
+}
+
+StringSeq* string_seq_map(StringSeq* s, void* f) {
+    if (!f) return NULL;
+    AeSeqClosure clo = *(AeSeqClosure*)f;
+    /* `f(elem) -> string`; the returned bytes are consed into a fresh
+     * spine (cons retains the head). Build a reversed prefix in O(1)
+     * per step, then reverse once at the end so order is preserved —
+     * the same allocate-then-reverse shape `string_seq_take` uses. */
+    const char* (*body)(void*, const char*) =
+        (const char* (*)(void*, const char*))clo.fn;
+    StringSeq* reversed = NULL;
+    StringSeq* cur = s;
+    while (cur) {
+        const char* mapped = body(clo.env, (const char*)cur->head);
+        StringSeq* cell = string_seq_cons(mapped, reversed);
+        /* The closure returns an OWNED heap string (a fresh
+         * `string.to_upper` / `string.concat` result has refcount 1).
+         * `cons` took its own retain on `mapped`, so the transient ref
+         * the closure handed us must be released here — otherwise the
+         * mapped string leaks one ref and never reaches 0 on
+         * `seq_free`. `string_release` is NULL-safe and a no-op on
+         * plain `char*` literals (no magic header), so a closure that
+         * returns a literal passes through unharmed. Release whether
+         * or not the cons succeeded (on OOM we still own the ref). */
+        string_release(mapped);
+        if (!cell) {
+            string_seq_free(reversed);
+            seq_closure_free(f);
+            return NULL;
+        }
+        /* cons retained `reversed`; drop our local so the new cell is
+         * the sole owner of the prior chain. */
+        string_seq_free(reversed);
+        reversed = cell;
+        cur = cur->tail;
+    }
+    StringSeq* result = string_seq_reverse(reversed);
+    string_seq_free(reversed);
+    seq_closure_free(f);
+    return result;
+}
+
+StringSeq* string_seq_filter(StringSeq* s, void* pred) {
+    if (!pred) return NULL;
+    AeSeqClosure clo = *(AeSeqClosure*)pred;
+    /* `pred(elem) -> int`; keep elements whose predicate is non-zero.
+     * Same reverse-then-reverse build as map so order is preserved and
+     * each step is O(1). */
+    int (*test)(void*, const char*) = (int (*)(void*, const char*))clo.fn;
+    StringSeq* reversed = NULL;
+    StringSeq* cur = s;
+    while (cur) {
+        if (test(clo.env, (const char*)cur->head)) {
+            StringSeq* cell = string_seq_cons((const char*)cur->head, reversed);
+            if (!cell) {
+                string_seq_free(reversed);
+                seq_closure_free(pred);
+                return NULL;
+            }
+            string_seq_free(reversed);
+            reversed = cell;
+        }
+        cur = cur->tail;
+    }
+    StringSeq* result = string_seq_reverse(reversed);
+    string_seq_free(reversed);
+    seq_closure_free(pred);
+    return result;
+}
+
+void* string_seq_reduce(StringSeq* s, void* init, void* f) {
+    if (!f) return init;
+    AeSeqClosure clo = *(AeSeqClosure*)f;
+    /* Left fold: `acc = f(acc, elem)`. acc and the result are opaque
+     * `ptr`s — the closure threads through whatever it likes (a boxed
+     * int, an accumulating StringSeq, a heap string handle). */
+    void* (*step)(void*, void*, const char*) =
+        (void* (*)(void*, void*, const char*))clo.fn;
+    void* acc = init;
+    StringSeq* cur = s;
+    while (cur) {
+        acc = step(clo.env, acc, (const char*)cur->head);
+        cur = cur->tail;
+    }
+    seq_closure_free(f);
+    return acc;
+}
+
+void string_seq_zip_each(StringSeq* a, StringSeq* b, void* f) {
+    if (!f) return;
+    AeSeqClosure clo = *(AeSeqClosure*)f;
+    /* Implicit zip: call `f(a_elem, b_elem)` per aligned pair, stopping
+     * at the shorter spine. Both inputs borrowed. O(min(|a|, |b|)). */
+    void (*body)(void*, const char*, const char*) =
+        (void (*)(void*, const char*, const char*))clo.fn;
+    StringSeq* ca = a;
+    StringSeq* cb = b;
+    while (ca && cb) {
+        body(clo.env, (const char*)ca->head, (const char*)cb->head);
+        ca = ca->tail;
+        cb = cb->tail;
+    }
+    seq_closure_free(f);
+}
+
 void* string_seq_to_array(StringSeq* s) {
     if (!s) return NULL;
     int n = s->length;

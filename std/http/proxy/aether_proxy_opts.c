@@ -7,12 +7,13 @@
  */
 
 #include "aether_proxy_internal.h"
+#include "../../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 AetherProxyOpts* aether_proxy_opts_new(void) {
-    AetherProxyOpts* o = (AetherProxyOpts*)calloc(1, sizeof(*o));
+    AetherProxyOpts* o = (AetherProxyOpts*)aether_caps_calloc(1, sizeof(*o));
     if (!o) return NULL;
     /* Sensible defaults — all X-Forwarded-* on, host rewritten to
      * upstream, no path-prefix chop, 8 MiB body cap. */
@@ -32,7 +33,7 @@ void aether_proxy_opts_free(AetherProxyOpts* opts) {
     free(opts->route_pattern);
     free(opts->methods);
     free(opts->strip_path_prefix);
-    free(opts);
+    aether_caps_free(opts, sizeof(*opts));
 }
 
 const char* aether_proxy_opts_set_strip_prefix(AetherProxyOpts* opts,

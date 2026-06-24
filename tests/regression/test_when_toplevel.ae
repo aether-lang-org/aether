@@ -1,0 +1,47 @@
+// Regression test: TOP-LEVEL compile-time `when` / static-if (issue #483)
+//
+// `when` works around top-level declarations (externs, functions, imports).
+// Two things are proven here, PORTABLY (the proof must hold on every host,
+// including Windows):
+//
+//   1. PRUNING. An arm whose condition is false on EVERY platform declares
+//      and calls an undefined C symbol. It must be pruned BEFORE typecheck
+//      and codegen on every host — if it weren't, the link would fail on the
+//      missing symbol. (The condition is a bogus OS name, never `windows`,
+//      so this arm is dead everywhere — a `target.os == "windows"` gate would
+//      make the undefined symbol the LIVE arm on a Windows runner.)
+//
+//   2. SELECTION. Real per-platform arms (no undefined symbols) pick exactly
+//      one branch by `target.os` on any host.
+
+extern exit(code: int)
+
+// (1) Pruning proof — dead on every platform.
+when target.os == "nonexistent_platform_xyz" {
+    extern never_linked_symbol(x: int) -> int
+    gated_value() -> int { return never_linked_symbol(7) }
+} else {
+    gated_value() -> int { return 42 }
+}
+
+// (2) Selection proof — one real arm is chosen per host, no missing symbols.
+when target.os == "windows" {
+    plat_name() -> string { return "windows" }
+} else when target.os == "darwin" {
+    plat_name() -> string { return "darwin" }
+} else when target.os == "linux" {
+    plat_name() -> string { return "linux" }
+} else {
+    plat_name() -> string { return "other" }
+}
+
+main() {
+    // If the always-false arm weren't pruned, `never_linked_symbol` would
+    // fail to link and this program would never build/run.
+    if gated_value() != 42 {
+        println("FAIL: an always-false top-level `when` arm was not pruned")
+        exit(1)
+    }
+    println("  selected top-level arm: ${plat_name()}")
+    println("  PASS: top-level `when` — always-false arm pruned + platform arm selected")
+}

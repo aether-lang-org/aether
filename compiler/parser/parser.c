@@ -17,6 +17,7 @@ Parser* create_parser(Token** tokens, int token_count) {
     parser->suppress_errors = 0;  // By default, show errors
     parser->parsing_builder = 0;
     parser->in_condition = 0;
+    parser->when_top_level = 0;
     return parser;
 }
 
@@ -1969,7 +1970,19 @@ ASTNode* parse_statement(Parser* parser) {
 
         case TOKEN_IF:
             return parse_if_statement(parser);
-            
+
+        case TOKEN_WHEN: {
+            // Compile-time `when` / static-if (#483). The guard use of
+            // `when` only appears after a clause's parameter list inside
+            // parse_function_definition, never at statement head, so this
+            // is unambiguous. Statement-level arms hold statements.
+            int saved = parser->when_top_level;
+            parser->when_top_level = 0;
+            ASTNode* w = parse_when_statement(parser);
+            parser->when_top_level = saved;
+            return w;
+        }
+
         case TOKEN_FOR:
             return parse_for_loop(parser);
             
@@ -2204,6 +2217,101 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
 
     match_token(parser, TOKEN_SEMICOLON);
     return decl;
+}
+
+// Compile-time `when` / static-if (issue #483).
+//
+//   when target.os == "windows" { ... } else { ... }
+//
+// `when` already exists as TOKEN_WHEN for function-clause guards
+// (`fib(n) when n > 1 -> ...`), but that use only appears AFTER a
+// parameter list inside parse_function_definition — never at the head
+// of a statement or top-level declaration. So a `when` reached from
+// parse_statement / parse_top_level_decl is unambiguously the static-if
+// form; the guard parse is untouched.
+//
+// The condition is evaluated at compile time by a pre-typecheck pass
+// (resolve_when_statements, in aetherc.c) which prunes the AST down to
+// the selected arm BEFORE type-checking or codegen run on it. The
+// UNSELECTED arm parses but is never type-checked or emitted — that is
+// what lets a platform-specific extern be gated cleanly.
+//
+// AST layout mirrors AST_IF_STATEMENT:
+//   children[0] = condition expression
+//   children[1] = then-arm  (an AST_BLOCK of statements/decls)
+//   children[2] = else-arm  (optional AST_BLOCK), present iff `else` given
+//
+// An arm body is a brace-delimited list. Its items are parsed with the
+// same grammar the surrounding context would use: a top-level-only
+// construct (extern / import / struct / func / ...) goes through
+// parse_top_level_decl, everything else through parse_statement. This
+// lets a single `when` form serve both statement bodies and top-level
+// declaration groups (including a `when` nested inside another `when`).
+
+// Parse one `{ ... }` arm of a `when`. At top level the items are
+// declarations (extern / import / func / struct / ...) parsed via
+// parse_top_level_decl, so a platform-gated extern parses identically to a
+// bare top-level one. At statement level the items are ordinary statements.
+// Returns an AST_BLOCK whose children are the arm items.
+static ASTNode* parse_when_arm(Parser* parser) {
+    if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
+    int top_level = parser->when_top_level;
+    ASTNode* arm = create_ast_node(AST_BLOCK, NULL, 0, 0);
+    while (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+        if (is_at_end(parser)) break;
+        int start_token = parser->current_token;
+        ASTNode* item = top_level
+            ? parse_top_level_decl(parser)
+            : parse_statement(parser);
+        if (item) {
+            add_child(arm, item);
+        } else if (parser->current_token == start_token) {
+            // Guarantee forward progress on a malformed item.
+            parser_error(parser, "Expected statement or declaration in `when` arm");
+            advance_token(parser);
+        }
+    }
+    return arm;
+}
+
+ASTNode* parse_when_statement(Parser* parser) {
+    Token* when_tok = advance_token(parser);  // consume `when`
+
+    // Parse the compile-time condition. Reuse the `in_condition` guard so a
+    // trailing `{` is read as the arm body, not a closure on the condition.
+    int saved_in_condition = parser->in_condition;
+    parser->in_condition = 1;
+    ASTNode* condition = parse_expression(parser);
+    parser->in_condition = saved_in_condition;
+    if (!condition) return NULL;
+
+    ASTNode* then_arm = parse_when_arm(parser);
+    if (!then_arm) return NULL;
+
+    ASTNode* when_stmt = create_ast_node(AST_WHEN_STATEMENT, NULL,
+                                         when_tok ? when_tok->line : 0,
+                                         when_tok ? when_tok->column : 0);
+    add_child(when_stmt, condition);
+    add_child(when_stmt, then_arm);
+
+    if (match_token(parser, TOKEN_ELSE)) {
+        // `else when ...` chains: an else arm that is itself a `when`.
+        if (peek_token(parser) && peek_token(parser)->type == TOKEN_WHEN) {
+            ASTNode* else_when = parse_when_statement(parser);
+            if (else_when) {
+                ASTNode* wrap = create_ast_node(AST_BLOCK, NULL, 0, 0);
+                add_child(wrap, else_when);
+                add_child(when_stmt, wrap);
+            }
+        } else {
+            ASTNode* else_arm = parse_when_arm(parser);
+            if (else_arm) {
+                add_child(when_stmt, else_arm);
+            }
+        }
+    }
+
+    return when_stmt;
 }
 
 ASTNode* parse_if_statement(Parser* parser) {
@@ -4415,22 +4523,28 @@ ASTNode* parse_struct_definition(Parser* parser) {
     return struct_def;
 }
 
-ASTNode* parse_program(Parser* parser) {
-    ASTNode* program = create_ast_node(AST_PROGRAM, NULL, 0, 0);
-    
-    int safety_counter = 0;
-    // Safety limit to prevent infinite loops on malformed input
-    const int MAX_ITERATIONS = 10000;
-    
-    while (!is_at_end(parser) && safety_counter < MAX_ITERATIONS) {
-        safety_counter++;
-        
+// Parse a single top-level declaration (module / import / func / struct /
+// extern / const / etc.). Returns the parsed node, or NULL when the item
+// was consumed by error recovery (the parser has advanced past it). Factored
+// out of parse_program so the top-level `when` static-if (issue #483) can
+// parse declarations inside its arms with the exact same grammar — an extern
+// or import gated behind `when` parses identically to a top-level one.
+ASTNode* parse_top_level_decl(Parser* parser) {
+    {
         Token* token = peek_token(parser);
-        if (!token) break;
-        
+        if (!token) return NULL;
+
         ASTNode* node = NULL;
-        
+
         switch (token->type) {
+            case TOKEN_WHEN: {
+                // Top-level static-if: its arms hold declarations.
+                int saved = parser->when_top_level;
+                parser->when_top_level = 1;
+                ASTNode* w = parse_when_statement(parser);
+                parser->when_top_level = saved;
+                return w;
+            }
             case TOKEN_MODULE:
                 node = parse_module_declaration(parser);
                 break;
@@ -4475,7 +4589,7 @@ ASTNode* parse_program(Parser* parser) {
                 //     aether_name(...) { return c_symbol_name(...) }
                 // …without the wrapper. Closes #234.
                 Token* at_tok = expect_token(parser, TOKEN_AT);
-                if (!at_tok) { advance_token(parser); continue; }
+                if (!at_tok) { advance_token(parser); return NULL; }
                 // Two attribute forms accepted at top-level:
                 //   @extern("c_symbol") aether_name(params) -> ret    (#234)
                 //   @c_callback aether_name(params) -> ret { body }   (#235)
@@ -4493,7 +4607,7 @@ ASTNode* parse_program(Parser* parser) {
                 if (attr && attr->type == TOKEN_IDENTIFIER &&
                     attr->value && strcmp(attr->value, "derive") == 0) {
                     advance_token(parser);  // consume 'derive'
-                    if (!expect_token(parser, TOKEN_LEFT_PAREN)) continue;
+                    if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
                     // Parse the comma-separated derive list.
                     char tag[256];
                     snprintf(tag, sizeof(tag), "derive:");
@@ -4511,7 +4625,7 @@ ASTNode* parse_program(Parser* parser) {
                         first = 0;
                         if (!match_token(parser, TOKEN_COMMA)) break;
                     }
-                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) continue;
+                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
                     // The next decl should be a struct. Parse it via the
                     // normal struct path, then attach the annotation.
                     Token* next_tok = peek_token(parser);
@@ -4525,7 +4639,7 @@ ASTNode* parse_program(Parser* parser) {
                         break;
                     } else {
                         parser_error(parser, "@derive(...) must precede a `struct` definition");
-                        continue;
+                        return NULL;
                     }
                 }
                 if (attr && attr->type == TOKEN_IDENTIFIER &&
@@ -4564,13 +4678,13 @@ ASTNode* parse_program(Parser* parser) {
                 if (!attr || attr->type != TOKEN_EXTERN) {
                     parser_error(parser, "unknown attribute (expected @extern(\"...\") or @c_callback)");
                     advance_token(parser);
-                    continue;
+                    return NULL;
                 }
                 advance_token(parser);
                 expect_token(parser, TOKEN_LEFT_PAREN);
                 Token* sym = expect_token(parser, TOKEN_STRING_LITERAL);
                 expect_token(parser, TOKEN_RIGHT_PAREN);
-                if (!sym || !sym->value) { advance_token(parser); continue; }
+                if (!sym || !sym->value) { advance_token(parser); return NULL; }
                 // Now parse the function declaration that follows.
                 // We use parse_extern_declaration's shape (params with
                 // mandatory types, no body) but the Aether name comes
@@ -4579,7 +4693,7 @@ ASTNode* parse_program(Parser* parser) {
                 // pretending `extern` came in: easier to inline the small
                 // amount of code than to rework parse_extern_declaration.
                 Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
-                if (!fname) continue;
+                if (!fname) return NULL;
                 expect_token(parser, TOKEN_LEFT_PAREN);
                 ASTNode* ext = create_ast_node(AST_EXTERN_FUNCTION, fname->value,
                                                at_tok->line, at_tok->column);
@@ -4689,7 +4803,7 @@ ASTNode* parse_program(Parser* parser) {
                 } else {
                     parser_error(parser, "Expected function definition after 'builder' at top level");
                     advance_token(parser);
-                    continue;
+                    return NULL;
                 }
                 break;
             }
@@ -4709,15 +4823,15 @@ ASTNode* parse_program(Parser* parser) {
                 int vline = token->line, vcol = token->column;
                 advance_token(parser); // consume 'var'
                 Token* vname = expect_token(parser, TOKEN_IDENTIFIER);
-                if (!vname) { advance_token(parser); continue; }
+                if (!vname) { advance_token(parser); return NULL; }
                 Type* vtype = NULL;
                 if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
                     advance_token(parser); // consume ':'
                     vtype = parse_type(parser);
                 }
-                if (!expect_token(parser, TOKEN_ASSIGN)) { advance_token(parser); continue; }
+                if (!expect_token(parser, TOKEN_ASSIGN)) { advance_token(parser); return NULL; }
                 ASTNode* vval = parse_expression(parser);
-                if (!vval) { advance_token(parser); continue; }
+                if (!vval) { advance_token(parser); return NULL; }
                 node = create_ast_node(AST_CONST_DECLARATION, vname->value, vline, vcol);
                 add_child(node, vval);
                 node->annotation = strdup("global_var");
@@ -4736,7 +4850,7 @@ ASTNode* parse_program(Parser* parser) {
                 int cline = token->line, ccol = token->column;
                 advance_token(parser); // consume 'const'
                 Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
-                if (!cname) { advance_token(parser); continue; }
+                if (!cname) { advance_token(parser); return NULL; }
 
                 int is_array = 0;
                 /* #745: explicit element type for a module-level const
@@ -4755,7 +4869,7 @@ ASTNode* parse_program(Parser* parser) {
                      * TYPE_ARRAY (element + size), so `long[3]` arrives
                      * here as array(long, 3). */
                     annotated_type = parse_type(parser);
-                    if (!annotated_type) { advance_token(parser); continue; }
+                    if (!annotated_type) { advance_token(parser); return NULL; }
                     if (annotated_type->kind == TYPE_ARRAY) {
                         is_array = 1;
                     }
@@ -4763,16 +4877,16 @@ ASTNode* parse_program(Parser* parser) {
                 // Untyped array form: const NAME[] = [...]
                 else if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
                     advance_token(parser); // consume '['
-                    if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) { advance_token(parser); continue; }
+                    if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) { advance_token(parser); return NULL; }
                     is_array = 1;
                 }
 
                 if (!expect_token(parser, TOKEN_ASSIGN)) {
                     if (annotated_type) free_type(annotated_type);
-                    advance_token(parser); continue;
+                    advance_token(parser); return NULL;
                 }
                 ASTNode* cval = parse_expression(parser);
-                if (!cval) { if (annotated_type) free_type(annotated_type); advance_token(parser); continue; }
+                if (!cval) { if (annotated_type) free_type(annotated_type); advance_token(parser); return NULL; }
                 node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
                 add_child(node, cval);
 
@@ -4844,7 +4958,7 @@ ASTNode* parse_program(Parser* parser) {
                 } else {
                     parser_error(parser, "Unexpected identifier at top level (expected actor, struct, or function)");
                     advance_token(parser);
-                    continue;
+                    return NULL;
                 }
                 break;
             }
@@ -4874,7 +4988,7 @@ ASTNode* parse_program(Parser* parser) {
                 } else {
                     parser_error(parser, "Expected function definition after type keyword");
                     advance_token(parser);
-                    continue;
+                    return NULL;
                 }
                 break;
             }
@@ -4943,23 +5057,44 @@ ASTNode* parse_program(Parser* parser) {
                                 advance_token(parser);
                             }
                         }
-                        continue;
+                        return NULL;
                     }
                 }
                 parser_error(parser, "Expected actor, struct, function, or main");
                 advance_token(parser);
-                continue;
+                return NULL;
         }
-        
+
+        return node;
+    }
+}
+
+ASTNode* parse_program(Parser* parser) {
+    ASTNode* program = create_ast_node(AST_PROGRAM, NULL, 0, 0);
+
+    int safety_counter = 0;
+    // Safety limit to prevent infinite loops on malformed input
+    const int MAX_ITERATIONS = 10000;
+
+    while (!is_at_end(parser) && safety_counter < MAX_ITERATIONS) {
+        safety_counter++;
+
+        int start_token = parser->current_token;
+        ASTNode* node = parse_top_level_decl(parser);
         if (node) {
             add_child(program, node);
+        } else if (parser->current_token == start_token) {
+            // Error recovery in parse_top_level_decl did not consume a token
+            // (e.g. NULL produced without advancing); step over to guarantee
+            // forward progress and avoid spinning the safety counter.
+            advance_token(parser);
         }
     }
-    
+
     if (safety_counter >= MAX_ITERATIONS) {
         parser_message(parser, "Error: Parser safety limit reached - possible infinite loop");
         return NULL;
     }
-    
+
     return program;
 }

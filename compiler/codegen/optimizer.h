@@ -20,6 +20,15 @@ ASTNode* optimize_tail_calls(ASTNode* node);
 // Apply all optimizations
 ASTNode* optimize_ast(ASTNode* node);
 
+// Compile-time `when` / static-if resolution (issue #483).
+// Evaluates each `when` condition at compile time and prunes the AST to the
+// selected arm, IN PLACE, before type-checking. The unselected arm is freed
+// and never type-checked or emitted. `target.os` / `target.arch` are
+// compiler-provided compile-time string constants for the build target.
+// Returns 0 on success; non-zero if any `when` condition was not a
+// compile-time constant (the driver aborts the build).
+int resolve_when_statements(ASTNode* program);
+
 // Optimization statistics
 typedef struct {
     int constants_folded;

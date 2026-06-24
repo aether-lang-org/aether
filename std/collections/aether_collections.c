@@ -573,15 +573,19 @@ void map_free(HashMap* map) {
 MapKeys* map_keys_raw(HashMap* map) {
     if (!map) return NULL;
 
-    MapKeys* keys = (MapKeys*)malloc(sizeof(MapKeys));
+    MapKeys* keys = (MapKeys*)aether_caps_malloc(sizeof(MapKeys));
     if (!keys) return NULL;
     keys->count = 0;
     if (map->size == 0) {
         keys->keys = NULL;
         return keys;
     }
-    keys->keys = (AetherString**)malloc(map->size * sizeof(AetherString*));
-    if (!keys->keys) { free(keys); return NULL; }
+    /* The snapshot array holds exactly map->size pointers; the fill loop
+     * below increments keys->count once per entry, so at free time
+     * keys->count == map->size and the matching aether_caps_free size is
+     * exact regardless of later map mutation. */
+    keys->keys = (AetherString**)aether_caps_malloc(map->size * sizeof(AetherString*));
+    if (!keys->keys) { aether_caps_free(keys, sizeof(MapKeys)); return NULL; }
 
     for (int i = 0; i < map->capacity; i++) {
         HashMapEntry* entry = map->buckets[i];
@@ -596,7 +600,7 @@ MapKeys* map_keys_raw(HashMap* map) {
 
 void map_keys_free(MapKeys* keys) {
     if (!keys) return;
-    free(keys->keys);
-    free(keys);
+    aether_caps_free(keys->keys, (size_t)keys->count * sizeof(AetherString*));
+    aether_caps_free(keys, sizeof(MapKeys));
 }
 

@@ -2829,6 +2829,37 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     gen->current_function = prev_current_function;
 }
 
+/* Recursively find the first `reply <Msg> { ... }` message-constructor name
+ * in a receive-arm body subtree. A reply may be nested in if/else, while,
+ * or match branches — not just at the top level (#736) — so the
+ * request->reply type map pre-pass must DESCEND, not only scan direct
+ * children. Without this, a branched reply leaves the request unmapped and
+ * the `?` ask reads a garbage reply slot. Does not descend into nested
+ * function/actor/builder/closure definitions, whose replies (if any) belong
+ * to a different receive scope. */
+static const char* find_first_reply_msg(ASTNode* node) {
+    if (!node) return NULL;
+    if (node->type == AST_REPLY_STATEMENT) {
+        if (node->child_count > 0 && node->children[0] &&
+            node->children[0]->type == AST_MESSAGE_CONSTRUCTOR &&
+            node->children[0]->value) {
+            return node->children[0]->value;
+        }
+        return NULL;
+    }
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_ACTOR_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_CLOSURE) {
+        return NULL;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        const char* r = find_first_reply_msg(node->children[i]);
+        if (r) return r;
+    }
+    return NULL;
+}
+
 void generate_program(CodeGenerator* gen, ASTNode* program) {
     if (!program || program->type != AST_PROGRAM) return;
     gen->program = program;
@@ -3744,23 +3775,20 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 ASTNode* body = arm->children[1];
                 if (!pattern || !pattern->value || !body) continue;
                 const char* req_msg = pattern->value;
-                for (int s = 0; s < body->child_count; s++) {
-                    ASTNode* stmt = body->children[s];
-                    if (!stmt || stmt->type != AST_REPLY_STATEMENT) continue;
-                    if (stmt->child_count > 0 && stmt->children[0] &&
-                        stmt->children[0]->type == AST_MESSAGE_CONSTRUCTOR &&
-                        stmt->children[0]->value) {
-                        const char* reply_msg = stmt->children[0]->value;
-                        if (gen->reply_type_count >= gen->reply_type_capacity) {
-                            gen->reply_type_capacity = gen->reply_type_capacity ? gen->reply_type_capacity * 2 : 16;
-                            gen->reply_type_map = realloc(gen->reply_type_map,
-                                gen->reply_type_capacity * sizeof(*gen->reply_type_map));
-                        }
-                        gen->reply_type_map[gen->reply_type_count].request_msg = strdup(req_msg);
-                        gen->reply_type_map[gen->reply_type_count].reply_msg = strdup(reply_msg);
-                        gen->reply_type_count++;
-                        break;
+                /* Search the whole arm body (incl. if/else/while/match
+                 * branches), not just its direct children — a branched
+                 * `reply` must still map the request to its reply type
+                 * (#736). */
+                const char* reply_msg = find_first_reply_msg(body);
+                if (reply_msg) {
+                    if (gen->reply_type_count >= gen->reply_type_capacity) {
+                        gen->reply_type_capacity = gen->reply_type_capacity ? gen->reply_type_capacity * 2 : 16;
+                        gen->reply_type_map = realloc(gen->reply_type_map,
+                            gen->reply_type_capacity * sizeof(*gen->reply_type_map));
                     }
+                    gen->reply_type_map[gen->reply_type_count].request_msg = strdup(req_msg);
+                    gen->reply_type_map[gen->reply_type_count].reply_msg = strdup(reply_msg);
+                    gen->reply_type_count++;
                 }
             }
         }

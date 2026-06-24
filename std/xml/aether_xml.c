@@ -8,6 +8,7 @@
  * config XML needs — see aether_xml.h.
  */
 #include "aether_xml.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -168,10 +169,10 @@ static void reset_event(XmlParser* p) {
 }
 
 XmlParser* xml_parser_new(const char* data, size_t len) {
-    XmlParser* p = (XmlParser*)calloc(1, sizeof(XmlParser));
+    XmlParser* p = (XmlParser*)aether_caps_calloc(1, sizeof(XmlParser));
     if (!p) return NULL;
     p->buf = (char*)malloc(len + 1);
-    if (!p->buf) { free(p); return NULL; }
+    if (!p->buf) { aether_caps_free(p, sizeof(XmlParser)); return NULL; }
     if (len) memcpy(p->buf, data, len);
     p->buf[len] = '\0';
     p->len = len;
@@ -192,7 +193,7 @@ void xml_parser_free(XmlParser* p) {
     free(p->attrs);
     free(p->pending_end);
     free(p->buf);
-    free(p);
+    aether_caps_free(p, sizeof(XmlParser));
 }
 
 static int xml_fail(XmlParser* p, const char* msg) {
@@ -431,7 +432,7 @@ struct XmlBuilder {
 };
 
 XmlBuilder* xml_builder_new(void) {
-    XmlBuilder* b = (XmlBuilder*)calloc(1, sizeof(XmlBuilder));
+    XmlBuilder* b = (XmlBuilder*)aether_caps_calloc(1, sizeof(XmlBuilder));
     if (!b) return NULL;
     sb_init(&b->sb);
     return b;
@@ -440,7 +441,7 @@ XmlBuilder* xml_builder_new(void) {
 void xml_builder_free(XmlBuilder* b) {
     if (!b) return;
     free(b->sb.data);
-    free(b);
+    aether_caps_free(b, sizeof(XmlBuilder));
 }
 
 static void close_open_tag(XmlBuilder* b) {
