@@ -1,0 +1,193 @@
+// Regression test for the closure-bearing *StringSeq combinators
+// (issue #421 — multi-sequence iteration primitives):
+//
+//   string.seq_each(s, |x| { ... })            side effects, per element
+//   string.seq_map(s, |x| { return ... })      fresh seq, order preserved
+//   string.seq_filter(s, |x| { return 0/1 })   fresh seq of truthy elems
+//   string.seq_reduce(s, init, |acc, x| {...}) left fold, returns acc
+//   string.seq_zip_each(a, b, |x, y| { ... })  implicit zip to shorter
+//
+// Each combinator is invoked with a real Aether closure (capturing and
+// non-capturing). The closure is heap-boxed into the `ptr`-typed C slot
+// by the codegen and invoked via the `_AeClosure` { fn, env } ABI from
+// the std runtime. All five are iterative O(n) spine walks — no
+// recursion. We assert results and exit 0 on success, 1 on any failure.
+
+import std.string
+import std.strbuilder
+
+extern exit(code: int)
+
+// Walk the seq and join with "," for order-sensitive assertions.
+walk_join(s: *StringSeq) -> string {
+    sb = strbuilder.new(0)
+    first = 1
+    cur = s
+    while string.seq_is_empty(cur) == 0 {
+        if first == 0 {
+            strbuilder.append(sb, ",")
+        }
+        strbuilder.append(sb, string.seq_head(cur))
+        cur = string.seq_tail(cur)
+        first = 0
+    }
+    return strbuilder.finish(sb)
+}
+
+main() {
+    // ---- each (capturing closure, side effects) --------------------
+    //
+    // A `ref` cell captured by the closure accumulates a running count
+    // and a concatenation of the visited elements. Proves the captured
+    // environment (`.env`) is threaded correctly into the callback.
+    src = string.split_to_seq("alpha,beta,gamma,delta", ",")
+
+    count = ref(0)
+    sb_each = strbuilder.new(0)
+    string.seq_each(src, |x: string| {
+        ref_set(count, ref_get(count) + 1)
+        strbuilder.append(sb_each, x)
+        strbuilder.append(sb_each, ";")
+    })
+    if ref_get(count) != 4 {
+        println("FAIL 1a: each visited ${ref_get(count)} elems, want 4")
+        exit(1)
+    }
+    visited = strbuilder.finish(sb_each)
+    if string.equals(visited, "alpha;beta;gamma;delta;") != 1 {
+        println("FAIL 1b: each order=${visited}")
+        exit(1)
+    }
+    println("  PASS 1: each — capturing closure, count + order")
+
+    // ---- map (fresh seq, order preserved) --------------------------
+    //
+    // Uppercase each element. The result is a fresh, independently-owned
+    // spine; freeing it must not disturb `src`.
+    upper = string.seq_map(src, |x: string| {
+        return string.to_upper(x)
+    })
+    if string.seq_length(upper) != 4 {
+        println("FAIL 2a: map length=${string.seq_length(upper)}, want 4")
+        exit(1)
+    }
+    mj = walk_join(upper)
+    if string.equals(mj, "ALPHA,BETA,GAMMA,DELTA") != 1 {
+        println("FAIL 2b: map=${mj}, want ALPHA,BETA,GAMMA,DELTA")
+        exit(1)
+    }
+    string.seq_free(upper)
+    // Freeing the map result must leave src intact.
+    if string.equals(walk_join(src), "alpha,beta,gamma,delta") != 1 {
+        println("FAIL 2c: map's free corrupted src")
+        exit(1)
+    }
+    println("  PASS 2: map — uppercase, order preserved, src untouched")
+
+    // ---- filter (keep truthy) --------------------------------------
+    //
+    // Keep elements whose length is exactly 5 ("alpha", "gamma",
+    // "delta"); drop "beta" (4). Capturing closure not needed here —
+    // a non-capturing predicate exercises the env == NULL path.
+    keep = string.seq_filter(src, |x: string| {
+        if string.length(x) == 5 {
+            return 1
+        }
+        return 0
+    })
+    if string.seq_length(keep) != 3 {
+        println("FAIL 3a: filter length=${string.seq_length(keep)}, want 3")
+        exit(1)
+    }
+    fj = walk_join(keep)
+    if string.equals(fj, "alpha,gamma,delta") != 1 {
+        println("FAIL 3b: filter=${fj}, want alpha,gamma,delta")
+        exit(1)
+    }
+    string.seq_free(keep)
+
+    // Predicate that rejects everything yields the empty seq.
+    none = string.seq_filter(src, |x: string| {
+        return 0
+    })
+    if string.seq_is_empty(none) != 1 {
+        println("FAIL 3c: filter(always-false) should be empty")
+        exit(1)
+    }
+    string.seq_free(none)
+    println("  PASS 3: filter — length predicate + empty-result edge")
+
+    // ---- reduce (left fold, ptr accumulator) -----------------------
+    //
+    // Fold total character count across the spine. The accumulator is a
+    // `ptr` — a single `ref` cell mutated in place per step and threaded
+    // back out as the result (left-fold associativity: each call sees
+    // the acc the previous one returned). Returning the captured cell
+    // (`acc_cell`, a parent-scope var) keeps the closure's `ptr` result
+    // type unambiguous to inference and allocates no intermediates.
+    // Total = 5 + 4 + 5 + 5 = 19.
+    acc_cell = ref(0)
+    total = string.seq_reduce(src, acc_cell, |acc: ptr, x: string| {
+        ref_set(acc_cell, ref_get(acc_cell) + string.length(x))
+        return acc_cell
+    })
+    if ref_get(total) != 19 {
+        println("FAIL 4a: reduce total=${ref_get(total)}, want 19")
+        exit(1)
+    }
+
+    // reduce over the empty seq returns init unchanged (the closure is
+    // never invoked, so init flows straight through).
+    init0 = ref(42)
+    same = string.seq_reduce(string.seq_empty(), init0, |acc: ptr, x: string| {
+        ref_set(init0, ref_get(init0) + 1)
+        return init0
+    })
+    if ref_get(same) != 42 {
+        println("FAIL 4b: reduce(empty, init) changed init to ${ref_get(same)}")
+        exit(1)
+    }
+    println("  PASS 4: reduce — char-count fold + empty-seq returns init")
+
+    // ---- zip_each (implicit zip, stops at shorter) -----------------
+    //
+    // Pair keys with values; the value seq is longer, so iteration must
+    // stop at the shorter (3 pairs). Build "k=v;" for each pair.
+    keys = string.split_to_seq("a,b,c", ",")
+    vals = string.split_to_seq("1,2,3,4,5", ",")
+    pairs = ref(0)
+    sb_zip = strbuilder.new(0)
+    string.seq_zip_each(keys, vals, |k: string, v: string| {
+        ref_set(pairs, ref_get(pairs) + 1)
+        strbuilder.append(sb_zip, k)
+        strbuilder.append(sb_zip, "=")
+        strbuilder.append(sb_zip, v)
+        strbuilder.append(sb_zip, ";")
+    })
+    if ref_get(pairs) != 3 {
+        println("FAIL 5a: zip_each made ${ref_get(pairs)} pairs, want 3 (shorter seq)")
+        exit(1)
+    }
+    zj = strbuilder.finish(sb_zip)
+    if string.equals(zj, "a=1;b=2;c=3;") != 1 {
+        println("FAIL 5b: zip_each=${zj}, want a=1;b=2;c=3;")
+        exit(1)
+    }
+    string.seq_free(keys)
+    string.seq_free(vals)
+    println("  PASS 5: zip_each — implicit zip stops at shorter seq")
+
+    string.seq_free(src)
+
+    // Reclaim the `ref` accumulator cells — `ref(...)` mallocs a bare
+    // cell with no scope tracking, so they need an explicit `ref_free`
+    // to keep the test leak-clean. (`acc_cell` and `init0` are the same
+    // cells `total`/`same` alias, so they're freed once each.)
+    ref_free(count)
+    ref_free(acc_cell)
+    ref_free(init0)
+    ref_free(pairs)
+
+    println("OK")
+    exit(0)
+}

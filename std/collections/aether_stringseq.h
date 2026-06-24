@@ -161,4 +161,83 @@ StringSeq* string_seq_take(StringSeq* s, int n);
  * new allocations. */
 StringSeq* string_seq_drop(StringSeq* s, int n);
 
+/* ---- Closure-bearing combinators ------------------------------------
+ *
+ * Higher-order iteration over the cons spine, taking an Aether closure
+ * as the per-element callback (issue #421 — multi-sequence iteration
+ * primitives). These resolve the "deferred to a follow-up change set
+ * once the Aether-callback-from-C bridge is settled" note that the
+ * structural combinators above carried.
+ *
+ * Closure ABI
+ * -----------
+ * Each callback parameter is declared `ptr` (C `void*`) on both sides,
+ * and the Aether `extern` declares it `ptr` too. When a caller passes
+ * a closure literal into a `ptr`-typed slot, the codegen heap-BOXES it:
+ *
+ *     extern_fn(..., _aether_box_closure(
+ *         (_AeClosure){ .fn = (void(*)(void))_closure_fn_N, .env = _e }))
+ *
+ * where `_AeClosure` is the codegen prologue's
+ *
+ *     typedef struct { void (*fn)(void); void* env; } _AeClosure;
+ *
+ * `_aether_box_closure` malloc's a copy of that two-word struct and
+ * hands us the heap pointer. We mirror the layout locally as
+ * `AeSeqClosure` (see the .c — this TU need not see the prologue
+ * typedef) and read `.fn` / `.env` back out. The closure body is then
+ * invoked as
+ *
+ *     ((RET(*)(void* env, ARG1, ARG2, ...))clo.fn)(clo.env, a1, a2, ...)
+ *
+ * i.e. `env` (the captured environment, NULL for a non-capturing
+ * closure) is ALWAYS the implicit first argument, ahead of the declared
+ * parameters — exactly what codegen emits for `call(cb, ...)` and for
+ * the `_closure_fn_N(env, ...)` definition.
+ *
+ * Ownership: the box (and the `env` it points at, when non-NULL) is
+ * malloc'd by `_aether_box_closure` and OWNED BY THE CALLEE — the same
+ * contract `list_add_closure_owned` / `list_free` use in
+ * aether_collections.c. Each combinator below frees the env then the
+ * box before returning, so a one-shot `string.seq_map(s, |x| ...)` does
+ * not leak the closure.
+ *
+ * Complexity: every combinator is a single iterative spine walk —
+ * O(n) time, O(1) auxiliary stack (no recursion). `map`/`filter`
+ * build a fresh, independently-owned result spine (free with
+ * `string_seq_free`); `each`/`zip_each` return nothing; `reduce`
+ * returns the caller's accumulator.
+ */
+
+/* Apply `f(elem)` to each element, head-to-tail, for side effects.
+ * `f`'s return value (if any) is discarded. NULL-safe (empty seq is a
+ * no-op). `s` is borrowed — not consumed, not freed. */
+void string_seq_each(StringSeq* s, void* f);
+
+/* Return a NEW seq with `f(elem)` substituted for each element, order
+ * preserved. `f` must return a `string` (its result is consed into the
+ * fresh spine, which retains it). The result is caller-owned: free with
+ * `string_seq_free`. `s` is left untouched. NULL on OOM (any partial
+ * result spine is freed before return). O(n). */
+StringSeq* string_seq_map(StringSeq* s, void* f);
+
+/* Return a NEW seq of the elements for which `pred(elem)` is truthy
+ * (non-zero), order preserved. The result is caller-owned: free with
+ * `string_seq_free`. `s` is left untouched. NULL on empty result or
+ * OOM (any partial result spine is freed before return). O(n). */
+StringSeq* string_seq_filter(StringSeq* s, void* pred);
+
+/* Left fold: starting from `init`, compute `acc = f(acc, elem)` for
+ * each element head-to-tail, and return the final `acc`. `acc` and the
+ * return are opaque `ptr`s — the closure owns whatever it threads
+ * through. NULL-safe (empty seq returns `init` unchanged). O(n). */
+void* string_seq_reduce(StringSeq* s, void* init, void* f);
+
+/* Implicit-zip iteration over two seqs: call `f(a_elem, b_elem)` for
+ * each aligned pair, stopping at the end of the SHORTER seq. Covers
+ * issue #421's multi-sequence intent without dynamic typing. Both
+ * seqs are borrowed. NULL-safe (a NULL either side ends immediately).
+ * O(min(|a|, |b|)). */
+void string_seq_zip_each(StringSeq* a, StringSeq* b, void* f);
+
 #endif

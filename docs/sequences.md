@@ -49,6 +49,11 @@ pattern.
 | `string.seq_concat(a, b)` | O(\|a\|) — `a` copied, `b` shared via refcount bump |
 | `string.seq_take(s, n)` | O(min(n, length)) — fresh independent spine |
 | `string.seq_drop(s, n)` | O(min(n, length)) — pointer walk only, returns retained tail |
+| `string.seq_each(s, f)` | O(n) — iterative spine walk, side effects |
+| `string.seq_map(s, f)` | O(n) — iterative; fresh independent spine |
+| `string.seq_filter(s, pred)` | O(n) — iterative; fresh independent spine |
+| `string.seq_reduce(s, init, f)` | O(n) — iterative left fold |
+| `string.seq_zip_each(a, b, f)` | O(min(\|a\|, \|b\|)) — iterative, stops at shorter |
 
 ## Building, walking, freeing
 
@@ -126,12 +131,11 @@ omitted but the dispatch test is still emitted — same
 
 ## Combinators
 
-The four built-in structural ops are all closure-free — they don't
-take an Aether function as a parameter, so the FFI surface stays
-simple. Closure-bearing siblings (`map` / `filter` / `foldl`) are
-deferred to a follow-up change set once the Aether-callback-from-C
-bridge is settled; until then, walk the spine with `match` and
-build the result with `cons`.
+There are two families. The four **structural** ops below are
+closure-free — they don't take an Aether function, so the FFI surface
+stays simple. The five **closure-bearing** combinators (`each` / `map`
+/ `filter` / `reduce` / `zip_each`, see the next section) take an
+Aether closure as the per-element callback.
 
 ```aether
 import std.string
@@ -180,6 +184,84 @@ conses each element back onto the second; the second argument is
 shared, never walked. `take` collects the first n elements into a
 reverse buffer then reverses to get them in order. `drop` is a pure
 pointer walk with a single `seq_retain` at the end.
+
+## Closure-bearing combinators
+
+These take an Aether closure as the per-element callback (issue #421 —
+multi-sequence iteration primitives). Every one is a single **iterative
+spine walk — O(n) time, O(1) auxiliary stack** (no recursion; that's
+the O(n²)→O(n) point of the issue):
+
+| Combinator | Callback | Returns |
+|---|---|---|
+| `string.seq_each(s, f)` | `\|x\| { ... }` (side effects) | nothing |
+| `string.seq_map(s, f)` | `\|x\| { return ... }` (`-> string`) | a NEW `*StringSeq`, order preserved |
+| `string.seq_filter(s, pred)` | `\|x\| { return 0/1 }` (`-> int`) | a NEW `*StringSeq` of truthy elements |
+| `string.seq_reduce(s, init, f)` | `\|acc, x\| { ... }` (`(ptr, string) -> ptr`) | the final accumulator (`ptr`) |
+| `string.seq_zip_each(a, b, f)` | `\|x, y\| { ... }` (side effects) | nothing |
+
+```aether
+import std.string
+
+s = string.split_to_seq("alpha,beta,gamma,delta", ",")
+
+// each — call the closure per element for its side effects. The
+// closure may capture (here, an outer `ref` counter).
+n = ref(0)
+string.seq_each(s, |x: string| {
+    ref_set(n, ref_get(n) + 1)
+    println(x)
+})                                   // prints all four; ref_get(n) == 4
+
+// map — fresh, independently-owned seq with the closure applied to
+// each element, order preserved. Free it with seq_free (or let scope
+// exit reclaim it); `s` is untouched.
+upper = string.seq_map(s, |x: string| { return string.to_upper(x) })
+// upper == ["ALPHA", "BETA", "GAMMA", "DELTA"]
+
+// filter — fresh seq of the elements whose predicate is truthy.
+five = string.seq_filter(s, |x: string| {
+    if string.length(x) == 5 { return 1 }
+    return 0
+})                                   // ["alpha", "gamma", "delta"]
+
+// reduce — left fold. acc is an opaque `ptr` the closure threads
+// through; here a `ref` cell holding a running character count.
+acc = ref(0)
+total = string.seq_reduce(s, acc, |a: ptr, x: string| {
+    ref_set(acc, ref_get(acc) + string.length(x))
+    return acc
+})                                   // ref_get(total) == 19
+
+// zip_each — implicit zip over two seqs, stopping at the shorter.
+keys = string.split_to_seq("a,b,c", ",")
+vals = string.split_to_seq("1,2,3,4,5", ",")
+string.seq_zip_each(keys, vals, |k: string, v: string| {
+    println("${k}=${v}")             // a=1, b=2, c=3 (stops at 3)
+})
+
+string.seq_free(upper)
+string.seq_free(five)
+```
+
+Ownership: `map` / `filter` build a fresh, caller-owned spine (freed via
+`seq_free`, or automatically at scope exit like any seq local) and leave
+the input untouched — `map` releases the transient string the closure
+returns after consing it (the new cell takes its own ref), so a freshly
+allocated mapped value such as `string.to_upper(x)` does not leak.
+`reduce` returns the caller's accumulator. `each` / `zip_each` return
+nothing and borrow their inputs. Under the hood the closure is heap-boxed
+into the combinator's `ptr` slot by the codegen (`_aether_box_closure`);
+the std runtime unboxes it, invokes the body with the captured
+environment as the implicit first argument, and frees the box (and its
+captured environment) when the walk completes — so a one-shot
+`string.seq_map(s, |x| ...)` does not leak the closure.
+
+> Closure-literal note: Aether infers a closure's return type from its
+> body, so write `|x: string| { return string.to_upper(x) }` (no
+> `-> Type` annotation on the closure itself). For a `reduce` whose
+> accumulator is a `ptr`, return a value whose `ptr` type is
+> unambiguous to inference — e.g. a captured `ref` cell, as above.
 
 ## Building from existing string-array shapes
 
