@@ -10,6 +10,7 @@
  * would cost an allocation per entry and chase an extra pointer. */
 
 #include "aether_collections.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,15 +21,15 @@ struct FloatArray {
 
 FloatArray* floatarr_new_raw(int size) {
     if (size < 0) return NULL;
-    FloatArray* arr = (FloatArray*)malloc(sizeof(*arr));
+    FloatArray* arr = (FloatArray*)aether_caps_malloc(sizeof(*arr));
     if (!arr) return NULL;
     arr->size = size;
     if (size == 0) {
         arr->data = NULL;   /* legal empty array; floatarr_free still OK */
         return arr;
     }
-    arr->data = (double*)calloc((size_t)size, sizeof(double));
-    if (!arr->data) { free(arr); return NULL; }
+    arr->data = (double*)aether_caps_calloc((size_t)size, sizeof(double));
+    if (!arr->data) { aether_caps_free(arr, sizeof(*arr)); return NULL; }
     return arr;
 }
 
@@ -68,6 +69,6 @@ void floatarr_fill(FloatArray* arr, double value) {
 
 void floatarr_free(FloatArray* arr) {
     if (!arr) return;
-    free(arr->data);
-    free(arr);
+    aether_caps_free(arr->data, (size_t)arr->size * sizeof(double));
+    aether_caps_free(arr, sizeof(*arr));
 }

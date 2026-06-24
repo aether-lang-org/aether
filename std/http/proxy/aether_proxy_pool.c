@@ -14,6 +14,7 @@
  */
 
 #include "aether_proxy_internal.h"
+#include "../../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -58,10 +59,10 @@ int aether_proxy_lb_algo_from_string(const char* name) {
 /* ----- AetherUpstream lifecycle ----- */
 
 static AetherUpstream* upstream_new(const char* base_url, int weight) {
-    AetherUpstream* u = (AetherUpstream*)calloc(1, sizeof(AetherUpstream));
+    AetherUpstream* u = (AetherUpstream*)aether_caps_calloc(1, sizeof(AetherUpstream));
     if (!u) return NULL;
     u->base_url = strdup(base_url);
-    if (!u->base_url) { free(u); return NULL; }
+    if (!u->base_url) { aether_caps_free(u, sizeof(AetherUpstream)); return NULL; }
     u->weight           = weight > 0 ? weight : 1;
     u->effective_weight = u->weight;
     u->current_weight   = 0;
@@ -95,7 +96,7 @@ static void upstream_free(AetherUpstream* u) {
     if (!u) return;
     pthread_mutex_destroy(&u->rl_lock);
     free(u->base_url);
-    free(u);
+    aether_caps_free(u, sizeof(AetherUpstream));
 }
 
 void aether_proxy_inflight_dec(AetherUpstream* u) {
@@ -114,7 +115,7 @@ AetherProxyPool* aether_proxy_pool_new(AetherProxyLbAlgo algo,
     if (dial_timeout_ms < 0)      return NULL;
     if (max_inflight_per_up < 0)  return NULL;
 
-    AetherProxyPool* p = (AetherProxyPool*)calloc(1, sizeof(*p));
+    AetherProxyPool* p = (AetherProxyPool*)aether_caps_calloc(1, sizeof(*p));
     if (!p) return NULL;
 
     p->algo                  = algo;
@@ -182,7 +183,7 @@ void aether_proxy_pool_free(AetherProxyPool* pool) {
     pthread_mutex_destroy(&pool->lock);
     pthread_mutex_destroy(&pool->hc_cv_lock);
     pthread_cond_destroy(&pool->hc_cv);
-    free(pool);
+    aether_caps_free(pool, sizeof(*pool));
 }
 
 /* ----- Drain ----- */
