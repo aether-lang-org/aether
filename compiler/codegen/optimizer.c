@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <errno.h>
 
 OptimizationStats global_opt_stats = {0, 0, 0, 0, 0};
 
@@ -125,20 +126,172 @@ static ASTNode* fold_binary_expression(ASTNode* node) {
     return node;
 }
 
+/* ---------------------------------------------------------------------------
+ * Compile-time constant evaluation, phase-1 (issue #482)
+ *
+ * A HARD-WHITELISTED folder — emphatically NOT a general interpreter. A
+ * general compile-time evaluator could synthesize std.fs / std.net calls
+ * that slip past the `--emit=lib` capability gate, so only the explicit
+ * whitelist below is ever folded. Everything else is left untouched here
+ * and rejected upstream by `is_const_expression` in the typechecker.
+ *
+ * The whitelist (mirrors the typechecker's `is_const_expr_call`):
+ *   string.from_int(<int const>)    -> decimal literal string
+ *   string.from_long(<int const>)   -> decimal literal string
+ *   string.from_float(<num const>)  -> %g literal string
+ *   string.concat(<str const>, <str const>) -> concatenated literal string
+ *
+ * Arithmetic (+ - * / %) on numeric literals is folded by
+ * fold_binary_expression above and predates this phase.
+ * ------------------------------------------------------------------------- */
+
+/* True when `name` is the dotted source spelling OR the underscored
+ * C-symbol spelling of one of the whitelisted pure conversions. The
+ * parser stores dotted callees (`string.from_int`); imported/merged
+ * callees can arrive underscored (`string_from_int`), so accept both. */
+static int is_whitelisted_string_call(const char* name, const char* dotted) {
+    if (!name) return 0;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "string.%s", dotted);
+    if (strcmp(name, buf) == 0) return 1;
+    snprintf(buf, sizeof(buf), "string_%s", dotted);
+    if (strcmp(name, buf) == 0) return 1;
+    return 0;
+}
+
+// Helper: create a string literal node (value carries the raw bytes; the
+// codegen adds the surrounding quotes + escapes on emit).
+static ASTNode* create_string_literal(const char* value, int line, int column) {
+    ASTNode* node = create_ast_node(AST_LITERAL, value, line, column);
+    if (node) node->node_type = create_type(TYPE_STRING);
+    return node;
+}
+
+// True when `node` is a string literal we can read the bytes of.
+static int is_string_literal(ASTNode* node) {
+    return node && node->type == AST_LITERAL && node->value &&
+           node->node_type && node->node_type->kind == TYPE_STRING;
+}
+
+/* Fold a whitelisted pure-conversion call on constant arguments into a
+ * string literal. Returns the folded literal (and frees `node`) on
+ * success, or `node` unchanged when the call is not in the whitelist /
+ * its arguments are not constants / the value would not be representable.
+ *
+ * Width discipline: from_int folds in 32-bit, from_long in 64-bit. An
+ * out-of-range argument for the chosen width is NOT folded — it is left
+ * as the runtime call so behaviour is unchanged (no silently-wrong
+ * literal). */
+static ASTNode* fold_const_string_call(ASTNode* node) {
+    if (!node || node->type != AST_FUNCTION_CALL || !node->value) return node;
+
+    // string.from_int / string.from_long — one numeric-literal argument.
+    int is_from_int  = is_whitelisted_string_call(node->value, "from_int");
+    int is_from_long = is_whitelisted_string_call(node->value, "from_long");
+    int is_from_flt  = is_whitelisted_string_call(node->value, "from_float");
+
+    if ((is_from_int || is_from_long || is_from_flt) && node->child_count == 1) {
+        ASTNode* arg = node->children[0];
+        if (!is_constant(arg) || !arg->value) return node;  // non-literal arg: leave runtime call
+        char buf[64];
+        if (is_from_flt) {
+            double v = get_constant_value(arg);
+            snprintf(buf, sizeof(buf), "%g", v);
+        } else {
+            /* Parse the integer literal text directly (not through the
+             * lossy double in get_constant_value) so 64-bit values past
+             * 2^53 fold exactly. strtoll handles decimal and 0x; 0b / 0o
+             * are uncommon as conversion args, so a literal we cannot
+             * parse exactly is left as the runtime call. */
+            errno = 0;
+            char* end = NULL;
+            const char* s = arg->value;
+            long long v;
+            if (s[0] == '0' && (s[1] == 'b' || s[1] == 'B')) {
+                v = strtoll(s + 2, &end, 2);
+            } else if (s[0] == '0' && (s[1] == 'o' || s[1] == 'O')) {
+                v = strtoll(s + 2, &end, 8);
+            } else {
+                v = strtoll(s, &end, 0);  // decimal / 0x
+            }
+            if (errno != 0 || !end || *end != '\0') return node;  // unparseable / overflow
+            if (is_from_int) {
+                // 32-bit width: an out-of-range value would print a
+                // different string than the runtime int truncation, so
+                // leave it as the runtime call rather than fold wrongly.
+                if (v < -2147483647LL - 1 || v > 2147483647LL) return node;
+                snprintf(buf, sizeof(buf), "%d", (int)v);
+            } else {
+                snprintf(buf, sizeof(buf), "%lld", v);
+            }
+        }
+        ASTNode* folded = create_string_literal(buf, node->line, node->column);
+        if (!folded) return node;
+        global_opt_stats.constants_folded++;
+        free_ast_node(node);
+        return folded;
+    }
+
+    // string.concat(a, b) — two string-literal arguments fold to one literal.
+    if (is_whitelisted_string_call(node->value, "concat") && node->child_count == 2) {
+        ASTNode* a = node->children[0];
+        ASTNode* b = node->children[1];
+        if (!is_string_literal(a) || !is_string_literal(b)) return node;
+        size_t la = strlen(a->value), lb = strlen(b->value);
+        char* joined = (char*)malloc(la + lb + 1);
+        if (!joined) return node;
+        memcpy(joined, a->value, la);
+        memcpy(joined + la, b->value, lb);
+        joined[la + lb] = '\0';
+        ASTNode* folded = create_string_literal(joined, node->line, node->column);
+        free(joined);
+        if (!folded) return node;
+        global_opt_stats.constants_folded++;
+        free_ast_node(node);
+        return folded;
+    }
+
+    return node;
+}
+
 // Constant folding main function
 ASTNode* optimize_constant_folding(ASTNode* node) {
     if (!node) return NULL;
-    
+
     // Handle binary expressions
     if (node->type == AST_BINARY_EXPRESSION) {
         return fold_binary_expression(node);
     }
-    
-    // Recursively optimize children
+
+    // Recursively optimize children FIRST so nested constants (and
+    // string-literal arguments produced by an inner fold) are available
+    // before we try to fold this node.
     for (int i = 0; i < node->child_count; i++) {
         node->children[i] = optimize_constant_folding(node->children[i]);
     }
-    
+
+    // Whitelisted pure-conversion calls fold to a string literal once
+    // their arguments are themselves constants.
+    if (node->type == AST_FUNCTION_CALL) {
+        return fold_const_string_call(node);
+    }
+
+    /* A `const` whose RHS folded to a string literal must have its
+     * declared type updated to `string`: the parser inferred the type
+     * from the original conversion call (which returns `ptr`), but the
+     * folded RHS is now a literal string. The `#define`/local emit keys
+     * off this type for the heap-string vs. literal decision. */
+    if (node->type == AST_CONST_DECLARATION && node->child_count > 0 &&
+        is_string_literal(node->children[0])) {
+        int is_array = node->annotation &&
+                       strcmp(node->annotation, "array_const") == 0;
+        if (!is_array &&
+            (!node->node_type || node->node_type->kind != TYPE_STRING)) {
+            if (node->node_type) free_type(node->node_type);
+            node->node_type = create_type(TYPE_STRING);
+        }
+    }
+
     return node;
 }
 

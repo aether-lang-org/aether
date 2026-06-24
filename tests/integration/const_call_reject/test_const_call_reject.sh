@@ -6,6 +6,13 @@
 # a helpful diagnostic that points the user at std.config /
 # std.actors for process-global state. Section 2 of
 # nuther-ask-of-aether-team.md.
+#
+# Exception (issue #482, compile-time constant evaluation phase-1):
+# a HARD-WHITELISTED set of pure conversions — string.from_int /
+# string.from_long / string.from_float / string.concat — IS admissible
+# in a const initializer because the optimizer folds them to a literal
+# at compile time (no re-evaluation at use sites). Every OTHER call
+# stays rejected. See docs/compile-time-eval.md.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -47,13 +54,27 @@ main() { println("ok") }
 EOF
 expect_reject "top-level const = function call" /tmp/ae_const_bad1.ae
 
-# Case 2: top-level const = stdlib call.
+# Case 2: top-level const = NON-whitelisted std-namespaced call.
+# string.length is a real pure stdlib function but it is NOT on the
+# compile-time-fold whitelist, so it must still be rejected.
 cat > /tmp/ae_const_bad2.ae << 'EOF'
 import std.string
-const NAME = string.from_int(42)
+const N = string.length("hi")
 main() { println("ok") }
 EOF
-expect_reject "top-level const = std-namespaced call" /tmp/ae_const_bad2.ae
+expect_reject "top-level const = non-whitelisted std call" /tmp/ae_const_bad2.ae
+
+# Case 2b (issue #482): the whitelisted pure conversions ARE accepted
+# and fold to a literal — string.from_int / from_long / from_float /
+# concat. These do not re-evaluate at use sites because the optimizer
+# replaces the call with the literal it produces.
+cat > /tmp/ae_const_ok_fold.ae << 'EOF'
+import std.string
+const ID = string.from_int(42)
+const VER = string.concat("v", "1")
+main() { println("ok") }
+EOF
+expect_accept "whitelisted from_int/concat const folds (issue #482)" /tmp/ae_const_ok_fold.ae
 
 # Case 3: function-local const = call.
 cat > /tmp/ae_const_bad3.ae << 'EOF'
@@ -84,7 +105,7 @@ EOF
 expect_accept "arithmetic on const RHS still compiles" /tmp/ae_const_ok2.ae
 
 rm -f /tmp/ae_const_bad*.ae /tmp/ae_const_ok*.ae \
-      /tmp/ae_const_reject_out /tmp/ae_const_ok_out
+      /tmp/ae_const_reject_out /tmp/ae_const_ok_out /tmp/ae_const_ok_fold.ae
 
 echo ""
 echo "const_call_reject: $pass passed, $fail failed"

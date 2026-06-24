@@ -814,12 +814,21 @@ static int byte_assignment_literal_out_of_range(ASTNode* init) {
  *   - Interpolated string ("${X}") where every interpolated value
  *     is itself a const-expression — useful for building
  *     concatenated literal-ish strings at the const layer
+ *   - Array literal where every element is a const-expression
+ *     (lowered to a `static const` C array, not #define-inlined)
+ *   - A HARD-WHITELISTED pure-conversion call on const arguments —
+ *     `string.from_int` / `string.from_long` / `string.from_float` /
+ *     `string.concat` (see is_const_expr_call). The optimizer folds
+ *     these to a literal post-typecheck (issue #482).
  *
  * Disallowed:
- *   - Function calls (the headline trap Nico flagged)
+ *   - Any function call NOT on the whitelist (the headline trap Nico
+ *     flagged — an arbitrary call is inlined per use, re-evaluating
+ *     side effects; and a general compile-time evaluator could
+ *     synthesize std.fs / std.net calls past the --emit=lib
+ *     capability gate, so the folder is whitelist-only by design)
  *   - Member access (could be a namespaced call; treat as non-const)
  *   - Struct literals (would allocate fresh per use)
- *   - Array / sequence literals
  *   - Anything else
  *
  * `table` may be NULL — when called from the global pre-pass, the
@@ -827,6 +836,38 @@ static int byte_assignment_literal_out_of_range(ASTNode* init) {
  * we treat unknown identifiers as non-const to err on the safe
  * side. The check is robust to NULL.
  */
+
+static int is_const_expression(ASTNode* expr, SymbolTable* table);
+
+/* The hard whitelist of pure conversions that may appear in a const
+ * initializer. Kept byte-for-byte in sync with the optimizer's
+ * is_whitelisted_string_call (compiler/codegen/optimizer.c) — that pass
+ * folds exactly these to literals after typecheck. Accepts both the
+ * dotted source spelling (`string.from_int`) and the underscored
+ * C-symbol spelling (`string_from_int`) a merged/imported callee can
+ * carry. NOTHING outside this list is admissible. */
+static int is_const_expr_call(ASTNode* expr) {
+    if (!expr || expr->type != AST_FUNCTION_CALL || !expr->value) return 0;
+    const char* name = expr->value;
+    static const char* const whitelist[] = {
+        "from_int", "from_long", "from_float", "concat"
+    };
+    for (size_t i = 0; i < sizeof(whitelist) / sizeof(whitelist[0]); i++) {
+        char dotted[64], under[64];
+        snprintf(dotted, sizeof(dotted), "string.%s", whitelist[i]);
+        snprintf(under,  sizeof(under),  "string_%s", whitelist[i]);
+        if (strcmp(name, dotted) == 0 || strcmp(name, under) == 0) {
+            /* Arguments must themselves be const-expressions — guards
+             * `string.from_int(rand())` and the like. */
+            for (int a = 0; a < expr->child_count; a++) {
+                if (!is_const_expression(expr->children[a], NULL)) return 0;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int is_const_expression(ASTNode* expr, SymbolTable* table) {
     if (!expr) return 0;
     switch (expr->type) {
@@ -864,13 +905,32 @@ static int is_const_expression(ASTNode* expr, SymbolTable* table) {
             return 1;
         }
         case AST_FUNCTION_CALL:
+            /* Only the hard whitelist of pure conversions (folded to
+             * literals by the optimizer post-typecheck). Every other
+             * call stays rejected. */
+            return is_const_expr_call(expr);
         case AST_MEMBER_ACCESS:
         case AST_STRUCT_LITERAL:
+            return 0;
         case AST_ARRAY_LITERAL:
+            /* A bare array literal is NOT a scalar const — it cannot be
+             * #define-inlined. It is admissible only in the const-array
+             * form (`const A[] = [...]` / `const A: T[N] = [...]`), which
+             * carries the "array_const" annotation and is gated at the
+             * declaration site (where each element is checked with
+             * is_const_array_element). */
             return 0;
         default:
             return 0;
     }
+}
+
+/* Element check for a const array literal. Each element must be a
+ * compile-time constant (literal, const identifier, folded const
+ * expression, or a whitelisted pure-conversion call). Used by the
+ * array_const branch of the const-declaration typecheck. */
+static int is_const_array_element(ASTNode* elem, SymbolTable* table) {
+    return is_const_expression(elem, table);
 }
 
 // Type compatibility functions
@@ -2823,9 +2883,20 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 if (stmt->type == AST_CONST_DECLARATION &&
                     !is_const_expression(init, table)) {
                     /* Allow array literals for const arr[] = [...] declarations.
-                     * These emit static const arrays, not #define-inlined forms. */
+                     * These emit static const arrays, not #define-inlined forms.
+                     * Each element must itself be a compile-time constant — a
+                     * non-const element (e.g. `[foo(), 2]`) is rejected so the
+                     * static initializer stays well-formed. */
                     int is_array_const = (stmt->annotation && strcmp(stmt->annotation, "array_const") == 0 &&
                                           init->type == AST_ARRAY_LITERAL);
+                    if (is_array_const) {
+                        for (int ei = 0; ei < init->child_count; ei++) {
+                            if (!is_const_array_element(init->children[ei], table)) {
+                                is_array_const = 0;
+                                break;
+                            }
+                        }
+                    }
                     if (!is_array_const) {
                         char msg[512];
                         if (stmt->annotation && strcmp(stmt->annotation, "global_var") == 0) {
