@@ -15,6 +15,10 @@ typedef struct {
                           // trailing-block parsing on function calls so the
                           // `{` belongs to the if/while body, not a trailing
                           // closure on the last call in the condition.
+    int when_top_level;   // Flag: the `when` static-if currently being parsed
+                          // sits at top level, so its arm items are parsed as
+                          // declarations (parse_top_level_decl) rather than
+                          // statements. Saved/restored around nested `when`s.
 } Parser;
 
 // Parser functions
@@ -46,6 +50,8 @@ ASTNode* parse_variable_declaration(Parser* parser);
 ASTNode* parse_variable_declaration_with_semicolon(Parser* parser, bool expect_semicolon);
 ASTNode* parse_python_style_declaration(Parser* parser);
 ASTNode* parse_if_statement(Parser* parser);
+ASTNode* parse_when_statement(Parser* parser);   // compile-time `when` / static-if (#483)
+ASTNode* parse_top_level_decl(Parser* parser);   // one top-level declaration (used by parse_program and top-level `when`)
 ASTNode* parse_for_loop(Parser* parser);
 ASTNode* parse_while_loop(Parser* parser);
 ASTNode* parse_switch_statement(Parser* parser);

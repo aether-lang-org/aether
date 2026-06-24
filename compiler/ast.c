@@ -386,6 +386,7 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_ASSIGNMENT: return "ASSIGNMENT";
         case AST_COMPOUND_ASSIGNMENT: return "COMPOUND_ASSIGNMENT";
         case AST_IF_STATEMENT: return "IF_STATEMENT";
+        case AST_WHEN_STATEMENT: return "WHEN_STATEMENT";
         case AST_FOR_LOOP: return "FOR_LOOP";
         case AST_WHILE_LOOP: return "WHILE_LOOP";
         case AST_SWITCH_STATEMENT: return "SWITCH_STATEMENT";

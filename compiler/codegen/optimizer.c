@@ -311,6 +311,276 @@ static int is_constant_condition(ASTNode* node, int* is_truthy) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Compile-time `when` / static-if resolution (issue #483)
+//
+// A `when COND { ... } else { ... }` is evaluated entirely at compile time:
+// only the selected arm survives into type-checking and codegen. The dead
+// arm parses but is pruned here, BEFORE typecheck runs (called from aetherc.c
+// between parse and typecheck), so a platform-specific extern in the dead arm
+// is never resolved, type-checked, or emitted.
+//
+// `target.os` / `target.arch` are compiler-provided compile-time string
+// constants for the build target. They are sourced from the SAME C
+// preprocessor macros the runtime's os.platform() uses (std/os/aether_os.c
+// os_platform_raw), so the canonical names match across the toolchain:
+// os ∈ {"windows","darwin","linux","freebsd","openbsd","netbsd",
+// "dragonfly","solaris","wasm","unknown"}; arch ∈ {"x86_64","aarch64",
+// "x86","arm","riscv64","ppc64","wasm","unknown"}. The target is the host
+// (aetherc emits C compiled by the host toolchain; there is no cross-target
+// flag today), exactly as os.platform() and select() already assume.
+// ---------------------------------------------------------------------------
+
+static const char* target_os_string(void) {
+#if defined(_WIN32) || defined(_WIN64)
+    return "windows";
+#elif defined(__APPLE__)
+    return "darwin";
+#elif defined(__linux__)
+    return "linux";
+#elif defined(__FreeBSD__)
+    return "freebsd";
+#elif defined(__OpenBSD__)
+    return "openbsd";
+#elif defined(__NetBSD__)
+    return "netbsd";
+#elif defined(__DragonFly__)
+    return "dragonfly";
+#elif defined(__sun) && (defined(__SVR4) || defined(__svr4__))
+    return "solaris";
+#elif defined(__EMSCRIPTEN__) || defined(__wasi__) || defined(__wasm__)
+    return "wasm";
+#else
+    return "unknown";
+#endif
+}
+
+static const char* target_arch_string(void) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__amd64__)
+    return "x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64) || defined(__arm64__)
+    return "aarch64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#elif defined(__arm__) || defined(_M_ARM)
+    return "arm";
+#elif defined(__riscv) && (__riscv_xlen == 64)
+    return "riscv64";
+#elif defined(__powerpc64__) || defined(__ppc64__)
+    return "ppc64";
+#elif defined(__EMSCRIPTEN__) || defined(__wasi__) || defined(__wasm__)
+    return "wasm";
+#else
+    return "unknown";
+#endif
+}
+
+// If `node` is the compiler-provided `target.os` / `target.arch` member
+// access, return its compile-time string value; otherwise NULL.
+static const char* when_target_field_value(ASTNode* node) {
+    if (!node || node->type != AST_MEMBER_ACCESS || !node->value) return NULL;
+    if (node->child_count < 1 || !node->children[0]) return NULL;
+    ASTNode* base = node->children[0];
+    if (base->type != AST_IDENTIFIER || !base->value) return NULL;
+    if (strcmp(base->value, "target") != 0) return NULL;
+    if (strcmp(node->value, "os") == 0)   return target_os_string();
+    if (strcmp(node->value, "arch") == 0) return target_arch_string();
+    return NULL;
+}
+
+// Result of evaluating a `when` condition at compile time.
+typedef enum {
+    WHEN_EVAL_ERROR = 0,   // not a recognised compile-time constant
+    WHEN_EVAL_FALSE,
+    WHEN_EVAL_TRUE
+} WhenEvalResult;
+
+// Evaluate a `when` condition expression to a compile-time boolean.
+// Supported forms (composed freely with `&&`, `||`, `!`, and parens):
+//   - target.os == "<str>" / target.os != "<str>"
+//   - target.arch == "<str>" / target.arch != "<str>"
+//   - "<str>" == "<str>" (and !=) between any two constant strings
+//   - boolean literals `true` / `false`
+//   - a numeric literal (nonzero is true) — lets `when 1 {}` work
+// Returns WHEN_EVAL_ERROR for anything not reducible to a constant bool;
+// the caller turns that into a clear compile error rather than guessing.
+static WhenEvalResult when_eval_condition(ASTNode* cond) {
+    if (!cond) return WHEN_EVAL_ERROR;
+
+    // Parenthesised / passthrough wrappers: a unary `!` is the only
+    // operator we special-case; otherwise fall through to literal/binary.
+    if (cond->type == AST_UNARY_EXPRESSION && cond->value &&
+        strcmp(cond->value, "!") == 0 && cond->child_count >= 1) {
+        WhenEvalResult inner = when_eval_condition(cond->children[0]);
+        if (inner == WHEN_EVAL_ERROR) return WHEN_EVAL_ERROR;
+        return inner == WHEN_EVAL_TRUE ? WHEN_EVAL_FALSE : WHEN_EVAL_TRUE;
+    }
+
+    if (cond->type == AST_LITERAL && cond->value) {
+        if (strcmp(cond->value, "true") == 0) return WHEN_EVAL_TRUE;
+        if (strcmp(cond->value, "false") == 0) return WHEN_EVAL_FALSE;
+        // A string literal alone is not a boolean condition.
+        if (cond->node_type && cond->node_type->kind == TYPE_STRING)
+            return WHEN_EVAL_ERROR;
+        return atof(cond->value) != 0.0 ? WHEN_EVAL_TRUE : WHEN_EVAL_FALSE;
+    }
+
+    if (cond->type == AST_BINARY_EXPRESSION && cond->value &&
+        cond->child_count >= 2) {
+        ASTNode* l = cond->children[0];
+        ASTNode* r = cond->children[1];
+
+        // Logical connectives compose sub-conditions.
+        if (strcmp(cond->value, "&&") == 0) {
+            WhenEvalResult a = when_eval_condition(l);
+            WhenEvalResult b = when_eval_condition(r);
+            if (a == WHEN_EVAL_ERROR || b == WHEN_EVAL_ERROR) return WHEN_EVAL_ERROR;
+            return (a == WHEN_EVAL_TRUE && b == WHEN_EVAL_TRUE)
+                       ? WHEN_EVAL_TRUE : WHEN_EVAL_FALSE;
+        }
+        if (strcmp(cond->value, "||") == 0) {
+            WhenEvalResult a = when_eval_condition(l);
+            WhenEvalResult b = when_eval_condition(r);
+            if (a == WHEN_EVAL_ERROR || b == WHEN_EVAL_ERROR) return WHEN_EVAL_ERROR;
+            return (a == WHEN_EVAL_TRUE || b == WHEN_EVAL_TRUE)
+                       ? WHEN_EVAL_TRUE : WHEN_EVAL_FALSE;
+        }
+
+        // String equality/inequality. Each side is either `target.os`/
+        // `target.arch` or a string literal; both must resolve to a string.
+        int is_eq = strcmp(cond->value, "==") == 0;
+        int is_ne = strcmp(cond->value, "!=") == 0;
+        if (is_eq || is_ne) {
+            const char* ls = when_target_field_value(l);
+            if (!ls && l->type == AST_LITERAL && l->node_type &&
+                l->node_type->kind == TYPE_STRING) ls = l->value;
+            const char* rs = when_target_field_value(r);
+            if (!rs && r->type == AST_LITERAL && r->node_type &&
+                r->node_type->kind == TYPE_STRING) rs = r->value;
+            if (ls && rs) {
+                int equal = strcmp(ls, rs) == 0;
+                int truth = is_eq ? equal : !equal;
+                return truth ? WHEN_EVAL_TRUE : WHEN_EVAL_FALSE;
+            }
+            // Fall back to numeric/bool equality on two constant literals.
+            int l_truthy = 0, r_truthy = 0;
+            if (is_constant_condition(l, &l_truthy) &&
+                is_constant_condition(r, &r_truthy)) {
+                int equal = (l_truthy == r_truthy);
+                int truth = is_eq ? equal : !equal;
+                return truth ? WHEN_EVAL_TRUE : WHEN_EVAL_FALSE;
+            }
+            return WHEN_EVAL_ERROR;
+        }
+    }
+
+    return WHEN_EVAL_ERROR;
+}
+
+// Tracks whether any `when` failed to resolve, so the driver can fail the
+// build with a non-zero status instead of silently dropping code.
+static int g_when_error_count = 0;
+
+// Replace the `when` child at parent->children[idx] with the children of its
+// selected arm (an AST_BLOCK), spliced in place. Splicing the arm's children
+// (rather than nesting the AST_BLOCK) keeps top-level externs/imports at top
+// level and avoids introducing a spurious C scope around a statement arm's
+// locals — the arm braces are a compile-time grouping, not a runtime block.
+// Frees the `when` node and the discarded arm. Returns the number of nodes
+// that now occupy the slot (the arm's child count), so the caller can
+// continue scanning from the right place.
+static int splice_when_selected_arm(ASTNode* parent, int idx, ASTNode* selected_arm) {
+    ASTNode* when_node = parent->children[idx];
+
+    // Detach the selected arm so freeing the `when` node doesn't free it.
+    int n = selected_arm ? selected_arm->child_count : 0;
+    ASTNode** spliced = NULL;
+    if (n > 0) {
+        spliced = (ASTNode**)malloc(sizeof(ASTNode*) * (size_t)n);
+        for (int i = 0; i < n; i++) {
+            spliced[i] = selected_arm->children[i];
+            selected_arm->children[i] = NULL;  // transfer ownership
+        }
+        selected_arm->child_count = 0;
+    }
+
+    // Free the entire `when` subtree (condition + both arms; the selected
+    // arm's children were transferred out above, so they survive).
+    free_ast_node(when_node);
+
+    // Rebuild parent->children with the spliced nodes in place of slot idx.
+    int old_count = parent->child_count;
+    int new_count = old_count - 1 + n;
+    ASTNode** rebuilt = (ASTNode**)malloc(sizeof(ASTNode*) * (size_t)(new_count > 0 ? new_count : 1));
+    int w = 0;
+    for (int i = 0; i < old_count; i++) {
+        if (i == idx) {
+            for (int j = 0; j < n; j++) rebuilt[w++] = spliced[j];
+        } else {
+            rebuilt[w++] = parent->children[i];
+        }
+    }
+    free(parent->children);
+    free(spliced);
+    parent->children = rebuilt;
+    parent->child_count = new_count;
+    return n;
+}
+
+// Recursively resolve every `when` statement in the subtree rooted at `node`,
+// scanning the children of each node so a `when` can be replaced in place by
+// its selected arm's contents. Runs before typecheck; the unselected arm is
+// freed and never seen by later phases.
+static void resolve_when_in_children(ASTNode* node) {
+    if (!node) return;
+    for (int i = 0; i < node->child_count; i++) {
+        ASTNode* child = node->children[i];
+        if (child && child->type == AST_WHEN_STATEMENT && child->child_count >= 2) {
+            ASTNode* cond = child->children[0];
+            WhenEvalResult r = when_eval_condition(cond);
+            if (r == WHEN_EVAL_ERROR) {
+                g_when_error_count++;
+                fprintf(stderr,
+                    "Error: `when` condition at line %d is not a compile-time "
+                    "constant.\n"
+                    "       Supported forms: target.os == \"<os>\", "
+                    "target.os != \"<os>\", target.arch == \"<arch>\",\n"
+                    "       a bool literal, and combinations with && / || / !.\n",
+                    child->line);
+                // Leave the node in place but neutralise it so we don't
+                // descend into a half-built arm; it won't survive anyway
+                // because the build fails. Skip it.
+                continue;
+            }
+            ASTNode* selected = NULL;
+            if (r == WHEN_EVAL_TRUE) {
+                selected = child->children[1];
+            } else if (child->child_count >= 3) {
+                selected = child->children[2];
+            }
+            // Resolve any nested `when`s inside the selected arm first, so
+            // the spliced-in nodes are already fully resolved.
+            resolve_when_in_children(selected);
+            int spliced = splice_when_selected_arm(node, i, selected);
+            // Re-examine the slot we just filled (the first spliced node may
+            // itself be a `when` from an `else when` chain wrapper).
+            i += spliced - 1;
+            if (i < -1) i = -1;
+            continue;
+        }
+        resolve_when_in_children(child);
+    }
+}
+
+// Public entry: resolve all compile-time `when` statements in `program`.
+// Returns 0 on success, non-zero if any `when` condition was not a
+// compile-time constant (the driver then aborts the build).
+int resolve_when_statements(ASTNode* program) {
+    g_when_error_count = 0;
+    resolve_when_in_children(program);
+    return g_when_error_count;
+}
+
 // Dead code elimination
 ASTNode* optimize_dead_code(ASTNode* node) {
     if (!node) return NULL;

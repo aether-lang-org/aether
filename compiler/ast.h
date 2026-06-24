@@ -42,6 +42,7 @@ typedef enum {
     AST_ASSIGNMENT,
     AST_COMPOUND_ASSIGNMENT,  // x += expr, x -= expr, etc.
     AST_IF_STATEMENT,
+    AST_WHEN_STATEMENT,        // compile-time `when` / static-if (issue #483)
     AST_FOR_LOOP,
     AST_WHILE_LOOP,
     AST_SWITCH_STATEMENT,

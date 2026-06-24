@@ -1,0 +1,103 @@
+// Regression test: compile-time `when` / static-if (issue #483)
+//
+// A `when COND { ... } else { ... }` is evaluated at COMPILE time. Only the
+// selected arm reaches type-checking and codegen; the unselected arm parses
+// but is pruned before either runs. This test proves all three properties on
+// any host, with no host-specific expected output:
+//
+//   (a) The selected branch executes (we pick the branch by the real host OS
+//       and confirm the matching code ran).
+//   (b) A `when` whose UNSELECTED arm calls a DELIBERATELY-UNDEFINED function
+//       still compiles and runs — proving the dead arm is neither type-checked
+//       nor emitted. `when false { ... }` is always-false on every host, so
+//       the undefined call always lands in the dead arm.
+//   (c) `target.arch` resolves and selects an arm.
+//
+// If the dead arm were type-checked, `undefined_must_not_link()` would be an
+// "undefined function" error and the build would fail. If it were emitted, the
+// C compiler / linker would fail on the missing symbol. The test passing
+// end-to-end is the proof that neither happens.
+
+extern exit(code: int)
+
+main() {
+    // ---- (b) The dead arm references an undefined symbol. -----------------
+    // `false` is a compile-time-constant bool, so the `else` arm is selected
+    // on every host and the `then` arm (with the undefined call) is pruned
+    // before typecheck. If pruning didn't happen, compilation would fail.
+    when false {
+        // This function is never declared anywhere. It must never be
+        // type-checked or emitted.
+        undefined_must_not_link()
+    } else {
+        println("  PASS: unselected `when` arm with undefined symbol was pruned")
+    }
+
+    // Symmetric check: an always-true condition selects the `then` arm and
+    // the undefined call sits in the `else` arm.
+    when true {
+        println("  PASS: always-true `when` selected the then-arm")
+    } else {
+        also_undefined_must_not_link()
+    }
+
+    // ---- (a) Real host selection via target.os. ---------------------------
+    // Exactly one arm runs; the others are pruned. Confirm a branch executed.
+    os_selected = 0
+    when target.os == "darwin" {
+        println("  selected os arm: darwin")
+        os_selected = 1
+    } else when target.os == "linux" {
+        println("  selected os arm: linux")
+        os_selected = 1
+    } else when target.os == "windows" {
+        println("  selected os arm: windows")
+        os_selected = 1
+    } else {
+        println("  selected os arm: other")
+        os_selected = 1
+    }
+    if os_selected != 1 {
+        println("FAIL: no target.os arm was selected")
+        exit(1)
+    }
+
+    // `!=` form: this arm runs on any real target ("plan9" is never one), so
+    // the else (with its undefined call) is always pruned.
+    os_ne_seen = 0
+    when target.os != "plan9" {
+        os_ne_seen = 1
+    } else {
+        nonexistent_plan9_only()
+    }
+    if os_ne_seen != 1 {
+        println("FAIL: target.os != arm did not run")
+        exit(1)
+    }
+
+    // ---- (c) target.arch selection. ---------------------------------------
+    arch_selected = 0
+    when target.arch == "x86_64" {
+        println("  selected arch arm: x86_64")
+        arch_selected = 1
+    } else when target.arch == "aarch64" {
+        println("  selected arch arm: aarch64")
+        arch_selected = 1
+    } else {
+        println("  selected arch arm: other")
+        arch_selected = 1
+    }
+    if arch_selected != 1 {
+        println("FAIL: no target.arch arm was selected")
+        exit(1)
+    }
+
+    // ---- Combined condition with ||. --------------------------------------
+    when target.os == "darwin" || target.os == "linux" || target.os == "windows" {
+        println("  PASS: combined `||` condition selected a mainstream-OS arm")
+    } else {
+        only_on_exotic_os()
+    }
+
+    println("  PASS: all `when` static-if checks passed")
+}

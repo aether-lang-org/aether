@@ -1,0 +1,40 @@
+// Regression test: TOP-LEVEL compile-time `when` / static-if (issue #483)
+//
+// `when` also works around top-level declarations (externs, functions,
+// imports). The headline use case: a platform-specific extern binding gated
+// cleanly so the host doesn't need the symbol to exist.
+//
+// On a non-Windows host the `windows` arm — which declares an extern for a
+// Windows-only C symbol and a function that calls it — is pruned BEFORE
+// typecheck and codegen. The undefined `win_only_symbol` is therefore never
+// resolved, type-checked, or linked. If pruning didn't happen, the build
+// would fail on the missing symbol. The test compiling + running is the proof.
+
+extern exit(code: int)
+
+when target.os == "windows" {
+    extern win_only_symbol(x: int) -> int
+    plat_value() -> int { return win_only_symbol(7) }
+    plat_name() -> string { return "windows" }
+} else when target.os == "darwin" {
+    plat_value() -> int { return 1 }
+    plat_name() -> string { return "darwin" }
+} else when target.os == "linux" {
+    plat_value() -> int { return 2 }
+    plat_name() -> string { return "linux" }
+} else {
+    plat_value() -> int { return 99 }
+    plat_name() -> string { return "other" }
+}
+
+main() {
+    v = plat_value()
+    n = plat_name()
+    println("  selected top-level arm: ${n} (plat_value=${v})")
+    // plat_value must be the defined-arm value, never the pruned windows arm.
+    if v == 0 {
+        println("FAIL: no top-level `when` arm was selected")
+        exit(1)
+    }
+    println("  PASS: top-level `when` selected a defined platform arm")
+}

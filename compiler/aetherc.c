@@ -1312,6 +1312,25 @@ int compile_source(const char* input_path, const char* output_path) {
         return 0;
     }
 
+    // Step 2.68: compile-time `when` / static-if resolution (#483).
+    // Evaluates each `when` condition (target.os / target.arch / const bool)
+    // at compile time and prunes the AST to the selected arm BEFORE type
+    // checking and codegen run. The unselected arm — including any platform-
+    // specific extern it declares — is freed here, so it is never resolved,
+    // type-checked, or emitted. Runs after module merge so `when`s in merged
+    // module bodies are resolved too, and BEFORE the --emit=lib import gate
+    // and typecheck so both see the post-prune program. A non-const `when`
+    // condition is a hard error (returns non-zero) — we never guess an arm.
+    if (resolve_when_statements(program) != 0) {
+        report_compilation_failure(input_path);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int k = 0; k < token_count; k++) free_token(tokens[k]);
+        free_parser(parser);
+        free(source);
+        return 0;
+    }
+
     // Step 2.7: --emit=lib capability-empty check.
     // In lib mode the output is consumed by another process (Java host,
     // Python script, etc.) that owns network/filesystem/process access.
