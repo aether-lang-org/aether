@@ -1875,6 +1875,10 @@ static void check_unreachable_code(ASTNode* body) {
     }
 }
 
+// #521: reject escapes of `@scoped` bindings (defined below, used in the
+// unused-variable/unreachable third pass).
+static void scoped_check_bindings(ASTNode* node, ASTNode* root);
+
 // Type checking functions
 int typecheck_program(ASTNode* program) {
     if (!program || program->type != AST_PROGRAM) return 0;
@@ -2498,11 +2502,13 @@ int typecheck_program(ASTNode* program) {
             ASTNode* body = child->children[child->child_count - 1];
             check_unused_variables(body, global_var_names, global_var_count);
             check_unreachable_code(body);
+            scoped_check_bindings(body, body);  // #521
         } else if (child->type == AST_MAIN_FUNCTION && child->child_count > 0) {
             // main() has a BLOCK child containing the actual statements
             ASTNode* main_body = child->children[0];
             check_unused_variables(main_body, global_var_names, global_var_count);
             check_unreachable_code(main_body);
+            scoped_check_bindings(main_body, main_body);  // #521
         }
     }
 
@@ -2703,6 +2709,133 @@ int typecheck_actor_definition(ASTNode* actor, SymbolTable* table) {
     
     free_symbol_table(actor_table);
     return 1;
+}
+
+/* #521 @scoped bindings — escape rejection.
+ *
+ * A binding annotated `@scoped` must not outlive the lexical block that
+ * introduced it. The check rejects the value escaping via: a return; an
+ * assignment / declaration that copies it into another binding or field; an
+ * element of an aggregate (array / struct / message) literal; a closure
+ * capture; or a container-insert builtin. Only a scalar *derived* from it may
+ * escape — `return buf.checksum()` carries the call RESULT, not the binding,
+ * so it is allowed. This is opt-in escape analysis, not a borrow checker:
+ * one annotation makes the non-escape a checked invariant. */
+
+/* Direct carry: does `node` hand `name`'s value out as-is — a bare reference,
+ * or an element of an aggregate literal? A call ON `name` (`name.f()`,
+ * `f(name)`) is NOT a direct carry; its result is a fresh value. */
+static int scoped_carries(ASTNode* node, const char* name) {
+    if (!node) return 0;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, name) == 0) return 1;
+    if (node->type == AST_ARRAY_LITERAL || node->type == AST_STRUCT_LITERAL ||
+        node->type == AST_MESSAGE_CONSTRUCTOR || node->type == AST_FIELD_INIT) {
+        for (int i = 0; i < node->child_count; i++)
+            if (scoped_carries(node->children[i], name)) return 1;
+    }
+    return 0;
+}
+
+/* Does the subtree reference `name` as an identifier (a closure-capture test)? */
+static int scoped_mentions(ASTNode* node, const char* name) {
+    if (!node) return 0;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, name) == 0) return 1;
+    for (int i = 0; i < node->child_count; i++)
+        if (scoped_mentions(node->children[i], name)) return 1;
+    return 0;
+}
+
+/* Curated container-insert builtins: handing a @scoped value to one of these
+ * stores it beyond the block. Same curation posture as codegen's
+ * is_nonstoring_builtin allowlist. Names are the as-written qualified
+ * spellings (the AST stores callees in dotted form). */
+static int scoped_store_call(const char* fn) {
+    if (!fn) return 0;
+    static const char* sinks[] = {
+        "list.add", "list.push", "list.set", "map.put", "map.set",
+        "set.add", "seq.cons", NULL };
+    for (int i = 0; sinks[i]; i++)
+        if (strcmp(fn, sinks[i]) == 0) return 1;
+    return 0;
+}
+
+/* Reason string if `node` escapes `name` AT THIS NODE, else NULL. */
+static const char* scoped_escape_reason(ASTNode* node, const char* name) {
+    if (!node) return NULL;
+    if (node->type == AST_RETURN_STATEMENT) {
+        for (int i = 0; i < node->child_count; i++)
+            if (scoped_carries(node->children[i], name))
+                return "it is returned from the function";
+    }
+    if ((node->type == AST_ASSIGNMENT ||
+         (node->type == AST_BINARY_EXPRESSION && node->value &&
+          strcmp(node->value, "=") == 0)) && node->child_count >= 2) {
+        ASTNode* lhs = node->children[0];
+        int lhs_is_self = lhs && lhs->type == AST_IDENTIFIER && lhs->value &&
+                          strcmp(lhs->value, name) == 0;
+        if (!lhs_is_self && scoped_carries(node->children[1], name))
+            return "it is stored into another binding or field";
+    }
+    if (node->type == AST_VARIABLE_DECLARATION) {
+        int decl_is_self = node->value && strcmp(node->value, name) == 0;
+        if (!decl_is_self)
+            for (int i = 0; i < node->child_count; i++)
+                if (scoped_carries(node->children[i], name))
+                    return "it is aliased into another binding";
+    }
+    if (node->type == AST_CLOSURE && scoped_mentions(node, name))
+        return "it is captured by a closure that can outlive the block";
+    if (node->type == AST_FUNCTION_CALL && node->value &&
+        scoped_store_call(node->value)) {
+        int first = strcmp(node->value, "call") == 0 ? 1 : 0;
+        for (int i = first; i < node->child_count; i++) {
+            ASTNode* a = node->children[i];
+            if (a && a->type == AST_IDENTIFIER && a->value &&
+                strcmp(a->value, name) == 0)
+                return "it is inserted into a container";
+        }
+    }
+    return NULL;
+}
+
+/* Walk `node`, reporting the first escape of `name`. Does not descend into a
+ * closure (handled at the capture site) or a nested function/actor scope. */
+static int scoped_check_subtree(ASTNode* node, const char* name) {
+    if (!node) return 0;
+    const char* reason = scoped_escape_reason(node, name);
+    if (reason) {
+        char msg[320];
+        snprintf(msg, sizeof(msg),
+            "`@scoped` binding '%s' escapes its block: %s. A @scoped value "
+            "must not outlive the block that introduced it — return a scalar "
+            "derived from it (e.g. `%s.len()`), or drop the `@scoped`.",
+            name, reason, name);
+        type_error(msg, node->line, node->column);
+        return 1;
+    }
+    if (node->type == AST_CLOSURE || node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION || node->type == AST_ACTOR_DEFINITION)
+        return 0;
+    int found = 0;
+    for (int i = 0; i < node->child_count; i++)
+        found |= scoped_check_subtree(node->children[i], name);
+    return found;
+}
+
+/* For each `@scoped` binding declared in `body`, reject any escape. */
+static void scoped_check_bindings(ASTNode* node, ASTNode* root) {
+    if (!node) return;
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        node->annotation && strstr(node->annotation, "scoped")) {
+        scoped_check_subtree(root, node->value);
+    }
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_ACTOR_DEFINITION) return;
+    for (int i = 0; i < node->child_count; i++)
+        scoped_check_bindings(node->children[i], root);
 }
 
 int typecheck_function_definition(ASTNode* func, SymbolTable* table) {

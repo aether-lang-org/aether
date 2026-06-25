@@ -1,0 +1,8 @@
+import std.string
+extern reg(cb: ptr)
+f() {
+    @scoped s = string.concat("a", "b")
+    cb = || { println(s) }
+    reg(cb)
+}
+main() { f() }

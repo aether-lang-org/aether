@@ -1829,6 +1829,35 @@ ASTNode* parse_statement(Parser* parser) {
     if (!token) return NULL;
     
     switch (token->type) {
+        case TOKEN_AT: {
+            // Statement-level binding annotation (#521): `@scoped let buf = ...`
+            // (the `let`/`var` keyword is optional). Marks a local whose value
+            // must not outlive its lexical block — the typechecker rejects the
+            // escape patterns (return / store into another binding or field /
+            // closure capture / container insert). The only statement
+            // annotation today is `@scoped`.
+            advance_token(parser); // consume '@'
+            Token* attr = peek_token(parser);
+            if (!attr || attr->type != TOKEN_IDENTIFIER || !attr->value ||
+                strcmp(attr->value, "scoped") != 0) {
+                parser_error(parser, "unknown statement annotation — only `@scoped` is supported on a binding");
+                return NULL;
+            }
+            advance_token(parser); // consume 'scoped'
+            if (peek_token(parser) && (peek_token(parser)->type == TOKEN_LET ||
+                                       peek_token(parser)->type == TOKEN_VAR)) {
+                advance_token(parser); // optional let/var
+            }
+            ASTNode* decl = parse_python_style_declaration(parser);
+            if (decl && decl->type == AST_VARIABLE_DECLARATION) {
+                if (decl->annotation) free(decl->annotation);
+                decl->annotation = strdup("scoped");
+            } else if (decl) {
+                parser_error(parser, "`@scoped` applies to a single `let`/`var` binding, not this form");
+                return NULL;
+            }
+            return decl;
+        }
         case TOKEN_LET:
         case TOKEN_VAR:
             // Optional 'let' or 'var' - skip it and parse as Python-style

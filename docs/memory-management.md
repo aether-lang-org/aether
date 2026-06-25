@@ -275,6 +275,40 @@ box; a field last assigned a literal is borrowed and is never freed. This lets
 a handler/server context own its config strings for its lifetime without
 dropping back to a raw `malloc(...) as *T`.
 
+### `@scoped` bindings — checked non-escape (#521)
+
+A `let`/`var` declaration can be annotated `@scoped` to declare that its value
+**must not outlive the lexical block** that introduced it. This is opt-in
+escape analysis — not a borrow checker (Aether has none). It turns a footgun
+into a compile-time invariant and documents intent at the binding site:
+
+```aether
+process() -> long {
+    @scoped buf = make_buffer(64 * 1024)
+    return buf.checksum()        // ok — a scalar DERIVED from buf escapes
+}
+
+leak() -> *Buffer {
+    @scoped buf = make_buffer(64 * 1024)
+    return buf                   // compile error: the @scoped binding escapes
+}
+```
+
+The typechecker rejects every way the binding's value could outlive the block:
+
+- returning the binding,
+- assigning/aliasing it into another binding or a struct field,
+- placing it as an element of an array / struct / message literal,
+- capturing it in a closure (closures lower to plain C functions, so their
+  lifetime is statically known),
+- inserting it into a container (`list.add`, `map.put`, `set.add`, …).
+
+Only a value *derived* from the binding via a call (`buf.checksum()`,
+`string.length(buf)`) may escape — that carries the call result, not the
+binding. A value handed to a function that retains it beyond the call is
+governed by that function's own contract; `@scoped` checks the direct escape
+sites at the binding's own scope.
+
 ### Heap-string sources
 
 The compiler treats these expressions as heap-allocated:
