@@ -1,0 +1,4 @@
+import std.fs
+@no_fs
+load(p: string) -> string { return file.read_all(p) }
+main() { println(load("x")) }

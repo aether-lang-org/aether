@@ -13,6 +13,15 @@ next version number before tagging the release.
 
 ### Added
 
+- **Per-function effect tags: `@pure` / `@no_fs` / `@no_net` / `@no_os`** (#481).
+  A function annotated with an effect tag declares it must not (transitively)
+  use the named capability; `@pure` forbids all of fs/net/os. A whole-program
+  pass walks the call graph from each tagged function and errors if a forbidden
+  capability is reached — e.g. `@no_fs load(...)` calling `file.read_all(...)`,
+  directly or through another function. Composes with the build-time
+  `--with=fs,net,os` gate (whole-program) as a finer, per-function axis. A raw
+  `extern` call is unclassifiable and is not flagged, matching the `--with=`
+  gate's boundary.
 - **`@scoped` bindings — opt-in escape analysis** (#521). A `let`/`var`
   declaration annotated `@scoped` (`@scoped let buf = make_buffer()`) declares
   that the value must not outlive its lexical block. The typechecker rejects
