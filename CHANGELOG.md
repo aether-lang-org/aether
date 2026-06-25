@@ -11,6 +11,50 @@ next version number before tagging the release.
 
 ## [0.309.0]
 
+### Added
+
+- **Raw identifiers: `` `name` `` escapes a reserved keyword for use as an
+  ordinary identifier** (#867). A backtick-delimited identifier is always
+  lexed as a plain name, so a faithful C→Aether port can keep identifiers
+  like `` `reply` ``, `` `message` ``, `` `after` ``, `` `ptr` ``, `` `when` ``
+  as parameter, local, struct-field, or function names instead of renaming
+  every site. The parameter-position diagnostic for an *unescaped* reserved
+  keyword now points at the keyword and teaches the escape (previously a
+  misleading "Expected RIGHT_PAREN").
+- **`heap.new(T)` supports structs with `string` fields** (#790). The POD-only
+  restriction is lifted: a heap-boxed struct now owns its string fields under
+  the same model value structs use — a field store adopts the heap string (and
+  frees the previous one on reassignment), and `heap.free(p)` releases every
+  owned field before freeing the box (a borrowed literal is never freed). The
+  `calloc` in `heap.new` zero-inits the ownership trackers. This closes the
+  handler-context gap (`struct AppCtx { db: ptr; data_dir: string }`) so such
+  contexts no longer need a raw `malloc(...) as *T`.
+- **`aetherc --audit-mem`** (#868): lists every raw `std.mem` offset access
+  (`mem.get_*`/`mem.set_*`) with the byte width its accessor name implies, then
+  exits without generating code. Lets a port author audit each read/write width
+  against the C field's actual type — the width-exact accessors already exist,
+  but nothing previously surfaced a wrong choice (reading a 4-byte field with
+  `get_long` pulled in adjacent bytes).
+
+### Fixed
+
+- **An explicitly-typed integer local keeps its declared width across a bare
+  re-bind** (#869). `uint64 v = 0` followed by an annotation-less `v = <int
+  expr>` no longer silently re-infers `v` to 32-bit int (the re-bind parsed as
+  a fresh declaration and adopted the initializer's type), which previously
+  discarded the explicit width and tripped the #698 narrowing guard at the next
+  64-bit assignment. The explicit declaration is now authoritative — an int RHS
+  widens into the declared type. Fixes silent truncation in the `string2ll`
+  accumulator shape (every 10+-digit integer parse).
+- **A selective `import std.string (...)` no longer suppresses qualified
+  `string.X` calls from merged modules** (#870). When the entry file imported a
+  module selectively, the module-merge dropped the bare/non-selective surface
+  for the whole compilation unit, so a qualified `string.concat(...)` arriving
+  from an imported module that bare-imports `std.string` was rejected with
+  E0301. The merge now injects a synthetic bare import for each merged module's
+  own bare imports, re-opening the qualified surface (kept out of the
+  user-explicit registry, preserving #243 sealed-scope isolation).
+
 ## [0.308.0]
 
 ### Fixed

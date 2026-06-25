@@ -251,6 +251,30 @@ The same tracker also covers two related cases automatically:
 on reassignment and at scope exit via the refcount-decrementing
 `string_seq_free`); see [sequences.md](sequences.md) § Automatic ownership.
 
+### `heap.new(T)` boxes that own string fields
+
+`heap.new(T)` allocates a zero-initialised `*T` box; `heap.free(p)` reclaims
+it. A struct with `string` fields is allowed (previously POD-only): the box
+**owns** its string fields under the same tracker model described above. Each
+string field carries a hidden `_heap_<field>` companion, so:
+
+```aether
+struct AppCtx { db: ptr; data_dir: string }
+
+ctx = heap.new(AppCtx)                       // calloc — fields NULL, trackers 0
+ctx.data_dir = string.concat("/var/", "data")// adopt heap string, _heap_data_dir = 1
+ctx.data_dir = string.concat("/srv/", "x")   // frees the previous buffer first
+ctx.data_dir = "literal"                      // borrowed: _heap_data_dir = 0
+heap.free(ctx)                                // releases owned fields, then frees the box
+```
+
+A field store adopts a heap string and frees the previous value on
+reassignment, exactly like a string variable. `heap.free(p)` routes through a
+generated `<T>_heap_free` that releases every owned field before freeing the
+box; a field last assigned a literal is borrowed and is never freed. This lets
+a handler/server context own its config strings for its lifetime without
+dropping back to a raw `malloc(...) as *T`.
+
 ### Heap-string sources
 
 The compiler treats these expressions as heap-allocated:

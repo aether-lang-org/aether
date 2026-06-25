@@ -174,17 +174,19 @@ Token* expect_token(Parser* parser, AeTokenType expected) {
             // point at the keyword and suggest a rename so they don't
             // have to guess which grammar slot was wanted.
             snprintf(error_msg, sizeof(error_msg),
-                "'%s' is a reserved keyword and cannot be used as an identifier; rename it (e.g. '%s_' or 'msg')",
-                token->value, token->value);
+                "'%s' is a reserved keyword and cannot be used as an identifier; "
+                "rename it (e.g. '%s_' or 'msg'), or escape it as `%s` to use the "
+                "name verbatim",
+                token->value, token->value, token->value);
             // Emit with a reserved-keyword-specific hint so the `help:`
             // line matches the error (previous default hint was the
             // generic "check for missing parentheses, braces, or
             // keywords", which misled users into hunting for a parse
             // problem that wasn't there).
-            char hint[128];
+            char hint[160];
             snprintf(hint, sizeof(hint),
-                "rename to '%s_' or another identifier",
-                token->value);
+                "rename to '%s_', or write `%s` to keep the name",
+                token->value, token->value);
             if (!parser->suppress_errors) {
                 aether_error_full(error_msg, token->line, token->column,
                                   hint, NULL, AETHER_ERR_SYNTAX);
@@ -3984,7 +3986,29 @@ ASTNode* parse_function_definition(Parser* parser) {
                 break;
             }
             ASTNode* param = parse_pattern(parser);
-            if (!param) break;
+            if (!param) {
+                // parse_pattern handles type-first C-style params (`int a`),
+                // so it only fails here when the parameter NAME position holds
+                // a reserved keyword (a faithful C-port name like
+                // `reply`/`after`/`ptr`). That otherwise surfaced as a
+                // misleading "Expected RIGHT_PAREN" further down — point at the
+                // keyword and teach the backtick escape instead (#867).
+                Token* pk = peek_token(parser);
+                if (pk && token_is_reserved_keyword(pk) && !parser->suppress_errors) {
+                    char emsg[256], hint[160];
+                    snprintf(emsg, sizeof(emsg),
+                        "'%s' is a reserved keyword and cannot be used as a parameter "
+                        "name; rename it (e.g. '%s_'), or escape it as `%s` to use the "
+                        "name verbatim", pk->value, pk->value, pk->value);
+                    snprintf(hint, sizeof(hint),
+                        "rename to '%s_', or write `%s` to keep the name",
+                        pk->value, pk->value);
+                    aether_error_full(emsg, pk->line, pk->column, hint, NULL, AETHER_ERR_SYNTAX);
+                    free_ast_node(func);
+                    return NULL;
+                }
+                break;
+            }
             add_child(func, param);
         } while (match_token(parser, TOKEN_COMMA));
 

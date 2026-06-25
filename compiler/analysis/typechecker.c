@@ -144,6 +144,7 @@ void add_symbol(SymbolTable* table, const char* name, Type* type, int is_actor, 
     symbol->alias_target = NULL;
     symbol->node = NULL;  // Initialize to NULL
     symbol->type_inferred = 0;
+    symbol->width_explicit = 0;
     symbol->next = table->symbols;
     table->symbols = symbol;
 }
@@ -2943,6 +2944,50 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     return 0;
                 }
 
+                /* #869: a bare re-bind (`v = <expr>`, no type annotation) of
+                 * a local that was declared with an EXPLICIT integer type
+                 * must NOT re-infer/narrow that type. In Aether `name = expr`
+                 * with no annotation parses as a fresh AST_VARIABLE_DECLARATION
+                 * (the Python-style re-bind noted above), and the path below
+                 * would otherwise stamp the binding with the initializer's
+                 * type — so `uint64 v = 0; v = x - 48` silently re-typed v to
+                 * 32-bit int, discarding the explicit width, and the next
+                 * 64-bit assignment (`v = v + d`) then tripped the #698 guard
+                 * with a "type was inferred as 32-bit int" message about a
+                 * variable that is explicitly `uint64`. The explicit
+                 * declaration is authoritative: keep v's declared type and
+                 * treat the re-bind as an assignment (an int RHS widens; a
+                 * narrower RHS is the same truncation the explicit type already
+                 * permits). Scoped to the explicitly-typed case — a re-bind of
+                 * an *inferred* int local still triggers #698 below. */
+                if (stmt->type == AST_VARIABLE_DECLARATION &&
+                    stmt->type_inferred &&
+                    existing && existing->type && existing->width_explicit &&
+                    is_integer_scalar(existing->type->kind) &&
+                    init_type && is_integer_scalar(init_type->kind)) {
+                    if (!is_assignable(init_type, existing->type)) {
+                        char emsg[256];
+                        snprintf(emsg, sizeof(emsg),
+                            "Type mismatch in assignment to '%s': expected %s, got %s",
+                            stmt->value ? stmt->value : "?",
+                            type_name(existing->type), type_name(init_type));
+                        type_error(emsg, stmt->line, stmt->column);
+                        free_type(init_type);
+                        return 0;
+                    }
+                    if (stmt->node_type) free_type(stmt->node_type);
+                    stmt->node_type = clone_type(existing->type);
+                    /* Compute the RHS in 64 bits when the declared type is
+                     * 64-bit, so an int-typed sub-expression doesn't truncate
+                     * mid-evaluation (#697). */
+                    if (existing->type->kind == TYPE_INT64 ||
+                        existing->type->kind == TYPE_UINT64) {
+                        propagate_int_width_64(init, existing->type->kind);
+                    }
+                    free_type(init_type);
+                    return 1;
+                }
+
                 /* #698: silent-narrowing guard. Re-binding a local whose
                  * type was INFERRED as 32-bit int (a bare `x = expr`, not an
                  * explicit annotation) with a 64-bit value truncates
@@ -3063,6 +3108,17 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     stmt->node_type->kind == TYPE_INT) {
                     Symbol* s = lookup_symbol_local(table, stmt->value);
                     if (s) s->type_inferred = 1;
+                }
+                /* #869: record an EXPLICIT integer-type annotation
+                 * (`uint64 v = 0`, `long n = ...`) so a later bare re-bind
+                 * preserves the declared width. Distinct from type_inferred:
+                 * the width-inference pass mutates `type`/`type_inferred` of an
+                 * inferred local, but never sets this flag, so it cannot make
+                 * an inferred local masquerade as explicitly-typed. */
+                if (!stmt->type_inferred && stmt->node_type &&
+                    is_integer_scalar(stmt->node_type->kind)) {
+                    Symbol* s = lookup_symbol_local(table, stmt->value);
+                    if (s) s->width_explicit = 1;
                 }
             }
             return 1;
@@ -3636,33 +3692,14 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 expr->node_type = create_type(TYPE_UNKNOWN);
                 return 0;
             }
-            /* POD gate: walk the struct definition's fields for any
-             * heap-managed (string) field. struct_sym->node is the
-             * AST_STRUCT_DEFINITION (set when the struct was registered). */
-            ASTNode* sdef = struct_sym->node;
-            if (sdef && sdef->type == AST_STRUCT_DEFINITION) {
-                for (int fi = 0; fi < sdef->child_count; fi++) {
-                    ASTNode* field = sdef->children[fi];
-                    if (field && field->type == AST_STRUCT_FIELD &&
-                        field->node_type &&
-                        field->node_type->kind == TYPE_STRING) {
-                        char msg[640];
-                        snprintf(msg, sizeof(msg),
-                            "heap.new(%s) — struct '%s' has a `string` field "
-                            "('%s'); heap.new is restricted to POD structs "
-                            "(scalars, ptr, fixed arrays). A struct with a "
-                            "heap-managed field needs an ownership model "
-                            "(retain-on-store + typed free) that does not yet "
-                            "exist — hold heavy data as an opaque handle/ptr "
-                            "the struct does not own, or keep it on the stack.",
-                            expr->value, expr->value,
-                            field->value ? field->value : "?");
-                        type_error(msg, expr->line, expr->column);
-                        expr->node_type = create_type(TYPE_UNKNOWN);
-                        return 0;
-                    }
-                }
-            }
+            /* #790: a struct with `string` fields IS allowed. The box owns
+             * its string fields under the same ownership model value structs
+             * already use: each string field carries a hidden `_heap_<field>`
+             * tracker (codegen_func.c), a field store adopts a heap string and
+             * sets the tracker, and `heap.free(p)` routes through the generated
+             * `<Name>_heap_free` (release every owned field, then free the box).
+             * calloc in heap.new zero-inits the trackers, so an unset field is
+             * never mistaken for owned. No POD gate to apply. */
             /* Result type: *T (TYPE_PTR -> TYPE_STRUCT{name}). */
             if (expr->node_type) free_type(expr->node_type);
             Type* inner = create_type(TYPE_STRUCT);

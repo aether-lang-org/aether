@@ -1,0 +1,51 @@
+// Regression: issue #869 — an explicitly-typed integer local keeps its
+// DECLARED width across a bare (annotation-less) re-bind, instead of being
+// silently re-inferred to 32-bit int from the assignment's RHS.
+//
+// Before the fix, `uint64 v = 0` followed by a bare `v = <int expr>` re-typed
+// v to 32-bit int (the re-bind parses as a fresh declaration and inferred the
+// initializer's type), so a later `v = v + <uint64>` tripped the #698
+// narrowing guard — and under any looser lowering would have truncated the
+// accumulator to 32 bits mid-parse. This is the aedis `string2ll` shape: the
+// most-used integer parser, where truncation corrupts every 10+-digit value.
+
+import std.string
+extern exit(code: int)
+
+// The issue's exact 7-line shape: int RHS, then uint64 RHS.
+f(x: int) -> long {
+    uint64 v = 0
+    v = x - 48        // int RHS — must widen into v, not re-narrow v to int
+    uint64 d = 5
+    v = v + d         // uint64 RHS
+    return v
+}
+
+// string2ll-shape: accumulate a decimal string into a 64-bit accumulator.
+parse_u64(s: string) -> long {
+    uint64 v = 0
+    int i = 0
+    int n = string.length(s)
+    while i < n {
+        int ch = string.char_at(s, i)
+        v = v * 10
+        uint64 digit = ch - 48
+        v = v + digit
+        i = i + 1
+    }
+    return v
+}
+
+main() {
+    if f(200) != 157 {
+        println("FAIL #869: f(200) did not equal 157")
+        exit(1)
+    }
+    // 12345678901 > 2^32 (4294967296): a 32-bit accumulator would truncate
+    // this to a wrong (often negative) value.
+    if parse_u64("12345678901") != 12345678901 {
+        println("FAIL #869: 64-bit accumulator truncated to 32 bits")
+        exit(1)
+    }
+    println("PASS: #869 explicit integer width preserved across bare re-bind")
+}

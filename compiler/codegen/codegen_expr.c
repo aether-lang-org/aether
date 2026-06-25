@@ -2315,14 +2315,32 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             break;
             
         case AST_FUNCTION_CALL:
-            /* heap.free(p) — counterpart to heap.new(T) (issue #564).
-             * POD boxes own no heap fields (typechecker enforces), so a
-             * plain free(p) reclaims the whole box. NULL-safe (free(NULL)
-             * is a no-op). One positional arg: the `*T` pointer. */
+            /* heap.free(p) — counterpart to heap.new(T) (issue #564, #790).
+             * A POD box owns no heap fields, so a plain free(p) reclaims it.
+             * A box whose struct has string fields (#790) routes through the
+             * generated `<Name>_heap_free`, which releases every owned field
+             * then frees the box. NULL-safe either way (free(NULL) is a no-op;
+             * the typed free early-returns on NULL). One positional arg. */
             if (expr->value && strcmp(expr->value, "heap.free") == 0 &&
                 expr->child_count == 1) {
-                fprintf(gen->output, "free(");
-                generate_expression(gen, expr->children[0]);
+                ASTNode* arg = expr->children[0];
+                const char* typed_free = NULL;
+                if (arg && arg->node_type && arg->node_type->kind == TYPE_PTR &&
+                    arg->node_type->element_type &&
+                    arg->node_type->element_type->kind == TYPE_STRUCT &&
+                    arg->node_type->element_type->struct_name && gen->program) {
+                    ASTNode* sdef = find_struct_definition_by_name(
+                        gen->program, arg->node_type->element_type->struct_name);
+                    if (sdef && struct_has_heap_string_field(sdef)) {
+                        typed_free = arg->node_type->element_type->struct_name;
+                    }
+                }
+                if (typed_free) {
+                    fprintf(gen->output, "%s_heap_free(", typed_free);
+                } else {
+                    fprintf(gen->output, "free(");
+                }
+                generate_expression(gen, arg);
                 fprintf(gen->output, ")");
                 break;
             }

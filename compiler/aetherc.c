@@ -110,6 +110,78 @@ static bool list_functions_mode = false;
 // can unmask.
 static bool diagnose_ownership_mode = false;
 
+// --audit-mem: print every raw std.mem offset access (mem.get_*/set_*)
+// with the byte width its accessor name implies, so a port author can
+// check each read/write width against the C field's actual type. The
+// dominant idiom for opaque C structs in large ports is hand-probed
+// offset access (`mem.get_long(p, OFF)`), where the read width is chosen
+// by the function name, not the field type — a single wrong choice reads
+// adjacent bytes (issue #868: a uint32 field read with get_long produced
+// a garbage 94 TB length and crashed). The width-exact accessors already
+// exist; this surfaces the call sites so the choice is auditable. Off by
+// default — opt-in, report-and-exit (no codegen). Issue #868 option 1.
+static bool audit_mem_mode = false;
+
+// Byte width a std.mem raw-offset accessor reads/writes, keyed by the
+// name after "mem.". Returns 0 for non-width-bearing ops (copy / move /
+// compare / set_bulk / ptr<->long) and unknown names.
+static int mem_accessor_width(const char* fn) {
+    static const struct { const char* name; int width; } t[] = {
+        {"get_byte",1},{"set_byte",1},{"get_byte_sz",1},{"set_byte_sz",1},
+        {"get_int8",1},{"set_int8",1},{"get_uint8",1},{"set_uint8",1},
+        {"get_int16",2},{"set_int16",2},{"get_uint16",2},{"set_uint16",2},
+        {"get_u16_le",2},{"get_u16_be",2},{"set_u16_le",2},{"set_u16_be",2},
+        {"get_int",4},{"set_int",4},{"get_uint32",4},{"set_uint32",4},
+        {"get_u32_le",4},{"get_u32_be",4},{"set_u32_le",4},{"set_u32_be",4},
+        {"get_float32",4},{"set_float32",4},
+        {"get_long",8},{"set_long",8},{"get_u64_le",8},{"get_u64_be",8},
+        {"set_u64_le",8},{"set_u64_be",8},{"get_float64",8},{"set_float64",8},
+        {"get_ptr",8},{"set_ptr",8},
+    };
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++)
+        if (strcmp(fn, t[i].name) == 0) return t[i].width;
+    return 0;
+}
+
+// Recursively report every raw std.mem offset access under `node`.
+// Returns the number of accesses reported.
+static int audit_mem_walk(ASTNode* node, FILE* out) {
+    if (!node) return 0;
+    int n = 0;
+    /* The audit runs post-typecheck, where a qualified `mem.get_long`
+     * call has been resolved to its namespace-prefixed binding
+     * `mem_get_long` (the same rewrite --emit=ast observes). Match that
+     * resolved form; also accept the as-written `mem.` form defensively. */
+    if (node->type == AST_FUNCTION_CALL && node->value &&
+        (strncmp(node->value, "mem_", 4) == 0 ||
+         strncmp(node->value, "mem.", 4) == 0)) {
+        const char* acc = node->value + 4;
+        int w = mem_accessor_width(acc);
+        if (w > 0) {
+            const char* kind = (strncmp(acc, "set", 3) == 0)
+                ? "writes" : "reads";
+            const char* file = node->source_file ? node->source_file : "<input>";
+            char offbuf[128];
+            offbuf[0] = '\0';
+            if (node->child_count >= 2 && node->children[1] &&
+                (node->children[1]->type == AST_IDENTIFIER ||
+                 node->children[1]->type == AST_LITERAL) &&
+                node->children[1]->value) {
+                snprintf(offbuf, sizeof(offbuf), " at offset %s",
+                         node->children[1]->value);
+            }
+            fprintf(out,
+                "%s:%d:%d: %s %s %d byte%s%s — verify the width matches the C field's type\n",
+                file, node->line, node->column, node->value, kind,
+                w, w == 1 ? "" : "s", offbuf);
+            n++;
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        n += audit_mem_walk(node->children[i], out);
+    return n;
+}
+
 // --emit=ast: post-typecheck AST emit as JSON to stdout. A third walker
 // beside --list-functions and --diagnose=ownership, runs at the same
 // post-typecheck / pre-codegen point so node->value carries the
@@ -1424,6 +1496,21 @@ int compile_source(const char* input_path, const char* output_path) {
         return 1;
     }
 
+    // --audit-mem: report every raw std.mem offset access and its implied
+    // width, then exit (no codegen). Post-typecheck so qualified calls are
+    // resolved to their `mem.<fn>` form and node->source_file is stamped.
+    if (audit_mem_mode) {
+        int total = audit_mem_walk(program, stdout);
+        fprintf(stdout, "audit-mem: %d raw std.mem offset access%s found\n",
+                total, total == 1 ? "" : "es");
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        return 0;
+    }
+
     // --check: stop after typecheck + type inference, no codegen
     if (check_only_mode) {
         int warnings = aether_warning_count();
@@ -1899,6 +1986,7 @@ void print_help(const char* program_name) {
     printf("  --no-contracts                   Skip runtime emission of `requires`/`ensures` checks (#348)\n");
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
     printf("  --diagnose=ownership             Print string-ownership verdicts and exit (no code generation)\n");
+    printf("  --audit-mem                      List every raw std.mem offset access + implied width, then exit\n");
     printf("  --emit=ast                       Print post-typecheck AST as JSON to stdout and exit (no code generation).\n");
     printf("  --emit=inspect                   Print an operator-facing summary of what the script declares and exit (drives `ae inspect`).\n");
     printf("                                   Filter set: import_statement, extern_function, function_call.\n");
@@ -1966,6 +2054,9 @@ int main(int argc, char *argv[]) {
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--diagnose=ownership") == 0) {
             diagnose_ownership_mode = true;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--audit-mem") == 0) {
+            audit_mem_mode = true;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-header") == 0) {
             // Check for optional explicit path argument (must end in .h)

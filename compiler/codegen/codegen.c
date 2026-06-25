@@ -135,6 +135,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->message_registry = create_message_registry();
     gen->declared_vars = NULL;
     gen->declared_var_count = 0;
+    gen->heap_box_vars = NULL;
+    gen->heap_box_var_count = 0;
     gen->module_global_vars = NULL;
     gen->module_global_var_count = 0;
     gen->generating_lvalue = 0;  // Not generating lvalue by default
@@ -388,6 +390,46 @@ void clear_declared_vars(CodeGenerator* gen) {
     }
     gen->declared_vars = NULL;
     gen->declared_var_count = 0;
+    /* #790: heap.new box provenance is per-function. */
+    if (gen->heap_box_vars) {
+        for (int i = 0; i < gen->heap_box_var_count; i++) free(gen->heap_box_vars[i]);
+        free(gen->heap_box_vars);
+    }
+    gen->heap_box_vars = NULL;
+    gen->heap_box_var_count = 0;
+}
+
+// #790: is `var_name` currently bound to a heap.new(T) box?
+int is_heap_box_var(CodeGenerator* gen, const char* var_name) {
+    if (!var_name) return 0;
+    for (int i = 0; i < gen->heap_box_var_count; i++) {
+        if (strcmp(gen->heap_box_vars[i], var_name) == 0) return 1;
+    }
+    return 0;
+}
+
+// #790: record that `var_name` now holds a heap.new(T) box.
+void mark_heap_box_var(CodeGenerator* gen, const char* var_name) {
+    if (!var_name || is_heap_box_var(gen, var_name)) return;
+    char** nv = realloc(gen->heap_box_vars, sizeof(char*) * (gen->heap_box_var_count + 1));
+    if (!nv) return;
+    gen->heap_box_vars = nv;
+    gen->heap_box_vars[gen->heap_box_var_count] = strdup(var_name);
+    gen->heap_box_var_count++;
+}
+
+// #790: `var_name` was reassigned to something other than a heap.new box —
+// drop it so a later `var.field = ...` store falls back to a bare assignment.
+void unmark_heap_box_var(CodeGenerator* gen, const char* var_name) {
+    if (!var_name) return;
+    for (int i = 0; i < gen->heap_box_var_count; i++) {
+        if (strcmp(gen->heap_box_vars[i], var_name) == 0) {
+            free(gen->heap_box_vars[i]);
+            gen->heap_box_vars[i] = gen->heap_box_vars[gen->heap_box_var_count - 1];
+            gen->heap_box_var_count--;
+            return;
+        }
+    }
 }
 
 // Helper: check if variable currently holds a heap-allocated string

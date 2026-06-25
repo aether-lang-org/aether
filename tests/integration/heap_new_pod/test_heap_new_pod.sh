@@ -1,10 +1,10 @@
 #!/bin/sh
-# Issue #564: heap.new(T) / heap.free(p) — POD-only heap box.
+# Issue #564 + #790: heap.new(T) / heap.free(p) — heap box.
 #   probe.ae          must build + run, printing the PASS line.
-#   reject_string.ae  must FAIL to build (struct has a string field).
+#   accept_string.ae  must build + run (#790: string-field struct is owned).
 #   reject_nonstruct.ae must FAIL to build (T is not a struct).
 # The directory is pruned from the generic .ae runner (Makefile) so this
-# driver owns the negative cells.
+# driver owns the cells.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -30,15 +30,17 @@ if ! grep -q "PASS: heap.new POD success path" "$TMPDIR/run.log"; then
     exit 1
 fi
 
-# ---- negative: string-field struct rejected ----
-if "$AE" build "$SCRIPT_DIR/reject_string.ae" -o "$TMPDIR/rs" \
-        >"$TMPDIR/rs.log" 2>&1; then
-    echo "  [FAIL] heap_new_pod: reject_string.ae compiled (should be rejected)"
+# ---- positive: string-field struct accepted, owned, and freed (#790) ----
+if ! "$AE" build "$SCRIPT_DIR/accept_string.ae" -o "$TMPDIR/as" \
+        >"$TMPDIR/as.log" 2>&1; then
+    echo "  [FAIL] heap_new_pod: accept_string.ae failed to build (#790: should be accepted)"
+    sed 's/^/    /' "$TMPDIR/as.log" | head -20
     exit 1
 fi
-if ! grep -q "POD structs" "$TMPDIR/rs.log"; then
-    echo "  [FAIL] heap_new_pod: reject_string.ae failed but without the POD diagnostic"
-    sed 's/^/    /' "$TMPDIR/rs.log" | head -10
+if ! "$TMPDIR/as" >"$TMPDIR/as_run.log" 2>&1 || \
+   ! grep -q "PASS: heap.new string-field box" "$TMPDIR/as_run.log"; then
+    echo "  [FAIL] heap_new_pod: accept_string.ae didn't reach PASS"
+    sed 's/^/    /' "$TMPDIR/as_run.log" | head -20
     exit 1
 fi
 
@@ -54,5 +56,5 @@ if ! grep -q "is not a struct type" "$TMPDIR/rn.log"; then
     exit 1
 fi
 
-echo "  [PASS] heap_new_pod: POD box works; string-field + non-struct rejected"
+echo "  [PASS] heap_new_pod: POD box works; string-field box owned (#790); non-struct rejected"
 exit 0
