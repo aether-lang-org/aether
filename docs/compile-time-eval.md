@@ -87,3 +87,30 @@ no general const evaluator, no compile-time loop unrolling beyond the
 existing closed-form loop passes, and no evaluation of user functions. Any
 broadening of the whitelist must preserve the capability-gate invariant
 above: only pure, I/O-free value conversions are ever eligible.
+
+## Purity introspection: `__pure(fn)` (#522)
+
+A separate whole-program analysis assigns every function a **purity** bit, and
+the compile-time builtin `__pure(funcName)` folds to a `true`/`false` constant
+reflecting it:
+
+```aether
+when __pure(parse_config) { ... }      // compile-time branch on purity
+let safe = __pure(transform)           // bool constant, no runtime cost
+```
+
+A function is **pure** when, transitively, it:
+
+- reaches no fs/net/os capability call (`file.*`/`dir.*`/`path.*`, `tcp.*`/
+  `http.*`, `os.*` — time/exec live under `os`), and
+- mutates no caller-visible state — neither a parameter's pointee (`p.field =
+  …`, `p[i] = …`) nor a module-level global.
+
+The analysis is **conservative**: a function whose body it cannot see (an
+`extern`, or an unresolved name) is treated as impure, and a raw `extern` call
+inside a body is opaque and left unjudged (the same boundary the `--with=` gate
+and effect tags have). This is the determinism axis that complements the
+capability (access-control) axis — a function can be capability-empty yet
+impure (reads a clock handed to it), or hold `fs` yet be pure for fixed input.
+`__pure` resolves at compile time, so it gates optimizations and library
+features with zero runtime cost.

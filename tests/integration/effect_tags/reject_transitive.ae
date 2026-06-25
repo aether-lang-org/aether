@@ -1,0 +1,5 @@
+import std.os
+helper() -> int { return os.system("echo hi") }
+@pure
+run() -> int { return helper() }
+main() { println(string.from_int(run())) }

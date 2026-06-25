@@ -1878,6 +1878,11 @@ static void check_unreachable_code(ASTNode* body) {
 // #521: reject escapes of `@scoped` bindings (defined below, used in the
 // unused-variable/unreachable third pass).
 static void scoped_check_bindings(ASTNode* node, ASTNode* root);
+// #481: validate `@pure`/`@no_fs`/`@no_net`/`@no_os` effect tags.
+static void check_effect_tags(ASTNode* program);
+// #522: fold `__pure(fn)` queries to compile-time bool constants.
+static void resolve_purity_queries(ASTNode* node, ASTNode* program,
+                                   const char** globals, int nglobals);
 
 // Type checking functions
 int typecheck_program(ASTNode* program) {
@@ -1888,6 +1893,22 @@ int typecheck_program(ASTNode* program) {
     namespace_count = 0;  // Reset imported namespaces
     user_explicit_namespace_count = 0;  // Reset user-explicit namespaces (issue #243)
     selective_import_reset();  // Reset per-module selective-import filters
+
+    // #522: fold `__pure(fn)` queries to bool constants before any expression
+    // is type-checked. Needs the merged call graph (all function defs), which
+    // is present in `program` by now; module globals make a write impure.
+    {
+        const char* pg[MAX_TRACKED_VARS];
+        int npg = 0;
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (c && c->type == AST_EXPORT_STATEMENT && c->child_count > 0) c = c->children[0];
+            if (c && c->type == AST_CONST_DECLARATION && c->value && c->annotation &&
+                strcmp(c->annotation, "global_var") == 0 && npg < MAX_TRACKED_VARS)
+                pg[npg++] = c->value;
+        }
+        resolve_purity_queries(program, program, pg, npg);
+    }
 
     SymbolTable* global_table = create_symbol_table(NULL);
     
@@ -2512,8 +2533,11 @@ int typecheck_program(ASTNode* program) {
         }
     }
 
+    // #481: validate effect tags over the whole-program call graph.
+    check_effect_tags(program);
+
     free_symbol_table(global_table);
-    
+
     // Report errors and warnings
     if (error_count > 0) {
         fprintf(stderr, "Type checking failed with %d error(s)\n", error_count);
@@ -2836,6 +2860,213 @@ static void scoped_check_bindings(ASTNode* node, ASTNode* root) {
         node->type == AST_ACTOR_DEFINITION) return;
     for (int i = 0; i < node->child_count; i++)
         scoped_check_bindings(node->children[i], root);
+}
+
+/* #481 effect tags — capability of a call's NAMESPACE (the as-written prefix,
+ * e.g. `file.read` → fs). std.fs re-exports the file/dir/path namespaces,
+ * std.net the tcp/http namespaces, std.os the os namespace — mirrors the
+ * `--with=` capability gate (aetherc.c inspect_module_capability), keyed on
+ * the call site rather than the import path. NULL = capability-free (pure). */
+static const char* effect_call_capability(const char* ns) {
+    if (!ns) return NULL;
+    if (!strcmp(ns, "fs") || !strcmp(ns, "file") || !strcmp(ns, "dir") ||
+        !strcmp(ns, "path")) return "fs";
+    if (!strcmp(ns, "net") || !strcmp(ns, "tcp") || !strcmp(ns, "http"))
+        return "net";
+    if (!strcmp(ns, "os")) return "os";
+    return NULL;
+}
+
+static ASTNode* effect_find_func(ASTNode* program, const char* name) {
+    if (!program || !name) return NULL;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if ((c->type == AST_FUNCTION_DEFINITION || c->type == AST_BUILDER_FUNCTION) &&
+            c->value && strcmp(c->value, name) == 0)
+            return c;
+    }
+    return NULL;
+}
+
+/* Walk `node`; return the first forbidden capability reached (recursing into
+ * user-function callees), writing the offending `ns.fn` spelling to `outcall`.
+ * `forbid` is the comma list of forbidden caps; `visited` guards recursion. */
+static const char* effect_scan(ASTNode* program, ASTNode* node, const char* forbid,
+                               const char** visited, int* nvisited,
+                               char* outcall, size_t outsz, int depth) {
+    if (!node || depth > 128) return NULL;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        const char* dot = strchr(node->value, '.');
+        if (dot) {
+            char ns[64];
+            size_t l = (size_t)(dot - node->value);
+            if (l < sizeof(ns)) {
+                memcpy(ns, node->value, l);
+                ns[l] = '\0';
+                const char* cap = effect_call_capability(ns);
+                if (cap && strstr(forbid, cap)) {
+                    snprintf(outcall, outsz, "%s", node->value);
+                    return cap;
+                }
+            }
+        } else {
+            int seen = 0;
+            for (int i = 0; i < *nvisited; i++)
+                if (strcmp(visited[i], node->value) == 0) { seen = 1; break; }
+            if (!seen && *nvisited < 512) {
+                ASTNode* def = effect_find_func(program, node->value);
+                if (def && def->child_count > 0) {
+                    visited[(*nvisited)++] = node->value;
+                    ASTNode* body = def->children[def->child_count - 1];
+                    const char* c = effect_scan(program, body, forbid, visited,
+                                                nvisited, outcall, outsz, depth + 1);
+                    if (c) return c;
+                }
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        const char* c = effect_scan(program, node->children[i], forbid, visited,
+                                    nvisited, outcall, outsz, depth);
+        if (c) return c;
+    }
+    return NULL;
+}
+
+/* For each function carrying an `effect:<caps>` annotation, reject any
+ * transitive use of a forbidden capability. A raw `extern` call is not
+ * classifiable, so — like the `--with=` gate — it is not flagged here. */
+static void check_effect_tags(ASTNode* program) {
+    if (!program) return;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* fn = program->children[i];
+        if ((fn->type != AST_FUNCTION_DEFINITION && fn->type != AST_BUILDER_FUNCTION) ||
+            !fn->annotation) continue;
+        const char* eff = strstr(fn->annotation, "effect:");
+        if (!eff) continue;
+        const char* forbid = eff + 7;  /* "fs,net,os" or a subset */
+        if (fn->child_count == 0) continue;
+        ASTNode* body = fn->children[fn->child_count - 1];
+        const char* visited[512];
+        int nv = 0;
+        if (fn->value) visited[nv++] = fn->value;  /* no self-recursion loop */
+        char offending[160];
+        offending[0] = '\0';
+        const char* cap = effect_scan(program, body, forbid, visited, &nv,
+                                      offending, sizeof(offending), 0);
+        if (cap) {
+            char msg[360];
+            snprintf(msg, sizeof(msg),
+                "function '%s' is declared `@no_%s` (or `@pure`) but reaches a "
+                "`%s` operation through `%s`. Remove that call path, or drop the "
+                "effect tag.", fn->value ? fn->value : "?", cap, cap, offending);
+            type_error(msg, fn->line, fn->column);
+        }
+    }
+}
+
+/* #522 purity inference. A function is PURE when it (transitively) reaches no
+ * capability stdlib call (fs/net/os — time/exec live under os) and mutates no
+ * caller-visible state: a parameter's pointee (`p.field = …`, `p[i] = …`) or a
+ * module global. Conservative — a function the analysis can't see the body of
+ * (extern, unresolved) is treated as impure; a raw `extern` call inside a body
+ * is opaque and left unflagged (same boundary as the effect-tag / `--with=`
+ * gates). The result is exposed by the compile-time `__pure(fn)` builtin. */
+
+static int purity_is_param(ASTNode* fn, const char* name) {
+    if (!fn || !name) return 0;
+    for (int i = 0; i < fn->child_count - 1; i++) {  /* last child is the body */
+        ASTNode* p = fn->children[i];
+        if (p && (p->type == AST_VARIABLE_DECLARATION || p->type == AST_PATTERN_VARIABLE) &&
+            p->value && strcmp(p->value, name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Root identifier of an lvalue: x, x.f, x[i], x.f[i].g → "x". */
+static const char* purity_lvalue_root(ASTNode* n) {
+    while (n) {
+        if (n->type == AST_IDENTIFIER) return n->value;
+        if ((n->type == AST_MEMBER_ACCESS || n->type == AST_ARRAY_ACCESS) &&
+            n->child_count > 0) { n = n->children[0]; continue; }
+        return NULL;
+    }
+    return NULL;
+}
+
+static int purity_scan(ASTNode* program, ASTNode* fn, ASTNode* node,
+                       const char** globals, int nglobals,
+                       const char** visited, int* nv, int depth) {
+    if (!node || depth > 128) return 0;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        const char* dot = strchr(node->value, '.');
+        if (dot) {
+            char ns[64];
+            size_t l = (size_t)(dot - node->value);
+            if (l < sizeof(ns)) {
+                memcpy(ns, node->value, l);
+                ns[l] = '\0';
+                if (effect_call_capability(ns)) return 1;  /* fs/net/os → impure */
+            }
+        } else {
+            int seen = 0;
+            for (int i = 0; i < *nv; i++)
+                if (strcmp(visited[i], node->value) == 0) { seen = 1; break; }
+            if (!seen && *nv < 512) {
+                ASTNode* def = effect_find_func(program, node->value);
+                if (def && def->child_count > 0) {
+                    visited[(*nv)++] = node->value;
+                    if (purity_scan(program, def, def->children[def->child_count - 1],
+                                    globals, nglobals, visited, nv, depth + 1)) return 1;
+                }
+            }
+        }
+    }
+    if ((node->type == AST_ASSIGNMENT ||
+         (node->type == AST_BINARY_EXPRESSION && node->value &&
+          strcmp(node->value, "=") == 0)) && node->child_count >= 1) {
+        ASTNode* lhs = node->children[0];
+        const char* root = purity_lvalue_root(lhs);
+        if (root) {
+            int is_field = lhs && (lhs->type == AST_MEMBER_ACCESS ||
+                                   lhs->type == AST_ARRAY_ACCESS);
+            if (is_field && purity_is_param(fn, root)) return 1;  /* mutate a param's pointee */
+            for (int g = 0; g < nglobals; g++)
+                if (strcmp(globals[g], root) == 0) return 1;       /* write a module global */
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        if (purity_scan(program, fn, node->children[i], globals, nglobals, visited, nv, depth))
+            return 1;
+    return 0;
+}
+
+static int func_is_pure(ASTNode* program, const char* fnname,
+                        const char** globals, int nglobals) {
+    ASTNode* fn = effect_find_func(program, fnname);
+    if (!fn || fn->child_count == 0) return 0;  /* unknown / extern → conservatively impure */
+    const char* visited[512];
+    int nv = 0;
+    visited[nv++] = fnname;
+    ASTNode* body = fn->children[fn->child_count - 1];
+    return !purity_scan(program, fn, body, globals, nglobals, visited, &nv, 0);
+}
+
+/* Fold every `__pure(fn)` node in the tree to a `true`/`false` bool literal. */
+static void resolve_purity_queries(ASTNode* node, ASTNode* program,
+                                   const char** globals, int nglobals) {
+    if (!node) return;
+    if (node->type == AST_PURITY_QUERY && node->value) {
+        int pure = func_is_pure(program, node->value, globals, nglobals);
+        node->type = AST_LITERAL;
+        free(node->value);
+        node->value = strdup(pure ? "true" : "false");
+        if (node->node_type) free_type(node->node_type);
+        node->node_type = create_type(TYPE_BOOL);
+        return;
+    }
+    for (int i = 0; i < node->child_count; i++)
+        resolve_purity_queries(node->children[i], program, globals, nglobals);
 }
 
 int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
