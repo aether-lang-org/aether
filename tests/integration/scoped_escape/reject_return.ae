@@ -1,0 +1,6 @@
+import std.string
+leak() -> string {
+    @scoped s = string.concat("a", "b")
+    return s
+}
+main() { println(leak()) }

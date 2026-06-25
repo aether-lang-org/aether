@@ -13,6 +13,14 @@ next version number before tagging the release.
 
 ### Added
 
+- **`@scoped` bindings — opt-in escape analysis** (#521). A `let`/`var`
+  declaration annotated `@scoped` (`@scoped let buf = make_buffer()`) declares
+  that the value must not outlive its lexical block. The typechecker rejects
+  every escape: returning the binding, aliasing it into another binding or
+  field, placing it in an aggregate literal, capturing it in a closure, or
+  inserting it into a container (`list.add`/`map.put`/…). Only a scalar
+  *derived* from it may escape (`return buf.len()`). Not a borrow checker —
+  one opt-in annotation that turns a non-escape into a checked invariant.
 - **Raw identifiers: `` `name` `` escapes a reserved keyword for use as an
   ordinary identifier** (#867). A backtick-delimited identifier is always
   lexed as a plain name, so a faithful C→Aether port can keep identifiers

@@ -1,0 +1,8 @@
+import std.string
+import std.list
+f() {
+    l = list.new()
+    @scoped s = string.concat("a", "b")
+    list.add(l, s)
+}
+main() { f() }

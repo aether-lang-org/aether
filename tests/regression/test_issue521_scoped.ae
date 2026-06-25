@@ -1,0 +1,36 @@
+// Regression: issue #521 — `@scoped` bindings. A binding annotated `@scoped`
+// must not outlive its lexical block. The compiler REJECTS escapes (return /
+// alias-into-another-binding / closure capture / container insert) — those
+// cases are covered by the negative integration test. Here we verify the
+// allowed shapes compile and run: a @scoped value used locally, and a scalar
+// DERIVED from it (a call result) escaping.
+
+import std.string
+extern exit(code: int)
+
+// A scalar derived from the @scoped buffer escapes — the buffer itself does
+// not. This is the headline allowed pattern.
+checksum_len(seed: string) -> int {
+    @scoped buf = string.concat(seed, "-scratch")
+    return string.length(buf)        // ok: the int escapes, not `buf`
+}
+
+// A @scoped value consumed entirely within the block (read-only use).
+local_only() -> int {
+    @scoped tmp = string.concat("x", "y")
+    n = string.length(tmp)
+    println(tmp)                     // ok: read-only, does not retain
+    return n
+}
+
+main() {
+    if checksum_len("abc") != 11 {   // "abc-scratch" = 11 chars
+        println("FAIL #521: derived scalar escape")
+        exit(1)
+    }
+    if local_only() != 2 {
+        println("FAIL #521: local-only @scoped use")
+        exit(1)
+    }
+    println("PASS: #521 @scoped allows scalar-derived escape and local use")
+}
