@@ -30,6 +30,15 @@ typedef struct {
     MessageRegistry* message_registry;
     char** declared_vars;  // Track variables declared in current function
     int declared_var_count;
+    // #790: names of locals currently bound to a `heap.new(T)` box (a
+    // calloc'd, zero-initialised `*T`). Only these boxes have their
+    // `_heap_<field>` ownership trackers guaranteed zero, so only on these is
+    // it safe to route a `box.field = ...` store through the heap-string
+    // assignment wrapper (free old if owned + set tracker). A raw
+    // `malloc(...) as *T` has garbage trackers, so its field stores stay bare.
+    // Reset per function; a var is removed when reassigned to a non-heap.new.
+    char** heap_box_vars;
+    int heap_box_var_count;
     // #701: names of module-level `var` globals (file-scope statics).
     // Populated once before any function body is emitted. A bare
     // `name = expr` inside a function whose name is in this set is a

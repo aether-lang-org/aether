@@ -403,6 +403,50 @@ Token* read_identifier() {
     return token;
 }
 
+/* Raw identifier: `name` — any identifier-shaped token, including a
+ * reserved keyword, used verbatim as an ordinary identifier (#867).
+ * Lets a C→Aether port keep faithful names like `reply`, `when`, `after`,
+ * `ptr`, `message` as parameter / local / struct-field / function names.
+ * The opening backtick has already been consumed by the caller. Always
+ * emits TOKEN_IDENTIFIER, so every identifier-expecting grammar position
+ * accepts it with no parser change. Mirrors read_identifier's buffer
+ * handling so the value buffer is owned and freed identically (no leak). */
+Token* read_raw_identifier(void) {
+    int start_line = current_line, start_col = current_column;
+    int capacity = MAX_IDENTIFIER_LENGTH;
+    char* buffer = malloc(capacity);
+    int i = 0;
+
+    while (current_pos < source_length && (isalnum(peek()) || peek() == '_')) {
+        if (i >= capacity - 1) {
+            capacity *= 2;
+            char* new_buf = realloc(buffer, capacity);
+            if (!new_buf) { free(buffer); return create_token(TOKEN_ERROR, "out of memory", start_line, start_col); }
+            buffer = new_buf;
+        }
+        buffer[i++] = advance();
+    }
+    buffer[i] = '\0';
+
+    if (i == 0) {
+        free(buffer);
+        return create_token(TOKEN_ERROR, "empty raw identifier — `` is not a valid name", start_line, start_col);
+    }
+    if (isdigit((unsigned char)buffer[0])) {
+        free(buffer);
+        return create_token(TOKEN_ERROR, "raw identifier must not start with a digit", start_line, start_col);
+    }
+    if (current_pos >= source_length || peek() != '`') {
+        free(buffer);
+        return create_token(TOKEN_ERROR, "unterminated raw identifier — missing closing backtick", start_line, start_col);
+    }
+    advance(); /* consume the closing backtick */
+
+    Token* token = create_token(TOKEN_IDENTIFIER, buffer, start_line, start_col);
+    free(buffer);
+    return token;
+}
+
 Token* next_token() {
     skip_whitespace();
     
@@ -421,7 +465,14 @@ Token* next_token() {
     if (c == '"') {
         return read_string();
     }
-    
+
+    // Handle raw identifiers: `name` escapes a reserved keyword for use
+    // as an ordinary identifier (#867).
+    if (c == '`') {
+        advance(); // consume the opening backtick
+        return read_raw_identifier();
+    }
+
     // Handle numbers
     if (isdigit(c)) {
         return read_number();

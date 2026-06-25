@@ -1211,9 +1211,33 @@ static int emit_struct_field_heap_assign(CodeGenerator* gen, ASTNode* lhs, ASTNo
     if (lhs->children[0]->type != AST_IDENTIFIER || !lhs->children[0]->value) return 0;
     ASTNode* obj = lhs->children[0];
     Type* obj_type = obj->node_type;
-    if (!obj_type || obj_type->kind != TYPE_STRUCT || !obj_type->struct_name) return 0;
+    if (!obj_type) return 0;
+    /* Accept a value struct (`v.field = ...`, accessor ".") and a heap-boxed
+     * struct pointer from heap.new (`p.field = ...`, accessor "->"). The
+     * pointer case (#790) lets a heap.new'd struct own its string fields: the
+     * box adopts the heap string and sets its `_heap_<field>` tracker, exactly
+     * as a value struct does, so the generated `<Name>_heap_free` / scope-exit
+     * destructor reclaims it. */
+    const char* acc;
+    const char* struct_name;
+    if (obj_type->kind == TYPE_STRUCT && obj_type->struct_name) {
+        acc = ".";
+        struct_name = obj_type->struct_name;
+    } else if (obj_type->kind == TYPE_PTR && obj_type->element_type &&
+               obj_type->element_type->kind == TYPE_STRUCT &&
+               obj_type->element_type->struct_name &&
+               is_heap_box_var(gen, obj->value)) {
+        /* Only a heap.new(T) box has zero-initialised `_heap_<field>`
+         * trackers, so only there is reading/freeing the previous field
+         * value safe. A raw `malloc(...) as *T` has garbage trackers — its
+         * field stays a bare store (#790 regression guard). */
+        acc = "->";
+        struct_name = obj_type->element_type->struct_name;
+    } else {
+        return 0;
+    }
     if (!gen->program) return 0;
-    ASTNode* sdef = find_struct_definition_by_name(gen->program, obj_type->struct_name);
+    ASTNode* sdef = find_struct_definition_by_name(gen->program, struct_name);
     if (!sdef) return 0;
     ASTNode* matching_field = NULL;
     for (int fi = 0; fi < sdef->child_count; fi++) {
@@ -1230,15 +1254,15 @@ static int emit_struct_field_heap_assign(CodeGenerator* gen, ASTNode* lhs, ASTNo
     int rhs_is_heap = is_heap_string_expr(gen, rhs);
     print_indent(gen);
     fprintf(gen->output,
-            "{ const char* _tmp_old = %s.%s; %s.%s = ",
-            obj->value, lhs->value,
-            obj->value, lhs->value);
+            "{ const char* _tmp_old = %s%s%s; %s%s%s = ",
+            obj->value, acc, lhs->value,
+            obj->value, acc, lhs->value);
     generate_expression(gen, rhs);
     fprintf(gen->output,
-            "; if (%s._heap_%s) aether_heap_str_free(_tmp_old); "
-            "%s._heap_%s = %d; }\n",
-            obj->value, lhs->value,
-            obj->value, lhs->value,
+            "; if (%s%s_heap_%s) aether_heap_str_free(_tmp_old); "
+            "%s%s_heap_%s = %d; }\n",
+            obj->value, acc, lhs->value,
+            obj->value, acc, lhs->value,
             rhs_is_heap ? 1 : 0);
     return 1;
 }
@@ -3577,6 +3601,16 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         }
 
         case AST_VARIABLE_DECLARATION: {
+            /* #790: track heap.new(T) box provenance. A var bound to
+             * `heap.new(T)` is a zero-initialised box whose string fields can
+             * be owned; rebinding it to anything else drops that status. */
+            if (stmt->value && strcmp(stmt->value, "_") != 0 &&
+                stmt->child_count > 0 && stmt->children[0]) {
+                if (stmt->children[0]->type == AST_HEAP_NEW)
+                    mark_heap_box_var(gen, stmt->value);
+                else
+                    unmark_heap_box_var(gen, stmt->value);
+            }
             /* Bare `_` is a per-use discard, not a real variable.
              * `_ = <expr>` evaluates the RHS for its side effects and
              * throws the value away — no declaration, no type, no
@@ -4670,6 +4704,16 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (stmt->child_count >= 2) {
                 ASTNode* lhs = stmt->children[0];
                 ASTNode* rhs = stmt->children[1];
+
+                /* #790: a whole-variable reassignment updates heap.new box
+                 * provenance (a member-access LHS like `box.field = ...` does
+                 * not — it is a field store, handled below). */
+                if (lhs && lhs->type == AST_IDENTIFIER && lhs->value) {
+                    if (rhs && rhs->type == AST_HEAP_NEW)
+                        mark_heap_box_var(gen, lhs->value);
+                    else
+                        unmark_heap_box_var(gen, lhs->value);
+                }
 
                 // Check if RHS is a function call with a trailing block
                 int assign_has_trailing = 0;

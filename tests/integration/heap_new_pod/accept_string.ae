@@ -1,0 +1,23 @@
+// Issue #790: heap.new(T) now ACCEPTS a struct with a `string` (heap-managed)
+// field. The box owns its string fields — a field store adopts the heap
+// string and heap.free(p) releases every owned field before freeing the box.
+// The .sh driver expects this to build, run, and print the PASS line.
+import std.heap
+import std.string
+
+struct WithStr {
+    name: string
+    n: int
+}
+
+main() {
+    p = heap.new(WithStr)
+    p.name = string.concat("hel", "lo")
+    p.n = 7
+    if p.name != "hello" {
+        println("FAIL: heap.new string field round-trip")
+        return
+    }
+    heap.free(p)
+    println("PASS: heap.new string-field box owns and frees its field")
+}

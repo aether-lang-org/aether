@@ -1836,6 +1836,19 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
         }
         unindent(gen);
         print_line(gen, "}");
+
+        /* #790: typed free for a heap.new'd box that owns string fields —
+         * release every owned field (via the destructor), then free the box
+         * itself. heap.free(p) routes here when p's struct has heap fields;
+         * the POD path stays a plain free(p). NULL-safe. */
+        print_line(gen, "static inline void %s_heap_free(%s* s) {",
+                   struct_def->value, struct_def->value);
+        indent(gen);
+        print_line(gen, "if (!s) return;");
+        print_line(gen, "%s_destroy(s);", struct_def->value);
+        print_line(gen, "free(s);");
+        unindent(gen);
+        print_line(gen, "}");
     }
     print_line(gen, "");
 }

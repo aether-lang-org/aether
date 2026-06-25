@@ -1,0 +1,36 @@
+// Regression: issue #867 — a backtick raw identifier (`name`) lets a
+// reserved keyword be used verbatim as a parameter, local, struct-field, or
+// function name. This keeps a 1:1 C→Aether port faithful: C names like
+// `reply`, `message`, `after`, `ptr`, `when` no longer force a rename.
+
+import std.string
+extern exit(code: int)
+
+struct Robj {
+    `reply`: int
+    `message`: int
+}
+
+// `reply` and `after` are reserved keywords; the backtick escape uses them
+// as ordinary parameter and local names.
+addReply(`reply`: int, `after`: int) -> int {
+    `ptr` = `reply` + `after`
+    return `ptr`
+}
+
+// `when` is reserved (the static-if keyword); usable as a name when escaped.
+`when`() -> int { return 7 }
+
+main() {
+    r = Robj { `reply`: 10, `message`: 20 }
+    sum = addReply(r.`reply`, r.`message`)   // 10 + 20
+    if sum != 30 {
+        println("FAIL #867: raw-identifier param/field round-trip")
+        exit(1)
+    }
+    if `when`() != 7 {
+        println("FAIL #867: raw-identifier function name")
+        exit(1)
+    }
+    println("PASS: #867 raw identifiers usable as keyword-named bindings")
+}

@@ -171,6 +171,28 @@ error[E1000]: module 'mod' (mod/module.ae) defines local function
 
 The same check applies to entry-point `main.ae` files when the shadow lives there directly (not inside a module). Both `AST_FUNCTION_DEFINITION` and `export <fn>` shapes are caught.
 
+## Qualified surface survives a selective import after merge (#870)
+
+The two `import std.X` forms each light up a different call syntax: a bare
+`import std.X` enables the qualified `X.fn()` surface; a selective
+`import std.X (fn)` enables the bare-name `fn()` surface. These compose
+per-file — but a merged compilation unit pulls definitions from several files
+into one program, and a module's own `import` statements are *not* cloned in
+(only its function/const/struct bodies are).
+
+That dropped the qualified surface in one case: when the entry file imported a
+module **selectively** (`import std.string (string_length)`), the merged unit
+was marked selective for `string`, so a qualified `string.concat(...)` arriving
+from an imported module that bare-imports `std.string` was rejected with
+`error[E0301]: Undefined function 'string.concat'`.
+
+The merge now injects a **synthetic bare import** for each merged module's own
+bare imports. A synthetic import marks the namespace non-selective for the unit
+(re-opening `string.X`) but is kept out of the user-explicit registry, so
+sealed-scope isolation (#243) is preserved: user code still cannot call into a
+namespace it never imported. This mirrors how transitive dependencies already
+get synthetic imports during merge.
+
 ## Future
 
 Work planned on top of the current module system:

@@ -1634,6 +1634,54 @@ static void insert_child_at(ASTNode* parent, ASTNode* child, int index) {
 // Merge pure Aether module functions into the main program AST.
 // For each non-stdlib import, clones function definitions with namespace-prefixed
 // names and inserts them before main() so constants and functions are available.
+/* #870: a merged module's own `import` statements are not cloned into the
+ * program (only its function/const/struct bodies are). When a merged module
+ * bare-imports a stdlib/local module, the QUALIFIED-call surface for that
+ * module (`string.concat`, `json.stringify`, ...) used inside the merged
+ * body must stay resolvable — even if the entry file imported the SAME
+ * module SELECTIVELY (`import std.string (string_length)`), which marks the
+ * namespace selective and would otherwise reject the qualified calls.
+ *
+ * Re-establish the bare/non-selective surface by injecting a synthetic BARE
+ * import (no selection children) for each module the merged module imported
+ * bare. The typechecker's import pass then calls
+ * selective_import_mark_nonselective() for it, so qualified calls resolve
+ * for the whole merged unit. The "synthetic" annotation keeps the namespace
+ * out of the user-explicit registry (issue #243 sealed-scope isolation):
+ * it is visible to merged bodies, not re-granted to user code that never
+ * imported it. Deduped against any bare import the program already carries
+ * (user-written or earlier-injected). */
+static void inject_synthetic_bare_imports_from(ASTNode* program,
+                                               ASTNode* mod_ast,
+                                               int* insert_idx) {
+    if (!program || !mod_ast || !insert_idx) return;
+    for (int j = 0; j < mod_ast->child_count; j++) {
+        ASTNode* imp = mod_ast->children[j];
+        if (!imp || imp->type != AST_IMPORT_STATEMENT || !imp->value) continue;
+        /* A selective import carries AST_IDENTIFIER selection children; only
+         * bare imports re-open the qualified surface. */
+        if (imp->child_count > 0 && imp->children[0] &&
+            imp->children[0]->type == AST_IDENTIFIER) continue;
+        /* Dedup: skip if the program already carries a bare import of this
+         * path (so two merged modules importing the same one inject once). */
+        int already = 0;
+        for (int p = 0; p < program->child_count; p++) {
+            ASTNode* pc = program->children[p];
+            if (pc && pc->type == AST_IMPORT_STATEMENT && pc->value &&
+                strcmp(pc->value, imp->value) == 0 &&
+                !(pc->child_count > 0 && pc->children[0] &&
+                  pc->children[0]->type == AST_IDENTIFIER)) {
+                already = 1;
+                break;
+            }
+        }
+        if (already) continue;
+        ASTNode* synth = create_ast_node(AST_IMPORT_STATEMENT, imp->value, 0, 0);
+        synth->annotation = strdup("synthetic");
+        insert_child_at(program, synth, (*insert_idx)++);
+    }
+}
+
 void module_merge_into_program(ASTNode* program) {
     if (!program || !global_module_registry) return;
 
@@ -1682,6 +1730,12 @@ void module_merge_into_program(ASTNode* program) {
         // only merge functions/constants that appear in the selection list
         int has_selection = (child->child_count > 0 &&
                             child->children[0]->type == AST_IDENTIFIER);
+
+        // #870: re-open the qualified-call surface for any module this
+        // imported module bare-imports, so its merged bodies' `ns.fn(...)`
+        // calls resolve even when the entry file imported the same module
+        // selectively.
+        inject_synthetic_bare_imports_from(program, mod_ast, &insert_idx);
 
         for (int j = 0; j < mod_ast->child_count; j++) {
             ASTNode* decl = unwrap_export(mod_ast->children[j]);

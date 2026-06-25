@@ -1854,6 +1854,34 @@ Note: `state` is context-sensitive — it is a keyword only inside actor bodies.
 
 Note: `void` is **not** a reserved word — there is no `void` token. It is a plain identifier used by convention to *spell* the absence of a return value (e.g. `extern free(p: ptr) -> void`); a function that omits its `-> Type` annotation is the canonical void declaration. See [Functions](#functions).
 
+### Raw identifiers — using a keyword as a name
+
+A backtick-delimited identifier, `` `name` ``, is always lexed as an ordinary
+identifier, bypassing keyword reservation. This lets a reserved word be used
+verbatim wherever an identifier is expected — parameter, local, struct-field,
+message-field, or function name:
+
+```aether
+struct Robj {
+    `reply`: int        // `reply` is a keyword; the backtick escape keeps it
+    `message`: int
+}
+
+addReply(`reply`: int, `after`: int) -> int {
+    `ptr` = `reply` + `after`
+    return `ptr`
+}
+```
+
+The escaped text is the name (`` `reply` `` is the identifier `reply`), so a
+raw identifier and the plain spelling refer to the same binding. The primary
+use is keeping a C→Aether port faithful: C APIs routinely use names like
+`reply`, `message`, `after`, and `ptr` that collide with Aether keywords.
+
+Writing an *unescaped* reserved keyword where a name is expected is an error
+(`error[E0100]: '<kw>' is a reserved keyword …`) whose hint points to both the
+rename and the `` `<kw>` `` escape.
+
 ---
 
 ## Comments

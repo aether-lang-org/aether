@@ -1,0 +1,38 @@
+// Regression: issue #790 — heap.new(T) supports structs with `string`
+// fields, not just POD. The box owns its string fields: a field store adopts
+// a heap string (and frees the previous one on reassignment), and
+// heap.free(p) releases every owned field before freeing the box. A literal
+// (borrowed) field is not freed. Leak-cleanliness is checked by the macOS
+// leaks gate; this test verifies functional behaviour.
+
+import std.heap
+import std.string
+extern exit(code: int)
+
+// The motivating shape from fbs-core: a handler context with a db handle and
+// an owned config string.
+struct AppCtx {
+    db: ptr
+    data_dir: string
+}
+
+main() {
+    ctx = heap.new(AppCtx)            // calloc — fields zero/NULL, trackers 0
+    ctx.data_dir = string.concat("/var/", "data")
+    if ctx.data_dir != "/var/data" {
+        println("FAIL #790: string field store")
+        exit(1)
+    }
+    // Reassign — the previous heap string must be reclaimed (no leak), the
+    // new one observed.
+    ctx.data_dir = string.concat("/srv/", "store")
+    if ctx.data_dir != "/srv/store" {
+        println("FAIL #790: string field reassignment")
+        exit(1)
+    }
+    // A borrowed literal is stored without being marked owned, so heap.free
+    // must not try to free it.
+    ctx.data_dir = "borrowed-literal"
+    heap.free(ctx)                    // releases owned fields, frees the box
+    println("PASS: #790 heap.new owns and frees struct string fields")
+}

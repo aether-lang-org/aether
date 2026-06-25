@@ -16,6 +16,13 @@ typedef struct Symbol {
                                 // from a bare `x = expr` declaration (no
                                 // annotation) and is a 32-bit int — drives
                                 // the #698 silent-narrowing guard.
+    int width_explicit;         // #869: 1 if this binding was declared with an
+                                // EXPLICIT integer-type annotation (`uint64 v
+                                // = 0`). Set once at declaration and never
+                                // cleared by the width-inference pass (unlike
+                                // `type`/`type_inferred`, which it mutates), so
+                                // a later bare re-bind can preserve the declared
+                                // width instead of re-narrowing it.
     struct Symbol* next;
 } Symbol;
 

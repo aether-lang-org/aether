@@ -518,6 +518,15 @@ RDB/AOF, module APIs, and platform conditionals.
 > externs ~251-276), backed by libc/intrinsics in `std/mem/aether_mem.c`.
 > The length parameter is `long` here rather than the `size_t` shown in the
 > sketch. *(Original gap analysis preserved below.)*
+>
+> **Width-audit (#868):** the raw-offset idiom (`mem.get_long(p, OFF)`) chooses
+> its read width by accessor *name*, not by the field's type, so reading a
+> 4-byte field with `get_long` silently pulls in adjacent bytes (a real port
+> read a `uint32` `slen` with `get_long` and crashed on a ~94 TB allocation).
+> The width-exact accessors needed to do it right already exist
+> (`get_uint32` / `get_u32_le` / …); `aetherc --audit-mem <file>` now lists
+> every `mem.get_*`/`mem.set_*` call with the byte width its name implies, so
+> each access can be checked against the C layout in one pass.
 
 ### Problem
 
