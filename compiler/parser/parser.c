@@ -917,6 +917,28 @@ ASTNode* parse_primary_expression(Parser* parser) {
                     return node;
                 }
             }
+            // __pure(funcName) — compile-time purity introspection (#522).
+            // Folds to a `true`/`false` bool constant after whole-program
+            // purity analysis. Same non-reserving treatment as sizeof: only
+            // the `__pure(` call shape triggers it.
+            {
+                Token* after = peek_ahead(parser, 1);
+                if (after && after->type == TOKEN_LEFT_PAREN && token->value &&
+                    strcmp(token->value, "__pure") == 0) {
+                    int line = token->line, column = token->column;
+                    advance_token(parser);                       // consume __pure
+                    if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
+                    Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
+                    if (!fname) return NULL;
+                    ASTNode* node = create_ast_node(AST_PURITY_QUERY, fname->value, line, column);
+                    node->node_type = create_type(TYPE_BOOL);
+                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                        free_ast_node(node);
+                        return NULL;
+                    }
+                    return node;
+                }
+            }
             // C variadic-consumer intrinsics: va_start() / va_arg(vap, T)
             // / va_end(vap). Same non-reserving treatment as sizeof —
             // intercepted only on the `va_*(`  call shape. Usable only

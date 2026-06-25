@@ -13,6 +13,13 @@ next version number before tagging the release.
 
 ### Added
 
+- **Static purity inference + the `__pure(fn)` builtin** (#522). A whole-program
+  analysis classifies each function pure/impure: pure means it transitively
+  reaches no fs/net/os capability call and mutates no caller-visible state (a
+  parameter's pointee or a module global). The compile-time `__pure(funcName)`
+  builtin folds to a `true`/`false` constant, so code can branch on purity at
+  compile time. Conservative — an extern / unresolved function is treated as
+  impure. Reuses the #481 call-graph + capability classification.
 - **Per-function effect tags: `@pure` / `@no_fs` / `@no_net` / `@no_os`** (#481).
   A function annotated with an effect tag declares it must not (transitively)
   use the named capability; `@pure` forbids all of fs/net/os. A whole-program

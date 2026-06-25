@@ -1880,6 +1880,9 @@ static void check_unreachable_code(ASTNode* body) {
 static void scoped_check_bindings(ASTNode* node, ASTNode* root);
 // #481: validate `@pure`/`@no_fs`/`@no_net`/`@no_os` effect tags.
 static void check_effect_tags(ASTNode* program);
+// #522: fold `__pure(fn)` queries to compile-time bool constants.
+static void resolve_purity_queries(ASTNode* node, ASTNode* program,
+                                   const char** globals, int nglobals);
 
 // Type checking functions
 int typecheck_program(ASTNode* program) {
@@ -1890,6 +1893,22 @@ int typecheck_program(ASTNode* program) {
     namespace_count = 0;  // Reset imported namespaces
     user_explicit_namespace_count = 0;  // Reset user-explicit namespaces (issue #243)
     selective_import_reset();  // Reset per-module selective-import filters
+
+    // #522: fold `__pure(fn)` queries to bool constants before any expression
+    // is type-checked. Needs the merged call graph (all function defs), which
+    // is present in `program` by now; module globals make a write impure.
+    {
+        const char* pg[MAX_TRACKED_VARS];
+        int npg = 0;
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (c && c->type == AST_EXPORT_STATEMENT && c->child_count > 0) c = c->children[0];
+            if (c && c->type == AST_CONST_DECLARATION && c->value && c->annotation &&
+                strcmp(c->annotation, "global_var") == 0 && npg < MAX_TRACKED_VARS)
+                pg[npg++] = c->value;
+        }
+        resolve_purity_queries(program, program, pg, npg);
+    }
 
     SymbolTable* global_table = create_symbol_table(NULL);
     
@@ -2944,6 +2963,110 @@ static void check_effect_tags(ASTNode* program) {
             type_error(msg, fn->line, fn->column);
         }
     }
+}
+
+/* #522 purity inference. A function is PURE when it (transitively) reaches no
+ * capability stdlib call (fs/net/os — time/exec live under os) and mutates no
+ * caller-visible state: a parameter's pointee (`p.field = …`, `p[i] = …`) or a
+ * module global. Conservative — a function the analysis can't see the body of
+ * (extern, unresolved) is treated as impure; a raw `extern` call inside a body
+ * is opaque and left unflagged (same boundary as the effect-tag / `--with=`
+ * gates). The result is exposed by the compile-time `__pure(fn)` builtin. */
+
+static int purity_is_param(ASTNode* fn, const char* name) {
+    if (!fn || !name) return 0;
+    for (int i = 0; i < fn->child_count - 1; i++) {  /* last child is the body */
+        ASTNode* p = fn->children[i];
+        if (p && (p->type == AST_VARIABLE_DECLARATION || p->type == AST_PATTERN_VARIABLE) &&
+            p->value && strcmp(p->value, name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Root identifier of an lvalue: x, x.f, x[i], x.f[i].g → "x". */
+static const char* purity_lvalue_root(ASTNode* n) {
+    while (n) {
+        if (n->type == AST_IDENTIFIER) return n->value;
+        if ((n->type == AST_MEMBER_ACCESS || n->type == AST_ARRAY_ACCESS) &&
+            n->child_count > 0) { n = n->children[0]; continue; }
+        return NULL;
+    }
+    return NULL;
+}
+
+static int purity_scan(ASTNode* program, ASTNode* fn, ASTNode* node,
+                       const char** globals, int nglobals,
+                       const char** visited, int* nv, int depth) {
+    if (!node || depth > 128) return 0;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        const char* dot = strchr(node->value, '.');
+        if (dot) {
+            char ns[64];
+            size_t l = (size_t)(dot - node->value);
+            if (l < sizeof(ns)) {
+                memcpy(ns, node->value, l);
+                ns[l] = '\0';
+                if (effect_call_capability(ns)) return 1;  /* fs/net/os → impure */
+            }
+        } else {
+            int seen = 0;
+            for (int i = 0; i < *nv; i++)
+                if (strcmp(visited[i], node->value) == 0) { seen = 1; break; }
+            if (!seen && *nv < 512) {
+                ASTNode* def = effect_find_func(program, node->value);
+                if (def && def->child_count > 0) {
+                    visited[(*nv)++] = node->value;
+                    if (purity_scan(program, def, def->children[def->child_count - 1],
+                                    globals, nglobals, visited, nv, depth + 1)) return 1;
+                }
+            }
+        }
+    }
+    if ((node->type == AST_ASSIGNMENT ||
+         (node->type == AST_BINARY_EXPRESSION && node->value &&
+          strcmp(node->value, "=") == 0)) && node->child_count >= 1) {
+        ASTNode* lhs = node->children[0];
+        const char* root = purity_lvalue_root(lhs);
+        if (root) {
+            int is_field = lhs && (lhs->type == AST_MEMBER_ACCESS ||
+                                   lhs->type == AST_ARRAY_ACCESS);
+            if (is_field && purity_is_param(fn, root)) return 1;  /* mutate a param's pointee */
+            for (int g = 0; g < nglobals; g++)
+                if (strcmp(globals[g], root) == 0) return 1;       /* write a module global */
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        if (purity_scan(program, fn, node->children[i], globals, nglobals, visited, nv, depth))
+            return 1;
+    return 0;
+}
+
+static int func_is_pure(ASTNode* program, const char* fnname,
+                        const char** globals, int nglobals) {
+    ASTNode* fn = effect_find_func(program, fnname);
+    if (!fn || fn->child_count == 0) return 0;  /* unknown / extern → conservatively impure */
+    const char* visited[512];
+    int nv = 0;
+    visited[nv++] = fnname;
+    ASTNode* body = fn->children[fn->child_count - 1];
+    return !purity_scan(program, fn, body, globals, nglobals, visited, &nv, 0);
+}
+
+/* Fold every `__pure(fn)` node in the tree to a `true`/`false` bool literal. */
+static void resolve_purity_queries(ASTNode* node, ASTNode* program,
+                                   const char** globals, int nglobals) {
+    if (!node) return;
+    if (node->type == AST_PURITY_QUERY && node->value) {
+        int pure = func_is_pure(program, node->value, globals, nglobals);
+        node->type = AST_LITERAL;
+        free(node->value);
+        node->value = strdup(pure ? "true" : "false");
+        if (node->node_type) free_type(node->node_type);
+        node->node_type = create_type(TYPE_BOOL);
+        return;
+    }
+    for (int i = 0; i < node->child_count; i++)
+        resolve_purity_queries(node->children[i], program, globals, nglobals);
 }
 
 int typecheck_function_definition(ASTNode* func, SymbolTable* table) {

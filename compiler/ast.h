@@ -144,6 +144,7 @@ typedef enum {
     // the real C struct layout (no hand-maintained offset constants).
     AST_SIZEOF,             // sizeof(TypeName)
     AST_OFFSETOF,           // offsetof(TypeName, fieldName)
+    AST_PURITY_QUERY,       // __pure(funcName) — folds to a compile-time bool (#522)
 
     // heap.new(T) — zero-initialised heap allocation of a POD struct,
     // returning `*T` (issue #564). `value` holds the struct type name;
