@@ -1,0 +1,3 @@
+import std.string
+divide(a: int, b: int where b != 0) -> int { return a / b }
+main() { println(string.from_int(divide(10, 0))) }

@@ -1,0 +1,27 @@
+// Regression: issue #525 — gradual contracts via `where` clauses on function
+// parameters. `name: T where <cond>` attaches a runtime-checked precondition,
+// lowered to the same entry guard as `requires`: a violation is a hard panic
+// (programmer-error signal), not a recoverable `(value, err)`. Opt-in — a
+// parameter with no `where` is unchecked. The violation (panic) path is
+// covered by the negative integration test; here we verify the satisfied
+// path compiles and runs.
+
+import std.string
+extern exit(code: int)
+
+divide(a: int, b: int where b != 0) -> int { return a / b }
+
+// Multiple conditions compose with `and`; multiple `where` params allowed.
+clamp(lo: int where lo >= 0, hi: int where hi >= lo) -> int { return hi - lo }
+
+main() {
+    if divide(10, 2) != 5 {
+        println("FAIL #525: divide precondition-satisfied path")
+        exit(1)
+    }
+    if clamp(2, 9) != 7 {
+        println("FAIL #525: clamp multi-where path")
+        exit(1)
+    }
+    println("PASS: #525 parameter `where` clauses hold on the satisfied path")
+}

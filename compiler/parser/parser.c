@@ -4061,6 +4061,29 @@ ASTNode* parse_function_definition(Parser* parser) {
                 break;
             }
             add_child(func, param);
+            // #525 gradual contracts: `name: T where <cond>` attaches a
+            // runtime precondition on the parameter. Lower to an
+            // AST_REQUIRES_CLAUSE on the function — checked at entry (the
+            // parameter is in scope) by the same machinery as `requires`.
+            // `where` is a contextual keyword: a plain identifier elsewhere,
+            // recognised only right after a parameter here.
+            {
+                Token* w = peek_token(parser);
+                if (w && w->type == TOKEN_IDENTIFIER && w->value &&
+                    strcmp(w->value, "where") == 0) {
+                    int wl = w->line, wc = w->column;
+                    advance_token(parser);  // consume 'where'
+                    ASTNode* cond = parse_expression(parser);
+                    if (!cond) {
+                        parser_error(parser, "expected a condition expression after `where`");
+                        free_ast_node(func);
+                        return NULL;
+                    }
+                    ASTNode* clause = create_ast_node(AST_REQUIRES_CLAUSE, NULL, wl, wc);
+                    add_child(clause, cond);
+                    add_child(func, clause);
+                }
+            }
         } while (match_token(parser, TOKEN_COMMA));
 
         expect_token(parser, TOKEN_RIGHT_PAREN);
