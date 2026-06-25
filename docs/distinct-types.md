@@ -1,9 +1,44 @@
-# Distinct Types — design
+# Distinct Types
 
-> **Status:** design draft. Issue #480 is the umbrella feature; this
-> document is the artefact that closes it. The maintainer (Nic) has
-> final call on the open design questions marked **TBD** below;
-> implementation does not start until those are resolved.
+> **Status:** implemented (#480). The first cut below is live; the rest of this
+> document keeps the original design rationale and the remaining **TBD** items
+> for future refinement.
+
+## Implemented
+
+A zero-cost nominal wrapper over a scalar / `string` / `ptr` base:
+
+```aether
+type USD = distinct float
+type Fd  = distinct int
+
+charge(amount: USD) -> USD { return (amount as float * 1.1) as USD }
+
+main() {
+    let price = 9.99 as USD          // wrap: base -> distinct (explicit `as`)
+    let total = charge(price)
+    let cents = total as float       // unwrap: distinct -> base (explicit `as`)
+}
+```
+
+- **Declaration:** `type Name = distinct Base` at top level. `type` and
+  `distinct` are contextual identifiers (usable as names elsewhere).
+- **Zero cost:** a distinct type lowers to its base C type — no boxing, no
+  vtable. `USD` is a C `double`, `Fd` a C `int`.
+- **Nominal identity:** the type checker treats `USD` as separate from `float`
+  and from any other distinct type. Crossing the boundary requires an explicit
+  cast: `value as USD` (wrap), `usd as float` (unwrap). The same `as` form also
+  does ordinary numeric conversions.
+- **Enforced at:** variable declarations / assignments (a raw `float` cannot
+  initialise a `USD`, and vice-versa) **and** call-argument boundaries (a
+  function taking `Fd` cannot be passed a raw `int`, nor an `EUR` where `USD`
+  is wanted) — the capability-token discipline the design below describes.
+  (Aether's argument checking is otherwise lenient; the distinct check is
+  scoped to distinct types.)
+- **Base kinds:** scalars (`int`/`long`/`uint64`/`float`/`byte`/`bool`),
+  `string`, and `ptr`.
+
+Original design rationale and open questions follow.
 
 ## Goal
 

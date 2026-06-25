@@ -12,6 +12,7 @@ Type* create_type(TypeKind kind) {
     type->array_size = -1;
     type->struct_name = NULL;
     type->c_alias = NULL;
+    type->distinct_name = NULL;
     type->tuple_types = NULL;
     type->tuple_count = 0;
     type->tuple_heap_flags = NULL;
@@ -77,6 +78,9 @@ void free_type(Type* type) {
         }
         if (type->c_alias) {
             free(type->c_alias);
+        }
+        if (type->distinct_name) {
+            free(type->distinct_name);
         }
         if (type->tuple_types) {
             for (int i = 0; i < type->tuple_count; i++) {
@@ -169,6 +173,18 @@ int types_equal(Type* a, Type* b) {
     if (!a || !b) return a == b;
     if (a->kind != b->kind) return 0;
     if (a->array_size != b->array_size) return 0;
+
+    // #480 distinct types: a distinct type equals only the same-named distinct
+    // type; a distinct type and its base (one name set, the other NULL) are
+    // not equal even when `kind` matches.
+    {
+        const char* da = a->distinct_name;
+        const char* db = b->distinct_name;
+        if (da || db) {
+            if (!da || !db) return 0;
+            return strcmp(da, db) == 0;
+        }
+    }
     
     // For struct types, compare names
     if (a->kind == TYPE_STRUCT) {
@@ -203,6 +219,9 @@ Type* clone_type(Type* type) {
     }
     if (type->c_alias) {
         new_type->c_alias = strdup(type->c_alias);
+    }
+    if (type->distinct_name) {
+        new_type->distinct_name = strdup(type->distinct_name);
     }
 
     if (type->tuple_types && type->tuple_count > 0) {

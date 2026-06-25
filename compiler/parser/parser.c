@@ -1485,22 +1485,25 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                 continue;
             }
             if (!(next && next->type == TOKEN_MULTIPLY)) {
-                // Not `as *T` — try `as T[]` (typed-array view cast).
-                // Reuse parse_type to consume the type, then assert the
-                // result is a TYPE_ARRAY. This piggy-backs on the
-                // existing `[N]` / `[]` parsing in parse_type.
-                Type* arr_type = parse_type(parser);
-                if (!arr_type) return NULL;
-                if (arr_type->kind != TYPE_ARRAY || !arr_type->element_type) {
-                    parser_error(parser,
-                        "Expected `*StructName`, `fn(...) -> R`, or `T[]` after `as`");
-                    free_type(arr_type);
-                    return NULL;
+                // Not `as *T`. Parse the target type: a `T[]` is the typed-
+                // array view cast; anything else (a scalar, or a named type
+                // that may resolve to a distinct type) is a #480 value cast —
+                // a zero-cost nominal (un)wrap or numeric conversion.
+                Type* target = parse_type(parser);
+                if (!target) return NULL;
+                if (target->kind == TYPE_ARRAY && target->element_type) {
+                    ASTNode* cast = create_ast_node(AST_PTR_AS_ARRAY_CAST,
+                                                    NULL,
+                                                    op->line, op->column);
+                    cast->node_type = target;
+                    add_child(cast, expr);
+                    expr = cast;
+                    continue;
                 }
-                ASTNode* cast = create_ast_node(AST_PTR_AS_ARRAY_CAST,
+                ASTNode* cast = create_ast_node(AST_VALUE_CAST,
                                                 NULL,
                                                 op->line, op->column);
-                cast->node_type = arr_type;
+                cast->node_type = target;
                 add_child(cast, expr);
                 expr = cast;
                 continue;
@@ -4633,6 +4636,40 @@ ASTNode* parse_top_level_decl(Parser* parser) {
         if (!token) return NULL;
 
         ASTNode* node = NULL;
+
+        // #480: `type Name = distinct Base` — a zero-cost nominal type over
+        // Base. `type` and `distinct` are contextual identifiers (usable as
+        // names elsewhere); only the `type <ident> = distinct ...` shape here
+        // is intercepted.
+        if (token->type == TOKEN_IDENTIFIER && token->value &&
+            strcmp(token->value, "type") == 0) {
+            Token* n1 = peek_ahead(parser, 1);
+            Token* n2 = peek_ahead(parser, 2);
+            if (n1 && n1->type == TOKEN_IDENTIFIER &&
+                n2 && n2->type == TOKEN_ASSIGN) {
+                advance_token(parser);                       // consume 'type'
+                Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!name) return NULL;
+                if (!expect_token(parser, TOKEN_ASSIGN)) return NULL;
+                Token* dk = peek_token(parser);
+                if (!(dk && dk->type == TOKEN_IDENTIFIER && dk->value &&
+                      strcmp(dk->value, "distinct") == 0)) {
+                    parser_error(parser, "expected `distinct` after `type Name =` (only distinct type aliases are supported)");
+                    return NULL;
+                }
+                advance_token(parser);                       // consume 'distinct'
+                Type* base = parse_type(parser);
+                if (!base) {
+                    parser_error(parser, "expected a base type after `distinct`");
+                    return NULL;
+                }
+                ASTNode* d = create_ast_node(AST_DISTINCT_TYPE_DEF,
+                                             name->value, name->line, name->column);
+                d->node_type = base;
+                match_token(parser, TOKEN_SEMICOLON);
+                return d;
+            }
+        }
 
         switch (token->type) {
             case TOKEN_WHEN: {

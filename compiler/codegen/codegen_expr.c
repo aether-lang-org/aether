@@ -2077,6 +2077,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             }
             break;
 
+        case AST_VALUE_CAST:
+            /* `expr as T` (#480) — zero-cost nominal (un)wrap or numeric
+             * conversion. Emit a plain C cast to the target's machine type;
+             * for a distinct target, node_type->kind is the base kind, so
+             * get_c_type yields the base C type (no runtime cost). */
+            if (expr->child_count > 0 && expr->node_type) {
+                fprintf(gen->output, "((%s)(", get_c_type(expr->node_type));
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, "))");
+            } else if (expr->child_count > 0) {
+                generate_expression(gen, expr->children[0]);
+            }
+            break;
+
         case AST_PTR_AS_FN_CAST:
             /* `expr as fn(T1, T2, ...) -> R` — at this node we emit
              * just `((void*)(expr))`.  The signature is carried on
