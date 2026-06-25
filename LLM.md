@@ -131,6 +131,19 @@ plays that role), no interfaces.
 
 ## Idioms that keep biting
 
+- **String/int dispatch → `match`, not an `if` chain.** `match (mode) {
+  "check" -> {…} "up" -> {…} _ -> {…} }` — string arms compare by content,
+  int arms by value, `_` is the wildcard. Beats a chained `if mode == "…"`
+  and a C-style `switch` (`case V:`, literals, no binding). `match` also
+  captures/destructures lists (`[h|t]`); for range/relational branching use
+  **guarded function clauses** (`grade(s) when s >= 90 -> "A"` — the Erlang-
+  style multi-clause form), and an `if`-expression for a value-producing
+  two-way choice. `match`/`switch` arms are literal-only; guards are the
+  escape to conditions. NB: this clause-level `when` (a runtime guard) is a
+  *different* construct from the top-level/statement **compile-time `when`**
+  (static-if: `when target.os == "windows" { … } else { … }`, only the
+  selected arm is type-checked/emitted — see `docs/when-static-if.md`). Same
+  keyword, two unrelated meanings.
 - **Go-style returns, not tuples-as-values.** `fs.write_atomic(path,
   data, len) -> string` — empty string = success, non-empty = error
   message. Don't "improve" the convention, it's consistent across all
