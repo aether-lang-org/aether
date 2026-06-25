@@ -13,6 +13,17 @@ next version number before tagging the release.
 
 ### Added
 
+- **Gradual contracts: `where` clauses on function parameters** (#525). A
+  parameter may carry a runtime-checked precondition: `divide(a: int, b: int
+  where b != 0)`. It lowers to the same entry guard as `requires` — a violation
+  is a hard panic naming the condition (`precondition violation: b != 0 in
+  divide`), a programmer-error signal, not a recoverable `(value, err)`. Opt-in
+  and gradual: a parameter with no `where` is unchecked; multiple `where`
+  params and `and`-composed conditions are allowed; suppressed by
+  `--no-contracts` like the other contract checks. (`where` on bindings is a
+  tracked follow-up — it needs a binding-syntax decision, since Aether bindings
+  are prefix/inferred, not the issue's postfix `let x: T` form.)
+
 - **Static purity inference + the `__pure(fn)` builtin** (#522). A whole-program
   analysis classifies each function pure/impure: pure means it transitively
   reaches no fs/net/os capability call and mutates no caller-visible state (a
