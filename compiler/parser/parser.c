@@ -4728,8 +4728,60 @@ ASTNode* parse_top_level_decl(Parser* parser) {
                     node = fdef;
                     break;
                 }
+                // #481 effect tags: `@pure` / `@no_fs` / `@no_net` / `@no_os`
+                // declare that the function (transitively) must not touch the
+                // named capability. Stackable (`@no_fs @no_net f() {}`);
+                // `@pure` forbids all three. A post-typecheck pass walks the
+                // call graph and errors if a forbidden capability is reached.
+                if (attr && attr->type == TOKEN_IDENTIFIER && attr->value &&
+                    (strcmp(attr->value, "pure") == 0 ||
+                     strcmp(attr->value, "no_fs") == 0 ||
+                     strcmp(attr->value, "no_net") == 0 ||
+                     strcmp(attr->value, "no_os") == 0)) {
+                    int no_fs = 0, no_net = 0, no_os = 0;
+                    for (;;) {
+                        if (strcmp(attr->value, "pure") == 0) { no_fs = no_net = no_os = 1; }
+                        else if (strcmp(attr->value, "no_fs") == 0) no_fs = 1;
+                        else if (strcmp(attr->value, "no_net") == 0) no_net = 1;
+                        else if (strcmp(attr->value, "no_os") == 0) no_os = 1;
+                        advance_token(parser);  // consume the effect keyword
+                        // Another stacked `@effect`?
+                        if (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
+                            advance_token(parser);  // consume '@'
+                            attr = peek_token(parser);
+                            if (attr && attr->type == TOKEN_IDENTIFIER && attr->value &&
+                                (strcmp(attr->value, "pure") == 0 ||
+                                 strcmp(attr->value, "no_fs") == 0 ||
+                                 strcmp(attr->value, "no_net") == 0 ||
+                                 strcmp(attr->value, "no_os") == 0)) {
+                                continue;
+                            }
+                            parser_error(parser, "effect tags (@pure/@no_fs/@no_net/@no_os) must directly precede the function definition");
+                            return NULL;
+                        }
+                        break;
+                    }
+                    if (peek_token(parser) && peek_token(parser)->type == TOKEN_FUNC)
+                        advance_token(parser);  // optional 'func'
+                    ASTNode* fdef = parse_function_definition(parser);
+                    if (fdef) {
+                        if (fdef->annotation) {
+                            parser_error(parser, "effect tags cannot combine with another annotation (e.g. a variadic `...` or @c_callback) on the same function");
+                            return NULL;
+                        }
+                        char caps[32] = "";
+                        if (no_fs)  strncat(caps, caps[0] ? ",fs"  : "fs",  sizeof(caps) - strlen(caps) - 1);
+                        if (no_net) strncat(caps, caps[0] ? ",net" : "net", sizeof(caps) - strlen(caps) - 1);
+                        if (no_os)  strncat(caps, caps[0] ? ",os"  : "os",  sizeof(caps) - strlen(caps) - 1);
+                        char tag[64];
+                        snprintf(tag, sizeof(tag), "effect:%s", caps);
+                        fdef->annotation = strdup(tag);
+                    }
+                    node = fdef;
+                    break;
+                }
                 if (!attr || attr->type != TOKEN_EXTERN) {
-                    parser_error(parser, "unknown attribute (expected @extern(\"...\") or @c_callback)");
+                    parser_error(parser, "unknown attribute (expected @extern(\"...\"), @c_callback, @derive, or an effect tag @pure/@no_fs/@no_net/@no_os)");
                     advance_token(parser);
                     return NULL;
                 }

@@ -373,6 +373,32 @@ direct calls to the raw extern (`tcp_connect_raw`) are enforced.
 Nested sandboxes are intersected — an inner sandbox cannot escalate
 beyond what the outer sandbox grants.
 
+## Per-function effect tags (#481)
+
+The sandbox and `--with=fs,net,os` gate the *whole program*. Effect tags add a
+**finer, per-function** capability axis, checked statically at compile time
+(zero runtime cost):
+
+```aether
+@pure
+parse_config(text: string) -> Config { ... }   // must touch no fs/net/os
+
+@no_fs
+classify(req: Request) -> int { ... }            // must touch no filesystem
+```
+
+- `@pure` forbids all of fs/net/os; `@no_fs` / `@no_net` / `@no_os` forbid one
+  capability each (stackable: `@no_fs @no_net f() {}`).
+- A whole-program pass walks the call graph from each tagged function. If it
+  reaches a capability-gated stdlib call — `file.*`/`dir.*`/`path.*` (fs),
+  `tcp.*`/`http.*` (net), `os.*` (os) — directly or through another function,
+  the compile fails with the offending call path named.
+- Composes with `--with=`: that switch says the *program* may use fs; an
+  effect tag says *this function* must not. The two axes are independent.
+- A raw `extern` call is unclassifiable (the compiler can't know a foreign
+  symbol's effects), so it is not flagged — the same boundary the `--with=`
+  import gate has.
+
 ## Pattern matching
 
 | Pattern | Matches | Example |

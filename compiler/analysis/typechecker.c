@@ -1878,6 +1878,8 @@ static void check_unreachable_code(ASTNode* body) {
 // #521: reject escapes of `@scoped` bindings (defined below, used in the
 // unused-variable/unreachable third pass).
 static void scoped_check_bindings(ASTNode* node, ASTNode* root);
+// #481: validate `@pure`/`@no_fs`/`@no_net`/`@no_os` effect tags.
+static void check_effect_tags(ASTNode* program);
 
 // Type checking functions
 int typecheck_program(ASTNode* program) {
@@ -2512,8 +2514,11 @@ int typecheck_program(ASTNode* program) {
         }
     }
 
+    // #481: validate effect tags over the whole-program call graph.
+    check_effect_tags(program);
+
     free_symbol_table(global_table);
-    
+
     // Report errors and warnings
     if (error_count > 0) {
         fprintf(stderr, "Type checking failed with %d error(s)\n", error_count);
@@ -2836,6 +2841,109 @@ static void scoped_check_bindings(ASTNode* node, ASTNode* root) {
         node->type == AST_ACTOR_DEFINITION) return;
     for (int i = 0; i < node->child_count; i++)
         scoped_check_bindings(node->children[i], root);
+}
+
+/* #481 effect tags — capability of a call's NAMESPACE (the as-written prefix,
+ * e.g. `file.read` → fs). std.fs re-exports the file/dir/path namespaces,
+ * std.net the tcp/http namespaces, std.os the os namespace — mirrors the
+ * `--with=` capability gate (aetherc.c inspect_module_capability), keyed on
+ * the call site rather than the import path. NULL = capability-free (pure). */
+static const char* effect_call_capability(const char* ns) {
+    if (!ns) return NULL;
+    if (!strcmp(ns, "fs") || !strcmp(ns, "file") || !strcmp(ns, "dir") ||
+        !strcmp(ns, "path")) return "fs";
+    if (!strcmp(ns, "net") || !strcmp(ns, "tcp") || !strcmp(ns, "http"))
+        return "net";
+    if (!strcmp(ns, "os")) return "os";
+    return NULL;
+}
+
+static ASTNode* effect_find_func(ASTNode* program, const char* name) {
+    if (!program || !name) return NULL;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if ((c->type == AST_FUNCTION_DEFINITION || c->type == AST_BUILDER_FUNCTION) &&
+            c->value && strcmp(c->value, name) == 0)
+            return c;
+    }
+    return NULL;
+}
+
+/* Walk `node`; return the first forbidden capability reached (recursing into
+ * user-function callees), writing the offending `ns.fn` spelling to `outcall`.
+ * `forbid` is the comma list of forbidden caps; `visited` guards recursion. */
+static const char* effect_scan(ASTNode* program, ASTNode* node, const char* forbid,
+                               const char** visited, int* nvisited,
+                               char* outcall, size_t outsz, int depth) {
+    if (!node || depth > 128) return NULL;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        const char* dot = strchr(node->value, '.');
+        if (dot) {
+            char ns[64];
+            size_t l = (size_t)(dot - node->value);
+            if (l < sizeof(ns)) {
+                memcpy(ns, node->value, l);
+                ns[l] = '\0';
+                const char* cap = effect_call_capability(ns);
+                if (cap && strstr(forbid, cap)) {
+                    snprintf(outcall, outsz, "%s", node->value);
+                    return cap;
+                }
+            }
+        } else {
+            int seen = 0;
+            for (int i = 0; i < *nvisited; i++)
+                if (strcmp(visited[i], node->value) == 0) { seen = 1; break; }
+            if (!seen && *nvisited < 512) {
+                ASTNode* def = effect_find_func(program, node->value);
+                if (def && def->child_count > 0) {
+                    visited[(*nvisited)++] = node->value;
+                    ASTNode* body = def->children[def->child_count - 1];
+                    const char* c = effect_scan(program, body, forbid, visited,
+                                                nvisited, outcall, outsz, depth + 1);
+                    if (c) return c;
+                }
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        const char* c = effect_scan(program, node->children[i], forbid, visited,
+                                    nvisited, outcall, outsz, depth);
+        if (c) return c;
+    }
+    return NULL;
+}
+
+/* For each function carrying an `effect:<caps>` annotation, reject any
+ * transitive use of a forbidden capability. A raw `extern` call is not
+ * classifiable, so — like the `--with=` gate — it is not flagged here. */
+static void check_effect_tags(ASTNode* program) {
+    if (!program) return;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* fn = program->children[i];
+        if ((fn->type != AST_FUNCTION_DEFINITION && fn->type != AST_BUILDER_FUNCTION) ||
+            !fn->annotation) continue;
+        const char* eff = strstr(fn->annotation, "effect:");
+        if (!eff) continue;
+        const char* forbid = eff + 7;  /* "fs,net,os" or a subset */
+        if (fn->child_count == 0) continue;
+        ASTNode* body = fn->children[fn->child_count - 1];
+        const char* visited[512];
+        int nv = 0;
+        if (fn->value) visited[nv++] = fn->value;  /* no self-recursion loop */
+        char offending[160];
+        offending[0] = '\0';
+        const char* cap = effect_scan(program, body, forbid, visited, &nv,
+                                      offending, sizeof(offending), 0);
+        if (cap) {
+            char msg[360];
+            snprintf(msg, sizeof(msg),
+                "function '%s' is declared `@no_%s` (or `@pure`) but reaches a "
+                "`%s` operation through `%s`. Remove that call path, or drop the "
+                "effect tag.", fn->value ? fn->value : "?", cap, cap, offending);
+            type_error(msg, fn->line, fn->column);
+        }
+    }
 }
 
 int typecheck_function_definition(ASTNode* func, SymbolTable* table) {

@@ -1,0 +1,4 @@
+import std.http
+@no_net
+fetch(u: string) -> string { return http.get(u) }
+main() { println(fetch("http://x")) }
