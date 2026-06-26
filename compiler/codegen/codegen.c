@@ -47,6 +47,162 @@ int aether_is_c_import_struct(const char* name) {
     return 0;
 }
 
+/* ---- #891 @c_struct typed overlay registry ---------------------------------
+ * A @c_struct is a pure-Aether typed lens over a raw `ptr`: each field carries
+ * an explicit byte offset and a type, and field access lowers to a
+ * width-correct mem_get_* and mem_set_* at that offset (NOT a C `->field`, so no C
+ * struct is declared or #include'd). Killing the hand-picked-width footgun
+ * (#868) is the point: the accessor width is DERIVED from the field type.
+ *
+ * `width` is a short token naming the mem accessor family: "byte", "int16",
+ * "uint16", "int", "uint32", "long", "u64", "float32", "float64", "ptr".
+ * A field whose `nested` names another @c_struct is a sub-overlay: `a.b.c`
+ * adds the offsets and resolves the leaf width. */
+typedef struct { char* name; char* width; long offset; char* nested; } CStructField;
+typedef struct { char* name; CStructField* fields; int nfields; int cap; } CStructDef;
+static CStructDef* g_cstructs = NULL;
+static int g_cstruct_count = 0, g_cstruct_cap = 0;
+
+static CStructDef* cstruct_find(const char* name) {
+    if (!name) return NULL;
+    for (int i = 0; i < g_cstruct_count; i++)
+        if (strcmp(g_cstructs[i].name, name) == 0) return &g_cstructs[i];
+    return NULL;
+}
+
+int aether_is_c_struct_overlay(const char* name) {
+    return cstruct_find(name) != NULL;
+}
+
+void aether_register_c_struct(const char* name) {
+    if (!name || cstruct_find(name)) return;
+    if (g_cstruct_count >= g_cstruct_cap) {
+        int nc = g_cstruct_cap ? g_cstruct_cap * 2 : 8;
+        CStructDef* g = (CStructDef*)realloc(g_cstructs, (size_t)nc * sizeof(CStructDef));
+        if (!g) { fprintf(stderr, "aetherc: OOM registering @c_struct\n"); exit(1); }
+        g_cstructs = g; g_cstruct_cap = nc;
+    }
+    CStructDef* d = &g_cstructs[g_cstruct_count++];
+    d->name = strdup(name); d->fields = NULL; d->nfields = 0; d->cap = 0;
+}
+
+void aether_c_struct_add_field(const char* sname, const char* fname,
+                               const char* width, long offset, const char* nested) {
+    CStructDef* d = cstruct_find(sname);
+    if (!d) return;
+    if (d->nfields >= d->cap) {
+        int nc = d->cap ? d->cap * 2 : 8;
+        CStructField* f = (CStructField*)realloc(d->fields, (size_t)nc * sizeof(CStructField));
+        if (!f) { fprintf(stderr, "aetherc: OOM adding @c_struct field\n"); exit(1); }
+        d->fields = f; d->cap = nc;
+    }
+    CStructField* f = &d->fields[d->nfields++];
+    f->name = strdup(fname);
+    f->width = width ? strdup(width) : NULL;
+    f->offset = offset;
+    f->nested = nested ? strdup(nested) : NULL;
+}
+
+/* Given a member-access chain `root.f1.f2...fN` whose ultimate receiver is a
+ * @c_struct overlay pointer, return that root receiver node and write the
+ * dotted field path ("f1.f2...fN") into `out`. Returns NULL if the chain's
+ * root receiver is not a @c_struct overlay pointer (caller falls back to
+ * ordinary member access). `macc` must be an AST_MEMBER_ACCESS node. */
+ASTNode* aether_c_struct_chain(ASTNode* macc, char* out, size_t outsz) {
+    if (!macc || macc->type != AST_MEMBER_ACCESS) return NULL;
+    const char* parts[32];
+    int n = 0;
+    ASTNode* cur = macc;
+    while (cur && cur->type == AST_MEMBER_ACCESS && cur->value && cur->child_count > 0) {
+        if (n < 32) parts[n++] = cur->value;
+        cur = cur->children[0];
+    }
+    if (!cur || !cur->node_type || cur->node_type->kind != TYPE_PTR ||
+        !cur->node_type->element_type ||
+        cur->node_type->element_type->kind != TYPE_STRUCT ||
+        !cur->node_type->element_type->struct_name ||
+        !aether_is_c_struct_overlay(cur->node_type->element_type->struct_name))
+        return NULL;
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = n - 1; i >= 0; i--) {
+        size_t pl = strlen(parts[i]);
+        if (used + pl + 2 >= outsz) break;
+        if (used) out[used++] = '.';
+        memcpy(out + used, parts[i], pl);
+        used += pl;
+        out[used] = '\0';
+    }
+    return cur;
+}
+
+/* Predicate: is this member-access node a write/read against a @c_struct
+ * overlay (its chain root is an overlay pointer)? */
+int aether_c_struct_overlay_lhs(ASTNode* macc) {
+    char tmp[256];
+    return aether_c_struct_chain(macc, tmp, sizeof(tmp)) != NULL;
+}
+
+/* Resolve `struct.field` (field may be a dotted chain for nested overlays)
+ * to a (cumulative offset, leaf width token). Returns 1 on success. */
+int aether_c_struct_resolve(const char* sname, const char* field,
+                            long* out_offset, const char** out_width) {
+    CStructDef* d = cstruct_find(sname);
+    if (!d || !field) return 0;
+    long acc = 0;
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", field);
+    char* seg = buf;
+    while (seg && *seg) {
+        char* dot = strchr(seg, '.');
+        if (dot) *dot = '\0';
+        CStructField* found = NULL;
+        for (int i = 0; i < d->nfields; i++)
+            if (strcmp(d->fields[i].name, seg) == 0) { found = &d->fields[i]; break; }
+        if (!found) return 0;
+        acc += found->offset;
+        if (dot) {
+            /* must descend into a nested overlay */
+            if (!found->nested) return 0;
+            d = cstruct_find(found->nested);
+            if (!d) return 0;
+            seg = dot + 1;
+        } else {
+            if (found->nested) return 0;  /* leaf access on a nested field */
+            *out_offset = acc;
+            *out_width = found->width;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* #891: map a @c_struct field type to the mem_get_* / set_* width token, the
+ * compiler choosing the accessor (killing the hand-picked-width footgun). If
+ * the field's type names another @c_struct, set *nested to that name and
+ * return NULL (the field is a sub-overlay, addressed by offset only). */
+const char* c_struct_field_width(Type* t, const char** nested) {
+    if (nested) *nested = NULL;
+    if (!t) return "long";
+    switch (t->kind) {
+        case TYPE_BYTE:
+        case TYPE_UINT8:    return "byte";
+        case TYPE_UINT16:   return "uint16";
+        case TYPE_UINT32:   return "uint32";
+        case TYPE_INT:      return "int";
+        case TYPE_INT64:
+        case TYPE_UINT64:
+        case TYPE_DURATION: return "long";
+        case TYPE_FLOAT:    return "float64";
+        case TYPE_PTR:      return "ptr";
+        case TYPE_STRUCT:
+            /* A nested @c_struct field: addressed by offset, descended into. */
+            if (t->struct_name && nested) { *nested = t->struct_name; return NULL; }
+            return "long";
+        default:            return "long";
+    }
+}
+
 // Map Aether type to C typename for array element declarations.
 // For arrays, the size goes after the name in C, so we need just the
 // element type, not the full "T[N]" form that get_c_type produces.
@@ -1515,7 +1671,12 @@ const char* get_c_type(Type* type) {
                 static int buf_idx = 0;
                 char* buffer = buffers[buf_idx++ & 3];
                 const char* sname = type->element_type->struct_name;
-                if (aether_is_c_import_struct(sname)) {
+                if (aether_is_c_struct_overlay(sname)) {
+                    /* #891: a @c_struct overlay pointer is just a raw `void*`
+                     * in the emitted C — there is no C struct type. Field
+                     * access lowers to mem accessors at offsets. */
+                    return "void*";
+                } else if (aether_is_c_import_struct(sname)) {
                     snprintf(buffer, 256, "struct %s*", sname);
                 } else {
                     snprintf(buffer, 256, "%s*", sname);
@@ -3538,6 +3699,54 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 continue;
             }
             fprintf(gen->output, "typedef struct %s %s;\n", sd->value, sd->value);
+        }
+        /* #891: register each @c_struct overlay (name + fields) so member
+         * access can lower to width-correct mem_get_* / set_*. No C typedef is
+         * emitted — the overlay is a pure-Aether lens, not a C struct. */
+        if (sd && sd->type == AST_C_STRUCT_DEF && sd->value) {
+            aether_register_c_struct(sd->value);
+            for (int f = 0; f < sd->child_count; f++) {
+                ASTNode* fld = sd->children[f];
+                if (!fld || fld->type != AST_STRUCT_FIELD || !fld->value) continue;
+                const char* nested = NULL;
+                const char* width = c_struct_field_width(fld->node_type, &nested);
+                aether_c_struct_add_field(sd->value, fld->value, width,
+                                          (long)fld->bit_width, nested);
+            }
+        }
+    }
+
+    /* #891: if any @c_struct overlay exists, its field access lowers to
+     * aether_mem_get_* and set_* runtime calls (linked from libaether.a). Emit
+     * their prototypes here so the generated C compiles WITHOUT requiring the
+     * user to `import std.mem` — the overlay IS the access surface. The
+     * symbols are always linked; declaring them is a no-op if also pulled in
+     * via std.mem. */
+    {
+        int any_overlay = 0;
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (c && c->type == AST_C_STRUCT_DEF) { any_overlay = 1; break; }
+        }
+        if (any_overlay) {
+            fprintf(gen->output,
+                "/* #891 @c_struct overlay accessors (from libaether.a) */\n"
+                "extern int     aether_mem_get_byte(void*, int);\n"
+                "extern int     aether_mem_set_byte(void*, int, int);\n"
+                "extern int     aether_mem_get_int16(void*, int);\n"
+                "extern int     aether_mem_set_int16(void*, int, int);\n"
+                "extern int     aether_mem_get_uint16(void*, int);\n"
+                "extern int     aether_mem_set_uint16(void*, int, int);\n"
+                "extern int     aether_mem_get_int(void*, int);\n"
+                "extern int     aether_mem_set_int(void*, int, int);\n"
+                "extern int     aether_mem_get_uint32(void*, int);\n"
+                "extern int     aether_mem_set_uint32(void*, int, int);\n"
+                "extern int64_t aether_mem_get_long(void*, int);\n"
+                "extern int     aether_mem_set_long(void*, int, int64_t);\n"
+                "extern double  aether_mem_get_float64(void*, int);\n"
+                "extern int     aether_mem_set_float64(void*, int, double);\n"
+                "extern void*   aether_mem_get_ptr(void*, int);\n"
+                "extern int     aether_mem_set_ptr(void*, int, void*);\n");
         }
     }
 

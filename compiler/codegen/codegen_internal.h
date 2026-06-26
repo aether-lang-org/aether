@@ -281,6 +281,25 @@ const char* lookup_c_callback_symbol(CodeGenerator* gen, const char* name);
  * universally-portable form. */
 void aether_register_c_import_struct(const char* name);
 int aether_is_c_import_struct(const char* name);
+
+/* #891 @c_struct typed overlay registry. A @c_struct lowers field access to
+ * width-correct mem_get_* / set_* at explicit offsets (pure Aether, no C struct).
+ * Registered from the AST_C_STRUCT_DEF nodes before codegen; queried at member
+ * access to pick the accessor. */
+void aether_register_c_struct(const char* name);
+int  aether_is_c_struct_overlay(const char* name);
+void aether_c_struct_add_field(const char* sname, const char* fname,
+                               const char* width, long offset, const char* nested);
+/* Resolve struct.field (dotted for nested) -> cumulative offset + leaf width
+ * token. Returns 1 on success, 0 if unknown. */
+int  aether_c_struct_resolve(const char* sname, const char* field,
+                             long* out_offset, const char** out_width);
+/* Flatten a member-access chain to its overlay-pointer root receiver +
+ * dotted field path; NULL if root isn't a @c_struct overlay. */
+ASTNode* aether_c_struct_chain(ASTNode* macc, char* out, size_t outsz);
+/* Predicate form of the above: is this member-access an overlay access? */
+int aether_c_struct_overlay_lhs(ASTNode* macc);
+
 void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext);
 void generate_function_definition(CodeGenerator* gen, ASTNode* func);
 void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def);

@@ -5,9 +5,37 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.317.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`@c_struct` typed overlays — width-correct C-struct field access over a
+  raw `ptr`** (#891). Declare a C struct's layout once with explicit offsets
+  (`@c_struct stream { length: uint64 @8, slen: uint32 @16, last_id: streamID
+  @24 }`); then `ptr as *stream` views a raw pointer through it and `s.length`
+  / `s.slen` / `s.last_id.ms` read and write by name. The **accessor width is
+  derived from the field type** (`uint32`→4 bytes, `uint64`→8, `ptr`→pointer-
+  width, …), so the hand-picked-width footgun behind #868 (a `uint32` read with
+  `get_long` pulling adjacent bytes) is gone structurally — the compiler never
+  lets you pick the wrong width. Nested overlays add offsets along the chain
+  (`s.last_id.seq` → 24+8). It is a pure-Aether lens: no `extern struct`, no
+  C struct emitted, no `#include`, no `import std.mem` — it lowers to
+  `aether_mem_*` calls over a `void*`, and the C side keeps owning the memory.
+  Reuses the existing `expr as *Name` cast and `s.field` syntax. (See
+  docs/c-interop.md “`@c_struct` typed overlays”.)
+- **`aetherc --emit=effects` — derived per-function effect/purity JSON** (#889).
+  Exposes the whole-program effect analysis (#481/#522) for external auditors
+  (aeb’s supply-chain veto): `{ "<fn>": { "pure": bool, "extern": bool,
+  "reaches": ["fs","net","os"] } }` on stdout (peer of `--emit=ast`/`inspect`,
+  no codegen). The result is **derived** from the call graph — not author
+  `@no_*` tags an attacker could omit — whole-program transitive (through
+  helpers *and* imported modules), per-function, and fail-closed on a raw
+  `extern` (treated as reaching every capability, never pure), matching the
+  `--with=` gate’s boundary.
 
 ## [0.317.0]
 

@@ -4879,6 +4879,54 @@ ASTNode* parse_top_level_decl(Parser* parser) {
                 // The lexer classifies `extern` as TOKEN_EXTERN (reserved
                 // keyword); `c_callback` is TOKEN_IDENTIFIER.
                 Token* attr = peek_token(parser);
+                // #891 @c_struct Name { field: type @offset, ... }
+                // A pure-Aether typed overlay over a raw ptr. Each field
+                // carries an explicit byte offset; access on an
+                // `expr as *Name` value lowers to a width-correct
+                // mem_get_*/set_* at that offset (no C struct is declared).
+                if (attr && attr->type == TOKEN_IDENTIFIER && attr->value &&
+                    strcmp(attr->value, "c_struct") == 0) {
+                    advance_token(parser);  // consume 'c_struct'
+                    Token* name_tok = expect_token(parser, TOKEN_IDENTIFIER);
+                    if (!name_tok) return NULL;
+                    if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
+                    ASTNode* cdef = create_ast_node(AST_C_STRUCT_DEF,
+                        name_tok->value, name_tok->line, name_tok->column);
+                    while (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+                        if (is_at_end(parser)) {
+                            parser_error(parser, "unterminated @c_struct body (missing `}`)");
+                            free_ast_node(cdef);
+                            return NULL;
+                        }
+                        // field name (accept value-ident keywords as names)
+                        Token* fn = peek_token(parser);
+                        if (fn && token_is_value_ident(fn)) advance_token(parser);
+                        else { fn = expect_token(parser, TOKEN_IDENTIFIER);
+                               if (!fn) { free_ast_node(cdef); return NULL; } }
+                        if (!expect_token(parser, TOKEN_COLON)) { free_ast_node(cdef); return NULL; }
+                        ASTNode* field = create_ast_node(AST_STRUCT_FIELD,
+                            fn->value, fn->line, fn->column);
+                        Type* ft = parse_type(parser);
+                        if (!ft) { free_ast_node(field); free_ast_node(cdef); return NULL; }
+                        field->node_type = ft;
+                        // `@offset` — required explicit byte offset.
+                        if (!match_token(parser, TOKEN_AT)) {
+                            parser_error(parser, "@c_struct field needs an explicit `@<offset>` (e.g. `length: uint64 @8`)");
+                            free_ast_node(field); free_ast_node(cdef); return NULL;
+                        }
+                        Token* off = expect_token(parser, TOKEN_NUMBER);
+                        if (!off || !off->value) {
+                            parser_error(parser, "expected a byte offset after `@`");
+                            free_ast_node(field); free_ast_node(cdef); return NULL;
+                        }
+                        field->bit_width = atoi(off->value);  // reuse: byte offset (#891)
+                        add_child(cdef, field);
+                        if (!match_token(parser, TOKEN_COMMA))
+                            match_token(parser, TOKEN_SEMICOLON);
+                    }
+                    node = cdef;
+                    break;
+                }
                 // @derive(eq[, format, clone, hash]) struct T { ... }
                 //
                 // Issue #338: synthesize trait-shaped helpers from

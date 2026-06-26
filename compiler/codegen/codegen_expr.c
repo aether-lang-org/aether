@@ -1993,6 +1993,27 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
         case AST_MEMBER_ACCESS:
             if (expr->child_count > 0) {
                 ASTNode* child = expr->children[0];
+                /* #891 @c_struct overlay read (handles nested chains
+                 * `s.a.b.c`): flatten to the overlay-pointer root + dotted
+                 * field path, then emit aether_mem_get_<width> at the
+                 * cumulative offset. Width is DERIVED from the field type. */
+                if (expr->value) {
+                    char cpath[256];
+                    ASTNode* root = aether_c_struct_chain(expr, cpath, sizeof(cpath));
+                    if (root) {
+                        long off = 0; const char* width = NULL;
+                        const char* sname = root->node_type->element_type->struct_name;
+                        if (aether_c_struct_resolve(sname, cpath, &off, &width) && width) {
+                            fprintf(gen->output, "aether_mem_get_%s((void*)(", width);
+                            generate_expression(gen, root);
+                            fprintf(gen->output, "), %ld)", off);
+                        } else {
+                            fprintf(gen->output, "/* @c_struct: unknown field %s.%s */0",
+                                    sname, cpath);
+                        }
+                        break;
+                    }
+                }
                 if (child->node_type && child->node_type->kind == TYPE_DURATION && expr->value) {
                     long long scale = duration_accessor_scale(expr->value);
                     if (scale == 1) {
@@ -2050,7 +2071,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
              * use `struct StructName*` instead — bare `StructName*`
              * fails for headers that don't ship `typedef struct N N;`. */
             if (expr->child_count > 0 && expr->value) {
-                if (aether_is_c_import_struct(expr->value)) {
+                if (aether_is_c_struct_overlay(expr->value)) {
+                    /* #891: a @c_struct overlay has NO C struct type — it's a
+                     * pure-offset lens. The cast is just the raw pointer;
+                     * member access lowers to mem_get_* / set_* at offsets. */
+                    fprintf(gen->output, "((void*)(");
+                } else if (aether_is_c_import_struct(expr->value)) {
                     fprintf(gen->output, "((struct %s*)(", expr->value);
                 } else {
                     fprintf(gen->output, "((%s*)(", expr->value);
@@ -2210,6 +2236,29 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, ")) %s 0", get_c_operator(expr->value));
                         if (!skip_parens) fprintf(gen->output, ")");
                     }
+                } else if (is_assignment && expr->children[0] &&
+                           expr->children[0]->type == AST_MEMBER_ACCESS &&
+                           aether_c_struct_overlay_lhs(expr->children[0])) {
+                    /* #891 @c_struct overlay write (incl. nested `s.a.b = v`):
+                     * flatten to overlay-pointer root + dotted path, emit
+                     * aether_mem_set_<width> at the cumulative offset. The
+                     * parser lands a member-access store as a binary-`=`. */
+                    char cpath[256];
+                    ASTNode* root = aether_c_struct_chain(expr->children[0], cpath, sizeof(cpath));
+                    const char* sname = root->node_type->element_type->struct_name;
+                    long off = 0; const char* width = NULL;
+                    if (!skip_parens) fprintf(gen->output, "(");
+                    if (aether_c_struct_resolve(sname, cpath, &off, &width) && width) {
+                        fprintf(gen->output, "aether_mem_set_%s((void*)(", width);
+                        generate_expression(gen, root);
+                        fprintf(gen->output, "), %ld, ", off);
+                        generate_expression(gen, expr->children[1]);
+                        fprintf(gen->output, ")");
+                    } else {
+                        fprintf(gen->output, "/* @c_struct: unknown field %s.%s */0",
+                                sname, cpath);
+                    }
+                    if (!skip_parens) fprintf(gen->output, ")");
                 } else {
                     if (!skip_parens) fprintf(gen->output, "(");
 

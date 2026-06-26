@@ -207,6 +207,12 @@ static bool emit_ast_mode = false;
 // (imports, capabilities, exports/entry, declarations) to stdout, then
 // exit. No codegen. Drives `ae inspect` (issue #473).
 static bool emit_inspect_mode = false;
+// --emit=effects: derived per-function effect/purity analysis as JSON to
+// stdout, then exit. No codegen. Peer of --emit=ast / inspect. Whole-program
+// transitive capability reachability (fs/net/os) + purity per function,
+// computed from the call graph (NOT author @no_* tags), fail-closed on
+// externs. Consumed by external auditors (aeb's supply-chain veto). Issue #889.
+static bool emit_effects_mode = false;
 
 #ifdef _WIN32
     #include <windows.h>
@@ -1560,6 +1566,21 @@ int compile_source(const char* input_path, const char* output_path) {
         return 1;  // process exit 0 (see --emit=ast note below)
     }
 
+    // --emit=effects: derived per-function capability reachability + purity
+    // as JSON to stdout (issue #889). Peer of --emit=ast / inspect — runs
+    // after typecheck/merge (so the call graph is whole-program), bypasses
+    // codegen. An external auditor reads this instead of re-walking the AST.
+    if (emit_effects_mode) {
+        emit_effects_json(stdout, program);
+        fflush(stdout);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        return 1;  // process exit 0 (see --emit=ast note below)
+    }
+
     if (emit_ast_mode) {
         emit_ast_json(stdout, program);
         module_registry_shutdown();
@@ -1979,6 +2000,8 @@ void print_help(const char* program_name) {
     printf("  --emit-c                         Print generated C code to stdout\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
     printf("  --emit=<exe|lib|both>            Output artifact (exe default, lib produces .so/.dylib)\n");
+    printf("  --emit=ast|inspect|effects       Analysis to stdout, no codegen: AST JSON / declaration\n");
+    printf("                                   summary / derived per-function effect+purity JSON (#889)\n");
     printf("  --emit-main=<func>               With --emit=lib: also emit a thin main(argc,argv) shim\n");
     printf("                                   that calls <func>(). Closes the exe/lib symmetry.\n");
     printf("  --emit-namespace-manifest        Print the manifest JSON for a manifest.ae and exit\n");
@@ -2120,8 +2143,12 @@ int main(int argc, char *argv[]) {
                 // --emit=inspect: operator-facing declaration summary on
                 // stdout (issue #473). Like --emit=ast, bypasses codegen.
                 emit_inspect_mode = true;
+            } else if (strcmp(val, "effects") == 0) {
+                // --emit=effects: derived per-function effect/purity JSON on
+                // stdout (issue #889). Like --emit=ast, bypasses codegen.
+                emit_effects_mode = true;
             } else {
-                fprintf(stderr, "Error: --emit must be one of: exe, lib, both, ast, inspect (got '%s')\n", val);
+                fprintf(stderr, "Error: --emit must be one of: exe, lib, both, ast, inspect, effects (got '%s')\n", val);
                 return 1;
             }
             arg_offset++;

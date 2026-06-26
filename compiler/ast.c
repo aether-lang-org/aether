@@ -396,6 +396,7 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_FUNCTION_CLAUSE: return "FUNCTION_CLAUSE";
         case AST_MAIN_FUNCTION: return "MAIN_FUNCTION";
         case AST_STRUCT_DEFINITION: return "STRUCT_DEFINITION";
+        case AST_C_STRUCT_DEF: return "C_STRUCT_DEF";
         case AST_STRUCT_FIELD: return "STRUCT_FIELD";
         case AST_STRUCT_FIELD_UNION: return "STRUCT_FIELD_UNION";
         case AST_STRUCT_FIELD_NESTED: return "STRUCT_FIELD_NESTED";

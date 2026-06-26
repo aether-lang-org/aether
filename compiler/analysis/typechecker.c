@@ -10,6 +10,10 @@
 
 static int error_count = 0;
 static int warning_count = 0;
+// #891: query the @c_struct overlay name set (defined ~typecheck_program).
+static int is_c_struct_name(const char* name);
+// #891: declared Type of a @c_struct field (dotted for nested). Defined below.
+static Type* c_struct_field_decl_type(const char* sname, const char* field);
 
 // Get the last component of a module path for namespace
 // "mypackage.utils" -> "utils"
@@ -1174,15 +1178,18 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
                     return create_type(TYPE_UNKNOWN);
                 }
             }
-            /* Validate the named struct exists. */
-            Symbol* struct_sym = lookup_symbol(table, expr->value);
-            if (!struct_sym || !struct_sym->type ||
-                struct_sym->type->kind != TYPE_STRUCT) {
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                    "`as *%s` — '%s' is not a struct type", expr->value, expr->value);
-                type_error(msg, expr->line, expr->column);
-                return create_type(TYPE_UNKNOWN);
+            /* Validate the named struct exists — or is a #891 @c_struct
+             * overlay (no struct symbol; it's a pure-offset lens). */
+            if (!is_c_struct_name(expr->value)) {
+                Symbol* struct_sym = lookup_symbol(table, expr->value);
+                if (!struct_sym || !struct_sym->type ||
+                    struct_sym->type->kind != TYPE_STRUCT) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "`as *%s` — '%s' is not a struct type", expr->value, expr->value);
+                    type_error(msg, expr->line, expr->column);
+                    return create_type(TYPE_UNKNOWN);
+                }
             }
             Type* inner = create_type(TYPE_STRUCT);
             inner->struct_name = strdup(expr->value);
@@ -1384,6 +1391,36 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             // Look up the struct/actor type and find the field type
             if (expr->child_count > 0 && expr->children[0]) {
                 Type* base_type = infer_type(expr->children[0], table);
+                /* #891 @c_struct overlay field access. base is a
+                 * `*OverlayName` ptr; resolve the field's declared type so the
+                 * node carries the right type (string interpolation picks
+                 * %lld for a uint64 field instead of defaulting to %d). A
+                 * field that is itself an overlay yields `*ThatOverlay` so a
+                 * nested chain (`s.last_id.ms`) keeps resolving. */
+                if (base_type && base_type->kind == TYPE_PTR &&
+                    base_type->element_type &&
+                    base_type->element_type->kind == TYPE_STRUCT &&
+                    base_type->element_type->struct_name &&
+                    is_c_struct_name(base_type->element_type->struct_name) &&
+                    expr->value) {
+                    Type* ft = c_struct_field_decl_type(base_type->element_type->struct_name,
+                                                   expr->value);
+                    if (ft) {
+                        Type* result;
+                        if (ft->kind == TYPE_STRUCT && ft->struct_name &&
+                            is_c_struct_name(ft->struct_name)) {
+                            /* nested overlay field → pointer-to-overlay */
+                            result = create_type(TYPE_PTR);
+                            result->element_type = ft;  /* adopt */
+                        } else {
+                            result = ft;
+                        }
+                        if (expr->node_type) free_type(expr->node_type);
+                        expr->node_type = clone_type(result);
+                        free_type(base_type);
+                        return result;
+                    }
+                }
                 if (base_type && base_type->kind == TYPE_DURATION) {
                     Type* out = NULL;
                     if (expr->value && strcmp(expr->value, "ns") == 0) {
@@ -1931,6 +1968,79 @@ static void resolve_purity_queries(ASTNode* node, ASTNode* program,
 // #480: resolve `type X = distinct Y` placeholders into distinct Types.
 static void resolve_distinct_types(ASTNode* program);
 
+// #891: typecheck-time registry of @c_struct overlay names. Codegen has its
+// own field-level registry; the typechecker only needs the NAME set so an
+// `expr as *Name` cast and member access against it validate.
+#define AETHER_MAX_C_STRUCTS 256
+static const char* g_c_struct_names[AETHER_MAX_C_STRUCTS];
+static int g_c_struct_name_count = 0;
+static ASTNode* g_c_struct_program = NULL;   /* for field-type lookup (#891) */
+
+static void collect_c_struct_names(ASTNode* program) {
+    g_c_struct_name_count = 0;
+    g_c_struct_program = program;
+    if (!program) return;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_C_STRUCT_DEF && c->value &&
+            g_c_struct_name_count < AETHER_MAX_C_STRUCTS)
+            g_c_struct_names[g_c_struct_name_count++] = c->value;
+    }
+}
+
+static int is_c_struct_name(const char* name) {
+    if (!name) return 0;
+    for (int i = 0; i < g_c_struct_name_count; i++)
+        if (strcmp(g_c_struct_names[i], name) == 0) return 1;
+    return 0;
+}
+
+/* #891: find the AST_C_STRUCT_DEF for `name`. */
+static ASTNode* c_struct_def_node(const char* name) {
+    if (!name || !g_c_struct_program) return NULL;
+    for (int i = 0; i < g_c_struct_program->child_count; i++) {
+        ASTNode* c = g_c_struct_program->children[i];
+        if (c && c->type == AST_C_STRUCT_DEF && c->value && strcmp(c->value, name) == 0)
+            return c;
+    }
+    return NULL;
+}
+
+/* #891: declared Type of `struct.field` (field may be a dotted chain for
+ * nested overlays). Returns a cloned Type (caller frees), or NULL if unknown.
+ * Lets member-access typing set the right node_type so string interpolation
+ * picks %lld for a uint64 field instead of defaulting to %d. */
+static Type* c_struct_field_decl_type(const char* sname, const char* field) {
+    ASTNode* def = c_struct_def_node(sname);
+    if (!def || !field) return NULL;
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", field);
+    char* seg = buf;
+    while (seg && *seg) {
+        char* dot = strchr(seg, '.');
+        if (dot) *dot = '\0';
+        ASTNode* fnode = NULL;
+        for (int i = 0; i < def->child_count; i++) {
+            ASTNode* f = def->children[i];
+            if (f && f->type == AST_STRUCT_FIELD && f->value && strcmp(f->value, seg) == 0) {
+                fnode = f; break;
+            }
+        }
+        if (!fnode || !fnode->node_type) return NULL;
+        if (dot) {
+            /* descend: this field must name another overlay */
+            if (fnode->node_type->kind != TYPE_STRUCT || !fnode->node_type->struct_name)
+                return NULL;
+            def = c_struct_def_node(fnode->node_type->struct_name);
+            if (!def) return NULL;
+            seg = dot + 1;
+        } else {
+            return clone_type(fnode->node_type);
+        }
+    }
+    return NULL;
+}
+
 // Type checking functions
 int typecheck_program(ASTNode* program) {
     if (!program || program->type != AST_PROGRAM) return 0;
@@ -1944,6 +2054,11 @@ int typecheck_program(ASTNode* program) {
     // #480: resolve `type X = distinct Y` placeholders into distinct Types
     // across the whole AST before any type-checking or inference runs.
     resolve_distinct_types(program);
+
+    // #891: collect @c_struct overlay names so `expr as *Name` casts and
+    // member access typecheck against them (they have no struct symbol —
+    // they're a pure-offset lens, not a declared struct type).
+    collect_c_struct_names(program);
 
     // #522: fold `__pure(fn)` queries to bool constants before any expression
     // is type-checked. Needs the merged call graph (all function defs), which
@@ -2628,6 +2743,12 @@ int typecheck_node(ASTNode* node, SymbolTable* table) {
         case AST_EXTERN_FUNCTION:
             // Extern functions have no body to check - just a declaration
             return 1;
+        case AST_C_STRUCT_DEF:
+            // #891 @c_struct overlay: a declaration of (field, type, offset)
+            // tuples — no body, no statements to check. The name set is
+            // collected (collect_c_struct_names) and the fields registered at
+            // codegen for width/offset resolution. Nothing to typecheck here.
+            return 1;
         case AST_STRUCT_DEFINITION:
             return typecheck_struct_definition(node, table);
         case AST_MAIN_FUNCTION:
@@ -3101,6 +3222,149 @@ static int func_is_pure(ASTNode* program, const char* fnname,
     visited[nv++] = fnname;
     ASTNode* body = fn->children[fn->child_count - 1];
     return !purity_scan(program, fn, body, globals, nglobals, visited, &nv, 0);
+}
+
+/* #889: derived per-function effect reachability, exposed via --emit=effects.
+ *
+ * Accumulates, over a whole-program call-graph walk from one function body, the
+ * set of capabilities (fs/net/os) transitively reached and whether the walk
+ * reaches a raw `extern` (the fail-closed signal: an extern is unclassifiable,
+ * so a consumer must treat it as reaching anything). Mirrors effect_scan's
+ * walk, but COLLECTS all caps rather than stopping at the first forbidden one,
+ * and additionally flags extern reachability. */
+typedef struct {
+    int reach_fs, reach_net, reach_os;  /* capability bits */
+    int reach_extern;                   /* hit a raw extern callee */
+} EffectSet;
+
+static int effect_is_extern(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_EXTERN_FUNCTION && c->value &&
+            strcmp(c->value, name) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void effect_collect(ASTNode* program, ASTNode* node, EffectSet* set,
+                           const char** visited, int* nvisited, int depth) {
+    if (!node || depth > 128) return;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        const char* dot = strchr(node->value, '.');
+        if (dot) {
+            char ns[64];
+            size_t l = (size_t)(dot - node->value);
+            if (l < sizeof(ns)) {
+                memcpy(ns, node->value, l);
+                ns[l] = '\0';
+                const char* cap = effect_call_capability(ns);
+                if (cap) {
+                    if (!strcmp(cap, "fs"))  set->reach_fs = 1;
+                    else if (!strcmp(cap, "net")) set->reach_net = 1;
+                    else if (!strcmp(cap, "os"))  set->reach_os = 1;
+                } else {
+                    /* Not a capability namespace — a call into an imported
+                       user module. After module merge the callee lives under
+                       its underscore-merged name (`osmod.do_exec` →
+                       `osmod_do_exec`), so follow that edge to keep the
+                       reachability whole-program across import boundaries. */
+                    char merged[256];
+                    snprintf(merged, sizeof(merged), "%.*s_%s",
+                             (int)l, node->value, dot + 1);
+                    int seen = 0;
+                    for (int i = 0; i < *nvisited; i++)
+                        if (strcmp(visited[i], merged) == 0) { seen = 1; break; }
+                    if (!seen && *nvisited < 512) {
+                        ASTNode* def = effect_find_func(program, merged);
+                        if (def && def->child_count > 0) {
+                            /* visited[] holds borrowed pointers; this name is
+                               stack-local, so search by value above is fine,
+                               but we must store a stable pointer. Use the
+                               def's own name (lives in the AST). */
+                            visited[(*nvisited)++] = def->value ? def->value : merged;
+                            effect_collect(program, def->children[def->child_count - 1],
+                                           set, visited, nvisited, depth + 1);
+                        }
+                    }
+                }
+            }
+        } else {
+            int seen = 0;
+            for (int i = 0; i < *nvisited; i++)
+                if (strcmp(visited[i], node->value) == 0) { seen = 1; break; }
+            if (!seen && *nvisited < 512) {
+                ASTNode* def = effect_find_func(program, node->value);
+                if (def && def->child_count > 0) {
+                    visited[(*nvisited)++] = node->value;
+                    effect_collect(program, def->children[def->child_count - 1],
+                                   set, visited, nvisited, depth + 1);
+                } else if (effect_is_extern(program, node->value)) {
+                    set->reach_extern = 1;  /* fail-closed: unclassifiable */
+                }
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        effect_collect(program, node->children[i], set, visited, nvisited, depth);
+}
+
+void emit_effects_json(FILE* out, ASTNode* program) {
+    if (!out) return;
+    /* Collect module globals once (for the purity test, same basis as #522:
+       a global is a top-level CONST_DECLARATION annotated "global_var",
+       possibly wrapped in an EXPORT_STATEMENT). */
+    const char* globals[256];
+    int nglobals = 0;
+    if (program) {
+        for (int i = 0; i < program->child_count && nglobals < 256; i++) {
+            ASTNode* c = program->children[i];
+            if (c && c->type == AST_EXPORT_STATEMENT && c->child_count > 0) c = c->children[0];
+            if (c && c->type == AST_CONST_DECLARATION && c->value && c->annotation &&
+                strcmp(c->annotation, "global_var") == 0)
+                globals[nglobals++] = c->value;
+        }
+    }
+    fprintf(out, "{\n");
+    int first = 1;
+    if (program) {
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* fn = program->children[i];
+            if (!fn || (fn->type != AST_FUNCTION_DEFINITION &&
+                        fn->type != AST_BUILDER_FUNCTION) || !fn->value)
+                continue;
+            EffectSet set = {0, 0, 0, 0};
+            const char* visited[512];
+            int nv = 0;
+            visited[nv++] = fn->value;
+            if (fn->child_count > 0)
+                effect_collect(program, fn->children[fn->child_count - 1],
+                               &set, visited, &nv, 0);
+            int rfs  = set.reach_fs  || set.reach_extern;
+            int rnet = set.reach_net || set.reach_extern;
+            int ros  = set.reach_os  || set.reach_extern;
+            /* Pure iff: the #522 engine says so (covers caller-visible
+               mutation), AND no capability/extern is reached. The second
+               clause keeps `pure` consistent with `reaches`/`extern` even
+               where func_is_pure's own walk has a cross-module blind spot
+               that effect_collect resolves. */
+            int pure = func_is_pure(program, fn->value, globals, nglobals) &&
+                       !rfs && !rnet && !ros && !set.reach_extern;
+            fprintf(out, "%s  \"%s\": { \"pure\": %s, \"extern\": %s, "
+                         "\"reaches\": [",
+                    first ? "" : ",\n", fn->value,
+                    pure ? "true" : "false",
+                    set.reach_extern ? "true" : "false");
+            int rfirst = 1;
+            if (rfs)  { fprintf(out, "%s\"fs\"",  rfirst ? "" : ", "); rfirst = 0; }
+            if (rnet) { fprintf(out, "%s\"net\"", rfirst ? "" : ", "); rfirst = 0; }
+            if (ros)  { fprintf(out, "%s\"os\"",  rfirst ? "" : ", "); rfirst = 0; }
+            fprintf(out, "] }");
+            first = 0;
+        }
+    }
+    fprintf(out, "\n}\n");
 }
 
 /* #480 distinct types — resolution pass. The parser leaves a reference to a
