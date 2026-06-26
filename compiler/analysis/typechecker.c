@@ -3103,6 +3103,149 @@ static int func_is_pure(ASTNode* program, const char* fnname,
     return !purity_scan(program, fn, body, globals, nglobals, visited, &nv, 0);
 }
 
+/* #889: derived per-function effect reachability, exposed via --emit=effects.
+ *
+ * Accumulates, over a whole-program call-graph walk from one function body, the
+ * set of capabilities (fs/net/os) transitively reached and whether the walk
+ * reaches a raw `extern` (the fail-closed signal: an extern is unclassifiable,
+ * so a consumer must treat it as reaching anything). Mirrors effect_scan's
+ * walk, but COLLECTS all caps rather than stopping at the first forbidden one,
+ * and additionally flags extern reachability. */
+typedef struct {
+    int reach_fs, reach_net, reach_os;  /* capability bits */
+    int reach_extern;                   /* hit a raw extern callee */
+} EffectSet;
+
+static int effect_is_extern(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_EXTERN_FUNCTION && c->value &&
+            strcmp(c->value, name) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void effect_collect(ASTNode* program, ASTNode* node, EffectSet* set,
+                           const char** visited, int* nvisited, int depth) {
+    if (!node || depth > 128) return;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        const char* dot = strchr(node->value, '.');
+        if (dot) {
+            char ns[64];
+            size_t l = (size_t)(dot - node->value);
+            if (l < sizeof(ns)) {
+                memcpy(ns, node->value, l);
+                ns[l] = '\0';
+                const char* cap = effect_call_capability(ns);
+                if (cap) {
+                    if (!strcmp(cap, "fs"))  set->reach_fs = 1;
+                    else if (!strcmp(cap, "net")) set->reach_net = 1;
+                    else if (!strcmp(cap, "os"))  set->reach_os = 1;
+                } else {
+                    /* Not a capability namespace — a call into an imported
+                       user module. After module merge the callee lives under
+                       its underscore-merged name (`osmod.do_exec` →
+                       `osmod_do_exec`), so follow that edge to keep the
+                       reachability whole-program across import boundaries. */
+                    char merged[256];
+                    snprintf(merged, sizeof(merged), "%.*s_%s",
+                             (int)l, node->value, dot + 1);
+                    int seen = 0;
+                    for (int i = 0; i < *nvisited; i++)
+                        if (strcmp(visited[i], merged) == 0) { seen = 1; break; }
+                    if (!seen && *nvisited < 512) {
+                        ASTNode* def = effect_find_func(program, merged);
+                        if (def && def->child_count > 0) {
+                            /* visited[] holds borrowed pointers; this name is
+                               stack-local, so search by value above is fine,
+                               but we must store a stable pointer. Use the
+                               def's own name (lives in the AST). */
+                            visited[(*nvisited)++] = def->value ? def->value : merged;
+                            effect_collect(program, def->children[def->child_count - 1],
+                                           set, visited, nvisited, depth + 1);
+                        }
+                    }
+                }
+            }
+        } else {
+            int seen = 0;
+            for (int i = 0; i < *nvisited; i++)
+                if (strcmp(visited[i], node->value) == 0) { seen = 1; break; }
+            if (!seen && *nvisited < 512) {
+                ASTNode* def = effect_find_func(program, node->value);
+                if (def && def->child_count > 0) {
+                    visited[(*nvisited)++] = node->value;
+                    effect_collect(program, def->children[def->child_count - 1],
+                                   set, visited, nvisited, depth + 1);
+                } else if (effect_is_extern(program, node->value)) {
+                    set->reach_extern = 1;  /* fail-closed: unclassifiable */
+                }
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        effect_collect(program, node->children[i], set, visited, nvisited, depth);
+}
+
+void emit_effects_json(FILE* out, ASTNode* program) {
+    if (!out) return;
+    /* Collect module globals once (for the purity test, same basis as #522:
+       a global is a top-level CONST_DECLARATION annotated "global_var",
+       possibly wrapped in an EXPORT_STATEMENT). */
+    const char* globals[256];
+    int nglobals = 0;
+    if (program) {
+        for (int i = 0; i < program->child_count && nglobals < 256; i++) {
+            ASTNode* c = program->children[i];
+            if (c && c->type == AST_EXPORT_STATEMENT && c->child_count > 0) c = c->children[0];
+            if (c && c->type == AST_CONST_DECLARATION && c->value && c->annotation &&
+                strcmp(c->annotation, "global_var") == 0)
+                globals[nglobals++] = c->value;
+        }
+    }
+    fprintf(out, "{\n");
+    int first = 1;
+    if (program) {
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* fn = program->children[i];
+            if (!fn || (fn->type != AST_FUNCTION_DEFINITION &&
+                        fn->type != AST_BUILDER_FUNCTION) || !fn->value)
+                continue;
+            EffectSet set = {0, 0, 0, 0};
+            const char* visited[512];
+            int nv = 0;
+            visited[nv++] = fn->value;
+            if (fn->child_count > 0)
+                effect_collect(program, fn->children[fn->child_count - 1],
+                               &set, visited, &nv, 0);
+            int rfs  = set.reach_fs  || set.reach_extern;
+            int rnet = set.reach_net || set.reach_extern;
+            int ros  = set.reach_os  || set.reach_extern;
+            /* Pure iff: the #522 engine says so (covers caller-visible
+               mutation), AND no capability/extern is reached. The second
+               clause keeps `pure` consistent with `reaches`/`extern` even
+               where func_is_pure's own walk has a cross-module blind spot
+               that effect_collect resolves. */
+            int pure = func_is_pure(program, fn->value, globals, nglobals) &&
+                       !rfs && !rnet && !ros && !set.reach_extern;
+            fprintf(out, "%s  \"%s\": { \"pure\": %s, \"extern\": %s, "
+                         "\"reaches\": [",
+                    first ? "" : ",\n", fn->value,
+                    pure ? "true" : "false",
+                    set.reach_extern ? "true" : "false");
+            int rfirst = 1;
+            if (rfs)  { fprintf(out, "%s\"fs\"",  rfirst ? "" : ", "); rfirst = 0; }
+            if (rnet) { fprintf(out, "%s\"net\"", rfirst ? "" : ", "); rfirst = 0; }
+            if (ros)  { fprintf(out, "%s\"os\"",  rfirst ? "" : ", "); rfirst = 0; }
+            fprintf(out, "] }");
+            first = 0;
+        }
+    }
+    fprintf(out, "\n}\n");
+}
+
 /* #480 distinct types — resolution pass. The parser leaves a reference to a
  * distinct type as a TYPE_STRUCT{struct_name=Name} placeholder (the same shape
  * any named type gets). This pass collects every `type Name = distinct Base`

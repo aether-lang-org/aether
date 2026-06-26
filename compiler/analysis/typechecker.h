@@ -1,6 +1,7 @@
 #ifndef TYPECHECKER_H
 #define TYPECHECKER_H
 
+#include <stdio.h>   /* FILE — used by emit_effects_json (#889) */
 #include "../ast.h"
 
 typedef struct Symbol {
@@ -115,5 +116,15 @@ AeTokenType get_token_type_from_string(const char* str);
 // Error reporting
 void type_error(const char* message, int line, int column);
 void type_warning(const char* message, int line, int column);
+
+// #889: emit the DERIVED per-function effect/purity analysis as JSON to `out`.
+// For each top-level user function, reports the whole-program transitive
+// capability reachability (fs/net/os) and purity — computed from the call
+// graph + capability classification, NOT from author-written @no_* tags (which
+// an attacker could simply omit). Fail-closed: a function that transitively
+// reaches a raw `extern` is treated as reaching every capability (`"extern":
+// true`), matching how the `--with=` gate treats unclassifiable externs.
+// Consumed by external auditors (e.g. aeb's supply-chain veto).
+void emit_effects_json(FILE* out, ASTNode* program);
 
 #endif
