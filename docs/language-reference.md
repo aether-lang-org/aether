@@ -289,6 +289,18 @@ const G_BUF = malloc(64)        // ERROR: const initializer must be a
 
 The reason is `const`'s substitution-at-each-use semantics: the compiler inlines the RHS at every reference rather than storing the value. For literal RHSs this is fine; for `make_thing()` it would re-call the function on every reference, allocating fresh state. If you need a process-global heap object initialised once and read everywhere, use [`std.config`](stdlib-reference.md#stdconfig--stringstring-kv) for string state or [`std.actors`](stdlib-reference.md#stdactors--name--actor_ref-registry) for actor references — both are described in the stdlib reference.
 
+**Exception — `sizeof` / `offsetof`.** The two layout builtins `sizeof(T)` and `offsetof(T, field)` *are* allowed in a `const` initializer (and arithmetic over them), even though they are spelled with call syntax. They lower to C compile-time constant expressions (`(int)sizeof(struct T)` / `(int)offsetof(struct T, field)`) — no evaluation, allocation, or side effect — so the substitution-at-each-use semantics are harmless:
+
+```aether
+extern struct JSString { gc_mark: uint64 : 1  len: uint64 : 60  buf: byte[] }
+
+const SIZEOF_JSSTRING = sizeof(JSString)          // ok — folds to a C constant
+const STR_BUF_OFFSET  = offsetof(JSString, buf)   // ok
+const STR_PADDED      = sizeof(JSString) + 8      // arithmetic over them is ok too
+```
+
+This lets a port that mirrors C structs as `extern struct` overlays centralise its offset/size table as named consts that are **self-verifying by construction** — the C compiler computes each value, so it cannot drift from the real layout — instead of hand-maintaining numeric offsets plus `_Static_assert` drift guards. The general "no function calls in a `const` initializer" rule is unchanged; these two layout builtins are the only carve-out.
+
 ### Mutable module-level globals
 
 Where a `const` is a fixed value, a module-level `var` is **one persistent, mutable word of state** shared by every function in the module — a PRNG seed, a monotonic counter, a one-slot cache:
@@ -1852,6 +1864,16 @@ The following identifiers are reserved:
 
 Note: `state` is context-sensitive — it is a keyword only inside actor bodies. In all other code, `state` can be used as a regular variable name.
 
+Note: **`ptr`, `byte`, `func`, `state` and `after` are usable as ordinary value identifiers** — parameter names, local names, struct field names, struct-literal fields, and field-access targets — *without* the backtick escape. These tokens have meaning only in type position (`ptr`/`byte`), as a declaration head (`func`), or as a statement head (`state`/`after`), none of which overlaps a value position, so a bare `ptr`/`byte`/`func`/`state`/`after` in value position is unambiguously a name:
+
+```aether
+add(ptr: int) -> int { return ptr + 1 }     // `ptr` is the parameter name
+struct Node { func: int  after: int }        // keyword-spelled field names
+main() { let byte = 7  println("${byte}") }  // keyword-spelled local
+```
+
+Two members of that family stay reserved in value position: `match` (it heads a match expression, so `match` as a bare value is genuinely ambiguous) and `union` (a C keyword — a value named `union` could not be emitted as valid C). For those, rename or use the backtick escape below. As a type keyword, `byte`/`ptr` still works in type position too: `byte b` declares `b` of type `byte` (the `<type> <name>` C-style form), while `byte: int` / `byte` in name position is the name.
+
 Note: `void` is **not** a reserved word — there is no `void` token. It is a plain identifier used by convention to *spell* the absence of a return value (e.g. `extern free(p: ptr) -> void`); a function that omits its `-> Type` annotation is the canonical void declaration. See [Functions](#functions).
 
 ### Raw identifiers — using a keyword as a name
@@ -1876,7 +1898,13 @@ addReply(`reply`: int, `after`: int) -> int {
 The escaped text is the name (`` `reply` `` is the identifier `reply`), so a
 raw identifier and the plain spelling refer to the same binding. The primary
 use is keeping a C→Aether port faithful: C APIs routinely use names like
-`reply`, `message`, `after`, and `ptr` that collide with Aether keywords.
+`reply`, `message`, and `when` that collide with Aether keywords.
+
+(For the common port collisions `ptr`, `byte`, `func`, `state` and `after`,
+the backtick escape is **not** required — they are accepted bare as value
+identifiers, see the note under [Keywords](#keywords) above. The escape is
+still the way to use a fully-reserved keyword such as `reply`, `message`,
+`when`, `match`, or `union` as a name.)
 
 Writing an *unescaped* reserved keyword where a name is expected is an error
 (`error[E0100]: '<kw>' is a reserved keyword …`) whose hint points to both the

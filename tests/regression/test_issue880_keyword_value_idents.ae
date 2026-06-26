@@ -1,0 +1,63 @@
+// Regression: issue #880 — the type/keyword tokens `ptr`, `byte`, `func`,
+// `state` and `after` are usable as ordinary value identifiers (parameter
+// names, local names, struct field names + access, struct-literal fields)
+// WITHOUT the backtick escape, since none of them have a meaning in value
+// position. A C→Aether port can keep the source's identifier names instead of
+// mechanically renaming `ptr`→`ptr_`, `func`→`fn_val`, etc.
+//
+// `match` (heads a match expression) and `union` (a C keyword that cannot be a
+// C identifier) deliberately stay reserved — those still need a rename or the
+// backtick escape.
+
+extern exit(code: int)
+
+// Each token as a parameter name, used as a value in the body.
+add_ptr(ptr: int) -> int   { return ptr + 1 }
+add_func(func: int) -> int { return func + 1 }
+add_byte(byte: int) -> int { return byte + 1 }
+add_state(state: int) -> int { return state + 1 }
+add_after(after: int) -> int { return after + 1 }
+
+// C-style typed param: here `byte` is the TYPE and `b` the name — still works.
+cstyle_byte(byte b) -> int { return b + 1 }
+
+// Struct whose fields are spelled with the keyword tokens.
+struct Node {
+    ptr: int
+    func: int
+    after: int
+}
+
+main() {
+    if add_ptr(10) != 11 { println("FAIL #880: ptr param"); exit(1) }
+    if add_func(20) != 21 { println("FAIL #880: func param"); exit(1) }
+    if add_byte(30) != 31 { println("FAIL #880: byte param"); exit(1) }
+    if add_state(40) != 41 { println("FAIL #880: state param"); exit(1) }
+    if add_after(50) != 51 { println("FAIL #880: after param"); exit(1) }
+    if cstyle_byte(99) != 100 { println("FAIL #880: C-style byte type still works"); exit(1) }
+
+    // Struct field definition + literal + access with keyword names.
+    n = Node { ptr: 1, func: 2, after: 3 }
+    if n.ptr + n.func + n.after != 6 {
+        println("FAIL #880: struct field def/literal/access")
+        exit(1)
+    }
+
+    // Local bindings via `let` (works for all five).
+    let ptr = 100
+    let func = 200
+    let byte = 7
+    let after = 3
+    if ptr + func + byte + after != 310 {
+        println("FAIL #880: keyword-named locals")
+        exit(1)
+    }
+
+    // Bare assignment + compound-assignment on a keyword-named local.
+    func = func + 1
+    after += 10
+    if func != 201 { println("FAIL #880: bare assignment"); exit(1) }
+    if after != 13 { println("FAIL #880: compound assignment"); exit(1) }
+
+    println("PASS: #880 ptr/byte/func/state/after usable as value identifiers")
+}

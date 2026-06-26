@@ -905,6 +905,16 @@ static int is_const_expression(ASTNode* expr, SymbolTable* table) {
             }
             return 1;
         }
+        case AST_SIZEOF:
+        case AST_OFFSETOF:
+            /* #879: `sizeof(T)` / `offsetof(T, f)` lower to C compile-time
+             * constants (`((int)sizeof(struct T))` / `((int)offsetof(...))`)
+             * — no evaluation, allocation, or side effect. They are valid
+             * const initializers (the E0200 "function calls re-evaluate"
+             * rationale doesn't apply); they merely share call syntax. Lets a
+             * port centralise struct sizes/offsets as named `const`s instead
+             * of a hand-maintained, drift-prone offset table. */
+            return 1;
         case AST_FUNCTION_CALL:
             /* Only the hard whitelist of pure conversions (folded to
              * literals by the optimizer post-typecheck). Every other

@@ -123,6 +123,31 @@ static int token_is_reserved_keyword(Token* token) {
     return 1;
 }
 
+// #880: tokens accepted as an ordinary value identifier in name position —
+// a parameter / local binding, an assignment target, a tuple-destructure
+// slot. `ptr`/`byte` are keywords only in type position, `func` only as a
+// declaration head, `state`/`after` only as statement heads; none of those
+// roles reaches a value-identifier position, so accept the spelling (carried
+// in `->value`) as the name. Two members of the issue's list are deliberately
+// left out: `match` (heads a match expression — genuinely ambiguous in value
+// position) and `union` (a C keyword, so a value named `union` would emit
+// invalid C — supporting it needs value-identifier mangling in codegen, a
+// separate change).
+static int token_is_value_ident(const Token* token) {
+    if (!token) return 0;
+    switch (token->type) {
+        case TOKEN_IDENTIFIER:
+        case TOKEN_STATE:
+        case TOKEN_PTR:
+        case TOKEN_BYTE:
+        case TOKEN_FUNC:
+        case TOKEN_AFTER:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 // C ABI scalar aliases — recognised exact C type spellings. When a
 // type-position identifier matches one, parse_type builds a Type with
 // the given `kind` (which governs all typechecking and arithmetic)
@@ -1016,7 +1041,8 @@ ASTNode* parse_primary_expression(Parser* parser) {
                     int looks_qualified_struct = 0;
                     if (t_after && t_after->type == TOKEN_RIGHT_BRACE) {
                         looks_qualified_struct = 1;
-                    } else if (t_after && t_after->type == TOKEN_IDENTIFIER) {
+                    } else if (t_after && token_is_value_ident(t_after)) {
+                        // #880: value-identifier keyword as the first field name
                         Token* t_colon = peek_ahead(parser, 5);
                         if (t_colon && t_colon->type == TOKEN_COLON) {
                             looks_qualified_struct = 1;
@@ -1036,8 +1062,14 @@ ASTNode* parse_primary_expression(Parser* parser) {
                         ASTNode* struct_lit = create_ast_node(AST_STRUCT_LITERAL, struct_name, s_line, s_col);
                         if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
                             do {
-                                Token* field_name = expect_token(parser, TOKEN_IDENTIFIER);
-                                if (!field_name) { free_ast_node(struct_lit); return NULL; }
+                                // #880: accept value-identifier keyword field names
+                                Token* field_name = peek_token(parser);
+                                if (field_name && token_is_value_ident(field_name)) {
+                                    advance_token(parser);
+                                } else {
+                                    field_name = expect_token(parser, TOKEN_IDENTIFIER);
+                                    if (!field_name) { free_ast_node(struct_lit); return NULL; }
+                                }
                                 if (!expect_token(parser, TOKEN_COLON)) { free_ast_node(struct_lit); return NULL; }
                                 ASTNode* value_expr = parse_expression(parser);
                                 if (!value_expr) { free_ast_node(struct_lit); return NULL; }
@@ -1072,7 +1104,10 @@ ASTNode* parse_primary_expression(Parser* parser) {
                 if (after_brace && after_brace->type == TOKEN_RIGHT_BRACE) {
                     // TypeName {} — empty struct literal
                     looks_like_struct = true;
-                } else if (after_brace && after_brace->type == TOKEN_IDENTIFIER) {
+                } else if (after_brace && token_is_value_ident(after_brace)) {
+                    // #880: a first field named with a value-identifier keyword
+                    // (`ptr`/`byte`/`func`/`state`/`after`) still marks this as
+                    // a struct literal, not an identifier-then-block.
                     Token* after_field = peek_ahead(parser, 3);
                     if (after_field && after_field->type == TOKEN_COLON) {
                         // TypeName { field: value } — struct literal
@@ -1093,11 +1128,19 @@ ASTNode* parse_primary_expression(Parser* parser) {
                 // Parse field initializers
                 if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
                     do {
-                        // Parse field name
-                        Token* field_name = expect_token(parser, TOKEN_IDENTIFIER);
-                        if (!field_name) {
-                            free_ast_node(struct_lit);
-                            return NULL;
+                        // Parse field name. #880: accept the value-identifier
+                        // keywords (`ptr`/`byte`/`func`/`state`/`after`) so a
+                        // literal can initialise a struct whose fields carry
+                        // those (valid-C) names.
+                        Token* field_name = peek_token(parser);
+                        if (field_name && token_is_value_ident(field_name)) {
+                            advance_token(parser);
+                        } else {
+                            field_name = expect_token(parser, TOKEN_IDENTIFIER);
+                            if (!field_name) {
+                                free_ast_node(struct_lit);
+                                return NULL;
+                            }
                         }
 
                         // Expect colon
@@ -1295,6 +1338,17 @@ ASTNode* parse_primary_expression(Parser* parser) {
 
         case TOKEN_STATE:
             // Outside actor bodies, 'state' is treated as a regular identifier
+        case TOKEN_PTR:
+        case TOKEN_BYTE:
+        case TOKEN_FUNC:
+        case TOKEN_AFTER:
+            // #880: these keywords have meaning only in type position
+            // (`ptr`/`byte`), as a declaration head (`func`) or as statement
+            // heads (`state`/`after`) — none of which reach a primary-
+            // expression operand. So in value position (e.g. `return ptr`,
+            // `ptr + 1`, `func.field`) accept them as ordinary identifiers.
+            // `match` (match-expression head) and `union` (a C keyword that
+            // can't be a C identifier) are deliberately NOT here (#880).
             return create_identifier_node(advance_token(parser));
 
         case TOKEN_PIPE:
@@ -2091,6 +2145,15 @@ ASTNode* parse_statement(Parser* parser) {
         case TOKEN_STATE:
             // Outside actor bodies, 'state' is a regular identifier
             // fall through
+        case TOKEN_FUNC:
+        case TOKEN_AFTER:
+            // #880: `func`/`after` have no statement-head role (and are not
+            // type keywords), so at the start of a statement they are a value
+            // identifier — a local binding (`func = compute()`), an
+            // assignment / compound-assign target, or the head of an
+            // expression statement. Routed through the identifier path below.
+            // (`ptr`/`byte` are type keywords: bare `byte b = ...` stays a
+            // typed declaration; the value-name form is `let byte = ...`.)
         case TOKEN_IDENTIFIER: {
             // Check if this is: identifier = expression (Python-style)
             // or tuple destructuring: identifier, identifier = expression
@@ -2120,7 +2183,7 @@ ASTNode* parse_statement(Parser* parser) {
                          next->type == TOKEN_LSHIFT_ASSIGN || next->type == TOKEN_RSHIFT_ASSIGN)) {
                 // Consume identifier
                 Token* name = peek_token(parser);
-                if (!name || (name->type != TOKEN_IDENTIFIER && name->type != TOKEN_STATE)) {
+                if (!token_is_value_ident(name)) {
                     parser_error(parser, "Expected identifier");
                     return NULL;
                 }
@@ -2192,9 +2255,10 @@ ASTNode* parse_variable_declaration_with_semicolon(Parser* parser, bool expect_s
 
 // Python-style variable declaration: x = 42 (no 'let', type inferred)
 ASTNode* parse_python_style_declaration(Parser* parser) {
-    // Accept TOKEN_IDENTIFIER or TOKEN_STATE (state is a regular identifier outside actors)
+    // Accept a value-identifier token as the binding name — TOKEN_IDENTIFIER,
+    // `state` (a regular identifier outside actors), or the #880 keyword set.
     Token* name = peek_token(parser);
-    if (!name || (name->type != TOKEN_IDENTIFIER && name->type != TOKEN_STATE)) {
+    if (!token_is_value_ident(name)) {
         parser_error(parser, "Expected identifier");
         return NULL;
     }
@@ -2222,7 +2286,7 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
                 ASTNode* discard = create_ast_node(AST_VARIABLE_DECLARATION, "_", next_name->line, next_name->column);
                 discard->node_type = create_type(TYPE_UNKNOWN);
                 add_child(destructure, discard);
-            } else if (next_name->type == TOKEN_IDENTIFIER || next_name->type == TOKEN_STATE) {
+            } else if (token_is_value_ident(next_name)) {
                 advance_token(parser);
                 ASTNode* var = create_ast_node(AST_VARIABLE_DECLARATION, next_name->value, next_name->line, next_name->column);
                 var->node_type = create_type(TYPE_UNKNOWN);
@@ -3592,8 +3656,17 @@ ASTNode* parse_receive_statement(Parser* parser) {
 // already emitted). Caller wires the result into the parent struct's
 // children list.
 ASTNode* parse_extern_struct_field(Parser* parser) {
-    Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
-    if (!fname) return NULL;
+    // #880: accept the value-identifier keywords (`ptr`/`byte`/`func`/`state`/
+    // `after`) as extern-struct field NAMES — these mirror C struct fields and
+    // are all valid C field identifiers. The `name:` form is unambiguous (the
+    // name is always first), so no type/name disambiguation is needed here.
+    Token* fname = peek_token(parser);
+    if (fname && token_is_value_ident(fname)) {
+        advance_token(parser);
+    } else {
+        fname = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!fname) return NULL;
+    }
 
     if (!expect_token(parser, TOKEN_COLON)) return NULL;
 
@@ -4354,22 +4427,34 @@ ASTNode* parse_pattern(Parser* parser) {
             return pattern;
         }
         
+        // #880: `func`/`state`/`after` are keywords only as declaration /
+        // statement heads, never types — so in pattern / parameter-NAME
+        // position they are unambiguously a binding name (their `->value`
+        // holds the spelling). Accept them here as a variable pattern.
+        // (`ptr`/`byte` ARE type keywords, so they share the C-style
+        // typed-parameter block below, which disambiguates `byte b` (type)
+        // from `byte: int` / `byte` (name) by the next token.) `match`
+        // (expression head) and `union` (a C keyword) stay reserved (#880).
+        case TOKEN_FUNC:
+        case TOKEN_STATE:
+        case TOKEN_AFTER:
         case TOKEN_IDENTIFIER: {
             // Check if it's a wildcard _
-            if (strcmp(token->value, "_") == 0) {
+            if (token->type == TOKEN_IDENTIFIER && strcmp(token->value, "_") == 0) {
                 advance_token(parser);
-                ASTNode* pattern = create_ast_node(AST_PATTERN_LITERAL, "_", 
+                ASTNode* pattern = create_ast_node(AST_PATTERN_LITERAL, "_",
                                                   token->line, token->column);
                 pattern->node_type = create_type(TYPE_WILDCARD);
                 return pattern;
             }
-            
-            // Check if it's a struct pattern: Point{x: 0, y: 0}
+
+            // Check if it's a struct pattern: Point{x: 0, y: 0} (real
+            // identifiers only — a keyword token is never a struct name).
             Token* next = peek_ahead(parser, 1);
-            if (next && next->type == TOKEN_LEFT_BRACE) {
+            if (token->type == TOKEN_IDENTIFIER && next && next->type == TOKEN_LEFT_BRACE) {
                 return parse_struct_pattern(parser);
             }
-            
+
             // Regular variable pattern
             advance_token(parser);
             ASTNode* pattern = create_ast_node(AST_PATTERN_VARIABLE, token->value,
@@ -4443,6 +4528,33 @@ ASTNode* parse_pattern(Parser* parser) {
                 }
                 return pattern;
             }
+            // #880: `byte`/`ptr` are type keywords that double as natural value
+            // identifiers in C ports. When NOT followed by an identifier they
+            // are the parameter NAME, not a type — `f(byte: int)`, `f(ptr)`,
+            // `f(ptr = 0)`. (The `<type> <name>` C-style form above already
+            // consumed the `next == identifier` case.) The other type keywords
+            // in this group (int/float/...) are not value identifiers, so they
+            // keep falling through to expression parsing.
+            if (token->type == TOKEN_BYTE || token->type == TOKEN_PTR) {
+                advance_token(parser);
+                ASTNode* pattern = create_ast_node(AST_PATTERN_VARIABLE, token->value,
+                                                   token->line, token->column);
+                if (match_token(parser, TOKEN_COLON)) {
+                    Type* param_type = parse_type(parser);
+                    pattern->node_type = param_type ? param_type : create_type(TYPE_UNKNOWN);
+                } else {
+                    pattern->node_type = create_type(TYPE_UNKNOWN);
+                }
+                if (match_token(parser, TOKEN_ASSIGN)) {
+                    ASTNode* default_expr = parse_expression(parser);
+                    if (default_expr) {
+                        add_child(pattern, default_expr);
+                        if (pattern->annotation) free(pattern->annotation);
+                        pattern->annotation = strdup("has_default");
+                    }
+                }
+                return pattern;
+            }
             // Fall through to expression parsing
             return parse_expression(parser);
         }
@@ -4465,11 +4577,18 @@ ASTNode* parse_struct_pattern(Parser* parser) {
 
     if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
         do {
-            Token* field = expect_token(parser, TOKEN_IDENTIFIER);
-            if (!field) break;
+            // #880: accept value-identifier keyword field names when
+            // destructuring (`Box{ ptr: p }`).
+            Token* field = peek_token(parser);
+            if (field && token_is_value_ident(field)) {
+                advance_token(parser);
+            } else {
+                field = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!field) break;
+            }
 
             if (!expect_token(parser, TOKEN_COLON)) break;
-            
+
             ASTNode* field_pattern = parse_pattern(parser);
             if (field_pattern) {
                 // Store field name in pattern
@@ -4590,10 +4709,22 @@ ASTNode* parse_struct_definition(Parser* parser) {
             }
         }
 
-        Token* field_name = expect_token(parser, TOKEN_IDENTIFIER);
-        if (!field_name) {
-            if (c_type) free_type(c_type);
-            return NULL;
+        // #880: accept the value-identifier keywords (`ptr`/`byte`/`func`/
+        // `state`/`after`) as field NAMES — C ports routinely have struct
+        // fields so named, and each is a valid C struct-field identifier. The
+        // `<type> <name>` C-style form above already consumed the case where
+        // such a keyword is the field TYPE (e.g. `byte b`), so a keyword
+        // remaining here is the name. Anything else falls to the standard
+        // identifier error.
+        Token* field_name = peek_token(parser);
+        if (field_name && token_is_value_ident(field_name)) {
+            advance_token(parser);
+        } else {
+            field_name = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!field_name) {
+                if (c_type) free_type(c_type);
+                return NULL;
+            }
         }
 
         // Create field node
