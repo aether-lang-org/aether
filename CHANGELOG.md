@@ -5,11 +5,13 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.309.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.309.0]
+## [current]
+
+## [0.316.0]
 
 ### Added
 
@@ -33,6 +35,10 @@ next version number before tagging the release.
   stay reserved — `match` heads a match expression; `union` is a C keyword that
   can't be emitted as a C identifier — use the backtick escape for those.)
 
+## [0.315.0]
+
+### Added
+
 - **Distinct types: `type Name = distinct Base`** (#480). A zero-cost nominal
   wrapper over a scalar / `string` / `ptr` base — `type USD = distinct float`,
   `type Fd = distinct int`. Lowers to the base C type (no boxing), but the type
@@ -42,6 +48,10 @@ next version number before tagging the release.
   declarations/assignments and at call-argument boundaries (a `Fd` parameter
   rejects a raw `int`; an `EUR` is rejected where `USD` is wanted) — the
   capability-token discipline now compiler-checked.
+
+## [0.314.0]
+
+### Added
 
 - **Gradual contracts: `where` clauses on function parameters** (#525). A
   parameter may carry a runtime-checked precondition: `divide(a: int, b: int
@@ -53,6 +63,10 @@ next version number before tagging the release.
   `--no-contracts` like the other contract checks. (`where` on bindings is a
   tracked follow-up — it needs a binding-syntax decision, since Aether bindings
   are prefix/inferred, not the issue's postfix `let x: T` form.)
+
+## [0.313.0]
+
+### Added
 
 - **Static purity inference + the `__pure(fn)` builtin** (#522). A whole-program
   analysis classifies each function pure/impure: pure means it transitively
@@ -70,6 +84,11 @@ next version number before tagging the release.
   `--with=fs,net,os` gate (whole-program) as a finer, per-function axis. A raw
   `extern` call is unclassifiable and is not flagged, matching the `--with=`
   gate's boundary.
+
+## [0.312.0]
+
+### Added
+
 - **`@scoped` bindings — opt-in escape analysis** (#521). A `let`/`var`
   declaration annotated `@scoped` (`@scoped let buf = make_buffer()`) declares
   that the value must not outlive its lexical block. The typechecker rejects
@@ -78,6 +97,11 @@ next version number before tagging the release.
   inserting it into a container (`list.add`/`map.put`/…). Only a scalar
   *derived* from it may escape (`return buf.len()`). Not a borrow checker —
   one opt-in annotation that turns a non-escape into a checked invariant.
+
+## [0.311.0]
+
+### Added
+
 - **Raw identifiers: `` `name` `` escapes a reserved keyword for use as an
   ordinary identifier** (#867). A backtick-delimited identifier is always
   lexed as a plain name, so a faithful C→Aether port can keep identifiers
@@ -119,6 +143,17 @@ next version number before tagging the release.
   E0301. The merge now injects a synthetic bare import for each merged module's
   own bare imports, re-opening the qualified surface (kept out of the
   user-explicit registry, preserving #243 sealed-scope isolation).
+
+## [0.310.0]
+
+_No user-facing language/stdlib changes recorded for this release; see git
+history for internal/infra commits._
+
+## [0.309.0]
+
+_The entries previously listed here were misattributed: they shipped across
+0.311–0.316 and have been moved to their correct release sections above. See
+those sections for the real 0.311–0.316 notes._
 
 ## [0.308.0]
 
