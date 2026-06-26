@@ -1,0 +1,10 @@
+// Issue #896: a module that uses `import M (*)` (glob) and calls a
+// glob-brought symbol must keep working when it is imported by another
+// module. `pathlib` globs std.fs and calls `clean`; `main` only imports
+// `pathlib`. Before the fix this failed with `Undefined function 'clean'`.
+import pathlib
+
+main() {
+    r = pathlib.do_clean("a//b")
+    println(r)
+}

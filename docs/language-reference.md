@@ -1500,6 +1500,13 @@ main() {
 }
 ```
 
+The glob form composes across module boundaries: a library module that
+does `import std.fs (*)` and calls a glob-brought `clean(...)` resolves
+correctly whether it is the compilation entry point or is imported by
+another module. (The bare glob-brought names are rewritten to their
+canonical prefixed form when the module is merged into a consumer, the
+same way selective and qualified imports are.)
+
 Use the glob form when you'd otherwise list 20+ symbols just to use
 the module without the namespace prefix. Bare `import std.math` (no
 parens) loads the module but does **not** register short aliases —
