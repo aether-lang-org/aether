@@ -1,0 +1,9 @@
+import std.list
+import std.string
+exports (doc, child, num, unwrap)
+type Num = distinct int
+num(value: int) -> Num { return value as Num }
+unwrap(value: Num) -> int { return value as int }
+child(_ctx: ptr, value: Num) { println(string.from_int(value as int)) }
+builder doc() with list_new {
+}

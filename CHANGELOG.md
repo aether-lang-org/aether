@@ -5,9 +5,33 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.320.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **Imported `distinct` types now resolve across the module boundary** (#908).
+  A `type X = distinct Base` defined in an imported module was never merged into
+  the consumer's program, so the distinct-resolution pass never learned `X` —
+  every cross-module `expr as X` / `x as Base` failed (`cannot cast X to Base`)
+  and codegen emitted an unknown C type `X`. The bug surfaced via the builder-
+  child (`_ctx`) path but was broader: any cross-module distinct wrap/unwrap was
+  affected. The module merge now pulls imported `distinct` defs into the program
+  (bare name, like struct defs), at both the direct-import and transitive-pull-in
+  sites, so every reference resolves.
+- **Heap double-free returning a string-field struct in a tuple** (#911). A
+  `-> (StructWithStringField, err)` constructor whose field was initialized from
+  a string variable double-freed at runtime (`free(): invalid pointer`): the
+  struct literal hard-coded `._heap_<field> = 1`, claiming ownership even when
+  the source variable held a *borrowed* string (`e = s`), so the struct's
+  owned-field free ran on a pointer it never owned. The field's heap-ownership
+  flag now mirrors the source variable's runtime `_heap_<v>` flag, and the
+  variable is disowned (move) so its deferred free is a no-op — exactly one free,
+  ASan/leak-clean for the genuinely-heap case. Unblocks the idiomatic "parse a
+  record at the boundary, return `(Record, err)`" shape.
 
 ## [0.320.0]
 

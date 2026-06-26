@@ -4178,7 +4178,34 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
              * <Struct>_destroy() reclaims the buffer at scope exit.
              * Plain initializers (literal strings, scalars) default
              * to _heap_<field> = 0 via C99 designated-init's zero-
-             * fill of unmentioned fields. */
+             * fill of unmentioned fields.
+             *
+             * #911: when a field ADOPTS a heap-string *variable* (`.f = v`
+             * with v a tracked heap-string local), ownership MOVES from the
+             * variable into the struct. The variable's own function-exit
+             * free must then be suppressed, or the same buffer is freed
+             * twice (once via the struct's owned-field free, once via the
+             * variable's deferred free) — the double-free crash. We collect
+             * the adopted variable names and, after the literal, clear their
+             * `_heap_<v>` flags inside a statement-expression so the exit
+             * free's `if (_heap_<v>)` guard skips them. */
+            const char* moved_vars[16];
+            int moved_count = 0;
+            int any_moved = 0;
+            for (int i = 0; i < expr->child_count; i++) {
+                ASTNode* fi = expr->children[i];
+                if (fi && fi->type == AST_ASSIGNMENT && fi->child_count > 0 &&
+                    fi->children[0]->type == AST_IDENTIFIER &&
+                    fi->children[0]->value &&
+                    is_heap_string_var(gen, fi->children[0]->value)) {
+                    any_moved = 1; break;
+                }
+            }
+            /* When a variable is moved into a field, build the struct into a
+             * temp inside a statement-expression, clear the moved-from vars'
+             * heap flags, then yield the temp. Otherwise emit the literal
+             * directly. */
+            if (any_moved) fprintf(gen->output, "({ %s _ae_slit = ", expr->value);
             fprintf(gen->output, "(%s){", expr->value);
             int emitted = 0;
             for (int i = 0; i < expr->child_count; i++) {
@@ -4190,16 +4217,42 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         generate_expression(gen, field_init->children[0]);
                     }
                     emitted++;
-                    /* If the init is heap-classified, also set the
-                     * hidden tracker. */
+                    /* If the init is heap-classified, also set the hidden
+                     * tracker. For a heap-tracked *variable* source, the
+                     * ownership is RUNTIME-conditional on the variable's own
+                     * `_heap_<v>` flag (#911): `e = s` leaves a borrowed,
+                     * non-heap value, so `._heap_<field> = 1` would make the
+                     * struct free a string it never owned (a bad free of the
+                     * caller's literal). Mirror the runtime flag instead, and
+                     * record the variable as moved-from so its flag is cleared
+                     * (the deferred free becomes a no-op). For non-variable
+                     * heap sources (an interp/concat temp), the value is freshly
+                     * owned, so a constant 1 is correct. */
                     if (field_init->child_count > 0 &&
                         is_heap_string_expr(gen, field_init->children[0])) {
-                        fprintf(gen->output, ", ._heap_%s = 1", field_init->value);
+                        ASTNode* src = field_init->children[0];
+                        if (src->type == AST_IDENTIFIER && src->value &&
+                            is_heap_string_var(gen, src->value)) {
+                            fprintf(gen->output, ", ._heap_%s = _heap_%s",
+                                    field_init->value, src->value);
+                            if (moved_count < 16) moved_vars[moved_count++] = src->value;
+                        } else {
+                            fprintf(gen->output, ", ._heap_%s = 1", field_init->value);
+                        }
                         emitted++;
                     }
                 }
             }
             fprintf(gen->output, "}");
+            if (any_moved) {
+                /* #911: disown each moved-from variable so its function-exit
+                 * `if (_heap_<v>)` free is a no-op (ownership now in the
+                 * struct). Then yield the built struct. */
+                fprintf(gen->output, ";");
+                for (int m = 0; m < moved_count; m++)
+                    fprintf(gen->output, " _heap_%s = 0;", moved_vars[m]);
+                fprintf(gen->output, " _ae_slit; })");
+            }
             break;
         }
         

@@ -1,0 +1,26 @@
+// Regression #911: a string-field struct returned in a (struct, err) tuple,
+// with the field initialized from a string VARIABLE, double-freed (the struct
+// claimed ownership of a borrowed string). Borrowed-param and genuinely-heap
+// (interp) cases must both behave: no crash, no leak, exactly one free.
+struct Rec { name: string }
+
+// borrowed: e = s (a param) — struct must NOT free it
+from_borrowed(s: string) -> (Rec, string) {
+    e = s
+    return Rec { name: e }, ""
+}
+// owned: e = interp (fresh heap) — struct frees it once
+from_heap(x: string) -> (Rec, string) {
+    e = "hi ${x}"
+    return Rec { name: e }, ""
+}
+
+main() {
+    a, ea = from_borrowed("borrowed")
+    b, eb = from_heap("world")
+    if a.name == "borrowed" && b.name == "hi world" {
+        println("PASS: #911 struct-string-in-tuple ownership")
+    } else {
+        println("FAIL: ${a.name} / ${b.name}")
+    }
+}
