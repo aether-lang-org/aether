@@ -1476,6 +1476,22 @@ static int program_has_struct(ASTNode* program, const char* name) {
     return 0;
 }
 
+/* #908: a `type X = distinct Base` def already present in the program (the
+ * consumer's own, or an earlier merge). Used to dedup distinct-def merges. */
+static int program_has_distinct(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (!existing) continue;
+        ASTNode* unwrapped = unwrap_export(existing);
+        if (unwrapped && unwrapped->type == AST_DISTINCT_TYPE_DEF &&
+            unwrapped->value && strcmp(unwrapped->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Apply M's own `import X (a, b, c)` selective-import rewrites to a body
 // that's about to be cloned out of M into the consumer's program AST.
 //
@@ -1920,6 +1936,22 @@ void module_merge_into_program(ASTNode* program) {
                 ASTNode* clone = clone_ast_node(decl);
                 clone->is_imported = 1;
                 insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_DISTINCT_TYPE_DEF && decl->value) {
+                // #908: `type X = distinct Base` from an imported module must
+                // enter the consumer's program AST (bare name, like structs)
+                // so resolve_distinct_types learns `X` and rewrites every
+                // `expr as X` / `x as Base` reference inside the merged
+                // constructor/unwrap/builder-child functions. Without this the
+                // imported distinct stays an unresolved TYPE_STRUCT{X}
+                // placeholder: the `as` cast fails its kind check ("cannot
+                // cast X to Base") and codegen emits an unknown C type `X`.
+                // Bypasses the selective-import filter on purpose (same as
+                // structs): a merged body that casts to/from `X` cannot
+                // type-check without the def in scope.
+                if (program_has_distinct(program, decl->value)) continue;
+                ASTNode* clone = clone_ast_node(decl);
+                clone->is_imported = 1;
+                insert_child_at(program, clone, insert_idx++);
             }
             // Skip AST_MAIN_FUNCTION, AST_IMPORT_STATEMENT, etc.
         }
@@ -2168,6 +2200,12 @@ void module_merge_into_program(ASTNode* program) {
                     // the function in.
                     if (program_has_struct(program, decl->value)) continue;
 
+                    ASTNode* clone = clone_ast_node(decl);
+                    clone->is_imported = 1;
+                    insert_child_at(program, clone, insert_idx++);
+                } else if (decl->type == AST_DISTINCT_TYPE_DEF && decl->value) {
+                    // #908: transitive sibling of the distinct-def merge above.
+                    if (program_has_distinct(program, decl->value)) continue;
                     ASTNode* clone = clone_ast_node(decl);
                     clone->is_imported = 1;
                     insert_child_at(program, clone, insert_idx++);

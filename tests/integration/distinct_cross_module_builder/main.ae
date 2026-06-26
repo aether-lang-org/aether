@@ -1,0 +1,9 @@
+import distmod (doc, child, num, unwrap)
+main() {
+    // plain cross-module distinct wrap/unwrap
+    println("${unwrap(num(5))}")
+    // distinct unwrap inside an imported builder child (#908)
+    doc() {
+        child(num(7))
+    }
+}
