@@ -3315,6 +3315,17 @@ static void push_struct_destroy_defer(CodeGenerator* gen, const char* var_name,
     }
 }
 
+// #893: innermost enclosing loop whose source label matches `name`, or -1.
+// Searches the loop-nest stack from the inside out, so a reused label binds
+// to the nearest loop (the standard rule).
+static int find_labeled_loop_level(CodeGenerator* gen, const char* name) {
+    if (!name) return -1;
+    for (int d = gen->loop_nest_depth - 1; d >= 0; d--) {
+        if (gen->loop_label[d] && strcmp(gen->loop_label[d], name) == 0) return d;
+    }
+    return -1;
+}
+
 void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     if (!stmt) return;
 
@@ -4999,18 +5010,38 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (gen->emit_lib) {
                 print_line(gen, "if (aether_caps_deadline_tripped()) { __aether_abort_call(); break; }");
             }
-            /* Issue #501: snapshot try_frame_depth at loop entry. */
+            /* Issue #501: snapshot try_frame_depth at loop entry.
+             * #893: record the loop's label / containing scope / C-label id. */
+            int for_lbl_idx = -1;
             if (gen->loop_nest_depth < AETHER_MAX_LOOP_NEST) {
-                gen->loop_try_base[gen->loop_nest_depth++] = gen->try_frame_depth;
+                for_lbl_idx = gen->loop_nest_depth;
+                gen->loop_try_base[for_lbl_idx] = gen->try_frame_depth;
+                gen->loop_label[for_lbl_idx] = stmt->value;
+                gen->loop_label_scope[for_lbl_idx] = gen->scope_depth;
+                gen->loop_label_id[for_lbl_idx] = gen->next_loop_label_id++;
+                gen->loop_label_break_used[for_lbl_idx] = 0;
+                gen->loop_label_continue_used[for_lbl_idx] = 0;
+                gen->loop_nest_depth++;
             }
             if (stmt->child_count > 3 && stmt->children[3]) {
                 // Body is always a statement (could be a block or single statement)
                 generate_statement(gen, stmt->children[3]); // body
             }
             if (gen->loop_nest_depth > 0) gen->loop_nest_depth--;
+            /* #893: labeled-continue target — end of the body, so falling
+             * through runs the C `for`'s increment then re-tests the condition. */
+            if (for_lbl_idx >= 0 && gen->loop_label[for_lbl_idx] &&
+                gen->loop_label_continue_used[for_lbl_idx]) {
+                print_line(gen, "__ae_cont_%d: ;", gen->loop_label_id[for_lbl_idx]);
+            }
             unindent(gen);
 
             print_line(gen, "}");
+            /* #893: labeled-break target — after the loop. */
+            if (for_lbl_idx >= 0 && gen->loop_label[for_lbl_idx] &&
+                gen->loop_label_break_used[for_lbl_idx]) {
+                print_line(gen, "__ae_brk_%d: ;", gen->loop_label_id[for_lbl_idx]);
+            }
             break;
 
         case AST_WHILE_LOOP: {
@@ -5053,17 +5084,39 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             }
             /* Issue #501: snapshot try_frame_depth at loop entry so
              * `break` / `continue` inside the body drains only
-             * frames pushed *inside* the loop, not outer-scope tries. */
+             * frames pushed *inside* the loop, not outer-scope tries.
+             * #893: record the loop's label / containing scope / a fresh
+             * C-label id in the same slot. */
+            int while_lbl_idx = -1;
             if (gen->loop_nest_depth < AETHER_MAX_LOOP_NEST) {
-                gen->loop_try_base[gen->loop_nest_depth++] = gen->try_frame_depth;
+                while_lbl_idx = gen->loop_nest_depth;
+                gen->loop_try_base[while_lbl_idx] = gen->try_frame_depth;
+                gen->loop_label[while_lbl_idx] = stmt->value;
+                gen->loop_label_scope[while_lbl_idx] = gen->scope_depth;
+                gen->loop_label_id[while_lbl_idx] = gen->next_loop_label_id++;
+                gen->loop_label_break_used[while_lbl_idx] = 0;
+                gen->loop_label_continue_used[while_lbl_idx] = 0;
+                gen->loop_nest_depth++;
             }
             if (stmt->child_count > 1) {
                 generate_statement(gen, stmt->children[1]);
             }
             if (gen->loop_nest_depth > 0) gen->loop_nest_depth--;
+            /* #893: labeled-continue target — end of the loop body, after the
+             * body's scope-exit defers, so the loop re-tests the condition. */
+            if (while_lbl_idx >= 0 && gen->loop_label[while_lbl_idx] &&
+                gen->loop_label_continue_used[while_lbl_idx]) {
+                print_line(gen, "__ae_cont_%d: ;", gen->loop_label_id[while_lbl_idx]);
+            }
             unindent(gen);
 
             print_line(gen, "}");
+
+            /* #893: labeled-break target — after the loop. */
+            if (while_lbl_idx >= 0 && gen->loop_label[while_lbl_idx] &&
+                gen->loop_label_break_used[while_lbl_idx]) {
+                print_line(gen, "__ae_brk_%d: ;", gen->loop_label_id[while_lbl_idx]);
+            }
 
             if (has_sends && gen->current_actor == NULL) {
                 print_line(gen, "scheduler_send_batch_flush();");
@@ -5667,23 +5720,55 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             break;
         }
 
-        case AST_BREAK_STATEMENT:
-            // Emit defers for current scope before break
-            emit_defers_for_scope(gen);
-            /* Issue #501: drain try frames pushed inside the current
-             * loop body so `break` from inside a try { } in a loop
-             * doesn't leak the panic frame. */
-            emit_try_pops_for_break_continue(gen);
-            print_line(gen, "break;");
+        case AST_BREAK_STATEMENT: {
+            int lvl = stmt->value ? find_labeled_loop_level(gen, stmt->value) : -1;
+            if (stmt->value && lvl >= 0) {
+                /* #893: labeled break — unwind every scope nested inside the
+                 * target loop (run their defers), drain the try frames pushed
+                 * since that loop was entered, then jump past the loop. */
+                emit_defers_through_scope(gen, gen->loop_label_scope[lvl]);
+                int drop = gen->try_frame_depth - gen->loop_try_base[lvl];
+                for (int i = 0; i < drop; i++) {
+                    print_indent(gen);
+                    fprintf(gen->output, "aether_try_pop();\n");
+                }
+                gen->loop_label_break_used[lvl] = 1;
+                print_line(gen, "goto __ae_brk_%d;", gen->loop_label_id[lvl]);
+            } else {
+                // Emit defers for current scope before break
+                emit_defers_for_scope(gen);
+                /* Issue #501: drain try frames pushed inside the current
+                 * loop body so `break` from inside a try { } in a loop
+                 * doesn't leak the panic frame. */
+                emit_try_pops_for_break_continue(gen);
+                print_line(gen, "break;");
+            }
             break;
+        }
 
-        case AST_CONTINUE_STATEMENT:
-            // Emit defers for current scope before continue
-            emit_defers_for_scope(gen);
-            /* Issue #501: drain inside-loop try frames. */
-            emit_try_pops_for_break_continue(gen);
-            print_line(gen, "continue;");
+        case AST_CONTINUE_STATEMENT: {
+            int lvl = stmt->value ? find_labeled_loop_level(gen, stmt->value) : -1;
+            if (stmt->value && lvl >= 0) {
+                /* #893: labeled continue — unwind nested scopes and inner try
+                 * frames, then jump to the end of the target loop's body (where
+                 * the loop re-tests / increments). */
+                emit_defers_through_scope(gen, gen->loop_label_scope[lvl]);
+                int drop = gen->try_frame_depth - gen->loop_try_base[lvl];
+                for (int i = 0; i < drop; i++) {
+                    print_indent(gen);
+                    fprintf(gen->output, "aether_try_pop();\n");
+                }
+                gen->loop_label_continue_used[lvl] = 1;
+                print_line(gen, "goto __ae_cont_%d;", gen->loop_label_id[lvl]);
+            } else {
+                // Emit defers for current scope before continue
+                emit_defers_for_scope(gen);
+                /* Issue #501: drain inside-loop try frames. */
+                emit_try_pops_for_break_continue(gen);
+                print_line(gen, "continue;");
+            }
             break;
+        }
 
         case AST_DEFER_STATEMENT:
             // Push deferred statement to stack - will be executed at scope exit

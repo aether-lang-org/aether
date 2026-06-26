@@ -1922,7 +1922,32 @@ int get_operator_precedence(AeTokenType type) {
 ASTNode* parse_statement(Parser* parser) {
     Token* token = peek_token(parser);
     if (!token) return NULL;
-    
+
+    // #893: labeled loop — `label: while ...` / `label: for ...`. A leading
+    // identifier followed by `:` and a loop keyword is a loop label; the loop's
+    // AST node carries the label name in its `value`, and `break label` /
+    // `continue label` inside it target that loop. Disambiguated from a typed
+    // declaration (`x: int = ...`) by requiring `while`/`for` after the colon —
+    // a type name never appears there.
+    if (token->type == TOKEN_IDENTIFIER) {
+        Token* colon = peek_ahead(parser, 1);
+        Token* kw = peek_ahead(parser, 2);
+        if (colon && colon->type == TOKEN_COLON && kw &&
+            (kw->type == TOKEN_WHILE || kw->type == TOKEN_FOR)) {
+            const char* label = token->value;
+            advance_token(parser);   // label identifier
+            advance_token(parser);   // ':'
+            ASTNode* loop = (kw->type == TOKEN_WHILE)
+                          ? parse_while_loop(parser)
+                          : parse_for_loop(parser);
+            if (loop) {
+                if (loop->value) free(loop->value);
+                loop->value = label ? strdup(label) : NULL;
+            }
+            return loop;
+        }
+    }
+
     switch (token->type) {
         case TOKEN_AT: {
             // Statement-level binding annotation (#521): `@scoped let buf = ...`
@@ -2128,14 +2153,25 @@ ASTNode* parse_statement(Parser* parser) {
             return parse_reply_statement(parser);
             
         case TOKEN_BREAK:
+        case TOKEN_CONTINUE: {
+            // #893: optional loop label — `break label` / `continue label`.
+            // The label must be on the SAME line as the keyword so a bare
+            // `break` followed by an identifier-headed statement on the next
+            // line is not mis-read as a labeled break.
+            AeTokenType kind = token->type;
+            int kline = token->line, kcol = token->column;
             advance_token(parser);
+            const char* label = NULL;
+            Token* nxt = peek_token(parser);
+            if (nxt && nxt->type == TOKEN_IDENTIFIER && nxt->line == kline) {
+                label = nxt->value;
+                advance_token(parser);
+            }
             match_token(parser, TOKEN_SEMICOLON);
-            return create_ast_node(AST_BREAK_STATEMENT, NULL, token->line, token->column);
-            
-        case TOKEN_CONTINUE:
-            advance_token(parser);
-            match_token(parser, TOKEN_SEMICOLON);
-            return create_ast_node(AST_CONTINUE_STATEMENT, NULL, token->line, token->column);
+            return create_ast_node(
+                kind == TOKEN_BREAK ? AST_BREAK_STATEMENT : AST_CONTINUE_STATEMENT,
+                label, kline, kcol);
+        }
             
         case TOKEN_DEFER:
             return parse_defer_statement(parser);
