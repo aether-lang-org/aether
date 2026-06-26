@@ -317,6 +317,13 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->try_frame_depth = 0;
     gen->loop_nest_depth = 0;
     memset(gen->loop_try_base, 0, sizeof(gen->loop_try_base));
+    // #893: labeled break/continue tracking
+    memset(gen->loop_label, 0, sizeof(gen->loop_label));
+    memset(gen->loop_label_scope, 0, sizeof(gen->loop_label_scope));
+    memset(gen->loop_label_id, 0, sizeof(gen->loop_label_id));
+    memset(gen->loop_label_break_used, 0, sizeof(gen->loop_label_break_used));
+    memset(gen->loop_label_continue_used, 0, sizeof(gen->loop_label_continue_used));
+    gen->next_loop_label_id = 0;
     // Issue #501 follow-up: try-clobbered locals tracking
     gen->try_clobbered_vars = NULL;
     gen->try_clobbered_var_count = 0;
@@ -988,6 +995,32 @@ void emit_defers_for_scope(CodeGenerator* gen) {
     int scope_start = gen->scope_defer_start[gen->scope_depth - 1];
 
     // Emit defers in LIFO order (reverse)
+    for (int i = gen->defer_count - 1; i >= scope_start; i--) {
+        ASTNode* deferred = gen->defer_stack[i];
+        if (deferred) {
+            if (try_emit_heap_string_exit_free(gen, deferred)) continue;
+            if (try_emit_seq_exit_free(gen, deferred)) continue;
+            if (try_emit_struct_destroy(gen, deferred)) continue;
+            print_indent(gen);
+            fprintf(gen->output, "/* deferred */ ");
+            generate_statement(gen, deferred);
+        }
+    }
+}
+
+// #893: emit defers for every scope from the innermost down to (but NOT
+// including) `floor_depth`. Labeled break/continue unwind multiple scopes at
+// once — a `break L` exits every scope nested inside the scope that CONTAINS
+// loop L — so the defers of all of them must run before the goto. `floor_depth`
+// is the scope_depth that contains the labeled loop, recorded when the loop was
+// entered. Emits only; it does not mutate scope/defer state, so the normal
+// fall-through path still runs exit_scope for each scope as usual.
+void emit_defers_through_scope(CodeGenerator* gen, int floor_depth) {
+    if (gen->scope_depth <= 0) return;
+    if (floor_depth < 0) floor_depth = 0;
+    if (floor_depth >= gen->scope_depth) { emit_defers_for_scope(gen); return; }
+
+    int scope_start = gen->scope_defer_start[floor_depth];
     for (int i = gen->defer_count - 1; i >= scope_start; i--) {
         ASTNode* deferred = gen->defer_stack[i];
         if (deferred) {

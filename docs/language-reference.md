@@ -647,6 +647,28 @@ for (i = 0; i < 10; i = i + 1) {
 }
 ```
 
+#### Labeled break / continue
+
+A `while` or `for` loop may carry a label (`label: while ...`), and `break label` / `continue label` then target that loop from inside a nested loop — `break label` exits the labeled loop, `continue label` jumps to its next iteration. This replaces the boolean-flag dance a C port would otherwise need for a nested-loop early exit (the C `goto cleanup` / labeled-break idiom):
+
+```aether
+outer: while have_more() {
+    while scan_row() {
+        if found_match() {
+            break outer        // exit BOTH loops
+        }
+        if skip_row() {
+            continue outer     // stop this row, advance the outer loop
+        }
+    }
+}
+```
+
+- The label sits before the loop keyword (`outer: while`, `scan: for`). It must be on the same line as the `break` / `continue` that references it.
+- A `break label` / `continue label` whose label names no enclosing loop is a compile-time error.
+- Defers in the loop scopes a labeled break/continue unwinds still run (in LIFO order) before the jump — the same cleanup guarantee as an ordinary scope exit.
+- Unlabeled `break` / `continue` are unchanged and act on the innermost loop.
+
 ---
 
 ## Match Statements

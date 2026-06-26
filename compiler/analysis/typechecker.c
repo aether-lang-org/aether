@@ -3528,9 +3528,36 @@ int typecheck_struct_definition(ASTNode* struct_def, SymbolTable* table) {
     return 1;
 }
 
+/* #893: enclosing loop labels, for validating `break label` / `continue
+ * label`. Pushed (one slot per loop, NULL for an unlabeled loop) while a
+ * loop body is type-checked. Type-checking is single-threaded, so a file-
+ * static stack is sufficient. */
+#define TC_MAX_LOOP_LABELS 256
+static const char* tc_loop_labels[TC_MAX_LOOP_LABELS];
+static int tc_loop_label_depth = 0;
+
+static void tc_push_loop_label(const char* label) {
+    if (tc_loop_label_depth < TC_MAX_LOOP_LABELS) {
+        tc_loop_labels[tc_loop_label_depth] = label;
+    }
+    tc_loop_label_depth++;   /* always increment so pop stays balanced */
+}
+static void tc_pop_loop_label(void) {
+    if (tc_loop_label_depth > 0) tc_loop_label_depth--;
+}
+static int tc_loop_label_in_scope(const char* label) {
+    if (!label) return 0;
+    int n = tc_loop_label_depth < TC_MAX_LOOP_LABELS
+          ? tc_loop_label_depth : TC_MAX_LOOP_LABELS;
+    for (int i = 0; i < n; i++) {
+        if (tc_loop_labels[i] && strcmp(tc_loop_labels[i], label) == 0) return 1;
+    }
+    return 0;
+}
+
 int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
     if (!stmt) return 0;
-    
+
     switch (stmt->type) {
         case AST_TUPLE_DESTRUCTURE: {
             // a, b = func() — last child is RHS, others are variable declarations
@@ -4017,11 +4044,14 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 typecheck_expression(stmt->children[2], loop_table);
             }
             
-            // Type check body (child 3)
+            // Type check body (child 3) — #893: with this loop's label in
+            // scope for break/continue validation.
             if (stmt->child_count > 3 && stmt->children[3]) {
+                tc_push_loop_label(stmt->value);
                 typecheck_statement(stmt->children[3], loop_table);
+                tc_pop_loop_label();
             }
-            
+
             free_symbol_table(loop_table);
             return 1;
         }
@@ -4040,13 +4070,31 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 free_type(cond_type);
             }
 
-            // Type check loop body
+            // Type check loop body (#893: with this loop's label in scope so
+            // a `break`/`continue <label>` inside it validates).
+            tc_push_loop_label(stmt->value);
             for (int i = 1; i < stmt->child_count; i++) {
                 typecheck_statement(stmt->children[i], table);
             }
+            tc_pop_loop_label();
             return 1;
         }
-        
+
+        case AST_BREAK_STATEMENT:
+        case AST_CONTINUE_STATEMENT:
+            /* #893: a labeled break/continue must name an enclosing loop. */
+            if (stmt->value && !tc_loop_label_in_scope(stmt->value)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "no enclosing loop labeled '%s' for `%s %s`",
+                    stmt->value,
+                    stmt->type == AST_BREAK_STATEMENT ? "break" : "continue",
+                    stmt->value);
+                type_error(msg, stmt->line, stmt->column);
+                return 0;
+            }
+            return 1;
+
         case AST_BLOCK: {
             SymbolTable* block_table = create_symbol_table(table);
 

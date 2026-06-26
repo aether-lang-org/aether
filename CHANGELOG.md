@@ -13,6 +13,15 @@ next version number before tagging the release.
 
 ### Added
 
+- **Labeled `break` / `continue`** (#893). A `while` / `for` loop can carry a
+  label — `outer: while ...` — and `break outer` / `continue outer` then target
+  that loop from inside a nested loop (`break` exits it, `continue` jumps to its
+  next iteration). This replaces the boolean-flag emulation a faithful C port
+  otherwise needs for a nested-loop early exit (the `goto cleanup` idiom). The
+  label must be on the same line as the `break`/`continue`; a label naming no
+  enclosing loop is a compile-time error; defers in the unwound scopes still run
+  (LIFO) before the jump. Unlabeled `break`/`continue` are unchanged.
+
 - **`@c_struct` typed overlays — width-correct C-struct field access over a
   raw `ptr`** (#891). Declare a C struct's layout once with explicit offsets
   (`@c_struct stream { length: uint64 @8, slen: uint32 @16, last_id: streamID

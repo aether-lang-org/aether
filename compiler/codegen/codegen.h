@@ -110,6 +110,20 @@ typedef struct {
     int loop_try_base[AETHER_MAX_LOOP_NEST];
     int loop_nest_depth;
 
+    // Labeled break/continue (#893). Parallel to loop_try_base, indexed by
+    // loop_nest_depth. For each enclosing loop: its source label (or NULL),
+    // the scope_depth of the scope CONTAINING the loop (so a labeled
+    // break/continue can emit defers for exactly the scopes it unwinds), a
+    // unique id used to mint the C goto labels, and whether the break/continue
+    // target labels were actually referenced (so only a C label that is used
+    // gets emitted, avoiding -Wunused-label).
+    const char* loop_label[AETHER_MAX_LOOP_NEST];
+    int loop_label_scope[AETHER_MAX_LOOP_NEST];
+    int loop_label_id[AETHER_MAX_LOOP_NEST];
+    int loop_label_break_used[AETHER_MAX_LOOP_NEST];
+    int loop_label_continue_used[AETHER_MAX_LOOP_NEST];
+    int next_loop_label_id;
+
     // try-clobbered locals: variable names modified inside any try
     // body of the current function.  Such locals — when declared
     // in an enclosing scope of the try — must be lowered as

@@ -1,0 +1,65 @@
+// Regression: issue #893 — labeled `break` / `continue`. A `label: while` /
+// `label: for` loop can be targeted by `break label` / `continue label` from
+// an inner loop, so a faithful C port of a nested loop with an outer-loop
+// early-exit (`goto cleanup`, nested-break) no longer needs a hand-rolled
+// boolean flag dance. Unlabeled `break`/`continue` keep their meaning.
+//
+// Also checks that defers in the scopes a labeled break unwinds still run
+// (LIFO), so the jump does not skip cleanup.
+
+extern exit(code: int)
+
+main() {
+    // Labeled break: exit the OUTER loop from inside the inner loop.
+    i = 0
+    hit_i = -1
+    outer: while i < 5 {
+        k = 0
+        while k < 5 {
+            if i == 2 && k == 3 {
+                hit_i = i * 10 + k
+                break outer
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    if hit_i != 23 { println("FAIL #893: break outer"); exit(1) }
+
+    // Labeled continue: skip the rest of the OUTER iteration.
+    visited = 0
+    a = 0
+    top: while a < 3 {
+        a = a + 1
+        b = 0
+        while b < 3 {
+            b = b + 1
+            if b == 2 { continue top }
+            visited = visited + 1
+        }
+        visited = visited + 100        // skipped by `continue top`
+    }
+    if visited != 3 { println("FAIL #893: continue top"); exit(1) }
+
+    // Labeled break out of a range-for from an inner range-for.
+    found = -1
+    for x in 0..5 {
+        scan: for y in 0..5 {
+            if x == 1 && y == 2 { found = x * 10 + y  break scan }
+        }
+    }
+    if found != 12 { println("FAIL #893: break scan (for)"); exit(1) }
+
+    // Unlabeled break/continue still work.
+    s = 0
+    n = 0
+    while n < 10 {
+        n = n + 1
+        if n == 3 { continue }
+        if n == 7 { break }
+        s = s + n
+    }
+    if s != 18 { println("FAIL #893: unlabeled break/continue"); exit(1) }
+
+    println("PASS: #893 labeled break/continue")
+}
