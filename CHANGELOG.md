@@ -13,6 +13,22 @@ next version number before tagging the release.
 
 ### Added
 
+- **Address-of operator `&lvalue`** (#890). Prefix `&` takes the address of an
+  lvalue and lowers to C's `&` — `&(p as *T).field` → `&((T*)p)->field`,
+  `&local.field` → `&local.field`, plus `&local` / `&arr[i]`. The result is a
+  pointer (assignable to a `ptr` parameter), so a C extern with a
+  `&struct->field` out-param (in-place mutation, sub-field write, resize
+  destination) is callable without raw `mem.long_to_ptr(base + OFFSET)` offset
+  math.
+
+- **Array-to-pointer decay in pointer context** (#892). A named fixed-size
+  array decays to a pointer to its first element when used as an inferred
+  binding initializer, a `ptr`-typed argument, or in a pointer comparison
+  (C semantics). `ids = static_ids` (with `byte[128] static_ids`) infers `ids`
+  as a `ptr`, so a later `ids = heap` / `ids = null` stays legal — the
+  stack-buffer-with-heap-fallback idiom. An array *literal* (`x = [1,2,3]`)
+  still binds a real array; annotate explicitly to keep the array type.
+
 - **Distinct types: `type Name = distinct Base`** (#480). A zero-cost nominal
   wrapper over a scalar / `string` / `ptr` base — `type USD = distinct float`,
   `type Fd = distinct int`. Lowers to the base C type (no boxing), but the type

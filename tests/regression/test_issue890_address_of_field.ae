@@ -1,0 +1,39 @@
+// Regression: issue #890 — the address-of operator `&lvalue` takes the
+// address of a struct field (or any lvalue), lowering to C's `&`. This lets a
+// C extern with a `&struct->field` out-param be called without raw
+// `mem.long_to_ptr(base + OFFSET)` offset math.
+//   &local.field          ->  &local.field
+//   &(p as *T).field       ->  &((T*)p)->field
+
+import std.mem
+extern exit(code: int)
+
+struct Pair { a: long  b: long }
+extern struct JSObject { proto: long  tab: long }   // tab at byte offset 8
+
+// A C-style helper that writes a long THROUGH a pointer to a field.
+fill_long(dst: ptr, v: long) { mem.set_long(dst, 0, v) }
+
+// Mutate a field in place via &(p as *T).field on an extern-struct overlay.
+poke_tab(p: ptr) { fill_long(&(p as *JSObject).tab, 42) }
+
+main() {
+    // &local.field on an Aether-owned value struct.
+    pr = Pair { a: 1, b: 2 }
+    fill_long(&pr.b, 99)
+    if pr.b != 99 {
+        println("FAIL #890: &local.field did not write through")
+        exit(1)
+    }
+
+    // &(p as *T).field on a typed overlay over a raw buffer.
+    byte[16] buf
+    mem.set_long(buf, 0, 7)
+    poke_tab(buf)                 // buf decays to ptr at the call site
+    if mem.get_long(buf, 8) != 42 {
+        println("FAIL #890: &(p as *T).field did not write through")
+        exit(1)
+    }
+
+    println("PASS: #890 address-of struct field")
+}

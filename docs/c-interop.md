@@ -618,6 +618,29 @@ main() {
 
 The `as` keyword is the same token already used for module-import aliasing (`import std.cryptography as crypto`). The two parses don't collide because import-aliasing is recognised only inside `import` statements; expression-level `as *T` is recognised only as a postfix operator on expressions. Both forms continue to work in the same source file.
 
+### Address of a field — `&lvalue`
+
+The prefix `&` operator takes the address of an lvalue and lowers directly to C's `&`. This is what a C extern with a `&struct->field` out-parameter needs (in-place mutation, a sub-field written by the callee, a `memcpy`/resize destination):
+
+```aether
+extern struct JSObject {
+    proto: long
+    u: union { array: struct { tab: long  len: uint32_t } }
+}
+extern js_shrink_value_array(ctx: ptr, slot: ptr, new_len: int)
+
+shrink(ctx: ptr, p: ptr, new_len: int) {
+    js_shrink_value_array(ctx, &(p as *JSObject).u.array.tab, new_len)
+}
+```
+
+- `&(p as *T).field` lowers to `&((T*)p)->field` — the address of a field on an `extern struct` / `*StructName` overlay.
+- `&local.field` lowers to `&local.field` — the address of a field on an Aether-owned value struct.
+- `&local` and `&arr[i]` work the same way (address of a local, address of an array element).
+- The result is typed as a pointer to the field's type (`*T`), assignable to a bare `ptr` parameter. Like the overlay casts, it is a raw view: the pointer is valid only while the underlying storage is.
+
+Without `&`, a `&struct->field` out-param forces raw `mem.long_to_ptr(base + OFFSET)` offset math, re-introducing the hand-maintained offset constant the typed overlay was meant to eliminate.
+
 ### Typed array view — `expr as T[]`
 
 The third axis of the `as` family (after `*StructName` and `fn(...) -> R`). Views a raw `ptr` as a typed C element-pointer so subscript access scales by `sizeof(T)` automatically. Use this whenever the underlying storage is a `malloc`'d typed buffer and you'd otherwise be writing `mem.set_int(buf, 4*i, v)` boilerplate.

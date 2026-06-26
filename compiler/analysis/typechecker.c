@@ -994,7 +994,14 @@ int is_type_compatible(Type* from, Type* to) {
     if (from->kind == TYPE_ARRAY && to->kind == TYPE_ARRAY) {
         return is_type_compatible(from->element_type, to->element_type);
     }
-    
+
+    // #892: array-to-pointer decay (C semantics). A fixed-size array is
+    // assignable to a pointer — `ptr p = byte_buf`, a `ptr`-typed argument,
+    // or comparison against a pointer. This already worked at call sites; the
+    // rule makes it uniform so a stack-buffer-with-heap-fallback binding
+    // (`ids = static_ids; ... ids = heap`) type-checks.
+    if (from->kind == TYPE_ARRAY && to->kind == TYPE_PTR) return 1;
+
     // Actor reference compatibility
     // Bare actor_ref (no type parameter) is compatible with any actor_ref
     if (from->kind == TYPE_ACTOR_REF && to->kind == TYPE_ACTOR_REF) {
@@ -1625,7 +1632,18 @@ Type* infer_unary_type(ASTNode* operand, AeTokenType operator) {
         case TOKEN_INCREMENT:
         case TOKEN_DECREMENT:
             return clone_type(operand_type); // Same type as operand
-            
+
+        case TOKEN_AMPERSAND: {
+            /* #890: address-of `&lvalue` yields a pointer to the operand's
+             * type — `&x` where `x: T` is `*T` (TYPE_PTR with element_type T).
+             * Carries the pointee type for `as *T` round-trips and deref, and
+             * is assignable to a bare `ptr` parameter (the C `&field`
+             * out-param case the issue targets). */
+            Type* p = create_type(TYPE_PTR);
+            p->element_type = clone_type(operand_type);
+            return p;
+        }
+
         default:
             return create_type(TYPE_UNKNOWN);
     }
@@ -3506,7 +3524,21 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 // If variable has no explicit type (TYPE_UNKNOWN), use initializer's type
                 if (!stmt->node_type || stmt->node_type->kind == TYPE_UNKNOWN) {
                     if (stmt->node_type) free_type(stmt->node_type);
-                    stmt->node_type = clone_type(init_type);
+                    /* #892: a NAMED array used as an initializer decays to a
+                     * pointer, matching C's array-to-pointer decay. So
+                     * `ids = static_ids` (static_ids: byte[N]) infers `ids`
+                     * as a plain `ptr`, not an array type — keeping a later
+                     * `ids = heap` / `ids = null` legal (the stack-buffer-
+                     * with-heap-fallback C idiom). An array LITERAL
+                     * initializer (`x = [1,2,3]`) is NOT an identifier, so it
+                     * still binds a real array; only a named-array lvalue
+                     * decays. */
+                    if (init_type && init_type->kind == TYPE_ARRAY &&
+                        init && init->type == AST_IDENTIFIER) {
+                        stmt->node_type = create_type(TYPE_PTR);
+                    } else {
+                        stmt->node_type = clone_type(init_type);
+                    }
                 } else if (!array_const_int_narrow && !is_assignable(init_type, stmt->node_type)) {
                     // Has explicit type but initializer doesn't match
                     free_type(init_type);

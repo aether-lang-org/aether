@@ -1,0 +1,37 @@
+// Regression: issue #892 — a named fixed-size array (`byte[N]`) decays to a
+// pointer when used as an initializer, matching C's array-to-pointer decay. So
+// `ids = static_ids` infers `ids` as a plain `ptr` (not an array type), and a
+// later `ids = heap` / `ids = null` is legal — the stack-buffer-with-heap-
+// fallback C idiom (`T buf[N]; T* p = buf; if (n > N) p = malloc(...)`).
+
+import std.mem
+extern exit(code: int)
+extern malloc(n: uint64) -> ptr
+extern free(p: ptr)
+
+main() {
+    byte[128] static_ids
+    mem.set_int(static_ids, 0, 11)
+
+    ids = static_ids                 // decays to ptr (was: "array type not assignable")
+    if mem.get_int(ids, 0) != 11 {
+        println("FAIL #892: decayed pointer does not alias the array")
+        exit(1)
+    }
+
+    // Reassign the same binding to a heap pointer — only legal if `ids` is ptr.
+    heap = null
+    id_count = 9
+    if id_count > 8 {
+        heap = malloc(256)
+        ids = heap
+    }
+    mem.set_int(ids, 4, 42)
+    if mem.get_int(ids, 4) != 42 {
+        println("FAIL #892: write through reassigned heap pointer failed")
+        exit(1)
+    }
+    if heap != null { free(heap) }
+
+    println("PASS: #892 array decays to pointer in pointer context")
+}

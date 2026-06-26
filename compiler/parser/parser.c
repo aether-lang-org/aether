@@ -1818,7 +1818,23 @@ ASTNode* parse_unary_expression(Parser* parser) {
         if (!operand) return NULL;
         return create_unary_expression(operand, operator);
     }
-    
+
+    // #890: prefix `&` is the address-of operator on an lvalue —
+    // `&local.field`, `&(p as *T).field`, `&local`, `&arr[i]`. It lowers to
+    // C's `&` and is typed as a pointer, so a C extern with a `&struct->field`
+    // out-param can be called without raw `mem.long_to_ptr(base + OFFSET)`
+    // offset math. A leading `&` here is unambiguous: a *binary* `&` (bitwise
+    // AND) is consumed by the binary-expression parser, never reaching the
+    // operand position. The operand is parsed at postfix precedence so member
+    // access / cast / index bind tighter than `&` (matching C: `&p.b` is
+    // `&(p.b)`).
+    if (operator->type == TOKEN_AMPERSAND) {
+        advance_token(parser);
+        ASTNode* operand = parse_unary_expression(parser);
+        if (!operand) return NULL;
+        return create_unary_expression(operand, operator);
+    }
+
     return parse_postfix_expression(parser);
 }
 
