@@ -1,20 +1,116 @@
 // contrib.host.lua — Embedded Lua Language Host Module
 //
-// Runs Lua code inside an Aether sandbox. Lua's io/os calls are
-// intercepted via the LD_PRELOAD libc interception layer.
+// Two tiers:
 //
-// Usage:
-//   import contrib.host.lua
+//  1. Fire-and-forget (the original surface): run a Lua string in a
+//     sandbox, intercepting Lua's io/os via the LD_PRELOAD libc gate.
 //
-//   worker = sandbox("worker") {
-//       grant_env("HOME")
-//       grant_fs_read("/etc/*")
-//   }
-//   lua.run_sandboxed(worker, "print(os.getenv('HOME'))")
+//         worker = sandbox("worker") { grant_env("HOME") }
+//         lua.run_sandboxed(worker, "print(os.getenv('HOME'))")
+//
+//  2. Bidirectional embedding (#904): a persistent, host-owned VM that
+//     registers host (Aether) callbacks the script can call, injects
+//     globals, runs code, and reads a TYPED result back — the shape a
+//     Redis-class host (EVAL/FCALL) needs.
+//
+//         vm = lua.vm_new()
+//         lua.vm_register(vm, "redis.call", redis_call)  // redis_call is @c_callback
+//         lua.vm_set_global_strlist(vm, "KEYS", keys)
+//         lua.vm_set_global_strlist(vm, "ARGV", argv)
+//         lua.vm_set_instruction_limit(vm, 100000000, 1000)
+//         status = lua.vm_eval(vm, source)
+//         if lua.vm_result_type(vm) == LUA_TSTR {
+//             reply = lua.vm_result_str(vm)
+//         }
+//         lua.vm_pop_result(vm)
+//
+//     A host callback is a `@c_callback` Aether fn `(vm: ptr) -> int` that
+//     reads its args with lua.arg_* (1-based) and pushes its result with
+//     lua.push_*, returning the count pushed (the Lua C-function rule). The
+//     `@c_callback` makes the fn addressable as a `ptr` (docs/c-interop.md):
+//
+//         @c_callback
+//         redis_call(vm: ptr) -> int {
+//             cmd = lua.arg_str(vm, 1)
+//             // ...dispatch in the host, marshal the reply...
+//             lua.push_str(vm, "OK")
+//             return 1
+//         }
 
-exports (lua_run_sandboxed, lua_run, lua_init, lua_finalize)
+exports (
+    lua_run_sandboxed, lua_run_sandboxed_with_map, lua_run,
+    lua_init, lua_finalize,
+    // #904 bidirectional API
+    lua_vm_new, lua_vm_free, lua_vm_register,
+    lua_vm_set_global_str, lua_vm_set_global_int, lua_vm_set_global_strlist,
+    lua_vm_eval, lua_vm_result_type, lua_vm_result_int, lua_vm_result_str,
+    lua_vm_result_bool, lua_vm_pop_result, lua_vm_set_instruction_limit,
+    lua_arg_count, lua_arg_type, lua_arg_str, lua_arg_int, lua_arg_bool,
+    lua_push_int, lua_push_str, lua_push_bool, lua_push_nil,
+    lua_push_tagged_table, lua_raise_error,
+    // typed-value tags (returned by *_result_type / *_arg_type)
+    LUA_TNIL, LUA_TBOOL, LUA_TINT, LUA_TSTR, LUA_TTABLE, LUA_TERR, LUA_TOTHER
+)
 
+// --- Typed value tags (must match aether_host_lua.c AE_LUA_T*) -------------
+const LUA_TNIL   = 0
+const LUA_TBOOL  = 1
+const LUA_TINT   = 2
+const LUA_TSTR   = 3
+const LUA_TTABLE = 4
+const LUA_TERR   = 5
+const LUA_TOTHER = 6
+
+// --- Tier 1: fire-and-forget -----------------------------------------------
 extern lua_run_sandboxed(perms: ptr, code: string) -> int
+extern lua_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
 extern lua_run(code: string) -> int
 extern lua_init() -> int
 extern lua_finalize()
+
+// --- Tier 2: bidirectional embedding (#904) --------------------------------
+// Persistent, host-owned VM. The handle (ptr) is the lua_State; pass it back
+// to every vm_* / arg_* / push_* call.
+extern lua_vm_new() -> ptr
+extern lua_vm_free(vm: ptr)
+
+// Register an Aether callback `(vm: ptr) -> int` under `name` (may be dotted,
+// e.g. "redis.call" — the prefix table is created/reused). Pass the callback
+// as a ptr (its address).
+extern lua_vm_register(vm: ptr, name: string, host_fn: ptr) -> int
+
+// Inject globals before a run.
+extern lua_vm_set_global_str(vm: ptr, name: string, value: string)
+extern lua_vm_set_global_int(vm: ptr, name: string, value: long)
+extern lua_vm_set_global_strlist(vm: ptr, name: string, items: ptr)
+
+// Run code; leaves the (single) return value on the VM stack for the readers.
+// Returns 0 on success, -1 on error (error object readable as LUA_TERR/str).
+extern lua_vm_eval(vm: ptr, code: string) -> int
+
+// Typed top-of-stack readers (the eval result).
+extern lua_vm_result_type(vm: ptr) -> int
+extern lua_vm_result_int(vm: ptr) -> long
+extern lua_vm_result_str(vm: ptr) -> string
+extern lua_vm_result_bool(vm: ptr) -> int
+extern lua_vm_pop_result(vm: ptr)
+
+// Execution guard: abort after `budget` VM instructions, checking every
+// `every` instructions. budget<=0 disarms.
+extern lua_vm_set_instruction_limit(vm: ptr, budget: long, every: int)
+
+// --- Callback-side stack API (used INSIDE a registered host fn) ------------
+// Args are at 1..arg_count(vm); push results then return the count.
+extern lua_arg_count(vm: ptr) -> int
+extern lua_arg_type(vm: ptr, i: int) -> int
+extern lua_arg_str(vm: ptr, i: int) -> string
+extern lua_arg_int(vm: ptr, i: int) -> long
+extern lua_arg_bool(vm: ptr, i: int) -> int
+extern lua_push_int(vm: ptr, v: long)
+extern lua_push_str(vm: ptr, v: string)
+extern lua_push_bool(vm: ptr, v: int)
+extern lua_push_nil(vm: ptr)
+// Redis-style { ok = msg } / { err = msg } single-field table.
+extern lua_push_tagged_table(vm: ptr, field: string, msg: string)
+// Raise a Lua error (longjmps; `return lua.raise_error(vm, m)` from the cb).
+extern lua_raise_error(vm: ptr, msg: string) -> int

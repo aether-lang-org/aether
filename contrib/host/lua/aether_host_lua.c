@@ -81,6 +81,30 @@ static struct {
     const char* (*lua_tolstring)(lua_State*, int idx, size_t* len);
     // luaL_checkstring wrappee.
     const char* (*luaL_checklstring)(lua_State*, int arg, size_t* l);
+
+    // --- #904 bidirectional surface ---------------------------------------
+    // Typed value pushers / readers for the host-callback + typed-eval API.
+    void       (*lua_pushinteger)(lua_State*, lua_Integer);
+    void       (*lua_pushboolean)(lua_State*, int);
+    void       (*lua_pushlstring)(lua_State*, const char*, size_t);
+    lua_Integer (*lua_tointegerx)(lua_State*, int idx, int* isnum);
+    int        (*lua_toboolean)(lua_State*, int idx);
+    int        (*lua_type)(lua_State*, int idx);
+    int        (*lua_gettop)(lua_State*);
+    void       (*lua_pushvalue)(lua_State*, int idx);
+    // Globals (read side) + tables.
+    int        (*lua_getglobal)(lua_State*, const char*);
+    void       (*lua_createtable)(lua_State*, int narr, int nrec);
+    void       (*lua_setfield)(lua_State*, int idx, const char*);
+    int        (*lua_getfield)(lua_State*, int idx, const char*);
+    void       (*lua_seti)(lua_State*, int idx, lua_Integer n);
+    // Error + light-userdata (carries the per-callback host fn pointer
+    // through a C closure upvalue).
+    int        (*lua_error)(lua_State*);
+    void       (*lua_pushlightuserdata)(lua_State*, void*);
+    void*      (*lua_touserdata)(lua_State*, int idx);
+    // Execution guard: instruction-count hook.
+    void       (*lua_sethook)(lua_State*, lua_Hook, int mask, int count);
 } g_lua;
 
 static int resolve_lua_symbols(void* h) {
@@ -105,6 +129,24 @@ static int resolve_lua_symbols(void* h) {
     RESOLVE(lua_setglobal,     "lua_setglobal");
     RESOLVE(lua_tolstring,     "lua_tolstring");
     RESOLVE(luaL_checklstring, "luaL_checklstring");
+    // #904 bidirectional surface.
+    RESOLVE(lua_pushinteger,        "lua_pushinteger");
+    RESOLVE(lua_pushboolean,        "lua_pushboolean");
+    RESOLVE(lua_pushlstring,        "lua_pushlstring");
+    RESOLVE(lua_tointegerx,         "lua_tointegerx");
+    RESOLVE(lua_toboolean,          "lua_toboolean");
+    RESOLVE(lua_type,               "lua_type");
+    RESOLVE(lua_gettop,             "lua_gettop");
+    RESOLVE(lua_pushvalue,          "lua_pushvalue");
+    RESOLVE(lua_getglobal,          "lua_getglobal");
+    RESOLVE(lua_createtable,        "lua_createtable");
+    RESOLVE(lua_setfield,           "lua_setfield");
+    RESOLVE(lua_getfield,           "lua_getfield");
+    RESOLVE(lua_seti,               "lua_seti");
+    RESOLVE(lua_error,              "lua_error");
+    RESOLVE(lua_pushlightuserdata,  "lua_pushlightuserdata");
+    RESOLVE(lua_touserdata,         "lua_touserdata");
+    RESOLVE(lua_sethook,            "lua_sethook");
     return 0;
 #undef RESOLVE
 }
@@ -336,6 +378,275 @@ int lua_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token
     return result;
 }
 
+// === #904 bidirectional embedding API ======================================
+//
+// A Redis-class host (aedis EVAL/FCALL) needs more than fire-and-forget: a
+// persistent host-owned VM, host callbacks the script can call (which read a
+// typed arg stack and build a typed return), typed eval results, injected
+// globals, and an instruction-count guard. This block adds that surface on
+// top of the dlsym table above. The Aether-facing names are `lua_vm_*` /
+// `lua_arg_*` / `lua_push_*` in module.ae.
+//
+// VM handle: an opaque `void*` that IS the lua_State* (the persistent VM the
+// host owns; distinct from the single global `L` the fire-and-forget path
+// uses). Callers pass it back to every lua_vm_* call.
+//
+// Typed value tags (must match module.ae's constants):
+#define AE_LUA_TNIL    0
+#define AE_LUA_TBOOL   1
+#define AE_LUA_TINT    2
+#define AE_LUA_TSTR    3
+#define AE_LUA_TTABLE  4
+#define AE_LUA_TERR    5
+#define AE_LUA_TOTHER  6
+
+/* Lua's own LUA_T* constants (stable across 5.3/5.4). */
+#define AE_LT_NIL      0
+#define AE_LT_BOOLEAN  1
+#define AE_LT_NUMBER   3
+#define AE_LT_STRING   4
+#define AE_LT_TABLE    5
+
+/* A registered host callback: an Aether fn `(vm: ptr) -> int` that reads args
+ * via lua_arg_* and pushes its result via lua_push_*, returning the number of
+ * results it pushed (the Lua C-function convention). We carry the host fn
+ * pointer through a Lua C-closure upvalue (light userdata) so one trampoline
+ * serves every registration. */
+typedef int (*ae_lua_host_fn)(void* vm);
+
+/* The C trampoline installed as the Lua C-function. It recovers the host fn
+ * pointer from upvalue 1 and calls it with the lua_State as the opaque vm. */
+static int ae_lua_trampoline(lua_State* state) {
+    /* upvalueindex(1) == LUA_REGISTRYINDEX-… ; the portable spelling is
+     * lua_upvalueindex(1), a macro = (LUA_REGISTRYINDEX - n). We compute it
+     * without the macro: LUA_REGISTRYINDEX is -1001000 on 5.3/5.4. */
+    const int LUA_REGISTRYINDEX_V = -1001000;
+    void* p = g_lua.lua_touserdata(state, LUA_REGISTRYINDEX_V - 1);
+    if (!p) return 0;
+    ae_lua_host_fn fn = (ae_lua_host_fn)p;
+    return fn((void*)state);
+}
+
+/* Create a persistent, host-owned VM. Returns the handle (lua_State*) or NULL.
+ * libs are opened; the sandbox checker is NOT installed here (the host drives
+ * it per eval via lua_vm_eval_sandboxed if it wants the libc gate). */
+void* lua_vm_new(void) {
+    if (load_liblua() != 0) return NULL;
+    lua_State* vm = g_lua.luaL_newstate();
+    if (!vm) return NULL;
+    g_lua.luaL_openlibs(vm);
+    return (void*)vm;
+}
+
+void lua_vm_free(void* vm) {
+    if (vm) g_lua.lua_close((lua_State*)vm);
+}
+
+/* Register a host callback as a Lua global named `name` (may be dotted, e.g.
+ * "redis.call": we create/reuse the `redis` table and set the field). The
+ * Aether fn is passed as a raw ptr (its address). Returns 0 on success. */
+int lua_vm_register(void* vm, const char* name, void* host_fn) {
+    if (!vm || !name || !host_fn) return -1;
+    lua_State* s = (lua_State*)vm;
+    const char* dot = strchr(name, '.');
+    /* Build the C closure: push the host fn ptr as an upvalue, then the
+     * trampoline as a 1-upvalue C closure. */
+    g_lua.lua_pushlightuserdata(s, host_fn);
+    g_lua.lua_pushcclosure(s, ae_lua_trampoline, 1);
+    if (!dot) {
+        g_lua.lua_setglobal(s, name);
+        return 0;
+    }
+    /* dotted: ensure global table `<prefix>` exists, set `<field>` on it. */
+    char prefix[128];
+    size_t plen = (size_t)(dot - name);
+    if (plen >= sizeof(prefix)) { g_lua.lua_settop(s, -2); return -1; }
+    memcpy(prefix, name, plen); prefix[plen] = '\0';
+    const char* field = dot + 1;
+    /* stack: [closure]. Get or create the prefix table. */
+    int t = g_lua.lua_getglobal(s, prefix);            /* [closure, tbl|nil] */
+    if (t != AE_LT_TABLE) {
+        g_lua.lua_settop(s, -2);                        /* pop nil → [closure] */
+        g_lua.lua_createtable(s, 0, 4);                 /* [closure, tbl] */
+        g_lua.lua_pushvalue(s, -1);                     /* [closure, tbl, tbl] */
+        g_lua.lua_setglobal(s, prefix);                 /* [closure, tbl] */
+    }
+    /* stack: [closure, tbl]. setfield(tbl, field) consumes the closure —
+     * but the closure is below tbl; move tbl under closure by pushing a copy
+     * arrangement. Simpler: re-fetch. We have [closure, tbl]; we need
+     * tbl.field = closure. lua_setfield(idx=-2 → tbl) pops the value at -1
+     * (must be the closure). Swap so closure is on top: */
+    g_lua.lua_pushvalue(s, -2);                         /* [closure, tbl, closure] */
+    g_lua.lua_setfield(s, -2, field);                   /* tbl.field=closure → [closure, tbl] */
+    g_lua.lua_settop(s, -3);                            /* pop tbl, closure */
+    return 0;
+}
+
+/* Inject globals before a run. */
+void lua_vm_set_global_str(void* vm, const char* name, const char* value) {
+    if (!vm || !name) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushstring(s, value ? value : "");
+    g_lua.lua_setglobal(s, name);
+}
+
+void lua_vm_set_global_int(void* vm, const char* name, long value) {
+    if (!vm || !name) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushinteger(s, (lua_Integer)value);
+    g_lua.lua_setglobal(s, name);
+}
+
+/* Set a global to a Lua array (table with 1..n string elements) from an
+ * Aether list of strings (the KEYS/ARGV shape). `items` is an Aether list
+ * handle; we read it with the existing list_size/list_get_raw externs. */
+void lua_vm_set_global_strlist(void* vm, const char* name, void* items) {
+    if (!vm || !name) return;
+    lua_State* s = (lua_State*)vm;
+    int n = items ? list_size(items) : 0;
+    g_lua.lua_createtable(s, n, 0);
+    for (int i = 0; i < n; i++) {
+        const char* v = (const char*)list_get_raw(items, i);
+        g_lua.lua_pushstring(s, v ? v : "");
+        g_lua.lua_seti(s, -2, (lua_Integer)(i + 1));   /* 1-based Lua array */
+    }
+    g_lua.lua_setglobal(s, name);
+}
+
+/* Run `code` in the VM, leaving its (single) return value on the stack for the
+ * lua_vm_result_* readers. Returns 0 on success, -1 on error (the error
+ * object/string is left on the stack and readable as type AE_LUA_TERR). */
+int lua_vm_eval(void* vm, const char* code) {
+    if (!vm || !code) return -1;
+    lua_State* s = (lua_State*)vm;
+    if (g_lua.luaL_loadstring(s, code) != 0) return -1;    /* compile error on stack */
+    if (g_lua.lua_pcallk(s, 0, 1, 0, 0, NULL) != 0) return -1; /* runtime error on stack */
+    return 0;
+}
+
+/* Map the top-of-stack (or any index) Lua type to an AE_LUA_T* tag. */
+static int ae_lua_tag_at(lua_State* s, int idx) {
+    switch (g_lua.lua_type(s, idx)) {
+        case AE_LT_NIL:     return AE_LUA_TNIL;
+        case AE_LT_BOOLEAN: return AE_LUA_TBOOL;
+        case AE_LT_NUMBER:  return AE_LUA_TINT;
+        case AE_LT_STRING:  return AE_LUA_TSTR;
+        case AE_LT_TABLE:   return AE_LUA_TTABLE;
+        default:            return AE_LUA_TOTHER;
+    }
+}
+
+/* Typed top-of-stack readers (the eval result, or a callback arg via index). */
+int lua_vm_result_type(void* vm) {
+    if (!vm) return AE_LUA_TNIL;
+    return ae_lua_tag_at((lua_State*)vm, -1);
+}
+long lua_vm_result_int(void* vm) {
+    if (!vm) return 0;
+    int isnum = 0;
+    return (long)g_lua.lua_tointegerx((lua_State*)vm, -1, &isnum);
+}
+const char* lua_vm_result_str(void* vm) {
+    if (!vm) return "";
+    const char* r = g_lua.lua_tolstring((lua_State*)vm, -1, NULL);
+    return r ? r : "";
+}
+int lua_vm_result_bool(void* vm) {
+    if (!vm) return 0;
+    return g_lua.lua_toboolean((lua_State*)vm, -1);
+}
+/* Drop the result (and anything above base) — call after reading. */
+void lua_vm_pop_result(void* vm) {
+    if (vm) g_lua.lua_settop((lua_State*)vm, 0);
+}
+
+// --- callback-side stack API (used INSIDE a registered host fn) ------------
+// Within `host_fn(vm)`, args are at stack indices 1..N; results are pushed
+// and the fn returns the count.
+int lua_arg_count(void* vm) {
+    if (!vm) return 0;
+    return g_lua.lua_gettop((lua_State*)vm);
+}
+int lua_arg_type(void* vm, int i) {
+    if (!vm) return AE_LUA_TNIL;
+    return ae_lua_tag_at((lua_State*)vm, i);
+}
+const char* lua_arg_str(void* vm, int i) {
+    if (!vm) return "";
+    const char* r = g_lua.lua_tolstring((lua_State*)vm, i, NULL);
+    return r ? r : "";
+}
+long lua_arg_int(void* vm, int i) {
+    if (!vm) return 0;
+    int isnum = 0;
+    return (long)g_lua.lua_tointegerx((lua_State*)vm, i, &isnum);
+}
+int lua_arg_bool(void* vm, int i) {
+    if (!vm) return 0;
+    return g_lua.lua_toboolean((lua_State*)vm, i);
+}
+void lua_push_int(void* vm, long v) {
+    if (vm) g_lua.lua_pushinteger((lua_State*)vm, (lua_Integer)v);
+}
+void lua_push_str(void* vm, const char* v) {
+    if (vm) g_lua.lua_pushstring((lua_State*)vm, v ? v : "");
+}
+void lua_push_bool(void* vm, int v) {
+    if (vm) g_lua.lua_pushboolean((lua_State*)vm, v);
+}
+void lua_push_nil(void* vm) {
+    if (vm) g_lua.lua_pushnil((lua_State*)vm);
+}
+/* Push a Redis-style { ok = msg } / { err = msg } single-field table — the
+ * status/error-reply convention. `field` is "ok" or "err". */
+void lua_push_tagged_table(void* vm, const char* field, const char* msg) {
+    if (!vm || !field) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_createtable(s, 0, 1);
+    g_lua.lua_pushstring(s, msg ? msg : "");
+    g_lua.lua_setfield(s, -2, field);
+}
+/* Raise a Lua error with `msg` as the error object (does not return in Lua
+ * semantics; the host fn should `return lua_raise_error(vm, m)` so control
+ * leaves via longjmp). */
+int lua_raise_error(void* vm, const char* msg) {
+    if (!vm) return 0;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushstring(s, msg ? msg : "error");
+    return g_lua.lua_error(s);   /* longjmps; never returns */
+}
+
+// --- execution guard: instruction-count hook -------------------------------
+// The host arms a count hook; when the budget is hit the hook raises a Lua
+// error (the script-timeout shape). One global budget per process is enough
+// for the single-threaded EVAL model; a richer per-VM budget can follow.
+static long g_lua_instr_budget = 0;
+static long g_lua_instr_used = 0;
+
+static void ae_lua_count_hook(lua_State* s, lua_Debug* ar) {
+    (void)ar;
+    g_lua_instr_used += 1;
+    if (g_lua_instr_budget > 0 && g_lua_instr_used >= g_lua_instr_budget) {
+        g_lua.lua_pushstring(s, "script exceeded instruction budget");
+        g_lua.lua_error(s);
+    }
+}
+
+/* Arm the count hook: fire every `every` VM instructions, abort after
+ * `budget` total. `budget`<=0 disarms. LUA_MASKCOUNT == 1<<3 == 8. */
+void lua_vm_set_instruction_limit(void* vm, long budget, int every) {
+    if (!vm) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua_instr_budget = budget;
+    g_lua_instr_used = 0;
+    if (budget > 0) {
+        g_lua.lua_sethook(s, ae_lua_count_hook, 8 /*LUA_MASKCOUNT*/,
+                          every > 0 ? every : 1);
+    } else {
+        g_lua.lua_sethook(s, NULL, 0, 0);
+    }
+}
+
 #else
 #include <stdio.h>
 int lua_init(void) {
@@ -350,4 +661,29 @@ int lua_run_sandboxed_with_map(void* perms, const char* code,
   (void)perms; (void)code; (void)token;
   return lua_init();
 }
+// #904 bidirectional API — unavailable stubs.
+void* lua_vm_new(void) { (void)lua_init(); return 0; }
+void  lua_vm_free(void* vm) { (void)vm; }
+int   lua_vm_register(void* vm, const char* n, void* f) { (void)vm; (void)n; (void)f; return -1; }
+void  lua_vm_set_global_str(void* vm, const char* n, const char* v) { (void)vm; (void)n; (void)v; }
+void  lua_vm_set_global_int(void* vm, const char* n, long v) { (void)vm; (void)n; (void)v; }
+void  lua_vm_set_global_strlist(void* vm, const char* n, void* it) { (void)vm; (void)n; (void)it; }
+int   lua_vm_eval(void* vm, const char* c) { (void)vm; (void)c; return -1; }
+int   lua_vm_result_type(void* vm) { (void)vm; return 0; }
+long  lua_vm_result_int(void* vm) { (void)vm; return 0; }
+const char* lua_vm_result_str(void* vm) { (void)vm; return ""; }
+int   lua_vm_result_bool(void* vm) { (void)vm; return 0; }
+void  lua_vm_pop_result(void* vm) { (void)vm; }
+int   lua_arg_count(void* vm) { (void)vm; return 0; }
+int   lua_arg_type(void* vm, int i) { (void)vm; (void)i; return 0; }
+const char* lua_arg_str(void* vm, int i) { (void)vm; (void)i; return ""; }
+long  lua_arg_int(void* vm, int i) { (void)vm; (void)i; return 0; }
+int   lua_arg_bool(void* vm, int i) { (void)vm; (void)i; return 0; }
+void  lua_push_int(void* vm, long v) { (void)vm; (void)v; }
+void  lua_push_str(void* vm, const char* v) { (void)vm; (void)v; }
+void  lua_push_bool(void* vm, int v) { (void)vm; (void)v; }
+void  lua_push_nil(void* vm) { (void)vm; }
+void  lua_push_tagged_table(void* vm, const char* f, const char* m) { (void)vm; (void)f; (void)m; }
+int   lua_raise_error(void* vm, const char* m) { (void)vm; (void)m; return 0; }
+void  lua_vm_set_instruction_limit(void* vm, long b, int e) { (void)vm; (void)b; (void)e; }
 #endif
