@@ -4737,6 +4737,25 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                  * same wrapper). */
                 if (emit_struct_field_heap_assign(gen, lhs, rhs)) break;
 
+                /* #891 @c_struct overlay write (incl. nested `s.a.b = v`):
+                 * lowers to a width-correct aether_mem_set_<width> at the
+                 * cumulative offset (no C `->field =`). */
+                if (lhs && lhs->type == AST_MEMBER_ACCESS &&
+                    aether_c_struct_overlay_lhs(lhs)) {
+                    char cpath[256];
+                    ASTNode* root = aether_c_struct_chain(lhs, cpath, sizeof(cpath));
+                    const char* sname = root->node_type->element_type->struct_name;
+                    long off = 0; const char* width = NULL;
+                    if (aether_c_struct_resolve(sname, cpath, &off, &width) && width) {
+                        fprintf(gen->output, "aether_mem_set_%s((void*)(", width);
+                        generate_expression(gen, root);
+                        fprintf(gen->output, "), %ld, ", off);
+                        generate_expression(gen, rhs);
+                        fprintf(gen->output, ");\n");
+                        break;
+                    }
+                }
+
                 // Generate the assignment itself
                 gen->generating_lvalue = 1;
                 generate_expression(gen, lhs);

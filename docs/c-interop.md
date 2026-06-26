@@ -676,6 +676,63 @@ main() {
 - For Aether-owned data; prefer fixed-size stack arrays (`int[5] arr`) or the higher-level collections in `std.collections`. The `as T[]` cast is the systems-programming escape hatch, not the everyday array.
 - When you want bounds-checked storage. There is none here.
 
+### `@c_struct` typed overlays — width-correct field access over a raw `ptr`
+
+When you're porting C that overlays a struct on memory the **C side owns**
+(`s->length--`, `max->ms = id->ms`), the raw way is hand-rolled offset math
+through `std.mem`:
+
+```aether
+const ST_LENGTH = 8
+mem.set_long(s, ST_LENGTH, mem.get_long(s, ST_LENGTH) - 1)   // s->length--
+```
+
+The footgun is the **accessor width**: picking `get_long` (8 bytes) for a
+`uint32` field silently pulls the next field/padding. A `@c_struct` overlay
+fixes that *structurally* — declare the layout once with explicit offsets, and
+field access lowers to a width-correct `mem` accessor the **compiler** chooses:
+
+```aether
+@c_struct streamID {
+    ms:  uint64 @0
+    seq: uint64 @8
+}
+
+@c_struct stream {
+    rax:         ptr      @0
+    length:      uint64   @8
+    slen:        uint32   @16     // 32-bit field — read/written at 4 bytes
+    last_id:     streamID @24     // nested overlay
+    max_deleted: streamID @40
+}
+
+s = robj_get_ptr(kv) as *stream   // reuse the `as *Name` cast — same syntax
+s.length = s.length - 1           // mem_set_long at offset 8 (uint64 width)
+s.slen   = 42                     // mem_set_uint32 at offset 16 (NOT get_long!)
+s.max_deleted.ms = s.last_id.ms   // nested: offsets add (40+0, 24+0)
+```
+
+- **The width is derived from the field type** — `uint8`/`byte`→1, `uint16`→2,
+  `uint32`/`int`→4, `int64`/`uint64`→8, `float64`→8, `ptr`→pointer-width. The
+  `--audit-mem` (#868) class of bug is gone for overlay-declared structs: you
+  never hand-pick the accessor.
+- **The offsets stay explicit** — Aether can't see the C headers, so you probe
+  them (as before). But they live in one declaration, not a scattered `const`
+  block, and a `ptr` field can be re-cast (`s.rax as *otherStruct`) to chase
+  links.
+- **It's a pure-Aether lens, not a C struct.** No `extern struct`, no
+  `#include`, no C type is emitted — the overlay lowers to `aether_mem_*` calls
+  over a `void*`. The C side keeps owning the allocation; the overlay never
+  allocates, frees, or bounds-checks. **No `import std.mem` needed** — the
+  overlay *is* the access surface (the accessor prototypes are emitted for you).
+- Access reuses the existing `expr as *Name` cast and `s.field` member syntax —
+  nothing new to learn at the call site. Nested overlays add offsets along the
+  chain (`s.last_id.seq` → 24+8).
+
+Choose `@c_struct` when the C side owns the memory and you want by-name,
+width-safe access; choose `extern struct` (below) only when a C header genuinely
+owns the struct type and you're linking against it.
+
 ### `extern struct` unions — `union { ... }` and nested `struct { ... }`
 
 C structs that span an FFI boundary often contain unions. mquickjs's `JSPropDef` has six variants overlayed on the same 32-byte tail; every tagged-union C shape (Lua `TValue`, JSON value, ...) hits the same problem.

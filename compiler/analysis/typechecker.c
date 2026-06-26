@@ -10,6 +10,8 @@
 
 static int error_count = 0;
 static int warning_count = 0;
+// #891: query the @c_struct overlay name set (defined ~typecheck_program).
+static int is_c_struct_name(const char* name);
 
 // Get the last component of a module path for namespace
 // "mypackage.utils" -> "utils"
@@ -1174,15 +1176,18 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
                     return create_type(TYPE_UNKNOWN);
                 }
             }
-            /* Validate the named struct exists. */
-            Symbol* struct_sym = lookup_symbol(table, expr->value);
-            if (!struct_sym || !struct_sym->type ||
-                struct_sym->type->kind != TYPE_STRUCT) {
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                    "`as *%s` — '%s' is not a struct type", expr->value, expr->value);
-                type_error(msg, expr->line, expr->column);
-                return create_type(TYPE_UNKNOWN);
+            /* Validate the named struct exists — or is a #891 @c_struct
+             * overlay (no struct symbol; it's a pure-offset lens). */
+            if (!is_c_struct_name(expr->value)) {
+                Symbol* struct_sym = lookup_symbol(table, expr->value);
+                if (!struct_sym || !struct_sym->type ||
+                    struct_sym->type->kind != TYPE_STRUCT) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "`as *%s` — '%s' is not a struct type", expr->value, expr->value);
+                    type_error(msg, expr->line, expr->column);
+                    return create_type(TYPE_UNKNOWN);
+                }
             }
             Type* inner = create_type(TYPE_STRUCT);
             inner->struct_name = strdup(expr->value);
@@ -1931,6 +1936,31 @@ static void resolve_purity_queries(ASTNode* node, ASTNode* program,
 // #480: resolve `type X = distinct Y` placeholders into distinct Types.
 static void resolve_distinct_types(ASTNode* program);
 
+// #891: typecheck-time registry of @c_struct overlay names. Codegen has its
+// own field-level registry; the typechecker only needs the NAME set so an
+// `expr as *Name` cast and member access against it validate.
+#define AETHER_MAX_C_STRUCTS 256
+static const char* g_c_struct_names[AETHER_MAX_C_STRUCTS];
+static int g_c_struct_name_count = 0;
+
+static void collect_c_struct_names(ASTNode* program) {
+    g_c_struct_name_count = 0;
+    if (!program) return;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_C_STRUCT_DEF && c->value &&
+            g_c_struct_name_count < AETHER_MAX_C_STRUCTS)
+            g_c_struct_names[g_c_struct_name_count++] = c->value;
+    }
+}
+
+static int is_c_struct_name(const char* name) {
+    if (!name) return 0;
+    for (int i = 0; i < g_c_struct_name_count; i++)
+        if (strcmp(g_c_struct_names[i], name) == 0) return 1;
+    return 0;
+}
+
 // Type checking functions
 int typecheck_program(ASTNode* program) {
     if (!program || program->type != AST_PROGRAM) return 0;
@@ -1944,6 +1974,11 @@ int typecheck_program(ASTNode* program) {
     // #480: resolve `type X = distinct Y` placeholders into distinct Types
     // across the whole AST before any type-checking or inference runs.
     resolve_distinct_types(program);
+
+    // #891: collect @c_struct overlay names so `expr as *Name` casts and
+    // member access typecheck against them (they have no struct symbol —
+    // they're a pure-offset lens, not a declared struct type).
+    collect_c_struct_names(program);
 
     // #522: fold `__pure(fn)` queries to bool constants before any expression
     // is type-checked. Needs the merged call graph (all function defs), which
@@ -2627,6 +2662,12 @@ int typecheck_node(ASTNode* node, SymbolTable* table) {
             return 1;
         case AST_EXTERN_FUNCTION:
             // Extern functions have no body to check - just a declaration
+            return 1;
+        case AST_C_STRUCT_DEF:
+            // #891 @c_struct overlay: a declaration of (field, type, offset)
+            // tuples — no body, no statements to check. The name set is
+            // collected (collect_c_struct_names) and the fields registered at
+            // codegen for width/offset resolution. Nothing to typecheck here.
             return 1;
         case AST_STRUCT_DEFINITION:
             return typecheck_struct_definition(node, table);

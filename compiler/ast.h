@@ -31,6 +31,14 @@ typedef enum {
                                // union). Same shape as AST_STRUCT_FIELD_UNION
                                // but emits a `struct { ... }` instead of a
                                // `union { ... }` body.
+    AST_C_STRUCT_DEF,          // #891 @c_struct Name { f: type @offset, ... }
+                               // A pure-Aether typed overlay over a raw ptr.
+                               // `value` = struct name; children are
+                               // AST_STRUCT_FIELD nodes whose `bit_width`
+                               // carries the byte offset and whose node_type
+                               // gives the width. Field access on an
+                               // `expr as *Name` value lowers to width-correct
+                               // mem_get_*/set_* at the offset (no C struct).
     AST_EXTERN_FUNCTION,      // External C function declaration
     AST_BUILDER_FUNCTION,     // Builder function: block configures first, then function executes
     AST_CONST_DECLARATION,    // Top-level constant: const NAME = value
