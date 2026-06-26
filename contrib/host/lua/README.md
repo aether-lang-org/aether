@@ -64,6 +64,66 @@ main() {
 }
 ```
 
+## Bidirectional embedding — a Redis-class host (#904)
+
+The fire-and-forget `run_sandboxed` is enough to *run* a script, but a host
+that uses Lua as a first-class, callback-driven extension surface (Redis-style
+`EVAL`/`FCALL`) needs a **persistent, host-owned VM** that registers host
+callbacks the script can call, injects globals, and returns a **typed** result.
+That tier:
+
+```aether
+import contrib.host.lua
+
+// A host callback: reads typed args (1-based), pushes a typed result,
+// returns the number of values pushed (the Lua C-function rule). It must be
+// `@c_callback` so its symbol is addressable as a `ptr` value (see
+// docs/c-interop.md "Exporting an Aether Function as a C Callback").
+@c_callback
+redis_call(vm: ptr) -> int {
+    cmd = lua.arg_str(vm, 1)
+    // ...dispatch the command in the host, marshal the reply...
+    lua.push_str(vm, "OK")
+    return 1
+}
+
+main() {
+    vm = lua.vm_new()                                   // persistent VM handle
+    lua.vm_register(vm, "redis.call", redis_call)       // pass the @c_callback fn
+    lua.vm_set_global_strlist(vm, "KEYS", keys)         // inject KEYS/ARGV
+    lua.vm_set_global_strlist(vm, "ARGV", argv)
+    lua.vm_set_instruction_limit(vm, 100000000, 1000)   // script-timeout guard
+
+    status = lua.vm_eval(vm, source)                    // 0 ok, -1 error
+    t = lua.vm_result_type(vm)                          // LUA_TINT/TSTR/TERR/…
+    if t == LUA_TSTR { reply = lua.vm_result_str(vm) }
+    else { if t == LUA_TINT { n = lua.vm_result_int(vm) } }
+    lua.vm_pop_result(vm)
+    lua.vm_free(vm)
+}
+```
+
+| Call | Effect |
+|------|--------|
+| `lua.vm_new() -> ptr` | create a persistent host-owned VM (libs opened) |
+| `lua.vm_register(vm, name, fn_ptr) -> int` | register an Aether `(vm: ptr) -> int` callback as a Lua global (dotted names like `"redis.call"` create/reuse the prefix table) |
+| `lua.vm_set_global_str/_int/_strlist(vm, name, v)` | inject a global before a run (string / int / string-array) |
+| `lua.vm_eval(vm, code) -> int` | run; leaves the single return value on the VM stack |
+| `lua.vm_result_type(vm) -> int` | typed tag of the result (`LUA_T*`) |
+| `lua.vm_result_int/_str/_bool(vm)` | read the typed result |
+| `lua.vm_pop_result(vm)` | clear the stack after reading |
+| `lua.vm_set_instruction_limit(vm, budget, every)` | count-hook guard; abort after `budget` VM instructions |
+| `lua.arg_count/_type/_str/_int/_bool(vm, i)` | **inside a callback**: read args (1-based) |
+| `lua.push_int/_str/_bool/_nil(vm, v)` | **inside a callback**: push a result |
+| `lua.push_tagged_table(vm, "ok"\|"err", msg)` | push a Redis-style `{ok=…}`/`{err=…}` table |
+| `lua.raise_error(vm, msg) -> int` | raise a Lua error from a callback (`return lua.raise_error(vm, m)`) |
+
+Typed-value tags exported as consts: `LUA_TNIL`, `LUA_TBOOL`, `LUA_TINT`,
+`LUA_TSTR`, `LUA_TTABLE`, `LUA_TERR`, `LUA_TOTHER`.
+
+This is the next tier above the factor bridge's two-way persistent-VM + shared-
+map model: **host-callbacks-with-typed-marshalling**, in both directions.
+
 ## Implementation notes
 
 - All Lua C-API access goes through a `dlsym` function-pointer
@@ -80,8 +140,17 @@ main() {
 
 ## Testing
 
-Lua has no dedicated fib-style end-to-end test like factor or racket
-do. Its coverage comes from two cross-cutting tests:
+The bidirectional API (#904) has a dedicated end-to-end test:
+
+- [`../../../tests/integration/host_lua_bidirectional/`](../../../tests/integration/host_lua_bidirectional/)
+  — a C harness over the tier-2 surface: registers two host callbacks
+  (`host.double`, `host.ping`), injects an int global + a `KEYS` string-array,
+  runs a script that calls the callbacks and reads the globals, and asserts the
+  **typed** results (int `142`, string `hello k2`) plus that the
+  instruction-limit guard aborts an infinite loop. SKIPs when no matching
+  liblua headers + runtime soname are found.
+
+The fire-and-forget surface is covered by two cross-cutting tests:
 
 - [`../../../tests/sandbox/test_shared_map_all.sh`](../../../tests/sandbox/test_shared_map_all.sh)
   — the cross-host shared-map round-trip. The Lua case seeds a shared
