@@ -1,0 +1,42 @@
+// Regression: issue #879 — `sizeof(T)` / `offsetof(T, field)` are accepted in
+// a top-level `const` initializer (they lower to C compile-time constants),
+// including arithmetic over them and over other consts. This lets a port that
+// mirrors C structs as `extern struct` overlays centralise its layout table as
+// named consts that are self-verifying by construction (the C compiler folds
+// the value), instead of hand-maintaining numbers + _Static_asserts.
+
+extern exit(code: int)
+
+extern struct Layout {
+    a: int
+    b: int
+    c: int
+}
+
+const SIZEOF_LAYOUT = sizeof(Layout)          // 12 on a 4-byte-int target
+const OFF_B         = offsetof(Layout, b)      // 4
+const OFF_C         = offsetof(Layout, c)      // 8
+const PADDED        = sizeof(Layout) + 8       // arithmetic over sizeof
+const COMBINED      = offsetof(Layout, c) - offsetof(Layout, b)  // 4
+
+main() {
+    // Compare against the same builtins used inline (which were always legal),
+    // so the test is independent of the target's exact int width / alignment.
+    if SIZEOF_LAYOUT != sizeof(Layout) {
+        println("FAIL #879: const sizeof initializer")
+        exit(1)
+    }
+    if OFF_B != offsetof(Layout, b) {
+        println("FAIL #879: const offsetof initializer")
+        exit(1)
+    }
+    if PADDED != sizeof(Layout) + 8 {
+        println("FAIL #879: const arithmetic over sizeof")
+        exit(1)
+    }
+    if COMBINED != OFF_C - OFF_B {
+        println("FAIL #879: const arithmetic over offsetof consts")
+        exit(1)
+    }
+    println("PASS: #879 sizeof/offsetof usable in const initializers")
+}

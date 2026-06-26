@@ -13,6 +13,26 @@ next version number before tagging the release.
 
 ### Added
 
+- **`sizeof` / `offsetof` in `const` initializers** (#879). The two layout
+  builtins are now accepted in a top-level `const` initializer (and arithmetic
+  over them) — `const SIZEOF_T = sizeof(T)`, `const OFF = offsetof(T, field)`,
+  `const PAD = sizeof(T) + 8`. They lower to C compile-time constant
+  expressions, so a port that mirrors C structs as `extern struct` overlays can
+  centralise its offset/size table as named consts that are self-verifying by
+  construction (the C compiler folds each value) instead of hand-maintaining
+  numbers plus `_Static_assert` drift guards. The general "no function calls in
+  a `const` initializer" rule is unchanged; these two builtins are the carve-out.
+
+- **Type/keyword tokens usable as value identifiers** (#880). `ptr`, `byte`,
+  `func`, `state` and `after` can now be used as ordinary value identifiers —
+  parameter names, local names, struct field names, struct-literal fields, and
+  field-access targets — without the `` `name` `` backtick escape. These tokens
+  have meaning only in type / declaration-head / statement-head position, so a
+  bare occurrence in value position is unambiguously a name. A C→Aether port no
+  longer has to rename `ptr`→`ptr_`, `func`→`fn_val`, etc. (`match` and `union`
+  stay reserved — `match` heads a match expression; `union` is a C keyword that
+  can't be emitted as a C identifier — use the backtick escape for those.)
+
 - **Distinct types: `type Name = distinct Base`** (#480). A zero-cost nominal
   wrapper over a scalar / `string` / `ptr` base — `type USD = distinct float`,
   `type Fd = distinct int`. Lowers to the base C type (no boxing), but the type
