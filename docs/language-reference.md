@@ -1552,6 +1552,24 @@ keeps everything else qualified — the same shape as `import static`
 in Java, useful when you want exactly two or three symbols bare and
 the rest namespaced.
 
+**The qualified `mod.fn(...)` surface is always available** whenever a
+module is imported in *any* form — bare, selective, or glob — the way
+Java's fully-qualified name is always legal regardless of imports. A
+selective import is purely **additive**: `import std.math (sqrt)` adds the
+bare-name binding `sqrt(...)` *on top of* the always-available qualified
+surface, so `math.pow(2.0, 3.0)` still resolves even though `pow` was not
+in the selection list. The import form decides only which **bare** names
+exist; it never restricts the qualified form.
+
+```aether
+import std.math (sqrt)
+
+main() {
+    a = sqrt(16.0)            // bare-name binding the selective import adds
+    b = math.pow(2.0, 3.0)    // qualified — always available, even un-selected
+}
+```
+
 ### Import with Alias (Planned)
 
 > **Note:** Import aliasing is parsed but not yet fully functional. Use the default namespace for now.
