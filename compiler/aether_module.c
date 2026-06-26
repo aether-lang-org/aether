@@ -1684,19 +1684,21 @@ static void insert_child_at(ASTNode* parent, ASTNode* child, int index) {
  * program (only its function/const/struct bodies are). When a merged module
  * bare-imports a stdlib/local module, the QUALIFIED-call surface for that
  * module (`string.concat`, `json.stringify`, ...) used inside the merged
- * body must stay resolvable — even if the entry file imported the SAME
- * module SELECTIVELY (`import std.string (string_length)`), which marks the
- * namespace selective and would otherwise reject the qualified calls.
+ * body must stay resolvable: the namespace has to be VISIBLE in the merged
+ * compilation unit even if the entry file never imported that module itself.
  *
- * Re-establish the bare/non-selective surface by injecting a synthetic BARE
- * import (no selection children) for each module the merged module imported
- * bare. The typechecker's import pass then calls
- * selective_import_mark_nonselective() for it, so qualified calls resolve
- * for the whole merged unit. The "synthetic" annotation keeps the namespace
- * out of the user-explicit registry (issue #243 sealed-scope isolation):
- * it is visible to merged bodies, not re-granted to user code that never
- * imported it. Deduped against any bare import the program already carries
- * (user-written or earlier-injected). */
+ * Re-establish that visibility by injecting a synthetic BARE import (no
+ * selection children) for each module the merged module imported. The
+ * typechecker's import pass registers the namespace so qualified calls
+ * resolve for the whole merged unit. The "synthetic" annotation keeps the
+ * namespace out of the user-explicit registry (issue #243 sealed-scope
+ * isolation): it is visible to merged bodies, not re-granted to user code
+ * that never imported it. Deduped against any bare import the program already
+ * carries (user-written or earlier-injected).
+ *
+ * (#878: a selective import no longer restricts the qualified surface, so
+ * this injection is purely about namespace visibility across the merge, not
+ * about overriding a per-module selective filter.) */
 static void inject_synthetic_bare_imports_from(ASTNode* program,
                                                ASTNode* mod_ast,
                                                int* insert_idx) {

@@ -357,120 +357,18 @@ int is_visible_namespace(const char* name, SymbolTable* table) {
     return is_user_explicit_namespace(name);
 }
 
-// Per-module selective-import filter.
-//
-// When a user writes `import std.math (sqrt)`, only `sqrt` should be
-// callable via the qualified form `math.sqrt(...)`. Previously this was
-// enforced by filtering externs out of the symbol table entirely, but
-// that broke Aether-native stdlib wrappers (like `http.get` calling
-// `http_get_raw` internally) which need every extern from their own
-// module visible in the symbol table regardless of the user's selection.
-//
-// The fix is two-layer: externs are always added to the symbol table so
-// merged module functions can resolve them, and a separate visibility
-// filter enforces the user's selection list at qualified-call sites only.
-// Unqualified calls from within merged stdlib functions bypass the filter
-// because they're implementation detail, not user-facing surface.
-typedef struct {
-    char* namespace;   // e.g. "math"
-    char* func_name;   // short name as written in the user's selection list
-} SelectiveImportEntry;
-
-#define MAX_SELECTIVE_IMPORTS 256
-static SelectiveImportEntry selective_imports[MAX_SELECTIVE_IMPORTS];
-static int selective_import_count = 0;
-static int selective_import_modules_count = 0;
-// Tracks which namespaces had a selection list at all. Namespace without
-// an entry here means "no filter — everything allowed", which matches
-// the non-selective import semantics.
-static char* selective_import_modules[MAX_SELECTIVE_IMPORTS];
-
-// Tracks namespaces that ALSO have a non-selective import in the same
-// file. When both forms coexist (`import std.fs.file_exists` followed
-// by `import std.fs`), the non-selective form makes the whole namespace
-// accessible — the per-symbol form just adds bare-name binding.
-// Without this, is_selective_import_blocked rejected fs.read because
-// fs had a filter from the per-symbol import. Issue #252.
-static char* nonselective_import_modules[MAX_SELECTIVE_IMPORTS];
-static int nonselective_import_modules_count = 0;
-
-static void selective_import_reset(void) {
-    for (int i = 0; i < selective_import_count; i++) {
-        free(selective_imports[i].namespace);
-        free(selective_imports[i].func_name);
-    }
-    selective_import_count = 0;
-    for (int i = 0; i < selective_import_modules_count; i++) {
-        free(selective_import_modules[i]);
-    }
-    selective_import_modules_count = 0;
-    for (int i = 0; i < nonselective_import_modules_count; i++) {
-        free(nonselective_import_modules[i]);
-    }
-    nonselective_import_modules_count = 0;
-}
-
-static void selective_import_mark_nonselective(const char* ns) {
-    for (int i = 0; i < nonselective_import_modules_count; i++) {
-        if (strcmp(nonselective_import_modules[i], ns) == 0) return;
-    }
-    if (nonselective_import_modules_count < MAX_SELECTIVE_IMPORTS) {
-        nonselective_import_modules[nonselective_import_modules_count++] = strdup(ns);
-    }
-}
-
-static int has_nonselective_import(const char* ns) {
-    for (int i = 0; i < nonselective_import_modules_count; i++) {
-        if (strcmp(nonselective_import_modules[i], ns) == 0) return 1;
-    }
-    return 0;
-}
-
-static void selective_import_mark_module(const char* ns) {
-    for (int i = 0; i < selective_import_modules_count; i++) {
-        if (strcmp(selective_import_modules[i], ns) == 0) return;
-    }
-    if (selective_import_modules_count < MAX_SELECTIVE_IMPORTS) {
-        selective_import_modules[selective_import_modules_count++] = strdup(ns);
-    }
-}
-
-static void selective_import_add(const char* ns, const char* func_name) {
-    selective_import_mark_module(ns);
-    if (selective_import_count < MAX_SELECTIVE_IMPORTS) {
-        selective_imports[selective_import_count].namespace = strdup(ns);
-        selective_imports[selective_import_count].func_name = strdup(func_name);
-        selective_import_count++;
-    }
-}
-
-static int module_has_selective_filter(const char* ns) {
-    for (int i = 0; i < selective_import_modules_count; i++) {
-        if (strcmp(selective_import_modules[i], ns) == 0) return 1;
-    }
-    return 0;
-}
-
-// Returns 1 if the user wrote a selective import for `ns` AND `func_name`
-// is not in the selection list. Returns 0 when there's no filter, when
-// the name is in the list, or when the user *also* wrote a non-selective
-// import of the same namespace (in which case the whole namespace is
-// accessible — the per-symbol form just adds the bare-name binding).
-// Used only at qualified-call sites.
-static int is_selective_import_blocked(const char* ns, const char* func_name) {
-    if (!module_has_selective_filter(ns)) return 0;
-    // If a non-selective import exists for this namespace, it overrides
-    // the filter — fs.read should resolve when both `import std.fs.file_exists`
-    // and `import std.fs` are present. Issue #252.
-    if (has_nonselective_import(ns)) return 0;
-    for (int i = 0; i < selective_import_count; i++) {
-        if (strcmp(selective_imports[i].namespace, ns) == 0 &&
-            strcmp(selective_imports[i].func_name, func_name) == 0) {
-            return 0;
-        }
-    }
-    return 1;
-}
+// #878: a module's qualified `X.fn()` surface is available whenever the
+// namespace is imported in ANY form (bare, selective, or qualified) — like
+// Java's fully-qualified name, which is always legal regardless of imports.
+// A selective import (`import std.math (sqrt)`) is purely ADDITIVE: it adds
+// the bare-name binding (`sqrt(...)`) on top of the always-available qualified
+// surface (`math.sqrt(...)`, `math.pow(...)`). It no longer restricts the
+// qualified form. Externs are still always added to the symbol table so merged
+// stdlib wrappers resolve their own module's symbols. Export visibility
+// (`is_export_blocked`) and hide/seal still gate qualified access; only the
+// per-import-form selective filter is gone. (Previously a per-module filter
+// rejected `math.pow` under `import std.math (sqrt)`; that whole machinery is
+// removed.)
 
 /* Note: the (selective-import + local-def-with-same-name) shadow
  * check that issue #436 facet A targeted lives at the orchestration
@@ -537,14 +435,9 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
                 free(name_copy);
                 return NULL;
             }
-            // Enforce selective-import visibility: if the user wrote
-            // `import std.math (sqrt)` then `math.pow` must be rejected
-            // even though `math_pow` is in the symbol table (so that
-            // merged stdlib wrappers can call it internally).
-            if (is_selective_import_blocked(prefix, suffix)) {
-                free(name_copy);
-                return NULL;
-            }
+            // #878: no selective-import gate here — the qualified `X.fn()`
+            // surface is available whenever the namespace is visible, in any
+            // import form. (export visibility + hide/seal above still apply.)
             char c_func_name[512];
             snprintf(c_func_name, sizeof(c_func_name), "%s_%s", prefix, suffix);
             Symbol* sym = lookup_symbol(table, c_func_name);
@@ -2049,7 +1942,7 @@ int typecheck_program(ASTNode* program) {
     warning_count = 0;
     namespace_count = 0;  // Reset imported namespaces
     user_explicit_namespace_count = 0;  // Reset user-explicit namespaces (issue #243)
-    selective_import_reset();  // Reset per-module selective-import filters
+    // (#878: per-module selective-import filter removed — nothing to reset)
 
     // #480: resolve `type X = distinct Y` placeholders into distinct Types
     // across the whole AST before any type-checking or inference runs.
@@ -2395,31 +2288,11 @@ int typecheck_program(ASTNode* program) {
                         register_user_explicit_namespace(ns_leaf);
                     }
 
-                    // If this is a selective import, record the allow list
-                    // so qualified calls to functions not in it get rejected.
-                    // Does not affect unqualified resolution inside merged
-                    // stdlib function bodies.
-                    //
-                    // Otherwise (non-selective), mark the namespace as
-                    // having full access — required so a non-selective
-                    // import after a per-symbol import of the same module
-                    // gives the whole namespace back. Issue #252.
-                    int is_selective = 0;
-                    if (child->child_count > 0) {
-                        ASTNode* first_sel = child->children[0];
-                        if (first_sel && first_sel->type == AST_IDENTIFIER) {
-                            is_selective = 1;
-                            for (int sk = 0; sk < child->child_count; sk++) {
-                                ASTNode* sel = child->children[sk];
-                                if (sel && sel->type == AST_IDENTIFIER && sel->value) {
-                                    selective_import_add(module_name, sel->value);
-                                }
-                            }
-                        }
-                    }
-                    if (!is_selective) {
-                        selective_import_mark_nonselective(module_name);
-                    }
+                    // #878: nothing to record here — a selective import no
+                    // longer restricts the qualified `X.fn()` surface, so
+                    // there is no per-module allow list to build. The bare-name
+                    // bindings a selective import adds are wired by the merger,
+                    // not here.
 
                     // Look up cached module from orchestrator
                     AetherModule* mod = module_find(module_path);
@@ -2427,19 +2300,13 @@ int typecheck_program(ASTNode* program) {
                     if (mod_ast) {
                         // Extract extern declarations from the module.
                         //
-                        // Externs are always registered regardless of the
-                        // user's selective-import list. This is because
-                        // merged Aether-native stdlib wrappers (like
-                        // `http.get` calling `http_get_raw` internally)
-                        // need every extern from their own module visible
-                        // in the global symbol table to compile, even when
-                        // the user only selectively imported the wrapper.
-                        //
-                        // The selective-import filter is applied instead
-                        // at qualified-call sites via
-                        // is_selective_import_blocked(), so user code that
-                        // writes `math.pow` is still rejected when only
-                        // `sqrt` is imported.
+                        // Externs are always registered regardless of import
+                        // form. Merged Aether-native stdlib wrappers (like
+                        // `http.get` calling `http_get_raw` internally) need
+                        // every extern from their own module visible in the
+                        // global symbol table to compile. (#878: the qualified
+                        // `X.fn()` surface is available on any import form, so
+                        // there is no selective filter to apply here.)
                         for (int j = 0; j < mod_ast->child_count; j++) {
                             ASTNode* decl = mod_ast->children[j];
                             if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
@@ -2469,13 +2336,12 @@ int typecheck_program(ASTNode* program) {
                         for (int j = 0; j < mod_ast->child_count; j++) {
                             ASTNode* decl = mod_ast->children[j];
                             if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
-                                // Always import externs regardless of the
-                                // selective-import filter. Externs are C
-                                // bindings that merged Aether functions may
-                                // call internally — filtering them out
-                                // breaks transitive references. The
-                                // selective filter applies at qualified-call
-                                // sites via is_selective_import_blocked().
+                                // Always import externs regardless of import
+                                // form. Externs are C bindings that merged
+                                // Aether functions may call internally —
+                                // filtering them out breaks transitive
+                                // references. (#878: no selective filter at
+                                // qualified-call sites anymore.)
                                 if (!lookup_symbol_local(global_table, decl->value)) {
                                     add_symbol(global_table, decl->value,
                                                clone_type(decl->node_type), 0, 1, 0);

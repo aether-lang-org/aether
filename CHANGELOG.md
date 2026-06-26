@@ -24,6 +24,21 @@ next version number before tagging the release.
 
 ## [0.321.0]
 
+### Changed
+
+- **Qualified `mod.fn()` surface is available on any import form** (#878). A
+  module's qualified call surface (`string.length()`, `math.pow()`) now resolves
+  whenever the module is imported in *any* form — bare, selective, or glob —
+  like Java's always-legal fully-qualified name. A selective import
+  (`import std.math (sqrt)`) is now purely additive: it adds the bare-name
+  binding `sqrt(...)` on top of the always-available qualified surface, instead
+  of restricting it. Previously a selective import rejected the qualified form
+  of any non-selected name (`math.pow` failed under `import std.math (sqrt)`),
+  which forced real code to import a module twice (once selective, once bare).
+  The per-module selective filter that enforced that restriction is removed;
+  export visibility (`exports (…)`) and `hide`/`seal` still gate qualified
+  access.
+
 ### Fixed
 
 - **Imported `distinct` types now resolve across the module boundary** (#908).

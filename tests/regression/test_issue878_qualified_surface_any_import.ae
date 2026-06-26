@@ -1,0 +1,26 @@
+// Regression: issue #878 — a module's qualified `X.fn()` surface is available
+// whenever the module is imported in ANY form. A selective import is purely
+// additive: `import std.math (sqrt)` adds the bare-name `sqrt(...)` binding ON
+// TOP OF the always-available qualified surface, so `math.pow(...)` (a name NOT
+// in the selection list) still resolves. Previously the qualified form of a
+// non-selected name was rejected.
+
+import std.math (sqrt)
+
+extern exit(code: int)
+
+main() {
+    // bare-name binding the selective import adds
+    a = sqrt(16.0)
+    if a != 4.0 { println("FAIL #878: bare sqrt"); exit(1) }
+
+    // qualified call to the SELECTED name
+    b = math.sqrt(9.0)
+    if b != 3.0 { println("FAIL #878: qualified math.sqrt"); exit(1) }
+
+    // qualified call to a NON-selected name — the #878 change
+    c = math.pow(2.0, 3.0)
+    if c != 8.0 { println("FAIL #878: qualified math.pow (non-selected)"); exit(1) }
+
+    println("PASS: #878 qualified surface available under selective import")
+}
