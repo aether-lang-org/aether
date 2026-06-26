@@ -35,4 +35,17 @@ void  lua_push_tagged_table(void* vm, const char* field, const char* msg);
 int   lua_raise_error(void* vm, const char* msg);
 void  lua_vm_set_instruction_limit(void* vm, long budget, int every);
 
+/* #910 host-callback table builder (RESP multibulk → Lua table). */
+void  lua_table_begin(void* vm, int narr, int nrec);
+void  lua_table_seti_str(void* vm, int i, const char* v);
+void  lua_table_seti_int(void* vm, int i, long v);
+void  lua_table_seti_bool(void* vm, int i, int v);
+void  lua_table_set_str(void* vm, const char* key, const char* v);
+void  lua_table_set_int(void* vm, const char* key, long v);
+void  lua_table_set_bool(void* vm, const char* key, int v);
+void  lua_table_end_seti(void* vm, int i);
+void  lua_table_end_setfield(void* vm, const char* key);
+void  lua_table_finish(void* vm);
+void  lua_push_double(void* vm, double v);
+
 #endif
