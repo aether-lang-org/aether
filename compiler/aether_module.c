@@ -1508,10 +1508,19 @@ static void apply_inherited_selective_imports(ASTNode* clone, ASTNode* mod_ast) 
     for (int i = 0; i < mod_ast->child_count; i++) {
         ASTNode* imp = mod_ast->children[i];
         if (!imp || imp->type != AST_IMPORT_STATEMENT || !imp->value) continue;
-        if (imp->child_count == 0) continue;
-        if (imp->children[0]->type != AST_IDENTIFIER) continue;
-        // Skip glob imports — selection list isn't on the AST.
-        if (imp->annotation && strcmp(imp->annotation, "glob_import") == 0) continue;
+
+        // #896: a glob import (`import M (*)`) brings every exported name of M
+        // into the module's bare scope. Its selection list is NOT on the AST
+        // (it's computed at typecheck time from M's exports), so it's handled
+        // separately below — the selection is M's full export set rather than
+        // the explicit selector children. A selective import needs its
+        // identifier children; a glob has none.
+        int is_glob = (imp->annotation &&
+                       strcmp(imp->annotation, "glob_import") == 0);
+        if (!is_glob) {
+            if (imp->child_count == 0) continue;
+            if (imp->children[0]->type != AST_IDENTIFIER) continue;
+        }
 
         // Resolve the import path to the merged-name prefix the
         // transitive pass will / has used (`std.http.client` →
@@ -1541,16 +1550,37 @@ static void apply_inherited_selective_imports(ASTNode* clone, ASTNode* mod_ast) 
         const char* sel_const_names[AETHER_MODULE_MAX_DECLS];
         int sel_const_count = 0;
 
-        for (int k = 0; k < imp->child_count; k++) {
-            ASTNode* sel = imp->children[k];
-            if (!sel || sel->type != AST_IDENTIFIER || !sel->value) continue;
-            if (sel->annotation && strcmp(sel->annotation, "module_alias") == 0) continue;
-            if (name_in_list(sel->value, sub_func_names, sub_func_count) &&
-                sel_func_count < AETHER_MODULE_MAX_DECLS) {
-                sel_func_names[sel_func_count++] = sel->value;
-            } else if (name_in_list(sel->value, sub_const_names, sub_const_count) &&
-                       sel_const_count < AETHER_MODULE_MAX_DECLS) {
-                sel_const_names[sel_const_count++] = sel->value;
+        if (is_glob) {
+            // #896: the glob selection is M's whole export surface. Take every
+            // func/const M defines (skipping leading-underscore privates, the
+            // same privacy rule the typecheck-time glob expansion applies) so
+            // a bare `clean(...)` in M's merged body is rewritten to the
+            // prefixed `fs_clean(...)` the transitive pass pulls in — exactly
+            // what the selective and qualified forms already get.
+            for (int k = 0; k < sub_func_count &&
+                            sel_func_count < AETHER_MODULE_MAX_DECLS; k++) {
+                if (sub_func_names[k] && sub_func_names[k][0] != '_') {
+                    sel_func_names[sel_func_count++] = sub_func_names[k];
+                }
+            }
+            for (int k = 0; k < sub_const_count &&
+                            sel_const_count < AETHER_MODULE_MAX_DECLS; k++) {
+                if (sub_const_names[k] && sub_const_names[k][0] != '_') {
+                    sel_const_names[sel_const_count++] = sub_const_names[k];
+                }
+            }
+        } else {
+            for (int k = 0; k < imp->child_count; k++) {
+                ASTNode* sel = imp->children[k];
+                if (!sel || sel->type != AST_IDENTIFIER || !sel->value) continue;
+                if (sel->annotation && strcmp(sel->annotation, "module_alias") == 0) continue;
+                if (name_in_list(sel->value, sub_func_names, sub_func_count) &&
+                    sel_func_count < AETHER_MODULE_MAX_DECLS) {
+                    sel_func_names[sel_func_count++] = sel->value;
+                } else if (name_in_list(sel->value, sub_const_names, sub_const_count) &&
+                           sel_const_count < AETHER_MODULE_MAX_DECLS) {
+                    sel_const_names[sel_const_count++] = sel->value;
+                }
             }
         }
 

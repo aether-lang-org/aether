@@ -11,6 +11,18 @@ next version number before tagging the release.
 
 ## [0.317.0]
 
+### Fixed
+
+- **Glob-imported symbols now resolve across a module boundary** (#896). A
+  module that used `import M (*)` and called a glob-brought symbol compiled
+  standalone but failed with `Undefined function` once it was imported by
+  another module — the merger skipped glob imports when rewriting a consumed
+  module's bare references to their prefixed form (only selective/qualified
+  imports were rewritten). The merge-time rewrite now treats a glob import's
+  selection as the imported module's full export set, so a bare `clean(...)`
+  in the consumed module's body lowers to `fs_clean(...)` exactly as the
+  selective and qualified forms already did.
+
 ## [0.316.0]
 
 ### Added
