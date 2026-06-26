@@ -115,11 +115,58 @@ main() {
 | `lua.vm_set_instruction_limit(vm, budget, every)` | count-hook guard; abort after `budget` VM instructions |
 | `lua.arg_count/_type/_str/_int/_bool(vm, i)` | **inside a callback**: read args (1-based) |
 | `lua.push_int/_str/_bool/_nil(vm, v)` | **inside a callback**: push a result |
+| `lua.push_double(vm, v)` | push a RESP3 Double (integral → Lua number, else precise string) |
 | `lua.push_tagged_table(vm, "ok"\|"err", msg)` | push a Redis-style `{ok=…}`/`{err=…}` table |
 | `lua.raise_error(vm, msg) -> int` | raise a Lua error from a callback (`return lua.raise_error(vm, m)`) |
 
 Typed-value tags exported as consts: `LUA_TNIL`, `LUA_TBOOL`, `LUA_TINT`,
 `LUA_TSTR`, `LUA_TTABLE`, `LUA_TERR`, `LUA_TOTHER`.
+
+### Returning arrays / maps / nested tables from a callback (#910)
+
+A faithful `redis.call` returns RESP multibulks — arrays (`KEYS`, `LRANGE`,
+`SMEMBERS`), maps (`HGETALL`), and nested arrays-of-arrays. The table builder
+constructs them inside a callback. **The table being built is the top of the
+stack:** `table_begin` pushes a fresh one, the `seti_*`/`set_*` ops write into
+it, and nesting is just another `table_begin` closed with `table_end_seti` /
+`table_end_setfield`.
+
+| Call | Effect |
+|------|--------|
+| `lua.table_begin(vm, narr, nrec)` | push a fresh table (`narr`/`nrec` are size hints) |
+| `lua.table_seti_str/_int/_bool(vm, i, v)` | array set: `t[i] = v` (1-based) |
+| `lua.table_set_str/_int/_bool(vm, key, v)` | map set: `t[key] = v` |
+| `lua.table_end_seti(vm, i)` | close the current child table into its parent at `[i]` |
+| `lua.table_end_setfield(vm, key)` | close the current child table into its parent at `[key]` |
+| `lua.table_finish(vm)` | finish the outermost table (it stays on the stack as the return) |
+
+```aether
+// redis.call('KEYS', pattern) -> {"k1","k2","k3"}
+@c_callback
+redis_keys(vm: ptr) -> int {
+    lua.table_begin(vm, 3, 0)
+    lua.table_seti_str(vm, 1, "k1")
+    lua.table_seti_str(vm, 2, "k2")
+    lua.table_seti_str(vm, 3, "k3")
+    lua.table_finish(vm)
+    return 1                      // the table is the single return value
+}
+
+// array-of-arrays: { {"a","b"}, {"c"} }
+@c_callback
+nested(vm: ptr) -> int {
+    lua.table_begin(vm, 2, 0)     // outer
+    lua.table_begin(vm, 2, 0)     // inner #1 (now on top)
+    lua.table_seti_str(vm, 1, "a")
+    lua.table_seti_str(vm, 2, "b")
+    lua.table_end_seti(vm, 1)     // outer[1] = inner#1
+    lua.table_begin(vm, 1, 0)     // inner #2
+    lua.table_seti_str(vm, 1, "c")
+    lua.table_end_seti(vm, 2)     // outer[2] = inner#2
+    lua.table_finish(vm)
+    return 1
+}
+```
 
 This is the next tier above the factor bridge's two-way persistent-VM + shared-
 map model: **host-callbacks-with-typed-marshalling**, in both directions.
@@ -149,6 +196,11 @@ The bidirectional API (#904) has a dedicated end-to-end test:
   **typed** results (int `142`, string `hello k2`) plus that the
   instruction-limit guard aborts an infinite loop. SKIPs when no matching
   liblua headers + runtime soname are found.
+- [`../../../tests/integration/host_lua_table_builder/`](../../../tests/integration/host_lua_table_builder/)
+  — the #910 table builder: callbacks returning a multi-element array
+  (`{"k1","k2","k3"}`), a string-keyed map (`{field=…, count=…}`), and a nested
+  array-of-arrays (`{{"a","b"},{"c"}}`), with a Lua script asserting each shape.
+  Same SKIP gate.
 
 The fire-and-forget surface is covered by two cross-cutting tests:
 

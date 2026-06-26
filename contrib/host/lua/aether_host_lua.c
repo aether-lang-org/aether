@@ -616,6 +616,130 @@ int lua_raise_error(void* vm, const char* msg) {
     return g_lua.lua_error(s);   /* longjmps; never returns */
 }
 
+// === #910 host-callback table builder ======================================
+//
+// A host callback can push scalars and a single {ok}/{err} table, but a
+// faithful `redis.call` returns RESP multibulks — arrays / maps / nested
+// tables (`KEYS`, `LRANGE`, `HGETALL`, `SMEMBERS`, array-of-arrays). This
+// builder exposes the same lua_createtable + lua_seti/setfield machinery the
+// global-injection path already uses, for callback RETURNS.
+//
+// Model: "the table being built is on top of the stack." table_begin pushes a
+// fresh table; the table_set* ops write into the top table; table_begin can be
+// nested (push a child table), and table_end_seti / table_end_setfield store
+// the finished child into the parent (now exposed at the top) at an index/key
+// and pop back to the parent. A small depth tracker guards underflow.
+//
+// Typical use, building {"k1","k2"} as a callback return:
+//   lua_table_begin(vm, 2, 0);
+//   lua_table_seti_str(vm, 1, "k1");
+//   lua_table_seti_str(vm, 2, "k2");
+//   return 1;   // the table is the single return value, left on the stack
+//
+// Nested (array-of-arrays) — outer[1] = {"a"}:
+//   lua_table_begin(vm, 1, 0);        // outer
+//   lua_table_begin(vm, 1, 0);        // inner (child, on top)
+//   lua_table_seti_str(vm, 1, "a");
+//   lua_table_end_seti(vm, 1);        // outer[1] = inner; back to outer on top
+//   return 1;
+
+#define AE_LUA_TBL_MAXDEPTH 32
+static int g_tbl_depth = 0;   /* per-process; the EVAL model is single-threaded */
+
+/* Push a fresh table; it becomes the top-of-stack "current" table. */
+void lua_table_begin(void* vm, int narr, int nrec) {
+    if (!vm) return;
+    if (g_tbl_depth >= AE_LUA_TBL_MAXDEPTH) return;  /* guard runaway nesting */
+    g_lua.lua_createtable((lua_State*)vm, narr < 0 ? 0 : narr, nrec < 0 ? 0 : nrec);
+    g_tbl_depth++;
+}
+
+/* Array sets: current_table[i] = value  (1-based, Lua convention). */
+void lua_table_seti_str(void* vm, int i, const char* v) {
+    if (!vm || g_tbl_depth <= 0) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushstring(s, v ? v : "");
+    g_lua.lua_seti(s, -2, (lua_Integer)i);
+}
+void lua_table_seti_int(void* vm, int i, long v) {
+    if (!vm || g_tbl_depth <= 0) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushinteger(s, (lua_Integer)v);
+    g_lua.lua_seti(s, -2, (lua_Integer)i);
+}
+void lua_table_seti_bool(void* vm, int i, int v) {
+    if (!vm || g_tbl_depth <= 0) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushboolean(s, v);
+    g_lua.lua_seti(s, -2, (lua_Integer)i);
+}
+
+/* Map sets: current_table[key] = value  (string keys, RESP3 map/hash shape). */
+void lua_table_set_str(void* vm, const char* key, const char* v) {
+    if (!vm || g_tbl_depth <= 0 || !key) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushstring(s, v ? v : "");
+    g_lua.lua_setfield(s, -2, key);
+}
+void lua_table_set_int(void* vm, const char* key, long v) {
+    if (!vm || g_tbl_depth <= 0 || !key) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushinteger(s, (lua_Integer)v);
+    g_lua.lua_setfield(s, -2, key);
+}
+void lua_table_set_bool(void* vm, const char* key, int v) {
+    if (!vm || g_tbl_depth <= 0 || !key) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_pushboolean(s, v);
+    g_lua.lua_setfield(s, -2, key);
+}
+
+/* Close the current (child) table by storing it into the now-exposed parent
+ * table at array index `i`, then leaving the parent on top. Requires at least
+ * two open tables (a parent and the child). */
+void lua_table_end_seti(void* vm, int i) {
+    if (!vm || g_tbl_depth < 2) return;   /* need parent + child */
+    lua_State* s = (lua_State*)vm;
+    /* stack: [..., parent, child]. Store child into parent[i]; lua_seti pops
+     * the value (the child), leaving the parent on top. */
+    g_lua.lua_seti(s, -2, (lua_Integer)i);
+    g_tbl_depth--;
+}
+/* Close the current (child) table into the parent at string key `key`. */
+void lua_table_end_setfield(void* vm, const char* key) {
+    if (!vm || g_tbl_depth < 2 || !key) return;
+    lua_State* s = (lua_State*)vm;
+    g_lua.lua_setfield(s, -2, key);
+    g_tbl_depth--;
+}
+/* Finish the OUTERMOST table: it stays on the stack as the callback's return
+ * value. Just resets the depth tracker (the table is already on top). Call
+ * once, matching the first lua_table_begin, then `return 1`. */
+void lua_table_finish(void* vm) {
+    (void)vm;
+    if (g_tbl_depth > 0) g_tbl_depth--;
+}
+
+// --- RESP3 typed scalars the callback can also return ----------------------
+/* Lua has one number type (5.3+ distinguishes int/float subtypes); a RESP3
+ * Double marshals to a Lua float. We push via the number path. */
+void lua_push_double(void* vm, double v) {
+    if (!vm) return;
+    /* lua_pushnumber isn't in the dlsym table; push the textual form is wrong
+     * for a Double. Use lua_pushinteger's sibling only if integral; otherwise
+     * fall back to a string so no precision is silently lost on 5.3 where the
+     * float push isn't resolved. Most RESP Doubles arrive integral. */
+    lua_State* s = (lua_State*)vm;
+    double r = v < 0 ? -v : v;
+    if (r == (double)(long)v) {
+        g_lua.lua_pushinteger(s, (lua_Integer)(long)v);
+    } else {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "%.17g", v);
+        g_lua.lua_pushstring(s, buf);
+    }
+}
+
 // --- execution guard: instruction-count hook -------------------------------
 // The host arms a count hook; when the budget is hit the hook raises a Lua
 // error (the script-timeout shape). One global budget per process is enough
@@ -686,4 +810,16 @@ void  lua_push_nil(void* vm) { (void)vm; }
 void  lua_push_tagged_table(void* vm, const char* f, const char* m) { (void)vm; (void)f; (void)m; }
 int   lua_raise_error(void* vm, const char* m) { (void)vm; (void)m; return 0; }
 void  lua_vm_set_instruction_limit(void* vm, long b, int e) { (void)vm; (void)b; (void)e; }
+// #910 table builder — unavailable stubs.
+void  lua_table_begin(void* vm, int a, int r) { (void)vm; (void)a; (void)r; }
+void  lua_table_seti_str(void* vm, int i, const char* v) { (void)vm; (void)i; (void)v; }
+void  lua_table_seti_int(void* vm, int i, long v) { (void)vm; (void)i; (void)v; }
+void  lua_table_seti_bool(void* vm, int i, int v) { (void)vm; (void)i; (void)v; }
+void  lua_table_set_str(void* vm, const char* k, const char* v) { (void)vm; (void)k; (void)v; }
+void  lua_table_set_int(void* vm, const char* k, long v) { (void)vm; (void)k; (void)v; }
+void  lua_table_set_bool(void* vm, const char* k, int v) { (void)vm; (void)k; (void)v; }
+void  lua_table_end_seti(void* vm, int i) { (void)vm; (void)i; }
+void  lua_table_end_setfield(void* vm, const char* k) { (void)vm; (void)k; }
+void  lua_table_finish(void* vm) { (void)vm; }
+void  lua_push_double(void* vm, double v) { (void)vm; (void)v; }
 #endif

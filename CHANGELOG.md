@@ -5,9 +5,22 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.321.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **Labeled `break` / `continue`** (#893). A `while` / `for` loop can carry a
+  label — `outer: while ...` — and `break outer` / `continue outer` then target
+  that loop from inside a nested loop (`break` exits it, `continue` jumps to its
+  next iteration). This replaces the boolean-flag emulation a faithful C port
+  otherwise needs for a nested-loop early exit (the `goto cleanup` idiom). The
+  label must be on the same line as the `break`/`continue`; a label naming no
+  enclosing loop is a compile-time error; defers in the unwound scopes still run
+  (LIFO) before the jump. Unlabeled `break`/`continue` are unchanged.
 
 ## [0.321.0]
 
@@ -36,15 +49,6 @@ next version number before tagging the release.
 ## [0.320.0]
 
 ### Added
-
-- **Labeled `break` / `continue`** (#893). A `while` / `for` loop can carry a
-  label — `outer: while ...` — and `break outer` / `continue outer` then target
-  that loop from inside a nested loop (`break` exits it, `continue` jumps to its
-  next iteration). This replaces the boolean-flag emulation a faithful C port
-  otherwise needs for a nested-loop early exit (the `goto cleanup` idiom). The
-  label must be on the same line as the `break`/`continue`; a label naming no
-  enclosing loop is a compile-time error; defers in the unwound scopes still run
-  (LIFO) before the jump. Unlabeled `break`/`continue` are unchanged.
 
 - **`@c_struct` typed overlays — width-correct C-struct field access over a
   raw `ptr`** (#891). Declare a C struct's layout once with explicit offsets
