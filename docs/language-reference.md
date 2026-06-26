@@ -150,6 +150,20 @@ string[5] names;           // Array of 5 strings
 float[100] values;         // Array of 100 floats
 ```
 
+**Array-to-pointer decay.** A named fixed-size array decays to a pointer to its first element in pointer context — when assigned to an inferred binding, passed as a `ptr`-typed argument, or compared against a pointer (the same rule C uses):
+
+```aether
+byte[128] static_ids
+ids = static_ids           // `ids` is inferred as a `ptr` (decays), not an array
+heap = null
+if id_count > 8 {
+    heap = malloc(256)
+    ids = heap             // legal: `ids` is a reassignable pointer
+}
+```
+
+This is the stack-buffer-with-heap-fallback idiom (`T buf[N]; T* p = buf; if (n > N) p = malloc(...)`). Only a *named array* decays; an array *literal* initializer (`x = [1, 2, 3]`) still binds a real array. To keep the array type, annotate the binding explicitly (`x: byte[128] = ...`).
+
 ### Sequence Types (`*StringSeq`)
 
 `*StringSeq` is a cons-cell linked list of strings — Erlang/Elixir-shaped, with O(1) head/tail/cons/length and refcount-based structural sharing. Empty list is the `NULL` pointer; each cell carries a cached length.

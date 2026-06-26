@@ -364,8 +364,21 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                 if (is_type_inferrable(node->node_type)) {
                     Type* init_type = node->children[0]->node_type;
                     if (init_type && init_type->kind != TYPE_UNKNOWN) {
-                        node->node_type = clone_type(init_type);
-                        add_constraint(ctx, node, init_type, "variable initialization");
+                        /* #892: a NAMED array initializer decays to a pointer
+                         * (C array-to-pointer decay), so `ids = static_ids`
+                         * (static_ids: byte[N]) infers `ids` as a plain `ptr`
+                         * and a later `ids = heap` stays legal. Mirror the
+                         * decay in the typechecker (infer path) so codegen
+                         * emits `void* ids`, not an array declarator. An array
+                         * LITERAL is not an identifier, so it still binds an
+                         * array. */
+                        if (init_type->kind == TYPE_ARRAY &&
+                            node->children[0]->type == AST_IDENTIFIER) {
+                            node->node_type = create_type(TYPE_PTR);
+                        } else {
+                            node->node_type = clone_type(init_type);
+                            add_constraint(ctx, node, init_type, "variable initialization");
+                        }
                     }
                 }
             }
