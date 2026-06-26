@@ -1,0 +1,5 @@
+type USD = distinct float
+type EUR = distinct float
+take(u: USD) -> int { return 1 }
+conv(e: EUR) -> int { return take(e) }
+main() { println("should not compile") }

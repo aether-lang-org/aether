@@ -13,6 +13,16 @@ next version number before tagging the release.
 
 ### Added
 
+- **Distinct types: `type Name = distinct Base`** (#480). A zero-cost nominal
+  wrapper over a scalar / `string` / `ptr` base — `type USD = distinct float`,
+  `type Fd = distinct int`. Lowers to the base C type (no boxing), but the type
+  checker treats it as nominally separate: crossing the boundary needs an
+  explicit `as` cast (`9.99 as USD` to wrap, `usd as float` to unwrap; `as`
+  also does ordinary numeric conversions). Enforced at variable
+  declarations/assignments and at call-argument boundaries (a `Fd` parameter
+  rejects a raw `int`; an `EUR` is rejected where `USD` is wanted) — the
+  capability-token discipline now compiler-checked.
+
 - **Gradual contracts: `where` clauses on function parameters** (#525). A
   parameter may carry a runtime-checked precondition: `divide(a: int, b: int
   where b != 0)`. It lowers to the same entry guard as `requires` — a violation

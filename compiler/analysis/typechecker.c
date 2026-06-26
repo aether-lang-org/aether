@@ -940,10 +940,21 @@ int is_type_compatible(Type* from, Type* to) {
     
     // Unknown types match anything (for inference)
     if (from->kind == TYPE_UNKNOWN || to->kind == TYPE_UNKNOWN) return 1;
-    
+
+    // #480 distinct types: a distinct type converts to/from any other type
+    // ONLY via an explicit `as` cast — never implicitly, even when the base
+    // `kind` matches. So if either side is distinct, they are compatible only
+    // when they are the SAME distinct type. (Checked before the kind-based
+    // numeric rules below, which would otherwise let `distinct int` flow into
+    // `int`.)
+    if (from->distinct_name || to->distinct_name) {
+        return from->distinct_name && to->distinct_name &&
+               strcmp(from->distinct_name, to->distinct_name) == 0;
+    }
+
     // Exact match
     if (types_equal(from, to)) return 1;
-    
+
     // Numeric conversions
     if (from->kind == TYPE_INT && to->kind == TYPE_FLOAT) return 1;
     if (from->kind == TYPE_FLOAT && to->kind == TYPE_INT) return 1;
@@ -1162,6 +1173,12 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             result->element_type = inner;
             return result;
         }
+
+        case AST_VALUE_CAST:
+            /* `expr as T` (scalar / distinct target, #480) — the result IS the
+             * target type the parser stashed (distinct-resolved by then). */
+            return expr->node_type ? clone_type(expr->node_type)
+                                   : create_type(TYPE_UNKNOWN);
 
         case AST_PTR_AS_ARRAY_CAST: {
             /* `expr as T[]` — view the operand as a typed C array.
@@ -1883,6 +1900,8 @@ static void check_effect_tags(ASTNode* program);
 // #522: fold `__pure(fn)` queries to compile-time bool constants.
 static void resolve_purity_queries(ASTNode* node, ASTNode* program,
                                    const char** globals, int nglobals);
+// #480: resolve `type X = distinct Y` placeholders into distinct Types.
+static void resolve_distinct_types(ASTNode* program);
 
 // Type checking functions
 int typecheck_program(ASTNode* program) {
@@ -1893,6 +1912,10 @@ int typecheck_program(ASTNode* program) {
     namespace_count = 0;  // Reset imported namespaces
     user_explicit_namespace_count = 0;  // Reset user-explicit namespaces (issue #243)
     selective_import_reset();  // Reset per-module selective-import filters
+
+    // #480: resolve `type X = distinct Y` placeholders into distinct Types
+    // across the whole AST before any type-checking or inference runs.
+    resolve_distinct_types(program);
 
     // #522: fold `__pure(fn)` queries to bool constants before any expression
     // is type-checked. Needs the merged call graph (all function defs), which
@@ -3052,6 +3075,65 @@ static int func_is_pure(ASTNode* program, const char* fnname,
     return !purity_scan(program, fn, body, globals, nglobals, visited, &nv, 0);
 }
 
+/* #480 distinct types — resolution pass. The parser leaves a reference to a
+ * distinct type as a TYPE_STRUCT{struct_name=Name} placeholder (the same shape
+ * any named type gets). This pass collects every `type Name = distinct Base`
+ * definition and rewrites those placeholders, anywhere in the AST, into the
+ * distinct Type: machine `kind` from Base (so codegen/get_c_type emit Base's
+ * C type — zero cost) plus `distinct_name = Name` (so the type system keeps it
+ * nominally separate). */
+#define AETHER_MAX_DISTINCT 256
+typedef struct { const char* name; Type* base; } DistinctDef;
+
+static void distinct_rewrite_type(Type* t, DistinctDef* defs, int ndefs, int depth) {
+    if (!t || depth > 64) return;
+    if (t->kind == TYPE_STRUCT && t->struct_name && !t->distinct_name) {
+        for (int i = 0; i < ndefs; i++) {
+            if (strcmp(t->struct_name, defs[i].name) == 0) {
+                Type* base = defs[i].base;
+                char* nm = strdup(t->struct_name);
+                free(t->struct_name);
+                t->struct_name = NULL;
+                t->kind = base->kind;
+                if (base->c_alias) t->c_alias = strdup(base->c_alias);
+                if (base->element_type) t->element_type = clone_type(base->element_type);
+                t->distinct_name = nm;
+                break;
+            }
+        }
+    }
+    distinct_rewrite_type(t->element_type, defs, ndefs, depth + 1);
+    distinct_rewrite_type(t->return_type, defs, ndefs, depth + 1);
+    for (int i = 0; i < t->tuple_count; i++)
+        if (t->tuple_types) distinct_rewrite_type(t->tuple_types[i], defs, ndefs, depth + 1);
+    for (int i = 0; i < t->param_count; i++)
+        if (t->param_types) distinct_rewrite_type(t->param_types[i], defs, ndefs, depth + 1);
+}
+
+static void distinct_rewrite_ast(ASTNode* n, DistinctDef* defs, int ndefs) {
+    if (!n) return;
+    if (n->node_type) distinct_rewrite_type(n->node_type, defs, ndefs, 0);
+    for (int i = 0; i < n->child_count; i++)
+        distinct_rewrite_ast(n->children[i], defs, ndefs);
+}
+
+static void resolve_distinct_types(ASTNode* program) {
+    if (!program) return;
+    DistinctDef defs[AETHER_MAX_DISTINCT];
+    int ndefs = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_DISTINCT_TYPE_DEF && c->value && c->node_type &&
+            ndefs < AETHER_MAX_DISTINCT) {
+            defs[ndefs].name = c->value;
+            defs[ndefs].base = c->node_type;
+            ndefs++;
+        }
+    }
+    if (ndefs == 0) return;
+    distinct_rewrite_ast(program, defs, ndefs);
+}
+
 /* Fold every `__pure(fn)` node in the tree to a `true`/`false` bool literal. */
 static void resolve_purity_queries(ASTNode* node, ASTNode* program,
                                    const char** globals, int nglobals) {
@@ -4171,6 +4253,31 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             }
             return 1;
 
+        case AST_VALUE_CAST: {
+            /* `expr as T` (#480) — a zero-cost nominal (un)wrap or numeric
+             * conversion. Validate it's a sensible value cast: the operand and
+             * target share a machine `kind` (distinct (un)wrap) or are both
+             * numeric (a numeric conversion). The target carries the result
+             * type (distinct-resolved). */
+            if (expr->child_count > 0) typecheck_expression(expr->children[0], table);
+            Type* operand = expr->child_count > 0 ? infer_type(expr->children[0], table) : NULL;
+            if (operand && expr->node_type) {
+                int same = (operand->kind == expr->node_type->kind);
+                int numeric = is_numeric_scalar(operand->kind) &&
+                              is_numeric_scalar(expr->node_type->kind);
+                if (!same && !numeric) {
+                    char msg[220];
+                    snprintf(msg, sizeof(msg),
+                        "cannot cast %s to %s with `as`: a value cast converts "
+                        "between a distinct type and its base, or between numeric "
+                        "types", type_name(operand), type_name(expr->node_type));
+                    type_error(msg, expr->line, expr->column);
+                }
+            }
+            if (operand) free_type(operand);
+            return 1;
+        }
+
         case AST_PTR_AS_FN_CAST:
             /* Walk the operand; keep the parser-populated node_type
              * (TYPE_FUNCTION with signature) so the call-site codegen
@@ -5146,6 +5253,31 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
             if (arg_slot < 0 || arg_slot >= call->child_count) continue;
 
             Type* param_type = param->node_type;
+            /* #480: a distinct-typed parameter (or a distinct argument to a
+             * non-distinct parameter) requires an explicit `as` cast at the
+             * call boundary — the capability-token use case (`GrantedFD =
+             * distinct int` cannot receive a raw int). Scoped to distinct
+             * types; Aether's argument checking is otherwise lenient. */
+            if (param_type) {
+                ASTNode* darg = call->children[arg_slot];
+                if (darg) {
+                    Type* da = infer_type(darg, table);
+                    if (da && da->kind != TYPE_UNKNOWN &&
+                        (param_type->distinct_name || da->distinct_name) &&
+                        !is_type_compatible(da, param_type)) {
+                        char emsg[340];
+                        snprintf(emsg, sizeof(emsg),
+                            "Argument %d '%s' of '%s': expected %s, got %s — a "
+                            "distinct type needs an explicit `as` cast at the "
+                            "boundary", arg_slot + 1,
+                            param->value ? param->value : "?",
+                            call->value ? call->value : "?",
+                            type_name(param_type), type_name(da));
+                        type_error(emsg, darg->line, darg->column);
+                    }
+                    if (da) free_type(da);
+                }
+            }
             if (!param_type || param_type->kind != TYPE_DURATION) continue;
 
             ASTNode* arg = call->children[arg_slot];

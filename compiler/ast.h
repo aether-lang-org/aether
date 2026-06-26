@@ -183,7 +183,18 @@ typedef enum {
     AST_ARRAY_TYPE,
     
     // Special
-    AST_PRINT_STATEMENT
+    AST_PRINT_STATEMENT,
+
+    // #480 distinct types. Appended at the END of the enum on purpose:
+    // inserting mid-enum shifts later values and (with incremental builds)
+    // leaves stale .o compiled against the old numbering.
+    AST_DISTINCT_TYPE_DEF,  // `type Name = distinct Base` — `value` is Name,
+                            // `node_type` is the base Type. Zero-cost: emits no
+                            // C; the typechecker registers Name as a nominally
+                            // distinct type over Base.
+    AST_VALUE_CAST          // `expr as T` for a scalar / distinct target — a
+                            // zero-cost nominal (un)wrap or numeric conversion.
+                            // children[0] = operand; node_type = target type.
 } ASTNodeType;
 
 typedef enum {
@@ -228,6 +239,12 @@ typedef struct Type {
     // NULL for every non-alias type. See redis-porting-language-gaps.md
     // "P0: C ABI Scalar Aliases".
     char* c_alias;
+    // #480 distinct types: when non-NULL, this is a nominally-distinct type
+    // named `distinct_name` whose machine representation is `kind` (zero cost —
+    // codegen emits the base C type). Two types with different distinct names,
+    // or a distinct type vs its base, are NOT compatible without an explicit
+    // `as` cast, even when `kind` matches. NULL for every non-distinct type.
+    char* distinct_name;
     // Tuple support (multiple return values)
     struct Type** tuple_types;  // Array of element types (NULL if not tuple)
     int tuple_count;            // Number of tuple elements (0 if not tuple)
