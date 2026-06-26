@@ -385,6 +385,58 @@ static void tc_seed_lib_dirs_from_env(void) {
     if (env && *env) tc_lib_dir_append(env);
 }
 
+#ifndef _WIN32
+/* Recursively fold every source file (.ae/.c/.h) under `dir` into `*acc`
+ * (name + resolved mtime + size), returning the count hashed. Modules live in
+ * SUBDIRECTORIES of a lib dir (`std/string/module.ae`,
+ * `contrib/host/lua/module.ae`), so a top-level-only walk misses them — an
+ * edit to a subdir module would not invalidate the cache and `ae run`/`build`
+ * would serve a stale binary. We recurse (bounded depth + a shared entry cap)
+ * so any module edit, at any nesting, bumps the key. `rel` is the path from
+ * the lib-dir root, so the same file at the same relative path hashes
+ * identically across runs but distinctly from a same-named file elsewhere. */
+static int hash_lib_dir_entries(const char* dir, const char* rel,
+                                unsigned long long* acc, int* count, int depth) {
+    if (depth > 8 || *count >= 4096) return *count;
+    DIR* d = opendir(dir);
+    if (!d) return *count;
+    struct dirent* de;
+    while ((de = readdir(d)) != NULL && *count < 4096) {
+        const char* name = de->d_name;
+        if (name[0] == '.') continue;  // skip . / .. / dotfiles
+        char full[1024];
+        snprintf(full, sizeof(full), "%s/%s", dir, name);
+        char childrel[1024];
+        if (rel && rel[0])
+            snprintf(childrel, sizeof(childrel), "%s/%s", rel, name);
+        else
+            snprintf(childrel, sizeof(childrel), "%s", name);
+        struct stat est;
+        if (stat(full, &est) != 0) continue;   // stat follows symlinks (#623)
+        if (S_ISDIR(est.st_mode)) {
+            hash_lib_dir_entries(full, childrel, acc, count, depth + 1);
+            continue;
+        }
+        size_t nlen = strlen(name);
+        int interesting = 0;
+        if (nlen > 3 && strcmp(name + nlen - 3, ".ae") == 0) interesting = 1;
+        else if (nlen > 2 && (strcmp(name + nlen - 2, ".c") == 0 ||
+                              strcmp(name + nlen - 2, ".h") == 0)) interesting = 1;
+        if (!interesting) continue;
+        /* Hash the RELATIVE path (not the bare name) + mtime + size, so a
+         * subdir module is distinct from a same-named top-level file and the
+         * key is stable across runs. mtime+size together catch same-second
+         * edits. */
+        *acc ^= fnv64_str(childrel);
+        *acc = (*acc * 1099511628211ULL) ^ (unsigned long long)est.st_mtime;
+        *acc = (*acc * 1099511628211ULL) ^ (unsigned long long)est.st_size;
+        (*count)++;
+    }
+    closedir(d);
+    return *count;
+}
+#endif
+
 static unsigned long long compute_cache_key(const char* ae_file,
                                             const char* extra_files,
                                             const char* opt_level,
@@ -444,41 +496,13 @@ static unsigned long long compute_cache_key(const char* ae_file,
                             ":lmt=%lld", (long long)lst.st_mtime);
         }
 #ifndef _WIN32
-        DIR* d = opendir(tc.lib_dirs[i]);
-        if (d) {
+        /* Recurse the whole lib-dir tree — modules live in subdirectories
+         * (#623 follow-up: a top-level-only walk missed every std/contrib
+         * module in a subdir, so editing one served a stale cached binary). */
+        {
             unsigned long long entry_hash = 0;
             int n = 0;
-            struct dirent* de;
-            while ((de = readdir(d)) != NULL && n < 256) {
-                const char* name = de->d_name;
-                if (name[0] == '.') continue;  // skip . / .. / dotfiles
-                /* We care about source files the compiler will read.
-                 * .ae is the common case (modules + entry points);
-                 * include common header-shape extensions too so a
-                 * vendored C shim edit also invalidates. */
-                size_t nlen = strlen(name);
-                int interesting = 0;
-                if (nlen > 3 && strcmp(name + nlen - 3, ".ae") == 0) interesting = 1;
-                else if (nlen > 2 && (strcmp(name + nlen - 2, ".c") == 0 ||
-                                      strcmp(name + nlen - 2, ".h") == 0)) interesting = 1;
-                if (!interesting) continue;
-                char full[1024];
-                snprintf(full, sizeof(full), "%s/%s", tc.lib_dirs[i], name);
-                struct stat est;
-                if (stat(full, &est) == 0) {
-                    /* Hash name + resolved-target mtime + size into a
-                     * single rolling FNV. Hashing keeps the key_buf
-                     * bounded regardless of entry count; mtime + size
-                     * together catch the same-second edit case. */
-                    entry_hash ^= fnv64_str(name);
-                    entry_hash = (entry_hash * 1099511628211ULL)
-                                 ^ (unsigned long long)est.st_mtime;
-                    entry_hash = (entry_hash * 1099511628211ULL)
-                                 ^ (unsigned long long)est.st_size;
-                    n++;
-                }
-            }
-            closedir(d);
+            hash_lib_dir_entries(tc.lib_dirs[i], "", &entry_hash, &n, 0);
             if (n > 0) {
                 pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
                                 ":lent=%d:lh=%016llx", n, entry_hash);
