@@ -12,6 +12,8 @@ static int error_count = 0;
 static int warning_count = 0;
 // #891: query the @c_struct overlay name set (defined ~typecheck_program).
 static int is_c_struct_name(const char* name);
+// #891: declared Type of a @c_struct field (dotted for nested). Defined below.
+static Type* c_struct_field_decl_type(const char* sname, const char* field);
 
 // Get the last component of a module path for namespace
 // "mypackage.utils" -> "utils"
@@ -1389,6 +1391,36 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             // Look up the struct/actor type and find the field type
             if (expr->child_count > 0 && expr->children[0]) {
                 Type* base_type = infer_type(expr->children[0], table);
+                /* #891 @c_struct overlay field access. base is a
+                 * `*OverlayName` ptr; resolve the field's declared type so the
+                 * node carries the right type (string interpolation picks
+                 * %lld for a uint64 field instead of defaulting to %d). A
+                 * field that is itself an overlay yields `*ThatOverlay` so a
+                 * nested chain (`s.last_id.ms`) keeps resolving. */
+                if (base_type && base_type->kind == TYPE_PTR &&
+                    base_type->element_type &&
+                    base_type->element_type->kind == TYPE_STRUCT &&
+                    base_type->element_type->struct_name &&
+                    is_c_struct_name(base_type->element_type->struct_name) &&
+                    expr->value) {
+                    Type* ft = c_struct_field_decl_type(base_type->element_type->struct_name,
+                                                   expr->value);
+                    if (ft) {
+                        Type* result;
+                        if (ft->kind == TYPE_STRUCT && ft->struct_name &&
+                            is_c_struct_name(ft->struct_name)) {
+                            /* nested overlay field → pointer-to-overlay */
+                            result = create_type(TYPE_PTR);
+                            result->element_type = ft;  /* adopt */
+                        } else {
+                            result = ft;
+                        }
+                        if (expr->node_type) free_type(expr->node_type);
+                        expr->node_type = clone_type(result);
+                        free_type(base_type);
+                        return result;
+                    }
+                }
                 if (base_type && base_type->kind == TYPE_DURATION) {
                     Type* out = NULL;
                     if (expr->value && strcmp(expr->value, "ns") == 0) {
@@ -1942,9 +1974,11 @@ static void resolve_distinct_types(ASTNode* program);
 #define AETHER_MAX_C_STRUCTS 256
 static const char* g_c_struct_names[AETHER_MAX_C_STRUCTS];
 static int g_c_struct_name_count = 0;
+static ASTNode* g_c_struct_program = NULL;   /* for field-type lookup (#891) */
 
 static void collect_c_struct_names(ASTNode* program) {
     g_c_struct_name_count = 0;
+    g_c_struct_program = program;
     if (!program) return;
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* c = program->children[i];
@@ -1959,6 +1993,52 @@ static int is_c_struct_name(const char* name) {
     for (int i = 0; i < g_c_struct_name_count; i++)
         if (strcmp(g_c_struct_names[i], name) == 0) return 1;
     return 0;
+}
+
+/* #891: find the AST_C_STRUCT_DEF for `name`. */
+static ASTNode* c_struct_def_node(const char* name) {
+    if (!name || !g_c_struct_program) return NULL;
+    for (int i = 0; i < g_c_struct_program->child_count; i++) {
+        ASTNode* c = g_c_struct_program->children[i];
+        if (c && c->type == AST_C_STRUCT_DEF && c->value && strcmp(c->value, name) == 0)
+            return c;
+    }
+    return NULL;
+}
+
+/* #891: declared Type of `struct.field` (field may be a dotted chain for
+ * nested overlays). Returns a cloned Type (caller frees), or NULL if unknown.
+ * Lets member-access typing set the right node_type so string interpolation
+ * picks %lld for a uint64 field instead of defaulting to %d. */
+static Type* c_struct_field_decl_type(const char* sname, const char* field) {
+    ASTNode* def = c_struct_def_node(sname);
+    if (!def || !field) return NULL;
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", field);
+    char* seg = buf;
+    while (seg && *seg) {
+        char* dot = strchr(seg, '.');
+        if (dot) *dot = '\0';
+        ASTNode* fnode = NULL;
+        for (int i = 0; i < def->child_count; i++) {
+            ASTNode* f = def->children[i];
+            if (f && f->type == AST_STRUCT_FIELD && f->value && strcmp(f->value, seg) == 0) {
+                fnode = f; break;
+            }
+        }
+        if (!fnode || !fnode->node_type) return NULL;
+        if (dot) {
+            /* descend: this field must name another overlay */
+            if (fnode->node_type->kind != TYPE_STRUCT || !fnode->node_type->struct_name)
+                return NULL;
+            def = c_struct_def_node(fnode->node_type->struct_name);
+            if (!def) return NULL;
+            seg = dot + 1;
+        } else {
+            return clone_type(fnode->node_type);
+        }
+    }
+    return NULL;
 }
 
 // Type checking functions

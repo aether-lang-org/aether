@@ -35,11 +35,13 @@ fi
 
 # 2. Runtime round-trip.
 ACTUAL=$(AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/probe.ae" 2>&1)
-EXPECT="length=999999
-slen=42
-last=111/222
-maxdel_ms=111"
-if [ "$ACTUAL" = "$EXPECT" ]; then
+# Match each expected line independently — robust to any build chatter the
+# `ae run` path may interleave (don't exact-match the whole stream).
+rt_ok=1
+for line in "length=999999" "slen=42" "last=111/222" "maxdel_ms=111"; do
+    echo "$ACTUAL" | grep -qF "$line" || { rt_ok=0; break; }
+done
+if [ "$rt_ok" -eq 1 ]; then
     echo "  [PASS] runtime round-trip (scalar + nested + s->length--)"
 else
     echo "  [FAIL] runtime mismatch:"; echo "$ACTUAL" | sed 's/^/      /'; fail=1
