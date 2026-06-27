@@ -5,9 +5,26 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.328.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **Bare top-level function passed as an `fn` arg across a module boundary**
+  (#940). Passing a bare named function as an `fn`-typed argument to an
+  *imported* module's function failed to compile — the caller referenced an
+  `_aether_bare_adapter_<name>` env-ignoring shim that was never emitted in
+  the caller's translation unit. The adapter-discovery pre-walk looked up the
+  call's callee by its AST name, which for a qualified `mod.fn(...)` call is
+  still dotted (`runner.runit`) while the merged definition is `runner_runit`;
+  the lookup missed, the `fn`-typed parameter was never inspected, and the
+  bare-fn argument's adapter was never registered. The lookup now also tries
+  the merged (`.`→`_`) form, so a library API that takes a caller-supplied
+  callback by bare name (visitors, comparators, retry/poll predicates) works
+  across the import boundary — same as it already did single-file.
 
 ## [0.328.0]
 
