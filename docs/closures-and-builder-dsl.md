@@ -55,6 +55,14 @@ appears on the same line as the call's closing `)`. A `{` on the next line is an
 independent block. This is what stops `result = build()\n{ ... }` from greedily
 consuming the bare block as `build`'s closure (issue #286).
 
+**Separate axis — fluent method chaining (UFCS):** the two axes above are the
+*block* DSL (a trailing block fills structure). The *value-chain* primitive is
+orthogonal: `x.f(args)` desugars to `f(x, args)` when `f`'s first parameter
+matches `typeof(x)`, so calls chain left-to-right
+(`expect(5).to_equal(5).to_be_gt(0)`). It works on imported library surfaces
+and is a strict last-resort that never shadows a module/field call. See
+[Fluent Method Chaining (UFCS)](#fluent-method-chaining-ufcs).
+
 ## Background
 
 The builder-style DSL pattern — where nested blocks of code describe structure
@@ -634,6 +642,66 @@ call(handler, num, prev, op)
 Each button's behavior is declared alongside the button — not in a separate
 dispatch table. The ref cells provide shared mutable state across all callbacks.
 
+## Fluent Method Chaining (UFCS)
+
+Everything above describes the **block** DSL — a function accepts a trailing
+block that fills structure (`describe("x") { ... }`). UFCS adds the
+orthogonal **value-chain** primitive: calling a method on a value and getting
+a value back, so calls read left-to-right like prose
+(`expect(5).to_equal(5).to_be_gt(0)`). This is the shape every fluent
+assertion / query / builder API is built on, and it composes with — but is
+distinct from — the trailing-block forms.
+
+**The rule.** `x.f(args)` desugars to `f(x, args)` when `f` is a free
+function whose **first parameter type matches `typeof(x)`**. No new
+declaration syntax: any existing free function whose first parameter is the
+receiver type is callable in method position.
+
+```aether
+struct Subject { v: int, ok: int }
+expect(n: int) -> Subject { return Subject { v: n, ok: 1 } }
+// returns the receiver, so calls chain (the fluent-interface contract)
+to_equal(s: Subject, want: int) -> Subject {
+    ok = s.ok
+    if s.v != want { ok = 0 }
+    return Subject { v: s.v, ok: ok }
+}
+
+expect(5).to_equal(5)            // -> to_equal(expect(5), 5)
+expect(5).to_equal(5).to_be_gt(0) // chains: each step returns a Subject
+```
+
+The receiver can be any expression — a call result (`expect(5).to_*`), a
+stored value (`s = expect(5); s.to_equal(5)`), or a pointer
+(`c.bump()` → `bump(c)` for `c: *Counter`, mutating in place).
+
+**Works across the import boundary.** The fluent surface is normally provided
+by a *library* and chained in *consumer* code — a test framework's matchers,
+a query API's combinators. `value.method()` resolves a `method` exported by
+an imported module whose first parameter matches `typeof(value)`, honoring the
+same visibility as a normal qualified `mod.method(value)` call:
+
+```aether
+import assert
+r = assert.expect_int(5).to_equal(5).to_be_gt(0)  // matchers imported, chain local
+```
+
+**Resolution & precedence.** UFCS is a strict *last resort*: module-qualified
+calls (`string.length(s)`), struct-field access, and function-pointer-field
+dispatch all keep priority. A dotted call only falls back to UFCS when it
+would otherwise be an "Undefined function" — so nothing that compiled before
+changes meaning. Same-file functions win over imported ones; a receiver whose
+type doesn't match the candidate's first parameter declines cleanly (no
+silent coercion). There is no codegen change: the rewritten `f(x, args)` is an
+ordinary call, and a small by-value struct threaded through an N-step chain is
+N register-width copies the C backend elides — fluent chains are cheap.
+
+**Ambient state for a facade.** A fluent facade often carries a shared
+"current context" cell (set by `init()`, read by the chained matchers). Use a
+module-level `var` (which persists across the import boundary) or
+`std.config` for that — see [Ref Cells](#ref-cells--shared-mutable-state-for-closures)
+for the closure-capture case.
+
 ## Comparison with Other Languages
 
 For the broader "why this shape exists" comparison against Lisp,
@@ -646,6 +714,7 @@ Smalltalk, Rust, and Zig, see
 | Trailing block | `do: [...]` | `method do ... end` | `method { ... }` | `method() { ... }` |
 | Implicit receiver | `self` in block | `instance_eval` | Delegate | `_ctx: ptr` convention |
 | Builder pattern | Cascades | Shoes, Sinatra | SwingBuilder | Trailing blocks + context stack |
+| Fluent method chain | Cascades (`;`) | method chaining | method chaining | UFCS (`x.f()` → `f(x)`) |
 | Callback storage | Block variables | Procs/lambdas | Closures | `fn` type + `call()` |
 | Shared mutable state | Instance vars | `@variables` | Delegate fields | `ref()` cells |
 
