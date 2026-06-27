@@ -147,3 +147,37 @@ subtree for general dotted calls; (2) typechecker UFCS fallback with
 first-param unification and strict last-resort ordering; (3) tests for the
 chain, the precedence (module/field win), and the no-match error. Codegen
 is untouched.
+
+---
+
+## Status: IMPLEMENTED (this PR)
+
+Option 1 (UFCS) is implemented exactly as scoped above — no codegen change.
+
+- **Parser** (`parser/parser.c`, postfix call handler). A dotted call whose
+  receiver is **not** a bare identifier (a call result, an indexed value —
+  `expect(5).to_eq(...)`) previously produced no callee name and failed as
+  `Undefined function '?'`. It now detaches the receiver subtree, carries the
+  bare method name, tags the call node `ufcs`, and seats the receiver as
+  `children[0]`. The `identifier.member()` path is unchanged (still forms the
+  qualified name first).
+- **Typechecker** (`analysis/typechecker.c`, `try_ufcs_rewrite`). Two entry
+  shapes both rewrite to canonical `method(recv, args)`:
+  - shape (a): the parser-tagged node (receiver already at `children[0]`);
+    handled at the top of `typecheck_function_call`.
+  - shape (b): a `recv.method(args)` where `recv` is a single-identifier
+    **value** — tried as a strict last resort, right after the #749
+    fnptr-field fallback and before the Undefined-function error.
+  In both shapes UFCS only fires when `method` resolves to a free function
+  whose first parameter type unifies with `typeof(recv)`; otherwise it
+  declines and the standard error stands. Module-qualified resolution,
+  struct-field, and fnptr-field dispatch all keep priority, so nothing that
+  compiled before changes meaning.
+- **Codegen**: untouched. The rewritten node is an ordinary call.
+
+Verified: chained call-result receivers (`expect(5).inc().to_equal(6)`),
+stored-value receivers, pointer receivers (`c.bump()` →
+`bump(c)` with `c: *Counter`), module calls still resolving, and both
+decline paths (no such free function; first-param type mismatch) producing a
+clean `Undefined function` error rather than a miscompile. Regression test:
+`tests/integration/ufcs_method_call/`.
