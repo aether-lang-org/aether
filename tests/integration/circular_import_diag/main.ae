@@ -1,0 +1,2 @@
+import a
+main() { x = a.fa() }

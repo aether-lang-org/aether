@@ -441,6 +441,19 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
             char c_func_name[512];
             snprintf(c_func_name, sizeof(c_func_name), "%s_%s", prefix, suffix);
             Symbol* sym = lookup_symbol(table, c_func_name);
+            /* #924 re-export: `hub.fn()` where hub re-exports an imported
+             * `fn`. No local `hub_fn` symbol exists; redirect to the
+             * defining module's `<origin>_fn`. */
+            if (!sym && global_module_registry) {
+                AetherModule* hub = module_find(prefix);
+                AetherModule* origin = module_resolve_reexport(hub, suffix);
+                if (origin && origin->name) {
+                    char c_origin[512];
+                    snprintf(c_origin, sizeof(c_origin), "%s_%s",
+                             origin->name, suffix);
+                    sym = lookup_symbol(table, c_origin);
+                }
+            }
             free(name_copy);
             return sym;
         }
@@ -4676,6 +4689,19 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 snprintf(qualified, sizeof(qualified), "%s_%s",
                          expr->children[0]->value, expr->value);
                 Symbol* sym = lookup_symbol(table, qualified);
+                /* #924 re-export: `hub.X` where hub lists X in `exports` but
+                 * imports it from another module. The local `hub_X` symbol
+                 * doesn't exist; redirect to the defining module's symbol
+                 * `<origin>_X`. */
+                if ((!sym || !sym->type) && global_module_registry) {
+                    AetherModule* hub = module_find(expr->children[0]->value);
+                    AetherModule* origin = module_resolve_reexport(hub, expr->value);
+                    if (origin && origin->name) {
+                        snprintf(qualified, sizeof(qualified), "%s_%s",
+                                 origin->name, expr->value);
+                        sym = lookup_symbol(table, qualified);
+                    }
+                }
                 if (sym && sym->type) {
                     // Rewrite node in-place
                     expr->type = AST_IDENTIFIER;
@@ -5057,6 +5083,18 @@ static ASTNode* ufcs_first_param(ASTNode* func) {
     return NULL;
 }
 
+/* #928/#934 UFCS: does `func`'s first parameter type unify with the receiver
+ * type `rtype`? Used to pick the UFCS target among same-file and imported
+ * candidates. An UNKNOWN on either side is treated as a match (inference may
+ * refine it) — the same latitude the original same-file check used. */
+static int ufcs_first_param_matches(ASTNode* func, Type* rtype) {
+    ASTNode* p0 = ufcs_first_param(func);
+    if (!p0 || !rtype || !p0->node_type) return 0;
+    return types_equal(rtype, p0->node_type) ||
+           rtype->kind == TYPE_UNKNOWN ||
+           p0->node_type->kind == TYPE_UNKNOWN;
+}
+
 /* #928 method-call-on-value (UFCS): rewrite `recv.method(args)` into the
  * free-function call `method(recv, args)` when `method` is a free function
  * whose FIRST parameter type unifies with typeof(recv). Strictly a
@@ -5116,35 +5154,52 @@ static int try_ufcs_rewrite(ASTNode* call, SymbolTable* table) {
 
     if (!method) { if (!recv_is_child0) free_ast_node(recv); return 0; }
 
-    /* Resolve the method as a free function. */
-    Symbol* fsym = lookup_symbol(table, method);
-    if (!fsym || !fsym->is_function || !fsym->node) {
-        free(method);
-        if (!recv_is_child0) free_ast_node(recv);
-        return 0;
-    }
-    ASTNode* p0 = ufcs_first_param(fsym->node);
-    if (!p0) {  /* zero-param function — nothing to receive */
-        free(method);
-        if (!recv_is_child0) free_ast_node(recv);
-        return 0;
-    }
-
-    /* First-param type must unify with typeof(recv). */
+    /* Receiver type, needed for first-parameter matching below. */
     typecheck_expression(recv, table);
     Type* rtype = infer_type(recv, table);
-    int match = (rtype && p0->node_type &&
-                 (types_equal(rtype, p0->node_type) ||
-                  rtype->kind == TYPE_UNKNOWN ||
-                  p0->node_type->kind == TYPE_UNKNOWN));
+
+    /* Resolve `method` to a free function whose first param matches the
+     * receiver. Two tiers, in order:
+     *   (1) a same-file (bare) free function, and
+     *   (2) #934: a function exported by an imported module — the case that
+     *       makes library-provided fluent surfaces work. We honour the same
+     *       visibility as a normal qualified `mod.method(recv)` call: walk
+     *       the visible namespaces and accept the first whose `mod.method`
+     *       resolves to a function with a matching first parameter. On an
+     *       imported match the call is rewritten to the QUALIFIED form
+     *       `mod.method` so normal resolution + codegen emit `mod_method`. */
+    char* resolved = NULL;  /* heap; the name to put on the call node */
+
+    Symbol* fsym = lookup_symbol(table, method);
+    if (fsym && fsym->is_function && fsym->node &&
+        ufcs_first_param_matches(fsym->node, rtype)) {
+        resolved = strdup(method);            /* same-file bare call */
+    } else if (global_module_registry) {
+        for (int mi = 0; mi < global_module_registry->module_count && !resolved; mi++) {
+            AetherModule* m = global_module_registry->modules[mi];
+            if (!m || !m->name) continue;
+            const char* ns = m->name;
+            if (!is_visible_namespace(ns, table)) continue;
+            if (!module_is_exported(m, method)) continue;
+            char qualified[512];
+            snprintf(qualified, sizeof(qualified), "%s.%s", ns, method);
+            Symbol* qs = lookup_qualified_symbol(table, qualified);
+            if (qs && qs->is_function && qs->node &&
+                ufcs_first_param_matches(qs->node, rtype)) {
+                resolved = strdup(qualified);  /* imported qualified call */
+            }
+        }
+    }
+
     if (rtype) free_type(rtype);
-    if (!match) {
-        free(method);
+    free(method);
+
+    if (!resolved) {
         if (!recv_is_child0) free_ast_node(recv);
         return 0;
     }
 
-    /* Splice into `method(recv, args...)`. For shape (a) the receiver is
+    /* Splice into `<resolved>(recv, args...)`. For shape (a) the receiver is
      * already children[0], so only the call name changes. For shape (b)
      * prepend the synthesized receiver. */
     if (!recv_is_child0) {
@@ -5157,7 +5212,7 @@ static int try_ufcs_rewrite(ASTNode* call, SymbolTable* table) {
         call->child_count = old + 1;
     }
     free(call->value);
-    call->value = method;            /* transfer ownership */
+    call->value = resolved;          /* transfer ownership */
     if (call->annotation) { free(call->annotation); call->annotation = NULL; }
     return 1;
 }
@@ -5208,6 +5263,34 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
 
     // Use qualified lookup to handle namespaced calls like string.new -> string_new
     Symbol* symbol = lookup_qualified_symbol(table, call->value);
+
+    /* #924 re-export: a `hub.fn(...)` call where hub re-exports fn from
+     * another module resolves (via lookup_qualified_symbol) to the defining
+     * module's symbol. Rewrite call->value to the origin-qualified form so
+     * codegen emits `<origin>_fn` (the cloned definition) rather than the
+     * non-existent `hub_fn`. Gate on a single-dot qualified name whose local
+     * `hub_fn` symbol genuinely doesn't exist. */
+    if (symbol && call->value && global_module_registry) {
+        char* dot = strchr(call->value, '.');
+        if (dot && dot != call->value && !strchr(dot + 1, '.')) {
+            char hubname[256];
+            size_t hl = (size_t)(dot - call->value);
+            if (hl < sizeof(hubname)) {
+                memcpy(hubname, call->value, hl);
+                hubname[hl] = '\0';
+                AetherModule* hub = module_find(hubname);
+                AetherModule* origin = module_resolve_reexport(hub, dot + 1);
+                if (origin && origin->name &&
+                    strcmp(origin->name, hubname) != 0) {
+                    char rewritten[512];
+                    snprintf(rewritten, sizeof(rewritten), "%s.%s",
+                             origin->name, dot + 1);
+                    free(call->value);
+                    call->value = strdup(rewritten);
+                }
+            }
+        }
+    }
 
     // Issue #333 DSL receiver fallback: when the call is bare-name
     // (no dot in call->value) and the symbol resolved through the

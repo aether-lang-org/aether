@@ -1,0 +1,3 @@
+import b
+exports (fa)
+fa() -> int { return 1 }

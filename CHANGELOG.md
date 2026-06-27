@@ -5,9 +5,43 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.326.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **First-class module re-export** (#924). A module may now list, in its
+  `exports`, a symbol it brought in via `import` — and that symbol becomes
+  part of its own qualified surface, identically to one it defined
+  (`hub.X` resolves to the defining module's symbol). Re-export is transitive
+  (a facade can re-export through several layers) and visibility still gates
+  it (the origin must export the name). A locally-defined export always wins
+  over a same-named import, so there's no ambiguity. This dissolves the
+  facade-monolith and per-consumer extern re-declaration patterns: a large
+  constants/API module can be decomposed into cohesive leaves that a thin hub
+  re-exports, with consumers' `import hub` unchanged — and it breaks the
+  `hub → leaf → hub` import cycle that derived-constant leaves otherwise force.
+
+- **UFCS resolves across the import boundary** (#934, follow-up to #928).
+  `value.method()` now finds a `method` exported by an imported module whose
+  first parameter matches `typeof(value)`, honoring the same visibility as a
+  normal qualified `mod.method(value)` call — not just same-file functions.
+  This is what makes library-provided fluent surfaces work: a test framework's
+  `expect(x).to_equal(5).to_be_gt(0)` with the matchers in an imported module
+  and the chain in the consumer's file. Same-file functions still take
+  priority; a type-mismatched receiver declines cleanly.
+
+### Changed
+
+- **Circular-import diagnostic names the actual cycle** (#925). The error now
+  reads `circular import dependency: a -> b -> a`, listing the participating
+  modules in order, instead of the prior `involving module '__main__'` at a
+  bogus `0:0` (the synthetic entry root, which is never part of a real import
+  cycle). In a large module tree this turns "a cycle exists somewhere — go
+  find it" into an actionable trace.
 
 ## [0.326.0]
 
