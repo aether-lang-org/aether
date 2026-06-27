@@ -1290,6 +1290,29 @@ static int collect_module_const_names(ASTNode* mod_ast, const char** names, int 
     return count;
 }
 
+/* #937: is `name` a MUTABLE module-level `var` (annotation "global_var",
+ * introduced by #701) in the module identified by namespace `ns`? Distinct
+ * from a plain `const`: a `var` is a real lvalue (file-scope static) whose
+ * cross-function writes must reach the shared cell, whereas a `const` lowers
+ * to a `#define` and a `name = expr` against it is a genuine shadowing local.
+ * Used to scope the import-boundary write rename to vars only — without the
+ * `global_var` gate, the rename would rewrite a const-shadowing local's
+ * assignment target into the `#define`, producing invalid C. */
+static int name_is_module_global_var(const char* ns, const char* name) {
+    if (!ns || !name) return 0;
+    AetherModule* m = module_find(ns);
+    if (!m || !m->ast) return 0;
+    for (int i = 0; i < m->ast->child_count; i++) {
+        ASTNode* decl = unwrap_export(m->ast->children[i]);
+        if (decl && decl->type == AST_CONST_DECLARATION && decl->value &&
+            decl->annotation && strcmp(decl->annotation, "global_var") == 0 &&
+            strcmp(decl->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Does the module declare an extern C function with this exact name?
 //
 // This is the check that prevents the namespace-prefix/extern collision
@@ -1462,6 +1485,24 @@ static void rename_intra_module_refs(ASTNode* node, const char* prefix,
         }
     }
 
+    /* #937: a bare-name WRITE to a module-level `var` (`counter = n`) is
+     * parsed as an AST_VARIABLE_DECLARATION / AST_ASSIGNMENT whose target
+     * name is in node->value (not a child AST_IDENTIFIER), so the identifier
+     * branch below never sees it — the write target stays bare `counter` and
+     * codegen emits a shadowing local (`int counter = n;`) instead of a store
+     * to the shared `<prefix>_counter` static, losing the write across the
+     * import boundary. Rename the target so codegen's is_module_global_var
+     * write-steering fires. Gated on `global_var` (NOT plain consts): a
+     * `const` lowers to a `#define`, and a `name = expr` against it is a real
+     * shadowing local that must stay local. */
+    if ((node->type == AST_VARIABLE_DECLARATION || node->type == AST_ASSIGNMENT) &&
+        node->value && name_is_module_global_var(prefix, node->value)) {
+        char prefixed[256];
+        snprintf(prefixed, sizeof(prefixed), "%s_%s", prefix, node->value);
+        free(node->value);
+        node->value = strdup(prefixed);
+    }
+
     /* `builder name(...) with <factory>` carries the factory name in
      * the AST_BUILDER_FUNCTION node's `annotation` field (see
      * parser.c:3626 and codegen_func.c:get_builder_factory which
@@ -1526,6 +1567,21 @@ static void rename_intra_module_refs(ASTNode* node, const char* prefix,
         const char* nested_locals[128];
         int nested_local_count = 0;
         collect_local_names(node, nested_locals, &nested_local_count, 128);
+        /* #937: collect_local_names counts a bare `var = expr` write as a
+         * local (it's shaped as an AST_VARIABLE_DECLARATION). For a module
+         * `global_var` that's wrong — the write is to the shared global, and
+         * leaving the name in `local_names` would shadow it out of the read
+         * rename below (so reads-after-write stay bare and resolve to the
+         * codegen's shadowing local). Drop global_var names so reads and the
+         * write target both rename. A real local shadowing a `const` is NOT a
+         * global_var, so it's correctly retained. */
+        int kept = 0;
+        for (int i = 0; i < nested_local_count; i++) {
+            if (!name_is_module_global_var(prefix, nested_locals[i])) {
+                nested_locals[kept++] = nested_locals[i];
+            }
+        }
+        nested_local_count = kept;
         for (int i = 0; i < node->child_count; i++) {
             rename_intra_module_refs(node->children[i], prefix, func_names, func_count,
                                      const_names, const_count, nested_locals, nested_local_count);

@@ -5,9 +5,30 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.327.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **Module-level `var` (#701) now persists across the import boundary**
+  (#937). A mutable module-level `var` defined in an *imported* module lost
+  writes: a store inside one of the module's functions was visible to that
+  function (it returned the written value) but a later call into the same
+  module read the initializer back (`write-returned=7  read-back=0`). The
+  module-merge's intra-module rename rewrote *reads* of the global to its
+  prefixed name but not the *write target* of an assignment — and worse,
+  counted a bare `name = expr` write as a function-local, which shadowed the
+  global out of renaming entirely. Codegen then emitted a throwaway local
+  (`int counter = n;`) instead of a store to the shared `static`, so the
+  write never reached the cell. The rename now treats a bare-name write to a
+  module global as the global it is (not a local declaration) and rewrites
+  the assignment target, so the store reaches the shared cell — the
+  "ambient context / process-global provided by a library" pattern (a config
+  cell, a registry, a current-context set during init and read later) works
+  across imports. Genuine same-named locals are unaffected.
 
 ## [0.327.0]
 
