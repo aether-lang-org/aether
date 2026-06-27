@@ -5257,6 +5257,13 @@ ASTNode* parse_top_level_decl(Parser* parser) {
                     node->node_type = vtype;
                 } else if (vval->node_type) {
                     node->node_type = clone_type(vval->node_type);
+                    /* #929: no explicit type annotation — the width was
+                     * INFERRED from the initializer (bare `var x = 0` → 32-bit
+                     * int). Mark it so the #698 silent-narrowing guard fires on
+                     * a later 64-bit assignment to this global, matching the
+                     * local `x = expr` path (an explicit `var x: long`/`: T`
+                     * leaves this 0 and is exempt). */
+                    node->type_inferred = 1;
                 } else {
                     node->node_type = create_type(TYPE_UNKNOWN);
                 }

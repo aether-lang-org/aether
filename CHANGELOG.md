@@ -5,9 +5,30 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.323.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **Module-scope `var` now honours the silent-narrowing guard** (#929). A
+  module-scope `var x = 0` infers a 32-bit `int` from its bare initializer,
+  exactly like the local `x = 0` form — but the #698 narrowing guard (E0200)
+  only fired on locals, so a later 64-bit assignment to the global
+  (`x = os.now_monotonic_ns()`) truncated silently. The parser now marks the
+  global's inferred type and the typechecker carries that marker onto the
+  symbol, so the assignment raises E0200 with the same "annotate the
+  declaration" suggestion. An explicit width (`var x: long = 0`) is exempt, and
+  a plain int global assigned int values is unaffected.
+
+- **Multiple `${duration}` interpolations in one string render distinct values**
+  (#927). The codegen helper `_aether_duration_repr` returned a shared static
+  buffer, so when several durations appeared in a single interpolated string
+  (`"${a} ${b} ${c}"`) all `%s` slots pointed at the last-formatted value —
+  every slot printed the same duration. The helper now hands out a small ring of
+  buffers, so up to eight distinct durations coexist in one printf/snprintf.
 
 ## [0.323.0]
 

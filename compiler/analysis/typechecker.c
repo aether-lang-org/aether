@@ -2235,6 +2235,18 @@ int typecheck_program(ASTNode* program) {
                     ctype = clone_type(child->children[0]->node_type);
                 }
                 add_symbol(global_table, child->value, ctype, 0, 0, 0);
+                /* #929: a module-scope `var x = 0` is a global_var whose type
+                 * was inferred 32-bit int from a bare initializer. Carry the
+                 * parser's `type_inferred` marker onto the symbol (mirroring
+                 * the local AST_VARIABLE_DECLARATION path) so the #698
+                 * silent-narrowing guard fires on a later 64-bit assignment to
+                 * it — without this, `cell = os.now_monotonic_ns()` truncated
+                 * silently for a global where the same code errors for a local. */
+                if (child->type_inferred && ctype &&
+                    (ctype->kind == TYPE_INT)) {
+                    Symbol* gs = lookup_symbol_local(global_table, child->value);
+                    if (gs) gs->type_inferred = 1;
+                }
                 break;
             }
             case AST_MAIN_FUNCTION:
