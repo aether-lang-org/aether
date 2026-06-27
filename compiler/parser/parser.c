@@ -1601,6 +1601,12 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
 
             // Extract function name - handle both simple and namespaced calls
             const char* func_name = NULL;
+            // #928 UFCS shape (a): a method-call on a NON-identifier
+            // receiver (a call result, an indexed value, etc. —
+            // `expect(5).to_eq(...)`). The receiver subtree is detached
+            // here and handed to the typechecker as the implicit first
+            // argument; ufcs_recv holds it until the call node exists.
+            ASTNode* ufcs_recv = NULL;
             if (expr && expr->type == AST_IDENTIFIER && expr->value) {
                 // Simple call: foo()
                 func_name = strdup(expr->value);
@@ -1608,10 +1614,21 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                        expr->child_count > 0 && expr->children[0] &&
                        expr->children[0]->type == AST_IDENTIFIER) {
                 // Namespaced call: namespace.func() -> store as "namespace.func"
+                // (the receiver MIGHT be a value, not a module — the
+                // typechecker tries qualified resolution first and only
+                // falls back to UFCS, shape (b), if that fails.)
                 char qualified_name[256];
                 snprintf(qualified_name, sizeof(qualified_name), "%s.%s",
                          expr->children[0]->value, expr->value);
                 func_name = strdup(qualified_name);
+            } else if (expr && expr->type == AST_MEMBER_ACCESS && expr->value &&
+                       expr->child_count > 0 && expr->children[0]) {
+                // #928 UFCS shape (a): receiver is not a bare identifier, so
+                // there is no qualified name to form. Carry the bare method
+                // name and detach the receiver subtree.
+                func_name = strdup(expr->value);
+                ufcs_recv = expr->children[0];
+                expr->children[0] = NULL;   // detach so free_ast_node(expr) won't reclaim it
             }
 
             // heap.new(TypeName) — like sizeof, the argument is a *type
@@ -1640,6 +1657,16 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
             advance_token(parser); // consume '('
 
             ASTNode* func_call = create_ast_node(AST_FUNCTION_CALL, func_name, op->line, op->column);
+
+            // #928 UFCS shape (a): mark the node and seat the detached
+            // receiver as the implicit first argument (children[0]). The
+            // typechecker rewrites `method(recv, args)` and clears the tag;
+            // if no free function matches, the tag is dropped and the
+            // standard Undefined-function error fires on `func_name`.
+            if (ufcs_recv) {
+                func_call->annotation = strdup("ufcs");
+                add_child(func_call, ufcs_recv);
+            }
 
             // Parse arguments
             if (!match_token(parser, TOKEN_RIGHT_PAREN)) {

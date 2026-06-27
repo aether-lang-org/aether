@@ -5,9 +5,28 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.325.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **Method-call-on-value (UFCS)** (#928). `x.f(args)` now desugars to
+  `f(x, args)` when `f` is a free function whose first parameter type matches
+  `typeof(x)` — the missing primitive for fluent / method-chaining DSLs
+  (`expect(5).to_equal(5)`, `subject.inc().to_equal(6)`). It works on any
+  receiver expression: a call result, a stored value, or a pointer
+  (`c.bump()` → `bump(c)` for `c: *Counter`). UFCS is a strict **last-resort**
+  fallback — module-qualified calls (`string.length(s)`), struct-field access,
+  and function-pointer-field dispatch all keep priority, so nothing that
+  compiled before changes meaning; UFCS only fires on a dotted call that would
+  otherwise be an "Undefined function" error. A receiver whose type doesn't
+  match the candidate's first parameter declines cleanly (no silent coercion).
+  No new declaration syntax and no codegen change: existing free functions
+  become chainable, and the rewritten call lowers like any other by-value
+  call.
 
 ## [0.325.0]
 

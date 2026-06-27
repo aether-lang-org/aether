@@ -1,0 +1,56 @@
+// #928 UFCS (method-call-on-value): `x.f(args)` desugars to `f(x, args)`
+// when `f` is a free function whose first parameter matches typeof(x).
+// This is the positive program — every line must run; it self-asserts by
+// printing a fixed transcript the shell test pins exactly.
+
+struct Subject {
+    val,
+    neg
+}
+
+expect(v: int) -> Subject {
+    return Subject{ val: v, neg: 0 }
+}
+
+// Returns the receiver so calls chain (fluent-interface shape).
+to_equal(s: Subject, want: int) -> Subject {
+    if s.val == want {
+        println("eq ok")
+    } else {
+        println("eq FAIL")
+    }
+    return s
+}
+
+inc(s: Subject) -> Subject {
+    return Subject{ val: s.val + 1, neg: s.neg }
+}
+
+// Pointer receiver — in-place mutation through `*T`.
+struct Counter { n }
+bump(c: *Counter) {
+    c.n = c.n + 1
+}
+
+main() {
+    // shape (a): UFCS on a call result.
+    _ = expect(5).to_equal(5)
+
+    // chain: expect(5).inc() == Subject{6}, then .to_equal(6).
+    _ = expect(5).inc().to_equal(6)
+
+    // longer chain — two incs.
+    _ = expect(1).inc().inc().to_equal(3)
+
+    // shape (b): UFCS on a stored value.
+    a = expect(7)
+    _ = a.to_equal(7)
+
+    // pointer receiver, mutate in place.
+    c = heap.new(Counter)
+    c.n = 0
+    c.bump()
+    c.bump()
+    c.bump()
+    println("count ${c.n}")
+}

@@ -5039,8 +5039,146 @@ static Type* resolve_fnptr_struct_field(SymbolTable* table, const char* recv_nam
     return NULL;
 }
 
+/* #928 UFCS support: the first declared parameter node of a user
+ * function (the slot a `recv.method(...)` receiver would fill). Returns
+ * NULL for builtins/externs with no AST body, or a zero-param function.
+ * Mirrors the param-walk in count_function_params (last child = body;
+ * guard clauses skipped). */
+static ASTNode* ufcs_first_param(ASTNode* func) {
+    if (!func || func->child_count == 0) return NULL;
+    for (int i = 0; i < func->child_count - 1; i++) {
+        ASTNode* child = func->children[i];
+        if (child->type == AST_VARIABLE_DECLARATION ||
+            child->type == AST_PATTERN_VARIABLE ||
+            child->type == AST_PATTERN_LITERAL) {
+            return child;
+        }
+    }
+    return NULL;
+}
+
+/* #928 method-call-on-value (UFCS): rewrite `recv.method(args)` into the
+ * free-function call `method(recv, args)` when `method` is a free function
+ * whose FIRST parameter type unifies with typeof(recv). Strictly a
+ * LAST-RESORT fallback — it only runs after module-qualified resolution,
+ * struct-field, and fnptr-field dispatch have all declined, so nothing
+ * that compiles today changes meaning (UFCS only fires on what currently
+ * errors with "Undefined function").
+ *
+ * Two entry shapes reach here:
+ *   (a) parser tagged the call `ufcs` and already put the receiver subtree
+ *       at children[0] (the receiver was NOT a bare identifier, e.g. a
+ *       call result `expect(5).to_eq(...)`). call->value is the bare
+ *       method name.
+ *   (b) call->value is the dotted name `recv.method` where `recv` is a
+ *       single identifier (a local value), and children[] are the plain
+ *       args — the legacy member-call shape that previously errored.
+ *
+ * On success the call node is left in canonical `method(recv, args...)`
+ * form (value = method, children = [recv, args...]) and 1 is returned so
+ * the caller continues into the normal arity/type-check path. Returns 0
+ * when no UFCS match applies (caller then emits its Undefined-function
+ * error). */
+static int try_ufcs_rewrite(ASTNode* call, SymbolTable* table) {
+    if (!call || !call->value) return 0;
+
+    int parser_tagged = (call->annotation && strcmp(call->annotation, "ufcs") == 0);
+
+    ASTNode* recv = NULL;       /* receiver expression (owned by call) */
+    char* method = NULL;        /* bare method name (heap; freed before return) */
+    int recv_is_child0 = 0;     /* receiver already sits at children[0] */
+
+    if (parser_tagged) {
+        if (call->child_count < 1) return 0;
+        recv = call->children[0];
+        recv_is_child0 = 1;
+        method = strdup(call->value);
+    } else {
+        /* shape (b): split a single-identifier dotted name. Bail if the
+         * receiver part itself contains a dot (that's a module path, not a
+         * value receiver) — those are handled by qualified resolution. */
+        char* dot = strrchr(call->value, '.');
+        if (!dot || dot == call->value) return 0;
+        size_t rlen = (size_t)(dot - call->value);
+        if (memchr(call->value, '.', rlen)) return 0;  /* multi-dot → not UFCS */
+        char rname[200];
+        if (rlen >= sizeof(rname)) return 0;
+        memcpy(rname, call->value, rlen);
+        rname[rlen] = '\0';
+        /* The receiver must be a known value (local/global), not a module
+         * or type name. If it doesn't resolve as a value symbol, this isn't
+         * UFCS — let the normal Undefined-function error stand. */
+        Symbol* rsym = lookup_symbol(table, rname);
+        if (!rsym || rsym->is_function) return 0;
+        recv = create_ast_node(AST_IDENTIFIER, rname, call->line, call->column);
+        method = strdup(dot + 1);
+    }
+
+    if (!method) { if (!recv_is_child0) free_ast_node(recv); return 0; }
+
+    /* Resolve the method as a free function. */
+    Symbol* fsym = lookup_symbol(table, method);
+    if (!fsym || !fsym->is_function || !fsym->node) {
+        free(method);
+        if (!recv_is_child0) free_ast_node(recv);
+        return 0;
+    }
+    ASTNode* p0 = ufcs_first_param(fsym->node);
+    if (!p0) {  /* zero-param function — nothing to receive */
+        free(method);
+        if (!recv_is_child0) free_ast_node(recv);
+        return 0;
+    }
+
+    /* First-param type must unify with typeof(recv). */
+    typecheck_expression(recv, table);
+    Type* rtype = infer_type(recv, table);
+    int match = (rtype && p0->node_type &&
+                 (types_equal(rtype, p0->node_type) ||
+                  rtype->kind == TYPE_UNKNOWN ||
+                  p0->node_type->kind == TYPE_UNKNOWN));
+    if (rtype) free_type(rtype);
+    if (!match) {
+        free(method);
+        if (!recv_is_child0) free_ast_node(recv);
+        return 0;
+    }
+
+    /* Splice into `method(recv, args...)`. For shape (a) the receiver is
+     * already children[0], so only the call name changes. For shape (b)
+     * prepend the synthesized receiver. */
+    if (!recv_is_child0) {
+        int old = call->child_count;
+        ASTNode** nc = malloc(sizeof(ASTNode*) * (old + 1));
+        nc[0] = recv;
+        for (int i = 0; i < old; i++) nc[i + 1] = call->children[i];
+        if (call->children) free(call->children);
+        call->children = nc;
+        call->child_count = old + 1;
+    }
+    free(call->value);
+    call->value = method;            /* transfer ownership */
+    if (call->annotation) { free(call->annotation); call->annotation = NULL; }
+    return 1;
+}
+
 int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     if (!call || call->type != AST_FUNCTION_CALL) return 0;
+
+    /* #928 UFCS, shape (a): the parser tagged this as a method-call on a
+     * non-identifier receiver (e.g. `expect(5).to_eq(...)`) and stashed the
+     * receiver subtree at children[0]. Rewrite to `method(recv, args)` up
+     * front so the normal resolution + arity path below sees a plain call.
+     * If no free function matches the receiver type, fall through with the
+     * tag cleared so the standard Undefined-function diagnostic fires. */
+    if (call->annotation && strcmp(call->annotation, "ufcs") == 0) {
+        if (!try_ufcs_rewrite(call, table)) {
+            /* Not a UFCS match. Drop the tag; restore a useful name for the
+             * error (the bare method name is already in call->value). */
+            free(call->annotation);
+            call->annotation = NULL;
+        }
+    }
 
     // heap.free(p) — the counterpart to heap.new(T) (issue #564). Not a
     // real function symbol; codegen lowers it to free(p). Validate the
@@ -5215,6 +5353,19 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                 call->annotation = strdup(is_ptr ? "fnfield_ptr" : "fnfield_val");
                 return 1;
             }
+        }
+    }
+
+    /* #928 UFCS, shape (b): a `recv.method(args)` where `recv` is a local
+     * value (not a module, not a struct field, not a fnptr field — all
+     * tried above and declined). Last resort: rewrite to `method(recv,
+     * args)` if `method` is a free function whose first param matches
+     * typeof(recv), then re-resolve and fall through to the normal
+     * arity/type-check path. */
+    if ((!symbol || !symbol->is_function) && call->value &&
+        strchr(call->value, '.')) {
+        if (try_ufcs_rewrite(call, table)) {
+            symbol = lookup_qualified_symbol(table, call->value);
         }
     }
 
