@@ -51,6 +51,10 @@ AetherModule* module_find(const char* name);
 void module_add_export(AetherModule* module, const char* symbol);
 void module_add_import(AetherModule* module, const char* module_name);
 int module_is_exported(AetherModule* module, const char* symbol);
+/* #924: if `module` re-exports `symbol` (lists it in `exports` but imports
+ * it from elsewhere), return the module that actually defines it (resolved
+ * transitively). NULL when `module` itself is the definer. */
+AetherModule* module_resolve_reexport(AetherModule* module, const char* symbol);
 
 // Dependency graph
 typedef struct DependencyNode {

@@ -268,14 +268,67 @@ void module_add_import(AetherModule* module, const char* module_name) {
 
 int module_is_exported(AetherModule* module, const char* symbol) {
     if (!module) return 0;
-    
+
     for (int i = 0; i < module->export_count; i++) {
         if (strcmp(module->exports[i], symbol) == 0) {
             return 1;
         }
     }
-    
+
     return 0;
+}
+
+/* #924 re-export resolution. A module may list, in its `exports`, a symbol
+ * it brought in via `import` — `module_resolve_reexport` finds the module
+ * that actually DEFINES such a symbol so qualified resolution can redirect
+ * `hub.X` to `<origin>_X`.
+ *
+ * `module` exports `symbol`; if one of its imported modules also exports
+ * `symbol`, that import is the origin (re-export). Resolution is transitive
+ * (the origin may itself re-export) and cycle-guarded via `depth`. Returns
+ * the origin module, or NULL when `module` is itself the definer (no
+ * importer exports the name) — the caller then resolves locally as before.
+ *
+ * Precision: a module that DEFINES `symbol` itself is never treated as
+ * re-exporting it (a local definition wins over a same-named import), so a
+ * name collision resolves to the local def — the redirect simply doesn't
+ * fire. Re-export is also opt-in: `module` must list `symbol` in `exports`. */
+static ASTNode* unwrap_export(ASTNode* node);  /* defined below */
+static int module_defines_symbol(AetherModule* module, const char* symbol) {
+    if (!module || !module->ast) return 0;
+    for (int j = 0; j < module->ast->child_count; j++) {
+        ASTNode* d = unwrap_export(module->ast->children[j]);
+        if (!d || !d->value) continue;
+        if ((d->type == AST_FUNCTION_DEFINITION ||
+             d->type == AST_BUILDER_FUNCTION ||
+             d->type == AST_CONST_DECLARATION) &&
+            strcmp(d->value, symbol) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static AetherModule* resolve_reexport_rec(AetherModule* module,
+                                          const char* symbol, int depth) {
+    if (!module || depth > 64) return NULL;
+    if (!module_is_exported(module, symbol)) return NULL;
+    /* A locally-defined export is not a re-export — resolve it in place. */
+    if (module_defines_symbol(module, symbol)) return NULL;
+    for (int i = 0; i < module->import_count; i++) {
+        AetherModule* imp = module_find(module->imports[i]);
+        if (!imp || imp == module) continue;
+        if (module_is_exported(imp, symbol)) {
+            /* Follow transitively: imp might itself be re-exporting. */
+            AetherModule* deeper = resolve_reexport_rec(imp, symbol, depth + 1);
+            return deeper ? deeper : imp;
+        }
+    }
+    return NULL;
+}
+
+AetherModule* module_resolve_reexport(AetherModule* module, const char* symbol) {
+    return resolve_reexport_rec(module, symbol, 0);
 }
 
 // Package manifest (aether.toml)
@@ -427,56 +480,99 @@ void dependency_graph_add_edge(DependencyGraph* graph, const char* from, const c
     from_node->dependencies[from_node->dependency_count++] = to_node;
 }
 
-// DFS helper for cycle detection
-static int dfs_has_cycle(DependencyNode* node) {
+// DFS helper for cycle detection.
+//
+// #925: on finding a back edge we capture the ACTUAL cycle — the chain of
+// modules from the back-edge target down to the current node — rather than
+// reporting the DFS root (which is `__main__`, not a cycle member). `path`
+// is the in-stack ancestor list; `path_len` its depth. On a hit we record
+// the slice of `path` starting at the back-edge target into `out_cycle`
+// (caller-owned, capacity `out_cap`) and return its length via `out_len`.
+static int dfs_find_cycle(DependencyNode* node,
+                          DependencyNode** path, int path_len,
+                          DependencyNode** out_cycle, int out_cap,
+                          int* out_len) {
     if (node->in_stack) {
-        // Found a back edge (cycle)
+        // Back edge: the cycle is path[start..path_len) + node, where
+        // path[start] == node (the module the back edge re-enters).
+        int start = 0;
+        for (int i = 0; i < path_len; i++) {
+            if (path[i] == node) { start = i; break; }
+        }
+        int n = 0;
+        for (int i = start; i < path_len && n < out_cap; i++) {
+            out_cycle[n++] = path[i];
+        }
+        // Close the loop by repeating the entry node (a → b → a).
+        if (n < out_cap) out_cycle[n++] = node;
+        *out_len = n;
         return 1;
     }
-    
+
     if (node->visited) {
         // Already checked this node
         return 0;
     }
-    
+
     node->visited = 1;
     node->in_stack = 1;
-    
+    if (path_len < out_cap) path[path_len] = node;
+
     // Visit all dependencies
     for (int i = 0; i < node->dependency_count; i++) {
-        if (dfs_has_cycle(node->dependencies[i])) {
+        if (dfs_find_cycle(node->dependencies[i], path, path_len + 1,
+                           out_cycle, out_cap, out_len)) {
             return 1;
         }
     }
-    
+
     node->in_stack = 0;
     return 0;
 }
 
 int dependency_graph_has_cycle(DependencyGraph* graph) {
-    if (!graph) return 0;
-    
+    if (!graph || graph->node_count == 0) return 0;
+
     // Reset visited flags
     for (int i = 0; i < graph->node_count; i++) {
         graph->nodes[i]->visited = 0;
         graph->nodes[i]->in_stack = 0;
     }
-    
+
+    int cap = graph->node_count + 1;
+    DependencyNode** path = malloc(sizeof(DependencyNode*) * cap);
+    DependencyNode** cycle = malloc(sizeof(DependencyNode*) * cap);
+    if (!path || !cycle) { free(path); free(cycle); return 0; }
+
     // Run DFS from each unvisited node
-    for (int i = 0; i < graph->node_count; i++) {
+    int found = 0;
+    for (int i = 0; i < graph->node_count && !found; i++) {
         if (!graph->nodes[i]->visited) {
-            if (dfs_has_cycle(graph->nodes[i])) {
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                    "circular import dependency involving module '%s'",
-                    graph->nodes[i]->module_name);
+            int cycle_len = 0;
+            if (dfs_find_cycle(graph->nodes[i], path, 0, cycle, cap, &cycle_len)) {
+                found = 1;
+                /* #925: name the modules in the cycle, in order, instead of
+                 * the bogus `involving module '__main__'`. Skip a leading
+                 * `__main__` if present (it's the synthetic entry root, not
+                 * a user module — it can't be part of a real import cycle,
+                 * but a defensive slice keeps the message clean). */
+                char msg[512];
+                int off = snprintf(msg, sizeof(msg),
+                                   "circular import dependency: ");
+                for (int c = 0; c < cycle_len && off < (int)sizeof(msg) - 8; c++) {
+                    const char* nm = cycle[c]->module_name
+                                     ? cycle[c]->module_name : "?";
+                    off += snprintf(msg + off, sizeof(msg) - off,
+                                    "%s%s", (c ? " -> " : ""), nm);
+                }
                 aether_error_simple(msg, 0, 0);
-                return 1;
             }
         }
     }
 
-    return 0;
+    free(path);
+    free(cycle);
+    return found;
 }
 
 // --- Module Orchestration ---
@@ -2270,6 +2366,68 @@ void module_merge_into_program(ASTNode* program) {
                                      sel_const_names, sel_const_count, NULL, 0);
         }
     }
+
+    /* #924 re-export pull-in. A directly-imported module may list, in its
+     * `exports`, a symbol it imported from another module. Such a symbol is
+     * resolved (in the typechecker) to the DEFINING module's prefixed name
+     * (`hub.X` -> `<origin>_X`), so that definition must be present in the
+     * merged program. Driven off the export list (re-export is opt-in via
+     * `exports`), not the import-graph BFS above — that BFS depends on a
+     * module's import_count being populated at merge time, which a bodyless
+     * re-export hub may not satisfy. For each re-exported name we clone the
+     * origin's func/const under the origin namespace, exactly as the
+     * transitive BFS would. */
+    for (int i = 0; i < orig_count; i++) {
+        ASTNode* child = program->children[i];
+        if (!child || child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+        AetherModule* hub = module_find(child->value);
+        if (!hub) continue;
+
+        for (int e = 0; e < hub->export_count; e++) {
+            const char* sym = hub->exports[e];
+            if (!sym) continue;
+            AetherModule* origin = module_resolve_reexport(hub, sym);
+            if (!origin || !origin->ast || !origin->name) continue;
+
+            const char* ons = module_get_namespace(origin->name);
+            char prefixed[256];
+            snprintf(prefixed, sizeof(prefixed), "%s_%s", ons, sym);
+            if (program_has_function(program, prefixed)) continue;
+
+            const char* of_names[AETHER_MODULE_MAX_DECLS];
+            int of_count = collect_module_func_names(origin->ast, of_names,
+                                                     AETHER_MODULE_MAX_DECLS);
+            const char* oc_names[AETHER_MODULE_MAX_DECLS];
+            int oc_count = collect_module_const_names(origin->ast, oc_names,
+                                                      AETHER_MODULE_MAX_DECLS);
+
+            for (int j = 0; j < origin->ast->child_count; j++) {
+                ASTNode* decl = unwrap_export(origin->ast->children[j]);
+                if (!decl || !decl->value || strcmp(decl->value, sym) != 0) continue;
+
+                if (decl->type == AST_FUNCTION_DEFINITION ||
+                    decl->type == AST_BUILDER_FUNCTION) {
+                    if (module_has_extern_named(origin->ast, prefixed)) break;
+                    ASTNode* clone = clone_ast_node(decl);
+                    free(clone->value);
+                    clone->value = strdup(prefixed);
+                    clone->is_imported = 1;
+                    rename_intra_module_refs(clone, ons, of_names, of_count,
+                                             oc_names, oc_count, NULL, 0);
+                    apply_inherited_selective_imports(clone, origin->ast);
+                    insert_child_at(program, clone, insert_idx++);
+                } else if (decl->type == AST_CONST_DECLARATION) {
+                    ASTNode* clone = clone_ast_node(decl);
+                    free(clone->value);
+                    clone->value = strdup(prefixed);
+                    rename_intra_module_refs(clone, ons, of_names, of_count,
+                                             oc_names, oc_count, NULL, 0);
+                    insert_child_at(program, clone, insert_idx++);
+                }
+                break;
+            }
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -2352,11 +2510,61 @@ static void nameset_free(NameSet* s) {
     s->count = s->capacity = 0;
 }
 
+/* #934 UFCS reachability: a `recv.method(...)` UFCS call is rewritten (at
+ * typecheck, AFTER this prune) to an imported `mod.method(recv, ...)` when a
+ * module exports a `method` whose first param matches typeof(recv). At prune
+ * time the receiver type isn't known, so over-approximate: for a bare method
+ * name, seed `mod.method` for EVERY module that exports it. Sound (keeps a
+ * few extra bodies); the typechecker still resolves the single real target. */
+static void prune_seed_ufcs_method(const char* method, NameSet* seen,
+                                   NameSet* worklist) {
+    if (!method || !global_module_registry) return;
+    for (int mi = 0; mi < global_module_registry->module_count; mi++) {
+        AetherModule* m = global_module_registry->modules[mi];
+        if (!m || !m->name) continue;
+        if (!module_is_exported(m, method)) continue;
+        char q[256];
+        snprintf(q, sizeof(q), "%s.%s", m->name, method);
+        if (nameset_add(seen, q)) nameset_add(worklist, q);
+    }
+}
+
 static void prune_collect_calls(ASTNode* node, NameSet* seen, NameSet* worklist) {
     if (!node) return;
     if (node->type == AST_FUNCTION_CALL && node->value) {
         if (nameset_add(seen, node->value)) {
             nameset_add(worklist, node->value);
+        }
+        /* #924 re-export: a `hub.fn(...)` call is cloned under the DEFINING
+         * module's name (`<origin>_fn`). Seed the origin-qualified form so
+         * the reachability sweep doesn't prune the re-exported body. */
+        char* dot = strchr(node->value, '.');
+        if (dot && dot != node->value && !strchr(dot + 1, '.')) {
+            char hubname[256];
+            size_t hl = (size_t)(dot - node->value);
+            if (hl < sizeof(hubname)) {
+                memcpy(hubname, node->value, hl);
+                hubname[hl] = '\0';
+                AetherModule* hub = module_find(hubname);
+                AetherModule* origin = module_resolve_reexport(hub, dot + 1);
+                if (origin && origin->name) {
+                    char oq[256];
+                    snprintf(oq, sizeof(oq), "%s.%s", origin->name, dot + 1);
+                    if (nameset_add(seen, oq)) nameset_add(worklist, oq);
+                }
+                /* #934 shape (b): `value.method(...)` where the receiver is
+                 * not a module — keep every imported `mod.method` candidate
+                 * alive for the post-prune UFCS rewrite. (When `hubname` IS a
+                 * module this is harmless; the real qualified target is
+                 * already seeded by node->value above.) */
+                prune_seed_ufcs_method(dot + 1, seen, worklist);
+            }
+        }
+        /* #934 shape (a): parser-tagged UFCS node — bare method in value,
+         * receiver subtree at children[0]. Seed imported candidates too. */
+        if (node->annotation && strcmp(node->annotation, "ufcs") == 0 &&
+            !strchr(node->value, '.')) {
+            prune_seed_ufcs_method(node->value, seen, worklist);
         }
     }
     // Bare identifiers can name a function passed as a callback, taken
@@ -2381,6 +2589,16 @@ static void prune_collect_calls(ASTNode* node, NameSet* seen, NameSet* worklist)
                  node->children[0]->value, node->value);
         if (nameset_add(seen, qualified)) {
             nameset_add(worklist, qualified);
+        }
+        /* #924 re-export: `hub.X` is cloned under the DEFINING module's
+         * name (`<origin>_X`), not `hub_X`. Seed the origin form too so the
+         * reachability sweep keeps the re-exported definition. */
+        AetherModule* hub = module_find(node->children[0]->value);
+        AetherModule* origin = module_resolve_reexport(hub, node->value);
+        if (origin && origin->name) {
+            char oq[256];
+            snprintf(oq, sizeof(oq), "%s.%s", origin->name, node->value);
+            if (nameset_add(seen, oq)) nameset_add(worklist, oq);
         }
     }
     /* `builder name(...) with <factory>` carries the factory name in
