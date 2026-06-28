@@ -312,6 +312,68 @@ int register_bare_fn_adapter(CodeGenerator* gen, const char* bare_fn_name) {
     return 1;
 }
 
+/* Resolve a registered bare-fn name to its definition and emit the adapter
+ * signature `static R _aether_bare_adapter_<name>(void* _env, P0 _a0, ...)`.
+ * Returns the resolved fdef (and fills params/param_count/ret_c) so the
+ * caller can either terminate with `;` (forward decl) or `{ ... }` (body).
+ * Returns NULL when the bare fn can't be resolved (caller skips it). */
+static ASTNode* emit_bare_fn_adapter_signature(CodeGenerator* gen,
+                                               const char* fname,
+                                               ASTNode** params,
+                                               int* param_count,
+                                               const char** ret_c_out) {
+    ASTNode* fdef = NULL;
+    for (int j = 0; j < gen->program->child_count; j++) {
+        ASTNode* c = gen->program->children[j];
+        if (c && (c->type == AST_FUNCTION_DEFINITION ||
+                  c->type == AST_BUILDER_FUNCTION) &&
+            c->value && strcmp(c->value, fname) == 0) {
+            fdef = c;
+            break;
+        }
+    }
+    if (!fdef) return NULL;
+    int pc = 0;
+    for (int k = 0; k < fdef->child_count && pc < 16; k++) {
+        ASTNode* p = fdef->children[k];
+        if (!p) continue;
+        if (p->type == AST_GUARD_CLAUSE || p->type == AST_BLOCK) continue;
+        params[pc++] = p;
+    }
+    *param_count = pc;
+    Type* rt = fdef->node_type;
+    const char* ret_c = (rt && rt->kind != TYPE_UNKNOWN) ? get_c_type(rt) : "void";
+    *ret_c_out = ret_c;
+    fprintf(gen->output, "static %s _aether_bare_adapter_%s(void* _env",
+            ret_c, fname);
+    for (int k = 0; k < pc; k++) {
+        ASTNode* p = params[k];
+        const char* pt = p->node_type ? get_c_type(p->node_type) : "int";
+        fprintf(gen->output, ", %s _a%d", pt, k);
+    }
+    fprintf(gen->output, ")");
+    return fdef;
+}
+
+/* #943: emit FORWARD DECLARATIONS for every registered bare-fn adapter.
+ * Closure bodies (emitted before emit_bare_fn_adapters) may reference an
+ * adapter, so its prototype must be in scope by then — otherwise the closure
+ * function sees `_aether_bare_adapter_<name>' undeclared'. Emitted right
+ * before the closure definitions; the full bodies still come later. */
+void emit_bare_fn_adapter_decls(CodeGenerator* gen) {
+    if (!gen || gen->bare_fn_adapter_count == 0 || !gen->program) return;
+    print_line(gen, "// Bare-fn adapter forward declarations (closures may call them)");
+    for (int i = 0; i < gen->bare_fn_adapter_count; i++) {
+        ASTNode* params[16];
+        int param_count = 0;
+        const char* ret_c = "void";
+        if (emit_bare_fn_adapter_signature(gen, gen->bare_fn_adapter_names[i],
+                                           params, &param_count, &ret_c)) {
+            fprintf(gen->output, ";\n");
+        }
+    }
+}
+
 /* Emit `_aether_bare_adapter_<name>(void* env, args) -> R` for every
  * registered bare-fn name. The adapter ignores env and forwards to the
  * bare fn with its real C signature. Looks up each bare fn in the
@@ -327,40 +389,15 @@ void emit_bare_fn_adapters(CodeGenerator* gen) {
     print_line(gen, "// Bare-fn → fn-typed-slot env-ignoring adapters (ASK 3)");
     for (int i = 0; i < gen->bare_fn_adapter_count; i++) {
         const char* fname = gen->bare_fn_adapter_names[i];
-        ASTNode* fdef = NULL;
-        for (int j = 0; j < gen->program->child_count; j++) {
-            ASTNode* c = gen->program->children[j];
-            if (c && (c->type == AST_FUNCTION_DEFINITION ||
-                      c->type == AST_BUILDER_FUNCTION) &&
-                c->value && strcmp(c->value, fname) == 0) {
-                fdef = c;
-                break;
-            }
-        }
-        if (!fdef) continue;  /* Shouldn't happen; registration gate
-                               * already confirmed existence. */
-        /* Walk the def's children to find params and return type.
-         * Skip AST_GUARD_CLAUSE and AST_BLOCK; the remaining typed
-         * nodes are the params, in order. */
         ASTNode* params[16];
         int param_count = 0;
-        for (int k = 0; k < fdef->child_count && param_count < 16; k++) {
-            ASTNode* p = fdef->children[k];
-            if (!p) continue;
-            if (p->type == AST_GUARD_CLAUSE || p->type == AST_BLOCK) continue;
-            params[param_count++] = p;
-        }
+        const char* ret_c = "void";
+        ASTNode* fdef = emit_bare_fn_adapter_signature(gen, fname, params,
+                                                       &param_count, &ret_c);
+        if (!fdef) continue;  /* Shouldn't happen; registration gate
+                               * already confirmed existence. */
         Type* rt = fdef->node_type;
-        const char* ret_c = (rt && rt->kind != TYPE_UNKNOWN)
-                            ? get_c_type(rt) : "void";
-        fprintf(gen->output, "static %s _aether_bare_adapter_%s(void* _env",
-                ret_c, fname);
-        for (int k = 0; k < param_count; k++) {
-            ASTNode* p = params[k];
-            const char* pt = p->node_type ? get_c_type(p->node_type) : "int";
-            fprintf(gen->output, ", %s _a%d", pt, k);
-        }
-        fprintf(gen->output, ") {\n    (void)_env;\n    ");
+        fprintf(gen->output, " {\n    (void)_env;\n    ");
         if (rt && rt->kind != TYPE_VOID && rt->kind != TYPE_UNKNOWN) {
             fprintf(gen->output, "return ");
         }

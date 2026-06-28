@@ -5,9 +5,26 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.329.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **Bare top-level function used as an `fn` value inside a closure body**
+  (#943, closure analogue of #940). Wrapping a bare named function as an
+  `fn` value from inside a trailing-block closure (`runit(val)` inside a
+  `callback { ... }`) failed to compile: the emitted closure function
+  referenced an `_aether_bare_adapter_<name>` shim that was only *defined*
+  later in the file, so it was undeclared in the closure's translation unit.
+  The cause was emit order — closure bodies were emitted before the bare-fn
+  adapters, but a closure body can itself wrap a bare fn. The adapters' C
+  forward declarations are now emitted before the closure definitions (the
+  full bodies still follow, since they call the user functions by name), so
+  closure bodies see the prototype in scope. Works in combination with #940
+  (a bare fn wrapped inside a closure whose callee is an imported function).
 
 ## [0.329.0]
 

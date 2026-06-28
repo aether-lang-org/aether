@@ -4039,18 +4039,25 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     // count; aetherc.c should check aether_error_count() after
     // generate_program returns and bail if non-zero.
     validate_closure_state_mutations(gen, program);
+
+    /* Bare-fn → fn-typed-slot adapter discovery (ASK 3). Pre-walk the
+     * program to register every bare-fn wrapped at a coercion site
+     * (mirrors the lazy registration in the wrap codegen path). Run this
+     * BEFORE closure bodies are emitted: a closure body can itself wrap a
+     * bare fn (`runit(val)` inside a `callback { }`), and #943 showed the
+     * emitted closure function then referenced an adapter that was only
+     * defined later — undeclared in the closure's TU. Emitting the adapter
+     * FORWARD DECLARATIONS before the closures fixes the ordering; the full
+     * bodies still come after (they call the user fns by their real C name,
+     * so they must follow the user fn definitions). */
+    discover_bare_fn_adapters(gen);
+    emit_bare_fn_adapter_decls(gen);
+
     if (gen->closure_count > 0) {
         print_line(gen, "// Closure definitions");
         emit_closure_definitions(gen);
     }
 
-    /* Bare-fn → fn-typed-slot adapter discovery + emit. Pre-walk the
-     * program to register every bare-fn that gets wrapped at a
-     * coercion site (mirrors the lazy registration in the wrap
-     * codegen path). Then emit forward declarations + bodies here so
-     * the user code that calls through them (main, etc.) sees the
-     * adapter symbol in scope. ASK 3 from aether/new_aevg_asks.md. */
-    discover_bare_fn_adapters(gen);
     emit_bare_fn_adapters(gen);
 
     // Pre-pass: build request->reply type map from actor receive handlers.

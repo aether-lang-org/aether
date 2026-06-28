@@ -242,6 +242,9 @@ const char* get_builder_factory(CodeGenerator* gen, const char* func_name);
  * the bug-shape rationale. */
 int  register_bare_fn_adapter(CodeGenerator* gen, const char* bare_fn_name);
 void emit_bare_fn_adapters(CodeGenerator* gen);
+/* #943: forward-declare the adapters before closure bodies (which may call
+ * them) are emitted, so the closure functions see the prototype in scope. */
+void emit_bare_fn_adapter_decls(CodeGenerator* gen);
 void discover_bare_fn_adapters(CodeGenerator* gen);
 
 /* Function/struct generation (codegen_func.c) */
