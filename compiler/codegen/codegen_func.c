@@ -189,6 +189,39 @@ static ASTNode* find_user_function_by_name(CodeGenerator* gen, const char* name)
             return c;
         }
     }
+    /* #940: a qualified call `mod.fn(...)` keeps its dotted name on the AST,
+     * but the merged definition is `<namespace>_fn` — where the namespace is
+     * the LAST segment of the module path (module_get_namespace's rule:
+     * `std.foo.bar.fn` → namespace `bar` → `bar_fn`). Reconstruct that
+     * merged form and retry, so cross-module callees resolve here. Without
+     * it the bare-fn-arg discovery below never finds the callee, the
+     * fn-typed param is never inspected, and the env-ignoring adapter for a
+     * bare function passed across the import boundary is never emitted
+     * (`_aether_bare_adapter_<name>' undeclared` in the caller's TU). */
+    const char* last_dot = strrchr(name, '.');
+    if (last_dot && last_dot != name) {
+        const char* fn = last_dot + 1;
+        /* Namespace = last path segment before the function name. */
+        const char* ns_start = name;
+        for (const char* p = name; p < last_dot; p++) {
+            if (*p == '.') ns_start = p + 1;
+        }
+        char merged[512];
+        size_t ns_len = (size_t)(last_dot - ns_start);
+        if (ns_len > 0 && ns_len + 1 + strlen(fn) + 1 <= sizeof(merged)) {
+            memcpy(merged, ns_start, ns_len);
+            merged[ns_len] = '_';
+            strcpy(merged + ns_len + 1, fn);
+            for (int i = 0; i < gen->program->child_count; i++) {
+                ASTNode* c = gen->program->children[i];
+                if (c && (c->type == AST_FUNCTION_DEFINITION ||
+                          c->type == AST_BUILDER_FUNCTION) &&
+                    c->value && strcmp(c->value, merged) == 0) {
+                    return c;
+                }
+            }
+        }
+    }
     return NULL;
 }
 
