@@ -1,0 +1,19 @@
+// #943: a bare top-level function used as an `fn` value INSIDE a
+// trailing-block closure body. The emitted closure function referenced an
+// `_aether_bare_adapter_<name>` shim that was defined only after the
+// closure, hence undeclared. Covers: zero-arg bare fn in a closure, a
+// bare fn with params in a closure, and the top-level control (which
+// already worked) to guard against a same-pass regression.
+val() -> int { return 42 }
+add(x: int, y: int) -> int { return x + y }
+runit(f: fn) -> int { return call(f) }
+apply2(f: fn, a: int, b: int) -> int { return call(f, a, b) }
+run_block(b: fn) { call(b) }
+
+main() {
+    println("top ${runit(val)}")            // control (top level) -> 42
+    run_block() callback {
+        println("closure ${runit(val)}")    // #943 core -> 42
+        println("closure2 ${apply2(add, 3, 4)}")  // bare fn + params -> 7
+    }
+}
