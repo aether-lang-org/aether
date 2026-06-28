@@ -588,6 +588,36 @@ Type* parse_type(Parser* parser) {
                      * Aliases". */
                     type = create_type(alias_kind);
                     type->c_alias = strdup(token->value);
+                } else if (peek_token(parser) &&
+                           peek_token(parser)->type == TOKEN_DOT) {
+                    /* #946: qualified type name `mod.Type` in a type
+                     * position (param / return / var annotation / field).
+                     * The qualified call surface already accepts `mod.fn()`
+                     * (#878); this is the type-position analogue. An
+                     * exported struct type is usable cross-module by its
+                     * BARE name (the merge brings it into the consumer's
+                     * struct namespace unprefixed), so the qualifier is a
+                     * disambiguator only — resolve `mod.Type` to the bare
+                     * `Type`. The leading identifier (`mod`) was already
+                     * consumed; consume the `.` and the type name. Allow a
+                     * multi-segment path (`a.b.Type`) by looping. */
+                    const char* type_name = token->value;
+                    while (peek_token(parser) &&
+                           peek_token(parser)->type == TOKEN_DOT) {
+                        advance_token(parser);  // consume '.'
+                        Token* seg = peek_token(parser);
+                        if (!seg || (seg->type != TOKEN_IDENTIFIER &&
+                                     !token_is_reserved_keyword(seg))) {
+                            parser_error(parser,
+                                "Expected a type name after '.' in a "
+                                "qualified type");
+                            return NULL;
+                        }
+                        advance_token(parser);  // consume the segment
+                        type_name = seg->value; // last segment is the type
+                    }
+                    type = create_type(TYPE_STRUCT);
+                    type->struct_name = strdup(type_name);
                 } else {
                     // Could be a struct type
                     type = create_type(TYPE_STRUCT);
@@ -2250,6 +2280,29 @@ ASTNode* parse_statement(Parser* parser) {
             // declaration may omit the initializer (`Pair p`).
             if (next && next->type == TOKEN_IDENTIFIER) {
                 return parse_variable_declaration(parser);
+            }
+            // #946: C-style typed local with a QUALIFIED type name —
+            // `mod.Type name [= expr]` (the dotted analogue of `Type name`
+            // above). Shape: IDENT (`.` IDENT)+ IDENT. Disambiguated from a
+            // member-access expression statement (`a.b.c`) by the trailing
+            // binding identifier — a member chain ends at the last `.field`,
+            // never `... field NAME`. parse_variable_declaration → parse_type
+            // consumes the dotted type, then the binding name.
+            if (next && next->type == TOKEN_DOT) {
+                int off = 1;
+                /* walk the `.IDENT` chain */
+                while (peek_ahead(parser, off) &&
+                       peek_ahead(parser, off)->type == TOKEN_DOT &&
+                       peek_ahead(parser, off + 1) &&
+                       peek_ahead(parser, off + 1)->type == TOKEN_IDENTIFIER) {
+                    off += 2;
+                }
+                /* `off` is past the dotted type name; a binding identifier
+                 * here (and not another `.`/`(`) marks a typed declaration. */
+                Token* after = peek_ahead(parser, off);
+                if (off > 1 && after && after->type == TOKEN_IDENTIFIER) {
+                    return parse_variable_declaration(parser);
+                }
             }
             if (next && (next->type == TOKEN_ASSIGN || next->type == TOKEN_COMMA)) {
                 return parse_python_style_declaration(parser);
@@ -4330,6 +4383,41 @@ ASTNode* parse_function_definition(Parser* parser) {
                         (c_abi_alias_kind(peek->value, &alias_k) ||
                          strcmp(peek->value, "longdouble") == 0)) {
                         is_typed_return = 1;
+                        break;
+                    }
+                    // #946: a qualified return type `-> mod.Name { ... }`
+                    // (or multi-segment `a.b.Name`). The bare-name branch
+                    // below only looks one token ahead for `{`; skip over a
+                    // `.IDENT` chain first so the `{` is found at the right
+                    // offset. A dotted name in return position is always a
+                    // type (a `-> expr` body never starts `ident . ident`
+                    // followed by `{`), so accept it directly.
+                    if (peek_ahead(parser, 1) &&
+                        peek_ahead(parser, 1)->type == TOKEN_DOT) {
+                        int off = 1;
+                        while (peek_ahead(parser, off) &&
+                               peek_ahead(parser, off)->type == TOKEN_DOT &&
+                               peek_ahead(parser, off + 1) &&
+                               (peek_ahead(parser, off + 1)->type == TOKEN_IDENTIFIER ||
+                                token_is_reserved_keyword(peek_ahead(parser, off + 1)))) {
+                            off += 2;
+                        }
+                        /* `off` now points just past the dotted name. A typed
+                         * return is one immediately followed by `{` (block
+                         * body) or end-of-signature; a struct-literal head
+                         * `{ field:` is still excluded. */
+                        Token* after_qual = peek_ahead(parser, off);
+                        if (after_qual && after_qual->type == TOKEN_LEFT_BRACE) {
+                            Token* after_brace = peek_ahead(parser, off + 1);
+                            Token* after_field = peek_ahead(parser, off + 2);
+                            int looks_like_struct_literal =
+                                after_brace &&
+                                after_brace->type == TOKEN_IDENTIFIER &&
+                                after_field && after_field->type == TOKEN_COLON;
+                            if (!looks_like_struct_literal) is_typed_return = 1;
+                        } else {
+                            is_typed_return = 1;
+                        }
                         break;
                     }
                     // `-> Name { ... }` — only a typed return if what

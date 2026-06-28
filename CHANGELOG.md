@@ -5,9 +5,29 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.330.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **Qualified type name `mod.Type` accepted in type positions** (#946). A
+  module-qualified name was accepted as a value/call (`lib.mk(...)`, #878) but
+  not as a *type* — the parser stopped at the `.` (`Expected RIGHT_PAREN, got
+  DOT` in a parameter, `Expected LEFT_BRACE, got DOT` in a return type). Only
+  the bare exported name worked, which left no way to disambiguate when two
+  imported modules export a type with the same name. `mod.Type` now parses in
+  parameter types, return types, and C-style typed locals (`mod.Type name`),
+  resolving to the bare exported type (the merge brings an exported struct
+  into the consumer's namespace unprefixed, so the qualifier is a
+  disambiguator). The type parser accepts a dotted name; the return-type
+  disambiguator and the typed-local statement dispatcher were taught the
+  dotted-name shape so they route to it. (Using an imported struct as a
+  *struct field* remains a separate, pre-existing limitation that affects the
+  bare name equally — incomplete-type in the consumer TU — and is unrelated to
+  this parser asymmetry.)
 
 ## [0.330.0]
 
