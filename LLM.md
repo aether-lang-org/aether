@@ -199,10 +199,15 @@ plays that role), no interfaces.
   interpolation/escaping — reach for them to embed another language's
   source verbatim (`contrib.host.*` snippets, SQL) so the guest's own
   `"…"` need no `\"`. Use a normal `"…"` string when you want `${}`.
-  Closing marker at column 0. The common leading-whitespace prefix is
-  stripped (so you can indent the body to match surrounding code); the
-  strip is character-exact, so don't mix tabs/spaces in that prefix. Full
-  dedent rules: lexer.c `<<` case.
+  Closing marker is `MARKER` alone on its line; it MAY be indented, but
+  only at or below the body's shallowest line (it sits at the content's
+  base level — column 0 always works). A more-indented line that reads
+  like the marker is content, not a terminator, so it can't silently
+  truncate the body; a marker indented past the body is an unterminated-
+  heredoc error. The common leading-whitespace prefix is stripped (so you
+  can indent the body to match surrounding code); the strip is character-
+  exact, so don't mix tabs/spaces in that prefix. Full rules: lexer.c `<<`
+  case (#922).
 - **Trailing-closure brace goes on the call's line.** `f(x) { … }`
   attaches the block as a trailing closure; `f(x)` then `{ … }` on the
   next line is a separate bare-brace block (the compiler warns). Keep the

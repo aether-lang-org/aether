@@ -1787,10 +1787,22 @@ WHERE active = 1
 SQL
 ```
 
-The body runs from the line after `<<MARKER` to a line whose first characters
-are exactly `MARKER` (the closing marker must be at column 0). Windows `\r\n`
-is normalized to `\n`, and the single newline immediately before the closing
-marker is dropped (it's syntax, not content).
+The body runs from the line after `<<MARKER` to the **closing-marker line**: a
+line that is, in full, optional leading whitespace followed by exactly `MARKER`
+and then the end of the line. The closing marker **may be indented** — it does
+not have to sit at column 0 — but its indentation must be **at or below** the
+shallowest body line (the terminator lives at the content's base level). Windows
+`\r\n` is normalized to `\n`, and the single newline immediately before the
+closing marker is dropped (it's syntax, not content).
+
+Because the terminator sits at the content's base level, a body line that is
+*more* indented than the rest but happens to read exactly like the marker is
+**body content, not a terminator** — so it can never silently truncate the
+string. (Conversely, a lone marker indented *past* the body matches nothing and
+the heredoc is reported as unterminated, rather than dropping content. Put the
+closing marker at column 0, or aligned with the body's base indent, and it
+always closes.) The marker must also be alone on its line: `done MARKER` and
+`xMARKER` stay content.
 
 **Common-indent dedent.** The longest run of leading whitespace shared by every
 *non-blank* line is stripped, so a heredoc can be indented to match its
