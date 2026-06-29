@@ -1,0 +1,61 @@
+// Regression: issue #922 — heredoc closing-marker rule.
+//
+// A line closes the heredoc only when it is (optional leading whitespace +
+// the marker + end-of-line) AND its indentation is at-or-below the shallowest
+// body line seen so far — the terminator lives at the content's base level.
+// Consequences this test pins:
+//   * an indented closing marker at the body's base level works;
+//   * a line that is MORE indented than the body but happens to equal the
+//     marker is body content, not a terminator — so it can never silently
+//     truncate the body (the bug this issue reported);
+//   * body dedent is unchanged (common leading whitespace / least-indented
+//     line, like Ruby's squiggly `<<~`).
+import std.string
+
+extern exit(code: int)
+
+check(got: string, want: string, label: string) {
+    if string.equals(got, want) != 1 {
+        print("FAIL #922 ")
+        print(label)
+        print(": <")
+        print(got)
+        print(">\n")
+        exit(1)
+    }
+}
+
+main() {
+    // 1. Column-0 marker, indented body — common-prefix dedent (unchanged).
+    a = <<END
+    line one
+    line two
+END
+    check(a, "line one\nline two", "col0-marker")
+
+    // 2. Indented closing marker at the body's base level — works.
+    b = <<MARK
+        body one
+        body two
+        MARK
+    check(b, "body one\nbody two", "indented-marker")
+
+    // 3. The reported bug: a deeper line that equals the marker is CONTENT,
+    //    not an early close — nothing after it is dropped.
+    c = <<MARK
+real content
+    MARK
+this stays
+MARK
+    check(c, "real content\n    MARK\nthis stays", "no-silent-truncation")
+
+    // 4. Relative indentation within the body is preserved after dedent.
+    d = <<END
+    outer
+      inner
+    outer2
+END
+    check(d, "outer\n  inner\nouter2", "relative-indent")
+
+    println("PASS: #922 heredoc close")
+}

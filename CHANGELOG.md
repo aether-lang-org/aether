@@ -13,6 +13,21 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **Heredoc closing-marker rule: no more silent truncation** (#922). A heredoc
+  body line that merely read like the closing marker could close the heredoc
+  early and silently drop the rest of the body. The close rule is now: a line
+  closes the heredoc only when it is the marker alone on its line AND its
+  indentation is at or below the shallowest body line — the terminator lives at
+  the content's base level. A more-indented marker-like line is therefore body
+  content (never a silent truncation); a lone marker indented *past* the body
+  matches nothing and is reported as an unterminated heredoc rather than
+  dropping content. The closing marker may still be indented (at/below the body
+  base; column 0 always works), the marker must be alone on its line
+  (`done END` / `xEND` stay content), and body dedent is unchanged (common
+  leading-whitespace / least-indented line, like Ruby's squiggly `<<~`). Docs
+  (`LLM.md`, language-reference) corrected — they wrongly claimed "column 0
+  only," which the lexer never enforced.
+
 - **Qualified type name `mod.Type` accepted in type positions** (#946). A
   module-qualified name was accepted as a value/call (`lib.mk(...)`, #878) but
   not as a *type* — the parser stopped at the `.` (`Expected RIGHT_PAREN, got

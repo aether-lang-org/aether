@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <limits.h>
 #include "tokens.h"
 #include "lexer.h"
 
@@ -583,35 +584,79 @@ Token* next_token() {
                     char* buf = malloc(buf_capacity);
                     if (!buf) return create_token(TOKEN_ERROR, "out of memory", current_line, current_column);
                     int blen = 0;
+                    // Close detection (#922). Scan line by line. A line closes
+                    // the heredoc only when it is, in full, optional leading
+                    // whitespace followed by exactly the marker and then a line
+                    // ending or EOF — AND its indentation is at-or-below the
+                    // shallowest non-blank body line seen so far. The closing
+                    // marker lives at the content's base level: a line that is
+                    // *more* indented than the body but happens to equal the
+                    // marker is therefore body content, not a terminator, so an
+                    // indented marker-like line can never silently truncate the
+                    // body. (A lone marker indented PAST the body never matches,
+                    // so the scan runs to EOF and reports an unterminated
+                    // heredoc rather than dropping content.) The marker must be
+                    // the only token on its line — `foo MARK` / `xMARK` stay
+                    // content. Body dedent (below) is unchanged: common leading
+                    // whitespace, i.e. the least-indented line, like Ruby's
+                    // squiggly `<<~`.
+                    int min_body_indent = INT_MAX;
+                    int closed = 0;
                     while (current_pos < source_length) {
-                        // Check if current line starts with the marker
-                        // Skip optional \r before checking (Windows CRLF)
-                        int check_pos = current_pos;
-                        int match = 1;
-                        for (int mi = 0; mi < mlen; mi++) {
-                            if (check_pos + mi >= source_length || source[check_pos + mi] != marker[mi]) {
-                                match = 0;
-                                break;
-                            }
+                        // Leading whitespace of the line at current_pos.
+                        int ws = 0;
+                        while (current_pos + ws < source_length &&
+                               (source[current_pos + ws] == ' ' ||
+                                source[current_pos + ws] == '\t')) {
+                            ws++;
                         }
-                        // Marker must be followed by newline, \r\n, or EOF
-                        if (match) {
-                            int after = check_pos + mlen;
+                        int mpos = current_pos + ws;
+                        // Is the rest of the line exactly the marker + EOL/EOF?
+                        int is_marker_line = 0;
+                        if (mpos + mlen <= source_length &&
+                            memcmp(&source[mpos], marker, (size_t)mlen) == 0) {
+                            int after = mpos + mlen;
                             if (after >= source_length ||
                                 source[after] == '\n' ||
-                                (source[after] == '\r' && after + 1 < source_length && source[after + 1] == '\n')) {
-                                // Skip past the marker and line ending
-                                for (int mi = 0; mi < mlen; mi++) advance();
-                                if (peek() == '\r') advance();
-                                if (peek() == '\n') advance();
-                                break;
+                                (source[after] == '\r' && after + 1 < source_length &&
+                                 source[after + 1] == '\n')) {
+                                is_marker_line = 1;
                             }
                         }
-                        // Not the marker — copy this char to buffer
-                        // Skip \r in \r\n sequences (normalize to \n)
-                        char ch = peek();
-                        if (ch != '\r' || (current_pos + 1 < source_length && source[current_pos + 1] != '\n')) {
-                            // Grow buffer if needed
+                        if (is_marker_line && ws <= min_body_indent) {
+                            // Consume the marker line + its ending, then stop.
+                            for (int i = 0; i < ws + mlen; i++) advance();
+                            if (peek() == '\r') advance();
+                            if (peek() == '\n') advance();
+                            closed = 1;
+                            break;
+                        }
+                        // Body line. A blank line (only whitespace) does not
+                        // constrain the base indent, mirroring the dedent pass.
+                        int line_is_blank = (mpos >= source_length ||
+                                             source[mpos] == '\n' ||
+                                             (source[mpos] == '\r' && mpos + 1 < source_length &&
+                                              source[mpos + 1] == '\n'));
+                        if (!line_is_blank && ws < min_body_indent) min_body_indent = ws;
+                        // Copy the line and its newline, normalizing \r\n -> \n.
+                        while (peek() != '\n' && peek() != '\0') {
+                            char ch = peek();
+                            if (ch != '\r' || (current_pos + 1 < source_length &&
+                                               source[current_pos + 1] != '\n')) {
+                                if (blen >= buf_capacity - 1) {
+                                    buf_capacity *= 2;
+                                    char* new_buf = realloc(buf, buf_capacity);
+                                    if (!new_buf) {
+                                        free(buf);
+                                        return create_token(TOKEN_ERROR, "heredoc too large", current_line, current_column);
+                                    }
+                                    buf = new_buf;
+                                }
+                                buf[blen++] = ch;
+                            }
+                            advance();
+                        }
+                        if (peek() == '\n') {
                             if (blen >= buf_capacity - 1) {
                                 buf_capacity *= 2;
                                 char* new_buf = realloc(buf, buf_capacity);
@@ -621,9 +666,19 @@ Token* next_token() {
                                 }
                                 buf = new_buf;
                             }
-                            buf[blen++] = ch;
+                            buf[blen++] = '\n';
+                            advance();
+                        } else {
+                            break;   // EOF mid-line, no closing marker
                         }
-                        advance();
+                    }
+                    if (!closed) {
+                        free(buf);
+                        char err[MAX_IDENTIFIER_LENGTH + 64];
+                        snprintf(err, sizeof(err),
+                                 "unterminated heredoc: missing closing marker '%s'",
+                                 marker);
+                        return create_token(TOKEN_ERROR, err, start_line, current_column);
                     }
                     // Strip the final newline before the marker line.
                     // Content between the markers is preserved exactly,
