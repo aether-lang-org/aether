@@ -1,0 +1,7 @@
+// Guard: a variadic extern (`fmt, ...`) accepts args beyond its named ones
+// and must NOT be rejected by the arity check.
+extern vfmt(fmt: string, ...) -> int
+main() {
+    let n: int = vfmt("x=%d y=%d", 1, 2)
+    println("${n}")
+}

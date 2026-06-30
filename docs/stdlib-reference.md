@@ -416,7 +416,7 @@ main() {
 **Creation:**
 - `string.new(cstr)` - Create from C string
 - `string.from_literal(cstr)` - Create from string literal (alias for `new`)
-- `string.from_cstr(cstr)` - Create from C string (alias for `new`)
+- `string.from_cstr(cstr)` - Create from a C string (alias for `new`). Also accepts an `AetherString*` (e.g. a value read back from `list.add_string_owned` via `list.get`), copying its payload rather than its header bytes.
 - `string.empty()` - Create empty string
 
 **Operations:**

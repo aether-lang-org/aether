@@ -1,0 +1,6 @@
+// Correct usage: the constant is called with no arguments and multiplied.
+import std.math
+main() {
+    let r: float = 45.0 * math.deg_to_rad()
+    println("${math.cos(r)}")
+}
