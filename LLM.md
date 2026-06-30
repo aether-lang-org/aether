@@ -406,6 +406,35 @@ workaround — they cover cases a porter often hand-rolls.
   `make ci-coverage`: add `-fprofile-arcs -ftest-coverage` to the build
   (mirror the `build/asan-obj/` variant pattern), run the tests, shell
   `gcov` over the .gcda files.
+- **Rebuild-trigger → minimum-test table** ("I touched X, so rebuild Y, run
+  Z"). `build/ae` *execs* `build/aetherc` (it doesn't link the compiler in),
+  so a compiler change takes effect the moment `aetherc` is rebuilt — no need
+  to relink `ae`.
+
+  | Touched | Rebuild | Then run |
+  |---|---|---|
+  | `docs/**`, any `.md` | none | nothing (doc-only) |
+  | `compiler/**` (parser, analysis, typechecker, codegen) | `make compiler` | the targeted `tests/regression/*.ae` via `build/ae`, then `make test-ae` |
+  | `std/<m>/**` | `make stdlib` | `rm -f build/test_*` (stale probe binaries), then that module's tests |
+  | `runtime/**` | none for `.ae` builds (runtime `.c` is compiled fresh into every `ae build`); `make test` relinks the C unit runner | `make test` + the affected `.ae` tests |
+  | `tools/ae.c` (the `ae` driver) | `make ae` | the relevant `tests/integration/*` |
+  | `contrib/**` | `make contrib MODULES=<m>` | that module's `tests/integration/` test |
+
+- **Never overlap a build with a test run.** Running `make test-ae` while
+  `make compiler`/`make stdlib` is still in flight gives *false* failures —
+  tests compile against a half-written `build/aetherc` / `libaether.a`. The
+  tell: a wave of `(compile error)` / `(shell test)` failures that all **pass
+  when re-run standalone**. Let the build finish, then test.
+- **A few regression probes are RSS-threshold leak tests**
+  (`heap_leak_cross_fn_recursion`, `heap_tracker_return_escape_no_leak`, …):
+  they measure their own RSS growth across N iterations and occasionally trip
+  the bound under allocator noise. A lone one of these failing while everything
+  else is green is almost always noise — re-run it standalone before treating
+  it as a real regression.
+- **Stale `~/.aether/cache`.** `ae build`/`ae run` cache compiled binaries by
+  source hash; if behaviour seems impossibly stale after an edit (or after
+  switching branches), `rm -rf ~/.aether/cache`. `make clean && make -j$(nproc)`
+  is the full reset to known-good.
 
 ## Branch / PR conventions
 
@@ -417,6 +446,11 @@ workaround — they cover cases a porter often hand-rolls.
 - Never commit to `main` directly. Push the feature branch, open a
   PR, wait for green CI (includes Windows MSYS2 + MINGW-w64
   cross-builds that catch `#include` gaps Linux doesn't).
+- **When to ask first.** Touching more than ~5 files, or crossing subsystem
+  dirs (`compiler/`, `std/`, `runtime/`, `tools/`); any change to diagnostic
+  text or ordering, codegen output shape, or a public CLI flag; and committing
+  or pushing (the standing rule above). A doc-only sweep across many files is
+  fine — just call it out.
 
 ## Invariants to not break
 
@@ -448,3 +482,9 @@ workaround — they cover cases a porter often hand-rolls.
   then `std/<module>/` for runtime.
 - The CHANGELOG has working-memory for what-landed-when. Treat it as
   authoritative for "is feature X available yet."
+- **Map generated C back to a codegen site.** Drop a unique marker at the
+  suspect emit — `fprintf(gen->output, "/*AEDBG1*/ ...")` — `make compiler`,
+  then `build/aetherc x.ae /tmp/x.c` (or `build/ae build --emit-c x.ae`) and
+  grep `/tmp/x.c` for `AEDBG1` to see which path fired and what surrounds it.
+  Same trick with a `fprintf(stderr, ...)` in the parser/typechecker to trace
+  resolution. Remove the marker when done.
