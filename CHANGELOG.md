@@ -40,6 +40,25 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **macOS arm64: `ae build` couldn't link anything off a released package**
+  (#959). Three build-toolchain fixes:
+  - **Flat runtime-archive fallback.** `ae build` looked for the prebuilt
+    archive only at the canonical nested `lib/aether/libaether.a`. The macOS
+    arm64 v0.331/0.332 packages shipped it flat at `lib/libaether.a`, so the
+    lookup missed it and fell back to compiling an *incomplete* runtime source
+    list — every build, even hello-world, then failed to link (`Undefined
+    symbols ... _aether_io_poller_init`). `ae build` now falls back to the flat
+    archive before the source path; the complete archive links.
+  - **Version-agnostic homebrew link paths.** The link flags baked into `ae`
+    came from `pkg-config`, which on homebrew emits versioned
+    `-L/opt/homebrew/Cellar/<pkg>/<ver>/lib` paths — so `ld: library 'ssl' not
+    found` the moment a formula was upgraded. The build now rewrites those to
+    the version-agnostic `/opt/homebrew/opt/<pkg>/lib` symlinks homebrew keeps
+    current. No-op on non-homebrew layouts.
+  - **Corrupt-archive guard on install.** `ae version install` now validates
+    that the extracted `libaether.a` is a well-formed `ar` archive of plausible
+    size, catching the interrupted/partial extract that left a truncated
+    archive (undefined symbols) and a broken install with no hint at the cause.
 - **`ae build` now fails on an imported module's compile error** (#953). `ae
   build` accepted an entry program whose *imported* module did not compile —
   the parser's error recovery dropped the offending construct (e.g. an invalid

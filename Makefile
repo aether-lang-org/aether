@@ -185,6 +185,22 @@ ifneq ($(PCRE2_LDFLAGS),)
   PCRE2_CFLAGS += -DAETHER_HAS_PCRE2
 endif
 
+# #959: homebrew's pkg-config .pc files emit versioned
+# `-L/opt/homebrew/Cellar/<pkg>/<version>/lib` paths. Those `-L` dirs get
+# baked into the shipped `ae` binary (via -DAETHER_*_LIBS below) and break
+# every user `ae build` with `ld: library 'ssl' not found` the moment the
+# formula is upgraded to a new version. Rewrite each Cellar path to the
+# version-agnostic `/opt/homebrew/opt/<pkg>` symlink homebrew always keeps
+# pointed at the current version. A no-op on layouts without `/Cellar/`
+# (Linux, MacPorts, custom prefixes), so it applies unconditionally. The
+# CFLAGS keep the as-probed paths — they are only used to build Aether
+# itself (where the probed version is present), never baked into user builds.
+cellar_to_opt = $(shell printf '%s' '$(1)' | sed 's|/Cellar/\([^/]*\)/[^/]*|/opt/\1|g')
+OPENSSL_LDFLAGS := $(call cellar_to_opt,$(OPENSSL_LDFLAGS))
+ZLIB_LDFLAGS    := $(call cellar_to_opt,$(ZLIB_LDFLAGS))
+NGHTTP2_LDFLAGS := $(call cellar_to_opt,$(NGHTTP2_LDFLAGS))
+PCRE2_LDFLAGS   := $(call cellar_to_opt,$(PCRE2_LDFLAGS))
+
 # -fPIC on every runtime/stdlib object so the precompiled `build/libaether.a`
 # can be linked into a shared object by `ae build --emit=lib`. Without it,
 # any `--emit=lib` build that pulls in a TLS-using runtime object (e.g.
