@@ -53,6 +53,26 @@ next version number before tagging the release.
   `check` now fail (non-zero, no binary) when any module they pull in carries an
   error. A clean import is unaffected (the gate keys on the error count).
 
+- **`ae check` now catches over-/under-applying an extern; `from_cstr` survives
+  an `AetherString*`** (#952). Two "`ae check` passes but the program then
+  crashes or fails in gcc" gaps:
+  - **Arity of extern functions wasn't checked.** Calling the zero-arg
+    `math.deg_to_rad()` constant as `math.deg_to_rad(x)` (and the sibling
+    `math.pi`/`tau`/`e`/`rad_to_deg` constants) passed `ae check` and surfaced
+    only as a raw gcc "too many arguments" error. Extern arity is now validated
+    in Aether terms, honoring variadic externs (`f(named, ...)`, both the
+    `extern` and `@extern("c")` forms) and `_ctx`-first builder externs. The
+    fix also wires each imported extern's AST node into its symbol — like
+    entry-file externs already were — so the existing extern arg-type checks
+    apply across module boundaries too.
+  - **`string.from_cstr` segfaulted on an owned-list value.** A string stored
+    with `list.add_string_owned` (which keeps the 24-byte `AetherString`
+    header) and read back via `list.get` was an `AetherString*`, not a raw
+    `char*`; `from_cstr` read the header bytes as character data and copied
+    garbage or crashed. `from_cstr` now routes its argument through the
+    magic-header-aware accessor, so the round-trip is correct for either an
+    `AetherString*` or a plain C string (and is NULL-safe).
+
 - **Heredoc closing-marker rule: no more silent truncation** (#922). A heredoc
   body line that merely read like the closing marker could close the heredoc
   early and silently drop the rest of the body. The close rule is now: a line

@@ -33,7 +33,14 @@ AetherString* string_from_literal(const char* cstr) {
 
 // Alias for from_cstr
 AetherString* string_from_cstr(const char* cstr) {
-    return string_new(cstr);
+    /* #952: `from_cstr` may be handed a magic AetherString* rather than a
+     * raw C string — e.g. a value stored with list.add_string_owned (which
+     * keeps the AetherString header) and read back via list.get. A naive
+     * string_new(cstr) would read the 24-byte header as character data and
+     * copy garbage (or crash dereferencing it). str_data() detects the magic
+     * header and yields the real payload bytes for either shape (and "" for
+     * NULL), so the round-trip is correct whichever the caller holds. */
+    return string_new(str_data(cstr));
 }
 
 // Alias for free

@@ -1,0 +1,40 @@
+// Regression (#952 part A): a string stored with `list.add_string_owned`
+// (which keeps the 24-byte AetherString header) and read back via `list.get`
+// can be handed to `string.from_cstr` without crashing or copying header
+// bytes as character data. Before the fix `from_cstr` did `string_new(cstr)`,
+// reading the magic header as text (garbage / segfault); now it routes the
+// argument through the magic-aware accessor so the round-trip is correct for
+// either an AetherString* or a raw C string.
+//
+// Leak-clean: the from_cstr results are independent copies (freed here), and
+// the owned strings the list holds are released by `list.free`.
+
+import std.list
+import std.string
+
+extern exit(code: int)
+
+main() {
+    l = list.new()
+    list.add_string_owned(l, string.copy("hello"))
+    list.add_string_owned(l, string.copy("world"))
+
+    p0, _ = list.get(l, 0)
+    s0 = string.from_cstr(p0)
+    if string.equals(string.to_cstr(s0), "hello") != 1 {
+        println("FAIL: slot 0 = ${string.to_cstr(s0)}")
+        exit(1)
+    }
+    string.free(s0)
+
+    p1, _ = list.get(l, 1)
+    s1 = string.from_cstr(p1)
+    if string.equals(string.to_cstr(s1), "world") != 1 {
+        println("FAIL: slot 1 = ${string.to_cstr(s1)}")
+        exit(1)
+    }
+    string.free(s1)
+
+    list.free(l)
+    println("=== all cases passed ===")
+}

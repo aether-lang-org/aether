@@ -1,0 +1,5 @@
+// `math.deg_to_rad` is a zero-arg extern constant (PI/180). Calling it with
+// an argument must be rejected by `ae check` (#952 part B), not slip through
+// to a raw gcc "too many arguments" error.
+import std.math
+main() { println("${math.cos(math.deg_to_rad(45.0))}") }

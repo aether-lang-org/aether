@@ -2414,6 +2414,12 @@ int typecheck_program(ASTNode* program) {
                                 if (!lookup_symbol_local(global_table, decl->value)) {
                                     add_symbol(global_table, decl->value,
                                                clone_type(decl->node_type), 0, 1, 0);
+                                    /* #952: wire the extern's AST node into its
+                                     * symbol so call-site arity + arg-type checks
+                                     * apply to imported externs too — exactly as
+                                     * the entry-file extern registration does. */
+                                    Symbol* es = lookup_symbol_local(global_table, decl->value);
+                                    if (es) es->node = decl;
                                 }
                             }
                         }
@@ -2446,6 +2452,12 @@ int typecheck_program(ASTNode* program) {
                                 if (!lookup_symbol_local(global_table, decl->value)) {
                                     add_symbol(global_table, decl->value,
                                                clone_type(decl->node_type), 0, 1, 0);
+                                    /* #952: wire the extern's AST node into its
+                                     * symbol so call-site arity + arg-type checks
+                                     * apply to imported externs too — exactly as
+                                     * the entry-file extern registration does. */
+                                    Symbol* es = lookup_symbol_local(global_table, decl->value);
+                                    if (es) es->node = decl;
                                 }
                             }
                             // AST_FUNCTION_DEFINITION handled by module_merge_into_program()
@@ -5816,6 +5828,61 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                 add_child(call, default_clone);
                 param_idx++;
             }
+        }
+    }
+
+    /* #952: arity check for extern (C FFI) functions. An extern's AST node
+     * holds only its parameters as children (no body, no guard), so the
+     * declared param count is the number of those children. A `varargs`
+     * extern (declared with a trailing `...`, e.g. `printf(fmt, ...)`)
+     * accepts any number of args beyond its named ones, so only the named
+     * minimum is enforced. Without this, over- or under-applying an extern —
+     * e.g. calling the zero-arg `math.deg_to_rad()` constant as
+     * `math.deg_to_rad(x)` — slipped past `ae check` and surfaced only as a
+     * raw gcc "too many arguments" error from the generated C. */
+    if (symbol->node && symbol->node->type == AST_EXTERN_FUNCTION) {
+        ASTNode* extern_node = symbol->node;
+        int expected = 0;
+        for (int i = 0; i < extern_node->child_count; i++) {
+            ASTNode* p = extern_node->children[i];
+            if (p && p->type == AST_IDENTIFIER) expected++;
+        }
+        int got = call->child_count;
+        /* Variadic externs (`f(named..., ...)`) accept any number of args
+         * beyond the named ones. The bare `extern` form marks this with
+         * annotation "varargs"; the `@extern("c_name")` form appends a
+         * ";varargs" suffix to its `c_symbol:` annotation (see
+         * codegen_func.c extern_is_varargs) — accept both. */
+        int is_variadic = (extern_node->annotation &&
+                           (strcmp(extern_node->annotation, "varargs") == 0 ||
+                            strstr(extern_node->annotation, ";varargs") != NULL));
+        /* A `_ctx`-first extern (builder-DSL boundary, e.g. std.host's
+         * `input(_ctx, name, type)`) is called with `_ctx` auto-injected at
+         * the call site, so the caller supplies expected-1 args. Extern
+         * params are AST_IDENTIFIER nodes (not the function-definition param
+         * shapes has_ctx_first_param expects), so detect `_ctx` directly. */
+        int ctx_first = (extern_node->child_count > 0 &&
+                         extern_node->children[0] &&
+                         extern_node->children[0]->type == AST_IDENTIFIER &&
+                         extern_node->children[0]->value &&
+                         strcmp(extern_node->children[0]->value, "_ctx") == 0);
+        int arity_ok = is_variadic
+            ? (got >= expected || (ctx_first && got >= expected - 1))
+            : (got == expected || (ctx_first && got == expected - 1));
+        if (!arity_ok) {
+            char error_msg[256];
+            int low = ctx_first ? (expected - 1) : expected;
+            if (is_variadic) {
+                snprintf(error_msg, sizeof(error_msg),
+                         "Function '%s' expects at least %d argument(s), got %d",
+                         call->value, low, got);
+            } else {
+                snprintf(error_msg, sizeof(error_msg),
+                         "Function '%s' expects %d argument(s), got %d",
+                         call->value, low, got);
+            }
+            type_error(error_msg, call->line, call->column);
+            return 0;
         }
     }
 
