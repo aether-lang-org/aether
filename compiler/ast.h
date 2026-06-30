@@ -213,8 +213,12 @@ typedef enum {
                             // yields the first slot.
     AST_NULL_COALESCE,      // `x ?? d` — yields T (x's value) or d if none.
                             // children[0] = optional, children[1] = default.
-    AST_OPTIONAL_CHAIN      // `x?.field` — none-propagating field access,
+    AST_OPTIONAL_CHAIN,     // `x?.field` — none-propagating field access,
                             // yields `fieldT?`. value = field; children[0] = x.
+    // #914 sum/variant types. `type Name = A | B | C` — a tagged union over
+    // existing struct variants. value = the sum type name; each child is an
+    // AST_IDENTIFIER naming a variant struct.
+    AST_SUM_TYPE_DEF
 } ASTNodeType;
 
 typedef enum {
@@ -244,10 +248,14 @@ typedef enum {
     TYPE_TUPLE,         // (T1, T2, ...) for multiple return values
     TYPE_FUNCTION,      // |param_types| -> return_type (closures)
     TYPE_UNKNOWN,
-    TYPE_OPTIONAL       // #340 `T?` — element_type is the wrapped type T.
+    TYPE_OPTIONAL,      // #340 `T?` — element_type is the wrapped type T.
                         // Lowers to a per-T tagged struct `ae_opt_<T>`
                         // `{ bool has; T val; }`. Appended at END to keep the
                         // existing kind numbering stable.
+    TYPE_SUM            // #914 sum/variant type. `struct_name` is the sum's
+                        // name; `tuple_types[0..tuple_count)` are the variant
+                        // Types (each TYPE_STRUCT). Lowers to a tagged union
+                        // `{ <Name>_tag tag; union { ... } data; }`.
 } TypeKind;
 
 typedef struct Type {
@@ -349,6 +357,7 @@ Type* create_array_type(Type* element_type, int size);
 Type* create_optional_type(Type* inner);   // #340 `T?`
 Type* create_actor_ref_type(Type* actor_type);
 Type* create_tuple_type(int count, ...);  // create_tuple_type(2, type_a, type_b)
+Type* create_sum_type(const char* name);  // #914 `type Name = A | B | C`
 Type* create_function_type(int param_count, Type** param_types, Type* return_type);
 void free_type(Type* type);
 const char* type_to_string(Type* type);

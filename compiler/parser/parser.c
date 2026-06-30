@@ -5032,22 +5032,53 @@ ASTNode* parse_top_level_decl(Parser* parser) {
                 if (!name) return NULL;
                 if (!expect_token(parser, TOKEN_ASSIGN)) return NULL;
                 Token* dk = peek_token(parser);
-                if (!(dk && dk->type == TOKEN_IDENTIFIER && dk->value &&
-                      strcmp(dk->value, "distinct") == 0)) {
-                    parser_error(parser, "expected `distinct` after `type Name =` (only distinct type aliases are supported)");
-                    return NULL;
+                if (dk && dk->type == TOKEN_IDENTIFIER && dk->value &&
+                    strcmp(dk->value, "distinct") == 0) {
+                    advance_token(parser);                   // consume 'distinct'
+                    Type* base = parse_type(parser);
+                    if (!base) {
+                        parser_error(parser, "expected a base type after `distinct`");
+                        return NULL;
+                    }
+                    ASTNode* d = create_ast_node(AST_DISTINCT_TYPE_DEF,
+                                                 name->value, name->line, name->column);
+                    d->node_type = base;
+                    match_token(parser, TOKEN_SEMICOLON);
+                    return d;
                 }
-                advance_token(parser);                       // consume 'distinct'
-                Type* base = parse_type(parser);
-                if (!base) {
-                    parser_error(parser, "expected a base type after `distinct`");
-                    return NULL;
+                // #914 sum/variant type: `type Name = A | B | C`. The variants
+                // are existing struct type names separated by `|`. At least two
+                // are required (a single-name alias is not a supported form).
+                if (dk && dk->type == TOKEN_IDENTIFIER) {
+                    ASTNode* sum = create_ast_node(AST_SUM_TYPE_DEF,
+                                                   name->value, name->line, name->column);
+                    int nvar = 0;
+                    for (;;) {
+                        Token* v = expect_token(parser, TOKEN_IDENTIFIER);
+                        if (!v) { free_ast_node(sum); return NULL; }
+                        add_child(sum, create_ast_node(AST_IDENTIFIER, v->value,
+                                                       v->line, v->column));
+                        nvar++;
+                        if (peek_token(parser) && peek_token(parser)->type == TOKEN_PIPE) {
+                            advance_token(parser);           // consume '|'
+                            continue;
+                        }
+                        break;
+                    }
+                    if (nvar < 2) {
+                        parser_error(parser,
+                            "a sum type needs at least two variants "
+                            "(`type Name = A | B`); a single-name alias is not supported");
+                        free_ast_node(sum);
+                        return NULL;
+                    }
+                    match_token(parser, TOKEN_SEMICOLON);
+                    return sum;
                 }
-                ASTNode* d = create_ast_node(AST_DISTINCT_TYPE_DEF,
-                                             name->value, name->line, name->column);
-                d->node_type = base;
-                match_token(parser, TOKEN_SEMICOLON);
-                return d;
+                parser_error(parser,
+                    "expected `distinct <type>` or a `|`-separated variant list "
+                    "after `type Name =`");
+                return NULL;
             }
         }
 

@@ -1144,6 +1144,79 @@ A value optional lowers to `typedef struct { int has; T val; } ae_opt_<T>` (one 
 
 ---
 
+## Sum / Variant Types
+
+A **sum type** is a value that is exactly one of N named struct variants:
+
+```aether
+struct Circle { r: float }
+struct Rect   { w: float  h: float }
+struct Empty  {}
+type Shape = Circle | Rect | Empty
+```
+
+Each variant is an existing struct. A sum needs at least two variants (a
+single-name `type T = A` alias is not a supported form).
+
+### Constructing — implicit wrap
+
+A variant struct value flows into a `Shape` slot directly; there is no
+`some(...)`-style constructor. The wrap happens at `let` bindings, function
+parameters, return values, and call arguments:
+
+```aether
+let s: Shape = Circle { r: 2.0 }      // Circle wraps into Shape
+draw(Rect { w: 3.0, h: 4.0 })         // wraps at the argument
+make() -> Shape { return Empty {} }   // wraps at the return
+```
+
+### Matching — narrowing + exhaustiveness
+
+`match` over a sum dispatches on the variant and **narrows** the scrutinee to
+that variant struct inside the arm, so `s.field` reads the right member:
+
+```aether
+area(s: Shape) -> float {
+    let a: float = match s {
+        Circle -> 3.14159 * s.r * s.r   // here `s` is a Circle
+        Rect   -> s.w * s.h             // here `s` is a Rect
+        Empty  -> 0.0
+    }
+    return a
+}
+```
+
+The match must be **exhaustive**: every variant must be handled, or a `_`
+wildcard arm must catch the rest. Omitting a variant is a compile error — the
+payoff that tells you, when you add a variant, exactly which matches to update.
+An arm naming something that isn't a variant is also rejected. Narrowing applies
+when the scrutinee is a plain variable (`match s { … }`).
+
+### Recursive sums
+
+Self-referential shapes (trees, ASTs, JSON values) use explicit pointer fields:
+
+```aether
+struct Leaf { v: int }
+struct Pair { left: *Tree  right: *Tree }
+type Tree = Leaf | Pair
+```
+
+### Codegen
+
+A sum lowers to a tag enum plus a tagged union — no allocation, no vtable:
+
+```c
+typedef enum { Shape__Circle, Shape__Rect, Shape__Empty } Shape_tag;
+typedef struct Shape { Shape_tag tag; union { Circle Circle_; Rect Rect_; Empty Empty_; } data; } Shape;
+```
+
+`match` becomes a `switch` on `.tag` with the matched value narrowed to the
+active union member in each `case`. v1 is monomorphic; type parameters are a
+follow-up.
+
+---
+
 ## Structs
 
 Structs group related data:

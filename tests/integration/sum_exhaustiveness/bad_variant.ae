@@ -1,0 +1,13 @@
+// A match arm naming a non-variant must be rejected (#914).
+struct Circle { r: float }
+struct Rect   { w: float  h: float }
+type Shape = Circle | Rect
+f(s: Shape) -> int {
+    match s {
+        Circle -> { return 1 }
+        Square -> { return 9 }
+        Rect   -> { return 2 }
+    }
+    return 0
+}
+main() { println("${f(Circle { r: 1.0 })}") }

@@ -1733,6 +1733,16 @@ const char* get_c_type(Type* type) {
             }
             return buffer;
         }
+        case TYPE_SUM: {
+            // #914: a sum type lowers to `typedef struct Name { Name_tag tag;
+            // union {...} data; } Name;` (emitted by emit_sum_typedefs), so the
+            // C type is just the sum's name.
+            static char buffers[4][256];
+            static int buf_idx = 0;
+            char* buffer = buffers[buf_idx++ & 3];
+            snprintf(buffer, 256, "%s", type->struct_name ? type->struct_name : "_sum");
+            return buffer;
+        }
         case TYPE_ARRAY: {
             static char buffers[4][256];
             static int buf_idx = 0;
@@ -2847,6 +2857,34 @@ void collect_optional_typedefs(CodeGenerator* gen, ASTNode* node) {
     }
 }
 
+// #914: emit a sum/variant type's C lowering — a tag enum plus a tagged union
+// embedding each variant struct by value:
+//   typedef enum { Shape__Circle, Shape__Rect } Shape_tag;
+//   typedef struct Shape { Shape_tag tag; union { Circle Circle_; Rect Rect_; } data; } Shape;
+// Emitted after all struct bodies (the union members embed the variants by
+// value) and before function forward declarations.
+void emit_sum_typedef(CodeGenerator* gen, ASTNode* def) {
+    if (!def || def->type != AST_SUM_TYPE_DEF || !def->value) return;
+    const char* name = def->value;
+    fprintf(gen->output, "typedef enum { ");
+    int n = 0;
+    for (int i = 0; i < def->child_count; i++) {
+        ASTNode* v = def->children[i];
+        if (!v || v->type != AST_IDENTIFIER || !v->value) continue;
+        if (n > 0) fprintf(gen->output, ", ");
+        fprintf(gen->output, "%s__%s", name, v->value);
+        n++;
+    }
+    fprintf(gen->output, " } %s_tag;\n", name);
+    fprintf(gen->output, "typedef struct %s {\n    %s_tag tag;\n    union {\n", name, name);
+    for (int i = 0; i < def->child_count; i++) {
+        ASTNode* v = def->children[i];
+        if (!v || v->type != AST_IDENTIFIER || !v->value) continue;
+        fprintf(gen->output, "        %s %s_;\n", v->value, v->value);
+    }
+    fprintf(gen->output, "    } data;\n} %s;\n", name);
+}
+
 const char* get_c_operator(const char* aether_op) {
     if (!aether_op) return "";
     
@@ -3873,6 +3911,16 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
     }
 
+    // #914: sum/variant tagged-union typedefs. Emitted after all struct
+    // bodies (each union member embeds a variant struct by value) and before
+    // the function forward declarations that reference `Name` in signatures.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* sd = program->children[i];
+        if (sd && sd->type == AST_SUM_TYPE_DEF) {
+            emit_sum_typedef(gen, sd);
+        }
+    }
+
     // Now that every user struct's full body is visible, emit the
     // synthesised tuple typedefs (deferred from the merge pre-scan
     // above). A tuple type embeds each element BY VALUE, so a
@@ -4443,6 +4491,10 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 // that do `view->field` member access see the full
                 // struct layout regardless of where the struct decl
                 // appeared in the merged program tree.
+                break;
+            case AST_SUM_TYPE_DEF:
+                // #914: the tagged-union typedef was emitted in the hoisted
+                // type pass above; nothing to emit for the declaration here.
                 break;
             case AST_MAIN_FUNCTION:
                 generate_main_function(gen, child);

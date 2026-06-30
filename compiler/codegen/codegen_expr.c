@@ -3903,6 +3903,11 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                              * param-node types), so this never emits one
                              * mid-expression. */
                             emit_optional_coerced(gen, arg, expected_type);
+                        } else if (expected_type && expected_type->kind == TYPE_SUM &&
+                                   needs_sum_coerce(arg, expected_type)) {
+                            /* #914: a variant struct flowing into a sum
+                             * parameter wraps into the tagged union. */
+                            emit_sum_coerced(gen, arg, expected_type);
                         } else if (expected == TYPE_PTR && arg->node_type &&
                             arg->node_type->kind == TYPE_FUNCTION &&
                             !arg->node_type->is_fnptr) {
