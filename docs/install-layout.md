@@ -57,6 +57,12 @@ Two consumption shapes, in priority order:
    itself uses this same path — see `cmd_cflags` for the
    construction.
 
+   `ae build` is tolerant of a package that ships the archive **flat** at
+   `<prefix>/lib/libaether.a` instead: it tries the canonical nested path
+   first and falls back to the flat one before resorting to the
+   compile-from-source path below (#959). The nested layout is still the
+   canonical one `install.sh` and `make install` produce.
+
 2. **Compile from source**, falling through to the `.c` files in
    `share/aether/`. This is what `ae build` does when
    `libaether.a` isn't found. It's also what tooling like

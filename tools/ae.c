@@ -1173,6 +1173,21 @@ found_root:
         snprintf(tc.lib, sizeof(tc.lib), "%s/build/libaether.a", tc.root);
     } else {
         snprintf(tc.lib, sizeof(tc.lib), "%s/lib/aether/libaether.a", tc.root);
+        /* #959: prefer the nested canonical archive, but fall back to a flat
+         * lib/libaether.a if that's all the package shipped. The flat archive
+         * is complete; the from-source fallback below is NOT (it omits the
+         * io-poller, sandbox/capsicum, http2, string_seq, and caps runtime
+         * sources), so a package that placed the archive flat — as the macOS
+         * arm64 v0.331/0.332 packages did — silently produced an unlinkable
+         * binary ("Undefined symbols ... _aether_io_poller_init"). Take the
+         * complete flat archive over the incomplete source compile. */
+        if (!path_exists(tc.lib)) {
+            char flat[1024];
+            snprintf(flat, sizeof(flat), "%s/lib/libaether.a", tc.root);
+            if (path_exists(flat)) {
+                snprintf(tc.lib, sizeof(tc.lib), "%s/lib/libaether.a", tc.root);
+            }
+        }
     }
     tc.has_lib = path_exists(tc.lib);
 
@@ -6374,6 +6389,59 @@ static int cmd_version_install(const char* version) {
             fprintf(stderr, "This version may not have a release for " AE_PLATFORM ".\n");
             fprintf(stderr, "Available versions: ae version list\n");
             return 1;
+        }
+    }
+
+    // #959: integrity-check the prebuilt runtime archive after extraction.
+    // An interrupted/partial extract has been observed to leave a truncated
+    // libaether.a whose symbols are undefined (U) instead of defined (T), so
+    // every later `ae build` fails to link with nothing pointing at the cause.
+    // Validate that the archive (canonical nested path, or the flat fallback
+    // some packages ship) is a well-formed `ar` archive of plausible size; on
+    // failure remove the install and tell the user to retry, rather than
+    // leaving a landmine. Skipped when the package ships sources only (no
+    // prebuilt archive present). This does not replace a full checksum verify
+    // (which needs the release pipeline to publish per-asset sums) but catches
+    // the truncation that actually corrupted a macOS download.
+    {
+        char arch_path[1024];
+        snprintf(arch_path, sizeof(arch_path), "%s/lib/aether/libaether.a", ver_dir);
+        if (!path_exists(arch_path))
+            snprintf(arch_path, sizeof(arch_path), "%s/lib/libaether.a", ver_dir);
+        if (path_exists(arch_path)) {
+            FILE* lf = fopen(arch_path, "rb");
+            int ok = 0;
+            if (lf) {
+                char hdr[8] = {0};
+                size_t n = fread(hdr, 1, sizeof(hdr), lf);
+                fseek(lf, 0, SEEK_END);
+                long lsize = ftell(lf);
+                fclose(lf);
+                /* `ar` archives begin with the 8-byte magic "!<arch>\n" on
+                 * every platform we ship (GNU/BSD/macOS ar). A complete
+                 * runtime+stdlib archive is multi-megabyte; a truncated one
+                 * falls well short of this conservative 64 KB floor. */
+                ok = (n == sizeof(hdr) &&
+                      memcmp(hdr, "!<arch>\n", sizeof(hdr)) == 0 &&
+                      lsize > 65536);
+            }
+            if (!ok) {
+                char rmc[1024];
+#ifdef _WIN32
+                snprintf(rmc, sizeof(rmc), "rmdir /S /Q \"%s\"", ver_dir);
+#else
+                snprintf(rmc, sizeof(rmc), "rm -rf '%s'", ver_dir);
+#endif
+                if (system(rmc) != 0) { /* cleanup failed — non-fatal */ }
+                fprintf(stderr,
+                    "Error: %s installed a corrupt runtime archive "
+                    "(lib/.../libaether.a is truncated or not an `ar` archive).\n",
+                    vtag);
+                fprintf(stderr,
+                    "The download or extraction was likely interrupted. "
+                    "Re-run: ae version install %s\n", vtag);
+                return 1;
+            }
         }
     }
 
