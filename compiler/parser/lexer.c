@@ -839,7 +839,13 @@ Token* next_token() {
             }
             return create_token(TOKEN_DOT, ".", current_line, current_column);
         case ':': advance(); return create_token(TOKEN_COLON, ":", current_line, current_column);
-        case '?': advance(); return create_token(TOKEN_QUESTION, "?", current_line, current_column);
+        case '?':
+            advance();
+            // #340: `??` null-coalesce, `?.` optional-chain. A lone `?` stays
+            // the actor-ask operator.
+            if (peek() == '?') { advance(); return create_token(TOKEN_QUESTION_QUESTION, "??", current_line, current_column); }
+            if (peek() == '.') { advance(); return create_token(TOKEN_QUESTION_DOT, "?.", current_line, current_column); }
+            return create_token(TOKEN_QUESTION, "?", current_line, current_column);
         case '@': advance(); return create_token(TOKEN_AT, "@", current_line, current_column);
         default: {
             advance();
@@ -980,6 +986,8 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_AT: return "AT";
         case TOKEN_EXCLAIM: return "EXCLAIM";
         case TOKEN_QUESTION: return "QUESTION";
+        case TOKEN_QUESTION_QUESTION: return "QUESTION_QUESTION";
+        case TOKEN_QUESTION_DOT: return "QUESTION_DOT";
         case TOKEN_PRINT: return "PRINT";
         case TOKEN_EOF: return "EOF";
         case TOKEN_ERROR: return "ERROR";

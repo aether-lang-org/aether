@@ -346,6 +346,9 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->tuple_type_names = NULL;
     gen->tuple_type_count = 0;
     gen->tuple_type_capacity = 0;
+    gen->opt_type_names = NULL;       // #340
+    gen->opt_type_count = 0;
+    gen->opt_type_capacity = 0;
     // Builder function registry
     gen->builder_funcs = NULL;
     gen->builder_func_count = 0;
@@ -1756,6 +1759,29 @@ const char* get_c_type(Type* type) {
             }
             return buffer;
         }
+        case TYPE_OPTIONAL: {
+            // #340: `T?` lowers to a per-T tagged struct `ae_opt_<T>`
+            // (`{ bool has; T val; }`), emitted on first use by
+            // ensure_optional_typedef. The mangled name uses the inner C
+            // type, identifier-sanitised (string/ptr aliases, non-alnum -> _).
+            static char buffers[4][256];
+            static int buf_idx = 0;
+            char* buffer = buffers[buf_idx++ & 3];
+            const char* inner = type->element_type ? get_c_type(type->element_type) : "int";
+            if (strcmp(inner, "const char*") == 0) inner = "string";
+            else if (strcmp(inner, "void*") == 0) inner = "ptr";
+            char safe[200];
+            int si = 0;
+            for (const char* p = inner; *p && si < 199; p++) {
+                char c = *p;
+                int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                         (c >= '0' && c <= '9') || c == '_';
+                safe[si++] = ok ? c : '_';
+            }
+            safe[si] = '\0';
+            snprintf(buffer, 256, "ae_opt_%s", safe);
+            return buffer;
+        }
         case TYPE_FUNCTION:
             /* Typed C function pointer (storage = void*).  The call
              * site injects a `((R (*)(T1, T2))(v))` cast — keeping the
@@ -2781,6 +2807,44 @@ void ensure_tuple_typedef(CodeGenerator* gen, Type* type) {
         gen->tuple_type_names = realloc(gen->tuple_type_names, gen->tuple_type_capacity * sizeof(char*));
     }
     gen->tuple_type_names[gen->tuple_type_count++] = strdup(name);
+}
+
+// #340: emit `typedef struct { bool has; <T> val; } ae_opt_<T>;` once per
+// concrete optional type. Skips optional-of-unknown (an unpinned `none` that
+// never reached a concrete context — it produces no storage).
+void ensure_optional_typedef(CodeGenerator* gen, Type* type) {
+    if (!type || type->kind != TYPE_OPTIONAL) return;
+    if (!type->element_type || type->element_type->kind == TYPE_UNKNOWN) return;
+    const char* name = get_c_type(type);
+    for (int i = 0; i < gen->opt_type_count; i++) {
+        if (strcmp(gen->opt_type_names[i], name) == 0) return;
+    }
+    // get_c_type uses rotating static buffers, so snapshot the inner C type
+    // name before `name` (also a rotating buffer) could be reused.
+    char inner_c[256];
+    snprintf(inner_c, sizeof(inner_c), "%s", get_c_type(type->element_type));
+    char opt_name[256];
+    snprintf(opt_name, sizeof(opt_name), "%s", name);
+    fprintf(gen->output, "typedef struct { int has; %s val; } %s;\n", inner_c, opt_name);
+    if (gen->opt_type_count >= gen->opt_type_capacity) {
+        gen->opt_type_capacity = gen->opt_type_capacity ? gen->opt_type_capacity * 2 : 8;
+        gen->opt_type_names = realloc(gen->opt_type_names, gen->opt_type_capacity * sizeof(char*));
+    }
+    gen->opt_type_names[gen->opt_type_count++] = strdup(opt_name);
+}
+
+// #340: walk the whole program AST, emitting an optional typedef for every
+// concrete `T?` that appears as a node's type (var/param/field/return/expr).
+// Optional typedefs must precede the function bodies that use them, so this
+// runs in the type-emission pre-pass.
+void collect_optional_typedefs(CodeGenerator* gen, ASTNode* node) {
+    if (!node) return;
+    if (node->node_type && node->node_type->kind == TYPE_OPTIONAL) {
+        ensure_optional_typedef(gen, node->node_type);
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        collect_optional_typedefs(gen, node->children[i]);
+    }
 }
 
 const char* get_c_operator(const char* aether_op) {
@@ -3846,6 +3910,8 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             }
         }
     }
+    // #340: emit optional typedefs (after struct bodies, before fn fwd-decls).
+    collect_optional_typedefs(gen, program);
 
     // Hoist top-level constants the same way.  Imported constants
     // (via `import mod` → cloned into the consumer's AST as

@@ -516,6 +516,7 @@ static const char* type_name(Type* t) {
         case TYPE_STRUCT:   return t->struct_name ? t->struct_name : "struct";
         case TYPE_FUNCTION:  return "closure";
         case TYPE_TUPLE:    return "tuple";
+        case TYPE_OPTIONAL: return "optional";   // #340
         case TYPE_UNKNOWN:  return "unknown";
         default:            return "unknown";
     }
@@ -971,6 +972,20 @@ int is_type_compatible(Type* from, Type* to) {
     if (from->kind == TYPE_INT && to->kind == TYPE_BYTE) return 1;
     if (from->kind == TYPE_INT64 && to->kind == TYPE_BYTE) return 1;
 
+    // #340 optionals. Assigning INTO a `T?`:
+    //   - `none` (optional with unknown inner) fits any optional;
+    //   - `U?` fits `T?` when inner U is compatible with inner T;
+    //   - a bare `U` implicitly WRAPS into `T?` when U is compatible with T.
+    // There is no implicit UNWRAP (`T?` -> `T`): the user must write `!` or
+    // `??`, so no rule for `from->kind == TYPE_OPTIONAL && to non-optional`.
+    if (to->kind == TYPE_OPTIONAL) {
+        if (from->kind == TYPE_OPTIONAL) {
+            if (!from->element_type || from->element_type->kind == TYPE_UNKNOWN) return 1;
+            return is_type_compatible(from->element_type, to->element_type);
+        }
+        return is_type_compatible(from, to->element_type);
+    }
+
     return 0;
 }
 
@@ -999,24 +1014,85 @@ int is_callable(Type* type) {
     }
 }
 
+// #340: resolve a struct field's declared type by struct name + field name.
+// Returns a fresh clone, or NULL if the struct/field is unknown.
+static Type* optional_struct_field_type(SymbolTable* table, const char* struct_name,
+                                        const char* field) {
+    if (!struct_name || !field) return NULL;
+    Symbol* s = lookup_symbol(table, struct_name);
+    if (s && s->node) {
+        for (int i = 0; i < s->node->child_count; i++) {
+            ASTNode* f = s->node->children[i];
+            if (f && f->value && strcmp(f->value, field) == 0) {
+                if (f->node_type && f->node_type->kind != TYPE_UNKNOWN)
+                    return clone_type(f->node_type);
+                return NULL;
+            }
+        }
+    }
+    return NULL;
+}
+
 // Type inference functions
 Type* infer_type(ASTNode* expr, SymbolTable* table) {
     if (!expr) return NULL;
-    
+
     switch (expr->type) {
         case AST_LITERAL:
             return clone_type(expr->node_type);
 
+        case AST_NONE_LITERAL:
+            // `none` — optional with as-yet-unknown inner; context pins the
+            // concrete T (assignment / `??` / `==`). If already pinned, use it.
+            if (expr->node_type && expr->node_type->kind == TYPE_OPTIONAL)
+                return clone_type(expr->node_type);
+            return create_optional_type(create_type(TYPE_UNKNOWN));
+
+        case AST_NULL_COALESCE: {
+            // `opt ?? d` -> the optional's inner T (or T if LHS already non-opt).
+            if (expr->child_count < 2) return create_type(TYPE_UNKNOWN);
+            Type* o = infer_type(expr->children[0], table);
+            Type* r;
+            if (o && o->kind == TYPE_OPTIONAL && o->element_type) r = clone_type(o->element_type);
+            else if (o) r = clone_type(o);
+            else r = infer_type(expr->children[1], table);
+            if (o) free_type(o);
+            return r;
+        }
+
+        case AST_OPTIONAL_CHAIN: {
+            // `opt?.field` -> fieldT? (none-propagating).
+            if (expr->child_count == 0 || !expr->value)
+                return create_optional_type(create_type(TYPE_UNKNOWN));
+            Type* o = infer_type(expr->children[0], table);
+            Type* inner = (o && o->kind == TYPE_OPTIONAL) ? o->element_type : o;
+            Type* field_t = NULL;
+            if (inner && inner->kind == TYPE_STRUCT) {
+                field_t = optional_struct_field_type(table, inner->struct_name, expr->value);
+            } else if (inner && inner->kind == TYPE_PTR && inner->element_type &&
+                       inner->element_type->kind == TYPE_STRUCT) {
+                field_t = optional_struct_field_type(table, inner->element_type->struct_name, expr->value);
+            }
+            Type* result = create_optional_type(field_t ? field_t : create_type(TYPE_UNKNOWN));
+            if (o) free_type(o);
+            return result;
+        }
+
         case AST_TUPLE_UNWRAP: {
-            /* `expr!` — unwrap-or-trap: the result is the operand tuple's
-             * FIRST slot type. Operand must be a tuple (a (value, err)
-             * return); a non-tuple operand is a type error reported in
+            /* `expr!` is polymorphic on the operand type:
+             *   - optional `T?`  -> inner `T` (#340 force-unwrap; panics at
+             *     runtime on `none`).
+             *   - tuple (value, err) -> the FIRST slot type (unwrap-or-trap).
+             * A non-optional, non-tuple operand is a type error reported in
              * typecheck_expression. */
             if (expr->child_count == 0 || !expr->children[0])
                 return create_type(TYPE_UNKNOWN);
             Type* operand = infer_type(expr->children[0], table);
             Type* result = create_type(TYPE_UNKNOWN);
-            if (operand && operand->kind == TYPE_TUPLE &&
+            if (operand && operand->kind == TYPE_OPTIONAL && operand->element_type) {
+                free_type(result);
+                result = clone_type(operand->element_type);
+            } else if (operand && operand->kind == TYPE_TUPLE &&
                 operand->tuple_count >= 1 && operand->tuple_types[0]) {
                 free_type(result);
                 result = clone_type(operand->tuple_types[0]);
@@ -3737,6 +3813,42 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     type_error("Type mismatch in variable initialization", stmt->line, stmt->column);
                     return 0;
                 }
+                /* #340: re-binding an already-declared optional local
+                 * (`z = 5` / `z = none` after `let z: int? = ...`) adopts the
+                 * existing optional type, so codegen wraps the value (or zeros
+                 * `none`) into the right `ae_opt_<T>` instead of stamping the
+                 * binding with the bare value type. */
+                if (existing && existing->type && existing->type->kind == TYPE_OPTIONAL &&
+                    (!stmt->node_type || stmt->node_type->kind != TYPE_OPTIONAL)) {
+                    if (stmt->node_type) free_type(stmt->node_type);
+                    stmt->node_type = clone_type(existing->type);
+                }
+                /* #340: a `none` initializer needs the declared optional type
+                 * pinned onto it (codegen emits the matching `ae_opt_<T>`).
+                 * `let m = none` with no annotation can't know T — require one. */
+                if (init && init->type == AST_NONE_LITERAL) {
+                    if (stmt->node_type && stmt->node_type->kind == TYPE_OPTIONAL &&
+                        stmt->node_type->element_type &&
+                        stmt->node_type->element_type->kind != TYPE_UNKNOWN) {
+                        if (init->node_type) free_type(init->node_type);
+                        init->node_type = clone_type(stmt->node_type);
+                    } else if (existing && existing->type &&
+                               existing->type->kind == TYPE_OPTIONAL &&
+                               existing->type->element_type &&
+                               existing->type->element_type->kind != TYPE_UNKNOWN) {
+                        // Python-style re-bind of an already-declared optional
+                        // (`z = none` after `let z: int? = ...`): adopt the
+                        // existing type so codegen emits the right `ae_opt_<T>`.
+                        if (stmt->node_type) free_type(stmt->node_type);
+                        stmt->node_type = clone_type(existing->type);
+                        if (init->node_type) free_type(init->node_type);
+                        init->node_type = clone_type(existing->type);
+                    } else {
+                        type_error("cannot infer optional type from `none` alone — "
+                                   "annotate the binding (e.g. `x: int? = none`)",
+                                   stmt->line, stmt->column);
+                    }
+                }
                 /* #697: declared 64-bit but the initializer is a 32-bit-int
                  * arithmetic expression (e.g. `uint64 x = byte << 24`) —
                  * widen it so the computation happens in 64 bits, not C int. */
@@ -4278,8 +4390,43 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     }
                 }
 
-                // Type check the arm body in the new scope
-                typecheck_statement(body, arm_table);
+                // #340: optional `match` — bind `some(v)` to the unwrapped
+                // value (typed as the optional's inner T), and pin a `none`
+                // arm's type to the matched optional so codegen compares the
+                // right shape.
+                if (match_expr_type && match_expr_type->kind == TYPE_OPTIONAL) {
+                    if (pattern->type == AST_PATTERN_VARIABLE && pattern->annotation &&
+                        strcmp(pattern->annotation, "some_pattern") == 0 && pattern->value) {
+                        Type* inner = match_expr_type->element_type
+                                    ? clone_type(match_expr_type->element_type)
+                                    : create_type(TYPE_UNKNOWN);
+                        add_symbol(arm_table, pattern->value, inner, 0, 0, 0);
+                    } else if (pattern->type == AST_NONE_LITERAL && !pattern->node_type) {
+                        pattern->node_type = clone_type(match_expr_type);
+                    }
+                }
+
+                // Type check the arm body in the new scope. A match-as-
+                // expression arm has an EXPRESSION body (an identifier,
+                // literal, call, interpolation, ...); typecheck_statement only
+                // recurses statement nodes, so a bare-expression body would
+                // keep whatever node_type it carried from an earlier pass —
+                // which, for an optional `some(v) -> v`, resolves `v` against
+                // an unrelated same-named binding instead of the arm's. Route
+                // expression bodies through typecheck_expression against
+                // arm_table so the pattern bindings resolve correctly; only
+                // genuine statement bodies (block / return / print / decl /
+                // expression-statement) go through typecheck_statement.
+                if (body && body->type != AST_BLOCK &&
+                    body->type != AST_EXPRESSION_STATEMENT &&
+                    body->type != AST_RETURN_STATEMENT &&
+                    body->type != AST_PRINT_STATEMENT &&
+                    body->type != AST_VARIABLE_DECLARATION &&
+                    body->type != AST_ASSIGNMENT) {
+                    typecheck_expression(body, arm_table);
+                } else {
+                    typecheck_statement(body, arm_table);
+                }
 
                 // Propagate arm result type to the match node (for match-as-expression)
                 if (!stmt->node_type || stmt->node_type->kind == TYPE_UNKNOWN) {
@@ -4318,6 +4465,67 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             return 1;
         }
 
+        case AST_NONE_LITERAL:   // #340
+            if (!expr->node_type)
+                expr->node_type = create_optional_type(create_type(TYPE_UNKNOWN));
+            return 1;
+
+        case AST_NULL_COALESCE: {   // #340  opt ?? default -> T
+            if (expr->child_count < 2) return 0;
+            typecheck_expression(expr->children[0], table);
+            typecheck_expression(expr->children[1], table);
+            Type* o = infer_type(expr->children[0], table);
+            if (!o || o->kind != TYPE_OPTIONAL) {
+                type_error("`??` requires an optional `T?` on its left",
+                           expr->line, expr->column);
+                if (o) free_type(o);
+                if (expr->node_type) free_type(expr->node_type);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            Type* inner = o->element_type ? clone_type(o->element_type)
+                                          : create_type(TYPE_UNKNOWN);
+            Type* d = infer_type(expr->children[1], table);
+            if (d && inner->kind != TYPE_UNKNOWN && d->kind != TYPE_UNKNOWN &&
+                !is_assignable(d, inner)) {
+                char msg[200];
+                snprintf(msg, sizeof(msg),
+                    "`??` default type %s is not assignable to the value type %s",
+                    type_name(d), type_name(inner));
+                type_error(msg, expr->line, expr->column);
+            }
+            if (d) free_type(d);
+            if (expr->node_type) free_type(expr->node_type);
+            expr->node_type = inner;   // transfer ownership
+            free_type(o);
+            return 1;
+        }
+
+        case AST_OPTIONAL_CHAIN: {   // #340  opt?.field -> fieldT?
+            if (expr->child_count == 0) return 0;
+            typecheck_expression(expr->children[0], table);
+            Type* o = infer_type(expr->children[0], table);
+            Type* inner = (o && o->kind == TYPE_OPTIONAL) ? o->element_type : NULL;
+            const char* sname = NULL;
+            if (inner && inner->kind == TYPE_STRUCT) sname = inner->struct_name;
+            else if (inner && inner->kind == TYPE_PTR && inner->element_type &&
+                     inner->element_type->kind == TYPE_STRUCT)
+                sname = inner->element_type->struct_name;
+            if (!o || o->kind != TYPE_OPTIONAL || !sname) {
+                type_error("optional chaining `?.` requires an optional struct operand",
+                           expr->line, expr->column);
+                if (o) free_type(o);
+                if (expr->node_type) free_type(expr->node_type);
+                expr->node_type = create_optional_type(create_type(TYPE_UNKNOWN));
+                return 0;
+            }
+            Type* ft = optional_struct_field_type(table, sname, expr->value);
+            if (expr->node_type) free_type(expr->node_type);
+            expr->node_type = create_optional_type(ft ? ft : create_type(TYPE_UNKNOWN));
+            free_type(o);
+            return 1;
+        }
+
         case AST_TUPLE_UNWRAP: {
             /* `expr!` — unwrap-or-trap. The operand must return a tuple
              * whose LAST slot is the (string) error; the unwrap yields
@@ -4328,9 +4536,18 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             if (expr->child_count == 0) return 0;
             typecheck_expression(expr->children[0], table);
             Type* op = infer_type(expr->children[0], table);
+            /* #340: optional force-unwrap `opt!` -> inner `T` (panics at
+             * runtime on `none`). Polymorphic with the tuple unwrap below. */
+            if (op && op->kind == TYPE_OPTIONAL) {
+                if (expr->node_type) free_type(expr->node_type);
+                expr->node_type = op->element_type ? clone_type(op->element_type)
+                                                   : create_type(TYPE_UNKNOWN);
+                free_type(op);
+                return 1;
+            }
             if (!op || op->kind != TYPE_TUPLE) {
-                type_error("`!` unwrap requires a tuple-returning operand "
-                           "(a `(value, err)` result)",
+                type_error("`!` requires an optional `T?` or a tuple "
+                           "`(value, err)` operand",
                            expr->line, expr->column);
                 if (op) free_type(op);
                 expr->node_type = create_type(TYPE_UNKNOWN);
@@ -4960,6 +5177,32 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
     Type* right_type = infer_type(right, table);
 
     AeTokenType operator = get_token_type_from_string(expr->value);
+
+    // #340: equality with `none` / between optionals — `m == none`,
+    // `none == m`, `a? == b?` all yield bool. Pin a bare `none` operand to the
+    // other side's concrete optional type so codegen emits the right compare.
+    if (operator == TOKEN_EQUALS || operator == TOKEN_NOT_EQUALS) {
+        int l_opt  = left_type  && left_type->kind  == TYPE_OPTIONAL;
+        int r_opt  = right_type && right_type->kind == TYPE_OPTIONAL;
+        int l_none = left->type  == AST_NONE_LITERAL;
+        int r_none = right->type == AST_NONE_LITERAL;
+        if (l_opt || r_opt || l_none || r_none) {
+            if (r_none && l_opt && (!right->node_type ||
+                right->node_type->kind != TYPE_OPTIONAL || !right->node_type->element_type)) {
+                if (right->node_type) free_type(right->node_type);
+                right->node_type = clone_type(left_type);
+            }
+            if (l_none && r_opt && (!left->node_type ||
+                left->node_type->kind != TYPE_OPTIONAL || !left->node_type->element_type)) {
+                if (left->node_type) free_type(left->node_type);
+                left->node_type = clone_type(right_type);
+            }
+            free_type(left_type);
+            free_type(right_type);
+            expr->node_type = create_type(TYPE_BOOL);
+            return 1;
+        }
+    }
 
     // Reject `string + string` at typecheck rather than emitting
     // invalid C (`(const char*) + (const char*)` is a pointer-arith

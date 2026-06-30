@@ -212,6 +212,11 @@ typedef struct {
     int tuple_type_count;
     int tuple_type_capacity;
 
+    // #340: emitted optional typedefs, e.g. "ae_opt_int" (parallel to tuples).
+    char** opt_type_names;
+    int opt_type_count;
+    int opt_type_capacity;
+
     // Builder function registry: functions with _ctx: ptr as first param
     // get builder_context() auto-injected at call sites inside trailing blocks
     char** builder_funcs;
@@ -434,6 +439,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt);
 void generate_expression(CodeGenerator* gen, ASTNode* expr);
 void generate_type(CodeGenerator* gen, Type* type);
 void ensure_tuple_typedef(CodeGenerator* gen, Type* type);
+void ensure_optional_typedef(CodeGenerator* gen, Type* type);   // #340
+void collect_optional_typedefs(CodeGenerator* gen, ASTNode* node);   // #340
+void emit_optional_coerced(CodeGenerator* gen, ASTNode* value, Type* target);   // #340
+int needs_optional_coerce(ASTNode* value, Type* target);   // #340
 
 // Utility functions
 void indent(CodeGenerator* gen);

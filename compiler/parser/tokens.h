@@ -40,6 +40,8 @@ typedef enum {
     TOKEN_REPLY,            // 'reply' keyword for sending responses
     TOKEN_EXCLAIM,          // '!' operator for fire-and-forget
     TOKEN_QUESTION,         // '?' operator for ask pattern
+    TOKEN_QUESTION_QUESTION,// '??' null-coalescing operator (#340)
+    TOKEN_QUESTION_DOT,     // '?.' optional-chaining operator (#340)
     TOKEN_EXTERN,           // 'extern' keyword for C FFI
     TOKEN_NULL,             // 'null' keyword for null pointer literal
     TOKEN_CONST,            // 'const' keyword for top-level constants

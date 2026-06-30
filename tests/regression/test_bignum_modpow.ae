@@ -118,8 +118,8 @@ main() {
 
     // no inverse when not coprime (gcd != 1)
     ni1 = bignum.from_int(6); ni2 = bignum.from_int(9)
-    none = bignum.mod_inverse(ni1, ni2)
-    if none != null { print("FAIL modinv none\n"); fails = fails + 1 }
+    no_inv = bignum.mod_inverse(ni1, ni2)
+    if no_inv != null { print("FAIL modinv none\n"); fails = fails + 1 }
     bignum.free(ni1); bignum.free(ni2)
 
     // ---- is_probable_prime ----

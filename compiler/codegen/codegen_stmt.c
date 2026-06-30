@@ -3326,6 +3326,108 @@ static int find_labeled_loop_level(CodeGenerator* gen, const char* name) {
     return -1;
 }
 
+// #340: emit `value` coerced to the optional type `target`. A bare value of
+// the inner type is implicitly wrapped (`{.has=1, .val=value}`); `none`
+// becomes `{0}`; an expression already of optional type passes through. Used
+// wherever a value flows into a `T?` slot — var-decl init, assignment, return,
+// call argument.
+void emit_optional_coerced(CodeGenerator* gen, ASTNode* value, Type* target) {
+    if (!value || !target || target->kind != TYPE_OPTIONAL) {
+        if (value) generate_expression(gen, value);
+        return;
+    }
+    const char* tc = get_c_type(target);
+    if (value->type == AST_NONE_LITERAL) {
+        fprintf(gen->output, "(%s){0}", tc);
+        return;
+    }
+    if (value->node_type && value->node_type->kind == TYPE_OPTIONAL) {
+        generate_expression(gen, value);   // already an optional
+        return;
+    }
+    fprintf(gen->output, "(%s){ .has = 1, .val = ", tc);
+    generate_expression(gen, value);
+    fprintf(gen->output, " }");
+}
+
+// #340: emit a match arm's result body — mirrors the generic match dispatch
+// (block / statement / expression), including match-as-expression's
+// `match_result_var` assignment so `let r = match m { ... }` works.
+static void emit_opt_match_arm(CodeGenerator* gen, ASTNode* result) {
+    if (!result) return;
+    if (result->type == AST_BLOCK) {
+        for (int j = 0; j < result->child_count; j++) {
+            generate_statement(gen, result->children[j]);
+        }
+    } else if (result->type == AST_PRINT_STATEMENT ||
+               result->type == AST_RETURN_STATEMENT ||
+               result->type == AST_VARIABLE_DECLARATION) {
+        generate_statement(gen, result);
+    } else {
+        print_indent(gen);
+        if (gen->match_result_var) {
+            fprintf(gen->output, "%s = ", gen->match_result_var);
+        }
+        generate_expression(gen, result);
+        fprintf(gen->output, ";\n");
+    }
+}
+
+// Emit a function's return value. #340: when the return type is `T?`,
+// coerce a bare value / `none` into the optional (`return 5` / `return none`).
+// Otherwise use the uniform-heap-return wrap or the plain expression.
+static void emit_return_value(CodeGenerator* gen, ASTNode* stmt) {
+    if (!stmt || stmt->child_count == 0) return;
+    if (gen->current_func_return_type &&
+        gen->current_func_return_type->kind == TYPE_OPTIONAL &&
+        needs_optional_coerce(stmt->children[0], gen->current_func_return_type)) {
+        emit_optional_coerced(gen, stmt->children[0], gen->current_func_return_type);
+        return;
+    }
+    if (should_uniform_heap_return(gen, stmt)) {
+        emit_uniform_heap_return_expr(gen, stmt->children[0]);
+    } else {
+        generate_expression(gen, stmt->children[0]);
+    }
+}
+
+// #340: does `value` need optional coercion to flow into `target`? True when
+// target is `T?` and value isn't already that optional (a bare T, or `none`).
+int needs_optional_coerce(ASTNode* value, Type* target) {
+    if (!value || !target || target->kind != TYPE_OPTIONAL) return 0;
+    if (value->type == AST_NONE_LITERAL) return 1;
+    if (value->node_type && value->node_type->kind == TYPE_OPTIONAL) return 0;
+    return 1;
+}
+
+// #340: optional-chain assignment `recv?.field = rhs` — a no-op when the
+// optional is `none`, else writes the field. Returns 1 if it emitted the
+// store (so the caller skips its normal assignment path), 0 otherwise.
+// `&(recv)` evaluates the receiver once and works for any lvalue receiver
+// (variable / array element / struct field); the `->val` access uses
+// `->`/`.` per whether the wrapped type is a pointer-to-struct or a value
+// struct. Both assignment shapes the parser can produce route here:
+// AST_ASSIGNMENT and AST_EXPRESSION_STATEMENT > AST_BINARY_EXPRESSION(`=`).
+static int emit_optional_chain_assign(CodeGenerator* gen, ASTNode* lhs, ASTNode* rhs) {
+    if (!lhs || lhs->type != AST_OPTIONAL_CHAIN || !lhs->value ||
+        lhs->child_count == 0)
+        return 0;
+    ASTNode* recv = lhs->children[0];
+    Type* ot = recv ? recv->node_type : NULL;
+    if (!ot || ot->kind != TYPE_OPTIONAL) return 0;
+    Type* inner = ot->element_type;
+    const char* acc = (inner && inner->kind == TYPE_PTR) ? "->" : ".";
+    static int oca_counter = 0;
+    int id = oca_counter++;
+    fprintf(gen->output, "{ %s* _oca%d = &(", get_c_type(ot), id);
+    generate_expression(gen, recv);
+    fprintf(gen->output, "); if (_oca%d->has) _oca%d->val%s%s = ",
+            id, id, acc, lhs->value);
+    generate_expression(gen, rhs);
+    fprintf(gen->output, "; }\n");
+    return 1;
+}
+
 void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     if (!stmt) return;
 
@@ -3621,6 +3723,31 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     mark_heap_box_var(gen, stmt->value);
                 else
                     unmark_heap_box_var(gen, stmt->value);
+            }
+
+            // #340: optional-typed local (`x: T? = ...`). Emit the
+            // declaration / re-bind with implicit `T -> T?` coercion of the
+            // initializer (a bare value wraps, `none` zero-inits, an optional
+            // passes through). A declaration with no initializer defaults to
+            // `none`. Handled here because the generic declarator paths below
+            // don't understand the `ae_opt_<T>` tagged-struct wrap.
+            if (stmt->value && strcmp(stmt->value, "_") != 0 &&
+                stmt->node_type && stmt->node_type->kind == TYPE_OPTIONAL) {
+                print_indent(gen);
+                if (!is_var_declared(gen, stmt->value)) {
+                    fprintf(gen->output, "%s %s", get_c_type(stmt->node_type), stmt->value);
+                    mark_var_declared(gen, stmt->value);
+                } else {
+                    fprintf(gen->output, "%s", stmt->value);
+                }
+                fprintf(gen->output, " = ");
+                if (stmt->child_count > 0 && stmt->children[0]) {
+                    emit_optional_coerced(gen, stmt->children[0], stmt->node_type);
+                } else {
+                    fprintf(gen->output, "(%s){0}", get_c_type(stmt->node_type));
+                }
+                fprintf(gen->output, ";\n");
+                break;
             }
             /* Bare `_` is a per-use discard, not a real variable.
              * `_ = <expr>` evaluates the RHS for its side effects and
@@ -4716,6 +4843,9 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 ASTNode* lhs = stmt->children[0];
                 ASTNode* rhs = stmt->children[1];
 
+                /* #340: optional-chain assignment `recv?.field = rhs`. */
+                if (emit_optional_chain_assign(gen, lhs, rhs)) break;
+
                 /* #790: a whole-variable reassignment updates heap.new box
                  * provenance (a member-access LHS like `box.field = ...` does
                  * not — it is a field store, handled below). */
@@ -5133,6 +5263,60 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (stmt->child_count > 0) {
                 ASTNode* match_expr = stmt->children[0];
 
+                // #340: optional `match` — `match m { none -> A  some(v) -> B }`
+                // lowers to a presence test on the tagged struct. Handled
+                // before the generic numeric / list / seq match lowering.
+                if (match_expr->node_type && match_expr->node_type->kind == TYPE_OPTIONAL) {
+                    Type* inner = match_expr->node_type->element_type;
+                    char inner_c[256];
+                    snprintf(inner_c, sizeof(inner_c), "%s", inner ? get_c_type(inner) : "int");
+                    char oc[256];
+                    snprintf(oc, sizeof(oc), "%s", get_c_type(match_expr->node_type));
+                    static int om_counter = 0;
+                    int id = om_counter++;
+                    ASTNode *none_body = NULL, *some_body = NULL, *wild_body = NULL;
+                    const char* some_bind = NULL;
+                    for (int i = 1; i < stmt->child_count; i++) {
+                        ASTNode* arm = stmt->children[i];
+                        if (!arm || arm->type != AST_MATCH_ARM || arm->child_count < 2) continue;
+                        ASTNode* pat = arm->children[0];
+                        ASTNode* body = arm->children[1];
+                        if (pat->type == AST_NONE_LITERAL) none_body = body;
+                        else if (pat->type == AST_PATTERN_VARIABLE && pat->annotation &&
+                                 strcmp(pat->annotation, "some_pattern") == 0) {
+                            some_body = body; some_bind = pat->value;
+                        } else if (pat->node_type && pat->node_type->kind == TYPE_WILDCARD) {
+                            wild_body = body;
+                        } else if (pat->type == AST_IDENTIFIER && pat->value &&
+                                   strcmp(pat->value, "_") == 0) {
+                            wild_body = body;
+                        }
+                    }
+                    print_line(gen, "{");
+                    indent(gen);
+                    print_indent(gen);
+                    fprintf(gen->output, "%s _om%d = ", oc, id);
+                    generate_expression(gen, match_expr);
+                    fprintf(gen->output, ";\n");
+                    print_indent(gen);
+                    fprintf(gen->output, "if (!_om%d.has) {\n", id);
+                    indent(gen);
+                    emit_opt_match_arm(gen, none_body ? none_body : wild_body);
+                    unindent(gen);
+                    print_line(gen, "} else {");
+                    indent(gen);
+                    if (some_bind) {
+                        print_indent(gen);
+                        fprintf(gen->output, "%s %s = _om%d.val;\n", inner_c, some_bind, id);
+                    }
+                    emit_opt_match_arm(gen, some_body ? some_body : wild_body);
+                    unindent(gen);
+                    print_line(gen, "}");
+                    unindent(gen);
+                    print_line(gen, "}");
+                    break;
+                }
+
                 // Check if any arm uses list patterns
                 int uses_list_patterns = has_list_patterns(stmt);
                 /* When the matched expression is *StringSeq, the
@@ -5385,11 +5569,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 gen->indent_level++;
                 print_indent(gen);
                 fprintf(gen->output, "%s result = ", ret_c_type);
-                if (should_uniform_heap_return(gen, stmt)) {
-                    emit_uniform_heap_return_expr(gen, stmt->children[0]);
-                } else {
-                    generate_expression(gen, stmt->children[0]);
-                }
+                emit_return_value(gen, stmt);   // #340: coerces into `T?`
                 fprintf(gen->output, ";\n");
                 /* Drain return-escape heap-string vars that aren't
                  * the one being returned. See
@@ -5543,11 +5723,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                      * Heap inputs pass through (fast path); literal
                      * inputs are malloc-duplicated. See codegen.c
                      * prologue and emit_uniform_heap_return_expr. */
-                    if (should_uniform_heap_return(gen, stmt)) {
-                        emit_uniform_heap_return_expr(gen, stmt->children[0]);
-                    } else {
-                        generate_expression(gen, stmt->children[0]);
-                    }
+                    emit_return_value(gen, stmt);   // #340: coerces into `T?`
                     fprintf(gen->output, ";\n");
                     /* Drain unreturned return-escape vars (the
                      * after-loop-return case where one return path's
@@ -5706,12 +5882,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                              * the defer-aware path's wrap so the
                              * contract holds even for functions with
                              * no defers (the avn-bench shape with a
-                             * single escape-marked heap-string local). */
-                            if (should_uniform_heap_return(gen, stmt)) {
-                                emit_uniform_heap_return_expr(gen, stmt->children[0]);
-                            } else {
-                                generate_expression(gen, stmt->children[0]);
-                            }
+                             * single escape-marked heap-string local).
+                             * #340: emit_return_value also coerces a
+                             * bare value / `none` into a `T?` return. */
+                            emit_return_value(gen, stmt);
                         }
                         fprintf(gen->output, ";\n");
                     }
@@ -5866,6 +6040,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 if (inner && inner->type == AST_BINARY_EXPRESSION &&
                     inner->value && strcmp(inner->value, "=") == 0 &&
                     inner->child_count == 2) {
+                    /* #340: optional-chain assignment `recv?.field = rhs`. */
+                    if (emit_optional_chain_assign(gen, inner->children[0],
+                                                   inner->children[1])) {
+                        break;
+                    }
                     if (emit_struct_field_heap_assign(gen, inner->children[0],
                                                        inner->children[1])) {
                         break;

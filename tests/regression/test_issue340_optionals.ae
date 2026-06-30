@@ -1,0 +1,122 @@
+// Regression test: optional types `T?` (issue #340).
+//
+// Exercises the full optional surface added for the Flint Tier-1 lift:
+//   - `T?` declaration + implicit wrap of a bare `T` value
+//   - `none` literal + `== none` / `!= none`
+//   - `!` force-unwrap (the panic-on-none path is covered separately;
+//     here only the present case, which must not panic)
+//   - `??` null-coalesce (value and reference element types)
+//   - `?.` optional chaining (none-propagating) and `?.field = v`
+//     chain assignment (a no-op when the receiver is `none`)
+//   - `match { none -> ...  some(v) -> ... }` as a statement and as
+//     an expression, with the `some` binding in scope
+//   - optionals as function parameters (call-argument coercion) and
+//     as return types (return-context coercion), for both a value
+//     element type (`int?`) and a reference element type (`string?`)
+//
+// The harness checks exit status only, so each assertion routes through
+// `check`, which panics (non-zero exit) on the first failure.
+
+struct Vec2 { x: int  y: int }
+
+check(cond: bool, label: string) {
+    if cond {
+        println("ok: ${label}")
+    } else {
+        panic("FAIL: ${label}")
+    }
+}
+
+// `int?` return with both branches coerced (`return 7` / `return none`).
+first_positive(n: int) -> int? {
+    if n > 0 {
+        return n
+    }
+    return none
+}
+
+// `string?` return — reference element type uses the same uniform repr.
+lookup(found: bool) -> string? {
+    if found {
+        return "Ada"
+    }
+    return none
+}
+
+// `int?` parameter — a bare `int` argument is wrapped at the call site.
+// Returns `int` (not `string`) so the test stays self-contained: a mixed
+// literal/heap `-> string` return is a separate, documented ownership
+// concern (box literals to make every return heap-reclaimed — see the
+// language reference) and orthogonal to what this exercises (call-argument
+// coercion + match-as-expression with the `some` binding).
+describe(x: int?) -> int {
+    let r: int = match x {
+        none -> -1
+        some(v) -> v
+    }
+    return r
+}
+
+main() {
+    // implicit wrap + force-unwrap (present)
+    let m: int? = 69
+    check(m! == 69, "wrap + force-unwrap")
+
+    // none literal + equality
+    let z: int? = none
+    check(z == none, "none == none")
+    check(m != none, "value != none")
+
+    // null-coalesce: present yields the value, none yields the default
+    check((m ?? 7) == 69, "coalesce present")
+    check((z ?? 7) == 7, "coalesce none")
+    // composes with arithmetic (`??` binds tighter than `+`)
+    check(5 + (z ?? 7) == 12, "coalesce in arithmetic")
+
+    // match as an expression with the `some` binding
+    let r: int = match m {
+        none -> 0
+        some(v) -> v
+    }
+    check(r == 69, "match-expr some binding")
+
+    // match as a statement over a none optional
+    match z {
+        none -> {
+            check(true, "match-stmt none arm")
+        }
+        some(v) -> {
+            check(false, "match-stmt should not hit some ${v}")
+        }
+    }
+
+    // optional return values flow through the operators
+    check(first_positive(5)! == 5, "return-coerce value")
+    check(first_positive(-1) == none, "return-coerce none")
+    check((first_positive(-1) ?? -9) == -9, "return-coerce coalesce")
+
+    // call-argument coercion: bare value, none, and a known optional
+    check(describe(5) == 5, "arg-coerce bare value")
+    check(describe(none) == -1, "arg-coerce none")
+    let known: int? = first_positive(3)
+    check(describe(known) == 3, "arg-coerce known optional")
+
+    // string optional (reference element type)
+    check((lookup(true) ?? "x") == "Ada", "string optional present")
+    check((lookup(false) ?? "x") == "x", "string optional none")
+    check(lookup(true)! == "Ada", "string force-unwrap")
+
+    // optional chaining: present propagates the field, none short-circuits
+    let v: Vec2? = Vec2 { x: 7, y: 8 }
+    check((v?.x ?? 0) == 7, "chain present")
+    let nv: Vec2? = none
+    check((nv?.x ?? -1) == -1, "chain none-propagating")
+
+    // chain assignment: writes when present, no-op when none
+    v?.x = 42
+    check((v?.x ?? 0) == 42, "chain assign present")
+    nv?.x = 99
+    check((nv?.x ?? -1) == -1, "chain assign none no-op")
+
+    println("all optional checks passed")
+}

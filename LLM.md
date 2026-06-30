@@ -175,7 +175,9 @@ plays that role), no interfaces.
   `fs_get_read_binary()` + `_length()` pair and memcpy into caller
   storage, not through the `fs.read_binary` wrapper.
 - **Reserved keywords that trip users up**: `state`, `match`,
-  `message` (actor-model hangover). Fails in extern param names too.
+  `message` (actor-model hangover), and the literal `none` (the empty
+  optional — reserved like `true`/`false`/`null`, so it can't be a variable
+  name). Fails in extern param names too.
   `after` parses as something scanner-special too — symptom is a
   "Expected statement in block" at an `if x = call(), …` use site.
   **Prefer the backtick escape over renaming**: a backtick-delimited
@@ -288,6 +290,20 @@ plays that role), no interfaces.
 Compiler-checked capabilities an LLM should know exist before speccing a
 workaround — they cover cases a porter often hand-rolls.
 
+- **Optionals `T?` for "maybe a value" — not `(value, "missing")`.** When a
+  value is simply present or absent (a missing map key, an empty list's first
+  element, a search that found nothing), reach for `T?` instead of a sentinel
+  tuple. `let m: int? = 69` / `let z: int? = none`; test with `== none`;
+  force-unwrap `m!` (panics on none); default with `m ?? d` (binds tighter than
+  arithmetic); chain with `v?.field` (none-propagating, `v?.field = x` is a
+  no-op when none); destructure with `match m { none -> …  some(v) -> … }`. A
+  bare `T` (or `none`) is implicitly wrapped into a `T?` slot. Keep `(value,
+  err)` for *fallible* operations (where you want to say why it failed); `T?` is
+  the orthogonal "present or absent" axis. Works for value and reference element
+  types alike (one uniform representation, so no null-vs-absent ambiguity).
+  Postfix `!` is shared with the `(value, err)` unwrap-or-trap and resolves by
+  operand type, so it never collides with the actor-send `!` (followed by a
+  message type) or `match` arms.
 - **Distinct types: `type Name = distinct Base`.** Zero-cost nominal wrapper
   over a scalar / `string` / `ptr` — `type USD = distinct float`,
   `type Fd = distinct int`. Lowers to the base C type (no boxing) but is
