@@ -1,0 +1,5 @@
+// Imports a module that fails to compile. `ae build` must fail (non-zero,
+// no binary), agreeing with `ae check`, instead of recovering from the
+// import's parse error and producing a working binary from bad source.
+import badimp
+main() { println("${badimp.f(5)}") }

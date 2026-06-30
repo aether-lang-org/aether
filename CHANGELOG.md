@@ -40,6 +40,19 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **`ae build` now fails on an imported module's compile error** (#953). `ae
+  build` accepted an entry program whose *imported* module did not compile —
+  the parser's error recovery dropped the offending construct (e.g. an invalid
+  `@` annotation lowering to a bare `return x`), so the merged AST type-checked
+  clean and codegen produced a working binary from non-compiling source, while
+  `ae check` correctly reported the error. The two disagreed on validity, and a
+  build's exit code couldn't be trusted (it bit a mutation-testing driver that
+  rebuilds an imported SUT). The entry file's own parse errors were already
+  gated, but the global error count was not re-checked after module
+  orchestration — which is where imported modules are parsed. Both `build` and
+  `check` now fail (non-zero, no binary) when any module they pull in carries an
+  error. A clean import is unaffected (the gate keys on the error count).
+
 - **Heredoc closing-marker rule: no more silent truncation** (#922). A heredoc
   body line that merely read like the closing marker could close the heredoc
   early and silently drop the rest of the body. The close rule is now: a line

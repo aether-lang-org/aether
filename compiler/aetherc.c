@@ -1362,6 +1362,27 @@ int compile_source(const char* input_path, const char* output_path) {
     }
     if (verbose_mode) printf("Module resolution successful\n");
 
+    /* #953: surface parse/annotation errors from IMPORTED modules. The
+     * entry file's own parse errors are gated above (the aether_error_count
+     * check after parse_program), but module_orchestrate parses every
+     * reachable import and returns success even when one carries an error —
+     * it recovers per-module so it can report as many as possible. Because
+     * the parser's error recovery can drop the offending construct (e.g. an
+     * invalid `@` annotation lowering to a bare `return x`), the merged AST
+     * then type-checks clean and codegen produces a working binary from
+     * source that does NOT compile — `build` silently disagreeing with
+     * `check`. Re-check the global error count here, after orchestration,
+     * so both paths fail (non-zero, no binary) on any imported-module error. */
+    if (aether_error_count() > 0) {
+        report_compilation_failure(input_path);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        return 0;
+    }
+
     // Step 2.6: Merge pure Aether module functions into program AST
     module_merge_into_program(program);
 
