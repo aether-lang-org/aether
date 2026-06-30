@@ -200,9 +200,21 @@ typedef enum {
                             // `node_type` is the base Type. Zero-cost: emits no
                             // C; the typechecker registers Name as a nominally
                             // distinct type over Base.
-    AST_VALUE_CAST          // `expr as T` for a scalar / distinct target — a
+    AST_VALUE_CAST,         // `expr as T` for a scalar / distinct target — a
                             // zero-cost nominal (un)wrap or numeric conversion.
                             // children[0] = operand; node_type = target type.
+    // #340 Optionals. Appended at END so existing enum values keep their
+    // numbering (a mid-enum insert + incremental build leaves stale .o).
+    AST_NONE_LITERAL,       // `none` — the empty optional. node_type is the
+                            // concrete `T?` inferred from context.
+                            // Force-unwrap `x!` reuses AST_TUPLE_UNWRAP, which
+                            // is polymorphic on the operand: an optional `T?`
+                            // yields T (panics on none), a `(value, err)` tuple
+                            // yields the first slot.
+    AST_NULL_COALESCE,      // `x ?? d` — yields T (x's value) or d if none.
+                            // children[0] = optional, children[1] = default.
+    AST_OPTIONAL_CHAIN      // `x?.field` — none-propagating field access,
+                            // yields `fieldT?`. value = field; children[0] = x.
 } ASTNodeType;
 
 typedef enum {
@@ -231,7 +243,11 @@ typedef enum {
     TYPE_WILDCARD,
     TYPE_TUPLE,         // (T1, T2, ...) for multiple return values
     TYPE_FUNCTION,      // |param_types| -> return_type (closures)
-    TYPE_UNKNOWN
+    TYPE_UNKNOWN,
+    TYPE_OPTIONAL       // #340 `T?` — element_type is the wrapped type T.
+                        // Lowers to a per-T tagged struct `ae_opt_<T>`
+                        // `{ bool has; T val; }`. Appended at END to keep the
+                        // existing kind numbering stable.
 } TypeKind;
 
 typedef struct Type {
@@ -330,6 +346,7 @@ typedef struct ASTNode {
 // Type functions
 Type* create_type(TypeKind kind);
 Type* create_array_type(Type* element_type, int size);
+Type* create_optional_type(Type* inner);   // #340 `T?`
 Type* create_actor_ref_type(Type* actor_type);
 Type* create_tuple_type(int count, ...);  // create_tuple_type(2, type_a, type_b)
 Type* create_function_type(int param_count, Type** param_types, Type* return_type);

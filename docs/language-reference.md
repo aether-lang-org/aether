@@ -60,15 +60,16 @@ Aether is not, and has no plans to be, a pure FP language (no Hindley-Milner inf
 7. [Switch Statements](#switch-statements)
 8. [Defer Statement](#defer-statement)
 9. [Memory Management](#memory-management)
-10. [Structs](#structs)
-11. [Messages](#messages)
-12. [Actors](#actors)
-13. [Operators](#operators)
-14. [Modules and Imports](#modules-and-imports)
-15. [Extern Functions](#extern-functions)
-16. [Built-in Functions](#built-in-functions)
-17. [Comments](#comments)
-18. [Compilation](#compilation)
+10. [Optionals](#optionals)
+11. [Structs](#structs)
+12. [Messages](#messages)
+13. [Actors](#actors)
+14. [Operators](#operators)
+15. [Modules and Imports](#modules-and-imports)
+16. [Extern Functions](#extern-functions)
+17. [Built-in Functions](#built-in-functions)
+18. [Comments](#comments)
+19. [Compilation](#compilation)
 
 ---
 
@@ -1024,6 +1025,122 @@ banner(name: string) -> string {
 If you want every return from your `-> string` function to be heap (so the wrapper reclaims it), box any literals: `return string.concat("", "guest")` makes the literal return a heap-string-expression and pushes the function into the heap-returning set.
 
 See [examples/basics/string-ownership.ae](../examples/basics/string-ownership.ae) for a runnable demonstration. Closes issue #405.
+
+---
+
+## Optionals
+
+An optional type `T?` holds either a value of type `T` or the empty sentinel `none`. It is the type for "maybe a value" — distinct from the `(value, err)` result convention, which is for *fallible* operations. Use `(value, err)` when an operation can fail and you want to say why; use `T?` when a value is simply present or absent (a missing map key, an empty list's first element, a search that found nothing).
+
+```aether
+let maybe: int? = 69        // a present value — implicitly wrapped
+let empty: int? = none      // the absent sentinel
+```
+
+`T?` works for any element type — value types (`int?`, `float?`, `bool?`) and reference types (`string?`, `*Node?`) alike — with one uniform representation, so there is no ambiguity between "the value is a null pointer" and "the key was absent".
+
+### `none` and equality
+
+`none` is a reserved literal (like `true`, `false`, and `null`) — it cannot be used as a variable name. Compare against it with `==` / `!=`:
+
+```aether
+if empty == none {
+    println("absent")
+}
+if maybe != none {
+    println("present")
+}
+```
+
+### Force-unwrap `!`
+
+Postfix `!` yields the wrapped value, or panics if the optional is `none`:
+
+```aether
+let n: int = maybe!         // 69
+let boom: int = empty!      // panics: "forced unwrap of `none`"
+```
+
+Use it only where absence is a programmer error. For a safe default, prefer `??`. (Postfix `!` is shared with the `(value, err)` unwrap-or-trap: on an optional it unwraps the value, on a tuple it unwraps the first slot and traps on a non-empty error — the meaning follows the operand type.)
+
+### Null-coalesce `??`
+
+`opt ?? default` yields the wrapped value when present, otherwise `default`. It binds tighter than arithmetic, so `5 + (opt ?? 7)` groups as expected:
+
+```aether
+let a: int = maybe ?? 0     // 69
+let b: int = empty ?? 0     // 0
+let c: int = 5 + (empty ?? 7)   // 12
+```
+
+### Optional chaining `?.`
+
+`opt?.field` reads a field through an optional struct and is *none-propagating*: it yields `fieldT?`, which is `none` when the receiver is `none`. Combine with `??` to default the result:
+
+```aether
+struct Vec2 { x: int  y: int }
+
+let v: Vec2? = Vec2 { x: 7, y: 8 }
+let xm: int? = v?.x          // some(7)
+let x:  int  = v?.x ?? 0     // 7
+
+let nv: Vec2? = none
+let zm: int? = nv?.x         // none — short-circuited
+```
+
+Chain *assignment* is a no-op when the receiver is `none`:
+
+```aether
+v?.x  = 42                   // writes — v is present
+nv?.x = 99                   // skipped — nv is none, no crash
+```
+
+### Matching on optionals
+
+`match` destructures an optional with the `none` and `some(binding)` arms — as a statement or as an expression:
+
+```aether
+match maybe {
+    none    -> println("missing")
+    some(v) -> println("got ${v}")
+}
+
+let label: string = match maybe {
+    none    -> "missing"
+    some(v) -> "got ${v}"
+}
+```
+
+### Functions
+
+Optionals flow through parameters and return types. A bare `T` (or `none`) is implicitly wrapped at the call site and in `return`:
+
+```aether
+first_positive(n: int) -> int? {
+    if n > 0 {
+        return n            // wrapped into int?
+    }
+    return none
+}
+
+describe(x: int?) -> string {
+    let label: string = match x {
+        none    -> "nothing"
+        some(v) -> "got ${v}"
+    }
+    return label
+}
+
+main() {
+    println(describe(5))          // "got 5"   — 5 wrapped into int?
+    println(describe(none))       // "nothing"
+    let r: int = first_positive(3)!   // 3
+}
+```
+
+### Codegen
+
+A value optional lowers to `typedef struct { int has; T val; } ae_opt_<T>` (one per concrete element type); `none` is `{0}`, a wrapped value is `{ .has = 1, .val = … }`. `!`, `??`, and `?.` lower to single-evaluation GCC statement-expressions, so an operand with side effects is evaluated exactly once.
 
 ---
 

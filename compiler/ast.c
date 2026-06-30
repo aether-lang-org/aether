@@ -36,6 +36,13 @@ Type* create_array_type(Type* element_type, int size) {
     return type;
 }
 
+// #340 `T?` — optional over `inner`. `inner` is adopted (not cloned).
+Type* create_optional_type(Type* inner) {
+    Type* type = create_type(TYPE_OPTIONAL);
+    type->element_type = inner;
+    return type;
+}
+
 Type* create_actor_ref_type(Type* actor_type) {
     Type* type = create_type(TYPE_ACTOR_REF);
     type->element_type = actor_type;
@@ -473,6 +480,9 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_CLOSURE: return "CLOSURE";
         case AST_CLOSURE_PARAM: return "CLOSURE_PARAM";
         case AST_NAMED_ARG: return "NAMED_ARG";
+        case AST_NONE_LITERAL: return "NONE_LITERAL";       // #340
+        case AST_NULL_COALESCE: return "NULL_COALESCE";     // #340
+        case AST_OPTIONAL_CHAIN: return "OPTIONAL_CHAIN";   // #340
         default: return "UNKNOWN";
     }
 }

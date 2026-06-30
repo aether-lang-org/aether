@@ -263,7 +263,22 @@ static void parser_message(Parser* parser, const char* message) {
     (void)message;
 }
 
+static Type* parse_type_unsuffixed(Parser* parser);
+
+// #340: a type may carry a postfix `?` making it optional (`int?`, `string?`,
+// `Vec2?`, `*Node?`). Parse the base type, then wrap once per `?`. In type
+// position `?` is unambiguous (the actor-ask `?` only appears in expressions).
 Type* parse_type(Parser* parser) {
+    Type* t = parse_type_unsuffixed(parser);
+    if (!t) return NULL;
+    while (peek_token(parser) && peek_token(parser)->type == TOKEN_QUESTION) {
+        advance_token(parser);
+        t = create_optional_type(t);
+    }
+    return t;
+}
+
+static Type* parse_type_unsuffixed(Parser* parser) {
     Token* token = peek_token(parser);
     if (!token) return NULL;
 
@@ -872,6 +887,16 @@ ASTNode* parse_primary_expression(Parser* parser) {
     Token* token = peek_token(parser);
     if (!token) return NULL;
 
+    // #340: `none` — the empty-optional literal. A contextual keyword (so it
+    // doesn't reserve the spelling globally): only an identifier token whose
+    // text is exactly "none" in expression position becomes the literal. Its
+    // concrete `T?` type is resolved from context by the typechecker.
+    if (token->type == TOKEN_IDENTIFIER && token->value &&
+        strcmp(token->value, "none") == 0) {
+        advance_token(parser);
+        return create_ast_node(AST_NONE_LITERAL, NULL, token->line, token->column);
+    }
+
     switch (token->type) {
         case TOKEN_NUMBER:
         case TOKEN_STRING_LITERAL:
@@ -1442,10 +1467,20 @@ ASTNode* parse_binary_expression(Parser* parser, int precedence) {
         advance_token(parser);
         ASTNode* right = parse_binary_expression(parser, op_precedence + 1);  // Left-associative
         if (!right) return NULL;
-        
-        left = create_binary_expression(left, right, operator);
+
+        // #340: `a ?? b` builds a dedicated null-coalesce node (children:
+        // [optional, default]) rather than a generic binary expression, so the
+        // typechecker/codegen handle it as its own form.
+        if (operator->type == TOKEN_QUESTION_QUESTION) {
+            ASTNode* nc = create_ast_node(AST_NULL_COALESCE, NULL, operator->line, operator->column);
+            add_child(nc, left);
+            add_child(nc, right);
+            left = nc;
+        } else {
+            left = create_binary_expression(left, right, operator);
+        }
     }
-    
+
     return left;
 }
 
@@ -1471,7 +1506,25 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
             expr = create_unary_expression(expr, op);
             continue;
         }
-        
+
+        // #340: optional chaining `opt?.field` -> fieldT? (none-propagating).
+        if (op->type == TOKEN_QUESTION_DOT) {
+            advance_token(parser);
+            Token* field = peek_token(parser);
+            if (!field) return NULL;
+            int field_ok = (field->type == TOKEN_IDENTIFIER) ||
+                           token_is_reserved_keyword(field);
+            if (!field_ok) {
+                expect_token(parser, TOKEN_IDENTIFIER);
+                return NULL;
+            }
+            advance_token(parser);
+            ASTNode* chain = create_ast_node(AST_OPTIONAL_CHAIN, field->value, op->line, op->column);
+            add_child(chain, expr);
+            expr = chain;
+            continue;
+        }
+
         if (op->type == TOKEN_DOT) {
             // Member access: expr.field
             //
@@ -1952,6 +2005,7 @@ ASTNode* parse_unary_expression(Parser* parser) {
 int get_operator_precedence(AeTokenType type) {
     switch (type) {
         case TOKEN_ASSIGN: return 0;  // Lowest precedence (right-associative)
+        case TOKEN_QUESTION_QUESTION: return 1;  // #340 `??` null-coalesce (loose, like ||)
         case TOKEN_OR: return 1;      // logical OR
         case TOKEN_AND: return 2;     // logical AND
         case TOKEN_PIPE: return 3;    // bitwise OR
@@ -2451,6 +2505,18 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
                                * explicit annotation. Survives the pre-
                                * typecheck pass that fills node_type. */
 
+    // Optional `: type` annotation — `let x: int = 5`, `let m: int? = none`.
+    // (#340 needs the optional form; the colon annotation is general.)
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_COLON) {
+        advance_token(parser);   // consume ':'
+        Type* annot = parse_type(parser);
+        if (annot) {
+            if (decl->node_type) free_type(decl->node_type);
+            decl->node_type = annot;
+            decl->type_inferred = 0;   // explicit annotation, not inferred
+        }
+    }
+
     if (match_token(parser, TOKEN_ASSIGN)) {
         // Check for match-as-expression: x = match val { ... }
         Token* next_tok = peek_token(parser);
@@ -2887,8 +2953,24 @@ ASTNode* parse_match_case(Parser* parser) {
         // List pattern: [], [x], [x, y], [h|t]
         pattern = parse_pattern(parser);
         if (!pattern) return NULL;
+    } else if (current->type == TOKEN_IDENTIFIER && current->value &&
+               strcmp(current->value, "some") == 0 &&
+               peek_ahead(parser, 1) &&
+               peek_ahead(parser, 1)->type == TOKEN_LEFT_PAREN) {
+        // #340: optional `some(binding)` arm — binds the unwrapped value.
+        // Modeled as a variable pattern annotated "some_pattern"; the
+        // matched `none` arm is the AST_NONE_LITERAL from the branch below.
+        advance_token(parser);  // 'some'
+        advance_token(parser);  // '('
+        Token* bind = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!bind) return NULL;
+        pattern = create_ast_node(AST_PATTERN_VARIABLE, bind->value,
+                                  bind->line, bind->column);
+        pattern->annotation = strdup("some_pattern");
+        if (!expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
     } else {
-        // Expression pattern (literal, identifier, etc.)
+        // Expression pattern (literal, identifier, etc.) — includes the
+        // `none` arm, which parse_expression yields as AST_NONE_LITERAL.
         pattern = parse_expression(parser);
         if (!pattern) return NULL;
     }

@@ -11,6 +11,33 @@ next version number before tagging the release.
 
 ## [0.331.0]
 
+### Added
+
+- **Optionals: `T?` with `none`, `!`, `??`, `?.`, and `match`** (#340). A
+  first-class optional type for "maybe a value," complementing the `(value,
+  err)` result convention (which stays the tool for *fallible* operations).
+  `T?` collapses the ambiguous "is the value a null pointer, or is the key
+  absent?" case (`map.get`, `list.first`, a search that found nothing) to one
+  type with predictable handling. Surface:
+  - `let m: int? = 69` wraps a value; `let z: int? = none` is the empty
+    sentinel. `none` is a reserved literal (like `true`/`false`/`null`) and
+    cannot be a variable name. `== none` / `!= none` test presence.
+  - Force-unwrap `m!` yields the value or panics on `none` (`forced unwrap of
+    \`none\``). Null-coalesce `m ?? d` yields the value or `d`, and binds
+    tighter than arithmetic. Optional chaining `v?.field` is none-propagating
+    (yields `fieldT?`); chain assignment `v?.field = x` is a no-op when `v` is
+    `none`.
+  - `match m { none -> …  some(v) -> … }` destructures as a statement or an
+    expression. A bare `T` (or `none`) is implicitly wrapped into a `T?`
+    parameter, return value, or binding.
+  - One uniform representation covers value and reference element types
+    (`typedef struct { int has; T val; } ae_opt_<T>`), so there is no
+    null-vs-absent ambiguity. Postfix `!` is polymorphic on its operand — an
+    optional unwraps the value, a `(value, err)` tuple unwraps the first slot —
+    so it does not collide with the actor-send `!` (which is followed by a
+    message type) or with `match` pattern arms. See the
+    [language reference](docs/language-reference.md#optionals).
+
 ### Fixed
 
 - **Heredoc closing-marker rule: no more silent truncation** (#922). A heredoc

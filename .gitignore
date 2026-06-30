@@ -13,6 +13,7 @@ benchmarks/cross-language/build/
 *.log
 .claude/
 -o
+a.out
 
 # Generated C code (from .ae compilation)
 output.c

@@ -107,14 +107,14 @@ main() {
     string.seq_free(keep)
 
     // Predicate that rejects everything yields the empty seq.
-    none = string.seq_filter(src, |x: string| {
+    empty_seq = string.seq_filter(src, |x: string| {
         return 0
     })
-    if string.seq_is_empty(none) != 1 {
+    if string.seq_is_empty(empty_seq) != 1 {
         println("FAIL 3c: filter(always-false) should be empty")
         exit(1)
     }
-    string.seq_free(none)
+    string.seq_free(empty_seq)
     println("  PASS 3: filter — length predicate + empty-result edge")
 
     // ---- reduce (left fold, ptr accumulator) -----------------------

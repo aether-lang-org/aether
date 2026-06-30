@@ -1792,6 +1792,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
              * sentinel is a non-NULL empty string). */
             if (expr->child_count == 0 || !expr->children[0]) break;
             ASTNode* operand = expr->children[0];
+            /* #340: postfix `!` is polymorphic on the operand type. When the
+             * operand is an optional `T?`, this is force-unwrap — yield the
+             * wrapped value, panic on `none`, single-eval via a statement-
+             * expression. The (value, err) tuple-unwrap form follows below. */
+            Type* ot = operand->node_type;
+            if (ot && ot->kind == TYPE_OPTIONAL) {
+                static int fu_counter = 0;
+                int id = fu_counter++;
+                fprintf(gen->output, "({ %s _fu%d = ", get_c_type(ot), id);
+                generate_expression(gen, operand);
+                fprintf(gen->output, "; if (!_fu%d.has) aether_panic(\"forced unwrap of `none`\"); _fu%d.val; })",
+                        id, id);
+                break;
+            }
             Type* tup = operand->node_type;
             if (!tup || tup->kind != TYPE_TUPLE || tup->tuple_count < 2) {
                 /* Typechecker already rejected this; emit the operand
@@ -1813,6 +1827,58 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     "aether_panic(_unw%d._%d); ",
                     uid, err_idx, uid, err_idx, uid, err_idx);
             fprintf(gen->output, "_unw%d._0; })", uid);
+            break;
+        }
+
+        case AST_NONE_LITERAL: {
+            // #340: `none` — zero-init compound literal of the pinned optional
+            // type (`{0}` sets has=0). Bare `{0}` only if unpinned (an error
+            // path the typechecker already flagged).
+            if (expr->node_type && expr->node_type->kind == TYPE_OPTIONAL &&
+                expr->node_type->element_type &&
+                expr->node_type->element_type->kind != TYPE_UNKNOWN) {
+                fprintf(gen->output, "(%s){0}", get_c_type(expr->node_type));
+            } else {
+                fprintf(gen->output, "{0}");
+            }
+            break;
+        }
+
+        case AST_NULL_COALESCE: {
+            // #340: `opt ?? default` -> opt.val if present, else default.
+            if (expr->child_count < 2) break;
+            ASTNode* operand = expr->children[0];
+            Type* ot = operand->node_type;
+            if (!ot || ot->kind != TYPE_OPTIONAL) { generate_expression(gen, operand); break; }
+            static int nc_counter = 0;
+            int id = nc_counter++;
+            fprintf(gen->output, "({ %s _nc%d = ", get_c_type(ot), id);
+            generate_expression(gen, operand);
+            fprintf(gen->output, "; _nc%d.has ? _nc%d.val : (", id, id);
+            generate_expression(gen, expr->children[1]);
+            fprintf(gen->output, "); })");
+            break;
+        }
+
+        case AST_OPTIONAL_CHAIN: {
+            // #340: `opt?.field` -> fieldT? (none-propagating).
+            if (expr->child_count == 0 || !expr->value) break;
+            ASTNode* operand = expr->children[0];
+            Type* ot = operand->node_type;   // optional<struct> | optional<*struct>
+            Type* rt = expr->node_type;      // fieldT?
+            if (!ot || ot->kind != TYPE_OPTIONAL || !rt || rt->kind != TYPE_OPTIONAL) {
+                generate_expression(gen, operand); break;
+            }
+            Type* inner = ot->element_type;
+            const char* acc = (inner && inner->kind == TYPE_PTR) ? "->" : ".";
+            char rc[256];
+            snprintf(rc, sizeof(rc), "%s", get_c_type(rt));
+            static int oc_counter = 0;
+            int id = oc_counter++;
+            fprintf(gen->output, "({ %s _oc%d = ", get_c_type(ot), id);
+            generate_expression(gen, operand);
+            fprintf(gen->output, "; _oc%d.has ? (%s){ .has = 1, .val = _oc%d.val%s%s } : (%s){0}; })",
+                    id, rc, id, acc, expr->value, rc);
             break;
         }
 
@@ -2136,6 +2202,37 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             
         case AST_BINARY_EXPRESSION:
             if (expr->child_count >= 2) {
+                // #340: equality against `none` / between optionals. A struct
+                // `==` is invalid C, so compare the `has` flag (and value).
+                if (expr->value && (strcmp(expr->value, "==") == 0 ||
+                                    strcmp(expr->value, "!=") == 0)) {
+                    ASTNode* L = expr->children[0];
+                    ASTNode* R = expr->children[1];
+                    int l_none = L->type == AST_NONE_LITERAL;
+                    int r_none = R->type == AST_NONE_LITERAL;
+                    int l_opt  = L->node_type && L->node_type->kind == TYPE_OPTIONAL;
+                    int r_opt  = R->node_type && R->node_type->kind == TYPE_OPTIONAL;
+                    int is_eq  = strcmp(expr->value, "==") == 0;
+                    if ((l_opt && r_none) || (r_opt && l_none)) {
+                        // `x == none` -> !x.has ;  `x != none` -> x.has
+                        ASTNode* opt = l_opt ? L : R;
+                        fprintf(gen->output, "(%s(", is_eq ? "!" : "");
+                        generate_expression(gen, opt);
+                        fprintf(gen->output, ").has)");
+                        break;
+                    }
+                    if (l_opt && r_opt) {
+                        // equal iff same presence and (when present) equal value
+                        // (value compare is scalar-correct, the common int?/… case).
+                        fprintf(gen->output, "(({ %s _l = ", get_c_type(L->node_type));
+                        generate_expression(gen, L);
+                        fprintf(gen->output, "; %s _r = ", get_c_type(R->node_type));
+                        generate_expression(gen, R);
+                        fprintf(gen->output, "; %s(_l.has == _r.has && (!_l.has || _l.val == _r.val)); }))",
+                                is_eq ? "" : "!");
+                        break;
+                    }
+                }
                 int skip_parens = gen->in_condition;
                 gen->in_condition = 0;
 
@@ -3796,7 +3893,17 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         }
                         int expected_is_fnptr_form = (expected == TYPE_FUNCTION &&
                             expected_type && expected_type->is_fnptr);
-                        if (expected == TYPE_PTR && arg->node_type &&
+                        if (expected_type && expected_type->kind == TYPE_OPTIONAL &&
+                            needs_optional_coerce(arg, expected_type)) {
+                            /* #340: a bare `T` (or `none`) flowing into a
+                             * `T?` parameter — wrap it into the `ae_opt_T`
+                             * struct so the C argument matches the param
+                             * slot. The typedef was already emitted by the
+                             * collect_optional_typedefs pre-pass (it walks
+                             * param-node types), so this never emits one
+                             * mid-expression. */
+                            emit_optional_coerced(gen, arg, expected_type);
+                        } else if (expected == TYPE_PTR && arg->node_type &&
                             arg->node_type->kind == TYPE_FUNCTION &&
                             !arg->node_type->is_fnptr) {
                             /* Closure (`_AeClosure` struct) → ptr slot.
