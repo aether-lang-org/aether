@@ -13,6 +13,40 @@ next version number before tagging the release.
 
 ### Added
 
+- **Sum / variant types: `type Name = A | B | C` + exhaustive `match`** (#914).
+  A tagged union over existing struct variants — "a value that is exactly one
+  of N named alternatives." Completes `match` (which was literal-only) with the
+  structural type it can be exhaustive over, and gives ports a checked
+  replacement for the hand-rolled "tag int + struct-with-all-fields" pattern.
+
+  ```aether
+  struct Circle { r: float }
+  struct Rect   { w: float  h: float }
+  struct Empty  {}
+  type Shape = Circle | Rect | Empty
+
+  area(s: Shape) -> float {
+      let a: float = match s {    // narrows `s` to the variant in each arm
+          Circle -> 3.14159 * s.r * s.r
+          Rect   -> s.w * s.h
+          Empty  -> 0.0
+          // omitting a variant is a compile error; no `_` needed
+      }
+      return a
+  }
+  let s: Shape = Circle { r: 2.0 }   // a variant implicitly wraps into the sum
+  ```
+
+  - A variant struct value implicitly wraps into the sum at `let` / parameter /
+    return / argument positions (no `some(...)`-style constructor).
+  - `match` over a sum narrows the scrutinee to the variant struct inside each
+    arm, so `s.field` reads the right member. Exhaustiveness is enforced —
+    forgetting a variant is a compile error (or use a `_` wildcard); an arm
+    naming a non-variant is rejected.
+  - Lowers to a tag enum + C union (`{ Name_tag tag; union {...} data; }`) —
+    no allocation, no vtable. Recursive shapes (trees, ASTs) work via explicit
+    pointer fields (`left: *Tree`). v1 is monomorphic; generics are a follow-up.
+
 - **Optionals: `T?` with `none`, `!`, `??`, `?.`, and `match`** (#340). A
   first-class optional type for "maybe a value," complementing the `(value,
   err)` result convention (which stays the tool for *fallible* operations).

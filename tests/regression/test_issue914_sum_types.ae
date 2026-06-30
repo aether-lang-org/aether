@@ -1,0 +1,96 @@
+// Regression test: sum/variant types `type Name = A | B | C` (issue #914).
+//
+// Exercises the v1 surface:
+//   - declaration of a sum over existing struct variants
+//   - implicit wrap of a variant into the sum (let init, call argument,
+//     return value)
+//   - `match` over a sum as a statement and as an expression, with the
+//     scrutinee narrowed to the variant struct inside each arm (`s.r` etc.)
+//   - the `_` wildcard arm
+//   - a recursive sum via explicit pointer fields (declare + base-case match)
+//
+// Exhaustiveness and the "not a variant" error are negative cases, checked by
+// tests/integration/sum_exhaustiveness (they must fail `ae check`).
+//
+// The harness checks exit status, so each assertion routes through `check`,
+// which panics (non-zero exit) on the first failure. Sums are value types
+// here, so the program is leak-free.
+
+struct Circle { r: float }
+struct Rect   { w: float  h: float }
+struct Empty  {}
+type Shape = Circle | Rect | Empty
+
+// recursive sum via explicit pointer fields
+struct Leaf { v: int }
+struct Pair { left: *Tree  right: *Tree }
+type Tree = Leaf | Pair
+
+check(cond: bool, label: string) {
+    if cond {
+        println("ok: ${label}")
+    } else {
+        panic("FAIL: ${label}")
+    }
+}
+
+// match-as-expression with narrowing
+area(s: Shape) -> float {
+    let a: float = match s {
+        Circle -> 3.14159 * s.r * s.r
+        Rect   -> s.w * s.h
+        Empty  -> 0.0
+    }
+    return a
+}
+
+// match-as-statement + `_` wildcard
+rank(s: Shape) -> int {
+    match s {
+        Rect -> { return 2 }
+        _    -> { return 1 }
+    }
+    return -1
+}
+
+// return-position variant -> sum coercion
+make_rect(w: float, h: float) -> Shape {
+    return Rect { w: w, h: h }
+}
+
+base_depth(t: Tree) -> int {
+    match t {
+        Leaf -> { return 1 }
+        Pair -> { return 2 }
+    }
+    return 0
+}
+
+main() {
+    // init-position wrap (variant -> sum)
+    let c: Shape = Circle { r: 2.0 }
+    let r: Shape = Rect { w: 3.0, h: 4.0 }
+    let e: Shape = Empty {}
+
+    // match-as-expression + narrowing
+    check(area(c) > 12.0 && area(c) < 13.0, "circle area (~12.566)")
+    check(area(r) == 12.0, "rect area (3*4)")
+    check(area(e) == 0.0, "empty area")
+
+    // match-as-statement + wildcard
+    check(rank(c) == 1, "rank circle via wildcard")
+    check(rank(r) == 2, "rank rect")
+
+    // call-argument wrap: a variant literal flows into a `Shape` parameter
+    check(area(Circle { r: 1.0 }) > 3.0 && area(Circle { r: 1.0 }) < 3.2, "arg-coerce variant")
+
+    // return-position wrap, then consume
+    let made: Shape = make_rect(5.0, 6.0)
+    check(area(made) == 30.0, "return-coerce variant -> sum")
+
+    // recursive sum (declare + base-case match)
+    let leaf: Tree = Leaf { v: 7 }
+    check(base_depth(leaf) == 1, "recursive sum: leaf base case")
+
+    println("all sum-type checks passed")
+}

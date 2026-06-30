@@ -62,6 +62,18 @@ Type* create_tuple_type(int count, ...) {
     return type;
 }
 
+// #914 sum/variant type. `struct_name` holds the sum's name; the variant
+// Types are filled into `tuple_types[]` by the typechecker once the named
+// variant structs resolve. clone_type/free_type already handle both fields
+// generically, so a TYPE_SUM round-trips like any other Type.
+Type* create_sum_type(const char* name) {
+    Type* type = create_type(TYPE_SUM);
+    if (name) type->struct_name = strdup(name);
+    type->tuple_types = NULL;
+    type->tuple_count = 0;
+    return type;
+}
+
 Type* create_function_type(int param_count, Type** param_types, Type* return_type) {
     Type* type = create_type(TYPE_FUNCTION);
     type->param_count = param_count;
@@ -172,6 +184,14 @@ const char* type_to_string(Type* type) {
                            type->return_type ? type_to_string(type->return_type) : "void");
             return buffer;
         }
+        case TYPE_OPTIONAL: {
+            static char buffer[256];
+            snprintf(buffer, sizeof(buffer), "%s?",
+                     type->element_type ? type_to_string(type->element_type) : "?");
+            return buffer;
+        }
+        case TYPE_SUM:
+            return type->struct_name ? type->struct_name : "sum";
         default: return "UNKNOWN";
     }
 }
@@ -195,6 +215,12 @@ int types_equal(Type* a, Type* b) {
     
     // For struct types, compare names
     if (a->kind == TYPE_STRUCT) {
+        if (!a->struct_name || !b->struct_name) return 0;
+        return strcmp(a->struct_name, b->struct_name) == 0;
+    }
+
+    // #914 sum types are nominal: equal iff they name the same sum.
+    if (a->kind == TYPE_SUM) {
         if (!a->struct_name || !b->struct_name) return 0;
         return strcmp(a->struct_name, b->struct_name) == 0;
     }
@@ -483,6 +509,7 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_NONE_LITERAL: return "NONE_LITERAL";       // #340
         case AST_NULL_COALESCE: return "NULL_COALESCE";     // #340
         case AST_OPTIONAL_CHAIN: return "OPTIONAL_CHAIN";   // #340
+        case AST_SUM_TYPE_DEF: return "SUM_TYPE_DEF";       // #914
         default: return "UNKNOWN";
     }
 }

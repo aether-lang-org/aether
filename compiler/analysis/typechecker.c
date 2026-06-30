@@ -972,6 +972,19 @@ int is_type_compatible(Type* from, Type* to) {
     if (from->kind == TYPE_INT && to->kind == TYPE_BYTE) return 1;
     if (from->kind == TYPE_INT64 && to->kind == TYPE_BYTE) return 1;
 
+    // #914 sum types. A variant struct value implicitly WRAPS into the sum:
+    // `from` is TYPE_STRUCT{V} and `to` is a TYPE_SUM whose variant set
+    // contains V. (Sum -> same-sum is the exact-match case above.) There is no
+    // implicit UNWRAP (sum -> a variant) — the user must `match`.
+    if (to->kind == TYPE_SUM && from->kind == TYPE_STRUCT && from->struct_name) {
+        for (int i = 0; i < to->tuple_count; i++) {
+            Type* vt = to->tuple_types[i];
+            if (vt && vt->struct_name &&
+                strcmp(vt->struct_name, from->struct_name) == 0) return 1;
+        }
+        return 0;
+    }
+
     // #340 optionals. Assigning INTO a `T?`:
     //   - `none` (optional with unknown inner) fits any optional;
     //   - `U?` fits `T?` when inner U is compatible with inner T;
@@ -1949,6 +1962,9 @@ static void resolve_purity_queries(ASTNode* node, ASTNode* program,
                                    const char** globals, int nglobals);
 // #480: resolve `type X = distinct Y` placeholders into distinct Types.
 static void resolve_distinct_types(ASTNode* program);
+// #914: resolve `type Name = A | B | C` references into TYPE_SUM.
+static void resolve_sum_types(ASTNode* program);
+static void sum_apply(Type* t, ASTNode* def);   // fill TYPE_SUM variant Types
 
 // #891: typecheck-time registry of @c_struct overlay names. Codegen has its
 // own field-level registry; the typechecker only needs the NAME set so an
@@ -2036,6 +2052,11 @@ int typecheck_program(ASTNode* program) {
     // #480: resolve `type X = distinct Y` placeholders into distinct Types
     // across the whole AST before any type-checking or inference runs.
     resolve_distinct_types(program);
+
+    // #914: resolve `type Name = A | B | C` references — rewrite bare
+    // TYPE_STRUCT{Name} use-sites into the real TYPE_SUM. Runs after distinct
+    // resolution (a name is one or the other) and before any type-checking.
+    resolve_sum_types(program);
 
     // #891: collect @c_struct overlay names so `expr as *Name` casts and
     // member access typecheck against them (they have no struct symbol —
@@ -2303,6 +2324,17 @@ int typecheck_program(ASTNode* program) {
                 if (struct_sym) {
                     struct_sym->node = child;
                 }
+                break;
+            }
+            case AST_SUM_TYPE_DEF: {
+                // #914: register the sum name as a TYPE_SUM symbol (variants in
+                // tuple_types[]) and stash the def node, so type lookups and the
+                // codegen typedef pass can resolve `Name` to its variant set.
+                Type* sum_type = create_sum_type(child->value);
+                sum_apply(sum_type, child);   // fill variant Types from children
+                add_symbol(global_table, child->value, sum_type, 0, 0, 0);
+                Symbol* sum_sym = lookup_symbol(global_table, child->value);
+                if (sum_sym) sum_sym->node = child;
                 break;
             }
             case AST_MESSAGE_DEFINITION: {
@@ -2730,6 +2762,25 @@ int typecheck_node(ASTNode* node, SymbolTable* table) {
             return 1;
         case AST_STRUCT_DEFINITION:
             return typecheck_struct_definition(node, table);
+        case AST_SUM_TYPE_DEF: {
+            // #914: variant references were rewritten in resolve_sum_types;
+            // validate here that every variant names a real struct (and not
+            // another sum — nested sums aren't supported in v1). Nothing else
+            // to check per-node.
+            for (int i = 0; i < node->child_count; i++) {
+                ASTNode* v = node->children[i];
+                if (!v || v->type != AST_IDENTIFIER || !v->value) continue;
+                Symbol* vs = lookup_symbol(table, v->value);
+                if (!vs || !vs->type || vs->type->kind != TYPE_STRUCT) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "sum type '%s': variant '%s' must name a struct type",
+                        node->value ? node->value : "?", v->value);
+                    type_error(msg, v->line, v->column);
+                }
+            }
+            return 1;
+        }
         case AST_MAIN_FUNCTION:
             return typecheck_statement(node, table);
         default:
@@ -3403,6 +3454,75 @@ static void resolve_distinct_types(ASTNode* program) {
     }
     if (ndefs == 0) return;
     distinct_rewrite_ast(program, defs, ndefs);
+}
+
+// #914 sum/variant types. `type Name = A | B | C` parses to AST_SUM_TYPE_DEF
+// (value = Name, each child an AST_IDENTIFIER naming a variant struct). A use
+// site `s: Name` is parsed by parse_type as a bare TYPE_STRUCT{Name}; this
+// pass rewrites every such reference to the real TYPE_SUM (carrying the
+// variant Types in tuple_types[]), exactly as resolve_distinct_types does for
+// distinct aliases.
+#define AETHER_MAX_SUMS 256
+typedef struct { const char* name; ASTNode* def; } SumDef;
+
+// Convert an in-place TYPE_STRUCT{sumName} into the TYPE_SUM, filling its
+// variant Types (each a TYPE_STRUCT{variantName}) from the def's children.
+static void sum_apply(Type* t, ASTNode* def) {
+    t->kind = TYPE_SUM;                 // struct_name already holds the sum name
+    int nv = 0;
+    for (int i = 0; i < def->child_count; i++)
+        if (def->children[i] && def->children[i]->type == AST_IDENTIFIER) nv++;
+    t->tuple_types = nv ? (Type**)malloc(nv * sizeof(Type*)) : NULL;
+    t->tuple_count = 0;
+    for (int i = 0; i < def->child_count; i++) {
+        ASTNode* v = def->children[i];
+        if (v && v->type == AST_IDENTIFIER && v->value) {
+            Type* vt = create_type(TYPE_STRUCT);
+            vt->struct_name = strdup(v->value);
+            t->tuple_types[t->tuple_count++] = vt;
+        }
+    }
+}
+
+static void sum_rewrite_type(Type* t, SumDef* defs, int ndefs, int depth) {
+    if (!t || depth > 64) return;
+    if (t->kind == TYPE_STRUCT && t->struct_name && !t->distinct_name) {
+        for (int i = 0; i < ndefs; i++) {
+            if (strcmp(t->struct_name, defs[i].name) == 0) {
+                sum_apply(t, defs[i].def);
+                break;
+            }
+        }
+    }
+    sum_rewrite_type(t->element_type, defs, ndefs, depth + 1);
+    sum_rewrite_type(t->return_type, defs, ndefs, depth + 1);
+    for (int i = 0; i < t->tuple_count; i++)
+        if (t->tuple_types) sum_rewrite_type(t->tuple_types[i], defs, ndefs, depth + 1);
+    for (int i = 0; i < t->param_count; i++)
+        if (t->param_types) sum_rewrite_type(t->param_types[i], defs, ndefs, depth + 1);
+}
+
+static void sum_rewrite_ast(ASTNode* n, SumDef* defs, int ndefs) {
+    if (!n) return;
+    if (n->node_type) sum_rewrite_type(n->node_type, defs, ndefs, 0);
+    for (int i = 0; i < n->child_count; i++)
+        sum_rewrite_ast(n->children[i], defs, ndefs);
+}
+
+static void resolve_sum_types(ASTNode* program) {
+    if (!program) return;
+    SumDef defs[AETHER_MAX_SUMS];
+    int ndefs = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_SUM_TYPE_DEF && c->value && ndefs < AETHER_MAX_SUMS) {
+            defs[ndefs].name = c->value;
+            defs[ndefs].def = c;
+            ndefs++;
+        }
+    }
+    if (ndefs == 0) return;
+    sum_rewrite_ast(program, defs, ndefs);
 }
 
 /* Fold every `__pure(fn)` node in the tree to a `true`/`false` bool literal. */
@@ -4354,6 +4474,21 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 element_type = create_type(TYPE_INT);
             }
 
+            // #914 sum `match` bookkeeping: track variant coverage (for the
+            // exhaustiveness check) and the scrutinee variable name (for
+            // per-arm narrowing — `match s { Circle -> { s.r } }` narrows `s`
+            // to Circle inside the Circle arm). Narrowing applies only when
+            // the scrutinee is a plain variable.
+            int sum_match = (match_expr_type && match_expr_type->kind == TYPE_SUM);
+            const char* scrutinee_name =
+                (sum_match && stmt->children[0] &&
+                 stmt->children[0]->type == AST_IDENTIFIER)
+                    ? stmt->children[0]->value : NULL;
+            int sum_nvar = sum_match ? match_expr_type->tuple_count : 0;
+            int sum_covered[64];
+            for (int z = 0; z < 64; z++) sum_covered[z] = 0;
+            int sum_wildcard = 0;
+
             // Type check each match arm
             for (int i = 1; i < stmt->child_count; i++) {
                 ASTNode* arm = stmt->children[i];
@@ -4418,6 +4553,47 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     }
                 }
 
+                // #914 sum `match`: a bare variant-name pattern selects that
+                // variant and narrows the scrutinee to the variant struct
+                // inside the arm. `_` is the catch-all. Validate the name and
+                // record coverage for the post-loop exhaustiveness check.
+                if (sum_match && pattern) {
+                    // A bare variant pattern (`Circle ->`) is parsed by
+                    // parse_match_case via parse_expression, so it arrives as
+                    // an AST_IDENTIFIER; `_` arrives as a TYPE_WILDCARD literal.
+                    int is_wild = (pattern->node_type &&
+                                   pattern->node_type->kind == TYPE_WILDCARD) ||
+                                  (pattern->value && strcmp(pattern->value, "_") == 0);
+                    if (is_wild) {
+                        sum_wildcard = 1;
+                    } else if ((pattern->type == AST_IDENTIFIER ||
+                                pattern->type == AST_PATTERN_VARIABLE) && pattern->value) {
+                        int vidx = -1;
+                        for (int vi = 0; vi < sum_nvar; vi++) {
+                            Type* vt = match_expr_type->tuple_types[vi];
+                            if (vt && vt->struct_name &&
+                                strcmp(vt->struct_name, pattern->value) == 0) { vidx = vi; break; }
+                        }
+                        if (vidx < 0) {
+                            char msg[256];
+                            snprintf(msg, sizeof(msg),
+                                "'%s' is not a variant of sum type '%s'",
+                                pattern->value,
+                                match_expr_type->struct_name ? match_expr_type->struct_name : "?");
+                            type_error(msg, pattern->line, pattern->column);
+                        } else {
+                            if (vidx < 64) sum_covered[vidx] = 1;
+                            // Narrow the scrutinee variable to the variant
+                            // struct so `s.field` typechecks inside the arm.
+                            if (scrutinee_name) {
+                                add_symbol(arm_table, scrutinee_name,
+                                           clone_type(match_expr_type->tuple_types[vidx]),
+                                           0, 0, 0);
+                            }
+                        }
+                    }
+                }
+
                 // Type check the arm body in the new scope. A match-as-
                 // expression arm has an EXPRESSION body (an identifier,
                 // literal, call, interpolation, ...); typecheck_statement only
@@ -4448,6 +4624,32 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 }
 
                 free_symbol_table(arm_table);
+            }
+
+            // #914 exhaustiveness: every variant of the sum must be handled,
+            // unless a `_` wildcard arm catches the rest. Missing a variant is
+            // a compile error — the payoff that makes adding a variant safe.
+            if (sum_match && !sum_wildcard) {
+                char missing[256]; int mp = 0, nmiss = 0;
+                for (int vi = 0; vi < sum_nvar && vi < 64; vi++) {
+                    if (sum_covered[vi]) continue;
+                    Type* vt = match_expr_type->tuple_types[vi];
+                    const char* vn = (vt && vt->struct_name) ? vt->struct_name : "?";
+                    if (nmiss > 0 && mp < (int)sizeof(missing))
+                        mp += snprintf(missing + mp, sizeof(missing) - mp, ", ");
+                    if (mp < (int)sizeof(missing))
+                        mp += snprintf(missing + mp, sizeof(missing) - mp, "%s", vn);
+                    nmiss++;
+                }
+                if (nmiss > 0) {
+                    char msg[360];
+                    snprintf(msg, sizeof(msg),
+                        "non-exhaustive match on sum type '%s': missing variant%s "
+                        "%s. Add an arm for each, or a `_` wildcard.",
+                        match_expr_type->struct_name ? match_expr_type->struct_name : "?",
+                        nmiss > 1 ? "s" : "", missing);
+                    type_error(msg, stmt->line, stmt->column);
+                }
             }
             return 1;
         }

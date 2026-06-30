@@ -3384,6 +3384,13 @@ static void emit_return_value(CodeGenerator* gen, ASTNode* stmt) {
         emit_optional_coerced(gen, stmt->children[0], gen->current_func_return_type);
         return;
     }
+    // #914: `return Circle {...}` from a `-> Shape` function wraps the variant.
+    if (gen->current_func_return_type &&
+        gen->current_func_return_type->kind == TYPE_SUM &&
+        needs_sum_coerce(stmt->children[0], gen->current_func_return_type)) {
+        emit_sum_coerced(gen, stmt->children[0], gen->current_func_return_type);
+        return;
+    }
     if (should_uniform_heap_return(gen, stmt)) {
         emit_uniform_heap_return_expr(gen, stmt->children[0]);
     } else {
@@ -3398,6 +3405,36 @@ int needs_optional_coerce(ASTNode* value, Type* target) {
     if (value->type == AST_NONE_LITERAL) return 1;
     if (value->node_type && value->node_type->kind == TYPE_OPTIONAL) return 0;
     return 1;
+}
+
+// #914: does `value` need sum coercion to flow into `target`? True when target
+// is a sum and value is one of its variant structs (not already the sum).
+int needs_sum_coerce(ASTNode* value, Type* target) {
+    if (!value || !target || target->kind != TYPE_SUM) return 0;
+    Type* vt = value->node_type;
+    if (!vt || vt->kind != TYPE_STRUCT || !vt->struct_name) return 0;
+    for (int i = 0; i < target->tuple_count; i++) {
+        Type* var = target->tuple_types[i];
+        if (var && var->struct_name &&
+            strcmp(var->struct_name, vt->struct_name) == 0) return 1;
+    }
+    return 0;
+}
+
+// #914: wrap a variant struct value into its sum:
+//   (Shape){ .tag = Shape__Circle, .data.Circle_ = <value> }
+// If `value` isn't a coercible variant, emit it bare.
+void emit_sum_coerced(CodeGenerator* gen, ASTNode* value, Type* target) {
+    if (!needs_sum_coerce(value, target)) {
+        if (value) generate_expression(gen, value);
+        return;
+    }
+    const char* sname = target->struct_name;
+    const char* variant = value->node_type->struct_name;
+    fprintf(gen->output, "(%s){ .tag = %s__%s, .data.%s_ = ",
+            sname, sname, variant, variant);
+    generate_expression(gen, value);
+    fprintf(gen->output, " }");
 }
 
 // #340: optional-chain assignment `recv?.field = rhs` — a no-op when the
@@ -3743,6 +3780,28 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 fprintf(gen->output, " = ");
                 if (stmt->child_count > 0 && stmt->children[0]) {
                     emit_optional_coerced(gen, stmt->children[0], stmt->node_type);
+                } else {
+                    fprintf(gen->output, "(%s){0}", get_c_type(stmt->node_type));
+                }
+                fprintf(gen->output, ";\n");
+                break;
+            }
+
+            // #914: sum-typed local (`s: Shape = Circle {...}`). Emit the
+            // declaration / re-bind, wrapping a variant struct initializer into
+            // the tagged union (a value already of the sum type passes through).
+            if (stmt->value && strcmp(stmt->value, "_") != 0 &&
+                stmt->node_type && stmt->node_type->kind == TYPE_SUM) {
+                print_indent(gen);
+                if (!is_var_declared(gen, stmt->value)) {
+                    fprintf(gen->output, "%s %s", get_c_type(stmt->node_type), stmt->value);
+                    mark_var_declared(gen, stmt->value);
+                } else {
+                    fprintf(gen->output, "%s", stmt->value);
+                }
+                fprintf(gen->output, " = ");
+                if (stmt->child_count > 0 && stmt->children[0]) {
+                    emit_sum_coerced(gen, stmt->children[0], stmt->node_type);
                 } else {
                     fprintf(gen->output, "(%s){0}", get_c_type(stmt->node_type));
                 }
@@ -5310,6 +5369,70 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "%s %s = _om%d.val;\n", inner_c, some_bind, id);
                     }
                     emit_opt_match_arm(gen, some_body ? some_body : wild_body);
+                    unindent(gen);
+                    print_line(gen, "}");
+                    unindent(gen);
+                    print_line(gen, "}");
+                    break;
+                }
+
+                // #914 sum `match` — switch on the tag enum, narrowing the
+                // matched value to each variant struct inside its case so
+                // `s.field` reads the right union member. Handled before the
+                // generic numeric / list / seq match lowering.
+                if (match_expr->node_type && match_expr->node_type->kind == TYPE_SUM) {
+                    Type* st = match_expr->node_type;
+                    const char* sname = st->struct_name ? st->struct_name : "_sum";
+                    static int sm_counter = 0;
+                    int id = sm_counter++;
+                    // The scrutinee is narrowed in each arm only when it is a
+                    // plain variable (so `s.field` has a name to bind to).
+                    const char* scrut = (match_expr->type == AST_IDENTIFIER)
+                                        ? match_expr->value : NULL;
+                    print_line(gen, "{");
+                    indent(gen);
+                    print_indent(gen);
+                    fprintf(gen->output, "%s _sm%d = ", sname, id);
+                    generate_expression(gen, match_expr);
+                    fprintf(gen->output, ";\n");
+                    print_indent(gen);
+                    fprintf(gen->output, "switch (_sm%d.tag) {\n", id);
+                    indent(gen);
+                    for (int i = 1; i < stmt->child_count; i++) {
+                        ASTNode* arm = stmt->children[i];
+                        if (!arm || arm->type != AST_MATCH_ARM || arm->child_count < 2) continue;
+                        ASTNode* pat = arm->children[0];
+                        ASTNode* body = arm->children[1];
+                        int is_wild =
+                            (pat->node_type && pat->node_type->kind == TYPE_WILDCARD) ||
+                            (pat->value && strcmp(pat->value, "_") == 0);
+                        // A bare variant pattern (`Circle ->`) arrives as an
+                        // AST_IDENTIFIER (parse_expression); accept that and
+                        // the AST_PATTERN_VARIABLE form.
+                        const char* variant = NULL;
+                        if (!is_wild && pat->value &&
+                            (pat->type == AST_IDENTIFIER ||
+                             pat->type == AST_PATTERN_VARIABLE))
+                            variant = pat->value;
+                        print_indent(gen);
+                        if (is_wild) {
+                            fprintf(gen->output, "default: {\n");
+                        } else if (variant) {
+                            fprintf(gen->output, "case %s__%s: {\n", sname, variant);
+                        } else {
+                            continue;   // unrecognised arm — typechecker flagged it
+                        }
+                        indent(gen);
+                        if (variant && scrut) {
+                            print_indent(gen);
+                            fprintf(gen->output, "%s %s = _sm%d.data.%s_; (void)%s;\n",
+                                    variant, scrut, id, variant, scrut);
+                        }
+                        emit_opt_match_arm(gen, body);
+                        print_line(gen, "break;");
+                        unindent(gen);
+                        print_line(gen, "}");
+                    }
                     unindent(gen);
                     print_line(gen, "}");
                     unindent(gen);
