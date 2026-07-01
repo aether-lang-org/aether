@@ -5,13 +5,16 @@
 
 exports (
     dir_exists, dir_create_raw, dir_delete_raw, dir_list_raw, dir_list_free,
-    create, delete, list
+    create, delete, list, list_count, list_get, list_kind
 )
 
 extern dir_exists(path: string) -> int
 extern dir_create_raw(path: string) -> int
 extern dir_delete_raw(path: string) -> int
 extern dir_list_raw(path: string) -> ptr
+extern dir_list_count(list: ptr) -> int
+extern dir_list_get(list: ptr, index: int) -> string
+extern dir_list_kind(list: ptr, index: int) -> int
 extern dir_list_free(list: ptr)
 
 // Create a directory. Returns "" on success, error on failure.
@@ -41,4 +44,22 @@ list(path: string) -> {
         return null, "cannot list directory"
     }
     return result, ""
+}
+
+// Number of entries in a listing.
+list_count(l: ptr) -> int {
+    return dir_list_count(l)
+}
+
+// Name of entry `index` (empty on out-of-range).
+list_get(l: ptr, index: int) -> string {
+    return dir_list_get(l, index)
+}
+
+// #966: file kind of entry `index`, straight from readdir's d_type — no
+// stat(2) per entry. Same encoding as file_stat's kind: 1 = file, 2 = dir,
+// 3 = symlink (target not followed), 4 = other; 0 = unknown (the filesystem
+// didn't report a type — stat that entry to resolve it).
+list_kind(l: ptr, index: int) -> int {
+    return dir_list_kind(l, index)
 }

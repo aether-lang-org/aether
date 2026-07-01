@@ -111,6 +111,23 @@ Plain string literals pass through unchanged — `string_retain` is a no-op on v
 - `string_list_remove(list, index)` - Remove + release the entry
 - `string_list_clear(list)` - Drop every entry, keep the backing alloc
 - `string_list_free(list)` - Release every entry then free
+- `string_list_sort_lex(list)` - Stable ascending lexicographic (byte-wise) sort, in place
+- `string_list_sort(list, cmp)` - Stable in-place sort by a comparator closure `|a: string, b: string| { ... }` returning negative / 0 / positive (like `strcmp`)
+
+Both sorts reorder the backing slots only — no element is copied or freed — so they sidestep the get/set aliasing trap of a hand-rolled swap (`string_list_get` returns the slot's internal pointer; a naive adjacent swap would free a slot another borrowed pointer still aliases). Issue #967.
+
+```aether
+names = string_list_new()
+string_list_add(names, "Charlie")
+string_list_add(names, "alice")
+string_list_add(names, "Bob")
+
+string_list_sort_lex(names)                 // "Bob", "Charlie", "alice" (ASCII order)
+
+string_list_sort(names, |a: string, b: string| {
+    return string.length(a) - string.length(b)   // shortest first, stable
+})
+```
 
 For a similar `string_map`, file an issue — same pattern would apply. Issue #274.
 
@@ -599,10 +616,18 @@ main() {
         if err != "" { println("mkdir failed: ${err}") }
     }
 
-    // List contents
+    // List contents, with each entry's kind straight from readdir's d_type
+    // (no per-entry stat needed).
     list, lerr = dir.list(".")
     if lerr == "" {
-        // Process list with dir.list_count / dir.list_get...
+        n = dir.list_count(list)
+        i = 0
+        while i < n {
+            name = dir.list_get(list, i)
+            kind = dir.list_kind(list, i)      // 1 file / 2 dir / 3 symlink / 4 other / 0 unknown
+            if kind == 2 { println("[dir]  ${name}") }
+            i = i + 1
+        }
         dir.list_free(list)
     }
 
@@ -615,10 +640,13 @@ main() {
 - `dir.create(path)` → `string` - Create directory, return error string
 - `dir.delete(path)` → `string` - Delete empty directory, return error string
 - `dir.list(path)` → `(ptr, string)` - List contents (caller must `dir.list_free`)
+- `dir.list_count(list)` → `int` - Number of entries
+- `dir.list_get(list, index)` → `string` - Entry name at `index`
+- `dir.list_kind(list, index)` → `int` - Entry's file kind from readdir's `d_type`, avoiding a `stat(2)` per entry: 1 = file, 2 = directory, 3 = symlink (target not followed), 4 = other; 0 = unknown (the filesystem didn't report a type — stat that entry to resolve it). Same encoding as `file_stat`'s kind. Issue #966.
 - `dir.exists(path)` - 1 if a **directory** is at `path`, 0 otherwise. Returns 0 for regular files, even if they exist — see `fs.exists` for the path-agnostic check.
 - `dir.list_free(list)` - Free directory listing
 
-Raw externs: `dir_create_raw`, `dir_delete_raw`, `dir_list_raw`.
+Raw externs: `dir_create_raw`, `dir_delete_raw`, `dir_list_raw`, `dir_list_count`, `dir_list_get`, `dir_list_kind`, `dir_list_free`.
 
 ### Paths (`std.path`)
 

@@ -1,0 +1,92 @@
+// Regression (#967): std.collections string_list sort.
+//
+//   - string_list_sort_lex(L)     stable ascending lexicographic (strcmp)
+//   - string_list_sort(L, cmp)    stable sort by a comparator closure
+//                                 `fn(string, string) -> int`
+//
+// Both reorder the backing slots only (no element copied or freed), so the
+// get/set aliasing trap the issue describes cannot occur. Self-asserting:
+// prints FAIL + exits 1 on mismatch, PASS at the end. Leak-clean: the list
+// owns its element copies and frees them in string_list_free.
+
+import std.collections
+import std.string
+
+extern exit(code: int)
+
+// Read the whole list back as "a,b,c,".
+joined(L: ptr) -> string {
+    out = ""
+    n = string_list_size(L)
+    i = 0
+    while i < n {
+        out = string.concat(out, string_list_get(L, i))
+        out = string.concat(out, ",")
+        i = i + 1
+    }
+    return out
+}
+
+main() {
+    L = string_list_new()
+    string_list_add(L, "banana")
+    string_list_add(L, "apple")
+    string_list_add(L, "cherry")
+    string_list_add(L, "apple")   // duplicate — exercises stability
+
+    // 1. lexicographic
+    string_list_sort_lex(L)
+    got = joined(L)
+    if string.equals(got, "apple,apple,banana,cherry,") != 1 {
+        println("FAIL sort_lex: ${got}")
+        exit(1)
+    }
+
+    // 2. comparator closure: by length descending, then the 6-length ones
+    //    first. banana(6), cherry(6) before apple(5), apple(5).
+    string_list_sort(L, |a: string, b: string| {
+        return string.length(b) - string.length(a)
+    })
+    first = string_list_get(L, 0)
+    second = string_list_get(L, 1)
+    if string.length(first) != 6 {
+        println("FAIL sort(cmp): first length ${string.length(first)}")
+        exit(1)
+    }
+    if string.length(second) != 6 {
+        println("FAIL sort(cmp): second length ${string.length(second)}")
+        exit(1)
+    }
+
+    // 3. stability: sort_lex leaves equal keys in input order. Build a fresh
+    //    list where every element is equal under a constant comparator; the
+    //    order must be untouched.
+    S = string_list_new()
+    string_list_add(S, "one")
+    string_list_add(S, "two")
+    string_list_add(S, "three")
+    string_list_sort(S, |a: string, b: string| {
+        return 0        // all "equal" — a stable sort preserves input order
+    })
+    order = joined(S)
+    if string.equals(order, "one,two,three,") != 1 {
+        println("FAIL stability: ${order}")
+        exit(1)
+    }
+
+    // 4. empty and single-element lists are no-ops (must not crash).
+    E = string_list_new()
+    string_list_sort_lex(E)
+    string_list_sort(E, |a: string, b: string| { return 0 })
+    string_list_add(E, "solo")
+    string_list_sort_lex(E)
+    if string.equals(string_list_get(E, 0), "solo") != 1 {
+        println("FAIL single-element")
+        exit(1)
+    }
+
+    string_list_free(L)
+    string_list_free(S)
+    string_list_free(E)
+    println("PASS: #967 string_list_sort / sort_lex (closure, stability, edges)")
+}
