@@ -20,6 +20,13 @@ const char* get_c_type(Type* type);
 const char* const_array_elem_c_type(Type* t);
 int is_c_reserved_word(const char* name);
 const char* safe_c_name(const char* name);
+// #976: mangle a VALUE/variable identifier that is a C reserved keyword
+// (`short`, `int`, `char`, …) so it emits as a valid C identifier. Unlike
+// safe_c_name (which also renames libc symbols for functions), this touches
+// keywords ONLY — a local named `open` is a valid C identifier and must keep
+// its spelling. Returns a static buffer; use before the next call.
+int is_c_keyword(const char* name);
+const char* safe_value_name(const char* name);
 const char* get_c_operator(const char* aether_op);
 void generate_type(CodeGenerator* gen, Type* type);
 void emit_fnptr_decl(CodeGenerator* gen, Type* sig, const char* name);

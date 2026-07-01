@@ -1626,6 +1626,52 @@ const char* safe_c_name(const char* name) {
     return buf;
 }
 
+// #976: is `name` a C reserved keyword (as opposed to a libc symbol)?
+// These are the names that cannot be a C identifier AT ALL — a variable,
+// parameter, or struct field spelled this way is a hard C syntax error, not
+// a link-time collision. A perfectly ordinary Aether identifier (`short`,
+// `long`, `char`, `default`) lands here and must be mangled in codegen so it
+// still compiles. Includes C89/C99/C11 keywords plus the common
+// header-provided keywords/macros (`bool`/`true`/`false` from <stdbool.h>,
+// C23 spellings) that the generated prelude may pull in.
+int is_c_keyword(const char* name) {
+    if (!name) return 0;
+    static const char* kw[] = {
+        // C89
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "int", "long", "register", "return", "short", "signed", "sizeof",
+        "static", "struct", "switch", "typedef", "union", "unsigned", "void",
+        "volatile", "while",
+        // C99 / C11
+        "inline", "restrict",
+        "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic",
+        "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local",
+        // <stdbool.h> / C23 spellings that behave as keywords/macros
+        "bool", "true", "false", "nullptr", "typeof", "typeof_unqual",
+        "alignas", "alignof", "static_assert", "thread_local", "constexpr",
+        NULL
+    };
+    for (int i = 0; kw[i]; i++) {
+        if (strcmp(name, kw[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+// #976: mangle a value/variable identifier that is a C keyword to a valid C
+// identifier. Non-keywords pass through unchanged, so normal code is emitted
+// verbatim and only the (previously broken) keyword names are rewritten. The
+// `ae_` prefix matches safe_c_name's convention. Must be applied at EVERY
+// site that emits this value's C name (declaration, reference, parameter,
+// capture field, loop var, …) so the spelling stays consistent.
+const char* safe_value_name(const char* name) {
+    if (!name) return name;
+    if (!is_c_keyword(name)) return name;
+    static char buf[280];
+    snprintf(buf, sizeof(buf), "ae_%s", name);
+    return buf;
+}
+
 const char* get_c_type(Type* type) {
     if (!type) {
         AetherError w = {NULL, NULL, 0, 0, "internal: NULL type in codegen, defaulting to int",
@@ -3198,9 +3244,53 @@ static const char* find_first_reply_msg(ASTNode* node) {
     return NULL;
 }
 
+// #976: a value identifier that is a C reserved keyword (`short`, `int`,
+// `char`, `default`, …) is a valid Aether identifier but an invalid C one, so
+// emitting it verbatim breaks the C compile even though `ae check` passed.
+// Rather than thread the mangler through the ~100 codegen sites that emit a
+// variable's name (declarations, references, params, and derived temporaries
+// like `_heap_<name>` / `_seqheap_<name>` / `<name>_len`), rewrite the name
+// ONCE on the AST before codegen: every site then reads the already-safe name
+// and stays consistent by construction.
+//
+// Only value-binding / value-reference node types are rewritten:
+//   - AST_IDENTIFIER          — reads, and assignment/destructure lvalues
+//   - AST_VARIABLE_DECLARATION — locals, for-loop vars, params
+//   - AST_PATTERN_VARIABLE     — match bindings, pattern params
+// Function names live on AST_FUNCTION_CALL->value / the function node and go
+// through safe_c_name at emission with the same `ae_` prefix, so a keyword
+// used as a function stays consistent too. Struct/message field names are
+// their own node types (AST_STRUCT_FIELD / AST_MESSAGE_FIELD / on
+// AST_MEMBER_ACCESS->value) and are left alone. AST_SUM_TYPE_DEF's children
+// are variant TYPE names, not values, so its subtree is skipped.
+static void mangle_keyword_value_idents(ASTNode* node) {
+    if (!node) return;
+    if ((node->type == AST_IDENTIFIER ||
+         node->type == AST_VARIABLE_DECLARATION ||
+         node->type == AST_PATTERN_VARIABLE) &&
+        node->value && is_c_keyword(node->value)) {
+        const char* safe = safe_value_name(node->value);
+        if (safe && safe != node->value) {
+            char* dup = strdup(safe);
+            if (dup) {
+                free(node->value);
+                node->value = dup;
+            }
+        }
+    }
+    if (node->type == AST_SUM_TYPE_DEF) return;  // children are type names
+    for (int i = 0; i < node->child_count; i++) {
+        mangle_keyword_value_idents(node->children[i]);
+    }
+}
+
 void generate_program(CodeGenerator* gen, ASTNode* program) {
     if (!program || program->type != AST_PROGRAM) return;
     gen->program = program;
+    // #976: rewrite C-keyword value identifiers to a valid C spelling before
+    // any codegen pass reads their names (must run before escape analysis and
+    // emission, which both key off the identifier names).
+    mangle_keyword_value_idents(program);
     // Note: `gen->program` is the source of truth for the
     // structural-escape-analysis lookup (issue #405). Setting it
     // here means every per-fn codegen pass beyond this point can
