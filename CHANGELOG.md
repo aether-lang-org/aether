@@ -5,11 +5,13 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.331.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.331.0]
+## [current]
+
+## [0.338.0]
 
 ### Added
 
@@ -47,6 +49,83 @@ next version number before tagging the release.
     no allocation, no vtable. Recursive shapes (trees, ASTs) work via explicit
     pointer fields (`left: *Tree`). v1 is monomorphic; generics are a follow-up.
 
+## [0.337.0]
+
+### Fixed
+
+- **macOS arm64: `ae build` couldn't link anything off a released package**
+  (#959). Three build-toolchain fixes:
+  - **Flat runtime-archive fallback.** `ae build` looked for the prebuilt
+    archive only at the canonical nested `lib/aether/libaether.a`. The macOS
+    arm64 v0.331/0.332 packages shipped it flat at `lib/libaether.a`, so the
+    lookup missed it and fell back to compiling an *incomplete* runtime source
+    list — every build, even hello-world, then failed to link (`Undefined
+    symbols ... _aether_io_poller_init`). `ae build` now falls back to the flat
+    archive before the source path; the complete archive links.
+  - **Version-agnostic homebrew link paths.** The link flags baked into `ae`
+    came from `pkg-config`, which on homebrew emits versioned
+    `-L/opt/homebrew/Cellar/<pkg>/<ver>/lib` paths — so `ld: library 'ssl' not
+    found` the moment a formula was upgraded. The build now rewrites those to
+    the version-agnostic `/opt/homebrew/opt/<pkg>/lib` symlinks homebrew keeps
+    current. No-op on non-homebrew layouts.
+  - **Corrupt-archive guard on install.** `ae version install` now validates
+    that the extracted `libaether.a` is a well-formed `ar` archive of plausible
+    size, catching the interrupted/partial extract that left a truncated
+    archive (undefined symbols) and a broken install with no hint at the cause.
+
+## [0.336.0]
+
+### Changed
+
+- **`LLM.md` operational additions** (#912) — rebuild/test table, build-safety
+  notes, ask-first thresholds, and the codegen tag-and-grep debugging recipe.
+  Documentation only; no compiler, stdlib, or runtime behaviour change.
+
+## [0.335.0]
+
+### Fixed
+
+- **`ae check` now catches over-/under-applying an extern; `from_cstr` survives
+  an `AetherString*`** (#952). Two "`ae check` passes but the program then
+  crashes or fails in gcc" gaps:
+  - **Arity of extern functions wasn't checked.** Calling the zero-arg
+    `math.deg_to_rad()` constant as `math.deg_to_rad(x)` (and the sibling
+    `math.pi`/`tau`/`e`/`rad_to_deg` constants) passed `ae check` and surfaced
+    only as a raw gcc "too many arguments" error. Extern arity is now validated
+    in Aether terms, honoring variadic externs (`f(named, ...)`, both the
+    `extern` and `@extern("c")` forms) and `_ctx`-first builder externs. The
+    fix also wires each imported extern's AST node into its symbol — like
+    entry-file externs already were — so the existing extern arg-type checks
+    apply across module boundaries too.
+  - **`string.from_cstr` segfaulted on an owned-list value.** A string stored
+    with `list.add_string_owned` (which keeps the 24-byte `AetherString`
+    header) and read back via `list.get` was an `AetherString*`, not a raw
+    `char*`; `from_cstr` read the header bytes as character data and copied
+    garbage or crashed. `from_cstr` now routes its argument through the
+    magic-header-aware accessor, so the round-trip is correct for either an
+    `AetherString*` or a plain C string (and is NULL-safe).
+
+## [0.334.0]
+
+### Fixed
+
+- **`ae build` now fails on an imported module's compile error** (#953). `ae
+  build` accepted an entry program whose *imported* module did not compile —
+  the parser's error recovery dropped the offending construct (e.g. an invalid
+  `@` annotation lowering to a bare `return x`), so the merged AST type-checked
+  clean and codegen produced a working binary from non-compiling source, while
+  `ae check` correctly reported the error. The two disagreed on validity, and a
+  build's exit code couldn't be trusted (it bit a mutation-testing driver that
+  rebuilds an imported SUT). The entry file's own parse errors were already
+  gated, but the global error count was not re-checked after module
+  orchestration — which is where imported modules are parsed. Both `build` and
+  `check` now fail (non-zero, no binary) when any module they pull in carries an
+  error. A clean import is unaffected (the gate keys on the error count).
+
+## [0.333.0]
+
+### Added
+
 - **Optionals: `T?` with `none`, `!`, `??`, `?.`, and `match`** (#340). A
   first-class optional type for "maybe a value," complementing the `(value,
   err)` result convention (which stays the tool for *fallible* operations).
@@ -72,59 +151,9 @@ next version number before tagging the release.
     message type) or with `match` pattern arms. See the
     [language reference](docs/language-reference.md#optionals).
 
+## [0.332.0]
+
 ### Fixed
-
-- **macOS arm64: `ae build` couldn't link anything off a released package**
-  (#959). Three build-toolchain fixes:
-  - **Flat runtime-archive fallback.** `ae build` looked for the prebuilt
-    archive only at the canonical nested `lib/aether/libaether.a`. The macOS
-    arm64 v0.331/0.332 packages shipped it flat at `lib/libaether.a`, so the
-    lookup missed it and fell back to compiling an *incomplete* runtime source
-    list — every build, even hello-world, then failed to link (`Undefined
-    symbols ... _aether_io_poller_init`). `ae build` now falls back to the flat
-    archive before the source path; the complete archive links.
-  - **Version-agnostic homebrew link paths.** The link flags baked into `ae`
-    came from `pkg-config`, which on homebrew emits versioned
-    `-L/opt/homebrew/Cellar/<pkg>/<ver>/lib` paths — so `ld: library 'ssl' not
-    found` the moment a formula was upgraded. The build now rewrites those to
-    the version-agnostic `/opt/homebrew/opt/<pkg>/lib` symlinks homebrew keeps
-    current. No-op on non-homebrew layouts.
-  - **Corrupt-archive guard on install.** `ae version install` now validates
-    that the extracted `libaether.a` is a well-formed `ar` archive of plausible
-    size, catching the interrupted/partial extract that left a truncated
-    archive (undefined symbols) and a broken install with no hint at the cause.
-- **`ae build` now fails on an imported module's compile error** (#953). `ae
-  build` accepted an entry program whose *imported* module did not compile —
-  the parser's error recovery dropped the offending construct (e.g. an invalid
-  `@` annotation lowering to a bare `return x`), so the merged AST type-checked
-  clean and codegen produced a working binary from non-compiling source, while
-  `ae check` correctly reported the error. The two disagreed on validity, and a
-  build's exit code couldn't be trusted (it bit a mutation-testing driver that
-  rebuilds an imported SUT). The entry file's own parse errors were already
-  gated, but the global error count was not re-checked after module
-  orchestration — which is where imported modules are parsed. Both `build` and
-  `check` now fail (non-zero, no binary) when any module they pull in carries an
-  error. A clean import is unaffected (the gate keys on the error count).
-
-- **`ae check` now catches over-/under-applying an extern; `from_cstr` survives
-  an `AetherString*`** (#952). Two "`ae check` passes but the program then
-  crashes or fails in gcc" gaps:
-  - **Arity of extern functions wasn't checked.** Calling the zero-arg
-    `math.deg_to_rad()` constant as `math.deg_to_rad(x)` (and the sibling
-    `math.pi`/`tau`/`e`/`rad_to_deg` constants) passed `ae check` and surfaced
-    only as a raw gcc "too many arguments" error. Extern arity is now validated
-    in Aether terms, honoring variadic externs (`f(named, ...)`, both the
-    `extern` and `@extern("c")` forms) and `_ctx`-first builder externs. The
-    fix also wires each imported extern's AST node into its symbol — like
-    entry-file externs already were — so the existing extern arg-type checks
-    apply across module boundaries too.
-  - **`string.from_cstr` segfaulted on an owned-list value.** A string stored
-    with `list.add_string_owned` (which keeps the 24-byte `AetherString`
-    header) and read back via `list.get` was an `AetherString*`, not a raw
-    `char*`; `from_cstr` read the header bytes as character data and copied
-    garbage or crashed. `from_cstr` now routes its argument through the
-    magic-header-aware accessor, so the round-trip is correct for either an
-    `AetherString*` or a plain C string (and is NULL-safe).
 
 - **Heredoc closing-marker rule: no more silent truncation** (#922). A heredoc
   body line that merely read like the closing marker could close the heredoc
@@ -140,6 +169,10 @@ next version number before tagging the release.
   leading-whitespace / least-indented line, like Ruby's squiggly `<<~`). Docs
   (`LLM.md`, language-reference) corrected — they wrongly claimed "column 0
   only," which the lexer never enforced.
+
+## [0.331.0]
+
+### Fixed
 
 - **Qualified type name `mod.Type` accepted in type positions** (#946). A
   module-qualified name was accepted as a value/call (`lib.mk(...)`, #878) but
