@@ -61,7 +61,7 @@ extern http_response_headers_str(response: ptr) -> string
 // http_get always returns a non-null response (unless out of memory); inspect
 // the error accessor or use http_response_ok to check for success.
 extern http_response_status(response: ptr) -> int
-extern http_response_body(response: ptr) -> string
+extern http_response_body(response: ptr) -> string @heap
 extern http_response_headers(response: ptr) -> string
 extern http_response_error(response: ptr) -> string
 extern http_response_ok(response: ptr) -> int

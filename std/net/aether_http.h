@@ -62,9 +62,17 @@ void http_response_free(HttpResponse* response);
 
 // Response field accessors. All are NULL-safe: passing NULL or a freed
 // response returns a sensible default (0 or "") rather than crashing.
-// Returned const char* pointers are owned by the response struct and
-// valid until http_response_free() is called.
+// Returned const char* pointers from the `_str` / headers / error accessors
+// are borrowed — owned by the response struct and valid only until
+// http_response_free().
 int http_response_status(HttpResponse* response);
+// Returns an OWNED, retained AetherString (cast to const char*). Unlike the
+// borrowed accessors, its lifetime is independent of the response: it survives
+// http_response_free(), so reading the body after freeing the response is safe.
+// C callers read content via aether_string_data() and must string_release() it
+// (Aether callers get automatic release via the `@heap` extern annotation).
+// This closes the response-body use-after-free footgun where a caller freed the
+// response before reading the borrowed body (http-serve-and-dial-reentrancy-ask.md).
 const char* http_response_body(HttpResponse* response);
 /* Byte length of the response body — binary-safe accessor that
  * partners with `http_response_body` for callers that may receive

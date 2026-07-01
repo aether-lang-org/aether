@@ -55,7 +55,11 @@ TEST_CATEGORY(http_accessors_success_response, TEST_CATEGORY_NETWORK) {
     resp->error = NULL;
 
     ASSERT_EQ(200, http_response_status(resp));
-    ASSERT_STREQ("Hello, world", http_response_body(resp));
+    /* http_response_body now returns an OWNED (retained) AetherString — read
+     * its content via aether_string_data and release the extra ref. */
+    const char* body = http_response_body(resp);
+    ASSERT_STREQ("Hello, world", aether_string_data(body));
+    string_release(body);
     ASSERT_STREQ("Content-Type: text/plain", http_response_headers(resp));
     ASSERT_STREQ("", http_response_error(resp));
     ASSERT_EQ(1, http_response_ok(resp));
@@ -72,7 +76,9 @@ TEST_CATEGORY(http_accessors_http_error_status, TEST_CATEGORY_NETWORK) {
     resp->error = NULL;
 
     ASSERT_EQ(404, http_response_status(resp));
-    ASSERT_STREQ("Not Found", http_response_body(resp));
+    const char* body404 = http_response_body(resp);
+    ASSERT_STREQ("Not Found", aether_string_data(body404));
+    string_release(body404);
     ASSERT_STREQ("", http_response_headers(resp));
     ASSERT_STREQ("", http_response_error(resp));
     ASSERT_EQ(0, http_response_ok(resp));
@@ -89,7 +95,10 @@ TEST_CATEGORY(http_accessors_transport_error, TEST_CATEGORY_NETWORK) {
     resp->error = string_new("Could not resolve host");
 
     ASSERT_EQ(0, http_response_status(resp));
-    ASSERT_STREQ("", http_response_body(resp));
+    /* NULL body → a fresh owned empty AetherString; content is "", release it. */
+    const char* ebody = http_response_body(resp);
+    ASSERT_STREQ("", aether_string_data(ebody));
+    string_release(ebody);
     ASSERT_STREQ("", http_response_headers(resp));
     ASSERT_STREQ("Could not resolve host", http_response_error(resp));
     ASSERT_EQ(0, http_response_ok(resp));
@@ -101,7 +110,9 @@ TEST_CATEGORY(http_accessors_null_response_safe, TEST_CATEGORY_NETWORK) {
     // All accessors must tolerate NULL without crashing. This guards against
     // the out-of-memory path where http_request() returns NULL directly.
     ASSERT_EQ(0, http_response_status(NULL));
-    ASSERT_STREQ("", http_response_body(NULL));
+    const char* nbody = http_response_body(NULL);
+    ASSERT_STREQ("", aether_string_data(nbody));
+    string_release(nbody);
     ASSERT_STREQ("", http_response_headers(NULL));
     ASSERT_STREQ("", http_response_error(NULL));
     ASSERT_EQ(0, http_response_ok(NULL));

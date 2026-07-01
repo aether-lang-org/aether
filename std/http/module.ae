@@ -96,7 +96,7 @@ extern http_response_headers_str(response: ptr) -> string
 // HTTP Client - response accessors (used by both raw callers and the
 // Go-style wrappers below).
 extern http_response_status(response: ptr) -> int
-extern http_response_body(response: ptr) -> string
+extern http_response_body(response: ptr) -> string @heap
 extern http_response_headers(response: ptr) -> string
 extern http_response_error(response: ptr) -> string
 extern http_response_ok(response: ptr) -> int

@@ -1327,10 +1327,18 @@ int http_response_status(HttpResponse* response) {
     return response->status_code;
 }
 
+/* Returns an OWNED string: the response's body AetherString, retained so it
+ * outlives http_response_free. Declared `@heap` on the Aether side, so codegen
+ * releases the caller's ref at scope exit (aether_heap_str_free dispatches on
+ * the magic header → string_release). This is what makes reading the body
+ * AFTER response_free safe — a borrowed `->data` pointer would dangle, the
+ * classic footgun in http-serve-and-dial-reentrancy-ask.md. On the empty/NULL
+ * path we hand back a fresh empty AetherString rather than a literal "", so the
+ * caller's uniform `@heap` release is always well-typed. */
 const char* http_response_body(HttpResponse* response) {
-    if (!response || !response->body) return "";
-    const char* s = string_to_cstr(response->body);
-    return s ? s : "";
+    if (!response || !response->body) return (const char*)string_empty();
+    string_retain(response->body);
+    return (const char*)response->body;
 }
 
 int http_response_body_length(HttpResponse* response) {
@@ -1361,8 +1369,14 @@ int http_response_status_code(HttpResponse* response) {
     return http_response_status(response);
 }
 
+/* Borrowed-pointer variant, kept for the legacy `_str` accessor whose callers
+ * copy-on-use (v1 wrappers, tinyweb). Unlike http_response_body (now `@heap`
+ * owned), this returns a pointer into the response and does NOT retain, so it
+ * must not be read after http_response_free. */
 const char* http_response_body_str(HttpResponse* response) {
-    return http_response_body(response);
+    if (!response || !response->body) return "";
+    const char* s = string_to_cstr(response->body);
+    return s ? s : "";
 }
 
 const char* http_response_headers_str(HttpResponse* response) {

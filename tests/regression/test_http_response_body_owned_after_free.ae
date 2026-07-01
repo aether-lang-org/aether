@@ -1,0 +1,59 @@
+// Regression: client.response_body() returns an OWNED string that survives
+// response_free(). Guards the fix for the "read body after free" footgun
+// (http-response-body-uaf-priority-ask.md / serve-and-dial Finding 2): the
+// body used to be a pointer borrowed from the response, so freeing the
+// response first left `body` dangling and it read as garbage. With the
+// `@heap` extern annotation + a retained AetherString on the C side, the body
+// outlives the response.
+//
+// Self-contained: an in-process server on an actor, a single client GET, then
+// deliberately response_free BEFORE reading the body — the anti-pattern that
+// used to corrupt. Asserts the body is still intact.
+
+import std.http.client
+import std.http
+import std.string
+
+extern exit(code: int)
+extern http_server_start_background_raw(server: ptr) -> int
+
+const PORT = 18599
+
+handle_echo(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "OWNED-BODY-SURVIVES-FREE")
+}
+
+main() {
+    s = http.server_create(PORT)
+    http.server_set_host(s, "127.0.0.1")
+    http.server_get(s, "/e", handle_echo, 0)
+    if s == 0 {
+        println("FAIL: server_create null")
+        exit(1)
+    }
+    http_server_start_background_raw(s)
+    sleep(400)
+
+    rq = client.request("GET", "http://127.0.0.1:${PORT}/e")
+    client.set_timeout(rq, 5s)
+    resp, err = client.send_request(rq)
+    client.request_free(rq)
+    if err != "" {
+        println("FAIL: send_request: ${err}")
+        exit(2)
+    }
+
+    // Grab the body, then FREE the response BEFORE reading it. This is the
+    // exact anti-pattern that used to yield garbage; the owned string must
+    // still be valid here.
+    body = client.response_body(resp)
+    client.response_free(resp)
+
+    if string.contains(body, "OWNED-BODY-SURVIVES-FREE") == 1 {
+        println("PASS: body survived response_free")
+        exit(0)
+    }
+    println("FAIL: body corrupt after free: ${body}")
+    exit(3)
+}
