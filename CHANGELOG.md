@@ -5,9 +5,24 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.339.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **`client.response_body()` now returns an OWNED string — safe to read after
+  `response_free()`.** The body was a pointer *borrowed* from the response, so a
+  caller that freed the response before reading the body got garbage or a crash
+  (surfaced by the aeo orchestrator's serve-and-dial agents, where an in-handler
+  client call's body was read after free). `http_response_body` now retains the
+  response's `AetherString` and is annotated `@heap` on the Aether side, so the
+  returned string outlives `response_free` and is released automatically at
+  scope exit. The borrowed C variant remains as `http_response_body_str` for the
+  `_str`/reverse-proxy callers that copy-on-use. Regression:
+  `tests/regression/test_http_response_body_owned_after_free.ae`.
 
 ## [0.339.0]
 

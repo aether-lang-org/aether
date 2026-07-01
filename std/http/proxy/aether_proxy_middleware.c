@@ -50,6 +50,7 @@ extern void http_request_free_raw(HttpClientRequest* req);
 extern HttpClientResponse* http_send_raw(HttpClientRequest* req);
 extern int  http_response_status(HttpClientResponse* response);
 extern const char* http_response_body(HttpClientResponse* response);
+extern const char* http_response_body_str(HttpClientResponse* response);
 extern int  http_response_body_length(HttpClientResponse* response);
 extern const char* http_response_headers(HttpClientResponse* response);
 extern const char* http_response_error(HttpClientResponse* response);
@@ -685,10 +686,12 @@ int aether_middleware_reverse_proxy(HttpRequest* req,
     /* Body — length-aware (binary-safe). `http_response_body_length`
      * exposes the AetherString's stored byte count, so payloads with
      * embedded NULs (gzip, protobuf, images, length-prefixed binary
-     * formats) round-trip verbatim. The body pointer remains a
-     * `const char*` for ABI continuity; the partner length is what
-     * makes the read binary-safe. */
-    const char* body = http_response_body(upstream);
+     * formats) round-trip verbatim. Use the BORROWED `_str` accessor: it
+     * returns a plain `const char*` into the response that we immediately
+     * copy via http_response_set_body_n below, before http_response_free
+     * (unlike http_response_body, which now hands back a retained
+     * AetherString for Aether callers). */
+    const char* body = http_response_body_str(upstream);
     int body_length = http_response_body_length(upstream);
     if (body_length > opts->max_body_bytes) {
         http_response_set_status(res, 502);

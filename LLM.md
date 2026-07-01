@@ -223,6 +223,21 @@ plays that role), no interfaces.
   next same-kind call or explicit release. If it smells like `ptr`,
   assume borrowed; if it smells like `string` from a builtin, assume
   ref-counted.
+- **`@heap` on a `-> string` extern makes its return OWNED.** By default an
+  `extern f() -> string` return is *borrowed* (see above) — a raw pointer the
+  caller must copy-before-free. Annotate the extern return `@heap` (`extern
+  http_response_body(r: ptr) -> string @heap`; `@borrow` is the explicit
+  default) and codegen tracks the result as a heap string (`_heap_<var>=1`) and
+  releases it at scope exit via `aether_heap_str_free` — which dispatches on the
+  AetherString magic header, so the C side must return a *real* `AetherString*`
+  (retain it if it's aliasing something the callee will free). This is what lets
+  a value survive its source being freed. `std.http.client.response_body` is now
+  `@heap`-owned for exactly this reason: reading the body *after*
+  `response_free(resp)` is safe (the old borrowed pointer dangled — the
+  serve-and-dial "garbled body" footgun). The borrowed C variant lives on as
+  `http_response_body_str` for `_str`/proxy callers that copy-on-use. When you
+  need a callee-freed extern string to outlive the callee, reach for `@heap` +
+  a retained AetherString rather than a TLS/split-accessor dance.
 - **`extern f() -> ptr` type-erases length.** Aether strings are
   length-aware internally, but once they cross an extern boundary
   as `ptr`, Aether sees only the leading bytes up to the first
@@ -337,16 +352,17 @@ workaround — they cover cases a porter often hand-rolls.
   AetherUIDriver HTTP test server. Was `contrib/aether_ui/` in this
   repo until the spin-out; now consumes Aether the same way external
   users do (install + `$(ae cflags)`). Useful reference for the
-  embedded-DSL pattern: the toolkit's surface IS a closure-DSL.
+  embedded-DSL pattern: the toolkit's surface IS a closure-DSL (think QML or Flutter)
 - **aeb** (`https://github.com/aether-lang-org/aeb` locally: ../aeb) 
-  — multi-package
-  build system, the second of three ecosystem siblings (language / build
-  runner / orchestrator). Reads `share/aether/MANIFEST` to discover
+  — multi-package and multi-language build system, the second major sibling. 
+  Could be a rival to Bazel maybe, but stopping short of reproduciblity.  
+  Reads `share/aether/MANIFEST` to discover
   link-suitable runtime/stdlib `.c` files and orchestrates per-package
   compile + cache + incremental relink. The MANIFEST contract
   (`docs/install-layout.md`) was carved out specifically to support aeb
   without forcing it to guess via `find -name '*.c'`. If you're touching
   install-layout / shipped source / link contract, ping aeb side.
+  See also google-monorepo-sim (../google-monorepo-sim) which showcases aeb.
 - **aeo** (`https://github.com/aether-lang-org/aeo` - locally: ../aeo) 
   — the third major sibling:
   an infrastructure orchestrator that stands up / tears down a dependency-
@@ -356,6 +372,7 @@ workaround — they cover cases a porter often hand-rolls.
   *built by* aeb and shells *to* aeb across a plain artifact+CLI seam. Its
   compose surface is the `config IS code` closure-DSL applied to live
   infra — the canonical proof the DSL pitch works beyond config files.
+  Has an `aeo-agent` and attempt to adhere to the principles of containment.
 - **aeocha** (`https://github.com/aether-lang-org/aeocha` locally: ../aeocha)
   — BDD-style test framework for Aether (`describe` / `it` / `before_each` /
   `after_each` via trailing blocks + closures, Cuppa-inspired). The
@@ -466,7 +483,7 @@ workaround — they cover cases a porter often hand-rolls.
 - **Stale `~/.aether/cache`.** `ae build`/`ae run` cache compiled binaries by
   source hash; if behaviour seems impossibly stale after an edit (or after
   switching branches), `rm -rf ~/.aether/cache`. `make clean && make -j$(nproc)`
-  is the full reset to known-good.
+  is the full reset to known-good. Maybe this should be investigated.
 
 ## Branch / PR conventions
 

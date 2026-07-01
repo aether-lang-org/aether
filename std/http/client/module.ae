@@ -78,7 +78,7 @@ extern http_request_free_raw(req: ptr)
 extern http_send_raw(req: ptr) -> ptr
 
 extern http_response_status(response: ptr) -> int
-extern http_response_body(response: ptr) -> string
+extern http_response_body(response: ptr) -> string @heap
 extern http_response_body_length(response: ptr) -> int
 extern http_response_headers(response: ptr) -> string
 extern http_response_error(response: ptr) -> string
