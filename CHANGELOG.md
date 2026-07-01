@@ -5,11 +5,11 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [current]`. When a PR merges to
+**Workflow**: New changes go under `## [0.341.0]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [current]
+## [0.341.0]
 
 ### Fixed
 
