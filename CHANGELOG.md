@@ -13,6 +13,41 @@ next version number before tagging the release.
 
 ### Added
 
+- **Result-type error handling: `-> T!`, `or`, and `!`** (#913). `-> T!` names
+  the existing `(value, string)` result-tuple convention and adds ergonomic
+  sugar for the three things you do with a fallible call, with no hidden
+  machinery — `T!` *is* the `(T, string)` tuple, so the sugar and manual
+  destructuring interoperate freely.
+
+  - `return v` in a `T!` function auto-wraps to `(v, "")`; `return v, "msg"`
+    reports an error.
+  - `expr or default` yields the success value, or `default` on error.
+  - `expr or { ... }` runs a block on error with `err` bound to the message
+    (the block exits via `return`/`break`/`continue`/`panic`, like a `match`
+    arm's block body).
+  - `expr!` propagates: inside a `T!` function it returns `(zero, err)` on a
+    non-empty error slot; elsewhere it is unwrap-or-trap (panics, catchable
+    with `try`/`catch`).
+
+  ```aether
+  safe_divide(a: int, b: int) -> int! {
+      if b == 0 { return 0, "division by zero" }
+      return a / b
+  }
+
+  checked(x: int, d: int) -> int! {
+      return safe_divide(x, d)!        // propagate on error
+  }
+
+  main() {
+      q = safe_divide(10, 0) or -1     // q == -1
+      r = safe_divide(x, y) or {       // `err` bound; block exits
+          println("failed: ${err}")
+          return
+      }
+  }
+  ```
+
 - **Sum / variant types: `type Name = A | B | C` + exhaustive `match`** (#914).
   A tagged union over existing struct variants — "a value that is exactly one
   of N named alternatives." Completes `match` (which was literal-only) with the

@@ -62,6 +62,16 @@ Type* create_tuple_type(int count, ...) {
     return type;
 }
 
+// #913 fallible result `T!`. Represented as the existing `(T, string)`
+// (value, err) tuple so it is ABI-interchangeable with the stdlib convention;
+// the `is_result` flag distinguishes it from a plain 2-tuple so `expr!`
+// propagates (not panics) in a result-returning function and `or {}` applies.
+Type* create_result_type(Type* inner) {
+    Type* t = create_tuple_type(2, inner, create_type(TYPE_STRING));
+    t->is_result = 1;
+    return t;
+}
+
 // #914 sum/variant type. `struct_name` holds the sum's name; the variant
 // Types are filled into `tuple_types[]` by the typechecker once the named
 // variant structs resolve. clone_type/free_type already handle both fields
@@ -287,6 +297,7 @@ Type* clone_type(Type* type) {
     }
     new_type->is_fnptr = type->is_fnptr;
     new_type->compound_node = type->compound_node;  // borrowed; AST owns it.
+    new_type->is_result = type->is_result;          // #913 `T!` marker
 
     return new_type;
 }

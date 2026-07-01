@@ -3391,6 +3391,22 @@ static void emit_return_value(CodeGenerator* gen, ASTNode* stmt) {
         emit_sum_coerced(gen, stmt->children[0], gen->current_func_return_type);
         return;
     }
+    // #913: `return value` from a `T!` function wraps the success value into
+    // the `(value, "")` result tuple. An explicit `return value, "err"` is a
+    // 2-value return handled by the multi-return path and never reaches here;
+    // a value that is already the result tuple (forwarding another result)
+    // passes through unchanged.
+    if (gen->current_func_return_type &&
+        gen->current_func_return_type->is_result) {
+        ASTNode* v = stmt->children[0];
+        if (!(v->node_type && v->node_type->kind == TYPE_TUPLE)) {
+            fprintf(gen->output, "(%s){ ._0 = ",
+                    get_c_type(gen->current_func_return_type));
+            generate_expression(gen, v);
+            fprintf(gen->output, ", ._1 = \"\" }");
+            return;
+        }
+    }
     if (should_uniform_heap_return(gen, stmt)) {
         emit_uniform_heap_return_expr(gen, stmt->children[0]);
     } else {

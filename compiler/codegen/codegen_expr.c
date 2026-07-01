@@ -1776,6 +1776,50 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             break;
         }
 
+        case AST_OR_ELSE: {
+            /* #913: `fallible or handler`. Evaluate the (value, err) tuple
+             * once; on a non-empty error slot run the handler, else yield the
+             * value. A block handler runs its statements (with `err` bound) and
+             * is expected to exit (return/break/…) — matching the codebase's
+             * block-body convention; a bare expression handler is the default
+             * value. Single-eval via a GCC statement-expression. */
+            if (expr->child_count < 2) break;
+            ASTNode* fallible = expr->children[0];
+            ASTNode* handler = expr->children[1];
+            Type* tup = fallible->node_type;
+            if (!tup || tup->kind != TYPE_TUPLE || tup->tuple_count < 2 ||
+                !tup->tuple_types[0]) {
+                generate_expression(gen, fallible);   // malformed; already flagged
+                break;
+            }
+            const char* tuple_c = get_c_type(tup);
+            const char* val_c = get_c_type(tup->tuple_types[0]);
+            int err_idx = tup->tuple_count - 1;
+            static int oe_counter = 0;
+            int id = oe_counter++;
+            fprintf(gen->output, "({ %s _oe%d = ", tuple_c, id);
+            generate_expression(gen, fallible);
+            fprintf(gen->output, "; %s _oer%d;\nif (_oe%d._%d && _oe%d._%d[0]) {\n",
+                    val_c, id, id, err_idx, id, err_idx);
+            if (handler->type == AST_BLOCK) {
+                /* Block statements emit their own `#line` directives, which
+                 * must begin a line — hence the newlines bracketing them. */
+                fprintf(gen->output, "const char* err = _oe%d._%d; (void)err;\n",
+                        id, err_idx);
+                for (int j = 0; j < handler->child_count; j++) {
+                    generate_statement(gen, handler->children[j]);
+                }
+                fprintf(gen->output, "\n");
+            } else {
+                fprintf(gen->output, "_oer%d = ", id);
+                generate_expression(gen, handler);
+                fprintf(gen->output, ";\n");
+            }
+            fprintf(gen->output, "} else { _oer%d = _oe%d._0; } _oer%d; })",
+                    id, id, id);
+            break;
+        }
+
         case AST_TUPLE_UNWRAP: {
             /* `expr!` — unwrap-or-trap. Emit a GCC statement-expression
              * that evaluates the tuple once, panics if the trailing
@@ -1822,10 +1866,25 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             fprintf(gen->output, "({ %s _unw%d = ", tuple_c, uid);
             generate_expression(gen, operand);
             fprintf(gen->output, "; ");
-            fprintf(gen->output,
-                    "if (_unw%d._%d && _unw%d._%d[0]) "
-                    "aether_panic(_unw%d._%d); ",
-                    uid, err_idx, uid, err_idx, uid, err_idx);
+            /* #913: `expr!` on a (value, err) result. In a function whose
+             * return type is itself a result (`T!`), PROPAGATE — return the
+             * enclosing result with the error slot set (value slot zero-init),
+             * V-style one-char propagation. Otherwise keep the unwrap-or-PANIC
+             * semantics, so `expr!` in a non-result function is unchanged. The
+             * `return` inside the statement-expression returns from the
+             * enclosing function, which is exactly the propagation we want. */
+            if (gen->current_func_return_type &&
+                gen->current_func_return_type->is_result) {
+                fprintf(gen->output,
+                        "if (_unw%d._%d && _unw%d._%d[0]) return (%s){ ._1 = _unw%d._%d }; ",
+                        uid, err_idx, uid, err_idx,
+                        get_c_type(gen->current_func_return_type), uid, err_idx);
+            } else {
+                fprintf(gen->output,
+                        "if (_unw%d._%d && _unw%d._%d[0]) "
+                        "aether_panic(_unw%d._%d); ",
+                        uid, err_idx, uid, err_idx, uid, err_idx);
+            }
             fprintf(gen->output, "_unw%d._0; })", uid);
             break;
         }

@@ -950,6 +950,54 @@ checked_op(x: int) -> {
 }
 ```
 
+#### The `T!` result type and `or` / `!` sugar (issue #913)
+
+`-> T!` is shorthand for the `(T, string)` result tuple above — it *names* the
+convention and unlocks ergonomic sugar for the three things you do with a
+fallible call. There is no hidden machinery: `T!` is the same tuple you can
+always destructure by hand, so the sugar and the manual form interoperate
+freely.
+
+```aether
+// `return v` auto-wraps to (v, ""); the error path is explicit.
+safe_divide(a: int, b: int) -> int! {
+    if b == 0 { return 0, "division by zero" }
+    return a / b
+}
+```
+
+**`expr or default` — use the value, or a fallback on error:**
+
+```aether
+q = safe_divide(10, 0) or -1      // q == -1
+```
+
+**`expr or { ... }` — run a block on error, with `err` bound to the message.**
+The block is expected to exit (like a `match` arm's block body): `return`,
+`break`, `continue`, or `panic`. For a computed fallback *value*, use the
+`or <expr>` form instead.
+
+```aether
+q = safe_divide(x, y) or {
+    println("math failed: ${err}")   // `err` is the error string
+    return
+}
+```
+
+**`expr!` — propagate the error.** Inside a function that itself returns `T!`,
+`!` returns `(zero, err)` to the caller when the error slot is non-empty, so an
+inner failure short-circuits without manual `if err != ""` plumbing:
+
+```aether
+checked_divide(x: int, d: int) -> int! {
+    return safe_divide(x, d)!   // forwards safe_divide's error unchanged
+}
+```
+
+Used outside a `T!` function, `expr!` is *unwrap-or-trap*: it panics on a
+non-empty error slot (catchable with `try`/`catch`). Both `!` and `or` accept
+any `(value, err)` tuple, not just `T!` returns.
+
 ### Function contracts: `requires` / `ensures` (issue #348)
 
 Eiffel-style runtime-checked preconditions and postconditions. Clauses appear after the typed return arrow and before the body; each is a single boolean expression, panic on violation.

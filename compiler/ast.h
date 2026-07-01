@@ -218,7 +218,12 @@ typedef enum {
     // #914 sum/variant types. `type Name = A | B | C` — a tagged union over
     // existing struct variants. value = the sum type name; each child is an
     // AST_IDENTIFIER naming a variant struct.
-    AST_SUM_TYPE_DEF
+    AST_SUM_TYPE_DEF,
+    // #913 error handler `expr or { … }` / `expr or default`. children[0] =
+    // the fallible (value, err) expression; children[1] = the handler (a
+    // block that yields a value or exits, or a bare default expression). `err`
+    // is bound inside a block handler.
+    AST_OR_ELSE
 } ASTNodeType;
 
 typedef enum {
@@ -311,6 +316,12 @@ typedef struct Type {
     // look up. NULL on all other types. Borrowed pointer (the AST owns
     // the storage), so don't free on type teardown.
     struct ASTNode* compound_node;
+    // #913: a fallible result type `T!`. Represented as the existing
+    // `(T, string)` (value, err) TUPLE so it is ABI-interchangeable with the
+    // stdlib convention; this flag marks it as a result so `expr!` PROPAGATES
+    // (rather than panics) inside a `T!`-returning function and so an `or {}`
+    // handler / the "must handle" check apply. 0 on a plain tuple.
+    int is_result;
 } Type;
 
 typedef struct ASTNode {
@@ -358,6 +369,7 @@ Type* create_optional_type(Type* inner);   // #340 `T?`
 Type* create_actor_ref_type(Type* actor_type);
 Type* create_tuple_type(int count, ...);  // create_tuple_type(2, type_a, type_b)
 Type* create_sum_type(const char* name);  // #914 `type Name = A | B | C`
+Type* create_result_type(Type* inner);    // #913 fallible `T!` -> (T, string)
 Type* create_function_type(int param_count, Type** param_types, Type* return_type);
 void free_type(Type* type);
 const char* type_to_string(Type* type);
