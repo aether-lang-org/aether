@@ -15,6 +15,7 @@ int tcp_server_close(TcpServer* s) { (void)s; return 0; }
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>   /* snprintf (getaddrinfo port string) */
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -75,21 +76,34 @@ TcpSocket* tcp_connect_raw(const char* host, int port) {
 
     net_init();
 
-    struct hostent* server = gethostbyname(host);
-    if (!server) {
-        return NULL;
+    /* getaddrinfo, not gethostbyname: the latter returns a pointer into a
+     * shared, process-static struct, so concurrent connects on different
+     * threads race and corrupt each other's resolved address. getaddrinfo is
+     * thread-safe and returns caller-owned memory. Pinned to AF_INET to match
+     * the sockaddr_in the rest of this function builds. */
+    struct sockaddr_in serv_addr;
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    {
+        char port_str[16];
+        snprintf(port_str, sizeof(port_str), "%d", port);
+        struct addrinfo hints;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family   = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        struct addrinfo* res = NULL;
+        if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+            return NULL;
+        }
+        memcpy(&serv_addr, res->ai_addr, sizeof(struct sockaddr_in));
+        freeaddrinfo(res);
     }
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         return NULL;
     }
-
-    struct sockaddr_in serv_addr;
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
-    serv_addr.sin_port = htons(port);
 
     if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
         close(sockfd);

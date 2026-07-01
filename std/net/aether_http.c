@@ -477,23 +477,41 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
 #endif
     }
 
-    struct hostent* server = gethostbyname(host);
-    if (!server) {
-        response->error = string_new("could not resolve host");
-        return response;
+    /* Resolve via getaddrinfo, NOT gethostbyname: gethostbyname returns a
+     * pointer into a shared, process-static `struct hostent`, so two client
+     * calls resolving at once on different threads — e.g. a request handler
+     * that dials out while serving (serve-and-dial), where the inner call runs
+     * on a server worker thread — race on that static buffer and can corrupt
+     * each other's resolved address. getaddrinfo is thread-safe and returns
+     * caller-owned memory freed with freeaddrinfo. Pinned to AF_INET: the rest
+     * of this function builds a sockaddr_in and the timeout/connect path
+     * assumes IPv4, so widening to IPv6 is a separate change. */
+    struct sockaddr_in serv_addr;
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    {
+        char port_str[16];
+        snprintf(port_str, sizeof(port_str), "%d", port);
+        struct addrinfo hints;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family   = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        struct addrinfo* res = NULL;
+        int gai = getaddrinfo(host, port_str, &hints, &res);
+        if (gai != 0 || !res) {
+            response->error = string_new("could not resolve host");
+            return response;
+        }
+        memcpy(&serv_addr, res->ai_addr, sizeof(struct sockaddr_in));
+        freeaddrinfo(res);
     }
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         response->error = string_new("could not create socket");
         return response;
     }
-
-    struct sockaddr_in serv_addr;
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
-    serv_addr.sin_port = htons(port);
 
     /* Connect — with timeout via non-blocking + select when the
      * caller asked for one. Without a timeout, fall through to the
