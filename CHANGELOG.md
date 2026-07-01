@@ -11,6 +11,22 @@ next version number before tagging the release.
 
 ## [0.344.0]
 
+### Fixed
+
+- **Codegen mangles struct/message FIELD names that collide with C keywords**
+  (follow-up to #976). #976 fixed value identifiers; this completes the class
+  for field names. A field named `register`, `signed`, `unsigned`, `volatile`,
+  `static`, `double`, … now compiles instead of emitting `int register;` in the
+  generated struct. The AST pre-pass rewrites the whole field namespace
+  consistently — the field declaration, the struct/message constructor field,
+  the field read (`x.field`), and receive-pattern bindings — so declaration and
+  use never diverge.
+
+  ```aether
+  struct Point { register: int  signed: int }   // was: invalid C
+  message Bump { volatile: int }
+  ```
+
 ## [0.343.0]
 
 ### Fixed
