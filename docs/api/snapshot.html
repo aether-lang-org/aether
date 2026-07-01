@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>snapshot - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search snapshot..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_snapshot_new">aether_snapshot_new</a></li>
+    <li><a href="#aether_snapshot_load">aether_snapshot_load</a></li>
+    <li><a href="#aether_snapshot_store">aether_snapshot_store</a></li>
+    <li><a href="#aether_snapshot_cas">aether_snapshot_cas</a></li>
+    <li><a href="#aether_snapshot_free">aether_snapshot_free</a></li>
+    <li><a href="#new">new</a></li>
+    <li><a href="#load">load</a></li>
+    <li><a href="#store">store</a></li>
+    <li><a href="#cas">cas</a></li>
+    <li><a href="#free">free</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li class="active"><a href="snapshot.html">snapshot</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>snapshot</h1>
+    <p class="module-desc">std.snapshot — copy-on-write snapshot cell for read-mostly shared data.</p>
+    <p class="import-line"><code>import std.snapshot</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_snapshot_new" data-name="aether_snapshot_new">
+      <h3 class="function-name">aether_snapshot_new <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_snapshot_new(initial) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">initial: ptr</span></p>
+      <p class="doc">Create a cell pointing at `initial` (may be null). Returns the cell handle, or null on allocation failure / memory-cap exceeded. Does NOT take ownership of `initial`.</p>
+    </div>
+    <div class="function" id="aether_snapshot_load" data-name="aether_snapshot_load">
+      <h3 class="function-name">aether_snapshot_load <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_snapshot_load(cell) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cell: ptr</span></p>
+      <p class="doc">Lock-free read: atomic acquire load of the current snapshot. Returns null for a null cell.</p>
+    </div>
+    <div class="function" id="aether_snapshot_store" data-name="aether_snapshot_store">
+      <h3 class="function-name">aether_snapshot_store <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_snapshot_store(cell, new_value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cell: ptr, new_value: ptr</span></p>
+      <p class="doc">Publish `new_value` and return the displaced (old) snapshot. The writer now owns the returned pointer and must reclaim it only after a grace period (see the contract above). Null cell returns null.</p>
+    </div>
+    <div class="function" id="aether_snapshot_cas" data-name="aether_snapshot_cas">
+      <h3 class="function-name">aether_snapshot_cas <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_snapshot_cas(cell, expected, new_value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">cell: ptr, expected: ptr, new_value: ptr</span></p>
+      <p class="doc">Compare-and-swap. If the cell holds `expected`, swap in `new_value` and return 1; otherwise return 0 and leave the cell unchanged. On success the caller owns `expected` (reclaim after a grace period); on failure re-load and retry. Null cell returns 0.</p>
+    </div>
+    <div class="function" id="aether_snapshot_free" data-name="aether_snapshot_free">
+      <h3 class="function-name">aether_snapshot_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_snapshot_free(cell)</code></pre>
+      <p class="signature"><span class="sig-params">cell: ptr</span></p>
+      <p class="doc">Free the cell itself. Does NOT free the snapshot it points at — that value is caller-owned. Null-safe.</p>
+    </div>
+    <div class="function" id="new" data-name="new">
+      <h3 class="function-name">new <span class="kind">fn</span></h3>
+      <pre class="usage"><code>new(initial) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">initial: ptr</span></p>
+      <p class="doc">snapshot.new(initial) — wrap an immutable value pointer in a cell.</p>
+    </div>
+    <div class="function" id="load" data-name="load">
+      <h3 class="function-name">load <span class="kind">fn</span></h3>
+      <pre class="usage"><code>load(cell) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cell: ptr</span></p>
+      <p class="doc">snapshot.load(cell) — lock-free read of the current snapshot.</p>
+    </div>
+    <div class="function" id="store" data-name="store">
+      <h3 class="function-name">store <span class="kind">fn</span></h3>
+      <pre class="usage"><code>store(cell, new_value) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">cell: ptr, new_value: ptr</span></p>
+      <p class="doc">snapshot.store(cell, new_value) — publish `new_value`, returning the displaced snapshot for the writer to reclaim after a grace period.</p>
+    </div>
+    <div class="function" id="cas" data-name="cas">
+      <h3 class="function-name">cas <span class="kind">fn</span></h3>
+      <pre class="usage"><code>cas(cell, expected, new_value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">cell: ptr, expected: ptr, new_value: ptr</span></p>
+      <p class="doc">snapshot.cas(cell, expected, new_value) — read-modify-write CAS; returns 1 on success, 0 on failure. Loop pattern (writer-actor): loop { cur = snapshot.load(cell) next = build_next_from(cur)   // pure, allocates `next` if snapshot.cas(cell, cur, next) == 1 { // `cur` is now displaced — reclaim it after a grace // period (e.g. defer one generation), NOT immediately. break } // lost the race: free our unused `next` and retry free_value(next) }</p>
+    </div>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">fn</span></h3>
+      <pre class="usage"><code>free(cell)</code></pre>
+      <p class="signature"><span class="sig-params">cell: ptr</span></p>
+      <p class="doc">snapshot.free(cell) — free the cell. Does NOT free the snapshots.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>
