@@ -1,36 +1,44 @@
 // Error Handling with Result Types
 //
 // Aether uses Go-style multiple return values for error handling.
-// Functions that can fail return (value, error) tuples.
-// The error is a string: "" means no error, non-empty means failure.
+// Functions that can fail return (value, error) tuples. The error is a
+// string: "" means no error, non-empty means failure.
 //
-// Pattern: check error first, handle it (return/exit), then continue.
-// No else needed — keeps the code flat and readable.
+// The `-> T!` return type names that convention: it is exactly the
+// `(T, string)` result tuple, plus ergonomic sugar for the common cases:
+//   result   or default   -- use the value, or a fallback on error
+//   result   or { ... }    -- run a block (with `err` bound) on error
+//   result!                -- propagate the error up (or panic at top level)
+//
+// Under the hood there is no hidden machinery: `T!` is the same tuple you
+// can always destructure by hand. Pick whichever reads best.
 
-safe_divide(a: int, b: int) -> {
+import std.string
+
+// A fallible function. `return a / b` auto-wraps to `(a / b, "")`; the
+// error path returns an explicit message.
+safe_divide(a: int, b: int) -> int! {
     if b == 0 {
         return 0, "cannot divide by zero"
     }
-    return a / b, ""
+    return a / b
 }
 
-// Chain: propagate errors from inner calls
-checked_divide(input: int, divisor: int) -> {
+// Propagate with `!`: if safe_divide fails, checked_divide returns its
+// error unchanged — no manual `if err != ""` plumbing.
+checked_divide(input: int, divisor: int) -> int! {
     if input < 0 {
         return 0, "input must be non-negative"
     }
-    result, err = safe_divide(input, divisor)
-    if err != "" {
-        return 0, err
-    }
-    return result, ""
+    return safe_divide(input, divisor)!
 }
 
 main() {
     println("=== Error Handling Demo ===")
     println("")
 
-    // Basic pattern: check error, bail if needed, continue
+    // 1. Manual form — destructure the tuple and check the error.
+    //    Always available; nothing is hidden.
     result, err = safe_divide(10, 3)
     if err != "" {
         println("Error: ${err}")
@@ -38,34 +46,15 @@ main() {
     }
     println("10 / 3 = ${result}")
 
-    // Error case — handle and continue
-    _, err2 = safe_divide(10, 0)
-    if err2 != "" {
-        println("Caught: ${err2}")
+    // 2. `or default` — use the value, or a fallback when it fails.
+    quotient = safe_divide(10, 0) or -1
+    println("10 / 0 (or -1) = ${quotient}")
+
+    // 3. `or { ... }` — run a block on error, with `err` bound to the
+    //    message. Handy for logging before falling back or bailing.
+    safe = safe_divide(10, 0) or {
+        println("Caught: ${err}")
+        return
     }
-
-    // Discard error with _ when you know it won't fail
-    val, _ = safe_divide(42, 7)
-    println("42 / 7 = ${val}")
-
-    // Chained error propagation
-    v1, e1 = checked_divide(100, 5)
-    if e1 != "" {
-        println("Chain error: ${e1}")
-        exit(1)
-    }
-    println("checked 100/5 = ${v1}")
-
-    _, e2 = checked_divide(10, 0)
-    if e2 != "" {
-        println("Chain caught: ${e2}")
-    }
-
-    _, e3 = checked_divide(0 - 1, 5)
-    if e3 != "" {
-        println("Chain caught: ${e3}")
-    }
-
-    println("")
-    println("Done.")
+    println("unreachable when the divide fails: ${safe}")
 }

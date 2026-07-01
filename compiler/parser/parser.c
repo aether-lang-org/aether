@@ -275,6 +275,15 @@ Type* parse_type(Parser* parser) {
         advance_token(parser);
         t = create_optional_type(t);
     }
+    // #913: a postfix `!` makes the type a fallible result (`string!`,
+    // `int!`), symmetric with the `?` optional suffix above. In type position
+    // `!` is unambiguous (the unwrap/propagate `!` only appears in
+    // expressions). `T!` lowers to the existing `(T, string)` (value, err)
+    // tuple, so it interops with the stdlib convention.
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_EXCLAIM) {
+        advance_token(parser);
+        t = create_result_type(t);
+    }
     return t;
 }
 
@@ -1437,7 +1446,33 @@ static int operator_starts_newline(Parser* parser, Token* op) {
 }
 
 ASTNode* parse_expression(Parser* parser) {
-    return parse_binary_expression(parser, 0);
+    ASTNode* expr = parse_binary_expression(parser, 0);
+    if (!expr) return NULL;
+    // #913: postfix error handler `expr or { … }` / `expr or <default>`. `or`
+    // is a CONTEXTUAL keyword — still a valid identifier elsewhere (`byte or =
+    // …`) — recognised only here, in value position, on the same line (so a
+    // bare expression followed by a statement that happens to start with an
+    // `or`-named identifier stays two statements). The LHS is a fallible
+    // `(value, err)` / `T!` expression; the handler runs when the error slot
+    // is non-empty, binding `err`, and yields a value or exits (return/…).
+    Token* t = peek_token(parser);
+    if (t && t->type == TOKEN_IDENTIFIER && t->value &&
+        strcmp(t->value, "or") == 0 && !operator_starts_newline(parser, t)) {
+        advance_token(parser);  // consume contextual 'or'
+        ASTNode* handler;
+        Token* nx = peek_token(parser);
+        if (nx && nx->type == TOKEN_LEFT_BRACE) {
+            handler = parse_block(parser);
+        } else {
+            handler = parse_expression(parser);   // bare default value
+        }
+        if (!handler) return NULL;
+        ASTNode* oe = create_ast_node(AST_OR_ELSE, NULL, expr->line, expr->column);
+        add_child(oe, expr);
+        add_child(oe, handler);
+        return oe;
+    }
+    return expr;
 }
 
 ASTNode* parse_binary_expression(Parser* parser, int precedence) {

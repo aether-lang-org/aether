@@ -1114,6 +1114,22 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             return result;
         }
 
+        case AST_OR_ELSE: {
+            // #913: `fallible or handler` yields the fallible's success value
+            // type (the first slot of its (value, err) tuple).
+            if (expr->child_count < 1 || !expr->children[0])
+                return create_type(TYPE_UNKNOWN);
+            Type* operand = infer_type(expr->children[0], table);
+            Type* result = create_type(TYPE_UNKNOWN);
+            if (operand && operand->kind == TYPE_TUPLE &&
+                operand->tuple_count >= 1 && operand->tuple_types[0]) {
+                free_type(result);
+                result = clone_type(operand->tuple_types[0]);
+            }
+            if (operand) free_type(operand);
+            return result;
+        }
+
         case AST_NULL_LITERAL:
             return create_type(TYPE_PTR);
 
@@ -4737,6 +4753,38 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             if (expr->node_type) free_type(expr->node_type);
             expr->node_type = create_optional_type(ft ? ft : create_type(TYPE_UNKNOWN));
             free_type(o);
+            return 1;
+        }
+
+        case AST_OR_ELSE: {
+            // #913: `fallible or handler`. The LHS must be a fallible
+            // `(value, err)` / `T!` expression. A block handler runs when the
+            // error slot is non-empty (with `err` bound) and yields a value or
+            // exits; a bare expression is a default value. The whole
+            // expression's type is the success value type.
+            if (expr->child_count < 2) return 0;
+            typecheck_expression(expr->children[0], table);
+            Type* op = infer_type(expr->children[0], table);
+            if (!op || op->kind != TYPE_TUPLE || op->tuple_count < 2) {
+                type_error("`or` requires a fallible `(value, err)` / `T!` "
+                           "expression on its left", expr->line, expr->column);
+                if (op) free_type(op);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            ASTNode* handler = expr->children[1];
+            if (handler && handler->type == AST_BLOCK) {
+                SymbolTable* h = create_symbol_table(table);
+                add_symbol(h, "err", create_type(TYPE_STRING), 0, 0, 0);
+                typecheck_statement(handler, h);
+                free_symbol_table(h);
+            } else if (handler) {
+                typecheck_expression(handler, table);
+            }
+            if (expr->node_type) free_type(expr->node_type);
+            expr->node_type = op->tuple_types[0] ? clone_type(op->tuple_types[0])
+                                                  : create_type(TYPE_UNKNOWN);
+            free_type(op);
             return 1;
         }
 
