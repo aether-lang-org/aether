@@ -415,6 +415,22 @@ workaround — they cover cases a porter often hand-rolls.
   wires many FFI consumers through one `aeb` run. Aether-side entry is
   `import core.vcr` — it's a separate repo, not part of `std.http` (the
   HTTP-client idiom above says the same).
+- **zsync-port** (`https://github.com/aether-lang-org/zsync-port` locally: ../zsync)
+  — a pure-Aether port of zsync (rsync-over-HTTP: fetch only the changed blocks
+  of a file, driven by a `.zsync` control file). ~3.4k lines of Aether + one
+  small Artistic-licensed C shim (`rcksum/fileio.c`, positional file I/O); the
+  rolling-checksum engine, control-file format, HTTP-range downloader, and a
+  native test file server are all Aether over `std.http` (client + server) and
+  `std.cryptography` (MD4/SHA-1). Notable as the **speed-of-port exemplar**: a
+  Go→Aether port done by a sibling Claude in ~4h, built leaf-first and
+  parity-gated byte-exact against the original Go (`legacy_golang` branch is the
+  oracle), which surfaced three stdlib gaps filed + landed upstream (#637 md4_hex,
+  #640, #641). Also the **licensing-boundary** case: it's **Artistic-2.0, NOT
+  MIT** — keep its import graph free of MIT aeb/aeocha *modules*, but building it
+  *with* aeb (a tool, like make/gcc) or linking a zsync `.so` is fine and does
+  not relicense (Artistic §7/§8). Builds two ways (Makefile via `build/ae`, or
+  `aeb cmd/zsync/.build.ae`); the aeb path wants the *installed* Aether's nested
+  include layout (dev-tree include-threading is a known aeb gap).
 - **Feature request flow that works**: downstream writes a spec
   (e.g. `import_typer_at_scale.md`, `exprt_structs.md`,
   `stdlib_wish.md`), Aether implements, downstream adopts within the
