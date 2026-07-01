@@ -1,0 +1,89 @@
+// Directory listing — sorted, with per-entry kind (issues #966, #967).
+// Run with: ae run examples/stdlib/dir-listing.ae
+//
+// The pattern behind a file browser or a `du`-style walk:
+//   - dir.list_kind(list, i) reports each entry's type straight from
+//     readdir's d_type (1 file / 2 dir / 3 symlink / 4 other; 0 unknown),
+//     so you skip a stat(2) per entry just to draw a folder-vs-file icon.
+//   - string_list_sort_lex / string_list_sort give a stable order without
+//     hand-rolling a sort (and its get/set aliasing footgun).
+
+import std.dir
+import std.file
+import std.collections
+import std.string
+
+main() {
+    print("=== Directory Listing Demo ===\n\n")
+
+    base = "/tmp/aether_dir_listing_demo"
+    _c = dir.create(base)
+    _s = dir.create("${base}/src")
+    wa = file.write("${base}/README.md", "readme")
+    wb = file.write("${base}/main.ae", "main")
+    wc = file.write("${base}/config.toml", "cfg")
+    if wa != "" {
+        println("(skipping: scratch dir not writable: ${wa})")
+        return
+    }
+
+    // List once. Read each entry's kind from the same sweep — no stat.
+    listing, lerr = dir.list(base)
+    if lerr != "" {
+        println("list failed: ${lerr}")
+        return
+    }
+
+    names = string_list_new()
+    n = dir.list_count(listing)
+    i = 0
+    while i < n {
+        name = dir.list_get(listing, i)
+        string_list_add(names, name)
+        i = i + 1
+    }
+
+    // Sort the names lexicographically for a stable display order.
+    string_list_sort_lex(names)
+
+    println("Entries (sorted), with kind from d_type:")
+    j = 0
+    m = string_list_size(names)
+    while j < m {
+        entry = string_list_get(names, j)
+        // Re-derive the kind for this name from the original listing.
+        kind = 0
+        k = 0
+        while k < n {
+            if string.equals(dir.list_get(listing, k), entry) == 1 {
+                kind = dir.list_kind(listing, k)
+            }
+            k = k + 1
+        }
+        label = "file"
+        if kind == 2 { label = "dir " }
+        if kind == 3 { label = "link" }
+        println("  [${label}] ${entry}")
+        j = j + 1
+    }
+
+    // Sort by descending name length via a comparator closure.
+    string_list_sort(names, |a: string, b: string| {
+        return string.length(b) - string.length(a)
+    })
+    println("")
+    println("Longest name: ${string_list_get(names, 0)}")
+
+    string_list_free(names)
+    dir.list_free(listing)
+
+    // Cleanup.
+    _ra = file.delete("${base}/README.md")
+    _rb = file.delete("${base}/main.ae")
+    _rc = file.delete("${base}/config.toml")
+    _rs = dir.delete("${base}/src")
+    _rd = dir.delete(base)
+
+    println("")
+    println("Done.")
+}

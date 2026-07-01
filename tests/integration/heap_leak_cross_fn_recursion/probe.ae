@@ -25,11 +25,24 @@ main() {
         return
     }
 
-    // Warm-up.
-    _w = dirwalk.rebuild_dir(3, 5)
-    if string.length(_w) < 100 {
-        println("FAIL: warm-up too short: ${string.length(_w)}")
-        exit(1)
+    // Warm-up LOOP. A single call leaves the allocator's arenas to grow
+    // *inside* the measured loop, and max_rss (a page-granular high-water
+    // mark that never decreases) then misattributes that one-time arena
+    // growth as per-call leakage — a false positive that made this test
+    // flaky on macOS (~500-768 KB of pure fragmentation). Running enough
+    // warm-up iterations first lets the arenas reach steady state before
+    // rss0 is sampled, so rss1 - rss0 reflects genuine per-call retention.
+    // (`leaks --atExit` independently confirms 0 leaked bytes; this test's
+    // job is to catch the O(N^2) retained-buffer *growth* the codegen fix
+    // addressed, which would dwarf the threshold regardless.)
+    w = 0
+    while w < 300 {
+        _wv = dirwalk.rebuild_dir(3, 5)
+        if string.length(_wv) < 100 {
+            println("FAIL: warm-up too short: ${string.length(_wv)}")
+            exit(1)
+        }
+        w = w + 1
     }
 
     rss0 = getrusage_max_rss_kb()

@@ -207,11 +207,23 @@ typedef struct {
      * size; the per-entry strdup'd names are freed via strlen at
      * dir_list_free time. */
     int capacity;
+    /* #966: per-entry file kind (parallel to `entries`), read straight
+     * from readdir's `d_type` / Windows `dwFileAttributes` so callers
+     * can distinguish files from directories without a stat(2) per entry.
+     * Same encoding as fs_stat_raw's out_kind: 0 unknown, 1 file, 2 dir,
+     * 3 symlink, 4 other. 0 when the filesystem doesn't report a type
+     * (DT_UNKNOWN) — the caller then stats only those. Allocated to
+     * `capacity` ints alongside `entries`. */
+    int* kinds;
 } DirList;
 
 DirList* dir_list_raw(const char* path);
 int dir_list_count(DirList* list);
 const char* dir_list_get(DirList* list, int index);
+// #966: file kind of entry `index` (0 unknown / 1 file / 2 dir /
+// 3 symlink / 4 other), from readdir's d_type. Turns an O(N)-syscall
+// "stat every entry" directory read into a single readdir sweep.
+int dir_list_kind(DirList* list, int index);
 void dir_list_free(DirList* list);
 
 // Glob: match files by pattern (e.g., "src/**/*.c")

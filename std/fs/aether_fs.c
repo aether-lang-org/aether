@@ -91,6 +91,7 @@ const char* fs_fsync_raw(File* f) { (void)f; return "fs unavailable"; }
 DirList* dir_list_raw(const char* p) { (void)p; return NULL; }
 int dir_list_count(DirList* l) { (void)l; return 0; }
 const char* dir_list_get(DirList* l, int i) { (void)l; (void)i; return NULL; }
+int dir_list_kind(DirList* l, int i) { (void)l; (void)i; return 0; }
 void dir_list_free(DirList* l) { (void)l; }
 DirList* fs_glob_raw(const char* p) { (void)p; return NULL; }
 DirList* fs_glob_multi_raw(void* l) { (void)l; return NULL; }
@@ -1733,6 +1734,36 @@ static char* fs_caps_strdup(const char* s) {
     return p;
 }
 
+/* #966: map readdir's d_type to fs_stat_raw's kind encoding
+ * (1 file / 2 dir / 3 symlink / 4 other), 0 when the FS doesn't report
+ * one (DT_UNKNOWN) so the caller stats only those. */
+#ifndef _WIN32
+static int fs_dtype_to_kind(unsigned char dt) {
+#ifdef DT_DIR
+    switch (dt) {
+        case DT_REG:  return FS_STAT_KIND_FILE;
+        case DT_DIR:  return FS_STAT_KIND_DIR;
+        case DT_LNK:  return FS_STAT_KIND_SYMLINK;
+        case DT_FIFO:
+        case DT_SOCK:
+        case DT_CHR:
+        case DT_BLK:  return FS_STAT_KIND_OTHER;
+        default:      return 0;   /* DT_UNKNOWN or unrecognised */
+    }
+#else
+    (void)dt;
+    return 0;   /* platform lacks d_type; caller falls back to stat */
+#endif
+}
+#else
+/* #966: same mapping from Windows' dwFileAttributes. */
+static int fs_winattr_to_kind(DWORD attr) {
+    if (attr & FILE_ATTRIBUTE_REPARSE_POINT) return FS_STAT_KIND_SYMLINK;
+    if (attr & FILE_ATTRIBUTE_DIRECTORY)     return FS_STAT_KIND_DIR;
+    return FS_STAT_KIND_FILE;
+}
+#endif
+
 // Directory listing
 DirList* dir_list_raw(const char* path) {
     if (!path) return NULL;
@@ -1745,6 +1776,7 @@ DirList* dir_list_raw(const char* path) {
     list->entries = NULL;
     list->count = 0;
     list->capacity = 0;
+    list->kinds = NULL;   /* #966 */
 
     #ifdef _WIN32
     WIN32_FIND_DATAA find_data;
@@ -1770,11 +1802,19 @@ DirList* dir_list_raw(const char* path) {
                     (size_t)new_cap * sizeof(char*));
                 if (!new_entries) break;
                 list->entries = new_entries;
+                /* #966: grow the parallel kinds array in lock-step. */
+                int* new_kinds = (int*)aether_caps_realloc(
+                    list->kinds, (size_t)cap * sizeof(int),
+                    (size_t)new_cap * sizeof(int));
+                if (!new_kinds) break;
+                list->kinds = new_kinds;
                 cap = new_cap;
                 list->capacity = new_cap;
             }
             char* name_copy = fs_caps_strdup(find_data.cFileName);
             if (!name_copy) break;
+            list->kinds[list->count] =                                   /* #966 */
+                fs_winattr_to_kind(find_data.dwFileAttributes);
             list->entries[list->count++] = name_copy;
         }
     } while (FindNextFileA(hFind, &find_data));
@@ -1795,11 +1835,18 @@ DirList* dir_list_raw(const char* path) {
                     (size_t)new_cap * sizeof(char*));
                 if (!new_entries) break;
                 list->entries = new_entries;
+                /* #966: grow the parallel kinds array in lock-step. */
+                int* new_kinds = (int*)aether_caps_realloc(
+                    list->kinds, (size_t)cap * sizeof(int),
+                    (size_t)new_cap * sizeof(int));
+                if (!new_kinds) break;
+                list->kinds = new_kinds;
                 cap = new_cap;
                 list->capacity = new_cap;
             }
             char* name_copy = fs_caps_strdup(entry->d_name);
             if (!name_copy) break;
+            list->kinds[list->count] = fs_dtype_to_kind(entry->d_type);  /* #966 */
             list->entries[list->count++] = name_copy;
         }
     }
@@ -1819,6 +1866,14 @@ const char* dir_list_get(DirList* list, int index) {
     return list->entries[index];
 }
 
+/* #966: file kind of entry `index`, from readdir's d_type. Out-of-range
+ * or a list built before kinds were tracked reports 0 (unknown), so a
+ * caller can safely fall back to stat. */
+int dir_list_kind(DirList* list, int index) {
+    if (!list || !list->kinds || index < 0 || index >= list->count) return 0;
+    return list->kinds[index];
+}
+
 void dir_list_free(DirList* list) {
     if (!list) return;
 
@@ -1830,6 +1885,9 @@ void dir_list_free(DirList* list) {
     }
     if (list->entries)
         aether_caps_free(list->entries, (size_t)list->capacity * sizeof(char*));
+    /* #966: the parallel kinds array is `capacity` ints. */
+    if (list->kinds)
+        aether_caps_free(list->kinds, (size_t)list->capacity * sizeof(int));
     aether_caps_free(list, sizeof(DirList));
 }
 
@@ -1981,6 +2039,7 @@ DirList* fs_glob_raw(const char* pattern) {
     result->entries = NULL;
     result->count = 0;
     result->capacity = 0;
+    result->kinds = NULL;   /* #966: globs carry no d_type; kind stays unknown */
 
 #ifdef _WIN32
     // Check for ** (recursive glob)
@@ -2090,6 +2149,7 @@ DirList* fs_glob_multi_raw(void* pattern_list) {
     result->entries = NULL;
     result->count = 0;
     result->capacity = 0;
+    result->kinds = NULL;   /* #966: globs carry no d_type; kind stays unknown */
 
     int n = list_size(pattern_list);
     for (int i = 0; i < n; i++) {

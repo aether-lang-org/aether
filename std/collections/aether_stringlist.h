@@ -51,4 +51,17 @@ void string_list_clear(StringList* list);
 /* Release every entry then free the list. Idempotent on null. */
 void string_list_free(StringList* list);
 
+/* #967: stable in-place sort by a caller-supplied comparator closure
+ * `fn(string, string) -> int` (negative / 0 / positive for a<b / a==b /
+ * a>b, like strcmp). `cmp_box` is a codegen-boxed `_AeClosure` passed as
+ * a ptr; this function OWNS it and frees it before returning (matching
+ * the seq-combinator convention). Reorders the backing pointers only —
+ * no element is copied or freed — so it sidesteps the get/set aliasing
+ * trap of a hand-rolled swap. No-op (box still freed) on null / OOM. */
+void string_list_sort(StringList* list, void* cmp_box);
+
+/* #967: stable in-place ascending lexicographic (byte-wise `strcmp`)
+ * sort — the common case, no closure needed. No-op on null. */
+void string_list_sort_lex(StringList* list);
+
 #endif

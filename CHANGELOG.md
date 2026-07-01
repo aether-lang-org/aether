@@ -26,6 +26,35 @@ next version number before tagging the release.
 
 ## [0.339.0]
 
+### Added
+
+- **`std.collections`: stable `string_list` sort** (#967). `string_list_sort_lex(list)`
+  sorts ascending byte-wise; `string_list_sort(list, cmp)` sorts by a comparator
+  closure `|a: string, b: string| { ... }` (negative / 0 / positive, like `strcmp`).
+  Both are stable and reorder the backing slots only — no element is copied or
+  freed — so they remove the get/set aliasing footgun of a hand-rolled swap (a
+  naive adjacent swap frees a slot another borrowed pointer still aliases,
+  silently corrupting entries).
+
+  ```aether
+  string_list_sort_lex(names)
+  string_list_sort(names, |a: string, b: string| {
+      return string.length(a) - string.length(b)   // shortest first, stable
+  })
+  ```
+
+- **`std.fs`: `dir_list_kind` exposes readdir's `d_type`** (#966). A directory
+  listing now carries each entry's file kind (1 file / 2 dir / 3 symlink /
+  4 other; 0 unknown), read straight from `readdir`'s `d_type` (Windows'
+  `dwFileAttributes`) — the same encoding `file_stat` returns. Telling files
+  from directories no longer costs an N-entry `stat(2)` sweep; a file browser
+  or tree walk gets it from the single `readdir`.
+
+  ```aether
+  list, err = dir.list(path)
+  kind = dir.list_kind(list, i)   // 2 == directory, no stat needed
+  ```
+
 ## [0.338.0]
 
 ### Added

@@ -32,7 +32,7 @@ exports (
     fs_try_stat, fs_get_stat_kind, fs_get_stat_size, fs_get_stat_mtime,
     fs_try_read_binary, fs_get_read_binary, fs_get_read_binary_length,
     fs_release_read_binary, fs_read_binary_tuple,
-    dir_list_count, dir_list_get, dir_list_free,
+    dir_list_count, dir_list_get, dir_list_kind, dir_list_free,
     path_join, path_dirname, path_basename, path_extension, path_is_absolute,
     path_clean, path_is_within_base, path_rel,
     clean, is_within_base, rel, join_clean, first_element,
@@ -221,6 +221,12 @@ extern fs_chmod_raw(path: string, mode: int) -> (int, int, string)
 
 extern dir_list_count(list: ptr) -> int
 extern dir_list_get(list: ptr, index: int) -> string
+// #966: file kind of entry `index`, straight from readdir's d_type — no
+// stat(2) needed. Same encoding as file_stat's kind: 1 = regular file,
+// 2 = directory, 3 = symlink (target not followed), 4 = other (fifo /
+// socket / device). 0 = unknown: the filesystem didn't report a type
+// (rare) — stat that entry to resolve it.
+extern dir_list_kind(list: ptr, index: int) -> int
 extern dir_list_free(list: ptr)
 
 // Path utilities - pure functions, never fail

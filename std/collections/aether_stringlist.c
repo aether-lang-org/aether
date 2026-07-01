@@ -128,3 +128,108 @@ void string_list_free(StringList* list) {
     }
     aether_caps_free(list, sizeof(StringList));
 }
+
+/* #967: sort support.
+ *
+ * The reorder strategy sidesteps the get/set aliasing footgun (issue
+ * #967): `string_list_get` hands back the slot's internal pointer and a
+ * naive adjacent-swap frees a slot that another borrowed pointer still
+ * aliases. Instead we snapshot the borrowed element pointers into a
+ * scratch array, sort the scratch (a permutation of the same pointers),
+ * then write them back with `list_set` — which only overwrites the slot
+ * pointer (never frees). No element is copied or freed, so the pointer
+ * set is preserved exactly: no leak, no double-free, no read-after-free.
+ */
+
+/* Layout-compatible view of the codegen's boxed `_AeClosure`
+ * (see std/collections/aether_stringseq.c and codegen.c's prologue):
+ *     typedef struct { void (*fn)(void); void* env; } _AeClosure;
+ * `env` is the implicit first argument to `fn`. */
+typedef struct { void (*fn)(void); void* env; } AeStrListClosure;
+
+/* Free a boxed comparator closure — the callee owns it, matching the
+ * seq-combinator convention. NULL-safe. */
+static void sl_closure_free(void* box) {
+    if (!box) return;
+    AeStrListClosure* clo = (AeStrListClosure*)box;
+    if (clo->env) free(clo->env);
+    free(box);
+}
+
+/* Stable top-down merge sort of borrowed pointers, invoking the Aether
+ * comparator. Taking the left run on a tie (`cmp <= 0`) preserves the
+ * input order of equal elements — the stability the issue asks for. */
+static void sl_msort(const char** a, const char** tmp, int lo, int hi,
+                     int (*cmp)(void*, const char*, const char*), void* env) {
+    if (hi - lo <= 1) return;
+    int mid = lo + (hi - lo) / 2;
+    sl_msort(a, tmp, lo, mid, cmp, env);
+    sl_msort(a, tmp, mid, hi, cmp, env);
+    int i = lo, j = mid, k = lo;
+    while (i < mid && j < hi) {
+        if (cmp(env, a[i] ? a[i] : "", a[j] ? a[j] : "") <= 0)
+            tmp[k++] = a[i++];
+        else
+            tmp[k++] = a[j++];
+    }
+    while (i < mid) tmp[k++] = a[i++];
+    while (j < hi)  tmp[k++] = a[j++];
+    for (int x = lo; x < hi; x++) a[x] = tmp[x];
+}
+
+void string_list_sort(StringList* list, void* cmp_box) {
+    if (!list || !list->items || !cmp_box) {
+        sl_closure_free(cmp_box);   /* still own the box on the error path */
+        return;
+    }
+    int n = list_size(list->items);
+    if (n <= 1) { sl_closure_free(cmp_box); return; }
+
+    AeStrListClosure clo = *(AeStrListClosure*)cmp_box;
+    int (*cmp)(void*, const char*, const char*) =
+        (int (*)(void*, const char*, const char*))clo.fn;
+
+    size_t bytes = (size_t)n * sizeof(const char*);
+    const char** snap = (const char**)aether_caps_malloc(bytes);
+    const char** tmp  = (const char**)aether_caps_malloc(bytes);
+    if (!snap || !tmp) {
+        if (snap) aether_caps_free(snap, bytes);
+        if (tmp)  aether_caps_free(tmp, bytes);
+        sl_closure_free(cmp_box);
+        return;
+    }
+
+    for (int i = 0; i < n; i++)
+        snap[i] = (const char*)list_get_raw(list->items, i);
+    sl_msort(snap, tmp, 0, n, cmp, clo.env);
+    for (int i = 0; i < n; i++)
+        list_set(list->items, i, (void*)snap[i]);
+
+    aether_caps_free(snap, bytes);
+    aether_caps_free(tmp, bytes);
+    sl_closure_free(cmp_box);
+}
+
+/* strcmp over borrowed element pointers, for qsort. Equal elements are
+ * byte-identical strings, so qsort's instability is unobservable here. */
+static int sl_cmp_lex(const void* pa, const void* pb) {
+    const char* a = *(const char* const*)pa;
+    const char* b = *(const char* const*)pb;
+    return strcmp(a ? a : "", b ? b : "");
+}
+
+void string_list_sort_lex(StringList* list) {
+    if (!list || !list->items) return;
+    int n = list_size(list->items);
+    if (n <= 1) return;
+
+    size_t bytes = (size_t)n * sizeof(const char*);
+    const char** snap = (const char**)aether_caps_malloc(bytes);
+    if (!snap) return;
+    for (int i = 0; i < n; i++)
+        snap[i] = (const char*)list_get_raw(list->items, i);
+    qsort(snap, (size_t)n, sizeof(const char*), sl_cmp_lex);
+    for (int i = 0; i < n; i++)
+        list_set(list->items, i, (void*)snap[i]);
+    aether_caps_free(snap, bytes);
+}
