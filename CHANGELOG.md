@@ -5,24 +5,47 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.341.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+## [0.343.0]
+
+### Fixed
+
+- **Codegen mangles value identifiers that collide with C reserved keywords**
+  (#976). An identifier whose name is a C keyword (`short`, `register`, `signed`,
+  `volatile`, `static`, `double`, …) is a valid Aether identifier but not a valid
+  C one, so codegen emitted it verbatim and `int short = 3` broke the C compiler
+  even though `ae check` passed — the same "front-end accepts, build breaks"
+  class as #952/#953, and the deferred C-keyword half of #880. A pre-codegen AST
+  pass now rewrites such value-binding / value-reference identifiers to
+  `ae_<name>` once (covering declarations, references, params, match bindings,
+  and derived temporaries), keeping every emit site consistent by construction.
+
+## [0.342.0]
+
+### Added
+
+- **`dir.list_kind` (readdir `d_type`) + stable string-list sort** (#966, #967).
+  Two stdlib gaps found building a file browser.
+  - **#966 — expose readdir's `d_type`.** A directory listing now carries each
+    entry's file kind (1 file / 2 dir / 3 symlink / 4 other / 0 unknown — the
+    same encoding `file_stat` reports), read straight from `readdir`'s `d_type`
+    (Windows' `dwFileAttributes`) via a parallel `kinds` array on `DirList`.
+    `dir.list_kind` (std.dir wrapper) / `dir_list_kind` (raw extern) return it, so
+    telling files from directories no longer costs an N-entry `stat(2)` sweep.
+    Also completes std.dir with `list_count` / `list_get` wrappers (the listing
+    API was previously un-iterable via `dir.*`).
+  - **#967 — stable string-list sort.** `string_list_sort_lex(list)` sorts a
+    string list in-place, lexicographically and stably; `string_list_sort(list,
+    cmp)` takes a comparator closure `fn(string, string) -> int`.
 
 ## [0.341.0]
 
 ### Fixed
-
-- **Identifiers that are C reserved keywords now compile** (#976). A value
-  named `short`, `register`, `signed`, `unsigned`, `volatile`, `static`,
-  `double`, … is a valid Aether identifier but not a valid C one, so codegen
-  emitted `int short = 3;` and the C compiler rejected it — `ae check` passed
-  but `ae build` failed, with an error that pointed into the `.ae` file but
-  showed C source. Codegen now rewrites such value identifiers to a safe C
-  spelling (`ae_<name>`) once on the AST, consistently across declarations,
-  references, parameters, loop variables, reassignment, tuple destructuring,
-  and heap-string tracking. (Names that are *Aether* keywords, e.g. `int` /
-  `struct`, are still reported at check time with a rename hint.)
 
 - **`client.response_body()` now returns an OWNED string — safe to read after
   `response_free()`.** The body was a pointer *borrowed* from the response, so a
@@ -35,38 +58,7 @@ next version number before tagging the release.
   `_str`/reverse-proxy callers that copy-on-use. Regression:
   `tests/regression/test_http_response_body_owned_after_free.ae`.
 
-## [0.339.0]
-
-### Added
-
-- **`std.collections`: stable `string_list` sort** (#967). `string_list_sort_lex(list)`
-  sorts ascending byte-wise; `string_list_sort(list, cmp)` sorts by a comparator
-  closure `|a: string, b: string| { ... }` (negative / 0 / positive, like `strcmp`).
-  Both are stable and reorder the backing slots only — no element is copied or
-  freed — so they remove the get/set aliasing footgun of a hand-rolled swap (a
-  naive adjacent swap frees a slot another borrowed pointer still aliases,
-  silently corrupting entries).
-
-  ```aether
-  string_list_sort_lex(names)
-  string_list_sort(names, |a: string, b: string| {
-      return string.length(a) - string.length(b)   // shortest first, stable
-  })
-  ```
-
-- **`std.fs`: `dir_list_kind` exposes readdir's `d_type`** (#966). A directory
-  listing now carries each entry's file kind (1 file / 2 dir / 3 symlink /
-  4 other; 0 unknown), read straight from `readdir`'s `d_type` (Windows'
-  `dwFileAttributes`) — the same encoding `file_stat` returns. Telling files
-  from directories no longer costs an N-entry `stat(2)` sweep; a file browser
-  or tree walk gets it from the single `readdir`.
-
-  ```aether
-  list, err = dir.list(path)
-  kind = dir.list_kind(list, i)   // 2 == directory, no stat needed
-  ```
-
-## [0.338.0]
+## [0.340.0]
 
 ### Added
 
@@ -104,6 +96,25 @@ next version number before tagging the release.
       }
   }
   ```
+
+### Fixed
+
+- **Thread-safe host resolution — `getaddrinfo`, not `gethostbyname`** (#974).
+  The HTTP client and raw TCP connect resolved hosts with `gethostbyname`, which
+  returns a pointer into a shared, process-static `struct hostent`; two client
+  calls resolving concurrently on different threads (e.g. a request handler that
+  dials out while serving) raced on that static buffer and could corrupt each
+  other's resolved address. Both sites now use `getaddrinfo` (thread-safe,
+  caller-owned memory). Regression: `tests/integration/http_serve_and_dial`.
+
+## [0.339.0]
+
+_Docs / tooling only (Chlipala-lens framing doc, API-doc refresh, benchmark
+runtime-source fix); no compiler, stdlib, or runtime behaviour change._
+
+## [0.338.0]
+
+### Added
 
 - **Sum / variant types: `type Name = A | B | C` + exhaustive `match`** (#914).
   A tagged union over existing struct variants — "a value that is exactly one
