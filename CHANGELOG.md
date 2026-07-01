@@ -13,6 +13,17 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **Identifiers that are C reserved keywords now compile** (#976). A value
+  named `short`, `register`, `signed`, `unsigned`, `volatile`, `static`,
+  `double`, … is a valid Aether identifier but not a valid C one, so codegen
+  emitted `int short = 3;` and the C compiler rejected it — `ae check` passed
+  but `ae build` failed, with an error that pointed into the `.ae` file but
+  showed C source. Codegen now rewrites such value identifiers to a safe C
+  spelling (`ae_<name>`) once on the AST, consistently across declarations,
+  references, parameters, loop variables, reassignment, tuple destructuring,
+  and heap-string tracking. (Names that are *Aether* keywords, e.g. `int` /
+  `struct`, are still reported at check time with a rename hint.)
+
 - **`client.response_body()` now returns an OWNED string — safe to read after
   `response_free()`.** The body was a pointer *borrowed* from the response, so a
   caller that freed the response before reading the body got garbage or a crash

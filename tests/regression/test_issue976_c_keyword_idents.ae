@@ -1,0 +1,90 @@
+// Regression (#976): an identifier that is a C reserved keyword (`short`,
+// `register`, `signed`, `unsigned`, `volatile`, `static`, `double`, …) is a
+// perfectly valid Aether identifier but an invalid C one. Before the fix it
+// was emitted verbatim, so `ae check` passed but the C compile failed
+// (`int short = 3;` → "expected identifier"). Codegen now mangles such value
+// identifiers to a valid C spelling consistently across declaration,
+// reference, parameters, loop variables, reassignment, tuple destructuring,
+// and heap-string tracking.
+//
+// Self-asserting: FAIL + exit 1 on mismatch, PASS at the end. Leak-clean.
+
+import std.string
+
+extern exit(code: int)
+
+check(name: string, got: int, want: int) {
+    if got != want {
+        println("FAIL: ${name} = ${got}, expected ${want}")
+        exit(1)
+    }
+}
+
+// keyword as a parameter name, referenced in the body
+add_one(short: int) -> int {
+    return short + 1
+}
+
+// keyword params + loop var + accumulator + reassignment
+sum_to(register: int) -> int {
+    double = 0
+    signed = 0
+    while signed < register {
+        double = double + signed
+        signed = signed + 1
+    }
+    return double
+}
+
+// keyword-named heap-string local, returned (exercises _heap_<name> tracking)
+join2(short: string, register: string) -> string {
+    unsigned = string.concat(short, register)
+    return unsigned
+}
+
+// keyword names as tuple-destructure targets come from here
+pair() -> (int, string) {
+    return 42, "answer"
+}
+
+main() {
+    // locals: declaration + reference + nested expression
+    short = 3
+    unsigned = 4
+    volatile = short * unsigned + 1
+    check("volatile", volatile, 13)
+
+    // reassignment of a keyword-named local
+    static = 1
+    static = static + 9
+    check("static", static, 10)
+
+    // keyword parameter + loop function
+    check("add_one", add_one(41), 42)
+    check("sum_to", sum_to(5), 10)
+
+    // tuple destructure into keyword-named targets
+    signed, double = pair()
+    check("destructure int", signed, 42)
+    if string.equals(double, "answer") != 1 {
+        println("FAIL: destructure string = ${double}")
+        exit(1)
+    }
+
+    // heap-string round trip through keyword-named locals
+    if string.equals(join2("ab", "cd"), "abcd") != 1 {
+        println("FAIL: join2")
+        exit(1)
+    }
+
+    // heap string reassigned through a keyword-named local
+    char = "x"
+    char = string.concat(char, "y")
+    char = string.concat(char, "z")
+    if string.equals(char, "xyz") != 1 {
+        println("FAIL: char reassign = ${char}")
+        exit(1)
+    }
+
+    println("PASS: #976 C-keyword value identifiers compile and run")
+}
