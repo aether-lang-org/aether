@@ -332,20 +332,14 @@ workaround — they cover cases a porter often hand-rolls.
 
 ## Working with downstream users
 
-- **svn-aether port (avn)** (`~/scm/subversion/subversion/` locally;
-  GitHub: anthropic/avn — sibling claude works there) is the biggest
-  real-world consumer. Port is methodical C → Aether, one-leaf-per-
-  commit. Downstream finds the gaps before anyone else — every
-  cross-`import` typer issue (struct visibility, selective-import
-  propagation, 128-decl cap) was filed by avn before showing up
-  anywhere else.
-- **aether-ui** (`https://github.com/aether-lang-org/aether-ui`) —
-  cross-platform widget toolkit (GTK4 / AppKit / Win32) with an
+- **aether-ui** (`https://github.com/aether-lang-org/aether-ui` locally: ../aether-ui) 
+  — cross-platform widget toolkit (GTK4 / AppKit / Win32) with an
   AetherUIDriver HTTP test server. Was `contrib/aether_ui/` in this
   repo until the spin-out; now consumes Aether the same way external
   users do (install + `$(ae cflags)`). Useful reference for the
   embedded-DSL pattern: the toolkit's surface IS a closure-DSL.
-- **aeb** (`https://github.com/aether-lang-org/aeb`) — multi-package
+- **aeb** (`https://github.com/aether-lang-org/aeb` locally: ../aeb) 
+  — multi-package
   build system, the second of three ecosystem siblings (language / build
   runner / orchestrator). Reads `share/aether/MANIFEST` to discover
   link-suitable runtime/stdlib `.c` files and orchestrates per-package
@@ -353,7 +347,8 @@ workaround — they cover cases a porter often hand-rolls.
   (`docs/install-layout.md`) was carved out specifically to support aeb
   without forcing it to guess via `find -name '*.c'`. If you're touching
   install-layout / shipped source / link contract, ping aeb side.
-- **aeo** (`https://github.com/aether-lang-org/aeo`) — the third sibling:
+- **aeo** (`https://github.com/aether-lang-org/aeo` - locally: ../aeo) 
+  — the third major sibling:
   an infrastructure orchestrator that stands up / tears down a dependency-
   ordered tree of VMs + containers (FreeBSD jail/bhyve, Linux
   podman·docker/KVM) from one Aether composition (`aeo up|status|down|
@@ -361,11 +356,48 @@ workaround — they cover cases a porter often hand-rolls.
   *built by* aeb and shells *to* aeb across a plain artifact+CLI seam. Its
   compose surface is the `config IS code` closure-DSL applied to live
   infra — the canonical proof the DSL pitch works beyond config files.
-- **aeocha** (`https://github.com/aether-lang-org/aeocha`) — BDD-style
-  test framework for Aether (`describe` / `it` / `before_each` /
+- **aeocha** (`https://github.com/aether-lang-org/aeocha` locally: ../aeocha)
+  — BDD-style test framework for Aether (`describe` / `it` / `before_each` /
   `after_each` via trailing blocks + closures, Cuppa-inspired). The
   reference consumer of the trailing-block/closure DSL for a test surface;
   look here for a worked example of the `builder`-shaped API in anger.
+  There is a co-located mutation testing facility too.
+- **svn-aether port (avn)** (`https://github.com/aether-lang-org/avn` locally: ../avn) 
+  — is a big
+  real-world consumer. Port is methodical C → Aether, one-leaf-per-
+  commit. Downstream finds the gaps before anyone else — every
+  cross-`import` typer issue (struct visibility, selective-import
+  propagation, 128-decl cap) was filed by avn before showing up
+  anywhere else. As much as anything it was used to shake out
+  missing features and bugs for Aether.
+- **mquickjs-port** (`https://github.com/aether-lang-org/mquickjs-port` locally: ../mquickjs-port)
+  — a full C→Aether port of Bellard & Gordon's
+  MicroQuickJS (ES5-subset embedded JS engine, tracing GC, ~10 kB RAM). The
+  end state is pure Aether: `mquickjs.c` deleted entirely, every engine leaf
+  now an `ae/*.ae` file, built with `aeb`, tested via the `c.tests` runner.
+  This is the extern-removal / no-C-consumers exemplar the memory notes keep
+  referencing — it drove the hardest low-level features (const arrays for the
+  atoms table, signed-bitfield emission, shift-width and `as int`-narrowing
+  fixes, the `--audit-mem` accessor-width check). `migration_assessment.md` 
+  and `ae/PORT_STATUS.md` were used in the port but could be out of date. 
+  Known pre-existing engine bugs live in
+  [[project_mquickjs_known_bugs]] (e.g. `Math.random()` returns -1, baseline
+  too — not caught by `make test`). `dtoa.c` stays C by decision ([[feedback_dtoa_stays_c]]).
+- **servirtium-vcr** (`https://github.com/servirtium/servirtium-vcr` locally: ../servirtium-vcr)
+   — record/replay for HTTP service tests in the
+  [Servirtium](https://servirtium.dev) markdown-tape format, as a **one-engine-
+  many-thin-bindings** monorepo. The engine is a single pure-Aether module
+  (`core/vcr.ae` + `core/embed.ae` C-ABI) built once as `libservirtium_vcr.so`
+  via `ae build --emit=lib` on top of the stdlib (HTTP server, regex, zlib,
+  crypto); 17+ language bindings (Go/cgo, Python/ctypes, Java·Panama, Ruby·
+  Fiddle, Rust, Node·koffi, Haskell, Elixir/Erlang-NIF, …, plus the JVM family
+  over the Java jar) are thin FFI wrappers over that one artifact, so they
+  can't drift — cross-language Servirtium compatibility is a build-time
+  guarantee, not a test target. The canonical proof of the `--emit=lib` +
+  auto-generated-SDK story at scale, and the reference for how a downstream
+  wires many FFI consumers through one `aeb` run. Aether-side entry is
+  `import core.vcr` — it's a separate repo, not part of `std.http` (the
+  HTTP-client idiom above says the same).
 - **Feature request flow that works**: downstream writes a spec
   (e.g. `import_typer_at_scale.md`, `exprt_structs.md`,
   `stdlib_wish.md`), Aether implements, downstream adopts within the
