@@ -26,6 +26,7 @@ Type* create_type(TypeKind kind) {
      * must NOT inherit garbage from malloc. */
     type->is_fnptr = 0;
     type->compound_node = NULL;
+    type->is_result = 0;   /* #913 `T!` marker — must not inherit malloc garbage */
     return type;
 }
 
