@@ -6,10 +6,12 @@ Thank you for your interest in contributing to Aether. This document outlines th
 
 ### General Guidelines
 
-- Use 2-space indentation (no tabs)
-- Maximum line length: 100 characters
+- Use 4-space indentation (no tabs) — match the surrounding C, which is
+  4-space throughout `compiler/`, `runtime/`, `std/`, and `tools/`
+- Keep lines to a readable width; wrap long comments rather than long code
 - Use descriptive variable and function names
-- Add comments for complex logic
+- Comment the non-obvious (why, not what); the codebase leans heavily on
+  explanatory comments at tricky codegen / ownership sites
 
 ### Naming Conventions
 
@@ -80,15 +82,14 @@ if (!buffer) {
 // ... use buffer ...
 free(buffer);
 
-// Better (when available)
-char* buffer = malloc(256);
-defer(free(buffer));
-if (!buffer) {
-    return NULL;
-}
-// ... use buffer ...
-// Automatically freed on scope exit
+// Keep the acquire and its free visually paired, and free on every
+// return path. `goto cleanup;` is the idiomatic C escape for functions
+// with several early exits.
 ```
+
+(The `defer` statement is an *Aether*-language feature that lowers to a
+scope-exit free; it is not available in the runtime's C code — C
+contributions free explicitly.)
 
 ## Stdlib modules
 
@@ -111,18 +112,20 @@ reference implementation.
 
 When a PR widens or replaces a parameter's type in a stdlib wrapper —
 the canonical case is `int` → a tagged-int type like `Duration`, but
-also `string` → an enum-like, or a positional arg → a struct —
-Aether's typechecker does not always reject the old call shape. A
-caller passing a bare `5` to a parameter newly typed `Duration` will
-typically compile (the literal gets accepted as the underlying
-`int64_t`), but the value is now interpreted in the new unit (5
-nanoseconds instead of 5 seconds, say). The bug is silent: the build
-is green, the test passes locally if the value happens not to matter,
-and CI fails on the platform where it does.
+also `string` → an enum-like, or a positional arg → a struct — the old
+call shape can still parse where the new type isn't yet enforced. The
+`Duration` case in particular is now checked: passing a bare `int` /
+`long` / `float` where a `Duration` is expected is rejected at compile
+time ("Cannot pass … where Duration expected", `compiler/analysis/
+typechecker.c`), for both extern and user-defined callees. But not every
+type-widening has that guard, and a value that *does* slip through is
+reinterpreted in the new unit (5 nanoseconds instead of 5 seconds, say)
+— a silent bug: green build, locally-passing test, CI failure on the
+platform where the value matters.
 
-Before merging a parameter-type change, grep the whole tree for
-callers and update them. Don't trust the typechecker to flag bare
-literals at the call site:
+So before merging a parameter-type change, grep the whole tree for
+callers and update them rather than assuming the typechecker will catch
+every stale call site:
 
 ```bash
 # Callers of the wrapper you just changed
@@ -134,11 +137,8 @@ grep -rn "server_set_keepalive(" tests/ examples/ std/
 grep -rn "http_request_set_timeout" tests/ examples/ std/
 ```
 
-Bare integers at call sites that should now be Duration / domain-typed
-values are the most common miss; check examples/ too, not just tests/.
-Plain-int → Duration *comparisons* are rejected by the typechecker per
-issue #524's spec, but parameter passing is not — until that's
-tightened, this manual sweep is load-bearing.
+Bare integers at call sites that should now be a domain-typed value are
+the most common miss; check `examples/` too, not just `tests/`.
 
 ## Adding Tests
 
@@ -156,13 +156,12 @@ TEST(my_feature) {
 }
 
 // Test with category
-TEST_CATEGORY(hashmap_insert, TEST_CATEGORY_COLLECTIONS) {
-    HashMap* map = hashmap_create(16);
+TEST_CATEGORY(hashmap_string_to_int, TEST_CATEGORY_COLLECTIONS) {
+    // The plain hashmap_create takes an initial capacity plus the six
+    // key/value function pointers; the string→int helper is the
+    // one-argument convenience used across the collections tests.
+    HashMap* map = hashmap_create_string_to_int(16);
     ASSERT_NOT_NULL(map);
-    
-    hashmap_insert(map, "key", "value");
-    ASSERT_STREQ(hashmap_get(map, "key"), "value");
-    
     hashmap_free(map);
 }
 ```
@@ -283,17 +282,22 @@ GitHub Actions runs a matrix of builds on every pull request. Every target
 must be green before a PR can be merged. Plan your code changes with this
 matrix in mind:
 
-| Target | Runner | Compiler | What trips up PRs |
-|---|---|---|---|
-| **Linux GCC** | `ubuntu-latest` | `gcc` | `-Werror` strictness; pedantic `-Wall -Wextra` |
-| **Linux Clang** | `ubuntu-latest` | `clang` | Different warning surface than GCC |
-| **macOS ARM64** | `macos-latest` | Apple Clang | BSD-style tools; no `/proc`; different `stat(2)` fields; Gatekeeper on fresh binaries |
-| **macOS x86_64** | `macos-13` | Apple Clang | Same as ARM64 plus intel-specific codegen corners |
-| **Windows MSYS2** | `windows-latest` (MSYS2 shell) | MinGW GCC | `#ifdef _WIN32` branches actually execute; POSIX syscalls (`symlink`, `readlink`, `fork`, `execvp`, `pipe`) are absent or stubbed; `/bin/sh` / `rm` / `ln` not guaranteed; path separators; `_mkdir`/`_unlink` instead of `mkdir`/`unlink`; `$PATH` uses `;` not `:` |
-| **Windows mingw-w64** | `windows-latest` (cross-compiled) | `x86_64-w64-mingw32-gcc` | Same C-level issues as MSYS2 but a different toolchain version, so MSVCRT corner-cases sometimes diverge |
-| **`make ci-coop`** | any Linux | `gcc` with `AETHER_NO_THREADING` | Cooperative scheduler only — tests that assume pthreads / `spawn` semantics may behave differently |
-| **`make test-asan`** | Linux | AddressSanitizer | Any use-after-free / leak in your new C code |
-| **`make test-valgrind`** | Docker Linux | Valgrind | Same, slower, catches a slightly different set |
+(Exact runner labels move with GitHub's images and the workflow files;
+treat `.github/workflows/` as authoritative and this as the shape.)
+
+| Target | Compiler | What trips up PRs |
+|---|---|---|
+| **Linux GCC** | `gcc` | `-Werror` strictness; pedantic `-Wall -Wextra` |
+| **Linux Clang** | `clang` | Different warning surface than GCC |
+| **Linux Hardened** | `gcc`, `HARDEN=1` | `-fstack-protector` / `_FORTIFY_SOURCE` / format-security promoted to errors |
+| **macOS ARM64 + x86_64** | Apple Clang | BSD-style tools; no `/proc`; different `stat(2)` fields; Gatekeeper on fresh binaries; intel-specific codegen corners |
+| **Windows MSYS2** | MinGW-w64 GCC | `#ifdef _WIN32` branches actually execute; POSIX syscalls (`symlink`, `readlink`, `fork`, `execvp`, `pipe`) are absent or stubbed; `/bin/sh` / `rm` / `ln` not guaranteed; path separators; `_mkdir`/`_unlink` instead of `mkdir`/`unlink`; `$PATH` uses `;` not `:` |
+| **`ci-coop`** | `gcc`, `AETHER_NO_THREADING` | Cooperative scheduler only — tests that assume pthreads / `spawn` semantics may behave differently |
+| **AddressSanitizer** | Clang/GCC | Any use-after-free / leak in your new C code (runs on Linux and macOS) |
+| **Valgrind** | Linux | Same, slower, catches a slightly different set |
+
+(A local `make ci-windows` cross-builds with `x86_64-w64-mingw32-gcc`;
+the PR-gating Windows job is the native MSYS2 build above.)
 
 The Windows targets are where most new-feature PRs fail first, because
 the existing stdlib has `_WIN32` stubs for anything POSIX-specific
@@ -424,10 +428,10 @@ platform.
 
 **6. Prefer existing portable helpers over re-rolling your own path
 handling.** `std/fs/aether_fs.c` provides `path_join`, `path_dirname`,
-`path_basename`, `path_normalize`, `path_is_absolute`. These already
-handle the cases where `/` and `\` both count as separators (Windows
-C stdlib accepts either). Concatenating with `"/"` is portable by
-accident; using the helpers is portable by design.
+`path_basename`, `path_extension`, `path_clean`, `path_is_absolute`, and
+`path_rel`. These already handle the cases where `/` and `\` both count as
+separators (Windows C stdlib accepts either). Concatenating with `"/"` is
+portable by accident; using the helpers is portable by design.
 
 **7. When in doubt, run the tests under a forced `OS=Windows_NT` env
 var locally.** It won't exercise actual `_WIN32` C branches (you need
@@ -544,7 +548,9 @@ Brief description of changes
 
 ### Review Process
 
-1. Automated CI checks must pass (Linux/macOS, memory safety, benchmarks)
+1. Automated CI checks must pass — Linux (GCC, Clang, and a hardened GCC
+   build), macOS, Windows (MSYS2 + MinGW-w64), and the AddressSanitizer /
+   Valgrind memory-safety jobs
 2. Code review by maintainer
 3. Address feedback
 4. Merge when approved
@@ -694,7 +700,7 @@ After merge, the pipeline transforms this into:
 
 ### `### Upgrade notes` for memory-fix releases
 
-When a PR touches `compiler/codegen/codegen_stmt.c` (the heap-string-tracker wrapper), `runtime/aether_string.c` (the refcount allocator), or anything else that changes when the runtime frees a heap-allocated value, add an `### Upgrade notes` block to the same `[current]` entry. The block names the alias / ownership patterns whose downstream behaviour the change can break, and gives a recommended pre-upgrade play.
+When a PR touches `compiler/codegen/codegen_stmt.c` (the heap-string-tracker wrapper), `std/string/aether_string.c` (the refcount allocator), or anything else that changes when the runtime frees a heap-allocated value, add an `### Upgrade notes` block to the same `[current]` entry. The block names the alias / ownership patterns whose downstream behaviour the change can break, and gives a recommended pre-upgrade play.
 
 The hazard the section guards against: a memory-fix release that closes a leak can flip latent UAFs in downstream code from "harmless slow leak" to "hard crash". The leak was kindly keeping the dangling pointer alive; once the leak is fixed, the alias dangles for real. If the CHANGELOG doesn't call this out, downstreams hit "rebuilt under new aetherc, my server crashes" and run a manual debugging ladder to figure out what changed semantically.
 
