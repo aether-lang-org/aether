@@ -1,0 +1,56 @@
+// Regression (follow-up to #976): struct and message FIELD names that are C
+// reserved keywords (`register`, `signed`, `unsigned`, `volatile`, `static`,
+// `double`, …) are valid Aether identifiers but invalid C ones. Codegen now
+// mangles them consistently across the field declaration, struct/message
+// construction, field reads, and reassignment — so `struct P { register: int }`
+// compiles instead of emitting `int register;`.
+//
+// Self-asserting for the (synchronous) struct paths; the actor section proves
+// the message-field declaration + send + receive-binding paths compile and run.
+
+import std.string
+
+extern exit(code: int)
+
+struct Point { register: int  signed: int }
+
+message Bump { volatile: int  static: int }
+message Done {}
+
+actor Counter {
+    state total = 0
+    receive {
+        Bump(volatile, static) -> {
+            total = total + volatile + static
+        }
+        Done -> {
+            println(total)          // 3+4 + 10+20 = 37
+        }
+    }
+}
+
+main() {
+    // struct: literal construction, field read, field reassignment
+    p = Point { register: 10, signed: 20 }
+    if p.register + p.signed != 30 {
+        println("FAIL: Point read = ${p.register + p.signed}")
+        exit(1)
+    }
+    p.register = p.register + 5
+    if p.register != 15 {
+        println("FAIL: Point reassign = ${p.register}")
+        exit(1)
+    }
+    if p.register + p.signed != 35 {
+        println("FAIL: Point total = ${p.register + p.signed}")
+        exit(1)
+    }
+
+    // message fields: declaration + send + positional receive binding
+    c = spawn(Counter())
+    c ! Bump { volatile: 3, static: 4 }
+    c ! Bump { volatile: 10, static: 20 }
+    c ! Done {}
+
+    println("PASS: C-keyword field names (struct + message) compile and run")
+}

@@ -3253,30 +3253,52 @@ static const char* find_first_reply_msg(ASTNode* node) {
 // ONCE on the AST before codegen: every site then reads the already-safe name
 // and stays consistent by construction.
 //
-// Only value-binding / value-reference node types are rewritten:
-//   - AST_IDENTIFIER          — reads, and assignment/destructure lvalues
-//   - AST_VARIABLE_DECLARATION — locals, for-loop vars, params
-//   - AST_PATTERN_VARIABLE     — match bindings, pattern params
+// Rewritten node types, grouped by namespace — each namespace's declaration,
+// initializer, reference, and pattern all read `->value`, so renaming every
+// member of the group keeps that namespace internally consistent:
+//   values — AST_IDENTIFIER (reads, assignment/destructure lvalues),
+//            AST_VARIABLE_DECLARATION (locals, for-loop vars, params),
+//            AST_PATTERN_VARIABLE (match bindings, pattern params)
+//   fields — AST_STRUCT_FIELD / AST_MESSAGE_FIELD (declarations),
+//            AST_ASSIGNMENT (struct/message constructor field — the parser
+//              builds every AST_ASSIGNMENT as a constructor field-init; a
+//              plain reassignment is an AST_VARIABLE_DECLARATION, so this node
+//              type always carries a field name, never an lvalue),
+//            AST_FIELD_INIT (the other constructor field-init shape),
+//            AST_PATTERN_FIELD (receive-pattern field bindings),
+//            AST_MEMBER_ACCESS (field reads `x.field`)
 // Function names live on AST_FUNCTION_CALL->value / the function node and go
 // through safe_c_name at emission with the same `ae_` prefix, so a keyword
-// used as a function stays consistent too. Struct/message field names are
-// their own node types (AST_STRUCT_FIELD / AST_MESSAGE_FIELD / on
-// AST_MEMBER_ACCESS->value) and are left alone. AST_SUM_TYPE_DEF's children
-// are variant TYPE names, not values, so its subtree is skipped.
+// used as a function stays consistent too. AST_SUM_TYPE_DEF's children are
+// variant TYPE names, not values, so its subtree is skipped. Module-qualified
+// and method calls are folded to AST_FUNCTION_CALL during parsing, so by
+// codegen an AST_MEMBER_ACCESS is a genuine field read (its non-keyword
+// property accessors — durations, optionals — never match is_c_keyword).
 static void mangle_keyword_value_idents(ASTNode* node) {
     if (!node) return;
-    if ((node->type == AST_IDENTIFIER ||
-         node->type == AST_VARIABLE_DECLARATION ||
-         node->type == AST_PATTERN_VARIABLE) &&
-        node->value && is_c_keyword(node->value)) {
-        const char* safe = safe_value_name(node->value);
-        if (safe && safe != node->value) {
-            char* dup = strdup(safe);
-            if (dup) {
-                free(node->value);
-                node->value = dup;
+    switch (node->type) {
+        case AST_IDENTIFIER:
+        case AST_VARIABLE_DECLARATION:
+        case AST_PATTERN_VARIABLE:
+        case AST_STRUCT_FIELD:
+        case AST_MESSAGE_FIELD:
+        case AST_ASSIGNMENT:
+        case AST_FIELD_INIT:
+        case AST_PATTERN_FIELD:
+        case AST_MEMBER_ACCESS:
+            if (node->value && is_c_keyword(node->value)) {
+                const char* safe = safe_value_name(node->value);
+                if (safe && safe != node->value) {
+                    char* dup = strdup(safe);
+                    if (dup) {
+                        free(node->value);
+                        node->value = dup;
+                    }
+                }
             }
-        }
+            break;
+        default:
+            break;
     }
     if (node->type == AST_SUM_TYPE_DEF) return;  // children are type names
     for (int i = 0; i < node->child_count; i++) {
