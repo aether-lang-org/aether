@@ -1,0 +1,94 @@
+// Recursive walk + change notification (issue #977).
+// Run with: ae run examples/stdlib/fs-walk-watch.ae
+//
+// The two building blocks a filesystem app needs beyond one-level listing:
+//   - fs.walk(root, cb)      visit every entry below root — kind and depth
+//                            come from the same readdir sweep (#966), so
+//                            nothing is stat'ed; return 1 from the callback
+//                            to skip a subtree, 2 to stop the walk.
+//   - fs.watch_open/wait     a coarse "something changed here" ping over the
+//                            platform primitive (kqueue / inotify / Win32
+//                            change notifications) — re-list to see what.
+
+import std.fs
+import std.string
+
+main() {
+    print("=== fs.walk + fs.watch demo ===\n\n")
+
+    base = "/tmp/aether_walk_watch_demo"
+    _c1 = fs.create_dir(base)
+    _c2 = fs.create_dir("${base}/src")
+    _c3 = fs.create_dir("${base}/docs")
+    _w1 = fs.write("${base}/README.md", "readme")
+    ok = fs.write("${base}/src/main.ae", "main")
+    if ok != "" {
+        println("(skipping: scratch dir not writable: ${ok})")
+        return
+    }
+    _w3 = fs.write("${base}/docs/guide.md", "guide")
+
+    // Walk the tree: indent by depth, tag directories.
+    println("Tree of ${base}:")
+    n, err = fs.walk(base, |path: string, kind: int, depth: int| {
+        pad = ""
+        d = 0
+        while d < depth {
+            pad = string.concat(pad, "  ")
+            d = d + 1
+        }
+        tag = ""
+        if kind == 2 {
+            tag = "/"
+        }
+        println("  ${pad}${path}${tag}")
+        return 0
+    })
+    if err != "" {
+        println("walk failed: ${err}")
+        return
+    }
+    println("  (${n} entries, one readdir sweep per directory, zero stats)")
+    println("")
+
+    // Prune: skip the docs/ subtree.
+    println("Same walk, pruning docs/:")
+    np, _perr = fs.walk(base, |path: string, kind: int, depth: int| {
+        if string.ends_with(path, "/docs") == 1 {
+            return 1     // don't descend
+        }
+        println("  ${path}")
+        return 0
+    })
+    println("  (${np} entries visited)")
+    println("")
+
+    // Watch: change the directory while a watch is open — the queued
+    // event fires on the next wait.
+    w, werr = fs.watch_open(base)
+    if werr != "" {
+        println("watch unavailable here: ${werr}")
+        return
+    }
+    println("Watching ${base} ...")
+    _wf = fs.write("${base}/hot-reload.txt", "changed!")
+    changed = fs.watch_wait(w, 5000)
+    if changed == 1 {
+        println("  change detected — re-list to pick it up")
+    } else {
+        println("  no change seen (${changed})")
+    }
+    fs.watch_close(w)
+
+    // Cleanup.
+    _r1 = fs.delete("${base}/hot-reload.txt")
+    _r2 = fs.delete("${base}/docs/guide.md")
+    _r3 = fs.delete("${base}/src/main.ae")
+    _r4 = fs.delete("${base}/README.md")
+    _r5 = fs.delete_dir("${base}/docs")
+    _r6 = fs.delete_dir("${base}/src")
+    _r7 = fs.delete_dir(base)
+
+    println("")
+    println("Done.")
+}

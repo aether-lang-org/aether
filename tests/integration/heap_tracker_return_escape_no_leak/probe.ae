@@ -71,13 +71,28 @@ main() {
         return
     }
 
-    // Warm-up call so the initial allocator pages settle.
-    _w = make_accumulator(50)
-    if string.length(_w) < 1 {
-        println("FAIL: warm-up empty")
-        exit(1)
+    // Warm-up LOOP so the allocator's arenas reach steady state before rss0
+    // is sampled. A single warm-up call left the arena growth to happen
+    // *inside* the measured loop, and under full-suite load that one-time
+    // growth intermittently crossed the threshold — a false positive (the
+    // same flakiness fixed in heap_leak_cross_fn_recursion). A genuine
+    // per-call leak (~770 KB over 500 calls) still dwarfs the threshold.
+    w = 0
+    while w < 150 {
+        _wv = make_accumulator(50)
+        if string.length(_wv) < 1 {
+            println("FAIL: warm-up empty")
+            exit(1)
+        }
+        w = w + 1
     }
 
+    // Measure TWO consecutive loops and take the SMALLER growth. A genuine
+    // per-call leak repeats in every loop (~770 KB per 500 calls pre-fix),
+    // so the minimum still carries the signal; one-time noise (macOS page
+    // compression re-residenting pages inside the first window under
+    // full-suite memory pressure) lands in one window only and the min
+    // discards it. Same hardening as heap_leak_cross_fn_recursion.
     rss0 = getrusage_max_rss_kb()
     j = 0
     while j < 500 {
@@ -89,22 +104,36 @@ main() {
         j = j + 1
     }
     rss1 = getrusage_max_rss_kb()
-    growth = rss1 - rss0
+    k = 0
+    while k < 500 {
+        s2 = make_accumulator(50)
+        if string.length(s2) < 1550 {
+            println("FAIL iter2 ${k}: length=${string.length(s2)}, expected 1550")
+            exit(1)
+        }
+        k = k + 1
+    }
+    rss2 = getrusage_max_rss_kb()
+    growth1 = rss1 - rss0
+    growth2 = rss2 - rss1
+    growth = growth1
+    if growth2 < growth1 {
+        growth = growth2
+    }
 
-    // Pre-fix this shows ~770 KB growth (one ~1550-byte leaked
-    // accumulator per iteration × 500). Post-fix the callee's defer-
-    // free reclaims each iteration's buffer; the shim reads CURRENT
-    // resident RSS (not the monotonic peak), so residency returns to
-    // baseline. The residual growth is the allocator's own page cache
-    // (freed blocks not yet returned to the OS) — bounded and well
-    // under the leak's magnitude. The 512 KB threshold leaves margin
-    // for that cache noise while keeping a clear gap from the ~770 KB
-    // leak signal.
+    // Pre-fix this shows ~770 KB growth PER LOOP (one ~1550-byte leaked
+    // accumulator per iteration × 500) — both windows show it, so the min
+    // stays far above the bound. Post-fix the callee's defer-free reclaims
+    // each iteration's buffer; the shim reads CURRENT resident RSS (not the
+    // monotonic peak), so residency returns to baseline. The residual is
+    // the allocator's own page cache — bounded and well under the leak's
+    // magnitude. The 512 KB threshold leaves margin for that cache noise
+    // while keeping a clear gap from the ~770 KB leak signal.
     if growth > 512 {
-        println("FAIL: RSS grew ${growth} KB across 500 calls (>512 KB threshold) — return-escape leak")
+        println("FAIL: RSS grew ${growth1}/${growth2} KB across two 500-call loops (min >512 KB) — return-escape leak")
         exit(1)
     }
 
-    println("  PASS: 500 calls x 1550-byte accumulator, RSS growth ${growth} KB (bounded)")
+    println("  PASS: 2x500 calls x 1550-byte accumulator, RSS growth min(${growth1}, ${growth2}) KB (bounded)")
     println("=== all cases passed ===")
 }

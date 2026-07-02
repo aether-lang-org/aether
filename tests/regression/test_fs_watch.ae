@@ -1,0 +1,79 @@
+// Regression (#977): fs.watch_open / watch_wait / watch_close — coarse
+// change notification on a directory over the platform primitive (kqueue on
+// macOS/BSD, inotify on Linux, FindFirstChangeNotification on Windows).
+//
+//   - watch_wait returns 0 on timeout when nothing changed,
+//   - 1 after a change — including a change made BETWEEN open and wait
+//     (events are queued, not lost),
+//   - 0 again once the pending burst is drained,
+//   - -1 for a null handle.
+//
+// SKIPs (rather than fails) when the platform/sandbox can't watch — the
+// stub build and exotic filesystems return an error from watch_open.
+// Self-asserting: FAIL + exit 1 on mismatch, PASS at the end. Cleans up.
+
+import std.fs
+
+extern exit(code: int)
+
+main() {
+    base = "/tmp/ae_fs_watch_test"
+    _c = fs.create_dir(base)
+    werr = fs.write("${base}/seed.txt", "seed")
+    if werr != "" {
+        println("SKIP fs.watch: cannot write probe (${werr})")
+        return
+    }
+
+    w, err = fs.watch_open(base)
+    if err != "" {
+        println("SKIP fs.watch: ${err}")
+        return
+    }
+
+    // 1. Nothing changed since open -> timeout.
+    r0 = fs.watch_wait(w, 150)
+    if r0 != 0 {
+        println("FAIL: quiet wait returned ${r0}, expected 0")
+        exit(1)
+    }
+
+    // 2. Change the directory, then wait: the queued event fires even
+    //    though the write happened before the wait.
+    _w = fs.write("${base}/new.txt", "hello")
+    r1 = fs.watch_wait(w, 5000)
+    if r1 != 1 {
+        println("FAIL: wait after a write returned ${r1}, expected 1")
+        exit(1)
+    }
+
+    // 3. Burst drained -> quiet again.
+    r2 = fs.watch_wait(w, 150)
+    if r2 != 0 {
+        println("FAIL: drained wait returned ${r2}, expected 0")
+        exit(1)
+    }
+
+    // 4. A second, distinct change fires again (the handle re-arms).
+    _d = fs.delete("${base}/new.txt")
+    r3 = fs.watch_wait(w, 5000)
+    if r3 != 1 {
+        println("FAIL: wait after a delete returned ${r3}, expected 1")
+        exit(1)
+    }
+
+    fs.watch_close(w)
+
+    // 5. Null handle reports an error, never blocks.
+    rn = fs.watch_wait(null, 100)
+    if rn != -1 {
+        println("FAIL: null-handle wait returned ${rn}, expected -1")
+        exit(1)
+    }
+
+    // Cleanup.
+    _d2 = fs.delete("${base}/seed.txt")
+    _dd = fs.delete_dir(base)
+
+    println("PASS: fs.watch (timeout, queued change, drain, re-arm, null handle)")
+}

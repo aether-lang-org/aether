@@ -234,5 +234,36 @@ DirList* fs_glob_raw(const char* pattern);
 // E.g., fs_glob_multi_raw(["**/*.c", "**/*.h"]) returns all .c and .h files.
 DirList* fs_glob_multi_raw(void* pattern_list);
 
+// #977: recursive directory walk. Visits `root` first (depth 0), then every
+// entry beneath it, invoking the boxed Aether closure per entry as
+// `cb(path, kind, depth)` where `path` is the full joined path (borrowed —
+// copy it to keep it), `kind` is the fs_stat_raw encoding (1 file / 2 dir /
+// 3 symlink / 4 other; resolved via lstat only when readdir's d_type doesn't
+// report one), and `depth` is 0 for the root, 1 for its entries, ….
+// The callback's return value steers the walk: 0 = continue, 1 = don't
+// descend into this directory (skip subtree), 2 = stop the whole walk.
+// Symlinks are reported but never followed (no cycles). Traversal order
+// within a directory is the platform's readdir order (unspecified).
+// Owns and frees `cb_box`. Returns the number of entries visited, or -1
+// when `root` cannot be read (missing path / sandbox denial).
+int fs_walk_raw(const char* root, void* cb_box);
+
+// #977: filesystem change notification over the platform primitive —
+// kqueue EVFILT_VNODE (macOS/BSD), inotify (Linux),
+// FindFirstChangeNotification (Windows). One watch = one directory (or
+// file), NON-recursive; events are a coarse "something changed here" ping
+// (create / delete / modify / rename inside a watched directory) — the
+// caller re-lists to see what. Changes that happen between watch_open and
+// watch_wait are queued, not lost. A handle is single-threaded.
+//   fs_watch_open_raw  — NULL when the path can't be watched.
+//   fs_watch_wait      — block up to timeout_ms (negative = forever);
+//                        1 = changed, 0 = timeout, -1 = error/closed handle.
+//                        Pending events are drained so one burst of changes
+//                        reports once.
+//   fs_watch_close     — release the handle (idempotent on NULL).
+void* fs_watch_open_raw(const char* path);
+int fs_watch_wait(void* watch, int timeout_ms);
+void fs_watch_close(void* watch);
+
 #endif // AETHER_FS_H
 

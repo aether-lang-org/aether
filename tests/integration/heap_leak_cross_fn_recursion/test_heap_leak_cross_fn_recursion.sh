@@ -43,5 +43,5 @@ if ! grep -q "all cases passed" "$tmpdir/run.log"; then
     exit 1
 fi
 
-echo "  [PASS] heap_leak_cross_fn_recursion: 1000 cross-fn+recursion calls, RSS bounded"
+echo "  [PASS] heap_leak_cross_fn_recursion: 2x1000 cross-fn+recursion calls, min-growth RSS bounded"
 exit 0

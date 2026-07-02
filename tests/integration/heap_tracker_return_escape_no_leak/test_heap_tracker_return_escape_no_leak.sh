@@ -40,5 +40,5 @@ if ! grep -q "all cases passed" "$tmpdir/run.log"; then
     exit 1
 fi
 
-echo "  [PASS] heap_tracker_return_escape_no_leak: 500 return-escape accumulator calls, RSS bounded"
+echo "  [PASS] heap_tracker_return_escape_no_leak: 2x500 return-escape accumulator calls, min-growth RSS bounded"
 exit 0

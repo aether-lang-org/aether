@@ -648,6 +648,37 @@ main() {
 
 Raw externs: `dir_create_raw`, `dir_delete_raw`, `dir_list_raw`, `dir_list_count`, `dir_list_get`, `dir_list_kind`, `dir_list_free`.
 
+### Recursive walk and change notification (`fs.walk`, `fs.watch_*`)
+
+The building blocks beyond one-level listing (issue #977): visit a whole tree, and learn when a directory changes underneath you.
+
+```aether
+import std.fs
+
+// Walk: the callback sees every entry with its kind and depth.
+n, err = fs.walk(root, |path: string, kind: int, depth: int| {
+    // kind: 1 file / 2 dir / 3 symlink / 4 other (same as file_stat)
+    if kind == 2 && string.ends_with(path, "/node_modules") == 1 {
+        return 1                 // skip this subtree
+    }
+    println("${depth} ${path}")
+    return 0                     // 0 continue · 1 skip subtree · 2 stop walk
+})
+
+// Watch: coarse change ping — re-list to see what changed.
+w, werr = fs.watch_open(dir)
+changed = fs.watch_wait(w, 1000)   // 1 changed / 0 timeout / -1 error
+fs.watch_close(w)
+```
+
+**Functions:**
+- `fs.walk(path, cb)` → `(int, string)` - Visit `path` (depth 0) and every entry beneath it. Entry kinds come from readdir's `d_type` (#966) — one sweep per directory, no per-entry `stat(2)`. Symlinks are reported (kind 3) but never followed, so cycles are impossible. `path` inside the callback is borrowed — copy it to keep it. Traversal order within a directory is the platform's readdir order (unspecified). Returns (entries visited, `""`), or (0, error) when `path` can't be read.
+- `fs.watch_open(path)` → `(ptr, string)` - Watch one directory (or file), non-recursive, over the platform primitive: kqueue `EVFILT_VNODE` (macOS/BSD), inotify (Linux), `FindFirstChangeNotification` (Windows). The handle is single-threaded.
+- `fs.watch_wait(watch, timeout_ms)` → `int` - Block up to `timeout_ms` (negative = forever): 1 = something changed (create/delete/modify/rename inside the watched directory), 0 = timeout, -1 = error. Changes made **between** `watch_open` and `watch_wait` are queued, not lost, and a burst of changes reports once (pending events are drained).
+- `fs.watch_close(watch)` - Release the handle. Safe on null.
+
+The watch event is deliberately coarse — a "something changed here" ping without the file name (that is the only semantics all three platform primitives share; kqueue in particular reports no names). The idiomatic pattern is: wake on the ping, re-list with `dir.list` + `dir.list_kind`, diff against what you rendered. An actor can own the watch and poll with a short timeout in a self-send loop for live refresh.
+
 ### Paths (`std.path`)
 
 Path functions return heap-allocated plain strings (`char*`). Use `defer free(result)` if you want explicit cleanup.
