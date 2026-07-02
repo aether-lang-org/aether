@@ -1,0 +1,170 @@
+// Regression (#977): fs.walk — recursive directory traversal.
+//
+//   n, err = fs.walk(root, |path, kind, depth| { return 0 })
+//
+//   - Visits the root first (depth 0), then every entry beneath it.
+//   - kind uses the file_stat encoding (1 file / 2 dir / 3 symlink),
+//     sourced from readdir's d_type (#966) — no stat per entry.
+//   - The callback's return steers traversal: 0 continue, 1 skip the
+//     directory's subtree, 2 stop the whole walk.
+//   - Symlinks are reported but never followed (no cycles).
+//
+// Collects "depth|kind|path" lines, sorts them (readdir order is
+// unspecified), and compares the exact joined listing. Self-asserting:
+// FAIL + exit 1 on mismatch, PASS at the end. Cleans up after itself.
+
+import std.fs
+import std.collections
+import std.string
+
+extern exit(code: int)
+
+joined(L: ptr) -> string {
+    out = ""
+    n = string_list_size(L)
+    i = 0
+    while i < n {
+        out = string.concat(out, string_list_get(L, i))
+        out = string.concat(out, "\n")
+        i = i + 1
+    }
+    return out
+}
+
+main() {
+    base = "/tmp/ae_fs_walk_test"
+    _c1 = fs.create_dir(base)
+    _c2 = fs.create_dir("${base}/sub")
+    _c3 = fs.create_dir("${base}/sub/deep")
+    werr = fs.write("${base}/a.txt", "a")
+    if werr != "" {
+        println("SKIP fs.walk: cannot write probe (${werr})")
+        return
+    }
+    _w2 = fs.write("${base}/sub/b.txt", "b")
+    _w3 = fs.write("${base}/sub/deep/c.txt", "c")
+    // Symlink to a DIRECTORY — must be reported (kind 3) but not entered.
+    lerr = fs.symlink("${base}/sub", "${base}/link")
+    have_symlink = 0
+    if lerr == "" {
+        have_symlink = 1
+    }
+
+    // 1. Full walk: exact listing (sorted), correct kinds and depths.
+    L = string_list_new()
+    n, err = fs.walk(base, |path: string, kind: int, depth: int| {
+        _sa1 = string_list_add(L, "${depth}|${kind}|${path}")
+        return 0
+    })
+    if err != "" {
+        println("FAIL walk: ${err}")
+        exit(1)
+    }
+    string_list_sort_lex(L)
+    got = joined(L)
+    // Build the expected lines and sort them the same way the collected
+    // ones are sorted (readdir order is unspecified; sorted compare is
+    // exact and order-independent).
+    E = string_list_new()
+    if have_symlink == 1 {
+        _sa2 = string_list_add(E, "0|2|${base}")
+        _sa3 = string_list_add(E, "1|1|${base}/a.txt")
+        _sa4 = string_list_add(E, "1|2|${base}/sub")
+        _sa5 = string_list_add(E, "1|3|${base}/link")
+        _sa6 = string_list_add(E, "2|1|${base}/sub/b.txt")
+        _sa7 = string_list_add(E, "2|2|${base}/sub/deep")
+        _sa8 = string_list_add(E, "3|1|${base}/sub/deep/c.txt")
+    } else {
+        _sa9 = string_list_add(E, "0|2|${base}")
+        _sa10 = string_list_add(E, "1|1|${base}/a.txt")
+        _sa11 = string_list_add(E, "1|2|${base}/sub")
+        _sa12 = string_list_add(E, "2|1|${base}/sub/b.txt")
+        _sa13 = string_list_add(E, "2|2|${base}/sub/deep")
+        _sa14 = string_list_add(E, "3|1|${base}/sub/deep/c.txt")
+    }
+    string_list_sort_lex(E)
+    want = joined(E)
+    if string.equals(got, want) != 1 {
+        println("FAIL walk listing.\n--- got ---\n${got}--- want ---\n${want}")
+        exit(1)
+    }
+    // The symlinked dir was NOT followed: no path under link/.
+    cnt = string_list_size(L)
+    i = 0
+    while i < cnt {
+        if string.contains(string_list_get(L, i), "${base}/link/") == 1 {
+            println("FAIL: walk descended into a symlinked directory")
+            exit(1)
+        }
+        i = i + 1
+    }
+    string_list_free(L)
+    string_list_free(E)
+
+    // 2. Prune: returning 1 on `sub` skips its whole subtree.
+    P = string_list_new()
+    np, perr = fs.walk(base, |path: string, kind: int, depth: int| {
+        _sa15 = string_list_add(P, path)
+        if string.equals(path, "${base}/sub") == 1 {
+            return 1
+        }
+        return 0
+    })
+    if perr != "" {
+        println("FAIL prune walk: ${perr}")
+        exit(1)
+    }
+    j = 0
+    m = string_list_size(P)
+    while j < m {
+        if string.contains(string_list_get(P, j), "/sub/") == 1 {
+            println("FAIL: pruned subtree was visited: ${string_list_get(P, j)}")
+            exit(1)
+        }
+        j = j + 1
+    }
+    expected_pruned = 4      // root, a.txt, sub, link
+    if have_symlink == 0 {
+        expected_pruned = 3  // root, a.txt, sub
+    }
+    if np != expected_pruned {
+        println("FAIL prune count: ${np}, expected ${expected_pruned}")
+        exit(1)
+    }
+    string_list_free(P)
+
+    // 3. Stop: returning 2 on the root ends the walk after one visit.
+    ns, serr = fs.walk(base, |path: string, kind: int, depth: int| {
+        return 2
+    })
+    if serr != "" {
+        println("FAIL stop walk: ${serr}")
+        exit(1)
+    }
+    if ns != 1 {
+        println("FAIL stop count: ${ns}, expected 1")
+        exit(1)
+    }
+
+    // 4. Missing path reports an error.
+    _, merr = fs.walk("/no/such/path/for/walk", |path: string, kind: int, depth: int| {
+        return 0
+    })
+    if merr == "" {
+        println("FAIL: walk of a missing path did not error")
+        exit(1)
+    }
+
+    // Cleanup.
+    _d1 = fs.delete("${base}/sub/deep/c.txt")
+    _d2 = fs.delete("${base}/sub/b.txt")
+    _d3 = fs.delete("${base}/a.txt")
+    if have_symlink == 1 {
+        _d4 = fs.unlink("${base}/link")
+    }
+    _d5 = fs.delete_dir("${base}/sub/deep")
+    _d6 = fs.delete_dir("${base}/sub")
+    _d7 = fs.delete_dir(base)
+
+    println("PASS: fs.walk (listing, kinds, depths, prune, stop, symlink not followed)")
+}

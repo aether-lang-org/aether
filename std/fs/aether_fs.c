@@ -95,6 +95,10 @@ int dir_list_kind(DirList* l, int i) { (void)l; (void)i; return 0; }
 void dir_list_free(DirList* l) { (void)l; }
 DirList* fs_glob_raw(const char* p) { (void)p; return NULL; }
 DirList* fs_glob_multi_raw(void* l) { (void)l; return NULL; }
+int fs_walk_raw(const char* r, void* c) { (void)r; (void)c; return -1; }
+void* fs_watch_open_raw(const char* p) { (void)p; return NULL; }
+int fs_watch_wait(void* w, int t) { (void)w; (void)t; return -1; }
+void fs_watch_close(void* w) { (void)w; }
 #else
 
 #include <stdio.h>
@@ -2387,6 +2391,292 @@ char* path_rel(const char* base, const char* target) {
     free(cb);
     free(ct);
     return out;
+}
+
+// ============================================================
+// #977: recursive directory walk + filesystem change notification
+// ============================================================
+
+/* Layout-compatible view of the codegen's boxed `_AeClosure`
+ * (see std/collections/aether_stringseq.c and codegen.c's prologue):
+ *     typedef struct { void (*fn)(void); void* env; } _AeClosure;
+ * `env` is the implicit first argument to `fn`. The box (and its env)
+ * is malloc'd by _aether_box_closure and OWNED by the callee. */
+typedef struct { void (*fn)(void); void* env; } AeFsClosure;
+
+static void fs_closure_free(void* box) {
+    if (!box) return;
+    AeFsClosure* clo = (AeFsClosure*)box;
+    if (clo->env) free(clo->env);
+    free(box);
+}
+
+/* Walk paths are built into one shared heap buffer (append the entry name,
+ * recurse, truncate back) so recursion costs no per-level path storage. */
+#define FS_WALK_PATH_CAP 4096
+
+/* Resolve an entry kind when the readdir sweep couldn't (DT_UNKNOWN — some
+ * filesystems don't fill d_type). lstat so a symlink reports as symlink. */
+static int fs_walk_stat_kind(const char* path) {
+#ifdef _WIN32
+    DWORD attr = GetFileAttributesA(path);
+    if (attr == INVALID_FILE_ATTRIBUTES) return 0;
+    return fs_winattr_to_kind(attr);
+#else
+    struct stat st;
+    if (lstat(path, &st) != 0) return 0;
+    if (S_ISLNK(st.st_mode))  return FS_STAT_KIND_SYMLINK;
+    if (S_ISREG(st.st_mode))  return FS_STAT_KIND_FILE;
+    if (S_ISDIR(st.st_mode))  return FS_STAT_KIND_DIR;
+    return FS_STAT_KIND_OTHER;
+#endif
+}
+
+/* Recursive worker. `buf` holds the current directory path (`len` bytes,
+ * NUL-terminated); entries are appended as "/name" for the callback and the
+ * buffer is truncated back after each. Returns 2 as soon as the callback
+ * asks to stop (propagates all the way out), 0 otherwise. */
+static int fs_walk_recurse(char* buf, size_t len, int depth,
+                           int (*cb)(void*, const char*, int, int), void* env,
+                           int* count) {
+#ifdef _WIN32
+    /* Build the search pattern in the shared path buffer (append "/*",
+     * FindFirstFile copies it, restore) — no per-recursion-level stack
+     * array, so deep trees cost no stack. */
+    if (len + 2 >= FS_WALK_PATH_CAP) return 0;  /* path too deep — prune */
+    buf[len] = '/';
+    buf[len + 1] = '*';
+    buf[len + 2] = '\0';
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(buf, &fd);
+    buf[len] = '\0';
+    if (h == INVALID_HANDLE_VALUE) return 0;    /* unreadable dir — skip */
+    do {
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0)
+            continue;
+        size_t nlen = strlen(fd.cFileName);
+        if (len + 1 + nlen >= FS_WALK_PATH_CAP) continue;  /* too long — prune */
+        buf[len] = '/';
+        memcpy(buf + len + 1, fd.cFileName, nlen + 1);
+        int kind = fs_winattr_to_kind(fd.dwFileAttributes);
+        (*count)++;
+        int rc = cb(env, buf, kind, depth);
+        if (rc == 2) { buf[len] = '\0'; FindClose(h); return 2; }
+        if (rc != 1 && kind == FS_STAT_KIND_DIR) {
+            if (fs_walk_recurse(buf, len + 1 + nlen, depth + 1,
+                                cb, env, count) == 2) {
+                buf[len] = '\0';
+                FindClose(h);
+                return 2;
+            }
+        }
+        buf[len] = '\0';
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR* dir = opendir(buf);
+    if (!dir) return 0;                         /* unreadable dir — skip */
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        size_t nlen = strlen(entry->d_name);
+        if (len + 1 + nlen >= FS_WALK_PATH_CAP) continue;  /* too long — prune */
+        buf[len] = '/';
+        memcpy(buf + len + 1, entry->d_name, nlen + 1);
+        int kind = fs_dtype_to_kind(entry->d_type);
+        if (kind == 0) kind = fs_walk_stat_kind(buf);   /* DT_UNKNOWN fallback */
+        (*count)++;
+        int rc = cb(env, buf, kind, depth);
+        if (rc == 2) { buf[len] = '\0'; closedir(dir); return 2; }
+        if (rc != 1 && kind == FS_STAT_KIND_DIR) {
+            /* Only genuine directories are entered — a symlink to a
+             * directory reports kind 3 and is never followed (no cycles). */
+            if (fs_walk_recurse(buf, len + 1 + nlen, depth + 1,
+                                cb, env, count) == 2) {
+                buf[len] = '\0';
+                closedir(dir);
+                return 2;
+            }
+        }
+        buf[len] = '\0';
+    }
+    closedir(dir);
+#endif
+    return 0;
+}
+
+int fs_walk_raw(const char* root, void* cb_box) {
+    if (!root || !cb_box) { fs_closure_free(cb_box); return -1; }
+    if (!aether_sandbox_check("fs_read", root)) {
+        fs_closure_free(cb_box);
+        return -1;
+    }
+    size_t rlen = strlen(root);
+    if (rlen == 0 || rlen >= FS_WALK_PATH_CAP) {
+        fs_closure_free(cb_box);
+        return -1;
+    }
+    int root_kind = fs_walk_stat_kind(root);
+    if (root_kind == 0) { fs_closure_free(cb_box); return -1; }
+
+    AeFsClosure clo = *(AeFsClosure*)cb_box;
+    int (*cb)(void*, const char*, int, int) =
+        (int (*)(void*, const char*, int, int))clo.fn;
+
+    /* #462: the path buffer goes through the capability allocator like the
+     * rest of the module's traversal storage. */
+    char* buf = (char*)aether_caps_malloc(FS_WALK_PATH_CAP);
+    if (!buf) { fs_closure_free(cb_box); return -1; }
+    memcpy(buf, root, rlen + 1);
+    /* Trim trailing separators so joined paths don't double the slash. */
+    while (rlen > 1 && buf[rlen - 1] == '/') buf[--rlen] = '\0';
+
+    int count = 1;
+    int rc = cb(clo.env, buf, root_kind, 0);    /* the root is visited too */
+    if (rc != 1 && rc != 2 && root_kind == FS_STAT_KIND_DIR) {
+        fs_walk_recurse(buf, rlen, 1, cb, clo.env, &count);
+    }
+
+    aether_caps_free(buf, FS_WALK_PATH_CAP);
+    fs_closure_free(cb_box);
+    return count;
+}
+
+// ---- watch: coarse change notification on one directory (or file) ----
+
+#if defined(__linux__)
+#include <sys/inotify.h>
+#include <poll.h>
+typedef struct { int ifd; int wd; } AeFsWatch;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+      defined(__NetBSD__) || defined(__DragonFly__)
+#include <sys/event.h>
+#include <sys/time.h>
+typedef struct { int kq; int dirfd; } AeFsWatch;
+#elif defined(_WIN32)
+typedef struct { HANDLE h; } AeFsWatch;
+#else
+typedef struct { int unused; } AeFsWatch;
+#endif
+
+void* fs_watch_open_raw(const char* path) {
+    if (!path) return NULL;
+    if (!aether_sandbox_check("fs_read", path)) return NULL;
+
+#if defined(__linux__)
+    int ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (ifd < 0) return NULL;
+    int wd = inotify_add_watch(ifd, path,
+                               IN_CREATE | IN_DELETE | IN_MODIFY |
+                               IN_MOVED_FROM | IN_MOVED_TO | IN_ATTRIB |
+                               IN_DELETE_SELF | IN_MOVE_SELF);
+    if (wd < 0) { close(ifd); return NULL; }
+    AeFsWatch* w = (AeFsWatch*)aether_caps_malloc(sizeof(AeFsWatch));
+    if (!w) { inotify_rm_watch(ifd, wd); close(ifd); return NULL; }
+    w->ifd = ifd;
+    w->wd = wd;
+    return w;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+      defined(__NetBSD__) || defined(__DragonFly__)
+    /* O_EVTONLY (macOS) opens for event monitoring without blocking
+     * unmount; elsewhere a plain read-only descriptor serves. */
+#ifdef O_EVTONLY
+    int dirfd = open(path, O_EVTONLY);
+#else
+    int dirfd = open(path, O_RDONLY);
+#endif
+    if (dirfd < 0) return NULL;
+    int kq = kqueue();
+    if (kq < 0) { close(dirfd); return NULL; }
+    struct kevent kev;
+    EV_SET(&kev, dirfd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+           NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB | NOTE_DELETE |
+           NOTE_RENAME | NOTE_LINK,
+           0, NULL);
+    if (kevent(kq, &kev, 1, NULL, 0, NULL) < 0) {
+        close(kq);
+        close(dirfd);
+        return NULL;
+    }
+    AeFsWatch* w = (AeFsWatch*)aether_caps_malloc(sizeof(AeFsWatch));
+    if (!w) { close(kq); close(dirfd); return NULL; }
+    w->kq = kq;
+    w->dirfd = dirfd;
+    return w;
+#elif defined(_WIN32)
+    HANDLE h = FindFirstChangeNotificationA(
+        path, FALSE,
+        FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+        FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE |
+        FILE_NOTIFY_CHANGE_ATTRIBUTES);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    AeFsWatch* w = (AeFsWatch*)aether_caps_malloc(sizeof(AeFsWatch));
+    if (!w) { FindCloseChangeNotification(h); return NULL; }
+    w->h = h;
+    return w;
+#else
+    (void)path;
+    return NULL;    /* no change-notification primitive on this platform */
+#endif
+}
+
+int fs_watch_wait(void* watch, int timeout_ms) {
+    if (!watch) return -1;
+    AeFsWatch* w = (AeFsWatch*)watch;
+
+#if defined(__linux__)
+    struct pollfd pfd = { .fd = w->ifd, .events = POLLIN, .revents = 0 };
+    int pr = poll(&pfd, 1, timeout_ms);   /* negative timeout = forever */
+    if (pr < 0) return -1;
+    if (pr == 0) return 0;
+    /* Drain everything queued so one burst of changes reports once. The
+     * fd is non-blocking; read until EAGAIN. */
+    char drain[4096];
+    while (read(w->ifd, drain, sizeof(drain)) > 0) { }
+    return 1;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+      defined(__NetBSD__) || defined(__DragonFly__)
+    struct kevent ev;
+    int n;
+    if (timeout_ms < 0) {
+        n = kevent(w->kq, NULL, 0, &ev, 1, NULL);
+    } else {
+        struct timespec ts = { timeout_ms / 1000,
+                               (long)(timeout_ms % 1000) * 1000000L };
+        n = kevent(w->kq, NULL, 0, &ev, 1, &ts);
+    }
+    if (n < 0) return -1;
+    return n > 0 ? 1 : 0;   /* EV_CLEAR resets the state after delivery */
+#elif defined(_WIN32)
+    DWORD t = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
+    DWORD r = WaitForSingleObject(w->h, t);
+    if (r == WAIT_OBJECT_0) {
+        FindNextChangeNotification(w->h);   /* re-arm for the next wait */
+        return 1;
+    }
+    if (r == WAIT_TIMEOUT) return 0;
+    return -1;
+#else
+    (void)timeout_ms;
+    return -1;
+#endif
+}
+
+void fs_watch_close(void* watch) {
+    if (!watch) return;
+    AeFsWatch* w = (AeFsWatch*)watch;
+#if defined(__linux__)
+    inotify_rm_watch(w->ifd, w->wd);
+    close(w->ifd);
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+      defined(__NetBSD__) || defined(__DragonFly__)
+    close(w->kq);
+    close(w->dirfd);
+#elif defined(_WIN32)
+    FindCloseChangeNotification(w->h);
+#endif
+    aether_caps_free(w, sizeof(AeFsWatch));
 }
 
 #endif // AETHER_HAS_FILESYSTEM

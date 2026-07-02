@@ -40,10 +40,12 @@ exports (
     fs_release_pread, fs_ftruncate_raw, fs_fsync_raw,
     pwrite, pread, ftruncate, fsync,
     fs_glob_raw, fs_glob_multi_raw,
+    fs_walk_raw, fs_watch_open_raw,
     open, read, write, delete, size, mtime, exists,
     create_dir, create_dir_with_mode, delete_dir, mkdir_p,
     symlink, readlink, unlink,
     list_dir, glob, glob_multi,
+    walk, watch_open, watch_wait, watch_close,
     write_binary, write_atomic, rename, file_stat, read_binary,
     fs_copy_raw, fs_move_raw, fs_realpath_raw, fs_chmod_raw,
     copy, move, realpath, chmod,
@@ -254,6 +256,18 @@ extern fs_fsync_raw(file: ptr) -> string
 extern fs_glob_raw(pattern: string) -> ptr
 extern fs_glob_multi_raw(patterns: ptr) -> ptr
 
+// #977: recursive walk + change notification. Raw externs; the Aether-native
+// wrappers (walk / watch_open below) add the (value, err) surface.
+extern fs_walk_raw(path: string, cb: ptr) -> int
+extern fs_watch_open_raw(path: string) -> ptr
+// Block up to timeout_ms (negative = forever): 1 = something changed,
+// 0 = timeout, -1 = error / closed handle. Pending events are drained so
+// one burst of changes reports once; changes between watch_open and
+// watch_wait are queued, not lost.
+extern fs_watch_wait(watch: ptr, timeout_ms: int) -> int
+// Release the handle. Safe on null.
+extern fs_watch_close(watch: ptr)
+
 // string_concat used for duplicating borrowed strings. strlen-based —
 // do NOT use for binary payloads (it truncates at the first embedded
 // NUL). Length-aware reads use string_new_with_length.
@@ -457,6 +471,60 @@ glob_multi(patterns: ptr) -> {
         return null, "glob failed"
     }
     return list, ""
+}
+
+// #977: recursive directory walk. Visits `path` itself first (depth 0), then
+// every entry beneath it, calling `cb` per entry:
+//
+//     n, err = fs.walk(root, |path: string, kind: int, depth: int| {
+//         // kind: 1 file / 2 dir / 3 symlink / 4 other (same as file_stat)
+//         return 0     // 0 = continue, 1 = skip this dir's subtree, 2 = stop
+//     })
+//
+// One readdir sweep per directory — entry kinds come from d_type (#966), so
+// nothing is stat'ed unless the filesystem doesn't report a type. Symlinks
+// are reported but never followed (no cycles). `path` is borrowed inside the
+// callback — copy it (string.copy / list add) to keep it. Traversal order
+// within a directory is the platform's readdir order (unspecified).
+// Returns (entries visited, "") or (0, error) when `path` can't be read.
+walk(path: string, cb: ptr) -> {
+    n = fs_walk_raw(path, cb)
+    if n < 0 {
+        return 0, "cannot walk path"
+    }
+    return n, ""
+}
+
+// #977: watch a directory (or file) for changes — create / delete / modify /
+// rename inside it — over the platform primitive (kqueue on macOS/BSD,
+// inotify on Linux, FindFirstChangeNotification on Windows). The event is a
+// coarse "something changed here" ping: re-list the directory to see what.
+// Non-recursive; one handle watches one path; a handle is single-threaded.
+//
+//     w, err = fs.watch_open(dir)
+//     changed = fs.watch_wait(w, 1000)   // 1 changed / 0 timeout / -1 error
+//     fs.watch_close(w)
+//
+// Changes that happen between watch_open and watch_wait are queued, not
+// lost — so "open watch, do work, then wait" never misses an edit.
+watch_open(path: string) -> {
+    w = fs_watch_open_raw(path)
+    if w == null {
+        return null, "cannot watch path"
+    }
+    return w, ""
+}
+
+// Block up to timeout_ms (negative = forever). 1 = changed, 0 = timeout,
+// -1 = error / closed handle. Drains pending events so one burst of changes
+// reports once.
+watch_wait(watch: ptr, timeout_ms: int) -> int {
+    return fs_watch_wait(watch, timeout_ms)
+}
+
+// Release the watch handle. Safe on null.
+watch_close(watch: ptr) {
+    fs_watch_close(watch)
 }
 
 // Non-atomic binary write: open, write exactly `length` bytes,

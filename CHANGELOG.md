@@ -11,6 +11,41 @@ next version number before tagging the release.
 
 ## [0.344.0]
 
+### Added
+
+- **`std.fs`: recursive walk + filesystem change notification** (#977). The
+  building blocks real filesystem apps need beyond one-level listing:
+
+  - `fs.walk(root, cb)` visits `root` (depth 0) and every entry beneath it,
+    calling `cb(path, kind, depth)` per entry. Kinds come from readdir's
+    `d_type` (#966) — one sweep per directory, zero per-entry `stat(2)`.
+    The callback steers traversal: return 0 to continue, 1 to skip a
+    directory's subtree, 2 to stop the walk. Symlinks are reported (kind 3)
+    but never followed, so cycles are impossible.
+
+  - `fs.watch_open(path)` / `fs.watch_wait(w, timeout_ms)` /
+    `fs.watch_close(w)` — coarse change notification on a directory over the
+    platform primitive: kqueue `EVFILT_VNODE` (macOS/BSD), inotify (Linux),
+    `FindFirstChangeNotification` (Windows). `watch_wait` returns 1 when
+    something changed (create/delete/modify/rename), 0 on timeout, -1 on
+    error; changes between open and wait are queued, not lost, and a burst
+    reports once. Re-list with `dir.list` + `dir.list_kind` to see what
+    changed.
+
+  ```aether
+  n, err = fs.walk(root, |path: string, kind: int, depth: int| {
+      if kind == 2 && string.ends_with(path, "/node_modules") == 1 {
+          return 1              // skip this subtree
+      }
+      println("${depth} ${path}")
+      return 0
+  })
+
+  w, werr = fs.watch_open(dir)
+  changed = fs.watch_wait(w, 1000)   // 1 changed / 0 timeout
+  fs.watch_close(w)
+  ```
+
 ### Fixed
 
 - **Codegen mangles struct/message FIELD names that collide with C keywords**

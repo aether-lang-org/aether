@@ -45,6 +45,14 @@ main() {
         w = w + 1
     }
 
+    // Measure TWO consecutive loops and take the SMALLER growth. A genuine
+    // per-call leak repeats in every loop (~896 KB per 1000 calls pre-fix),
+    // so the minimum still carries the signal. One-time noise does not
+    // repeat: under full-suite memory pressure macOS can page-compress part
+    // of the process before rss0 and re-resident it inside the first loop,
+    // which showed up as spurious "growth" on a leak-free run even with the
+    // shim's pressure-relief sampling. That transient lands in one window,
+    // not both — the min discards it.
     rss0 = getrusage_max_rss_kb()
     j = 0
     while j < 1000 {
@@ -56,17 +64,33 @@ main() {
         j = j + 1
     }
     rss1 = getrusage_max_rss_kb()
-    growth = rss1 - rss0
+    k = 0
+    while k < 1000 {
+        s2 = dirwalk.rebuild_dir(3, 5)
+        if string.length(s2) < 100 {
+            println("FAIL iter2 ${k}: length=${string.length(s2)}")
+            exit(1)
+        }
+        k = k + 1
+    }
+    rss2 = getrusage_max_rss_kb()
+    growth1 = rss1 - rss0
+    growth2 = rss2 - rss1
+    growth = growth1
+    if growth2 < growth1 {
+        growth = growth2
+    }
 
-    // Pre-fix this leaks ~896 KB across 1000 iterations of the
-    // cross-fn + recursion + bare-identifier-return shape. Post-fix
-    // stays flat (~0 KB). 256 KB threshold accommodates incidental
+    // Pre-fix this leaks ~896 KB across EACH 1000-iteration loop of the
+    // cross-fn + recursion + bare-identifier-return shape — both windows
+    // show it, so the min stays far above the bound. Post-fix both stay
+    // flat (~0 KB). 256 KB threshold accommodates incidental
     // allocator-bookkeeping.
     if growth > 256 {
-        println("FAIL: RSS grew ${growth} KB across 1000 calls (>256 KB) — cross-fn+recursion leak")
+        println("FAIL: RSS grew ${growth1}/${growth2} KB across two 1000-call loops (min >256 KB) — cross-fn+recursion leak")
         exit(1)
     }
 
-    println("  PASS: 1000 cross-fn+recursion calls, RSS growth ${growth} KB (bounded)")
+    println("  PASS: 2x1000 cross-fn+recursion calls, RSS growth min(${growth1}, ${growth2}) KB (bounded)")
     println("=== all cases passed ===")
 }
