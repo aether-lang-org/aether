@@ -111,6 +111,7 @@ const char* http_request_path(HttpRequest* r) { (void)r; return ""; }
 const char* http_request_body(HttpRequest* r) { (void)r; return ""; }
 int http_request_body_length(HttpRequest* r) { (void)r; return 0; }
 int http_request_body_read_raw(HttpRequest* r, int o, int m) { (void)r; (void)o; (void)m; return 0; }
+int http_request_body_complete(HttpRequest* r) { (void)r; return 0; }
 const char* http_get_request_body_read(void) { return ""; }
 int http_get_request_body_read_length(void) { return 0; }
 void http_release_request_body_read(void) {}
@@ -2586,6 +2587,16 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
      * total so length-aware callers (http.request_body_length) still
      * report the wire size; `body` is NULL (no buffered payload). */
     if (stream_body) {
+        /* The parser only saw the header slice, so it left a 0-byte
+         * placeholder in req->body (malloc'd empty buffer). Drop it:
+         * a streaming request's contract is body == NULL until either
+         * http_request_body materializes it or the chunked accessor
+         * consumes the wire directly. Leaving the placeholder in place
+         * would make the whole-body accessor return an empty buffer
+         * while body_length claims the declared Content-Length — a
+         * 1-byte allocation paired with a multi-MB length. */
+        free(req->body);
+        req->body            = NULL;
         req->stream_conn     = conn;
         req->stream_total    = content_length;
         req->stream_consumed = 0;
@@ -4290,16 +4301,77 @@ const char* http_request_path(HttpRequest* req) {
 }
 
 const char* http_request_body(HttpRequest* req) {
-    return (req && req->body) ? req->body : "";
+    if (!req) return "";
+    /* #644 — v1 contract on a STREAMING request: `http.request_body` must
+     * keep returning the whole payload even though the dispatcher no longer
+     * pre-buffers it. Materialize on demand: drain the remaining wire bytes
+     * into a heap buffer once, then serve it like a buffered body. The
+     * caller explicitly asked for full buffering, so the O(Content-Length)
+     * allocation is the requested behaviour — handlers that want bounded
+     * RAM use http_request_body_read instead.
+     *
+     * Mixed usage (some bytes already pulled via http_request_body_read)
+     * cannot be honoured — the consumed prefix is gone, and returning a
+     * tail as if it were the whole body would silently corrupt. That case
+     * keeps returning "" (same as before this fix). */
+    if (req->stream_conn && !req->body && req->stream_consumed == 0 &&
+        req->stream_total > 0) {
+        HttpConn* conn = (HttpConn*)req->stream_conn;
+        long total = req->stream_total;
+        char* buf = (char*)malloc((size_t)total + 1);
+        if (!buf) return "";
+        long got = 0;
+        /* (a) body bytes that arrived in the same recv as the headers. */
+        int buffered = conn->write_pos - conn->read_pos;
+        if (buffered > 0) {
+            long take = ((long)buffered < total) ? (long)buffered : total;
+            memcpy(buf, conn->buf + conn->read_pos, (size_t)take);
+            conn->read_pos += (int)take;
+            got += take;
+        }
+        /* (b) the rest straight off the socket. A short read (peer closed
+         * mid-body) yields the received prefix; the post-handler drain
+         * sees the updated stream_consumed and gives up on the same
+         * peer-close. */
+        while (got < total) {
+            int n = conn_recv(conn, buf + got, (int)(total - got));
+            if (n <= 0) break;
+            got += n;
+        }
+        buf[got] = '\0';
+        req->body = buf;
+        req->body_length = (size_t)got;
+        req->stream_consumed += got;
+    }
+    return (req->body) ? req->body : "";
 }
 
 int http_request_body_length(HttpRequest* req) {
     if (!req) return 0;
-    /* Streaming request: `body` is NULL but the declared length is the
-     * Content-Length we stashed. The canonical upload loop reads this
-     * to know how many bytes to pull via http_request_body_read. */
+    /* A materialized (or originally buffered) body reports its actual
+     * byte count — after a short read this is what request_body holds. */
+    if (req->body) return (int)req->body_length;
+    /* Streaming request not yet materialized: `body` is NULL but the
+     * declared length is the Content-Length we stashed. The canonical
+     * upload loop reads this to know how many bytes to pull via
+     * http_request_body_read. */
     if (req->stream_conn) return (int)req->stream_total;
-    return req->body ? (int)req->body_length : 0;
+    return 0;
+}
+
+/* #644 — has the request body fully arrived (and, for a streaming
+ * request, been consumed off the wire)? Buffered requests are complete
+ * by construction — the dispatcher had the whole payload before the
+ * handler ran. A streaming request reports 1 once every declared byte
+ * has been pulled (via http_request_body_read or a materializing
+ * http_request_body call). Lets a chunked-iteration loop detect "done"
+ * without comparing offsets against request_body_length. */
+int http_request_body_complete(HttpRequest* req) {
+    if (!req) return 0;
+    if (req->stream_conn) {
+        return (req->stream_consumed >= req->stream_total) ? 1 : 0;
+    }
+    return 1;
 }
 
 /* #626 — chunked-read request body, TLS split-accessor shape.

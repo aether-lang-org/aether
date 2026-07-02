@@ -98,4 +98,71 @@ if ! echo "$RESP" | grep -q "pong"; then
     exit 1
 fi
 
-echo "  [PASS] http_stream_upload: 3 MiB streamed (bounded), byte-identical, keep-alive clean"
+# #644 — request_body_complete around the streaming loop: not complete at
+# handler entry (dispatched at headers-complete), complete after the drain.
+if ! echo "$RESP" | grep -q "pre=0"; then
+    echo "  [FAIL] body_complete at handler entry should be 0 on a streaming request: $RESP"
+    exit 1
+fi
+if ! echo "$RESP" | grep -q "post=1"; then
+    echo "  [FAIL] body_complete after the read loop should be 1: $RESP"
+    exit 1
+fi
+
+# #644 v1 contract — the whole-body accessor on the SAME large payload must
+# materialize on demand and return every byte (pre-fix it returned "" for
+# any body over the 16 KiB streaming threshold). Keep-alive after the
+# materializing route must stay clean too (drain no-ops on a consumed body).
+RESP2=$(curl --silent --show-error --max-time 30 \
+            --data-binary "@$PAYLOAD" \
+            -H "Content-Type: application/octet-stream" \
+            -X POST "http://127.0.0.1:19250/v1body" \
+            --next "http://127.0.0.1:19250/ping" \
+            2>"$TMPDIR/curl2.err") || {
+    echo "  [FAIL] v1body curl failed:"; cat "$TMPDIR/curl2.err"; head -20 "$TMPDIR/srv.log"; exit 1
+}
+if echo "$RESP2" | grep -q "v1sha=unavailable"; then
+    echo "  [SKIP] http_stream_upload v1body — server built without OpenSSL (no digest)"
+    exit 0
+fi
+V1_LEN=$(echo "$RESP2" | sed -n 's/.*v1len=\([0-9]*\).*/\1/p' | head -1)
+V1_SHA=$(echo "$RESP2" | sed -n 's/.*v1sha=\([0-9a-f]*\).*/\1/p' | head -1)
+if [ "$V1_LEN" != "$WANT_LEN" ]; then
+    echo "  [FAIL] v1 request_body length: got '$V1_LEN', want '$WANT_LEN' (materialize-on-demand broken)"; exit 1
+fi
+if [ "$V1_SHA" != "$WANT_SHA" ]; then
+    echo "  [FAIL] v1 request_body digest mismatch (materialized body corrupt):"
+    echo "    server sha256=$V1_SHA"
+    echo "    sent   sha256=$WANT_SHA"
+    exit 1
+fi
+if ! echo "$RESP2" | grep -q "v1pre=0"; then
+    echo "  [FAIL] v1body: body_complete at entry should be 0 on a streaming request: $RESP2"; exit 1
+fi
+if ! echo "$RESP2" | grep -q "v1post=1"; then
+    echo "  [FAIL] v1body: body_complete after materialization should be 1: $RESP2"; exit 1
+fi
+if ! echo "$RESP2" | grep -q "pong"; then
+    echo "  [FAIL] keep-alive boundary dirty after materializing route: $RESP2"; exit 1
+fi
+
+# Small (buffered, < 16 KiB) body: complete at entry by construction.
+SMALL="$TMPDIR/small.bin"
+head -c 512 /dev/urandom > "$SMALL"
+SMALL_LEN=$(wc -c < "$SMALL" | tr -d ' ')
+RESP3=$(curl --silent --show-error --max-time 10 \
+            --data-binary "@$SMALL" \
+            -H "Content-Type: application/octet-stream" \
+            -X POST "http://127.0.0.1:19250/v1body" \
+            2>"$TMPDIR/curl3.err") || {
+    echo "  [FAIL] small v1body curl failed:"; cat "$TMPDIR/curl3.err"; exit 1
+}
+S_LEN=$(echo "$RESP3" | sed -n 's/.*v1len=\([0-9]*\).*/\1/p' | head -1)
+if [ "$S_LEN" != "$SMALL_LEN" ]; then
+    echo "  [FAIL] small v1body length: got '$S_LEN', want '$SMALL_LEN': $RESP3"; exit 1
+fi
+if ! echo "$RESP3" | grep -q "v1pre=1"; then
+    echo "  [FAIL] small (buffered) body should be complete at handler entry: $RESP3"; exit 1
+fi
+
+echo "  [PASS] http_stream_upload: 3 MiB streamed (bounded), byte-identical, keep-alive clean, v1 whole-body materializes, body_complete correct"

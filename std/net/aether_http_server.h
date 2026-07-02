@@ -618,20 +618,36 @@ void http_server_drain_connection(HttpServer* server, int client_fd);
 // Request accessors (for use from Aether .ae code via opaque ptr)
 const char* http_request_method(HttpRequest* req);
 const char* http_request_path(HttpRequest* req);
+// Whole request body. On a STREAMING request (#644 v1 contract) the
+// first call materializes: it drains the remaining wire bytes into a
+// heap buffer once, so existing whole-body handlers keep working on
+// large uploads at the cost of the O(Content-Length) allocation they
+// asked for. Mixed usage — calling this after http_request_body_read
+// already consumed part of the stream — returns "" (the prefix is
+// gone; a silent tail-as-whole would corrupt).
 const char* http_request_body(HttpRequest* req);
 // Sibling of http_request_body — returns the body's byte length so
 // callers can read NUL-bearing payloads (svn PUT, image uploads,
 // gzip-compressed bodies) without strlen() truncating at the first
-// embedded zero. Returns 0 if req is NULL or has no body.
+// embedded zero. Returns 0 if req is NULL or has no body. On a
+// streaming request this is the declared Content-Length until the
+// body is materialized, then the actual received count.
 int         http_request_body_length(HttpRequest* req);
 
-// #626 — Chunked-read request body. TLS split-accessor: the bytes
-// live in a per-thread buffer until the next call or explicit release.
-// CURRENT IMPLEMENTATION reads from the already-buffered req->body;
-// the streaming-parse reshape (handler runs before body finishes
-// arriving) is a follow-up. The API shape is stable so porter code
-// is ready for the day the internals stream.
+// #626 / #644 — Chunked-read request body. TLS split-accessor: the
+// bytes live in a per-thread buffer until the next call or explicit
+// release. Two backing modes: bodies that fit one connection buffer
+// (16 KiB) are pre-buffered and served as random-access slices; larger
+// bodies are STREAMED — the dispatcher fires the handler at headers-
+// complete and each read pulls the next window straight off the
+// socket (sequential offsets only), so peak RAM is O(buf + window)
+// per connection. Backpressure is the TCP flow control itself: the
+// server simply doesn't recv until the handler asks for more.
+// Transfer-Encoding: chunked request bodies remain unsupported (as
+// before the reshape): with no Content-Length the body length is 0
+// and no body is read — the deliberate v1 semantics decision of #644.
 int         http_request_body_read_raw(HttpRequest* req, int offset, int max);
+int         http_request_body_complete(HttpRequest* req);
 const char* http_get_request_body_read(void);
 int         http_get_request_body_read_length(void);
 void        http_release_request_body_read(void);
