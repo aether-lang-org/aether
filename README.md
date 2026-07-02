@@ -283,9 +283,13 @@ aether/
 │   ├── os/             # Shell execution, command capture, env vars, ISO-8601 time
 │   └── log/            # Structured logging
 ├── contrib/            # Optional / opinionated modules outside std/
+│   ├── cryptography/   # Extra crypto beyond std.cryptography
+│   ├── parsers/        # xml_expat (SAX XML via libexpat)
 │   ├── sqlite/         # SQLite bindings (open, prepare, bind, step, column, ...)
+│   ├── templating/     # liquid (Shopify-Liquid port) + native emitter DSL
 │   ├── tinyweb/        # Server-side request/response DSL
-│   └── host/<lang>/    # Embed Lua, Python, Perl, Ruby, Tcl, JS, Factor in-process
+│   └── host/<lang>/    # Embed js, lua, perl, python, ruby, tcl, duktape,
+│                       #   tinygo, go, java, factor, racket, rhombus in-process
 ├── tools/              # Developer tools
 │   ├── ae.c            # Unified CLI tool (ae command)
 │   └── apkg/           # Project tooling, TOML parser
