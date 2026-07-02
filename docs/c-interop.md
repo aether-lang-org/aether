@@ -788,6 +788,38 @@ This is the shape a packed C header struct needs — e.g. the Redis `sdshdr8/16/
 - `@packed` governs only a struct body **Aether emits**. It is mutually exclusive with `@c_import` (whose layout — including packing — comes from the included C header); combining them is a parse error.
 - Bit-width fields (`name: type : NN`) and a trailing flexible array still work under `@packed`, exactly as for a plain `extern struct`.
 
+#### Recipe: header-before-the-pointer strings (the `sds` pattern)
+
+Redis-style strings hand around a pointer to the *data* while the packed
+header lives at negative offsets — `SDS_HDR(T, s)` is just `s -
+sizeof(struct sdshdrT)`, and `s[-1]` is the flags byte that selects the
+variant. Both halves compose from `@packed` + `std.mem`:
+
+```aether
+import std.mem
+
+extern struct sdshdr8 @packed { len: uint8  alloc: uint8  flags: byte }
+
+// One allocation: [header][data...]; hand around only `s`.
+base = malloc(sizeof(sdshdr8) + cap)
+*sdshdr8 h = base as *sdshdr8
+h.len = 5
+h.alloc = cap
+h.flags = 1
+s = mem.long_to_ptr(mem.ptr_to_long(base) + sizeof(sdshdr8))
+
+// Given ONLY `s`: the s[-1] flags read selects the header variant...
+flags = mem.get_uint8(s, 0 - 1)
+// ...and the negative-offset overlay recovers the whole header.
+*sdshdr8 hdr = mem.long_to_ptr(mem.ptr_to_long(s) - sizeof(sdshdr8)) as *sdshdr8
+n = hdr.len
+```
+
+`mem.get_uint8(p, offset)` and friends accept negative offsets (they index
+a `uint8_t*` with a signed int), and the recovered overlay aliases the same
+memory — a write through `hdr.len` is visible through every other view.
+End-to-end proof: `tests/regression/test_issue747_sds_floor.ae`.
+
 ### Aether-side string-builder return types
 
 Aether-side primitives that build strings split into two camps:
