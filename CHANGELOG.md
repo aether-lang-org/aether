@@ -13,6 +13,26 @@ next version number before tagging the release.
 
 ### Added
 
+- **`std.http`: streaming request bodies completed** (#644). The parse-loop
+  reshape landed earlier (bodies over 16 KiB dispatch the handler at
+  headers-complete and `request_body_read` pulls windows straight off the
+  socket — peak RAM per upload is one window, with TCP flow control as the
+  backpressure). This closes the remaining #644 items:
+
+  - **v1 whole-body contract restored**: `http.request_body(req)` on a large
+    (streaming) request now *materializes on demand* — the first call drains
+    the remaining wire bytes into one buffer, so existing whole-body handlers
+    keep working at the O(Content-Length) cost they asked for. Previously it
+    returned an empty buffer while `request_body_length` claimed the declared
+    Content-Length — a mismatch that read out of bounds if the caller
+    trusted the pair. Mixing it with `request_body_read` on the same request
+    returns `""` (the consumed prefix is gone; a tail-as-whole would corrupt).
+  - **`http.request_body_complete(req)`** — 1 once every declared byte has
+    arrived (streaming: pulled off the wire; buffered: always 1). The natural
+    chunked-loop terminator.
+  - **Semantics decision documented**: `Transfer-Encoding: chunked` request
+    bodies remain unsupported (no `Content-Length` → length 0, no body read).
+
 - **`std.fs`: recursive walk + filesystem change notification** (#977). The
   building blocks real filesystem apps need beyond one-level listing:
 

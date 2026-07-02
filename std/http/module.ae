@@ -58,7 +58,8 @@ exports (
     http_request_scheme, http_request_is_tls, http_request_http_version,
     http_request_body_read_raw, http_get_request_body_read,
     http_get_request_body_read_length, http_release_request_body_read,
-    request_body_read,
+    http_request_body_complete,
+    request_body_read, request_body_complete,
     http_request_header_count, http_request_header_name, http_request_header_value,
     http_serve_static, http_serve_file, http_mime_type,
     serve_file, serve_static,
@@ -627,6 +628,12 @@ extern http_request_body(req: ptr) -> string
 // svn PUT) — `string.length` on the body would `strlen` and truncate.
 extern http_request_body_length(req: ptr) -> int
 extern http_request_body_read_raw(req: ptr, offset: int, max: int) -> int
+// #644: 1 once the whole body has arrived (streaming request: every
+// declared byte pulled off the wire; buffered request: always 1 — the
+// dispatcher had the payload before the handler ran). Lets a chunked-
+// iteration loop detect "done" without comparing offsets against
+// request_body_length.
+extern http_request_body_complete(req: ptr) -> int
 extern http_get_request_body_read() -> string
 extern http_get_request_body_read_length() -> int
 extern http_release_request_body_read()
@@ -734,6 +741,23 @@ request_body_read(req: ptr, offset: int, max: int) -> {
     owned = string_new_with_length(raw, n)
     http_release_request_body_read()
     return owned, n, ""
+}
+
+// #644: has the request body fully arrived? 1 once every declared byte
+// has been received (streaming request: pulled off the wire by
+// request_body_read / request_body; buffered request: always 1). The
+// natural loop terminator for chunked iteration:
+//
+//   off = 0
+//   while http.request_body_complete(req) == 0 {
+//       chunk, n, err = http.request_body_read(req, off, 65536)
+//       if err != "" { ...handle... break }
+//       if n == 0 { break }
+//       ...consume chunk...
+//       off = off + n
+//   }
+request_body_complete(req: ptr) -> int {
+    return http_request_body_complete(req)
 }
 
 request_query(req: ptr) -> string {

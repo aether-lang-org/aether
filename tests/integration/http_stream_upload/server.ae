@@ -32,6 +32,10 @@ extern exit(code: int)
 const PORT = 19250
 
 handle_upload(req: ptr, res: ptr, ud: ptr) {
+    // #644: a streaming request is not complete at handler entry (the
+    // dispatcher fired us at headers-complete) and is complete after the
+    // read loop drains the declared length. Reported to the driver.
+    pre = http.request_body_complete(req)
     total = http.request_body_length(req)
     root = aether_args_get(2)
     out_path = "${root}/uploaded.bin"
@@ -78,7 +82,25 @@ handle_upload(req: ptr, res: ptr, ud: ptr) {
         http.response_set_body(res, "received=${received} sha256=unavailable")
         return
     }
-    http.response_set_body(res, "received=${received} sha256=${digest}")
+    post = http.request_body_complete(req)
+    http.response_set_body(res, "received=${received} sha256=${digest} pre=${pre} post=${post}")
+}
+
+// #644 v1 contract: a handler that ignores the chunked API and calls the
+// whole-body accessor must still get the full payload on a large
+// (streaming) request — request_body materializes on demand. Digest is
+// computed over the in-memory body, no temp file involved.
+handle_v1body(req: ptr, res: ptr, ud: ptr) {
+    pre = http.request_body_complete(req)
+    body = http.request_body(req)
+    len = http.request_body_length(req)
+    post = http.request_body_complete(req)
+    digest, derr = cryptography.sha256_hex(body, len)
+    if derr != "" {
+        http.response_set_body(res, "v1len=${len} v1sha=unavailable v1pre=${pre} v1post=${post}")
+        return
+    }
+    http.response_set_body(res, "v1len=${len} v1sha=${digest} v1pre=${pre} v1post=${post}")
 }
 
 handle_ping(req: ptr, res: ptr, ud: ptr) {
@@ -108,6 +130,7 @@ main() {
     http.server_set_host(s, "127.0.0.1")
     http.server_set_keepalive(s, 1, 0, 5000ms)
     http_server_post(s, "/upload", handle_upload, 0)
+    http_server_post(s, "/v1body", handle_v1body, 0)
     http.server_get(s, "/ping", handle_ping, 0)
 
     println("READY")
