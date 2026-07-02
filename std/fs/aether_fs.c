@@ -2440,9 +2440,9 @@ static int fs_walk_recurse(char* buf, size_t len, int depth,
                            int (*cb)(void*, const char*, int, int), void* env,
                            int* count) {
 #ifdef _WIN32
-    /* Build the search pattern in the shared path buffer (append "/*",
-     * FindFirstFile copies it, restore) — no per-recursion-level stack
-     * array, so deep trees cost no stack. */
+    /* Build the search pattern in the shared path buffer (append the
+     * slash-wildcard suffix, FindFirstFile copies it, restore) — no
+     * per-recursion-level stack array, so deep trees cost no stack. */
     if (len + 2 >= FS_WALK_PATH_CAP) return 0;  /* path too deep — prune */
     buf[len] = '/';
     buf[len + 1] = '*';
