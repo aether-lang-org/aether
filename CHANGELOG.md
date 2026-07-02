@@ -5,11 +5,28 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.344.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.344.0]
+## [current]
+
+## [0.349.0]
+
+_Docs only — LLM.md / CONTRIBUTING / README corrections (#997). No compiler,
+stdlib, or runtime behaviour change._
+
+## [0.348.0]
+
+### Added
+
+- **`@packed` extern-struct SDS-floor recipe** (#747). Documents negative-offset
+  header recovery via `std.mem` (whose accessors accept negative offsets by
+  construction) in `docs/c-interop.md`, backed by an end-to-end interop
+  regression test (`tests/regression/test_issue747_sds_floor.ae`). No runtime
+  change — a documented recipe + living-proof test that closes #747.
+
+## [0.347.0]
 
 ### Added
 
@@ -32,6 +49,10 @@ next version number before tagging the release.
     chunked-loop terminator.
   - **Semantics decision documented**: `Transfer-Encoding: chunked` request
     bodies remain unsupported (no `Content-Length` → length 0, no body read).
+
+## [0.346.0]
+
+### Added
 
 - **`std.fs`: recursive walk + filesystem change notification** (#977). The
   building blocks real filesystem apps need beyond one-level listing:
@@ -66,6 +87,8 @@ next version number before tagging the release.
   fs.watch_close(w)
   ```
 
+## [0.345.0]
+
 ### Fixed
 
 - **Codegen mangles struct/message FIELD names that collide with C keywords**
@@ -81,6 +104,11 @@ next version number before tagging the release.
   struct Point { register: int  signed: int }   // was: invalid C
   message Bump { volatile: int }
   ```
+
+## [0.344.0]
+
+_CHANGELOG reconstruction (0.340/0.342/0.343 gaps) + zsync-port added to LLM.md
+(#984); no compiler, stdlib, or runtime behaviour change._
 
 ## [0.343.0]
 
