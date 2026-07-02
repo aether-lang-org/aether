@@ -1,7 +1,10 @@
-# Notes to self (LLM assisting on Aether)
+# Orientation for an LLM working on Aether
 
-Not a CLAUDE.md — short, opinionated, written for a future LLM picking up
-mid-task. Re-read at start of every session.
+A dense, opinionated map of the parts of this repo that aren't obvious from
+a first read: what the language is, the idioms that trip up a first port,
+and the build/test wiring. Skim it before starting, and prefer the code
+(`std/<m>/module.ae`, `compiler/`, the CHANGELOG) as the source of truth
+whenever this file and the tree disagree.
 
 ## What Aether is, in one paragraph
 
@@ -52,15 +55,13 @@ Erlang's actor syntax, compiling via C.**
   C functions with no VM behind them, so there's no run-time hook
   for the block to reach back through. `hide` / `seal except` are
   compile-time, and the grant list is the closure's only handle to
-  privileged operations. The trailing-block + `builder` shape is
-  Aether's lever for **pseudo-declarative nirvana**: the call site
-  reads like a config file (bare setters, no constructor noise, no
-  parameter threading) while the body is full Aether underneath —
-  control flow, env lookups, library calls, the lot. Levels 1-2
-  (YAML, HCL) are readable but powerless; Level 3 (Pulumi/CDK) is
-  powerful but reads like glue code; Aether's closure-DSL is the
-  one step beyond that gives both. This is what makes the next
-  bullet possible.
+  privileged operations. The trailing-block + `builder` shape is what
+  lets a call site read like a config file (bare setters, no constructor
+  noise, no parameter threading) while the body is still ordinary Aether:
+  control flow, env lookups, library calls. YAML and HCL are declarative
+  but can't compute; Pulumi/CDK can compute but read like glue code. The
+  closure-DSL sits between them, which is what makes the next bullet
+  possible.
 - **NOT a YAML/HCL/Helm host** (related) — and won't be. Building on
   the closure-DSL above, Aether's pitch for server-shaped libraries
   is **config IS code**: don't ship a YAML loader, expose your
@@ -98,9 +99,11 @@ plays that role), no interfaces.
   is the (implemented and shipped) `ae help <script>` companion that
   catches operator-side mistakes in those scripts — built into the `ae`
   driver via `tools/ae_help.c`, dispatched from `tools/ae.c`.
-- `docs/next-steps.md` — roadmap. P1/P2/P3/P4 are ordered; `fs.copy` /
-  `fs.move` / `fs.chmod` / `fs.symlink` / `fs.realpath` are P4. Check
-  here before speccing a new stdlib addition.
+- `docs/next-steps.md` — roadmap, in priority order. Check it before
+  speccing a new stdlib addition, but treat its "done" ticks as
+  authoritative over its priority labels — the `std.fs` completeness
+  bundle (`fs.copy` / `fs.move` / `fs.chmod` / `fs.symlink` /
+  `fs.realpath`) has shipped, for instance.
 - `std/<module>/module.ae` — the Aether-facing surface. Raw externs
   end in `_raw`; Go-style wrappers return `(value, err)` tuples.
 - `std/<module>/aether_<module>.c` — the C runtime behind the externs.
@@ -109,21 +112,23 @@ plays that role), no interfaces.
   add `extra_sources` + `link_flags` per the contrib README rather
   than getting auto-link. **Always check `contrib/` before deciding
   a stdlib gap is real** — a porter writing a downstream port may
-  not realise the module is there. Today covers: `xml/expat` (SAX
-  XML parser via libexpat), `sqlite`, `host/{python,ruby,lua,perl,
-  tcl,duktape,tinygo,factor,aether,go,java}` for embedded
-  interpreters, `tinyweb`.
+  not realise the module is there. Today's top-level dirs are
+  `contrib/{cryptography, host, parsers, sqlite, templating, tinyweb}`:
+  `parsers/xml_expat` (SAX XML via libexpat), `sqlite`,
+  `templating/{liquid,native}`, and `host/<lang>` embedded interpreters
+  for js, lua, perl, python, ruby, tcl, duktape, tinygo, go, java, factor,
+  racket, rhombus, and aether-in-aether.
 - `compiler/aetherc.c` — CLI entry. `--emit=lib`, `--with=`, and the
   capability import gate (search for `--with=` argv parsing and the
   "Step 2.7: --emit=lib capability-empty check" enforcement block).
 - `build/aetherc`, `build/ae` — the compiled binaries. `make && make
   install` to rebuild. If `aetherc --help` lacks a feature the CHANGELOG
   `[current]` documents, the local binary is stale — rebuild.
-- `patch_json_plan.md`, `stdlib_wish.md` — spec documents written by
-  downstream users (svn-aether port) requesting changes. Good model
-  for incoming feature requests: exact API shape, call-site census,
-  rationale. A landed wish keeps a status banner at the top and stays
-  in-tree as context.
+- Downstream feature requests tend to arrive as concrete spec documents
+  (exact API shape, call-site census, rationale) rather than vague asks;
+  match that level when responding. Landed ones are folded into the
+  CHANGELOG and the relevant `docs/` page rather than kept as loose
+  planning files.
 - `tests/regression/` — one `.ae` file per feature; the CI gate.
   `tests/integration/` — integration test directories (e.g.
   `emit_lib_with_capability/` for the `--with=` opt-in).
@@ -347,15 +352,15 @@ workaround — they cover cases a porter often hand-rolls.
 
 ## Working with downstream users
 
-- **aether-ui** (`https://github.com/aether-lang-org/aether-ui` locally: ../aether-ui) 
+- **aether-ui** (`https://github.com/aether-lang-org/aether-ui`) 
   — cross-platform widget toolkit (GTK4 / AppKit / Win32) with an
   AetherUIDriver HTTP test server. Was `contrib/aether_ui/` in this
   repo until the spin-out; now consumes Aether the same way external
   users do (install + `$(ae cflags)`). Useful reference for the
   embedded-DSL pattern: the toolkit's surface IS a closure-DSL (think QML or Flutter)
-- **aeb** (`https://github.com/aether-lang-org/aeb` locally: ../aeb) 
-  — multi-package and multi-language build system, the second major sibling. 
-  Could be a rival to Bazel maybe, but stopping short of reproduciblity.  
+- **aeb** (`https://github.com/aether-lang-org/aeb`) 
+  — multi-package and multi-language build system, the second major sibling.
+  Bazel-shaped in ambition but stops short of full reproducibility.
   Reads `share/aether/MANIFEST` to discover
   link-suitable runtime/stdlib `.c` files and orchestrates per-package
   compile + cache + incremental relink. The MANIFEST contract
@@ -363,7 +368,7 @@ workaround — they cover cases a porter often hand-rolls.
   without forcing it to guess via `find -name '*.c'`. If you're touching
   install-layout / shipped source / link contract, ping aeb side.
   See also google-monorepo-sim (../google-monorepo-sim) which showcases aeb.
-- **aeo** (`https://github.com/aether-lang-org/aeo` - locally: ../aeo) 
+- **aeo** (`https://github.com/aether-lang-org/aeo`) 
   — the third major sibling:
   an infrastructure orchestrator that stands up / tears down a dependency-
   ordered tree of VMs + containers (FreeBSD jail/bhyve, Linux
@@ -373,13 +378,13 @@ workaround — they cover cases a porter often hand-rolls.
   compose surface is the `config IS code` closure-DSL applied to live
   infra — the canonical proof the DSL pitch works beyond config files.
   Has an `aeo-agent` and attempt to adhere to the principles of containment.
-- **aeocha** (`https://github.com/aether-lang-org/aeocha` locally: ../aeocha)
+- **aeocha** (`https://github.com/aether-lang-org/aeocha`)
   — BDD-style test framework for Aether (`describe` / `it` / `before_each` /
   `after_each` via trailing blocks + closures, Cuppa-inspired). The
   reference consumer of the trailing-block/closure DSL for a test surface;
-  look here for a worked example of the `builder`-shaped API in anger.
+  look here for a worked example of the `builder`-shaped API in practice.
   There is a co-located mutation testing facility too.
-- **svn-aether port (avn)** (`https://github.com/aether-lang-org/avn` locally: ../avn) 
+- **svn-aether port (avn)** (`https://github.com/aether-lang-org/avn`) 
   — is a big
   real-world consumer. Port is methodical C → Aether, one-leaf-per-
   commit. Downstream finds the gaps before anyone else — every
@@ -387,7 +392,7 @@ workaround — they cover cases a porter often hand-rolls.
   propagation, 128-decl cap) was filed by avn before showing up
   anywhere else. As much as anything it was used to shake out
   missing features and bugs for Aether.
-- **mquickjs-port** (`https://github.com/aether-lang-org/mquickjs-port` locally: ../mquickjs-port)
+- **mquickjs-port** (`https://github.com/aether-lang-org/mquickjs-port`)
   — a full C→Aether port of Bellard & Gordon's
   MicroQuickJS (ES5-subset embedded JS engine, tracing GC, ~10 kB RAM). The
   end state is pure Aether: `mquickjs.c` deleted entirely, every engine leaf
@@ -397,10 +402,9 @@ workaround — they cover cases a porter often hand-rolls.
   atoms table, signed-bitfield emission, shift-width and `as int`-narrowing
   fixes, the `--audit-mem` accessor-width check). `migration_assessment.md` 
   and `ae/PORT_STATUS.md` were used in the port but could be out of date. 
-  Known pre-existing engine bugs live in
-  [[project_mquickjs_known_bugs]] (e.g. `Math.random()` returns -1, baseline
-  too — not caught by `make test`). `dtoa.c` stays C by decision ([[feedback_dtoa_stays_c]]).
-- **servirtium-vcr** (`https://github.com/servirtium/servirtium-vcr` locally: ../servirtium-vcr)
+  `dtoa.c` stays C by decision; the double-to-string path is not worth
+  reimplementing in Aether.
+- **servirtium-vcr** (`https://github.com/servirtium/servirtium-vcr`)
    — record/replay for HTTP service tests in the
   [Servirtium](https://servirtium.dev) markdown-tape format, as a **one-engine-
   many-thin-bindings** monorepo. The engine is a single pure-Aether module
@@ -415,7 +419,7 @@ workaround — they cover cases a porter often hand-rolls.
   wires many FFI consumers through one `aeb` run. Aether-side entry is
   `import core.vcr` — it's a separate repo, not part of `std.http` (the
   HTTP-client idiom above says the same).
-- **zsync-port** (`https://github.com/aether-lang-org/zsync-port` locally: ../zsync)
+- **zsync-port** (`https://github.com/aether-lang-org/zsync-port`)
   — a pure-Aether port of zsync (rsync-over-HTTP: fetch only the changed blocks
   of a file, driven by a `.zsync` control file). ~3.4k lines of Aether + one
   small Artistic-licensed C shim (`rcksum/fileio.c`, positional file I/O); the
@@ -491,11 +495,12 @@ workaround — they cover cases a porter often hand-rolls.
   tell: a wave of `(compile error)` / `(shell test)` failures that all **pass
   when re-run standalone**. Let the build finish, then test.
 - **A few regression probes are RSS-threshold leak tests**
-  (`heap_leak_cross_fn_recursion`, `heap_tracker_return_escape_no_leak`, …):
-  they measure their own RSS growth across N iterations and occasionally trip
-  the bound under allocator noise. A lone one of these failing while everything
-  else is green is almost always noise — re-run it standalone before treating
-  it as a real regression.
+  (`heap_leak_cross_fn_recursion`, `heap_tracker_return_escape_no_leak`).
+  They measure their own resident-set growth across a loop and assert it
+  stays bounded. They were hardened to run two loops and bound the smaller
+  growth, which drops the earlier false positives under full-suite memory
+  pressure; `leaks --atExit` remains the authoritative macOS leak gate if
+  one ever looks suspect.
 - **Stale `~/.aether/cache`.** `ae build`/`ae run` cache compiled binaries by
   source hash; if behaviour seems impossibly stale after an edit (or after
   switching branches), `rm -rf ~/.aether/cache`. `make clean && make -j$(nproc)`
