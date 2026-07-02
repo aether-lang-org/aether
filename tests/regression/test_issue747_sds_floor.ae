@@ -1,0 +1,135 @@
+// Verification (#747): the aedis core-data-structure floor, end-to-end.
+//
+// The issue named three gates; this test exercises the two that are code
+// (the third — zmalloc's atomics — is the issue's own "permanent C edge"
+// answer, tracked separately under #483):
+//
+//   1. Packed header-before-the-pointer strings (the `sds` shape, gates
+//      sds.c): a `@packed` extern struct header written at the front of
+//      one allocation, the data pointer `s` handed around alone, and the
+//      header recovered from NEGATIVE offsets off `s` — the exact
+//      `SDS_HDR(T, s) = (struct sdshdrT*)(s - sizeof(struct sdshdrT))`
+//      macro shape, including the `s[-1]` flags read that selects the
+//      header variant.
+//   2. The `dictType` vtable (gates dict.c / object.c): fn-pointer struct
+//      fields dispatched through value structs, by-value struct params,
+//      and pointer-to-struct receivers.
+//
+// Self-asserting: FAIL + exit 1 on mismatch, PASS at the end. Leak-clean
+// (every malloc freed).
+
+import std.mem
+
+extern exit(code: int)
+extern malloc(n: long) -> ptr
+extern free(p: ptr)
+
+// The two smallest real sdshdr variants, packed exactly as Redis packs
+// them: len / alloc / flags, no padding, data follows immediately.
+extern struct sdshdr8  @packed { len: uint8   alloc: uint8   flags: byte }
+extern struct sdshdr16 @packed { len: uint16  alloc: uint16  flags: byte }
+
+// dictType vtable — the dict.c dispatch shape.
+struct DictType {
+    hash: fn(int) -> int
+    key_compare: fn(int, int) -> int
+}
+
+hash_fn(k: int) -> int { return k * 31 }
+cmp_fn(a: int, b: int) -> int {
+    if a == b { return 1 }
+    return 0
+}
+
+// Dispatch through a by-value struct param (object.c passes these around).
+dict_find(dt: DictType, key: int, stored: int) -> int {
+    h = dt.hash(key)
+    if h != key * 31 { return 0 - 1 }
+    return dt.key_compare(key, stored)
+}
+
+main() {
+    println("=== test_issue747_sds_floor ===")
+
+    // ---- 1. sdshdr8: header + data in ONE allocation, SDS_HDR recovery ----
+    if sizeof(sdshdr8) != 3 {
+        println("FAIL: sizeof(sdshdr8) = ${sizeof(sdshdr8)} (want 3)")
+        exit(1)
+    }
+    base8 = malloc(3 + 16)
+    *sdshdr8 h8 = base8 as *sdshdr8
+    h8.len = 5
+    h8.alloc = 16
+    h8.flags = 1                    // SDS_TYPE_8
+
+    // The sds pointer Redis hands around: s = buf + sizeof(header).
+    s8 = mem.long_to_ptr(mem.ptr_to_long(base8) + 3)
+    // Write "hello" through s (data region), NUL-terminated.
+    _w0 = mem.set_uint8(s8, 0, 104)   // h
+    _w1 = mem.set_uint8(s8, 1, 101)   // e
+    _w2 = mem.set_uint8(s8, 2, 108)   // l
+    _w3 = mem.set_uint8(s8, 3, 108)   // l
+    _w4 = mem.set_uint8(s8, 4, 111)   // o
+    _w5 = mem.set_uint8(s8, 5, 0)
+
+    // From ONLY `s`: the s[-1] flags read that selects the variant...
+    fl = mem.get_uint8(s8, 0 - 1)
+    if fl != 1 {
+        println("FAIL: s[-1] flags = ${fl} (want 1)")
+        exit(1)
+    }
+    // ...then the SDS_HDR negative-offset header recovery.
+    *sdshdr8 hdr8 = mem.long_to_ptr(mem.ptr_to_long(s8) - sizeof(sdshdr8)) as *sdshdr8
+    if hdr8.len != 5    { println("FAIL: recovered len = ${hdr8.len} (want 5)"); exit(1) }
+    if hdr8.alloc != 16 { println("FAIL: recovered alloc = ${hdr8.alloc} (want 16)"); exit(1) }
+    // And the data survived intact next to the header.
+    if mem.get_uint8(s8, 0) != 104 { println("FAIL: s[0] != 'h'"); exit(1) }
+    if mem.get_uint8(s8, 4) != 111 { println("FAIL: s[4] != 'o'"); exit(1) }
+
+    // Mutate through the recovered header (sdssetlen shape) and observe
+    // through the original overlay — same memory, no copies.
+    hdr8.len = 4
+    if h8.len != 4 { println("FAIL: header aliasing broken"); exit(1) }
+    free(base8)
+
+    // ---- 1b. sdshdr16: >255 lengths through the packed 5-byte header ----
+    if sizeof(sdshdr16) != 5 {
+        println("FAIL: sizeof(sdshdr16) = ${sizeof(sdshdr16)} (want 5)")
+        exit(1)
+    }
+    base16 = malloc(5 + 600)
+    *sdshdr16 h16 = base16 as *sdshdr16
+    h16.len = 300                   // needs the full uint16, not a byte
+    h16.alloc = 600
+    h16.flags = 2                   // SDS_TYPE_16
+    s16 = mem.long_to_ptr(mem.ptr_to_long(base16) + 5)
+    if mem.get_uint8(s16, 0 - 1) != 2 {
+        println("FAIL: 16-bit variant s[-1] flags")
+        exit(1)
+    }
+    *sdshdr16 hdr16 = mem.long_to_ptr(mem.ptr_to_long(s16) - sizeof(sdshdr16)) as *sdshdr16
+    if hdr16.len != 300   { println("FAIL: 16-bit len = ${hdr16.len} (want 300)"); exit(1) }
+    if hdr16.alloc != 600 { println("FAIL: 16-bit alloc = ${hdr16.alloc} (want 600)"); exit(1) }
+    free(base16)
+
+    // ---- 2. dictType vtable dispatch ----
+    dt = DictType {
+        hash: hash_fn as fn(int) -> int,
+        key_compare: cmp_fn as fn(int, int) -> int
+    }
+    // Value-struct dispatch.
+    if dt.hash(7) != 217 { println("FAIL: dt.hash(7) = ${dt.hash(7)}"); exit(1) }
+    // By-value struct param dispatch (the object.c shape).
+    if dict_find(dt, 42, 42) != 1 { println("FAIL: dict_find match"); exit(1) }
+    if dict_find(dt, 42, 43) != 0 { println("FAIL: dict_find mismatch"); exit(1) }
+    // Pointer-to-struct dispatch (the dict.c `d->type->hashFunction` shape).
+    *DictType pdt = malloc(sizeof(DictType)) as *DictType
+    pdt.hash = hash_fn as fn(int) -> int
+    pdt.key_compare = cmp_fn as fn(int, int) -> int
+    if pdt.hash(3) != 93           { println("FAIL: pdt.hash"); exit(1) }
+    if pdt.key_compare(9, 9) != 1  { println("FAIL: pdt.key_compare"); exit(1) }
+    free(pdt as ptr)
+
+    println("  PASS: sds packed negative-offset headers + dictType vtable dispatch")
+    println("OK")
+}
