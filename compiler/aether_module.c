@@ -1609,6 +1609,23 @@ static int program_has_function(ASTNode* program, const char* prefixed_name) {
     return 0;
 }
 
+// Is a constant with the given prefixed name already a top-level child of
+// `program`? Mirrors program_has_function for the const-clone path — needed
+// because the merge loop can now revisit a synthetic import (aether#1009), and
+// re-cloning a module's consts without this guard emits a duplicate C
+// definition (`redefinition of 'sha2_K256'`).
+static int program_has_const(ASTNode* program, const char* prefixed_name) {
+    if (!program || !prefixed_name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (existing && existing->type == AST_CONST_DECLARATION &&
+            existing->value && strcmp(existing->value, prefixed_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Is a struct with the given name already a top-level child of `program`?
 // Used by module_merge_into_program to dedup struct definitions when the
 // consumer imports a module that exposes one. Imported structs share the
@@ -1894,12 +1911,30 @@ void module_merge_into_program(ASTNode* program) {
         }
     }
 
-    // Save original child count — we only scan imports from the original program
+    // Save original child count — we scan the original program's imports, PLUS
+    // any synthetic bare imports injected during the loop by
+    // inject_synthetic_bare_imports_from (#870). Those re-open the qualified
+    // surface for a merged dependency's `ns.fn()` calls, but their module
+    // bodies still need cloning here — and depending on import order a synthetic
+    // can land at an index >= the original count, past a frozen `orig_count`
+    // bound. That left the dependency's wrappers un-cloned whenever the entry
+    // also selectively imported the same module and that module wasn't the
+    // dependency's first import (aether#1009: `os.now_monotonic_ns` Undefined).
+    // We therefore extend the scan to the growing child_count but process only
+    // *synthetic* import nodes beyond orig_count — originals all live below it,
+    // and clone dedup (`program_has_function`) makes reprocessing a no-op. The
+    // growth terminates: each module injects finitely and injection dedups.
     int orig_count = program->child_count;
 
-    for (int i = 0; i < orig_count; i++) {
+    for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
         if (child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+        // Beyond the original imports, only synthetic (#870) imports are in
+        // scope for body-cloning; skip anything else that grew the array.
+        if (i >= orig_count &&
+            !(child->annotation && strcmp(child->annotation, "synthetic") == 0)) {
+            continue;
+        }
 
         const char* module_path = child->value;
 
@@ -2054,10 +2089,15 @@ void module_merge_into_program(ASTNode* program) {
                     if (!selected) continue;
                 }
 
+                // Skip if already merged (e.g. from a prior import of the same
+                // module, or a synthetic revisit — aether#1009). Without this
+                // the const is cloned twice → duplicate C definition.
+                char prefixed[256];
+                snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, decl->value);
+                if (program_has_const(program, prefixed)) continue;
+
                 // Clone and rename constants too
                 ASTNode* clone = clone_ast_node(decl);
-                char prefixed[256];
-                snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, clone->value);
                 free(clone->value);
                 clone->value = strdup(prefixed);
 
@@ -2336,7 +2376,11 @@ void module_merge_into_program(ASTNode* program) {
                     char prefixed[256];
                     snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, decl->value);
 
-                    if (program_has_function(program, prefixed)) continue;
+                    // Dedup against existing CONSTS (not functions — the old
+                    // program_has_function guard here never matched a const, so
+                    // a revisited module re-cloned it: aether#1009 exposed this
+                    // as `redefinition of 'sha2_K256'`).
+                    if (program_has_const(program, prefixed)) continue;
 
                     ASTNode* clone = clone_ast_node(decl);
                     free(clone->value);
@@ -2473,6 +2517,9 @@ void module_merge_into_program(ASTNode* program) {
                     apply_inherited_selective_imports(clone, origin->ast);
                     insert_child_at(program, clone, insert_idx++);
                 } else if (decl->type == AST_CONST_DECLARATION) {
+                    // The block-level guard above checks functions only; a
+                    // const needs its own dedup or a revisit re-clones it.
+                    if (program_has_const(program, prefixed)) break;
                     ASTNode* clone = clone_ast_node(decl);
                     free(clone->value);
                     clone->value = strdup(prefixed);

@@ -1,0 +1,18 @@
+// Dependency module for the aether#1009 regression.
+//
+// It whole-imports std.os and calls os.now_monotonic_ns() qualified from a
+// merged body — but std.os is NOT its first import (std.string precedes it).
+// That ordering is the trigger: when the consumer ALSO selectively imports
+// std.os, the merger used to skip cloning std.os's wrappers into the program
+// (the synthetic bare-import re-injection landed past the frozen merge-loop
+// bound), so `os.now_monotonic_ns` came back Undefined. Mirrors aeocha, which
+// lists std.os 7th of 10 imports.
+exports (dep_now)
+
+import std.string
+import std.os
+
+dep_now() -> string {
+    // Qualified os.* call inside a merged body — the surface that regressed.
+    return string.from_long(os.now_monotonic_ns())
+}
