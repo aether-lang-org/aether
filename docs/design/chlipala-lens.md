@@ -4,33 +4,32 @@ A framing writeup reading Aether against Adam Chlipala's *"The Expensive
 Fictions of Low-Level Programming Languages"* (Jun 2026,
 [stng.substack.com](https://stng.substack.com/p/the-expensive-fictions-of-low-level)).
 It is a *framing*
-document, not a spec — the goal is to place Aether honestly on the two axes the
+document, not a spec, the goal is to place Aether honestly on the two axes the
 essay uses to judge languages, and to name the two research directions that
 would let Aether actually engage the half of the critique it currently ducks.
 
-Like `docs/v-language-inspiration.md` and `docs/moonbit-feature-survey.md`,
-this separates the genuine alignment from the wishful, and it is deliberately
+It separates the genuine alignment from the wishful, and it is deliberately
 unflattering where the language deserves it.
 
 ## What Chlipala is actually arguing
 
-The naive reading — "C bad, high-level good" — is *not* his claim, and Aether
+The naive reading, "C bad, high-level good", is *not* his claim, and Aether
 is vulnerable to being praised for the wrong reasons. His argument runs on two
 axes for judging a notation used in automated program search:
 
-1. **Tractability of search** — can we describe systems succinctly and
+1. **Tractability of search**, can we describe systems succinctly and
    manipulate them algebraically?
-2. **Control over the final program's hardware behaviour** — can we spell out
+2. **Control over the final program's hardware behaviour**, can we spell out
    every last detail of harnessing the hardware?
 
 His indictment of C and Rust is that they score *poorly on both*: too low-level
 to manipulate cleanly, yet too high-level to expose the real performance model.
 And the specific "fictions" he names are precise:
 
-- **The sequential-instruction fiction** — code reads as one-instruction-at-a-
+- **The sequential-instruction fiction**, code reads as one-instruction-at-a-
   time while the hardware is a spatial fabric where *everything is always
   running*.
-- **The flat-shared-memory fiction** — one uniform address space, when real
+- **The flat-shared-memory fiction**, one uniform address space, when real
   access cost is a function of *locality and topology* and requires global
   reasoning to predict.
 
@@ -52,7 +51,7 @@ So on his two axes:
 
 ### Axis 2 (hardware control): Aether is *further from* the fabric than C
 
-This is the counterintuitive part. Aether is not a lower-level language than C —
+This is the counterintuitive part. Aether is not a lower-level language than C,
 it is C *plus* abstractions that move away from the fabric:
 
 - RAII-via-codegen,
@@ -70,20 +69,20 @@ require nonlocal changes" problem is **amplified** by a compile-to-C layer, not
 relieved.
 
 The one real qualifier: the *runtime* is topology-aware even though the
-*language* is not — see the actor section below.
+*language* is not, see the actor section below.
 
 ### Axis 1 (search tractability): a genuine story, but a *different* one
 
-This is where Aether has a defensible answer — but it lives near the **top and
+This is where Aether has a defensible answer, but it lives near the **top and
 middle** of his refinement diagram, which is the half he spends the least time
 on. It is important to claim the right win rather than the flattering one.
 
 - **The trailing-block / `builder` DSL and `config IS code`** are a succinct-
-  notation play — "notations that let us describe complex systems succinctly and
+  notation play, "notations that let us describe complex systems succinctly and
   manipulate algebraically." The call site reads like a config file while the
   body is full Aether underneath (see `docs/config-is-code.md`,
   `docs/closures-and-builder-dsl.md`). That is precisely his axis-1 virtue,
-  expressed at the requirements/config altitude — *not* at the codegen altitude
+  expressed at the requirements/config altitude, *not* at the codegen altitude
   he cares most about.
 
 - **The capability / effect system is the most Chlipala-aligned thing in the
@@ -95,7 +94,7 @@ on. It is important to claim the right win rather than the flattering one.
   **lightweight, gradual** version of exactly that discipline: invariants turned
   into things the compiler *rejects programs for violating*. A search generating
   Aether can use "does it typecheck under `@no_fs`?" as a real, cheap fitness
-  signal — verification-as-fitness-function, at the safety-property level.
+  signal, verification-as-fitness-function, at the safety-property level.
 
 ## Where the critique bites Aether specifically
 
@@ -105,17 +104,17 @@ Three places worth naming rather than papering over:
 
 The capability system proves *a program cannot touch the filesystem*; it does
 not prove *the program meets its spec*. Chlipala's premise is search where "a
-tool might give up but will never return an incorrect program" — full
+tool might give up but will never return an incorrect program", full
 functional correctness. Aether's `where`-contracts are **runtime** panics
 (`precondition violation: b != 0 in divide`), not static proofs. A violation is
-caught at execution — which is exactly what a correct-by-construction search
+caught at execution, which is exactly what a correct-by-construction search
 *cannot* rely on. To play in his world, those contracts would need to be
 *discharged statically* (SMT / refinement-type style). They currently are not.
 This is the single largest gap between Aether's marketing-adjacent story ("the
 compiler checks your invariants") and Chlipala's bar ("the compiler proves your
 program correct or refuses it").
 
-### 2. The performance model is fully implicit — and the C layer widens the gap
+### 2. The performance model is fully implicit, and the C layer widens the gap
 
 Covered above under axis 2. The point bears repeating because it is the crux:
 inserting a compile-to-C stage between the search's candidate and the emitted
@@ -123,18 +122,18 @@ instructions makes the *cost of a candidate less predictable*, not more. This is
 the opposite of what a self-improving search wants from its target language.
 
 ### 3. The actor model is the one place Aether *could* answer the sequential
-fiction — and half-does
+fiction, and half-does
 
 Chlipala explicitly praises models that "reveal hardware topology" (MPI) even
 while noting they are painful. Aether's `message` / `receive` / `spawn` is a
-*logical* concurrency model — no shared mutable state, message-passing — which
+*logical* concurrency model (no shared mutable state, message-passing) that
 answers the *correctness* worry the sequential fiction creates (data races) but
 says nothing at the **language** level about *placement*: which node runs which
 actor, how far a message travels.
 
 The nuance the first draft of this document got wrong: the **runtime already
 carries the topology Aether's source hides.** The multicore scheduler is
-NUMA-aware (`runtime/aether_numa.*`, `docs/numa-support.md`) — it detects the
+NUMA-aware (`runtime/aether_numa.*`, `docs/numa-support.md`), it detects the
 node topology and places work to keep memory accesses local. So the fiction is
 half-broken *underneath* the language even though the language surface still
 presents flat, placeless actors.
@@ -142,7 +141,7 @@ presents flat, placeless actors.
 That is the design opening. If actor handles carried **affinity/locality as a
 first-class, source-visible property**, and the scheduler surfaced its placement
 decisions back to the program (or to a search process), Aether would have a
-principled, *language-level* answer to fiction #1 — a genuine move down-and-
+principled, *language-level* answer to fiction #1, a genuine move down-and-
 across his diagram rather than a restatement of the C model. The runtime
 plumbing is already there; what's missing is exposing it in the type/effect
 system the way capabilities are exposed.
@@ -164,9 +163,9 @@ system the way capabilities are exposed.
 ## The one-line verdict
 
 Aether is a strong answer to the *half* of Chlipala's critique he spends the
-*least* time on — succinct, algebraically-manipulable, machine-checkable
-notation, via the DSL layer and the capability/effect system — and **not an
-answer** to the half he spends the *most* time on: the sequential-execution and
+*least* time on: succinct, algebraically-manipulable, machine-checkable
+notation, via the DSL layer and the capability/effect system. It is **not an
+answer** to the half he spends the *most* time on, the sequential-execution and
 flat-memory performance fictions, because it compiles to C and adopts C's cost
 model verbatim (its NUMA-aware runtime notwithstanding, because that awareness
 is not yet visible to the source).
@@ -174,17 +173,15 @@ is not yet visible to the source).
 Marketing Aether as "a better low-level language for the AI-search era" invites
 exactly the rebuttal the essay pre-loads. Marketing it as **"a high-tractability
 specification-and-capability layer that happens to emit native code"** is both
-more defensible and more true — and it names the two concrete moves (static
+more defensible and more true, and it names the two concrete moves (static
 `where`-contracts; topology-visible actors) that would let Aether actually
 engage the performance half of the argument.
 
 ## See also
 
-- `docs/config-is-code.md`, `docs/closures-and-builder-dsl.md` — the succinct-
+- `docs/config-is-code.md`, `docs/closures-and-builder-dsl.md` the succinct-
   notation / axis-1 story.
-- `docs/emit-lib.md`, `docs/hide-and-seal.md`, `docs/distinct-types.md` — the
+- `docs/emit-lib.md`, `docs/hide-and-seal.md`, `docs/distinct-types.md` the
   capability / effect surface.
-- `docs/numa-support.md`, `docs/actor-concurrency.md` — the runtime topology
+- `docs/numa-support.md`, `docs/actor-concurrency.md` the runtime topology
   awareness the language does not yet surface.
-- `docs/v-language-inspiration.md`, `docs/moonbit-feature-survey.md` — sibling
-  "read another design through Aether's lens" writeups.

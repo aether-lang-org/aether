@@ -128,14 +128,14 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
 
 **Optimizations (always on):**
 
-1. **Constant Folding** — `2 + 3 * 4` → `14` at compile time
-2. **Dead Code Elimination** — `if false { ... }` block removed
-3. **Tail Call Detection** — identifies recursive tail calls (detection only; loop transformation is pending)
+1. **Constant Folding**, `2 + 3 * 4` → `14` at compile time
+2. **Dead Code Elimination**, `if false { ... }` block removed
+3. **Tail Call Detection**, identifies recursive tail calls (detection only; loop transformation is pending)
 
 **Optimizations (applied during codegen, `compiler/codegen/codegen_stmt.c`):**
 
-4. **Arithmetic Series Collapse** — `while i < n { acc += C; i++ }` → O(1) closed form
-5. **Linear Counter Sum** — `while i < n { total += i; i++ }` → triangular-number formula
+4. **Arithmetic Series Collapse**, `while i < n { acc += C; i++ }` → O(1) closed form
+5. **Linear Counter Sum**, `while i < n { total += i; i++ }` → triangular-number formula
 
 **Key Files:**
 - `compiler/codegen/optimizer.c` - AST-level passes
@@ -294,13 +294,13 @@ For platforms without pthreads (WebAssembly, embedded, bare-metal), the cooperat
 - `scheduler_wait()` drains via `aether_scheduler_poll()` loop
 - All sends are local (no cross-core queues, no migration)
 - Ask/reply is synchronous (poll until reply_ready)
-- `aether_send_message_sync()` heap-allocates message data (no zero-copy stack optimization — mailbox FIFO order means the sent message may not be the next one consumed)
+- `aether_send_message_sync()` heap-allocates message data (no zero-copy stack optimization, mailbox FIFO order means the sent message may not be the next one consumed)
 
 **Selection:** The Makefile selects the scheduler based on `PLATFORM` or auto-detects `AETHER_NO_THREADING` in `EXTRA_CFLAGS`. Only one scheduler .c file is compiled into the binary. Users can also use `ae build --target wasm` for Emscripten builds.
 
 ### Actor Timeouts
 
-Actors with `receive { ... } after N -> { ... }` carry `timeout_ns` and `last_activity_ns` fields in `ActorBase`. The generated step function checks `_aether_clock_ns()` before `mailbox_receive()`. If the idle duration exceeds the threshold, the timeout handler fires (one-shot — cancelled when any message arrives). Both schedulers poll timeout-active actors even when their mailbox is empty.
+Actors with `receive { ... } after N -> { ... }` carry `timeout_ns` and `last_activity_ns` fields in `ActorBase`. The generated step function checks `_aether_clock_ns()` before `mailbox_receive()`. If the idle duration exceeds the threshold, the timeout handler fires (one-shot, cancelled when any message arrives). Both schedulers poll timeout-active actors even when their mailbox is empty.
 
 ### Cooperative Preemption (Opt-In)
 
@@ -347,7 +347,7 @@ When `AETHER_HAS_ATOMICS == 0`, `<stdatomic.h>` is replaced with fallback typede
 - Trackers are emitted at function-entry scope by a dedicated codegen pre-pass (`hoist_heap_string_trackers` in `compiler/codegen/codegen_stmt.c`), making cross-block reassignment safe
 - Reassignment goes through a unified wrapper handling all four heap/literal transitions: `{ const char* _tmp_old = s; s = <rhs>; if (_heap_s) free(_tmp_old); _heap_s = <rhs_is_heap>; }`
 - Recognised heap sources: hardcoded stdlib `string.{concat,substring,to_upper,to_lower,trim}`, string interpolation `"foo ${x}"`, and user-defined `-> string` functions whose body provably returns heap (recursive structural escape analysis with cycle detection, memoised on the function-definition AST node's annotation slot)
-- Runtime cost: zero — just `if (...) free(...)` per assignment. Codegen-time cost: O(K) per call site for fn-def lookup where K is the number of top-level fn definitions; total well under a millisecond for typical programs
+- Runtime cost: zero, just `if (...) free(...)` per assignment. Codegen-time cost: O(K) per call site for fn-def lookup where K is the number of top-level fn definitions; total well under a millisecond for typical programs
 
 ### Performance Optimizations
 

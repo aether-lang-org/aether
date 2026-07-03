@@ -1,4 +1,4 @@
-# Structured Concurrency for Aether — Design Direction
+# Structured Concurrency for Aether, Design Direction
 
 Status: **proposal**. Nothing shipped yet. This doc captures the design
 choices we've committed to before writing code, so the implementation PRs
@@ -20,7 +20,7 @@ Aether has actors. It does not have:
 
 Both are fixable without fundamentally changing the actor model.
 
-## The design space — and why we picked what we picked
+## The design space, and why we picked what we picked
 
 Six families of structured concurrency exist. The summary table:
 
@@ -39,7 +39,7 @@ Six families of structured concurrency exist. The summary table:
 Introducing suspension points inside a handler would break the invariant
 that makes the shared-nothing actor model safe: a handler either finishes
 or panics, it doesn't yield. Async/await would also force **coloured
-functions** (async vs sync), which splits the ecosystem — every stdlib
+functions** (async vs sync), which splits the ecosystem, every stdlib
 function becomes two functions, every actor becomes two kinds. Aether's
 cooperative scheduler gets its simplicity from the run-to-completion
 rule, and async/await would throw that away.
@@ -48,7 +48,7 @@ rule, and async/await would throw that away.
 mailboxes. A channel is a point-to-point typed queue with a send and a
 receive end; an actor's mailbox is exactly that with an identity
 attached. Adding channels on top would give users two ways to do the
-same thing and force stdlib authors to pick one — usually the wrong one
+same thing and force stdlib authors to pick one, usually the wrong one
 for half their callers.
 
 ### The two we're building
@@ -57,8 +57,8 @@ for half their callers.
 problem. They're a library-level pattern on top of primitives the runtime
 *doesn't yet expose but easily could*: actor failure notification.
 Parents register interest in a child; if the child dies, the parent gets
-a `Down { ref, reason }` message. Everything else — restart strategies,
-escalation, graceful shutdown — is ordinary actor code on top of that
+a `Down { ref, reason }` message. Everything else, restart strategies,
+escalation, graceful shutdown, is ordinary actor code on top of that
 one primitive.
 
 **Capability-scoped concurrency (#6)** solves the "who can reach whom"
@@ -66,28 +66,27 @@ problem. Aether already has `hide` and `seal except` for compile-time
 capability denial on *variable* references. Extending that enforcement
 to *actor* references means a sealed block cannot `spawn` a type it
 can't name, cannot `!` a reference it can't see, and cannot `ask` an
-actor outside its whitelist. **No new mechanism is needed** — just the
+actor outside its whitelist. **No new mechanism is needed**, just the
 existing scope-denial check applied at two more compile-time sites
 (spawn, send).
 
-The two compose beautifully: a supervised subtree that is also sealed
-gives you both bounded lifetime and bounded blast radius. No other
-actor language pairs both.
+The two compose: a supervised subtree that is also sealed gives you both
+bounded lifetime and bounded blast radius.
 
-## Phase 1 — supervision primitives
+## Phase 1, supervision primitives
 
 The runtime change needed is small: actor failure notification.
 
 ### What the runtime must expose
 
-1. When an actor's handler returns abnormally — explicit `exit(reason)`,
-   or a panic caught by the scheduler — the scheduler delivers a
+1. When an actor's handler returns abnormally (an explicit `exit(reason)`,
+   or a panic caught by the scheduler), the scheduler delivers a
    `Down { ref, reason }` message to every actor that registered
    interest in the failed actor.
 2. Registration is one of two kinds:
-   - **Monitor** — one-way. I get a `Down` if it dies; it doesn't hear
+   - **Monitor**, one-way. I get a `Down` if it dies; it doesn't hear
      about me dying.
-   - **Link** — two-way (Erlang semantics). If either of us dies, the
+   - **Link**, two-way (Erlang semantics). If either of us dies, the
      other gets a `Down`.
 3. Delivery is best-effort at-most-once, routed through the normal
    mailbox. No new transport.
@@ -137,7 +136,7 @@ the trailing-block + closure pattern that shipped with the closures and
 embedded-namespaces features. The supervisor actor is the `_ctx` holder;
 `child()` registers into it.
 
-## Phase 2 — capability-scoped concurrency
+## Phase 2, capability-scoped concurrency
 
 Once Phase 1 is in, this is a compile-time-only change. No new runtime
 mechanism.
@@ -148,9 +147,9 @@ In a block that contains `hide X` or `seal except Y, Z`, every
 concurrency site is checked against the same visibility rules already
 applied to ordinary reads:
 
-- `spawn(X())` — rejected if `X` is hidden or not on the seal whitelist.
-- `ref ! Msg {}` — rejected if `ref` is hidden or not whitelisted.
-- `ask ref { Request {} } after N` — same check on `ref`.
+- `spawn(X())` rejected if `X` is hidden or not on the seal whitelist.
+- `ref ! Msg {}` rejected if `ref` is hidden or not whitelisted.
+- `ref ? Request {}` (the `?` ask operator), same check on `ref`.
 
 The error message reuses the existing `E0304` (hidden in this scope)
 diagnostic.
@@ -167,7 +166,7 @@ sandbox("payment-handler") {
     // It cannot send to any actor reference not named here.
     // It cannot ask any outside service.
 
-    result = ask payment_client { Charge { amount: req.amount } } after 5000
+    result = payment_client ? Charge { amount: req.amount }
     if result != null {
         logger ! Audit { who: req.user, what: "charged", amount: req.amount }
         res.status = 200
@@ -184,45 +183,45 @@ crypto-miner actor because it cannot name one.
 
 ## What's not in scope
 
-- **Fork-join / `parallel_for` (#5)** — useful for data parallelism,
+- **Fork-join / `parallel_for` (#5)**, useful for data parallelism,
   does not solve the lifecycle or reachability problem. Can be added
   later as a narrow stdlib feature layered on the existing
   work-stealing scheduler. Not part of this design.
-- **Nurseries (#1)** — would require a second concurrency primitive
+- **Nurseries (#1)**, would require a second concurrency primitive
   (lightweight tasks distinct from actors). High cost for small
   marginal benefit given the actor model already exists. Revisit only
   if users ask for it after Phases 1 and 2 ship.
-- **Channels (#4)** — actors already cover this. No plan.
+- **Channels (#4)**, actors already cover this. No plan.
 
 ## Order of work
 
-1. **Runtime — `Down` message delivery.** Scheduler catches handler
+1. **Runtime, `Down` message delivery.** Scheduler catches handler
    exits, iterates the monitor/link table, enqueues `Down` messages.
-2. **Builtins — `monitor`, `link`, `demonitor`, `unlink`.** Thin
+2. **Builtins, `monitor`, `link`, `demonitor`, `unlink`.** Thin
    wrappers over the runtime table.
 3. **`std.supervise` module.** Supervisor actor type with the three
    strategies. Builder DSL for child registration.
 4. **Tests.** Restart-on-crash, escalation, graceful shutdown, monitor
    vs link asymmetry, double-death ordering.
-5. **Compiler — capability-scoped spawn/send/ask.** Extend existing
+5. **Compiler, capability-scoped spawn/send/ask.** Extend existing
    `hide`/`seal except` denial to concurrency sites.
 6. **Docs and worked example.** Update `docs/actor-concurrency.md` with
    the supervision section. One worked example in `examples/actors/`
    showing a supervised, sealed subtree.
 
 Phase 1 can ship without Phase 2. Phase 2 can ship independently once
-Phase 1 is in — they touch different compiler subsystems.
+Phase 1 is in, they touch different compiler subsystems.
 
 ## References
 
-- [`docs/actor-concurrency.md`](actor-concurrency.md) — current actor
+- [`docs/actor-concurrency.md`](actor-concurrency.md), current actor
   runtime.
-- [`docs/hide-and-seal.md`](hide-and-seal.md) — existing
+- [`docs/hide-and-seal.md`](hide-and-seal.md), existing
   capability-denial primitive that Phase 2 extends.
-- [`docs/containment-sandbox.md`](containment-sandbox.md) — filesystem /
+- [`docs/containment-sandbox.md`](containment-sandbox.md), filesystem /
   network capability grants, natural pairing with Phase 2.
 - [Erlang OTP design principles](https://www.erlang.org/doc/design_principles/des_princ.html)
-  — the supervision-tree pattern we're borrowing.
+  the supervision-tree pattern we're borrowing.
 - [Nathaniel Smith, *Notes on structured concurrency*](https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/)
-  — the Trio post that named the pattern. Aether takes the "structure"
+  the Trio post that named the pattern. Aether takes the "structure"
   part but not the nursery/task primitive.

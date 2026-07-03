@@ -86,7 +86,7 @@ Each benchmark is run **5 times** (configurable via `BENCH_RUNS`). The **median*
 | Latency (ns/msg) | Nanoseconds per message (median) |
 | Memory (MB) | Peak resident set size via `/usr/bin/time` |
 | Relative (%) | Percentage of the fastest language's throughput |
-| CV% | Coefficient of variation (σ/μ × 100) — measures run-to-run stability |
+| CV% | Coefficient of variation (σ/μ × 100), measures run-to-run stability |
 | Range | Min–Max throughput across all runs |
 | Efficiency | Throughput per MB of memory (M msg/s/MB) |
 
@@ -110,7 +110,7 @@ figure, regardless of which language is being measured:
 
 - All languages use the same message count (`BENCHMARK_MESSAGES` environment variable)
 - Skynet throughput standardized: all languages count **total tree nodes** (not messages or threads)
-- Each language uses its idiomatic concurrency model — the benchmark measures "how well does this language solve the problem," not "how identical is the implementation"
+- Each language uses its idiomatic concurrency model, the benchmark measures "how well does this language solve the problem," not "how identical is the implementation"
 - Results JSON includes full methodology metadata for reproducibility
 
 ## Running Benchmarks
@@ -121,7 +121,7 @@ figure, regardless of which language is being measured:
 make benchmark
 ```
 
-This builds the Aether benchmark runner (`run_benchmarks.ae`), compiles all 11 languages, runs all 5 patterns, writes JSON results, and launches the visualization server (`server.ae`) at `http://localhost:8080`. Both the runner and the server are written in Aether using only the stdlib — no extern FFI, no C helper files.
+This builds the Aether benchmark runner (`run_benchmarks.ae`), compiles all 11 languages, runs all 5 patterns, writes JSON results, and launches the visualization server (`server.ae`) at `http://localhost:8080`. Both the runner and the server are written in Aether using only the stdlib, no extern FFI, no C helper files.
 
 ### Aether Only
 
@@ -162,7 +162,7 @@ These Aether runtime optimizations affect benchmark performance:
 | Optimization | Effect | File |
 |-------------|--------|------|
 | Main Thread Actor Mode | Single-actor programs bypass scheduler entirely | `runtime/actors/aether_send_message.c` |
-| Inline message path | Single-field messages (int, int64, ptr, bool, actor_ref) skip heap allocation — value stored in `Message.payload_int` | `compiler/codegen/codegen.c` |
+| Inline message path | Single-field messages (int, int64, uint64, duration, ptr) skip heap allocation, value stored in `Message.payload_int` | `compiler/codegen/codegen.c` |
 | Batch send | Main-thread fan-out groups messages by target core, reducing atomics from N to num_cores | `runtime/scheduler/multicore_scheduler.c` |
 | Partial batch enqueue | `queue_enqueue_batch` returns how many fit instead of all-or-nothing | `runtime/scheduler/lockfree_queue.h` |
 | Work inlining | Same-core sends invoke `actor->step()` immediately, skipping the scheduler drain loop | `runtime/scheduler/multicore_scheduler.c` |
@@ -173,7 +173,7 @@ These Aether runtime optimizations affect benchmark performance:
 
 ## References
 
-- [Savina — An Actor Benchmark Suite](https://dl.acm.org/doi/10.1145/2687357.2687368) (Imam & Sarkar, 2014)
+- [Savina, An Actor Benchmark Suite](https://dl.acm.org/doi/10.1145/2687357.2687368) (Imam & Sarkar, 2014)
 - [Cross-Language Benchmark Source](../benchmarks/cross-language/)
 - [Runtime Optimizations](runtime-optimizations.md)
 - [Scheduler Architecture](scheduler-quick-reference.md)

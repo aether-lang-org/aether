@@ -29,8 +29,9 @@ version = "1.0.0"
 description = "What this program does"
 
 [build]
-# Extra C compiler flags applied during `ae build` (release builds only).
-# `ae run` uses -O0 for fast iteration regardless of this setting.
+# Extra C compiler flags appended to the gcc invocation on every build path,
+# including `ae run`. They come after the optimisation level, so a cflag like
+# `-O3` overrides the `-O0` that `ae run` and `ae build --quick` use by default.
 cflags = "-O3 -march=native"
 
 # Platform-specific linker flags (e.g. for third-party C libraries).
@@ -50,7 +51,7 @@ extra_sources = ["src/ffi_helpers.c", "src/renderer.c"]
 
 ### `extra_sources` vs `--extra`
 
-Both add C files to the build — they are additive when both are present.
+Both add C files to the build, they are additive when both are present.
 
 | | `extra_sources` in `aether.toml` | `--extra file.c` CLI flag |
 |---|---|---|
@@ -80,7 +81,7 @@ ae build myapp         # [[bin]] name = "myapp"
 
 When the positional argument doesn't exist as a file, `ae` checks `aether.toml`'s `[[bin]]` entries for a matching `name = "..."` and uses that bin's `path` field. Cargo and similar build systems work the same way.
 
-If you run `ae build` from a subdirectory and there's no `aether.toml` in the current directory, `ae` walks up the directory tree looking for one. When it finds an ancestor `aether.toml`, it switches to that directory before resolving paths — so `cd src && ae build main.ae` works as if you had run `ae build src/main.ae` from the project root, and `extra_sources` declared in the toml are still applied. Walk-up only happens when there's no toml in the current directory; a project with a local `aether.toml` always wins.
+If you run `ae build` from a subdirectory and there's no `aether.toml` in the current directory, `ae` walks up the directory tree looking for one. When it finds an ancestor `aether.toml`, it switches to that directory before resolving paths, so `cd src && ae build main.ae` works as if you had run `ae build src/main.ae` from the project root, and `extra_sources` declared in the toml are still applied. Walk-up only happens when there's no toml in the current directory; a project with a local `aether.toml` always wins.
 
 ---
 
@@ -185,17 +186,17 @@ Limited by dependency ordering: some files must build before others.
 The `PLATFORM` Makefile variable selects the scheduler backend and sets platform-specific flags:
 
 ```bash
-# Native (default) — multi-core scheduler, pthreads
+# Native (default), multi-core scheduler, pthreads
 make stdlib PLATFORM=native
 
-# WebAssembly — cooperative scheduler, no pthreads/fs/net
+# WebAssembly, cooperative scheduler, no pthreads/fs/net
 make stdlib PLATFORM=wasm    # CC=emcc, -DAETHER_NO_THREADING/FILESYSTEM/NETWORKING
 
 # Or use the ae CLI directly:
 ae build --target wasm hello.ae    # Produces hello.js + hello.wasm
 node hello.js                       # Run with Node.js
 
-# Embedded — cooperative scheduler, no pthreads/fs/net/getenv
+# Embedded, cooperative scheduler, no pthreads/fs/net/getenv
 make stdlib PLATFORM=embedded    # -DAETHER_NO_THREADING/FILESYSTEM/NETWORKING/GETENV
 
 # Override individual features on native
@@ -233,7 +234,7 @@ Useful for catching pointer-width, struct-padding, and atomic-
 instruction-availability bugs that an x86_64-only matrix can't
 surface. Optional libs (OpenSSL, zlib, nghttp2, GTK4) are disabled
 in the riscv64 build because the host runner's pkg-config returns
-x86_64 lib paths — the std.* feature-detection wrappers fall into
+x86_64 lib paths, the std.* feature-detection wrappers fall into
 their "unavailable" stubs cleanly.
 
 Docker images: `docker/Dockerfile.wasm` (Emscripten), `docker/Dockerfile.embedded` (ARM Cortex-M4).
@@ -255,7 +256,7 @@ Docker images: `docker/Dockerfile.wasm` (Emscripten), `docker/Dockerfile.embedde
 Opt-in hardening flags add stack canaries, fortified libc-call wrappers, and format-string-injection diagnostics. Enabled with the `HARDEN=1` environment variable; disabled by default in release builds because the runtime overhead is non-zero (~3-5% on micro-benchmarks) and macOS Clang has historically been finicky with `_FORTIFY_SOURCE` on a few setups.
 
 ```bash
-# Local hardened build — recommended before submitting a PR that
+# Local hardened build, recommended before submitting a PR that
 # touches C in compiler/, runtime/, or std/.
 HARDEN=1 make compiler ae stdlib
 
@@ -267,8 +268,8 @@ Flags enabled (issue #396):
 
 | Flag | Purpose |
 |------|---------|
-| `-fstack-protector-all` | Stack canaries on every function (not just gcc-strong heuristic candidates) — catches the smashing class of bugs that escape the default heuristic. |
-| `-D_FORTIFY_SOURCE=2` | Runtime checks on `read`/`write`/`memcpy`/`strncpy`/`printf`-family calls. Linux `gcc` also emits compile-time warnings when it can prove a buffer overflow — those should be fixed at the source, never blanket-suppressed. Requires at least `-O1`; the default `-O2` satisfies that. |
+| `-fstack-protector-all` | Stack canaries on every function (not just gcc-strong heuristic candidates), catches the smashing class of bugs that escape the default heuristic. |
+| `-D_FORTIFY_SOURCE=2` | Runtime checks on `read`/`write`/`memcpy`/`strncpy`/`printf`-family calls. Linux `gcc` also emits compile-time warnings when it can prove a buffer overflow, those should be fixed at the source, never blanket-suppressed. Requires at least `-O1`; the default `-O2` satisfies that. |
 | `-Wformat -Wformat-security` | Diagnose `printf`-family format strings sourced from non-literals (the `%s`-format-injection class). Default in modern Linux distros; we standardise on it explicitly. |
 
 The flags are added to `CFLAGS` only when `HARDEN=1` is set; the default build path is byte-identical to the unhardened release. The Linux/Hardened (gcc) CI matrix entry pins this so a regression that introduces an unchecked `memcpy`-over-fixed-buffer trips a red check before merge.
@@ -281,11 +282,11 @@ builds omit the LLM module entirely so the binary stays small and the link line
 stays dependency-light; embedders enable it explicitly at build time.
 
 ```bash
-# Default build — `ae help --llm <path>` returns a clear "rebuild with
+# Default build, `ae help --llm <path>` returns a clear "rebuild with
 # AETHER_ENABLE_LLM=1" message; no llama.cpp dependency.
 make ae
 
-# LLM-enabled build — requires llama.cpp built and linkable. The shim
+# LLM-enabled build, requires llama.cpp built and linkable. The shim
 # in `tools/llm_shim.c` targets the stable `llama.h` C API.
 make ae AETHER_ENABLE_LLM=1 \
     LLM_LDFLAGS="-L/path/to/llama.cpp/build -lllama -lggml -lstdc++ -lm" \
@@ -304,7 +305,7 @@ Hard privacy invariants (enforced by code structure + a Linux CI `strace -e netw
   it?" prompt.
 - **Stripped builds (default) omit the entire module.** A binary built without
   `AETHER_ENABLE_LLM=1` cannot run inference even if someone passes `--llm
-  <path>` — they get the documented "rebuild with the flag" message instead.
+  <path>`, they get the documented "rebuild with the flag" message instead.
 
 The shim's surface is a single C function (`int ae_llm_run(const char* weights_path,
 const char* prompt, FILE* out)`); upstream API rotations in llama.cpp need

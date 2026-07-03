@@ -13,7 +13,7 @@ The actor runtime includes several performance optimizations applied automatical
 - Each core processes only its local actors in the fast path
 - Work stealing activated when cores become idle
 - Non-blocking work stealing using try-lock with ascending core-id lock ordering
-- NUMA-aware allocation when available (Linux, macOS, Windows)
+- NUMA-aware allocation when available (Linux and Windows; on macOS `aether_numa_alloc` is a plain `malloc`)
 - Message-driven actor migration co-locates communicating actors on the sender's core
 
 **Work Stealing:**
@@ -87,10 +87,13 @@ typedef struct {
     SPSCQueue* spsc_queue;           // Lock-free same-core messaging (lazy alloc)
     _Atomic(ActorReplySlot*) reply_slot;  // Non-NULL during ask/reply
     atomic_flag step_lock;           // Prevents concurrent step() during work-steal
+    uint64_t timeout_ns;             // Receive timeout in ns (0 = none)
+    uint64_t last_activity_ns;       // Timestamp when idle started (0 = not idle)
+    atomic_int dead;                 // 1 once step() unwound via panic; actor skipped after
 } ActorBase;
 ```
 
-User-defined actors extend this layout with additional fields after `step_lock`.
+User-defined actors extend this layout with additional fields after `dead`.
 
 ## Message Passing
 
@@ -125,6 +128,7 @@ typedef struct {
         int size;
         int owned;
     } zerocopy;
+    void* _reply_slot;  // ActorReplySlot* for ask messages, NULL for fire-and-forget
 } Message;
 ```
 
@@ -189,7 +193,7 @@ actor Monitor {
 
 The timeout is one-shot: it is cancelled when any message is received. The countdown starts when the actor's mailbox becomes empty. Internally, the generated step function checks `_aether_clock_ns()` against a deadline before each `mailbox_receive()` call.
 
-The timeout expression can reference actor state fields, not just integer literals — useful when the interval is configurable per-actor or computed:
+The timeout expression can reference actor state fields, not just integer literals, useful when the interval is configurable per-actor or computed:
 
 ```aether
 actor Poller {
@@ -204,7 +208,7 @@ actor Poller {
 }
 ```
 
-Identifiers in the timeout **expression** resolve against actor state fields only. `self` is **not** in scope there: the timeout expression is generated at spawn time (in `spawn_<Actor>`, before `self` exists), so a state-field reference such as `after interval_ms` resolves against the freshly-allocated actor handle. The timeout **body** (above) runs later inside the step function, where `self` *is* in scope — `self ! Tick {}` is fine.
+Identifiers in the timeout **expression** resolve against actor state fields only. `self` is **not** in scope there: the timeout expression is generated at spawn time (in `spawn_<Actor>`, before `self` exists), so a state-field reference such as `after interval_ms` resolves against the freshly-allocated actor handle. The timeout **body** (above) runs later inside the step function, where `self` *is* in scope, `self ! Tick {}` is fine.
 
 ## Panic and Stack Traces
 
@@ -219,13 +223,13 @@ Stack trace (most recent call first):
   2: main
 ```
 
-The trace is captured at the call site (codegen wires `aether_panic_capture_stack` in front of every `aether_panic` call) so the user's caller frames survive `-O2` tail-call optimisation. Symbols starting with `aether_` are pretty-printed back to their dotted Aether names — `aether_std_string_concat` reads as `std.string.concat`. User-code symbols pass through verbatim.
+The trace is captured at the call site (codegen wires `aether_panic_capture_stack` in front of every `aether_panic` call) so the user's caller frames survive `-O2` tail-call optimisation. Symbols starting with `aether_` are pretty-printed back to their dotted Aether names, `aether_std_string_concat` reads as `std.string.concat`. User-code symbols pass through verbatim.
 
-The trace is **best-effort diagnostic info**. Under `-O2`, function inlining can fuse callers into one frame; a panic deep inside a chain of small helpers may show only `main`. For richer development-time traces, build with `--cflags="-O0 -g"` (or set `AE_CFLAGS=-O0 -g`); the per-call frames return.
+The trace is **best-effort diagnostic info**. Under `-O2`, function inlining can fuse callers into one frame; a panic deep inside a chain of small helpers may show only `main`. For richer development-time traces, build with `ae build --quick`, which compiles at `-O0 -g` instead of the default `-O2`; the per-call frames return.
 
 To suppress the trace block entirely (useful for tests that diff stderr line-for-line), set `AETHER_STACK_TRACE=0` in the environment. The reason line still prints.
 
-Available on glibc-Linux and macOS today (uses `<execinfo.h>` `backtrace()` from libc proper, no extra link dependency). On musl, Windows, Emscripten, and freestanding targets the trace block is skipped — `panic`/`try`/`catch` themselves still work.
+Available on glibc-Linux and macOS today (uses `<execinfo.h>` `backtrace()` from libc proper, no extra link dependency). On musl, Windows, Emscripten, and freestanding targets the trace block is skipped, `panic`/`try`/`catch` themselves still work.
 
 ## Cooperative Preemption
 
@@ -322,4 +326,4 @@ See [Memory Management](memory-management.md) for details on arenas, pools, and 
 
 ## Patterns
 
-- **Per-process configuration** — Aether rejects mutable assignment to module-level identifiers, so the C `static char *g_config` shape doesn't transcribe. The canonical replacement is the actor-singleton pattern: spawn one config actor at startup, drive writes via `Set*` messages, drive reads via `Get*` messages that carry an `actor_ref` reply target. See [per-process-config.md](per-process-config.md) for the worked example, the trade-offs (when message round-trip is acceptable vs. when to plumb the value as a parameter or worker-actor cache), and a port of a real C global-state shim.
+- **Per-process configuration**, Aether rejects mutable assignment to module-level identifiers, so the C `static char *g_config` shape doesn't transcribe. The canonical replacement is the actor-singleton pattern: spawn one config actor at startup, drive writes via `Set*` messages, drive reads via `Get*` messages that carry an `actor_ref` reply target. See [per-process-config.md](per-process-config.md) for the worked example, the trade-offs (when message round-trip is acceptable vs. when to plumb the value as a parameter or worker-actor cache), and a port of a real C global-state shim.

@@ -3,12 +3,12 @@
 Aether's `const` is *substitution-at-each-use*: the compiler inlines the
 RHS expression at every reference rather than allocating storage. For a
 literal (`const PI = 3.14`) that is exactly right. For an arbitrary call
-(`const G = make_thing()`) it is silently wrong — every reference would
+(`const G = make_thing()`) it is silently wrong, every reference would
 re-run the call, re-allocating / re-side-effecting. The typechecker
 therefore rejects non-constant const initializers.
 
 Phase-1 (issue #482) extends the set of initializers the compiler can
-evaluate *at compile time* — folding them to a plain literal before
+evaluate *at compile time*, folding them to a plain literal before
 codegen so they inline correctly and run once, not per use. It is a
 **hard-whitelisted folder, not an interpreter**.
 
@@ -32,7 +32,7 @@ is itself a const.
 
 ## What does NOT fold (and why)
 
-- **Any function call outside the whitelist** — e.g. `string.upper(...)`,
+- **Any function call outside the whitelist**, e.g. `string.upper(...)`,
   `string.trim(...)`, a user function, an `extern`, `malloc`. Even though
   some of these are pure, they are rejected in a const initializer with:
 
@@ -41,22 +41,22 @@ is itself a const.
   This is deliberate. A *general* compile-time evaluator would be able to
   synthesize `std.fs` / `std.net` calls and evaluate them at build time,
   which would run filesystem / network code **past the `--emit=lib`
-  capability gate** — the gate that decides which side effects a compiled
+  capability gate**, the gate that decides which side effects a compiled
   artifact is allowed to perform. By folding *only* an explicit,
   audited whitelist of pure value conversions, the build step performs no
   I/O and grants no capability it would not otherwise grant.
 
-- **`string + string`** — the `+` operator is not defined for strings
+- **`string + string`**, the `+` operator is not defined for strings
   anywhere in Aether (it is rejected at typecheck with
   `'+' is not defined for strings`). Build a constant string with
   `string.concat(...)` instead. `const G = "a" + "b"` does **not** work
   by design; `const G = string.concat("a", "b")` does.
 
 - **Struct literals**, **member access**, and **non-constant array
-  elements** — rejected; each would either allocate fresh per use or is
+  elements**, rejected; each would either allocate fresh per use or is
   not a value the substitution model can inline.
 
-- **Out-of-range / undefined folds** — a `string.from_int` argument that
+- **Out-of-range / undefined folds**, a `string.from_int` argument that
   does not fit in 32 bits, or a division by zero, is **not** folded. The
   expression is left as-is rather than producing a silently-wrong
   literal. (For `from_int` the result would have been the runtime
@@ -95,22 +95,30 @@ the compile-time builtin `__pure(funcName)` folds to a `true`/`false` constant
 reflecting it:
 
 ```aether
-when __pure(parse_config) { ... }      // compile-time branch on purity
 let safe = __pure(transform)           // bool constant, no runtime cost
+if __pure(parse_config) { ... }        // branch on purity; folded to a literal
 ```
+
+`__pure` folds during typecheck, so it is usable anywhere an expression is
+(a `let` initializer, an `if` condition, a comparison). It is *not* a valid
+`when` condition: `when` is resolved before typecheck (`resolve_when_statements`,
+`compiler/codegen/optimizer.c`), so it never sees the folded bool and rejects
+`when __pure(fn)` with "`when` condition is not a compile-time constant".
+`when` conditions are limited to `target.os`/`target.arch` comparisons, bool
+literals, and `&&`/`||`/`!` combinations of those.
 
 A function is **pure** when, transitively, it:
 
 - reaches no fs/net/os capability call (`file.*`/`dir.*`/`path.*`, `tcp.*`/
-  `http.*`, `os.*` — time/exec live under `os`), and
-- mutates no caller-visible state — neither a parameter's pointee (`p.field =
+  `http.*`, `os.*` time/exec live under `os`), and
+- mutates no caller-visible state, neither a parameter's pointee (`p.field =
   …`, `p[i] = …`) nor a module-level global.
 
 The analysis is **conservative**: a function whose body it cannot see (an
 `extern`, or an unresolved name) is treated as impure, and a raw `extern` call
 inside a body is opaque and left unjudged (the same boundary the `--with=` gate
 and effect tags have). This is the determinism axis that complements the
-capability (access-control) axis — a function can be capability-empty yet
+capability (access-control) axis, a function can be capability-empty yet
 impure (reads a clock handed to it), or hold `fs` yet be pure for fixed input.
 `__pure` resolves at compile time, so it gates optimizations and library
 features with zero runtime cost.

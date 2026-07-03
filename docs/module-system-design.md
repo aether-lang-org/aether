@@ -49,24 +49,24 @@ Before type checking, the compiler runs a module orchestration phase
 6. **Cycle Check**: Build a dependency graph and detect circular imports via DFS
 
 Both the type checker and code generator then use `module_find()` to retrieve
-cached ASTs — each module file is read and parsed exactly once.
+cached ASTs, each module file is read and parsed exactly once.
 
 ### Available Modules
 
 | Import | Namespace | Functions |
 |--------|-----------|-----------|
 | `import std.string` | `string` | `string.new()`, `string.length()`, `string.release()` |
-| `import std.file` | `file` | `file.open()`, `file.read_all()`, `file.write()`, `file.exists()`, `file.close()`, `file.delete()`, `file.size()` |
+| `import std.file` | `file` | `file.open()`, `file.read()`, `file.write()`, `file.exists()`, `file.close()`, `file.delete()`, `file.size()` |
 | `import std.dir` | `dir` | `dir.exists()`, `dir.create()`, `dir.delete()`, `dir.list()` |
 | `import std.path` | `path` | `path.join()`, `path.dirname()`, `path.basename()`, `path.extension()`, `path.is_absolute()` |
-| `import std.fs` | `file`, `dir`, `path` | Combined module — re-exports `file.*`, `dir.*`, and `path.*` operations |
+| `import std.fs` | `fs` | Monolithic file/dir/path module, call under the `fs` namespace, e.g. `fs.read()`, `fs.exists()`, `fs.list_dir()`, `fs.clean()` (not `file.*`/`dir.*`/`path.*`) |
 | `import std.json` | `json` | `json.parse()`, `json.create_object()`, `json.free()` |
 | `import std.http` | `http` | `http.get()`, `http.server_create()`, `http.server_start()` |
 | `import std.tcp` | `tcp` | `tcp.connect()`, `tcp.write()`, `tcp.listen()` |
-| `import std.net` | `tcp`, `http` | Combined module — re-exports `tcp.*` and `http.*` operations |
+| `import std.net` | `net` | Monolithic networking module under the `net` namespace; redeclares the same TCP/HTTP externs over shared C symbols. Does not re-export the `tcp`/`http` namespaces, so `http.get()` fails after `import std.net` import `std.http`/`std.tcp` for those |
 | `import std.list` | `list` | `list.new()`, `list.add()`, `list.get()`, `list.set()`, `list.remove()` |
 | `import std.map` | `map` | `map.new()`, `map.put()`, `map.get()`, `map.has()`, `map.remove()` |
-| `import std.collections` | `list`, `map` | Combined module — re-exports `list.*` and `map.*` operations |
+| `import std.collections` | `collections` | Monolithic list/map module. Functions keep their raw names; the qualified `collections.X` surface only reaches the Aether wrappers (`collections.list_add()`, `collections.map_put()`, `collections.map_get()`). Raw externs like `list_new`/`map_new` register globally and are callable unqualified, not as `collections.list_new()`. For a namespaced `list.new()`/`map.new()` surface, import `std.list`/`std.map` |
 | `import std.math` | `math` | `math.abs_int()`, `math.sqrt()`, `math.sin()`, `math.random_int()` |
 | `import std.log` | `log` | `log.init()`, `log.write()`, `log.shutdown()` |
 | `import std.io` | `io` | `io.print()`, `io.read_file()`, `io.getenv()` |
@@ -78,7 +78,7 @@ cached ASTs — each module file is read and parsed exactly once.
 
 Modules declare their public API via a single Erlang-style `exports (…)`
 list at the top of the file. Names in the list are accessible from
-importers; names not in the list are private — still usable inside the
+importers; names not in the list are private, still usable inside the
 module's own functions, but rejected at qualified-call sites.
 
 ```aether
@@ -94,7 +94,7 @@ distance(x1, y1, x2, y2) {
     return _sqrt_approx(dx * dx + dy * dy)
 }
 
-// Private helper — not in the exports list, not accessible from outside.
+// Private helper, not in the exports list, not accessible from outside.
 _sqrt_approx(n) {
     return n  // placeholder
 }
@@ -104,8 +104,8 @@ _sqrt_approx(n) {
 import geometry
 
 main() {
-    d = geometry.distance(0, 0, 3, 4)   // OK — listed
-    println(geometry.PI)                 // OK — listed
+    d = geometry.distance(0, 0, 3, 4)   // OK, listed
+    println(geometry.PI)                 // OK, listed
     // geometry._sqrt_approx(25)         // Error: not in exports list
 }
 ```
@@ -116,11 +116,11 @@ main() {
 - A module that declares an `exports (…)` list exposes **only** the
   listed names. Anything else is private.
 - A module with no `exports (…)` list keeps the legacy default-public
-  behavior — every top-level name is callable from outside. v1 is
+  behavior, every top-level name is callable from outside. v1 is
   additive; v2 will flip this default to private once every stdlib +
   contrib module has been migrated.
 - Private names can still be referenced from inside the module's own
-  functions — they're merged into the program, just blocked at the
+  functions, they're merged into the program, just blocked at the
   external call boundary.
 
 ### Legacy `export <fn>` form (deprecated)
@@ -128,7 +128,7 @@ main() {
 Earlier versions of Aether used a per-function `export` keyword:
 
 ```aether
-// DEPRECATED — emits a warning at compile time.
+// DEPRECATED, emits a warning at compile time.
 export const PI = 3
 export distance(...) { … }
 ```
@@ -152,14 +152,14 @@ length(s: string) -> int {
 }
 ```
 
-Pre-fix, the merger renamed the body's bare `length(s)` to `mod_length(s)` (matching the local def's namespaced name post-merge), turning the wrapper into self-recursion — a runtime stack overflow with no compile-time signal. As of #436 facet A, the orchestrator rejects this pattern with `error[E1000]` before merging:
+Pre-fix, the merger renamed the body's bare `length(s)` to `mod_length(s)` (matching the local def's namespaced name post-merge), turning the wrapper into self-recursion, a runtime stack overflow with no compile-time signal. As of #436 facet A, the orchestrator rejects this pattern with `error[E1000]` before merging:
 
 ```
 error[E1000]: module 'mod' (mod/module.ae) defines local function
 'length' (3:1) but also selectively imports 'length' from 'std.string'
   the local def silently shadows the import, so a bare call to
   'length(...)' inside the local body would recurse into the local
-  rather than forward to the imported symbol — at runtime this is a
+  rather than forward to the imported symbol, at runtime this is a
   stack overflow with no compile-time signal.
   fix one of:
     - rename the local function
@@ -176,7 +176,7 @@ The same check applies to entry-point `main.ae` files when the shadow lives ther
 The two `import std.X` forms each light up a different call syntax: a bare
 `import std.X` enables the qualified `X.fn()` surface; a selective
 `import std.X (fn)` enables the bare-name `fn()` surface. These compose
-per-file — but a merged compilation unit pulls definitions from several files
+per-file, but a merged compilation unit pulls definitions from several files
 into one program, and a module's own `import` statements are *not* cloned in
 (only its function/const/struct bodies are).
 
@@ -193,14 +193,54 @@ sealed-scope isolation (#243) is preserved: user code still cannot call into a
 namespace it never imported. This mirrors how transitive dependencies already
 get synthetic imports during merge.
 
+## Re-exports
+
+A module can re-export a symbol it imports from another module by listing that
+symbol in its own `exports`. A consumer then reaches it through the re-exporting
+module even though that module never defined it:
+
+```aether
+// hub.ae, re-exports DERIVED from an inner module
+import layout_consts (DERIVED)
+exports (DERIVED)
+
+// consumer.ae
+import hub
+x = hub.DERIVED        // resolves to the definition in layout_consts
+```
+
+Re-export is opt-in through the `exports` list, transitive (a hub may
+re-export a symbol another hub re-exports), and cycle-guarded. It is also
+precise: a locally-defined export is never treated as a re-export, so if a
+module both defines a name and imports one, the local definition wins. The
+resolver redirects an unresolved `hub.X` to the origin module that defines it,
+and the merge pass pulls that origin definition into the program under the
+origin's namespace.
+
+## Cross-module method-call syntax (UFCS)
+
+A method-style call `x.f(args)` is rewritten to the free-function call
+`f(x, args)` when no field or method named `f` applies. The target `f` may be
+defined in an imported module, not only in the same file. Same-file functions
+take precedence, and the rewrite is a last resort, it fires only when the call
+does not already resolve as a normal function or a struct field, so it never
+shadows an existing binding. This is what lets a fluent chain such as
+`expect(x).to_equal(y)` span module boundaries.
+
+## Circular-import diagnostics
+
+Imports are resolved through a dependency graph, and a cycle is a hard error.
+The diagnostic names the actual cycle as a path, `a -> b -> a` rather than
+the entry point, so the report points at the modules that actually form the
+loop. The synthetic `__main__` entry node never appears in the path because
+nothing imports it.
+
 ## Future
 
 Work planned on top of the current module system:
 
-- `import math.geometry as geo` — import aliases (parser accepts them; wiring through the typechecker and symbol table is next).
+- `import math.geometry as geo` import aliases. The parser accepts them and the typechecker records the alias via `add_module_alias`, but qualified calls through the alias (`geo.distance()`) do not yet resolve; completing that lookup is the remaining work.
 - Exporting structs and actors from modules.
-- Re-exports (module A re-exporting module B's symbols).
-- Transitive dependency resolution.
 
 ---
 
@@ -237,31 +277,31 @@ mypackage/
 
 ### Package Manifest (aether.toml)
 
-Every package has an `aether.toml` file:
+Every package has an `aether.toml` file. This is what `ae init mypackage`
+scaffolds:
 
 ```toml
 [package]
 name = "mypackage"
 version = "0.1.0"
-authors = ["Your Name <you@example.com>"]
+description = "A new Aether project"
 license = "MIT"
-description = "My awesome Aether package"
-
-[dependencies]
-# Add with: ae add github.com/user/repo
-# github.com/user/mylib = "v1.0.0"
-
-[dev-dependencies]
-# Test dependencies
-
-[build]
-target = "native"
-optimizations = "aggressive"
 
 [[bin]]
 name = "mypackage"
 path = "src/main.ae"
+
+[dependencies]
+
+[build]
+target = "native"
+# link_flags = "-lsqlite3 -lcurl"  # Add extra linker flags
 ```
+
+Only a subset of the manifest is honored today: the `[[bin]]` entries
+(`name`/`path`/`extra_sources`) and the `[build]` `target`, `link_flags`,
+and `cflags` keys. The `[package]` metadata and `[dependencies]` table are
+recorded but not yet acted on by the toolchain.
 
 ### Creating Local Modules
 
@@ -279,7 +319,7 @@ myapp/
 └── tests/
 ```
 
-**lib/utils/module.ae** — define your module:
+**lib/utils/module.ae**, define your module:
 ```aether
 export const MULTIPLIER = 2
 
@@ -297,7 +337,7 @@ multiply(a, b) {
 }
 ```
 
-**src/main.ae** — use the module:
+**src/main.ae**, use the module:
 ```aether
 import utils
 
@@ -330,7 +370,7 @@ Packages installed with `ae add` are searched after local paths. The package nam
 
 #### Lib search path (#413)
 
-`<lib-path-entry>` in steps 1 and 2 is a list of directories — PATH-style, `:` on POSIX and `;` on Windows. The list is searched left-to-right; the first hit wins. Three forms compose:
+`<lib-path-entry>` in steps 1 and 2 is a list of directories, PATH-style, `:` on POSIX and `;` on Windows. The list is searched left-to-right; the first hit wins. Three forms compose:
 
 ```sh
 ae run main.ae --lib ./lib:./vendor/stdlib    # separator-string
@@ -338,11 +378,11 @@ ae run main.ae --lib ./lib --lib ./vendor     # repeated flag
 AETHER_LIB_DIR=./lib:./vendor ae run main.ae  # env var
 ```
 
-Both forms can be mixed (`--lib a:b --lib c` → `[a, b, c]`). The default is the single entry `lib` (the legacy behaviour); supplying any explicit `--lib` or `AETHER_LIB_DIR` replaces the default with the given list. Up to 8 entries. Caching invalidates on lib-path changes — two builds of the same source with different `--lib` chains get distinct cache slots, and every entry's mtime feeds into the cache key so a `touch` in a vendored module reuses the right cache bucket.
+Both forms can be mixed (`--lib a:b --lib c` → `[a, b, c]`). The default is the single entry `lib` (the legacy behaviour); supplying any explicit `--lib` or `AETHER_LIB_DIR` replaces the default with the given list. Up to 8 entries. Caching invalidates on lib-path changes, two builds of the same source with different `--lib` chains get distinct cache slots, and every entry's mtime feeds into the cache key so a `touch` in a vendored module reuses the right cache bucket.
 
 The shape matches Java `-cp`, Python `PYTHONPATH`, Ruby `-I` / `RUBYLIB`. Useful for layering project-local modules over a vendored stdlib, sharing a common lib root across two projects, or pinning a stdlib snapshot alongside HEAD-tracking deps.
 
-Trailing slashes are normalised: `--lib ./lib/` and `--lib ./lib` register the same entry (the dedup catches them), and lookup paths stay clean — `<entry>/<module>.ae` rather than `./lib//<module>.ae`. Root paths (`/` on POSIX, `C:\` on Windows) are preserved as-is.
+Trailing slashes are normalised: `--lib ./lib/` and `--lib ./lib` register the same entry (the dedup catches them), and lookup paths stay clean, `<entry>/<module>.ae` rather than `./lib//<module>.ae`. Root paths (`/` on POSIX, `C:\` on Windows) are preserved as-is.
 
 #### Introspecting the resolved chain
 
@@ -357,7 +397,7 @@ $ AETHER_LIB_DIR=/usr/share/aether:./local ae lib-path
 /usr/share/aether
 ./local
 
-$ ae lib-path                          # defaults — single entry
+$ ae lib-path                          # defaults, single entry
 lib
 ```
 
@@ -374,7 +414,7 @@ The compiler converts `namespace.function()` to `namespace_function()`.
 
 ### Pure Aether Modules
 
-You can write reusable modules in pure Aether — no C backing file required:
+You can write reusable modules in pure Aether, no C backing file required:
 
 **lib/mymath/module.ae:**
 ```aether
@@ -388,7 +428,7 @@ export add(a, b) {
     return a + b
 }
 
-// Intra-module calls work — functions can call each other
+// Intra-module calls work, functions can call each other
 export double_and_add(x, y) {
     return add(double_it(x), y)
 }
@@ -408,9 +448,9 @@ main() {
 
 **How it works:**
 
-After module orchestration, the compiler clones each module's function and constant AST nodes into the main program with namespace-prefixed names (`double_it` → `mymath_double_it`). Intra-module calls, constant references, and constant-to-constant references (e.g., `const DOUBLE_BASE = BASE * 2`) are renamed automatically. Function parameters and local variables correctly shadow module constants — `check(SCALE) { return SCALE }` returns the parameter, not the module constant `SCALE`. This makes the entire downstream pipeline (type inference, type checking, codegen) work without modification — merged functions are just regular top-level functions.
+After module orchestration, the compiler clones each module's function and constant AST nodes into the main program with namespace-prefixed names (`double_it` → `mymath_double_it`). Intra-module calls, constant references, and constant-to-constant references (e.g., `const DOUBLE_BASE = BASE * 2`) are renamed automatically. Function parameters and local variables correctly shadow module constants, `check(SCALE) { return SCALE }` returns the parameter, not the module constant `SCALE`. This makes the entire downstream pipeline (type inference, type checking, codegen) work without modification, merged functions are just regular top-level functions.
 
-**Tree-shake of unused merges.** Immediately after merging and before typechecking, `module_prune_unreachable` runs a mark-and-sweep over the program AST. It seeds reachability from `main`, every actor handler, every `export` statement, and every non-imported user function/builder, then closes over `AST_FUNCTION_CALL`, `AST_IDENTIFIER`, and `AST_MEMBER_ACCESS` references — including suffix matches that handle glob-import (`import mymath (*)`) and selective-import (`import mymath [cube]`) shorthands. Imported function and builder definitions outside the closure are dropped from the AST so the typechecker doesn't walk them and the C compiler doesn't emit them. Constants stay (cheap, and pruning them would need a separate pass keyed on identifier references). The whole pass is invisible to user code; programs that *do* call every imported function build identically before and after.
+**Tree-shake of unused merges.** Immediately after merging and before typechecking, `module_prune_unreachable` runs a mark-and-sweep over the program AST. It seeds reachability from `main`, every actor handler, every `export` statement, and every non-imported user function/builder, then closes over `AST_FUNCTION_CALL`, `AST_IDENTIFIER`, and `AST_MEMBER_ACCESS` references, including suffix matches that handle glob-import (`import mymath (*)`) and selective-import (`import mymath [cube]`) shorthands. Imported function and builder definitions outside the closure are dropped from the AST so the typechecker doesn't walk them and the C compiler doesn't emit them. Constants stay (cheap, and pruning them would need a separate pass keyed on identifier references). The whole pass is invisible to user code; programs that *do* call every imported function build identically before and after.
 
 **What's supported:**
 - Functions (with type inference from call sites)
@@ -424,7 +464,6 @@ After module orchestration, the compiler clones each module's function and const
 **On the module-system roadmap (language-level):**
 - Actors from modules (dispatch tables currently assume main-program scope)
 - Message definitions from modules
-- Re-exports (module A re-exporting module B's functions)
 - Module-level mutable state
 
 ### Roadmap

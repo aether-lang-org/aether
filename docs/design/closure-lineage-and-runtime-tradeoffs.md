@@ -177,12 +177,12 @@ Lisp/Smalltalk runtime.
 
 That bet is already visible in:
 
-- `docs/closures-and-builder-dsl.md` — the syntax and implementation shape;
-- `docs/dsl-without-macros.md` — why trailing-block DSLs replace many macro
+- `docs/closures-and-builder-dsl.md` the syntax and implementation shape;
+- `docs/dsl-without-macros.md` why trailing-block DSLs replace many macro
   use cases;
-- `docs/config-is-code.md` — why Aether configuration should be executable,
+- `docs/config-is-code.md` why Aether configuration should be executable,
   sandboxable Aether rather than YAML/HCL plus a second templating layer;
-- `contrib/templating/liquid` and `contrib/parsers/xml_expat` — concrete
+- `contrib/templating/liquid` and `contrib/parsers/xml_expat` concrete
   examples where callbacks and DSL surfaces carry structure and behavior
   without a VM.
 

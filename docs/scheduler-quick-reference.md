@@ -12,8 +12,8 @@ Single-actor programs bypass the scheduler entirely. When only one actor exists 
 - `scheduler_start()` returns immediately
 - `scheduler_wait()` returns immediately (non-destructive; does not stop threads)
 - `aether_send_message` processes synchronously via `aether_send_message_sync`
-- **Threaded mode:** Zero-copy — message data passed directly from caller's stack
-- **Cooperative mode:** Heap-copy — message data is `malloc`'d because mailbox FIFO order means the sent message may not be consumed by the immediate `step()` call
+- **Threaded mode:** Zero-copy, message data passed directly from caller's stack
+- **Cooperative mode:** Heap-copy, message data is `malloc`'d because mailbox FIFO order means the sent message may not be consumed by the immediate `step()` call
 
 **Per-actor flag:**
 The `main_thread_only` field on `ActorBase` signals scheduler threads to skip processing this actor. When a second actor spawns, the flag is cleared on the first actor. In cooperative mode, this flag stays set for all actors.
@@ -64,7 +64,7 @@ Opt-in, zero cost when disabled. Two independent levels:
 
 **Scheduler-side** (`AETHER_PREEMPT=1`): After each `actor->step()` call in the drain loop, the scheduler checks elapsed time via `aether_now_ns()`. If the batch exceeds the threshold (default 1ms, configurable via `AETHER_PREEMPT_MS`), it breaks out and moves to the next actor. Cost when disabled: zero (branch skipped).
 
-**Codegen-side** (`aetherc --preempt`): Inserts `sched_yield()` at the top of every `while` and `for` loop body. A thread-local reduction counter (10000) controls frequency — yields only when the counter hits zero. Cost when `--preempt` is not passed: zero (code not generated).
+**Codegen-side** (`aetherc --preempt`): Inserts `sched_yield()` at the top of every `while` and `for` loop body. A `static int _aether_reductions` counter (initialized to 10000) controls frequency, yields only when the counter hits zero. Note this counter is a single file-scope global, not thread-local, so in a multi-threaded actor program it is shared across all threads. Cost when `--preempt` is not passed: zero (code not generated).
 
 ---
 
@@ -209,7 +209,7 @@ Both migration and work stealing use ascending core-id lock ordering to prevent 
 - Avoid blocking operations in actor step functions
 
 ### Crashes
-- Verify all actor structs match `ActorBase` layout (fields: `active`, `id`, `mailbox`, `step`, `thread`, `auto_process`, `assigned_core`, `migrate_to`, `main_thread_only`, `spsc_queue`, `reply_slot`, `step_lock`)
+- Verify all actor structs match `ActorBase` layout (fields, in order: `active`, `id`, `mailbox`, `step`, `thread`, `auto_process`, `assigned_core`, `migrate_to`, `main_thread_only`, `spsc_queue`, `reply_slot`, `step_lock`, `timeout_ns`, `last_activity_ns`, `dead`)
 - Initialize `migrate_to = -1` after actor creation
 - Use `scheduler_send_remote` instead of direct mailbox writes for cross-core messages
 - Call `scheduler_shutdown()` before process exit (waits for quiescence, stops and joins threads)

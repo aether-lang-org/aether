@@ -1,15 +1,15 @@
-# `hide` and `seal except` — scope-level capability denial
+# `hide` and `seal except` scope-level capability denial
 
 Aether provides two scope-level directives that let a block decline to
 see selected names from its enclosing lexical scopes. They are the
 language-level expression of the ["Principles of Containment"](
-https://paulhammant.com/2016/12/14/principles-of-containment/) — capability
+https://paulhammant.com/2016/12/14/principles-of-containment/), capability
 flow becomes explicit not just on the way *in* (via dependency injection)
 but also on the way *out* (via name denial).
 
 ## The two forms
 
-### `hide` — blacklist
+### `hide` blacklist
 
 ```aether
 {
@@ -21,11 +21,11 @@ but also on the way *out* (via name denial).
 }
 ```
 
-### `seal except` — whitelist
+### `seal except` whitelist
 
 ```aether
 {
-    seal except req, res, inventory, response_write, response_status
+    seal except req, res, inventory, response_write, response_write_status
     // Every name from every outer scope is now invisible EXCEPT the five
     // listed here. The block can still create its own local variables
     // freely; it just can't reach out for ambient state.
@@ -65,7 +65,7 @@ called `fooStr`, which collides with the hidden outer name.
 
 ### Reads AND writes both blocked
 
-`hide x` blocks `println(x)`, `x = 5`, `x += 1`, and `do_stuff(x)` —
+`hide x` blocks `println(x)`, `x = 5`, `x += 1`, and `do_stuff(x)`,
 every form of access. Half-hiding (read-only or write-only) would be a
 footgun.
 
@@ -73,7 +73,7 @@ footgun.
 
 If the outer block hides `x`, every nested block, closure, and
 trailing-block lambda inside it also has `x` hidden. There is no way to
-"un-hide" a name in a nested block — declaring a fresh variable with
+"un-hide" a name in a nested block, declaring a fresh variable with
 the same name in a nested block is allowed, but that's a fresh binding
 in a child scope, not a re-exposure of the parent's hidden binding.
 
@@ -89,7 +89,7 @@ main() {
     secret_token = "abc"
     {
         hide secret_token
-        log_secret()                      // OK — log_secret is visible,
+        log_secret()                      // OK, log_secret is visible,
                                           //      and reads secret_token
                                           //      via its OWN lexical scope
     }
@@ -109,7 +109,7 @@ The same caveat applies to closures captured into local variables:
     incr = || { secret = secret + 1 }     // closure captures `secret`
     {
         hide secret
-        incr()                             // legal — incr was already
+        incr()                             // legal, incr was already
                                            // captured before the hide
     }
 }
@@ -124,15 +124,22 @@ closure into the hiding scope.
 hide a namespace, all member access through that namespace is blocked:
 
 ```aether
-import std.string
+import std.http
 {
-    hide string
-    x = string.new("hello")   // E0304: string is hidden
+    hide http
+    r = http.get("http://example.com")   // rejected: http is hidden here
 }
 ```
 
-This prevents a name from being accessed indirectly through dotted
-syntax when you've explicitly denied it.
+The hidden prefix is refused before namespace resolution, so the call
+never resolves. The diagnostic on a hidden dotted call reports the name
+as undefined (`E0301: Undefined function 'http.get'`) rather than the
+`E0304` you get for a hidden bare name, the qualified lookup returns no
+symbol once the prefix is denied. Either way the access is blocked.
+
+(Don't reach for a built-in type keyword like `string` here: `hide
+string` fails earlier with `E0100`, because `string` is a reserved
+keyword and can't be used as an identifier at all.)
 
 ### Works inside actor receive arms
 
@@ -172,7 +179,7 @@ always visible inside that block, regardless of what's hidden:
 {
     seal except println
     local_thing = "fresh"
-    println(local_thing)    // OK — local_thing is local, not from outside
+    println(local_thing)    // OK, local_thing is local, not from outside
 }
 ```
 
@@ -205,7 +212,7 @@ always visible inside that block, regardless of what's hidden:
    lexical scope. Cheaper, weaker, available today.
 4. **The DI flip-side of dependency injection.** DI delivers
    capabilities to a handler. Without `hide`, the handler can always
-   reach around the injection and grab ambient state — the DI is
+   reach around the injection and grab ambient state, the DI is
    convention. With `hide`/`seal except`, the handler is a closed
    container with a declared dependency surface, and the DI is
    enforced at the call site.
@@ -220,7 +227,7 @@ E0304: 'secret' is hidden in this scope by `hide` or `seal except`
 
 with a source line and column pointing at the offending use. Trying to
 declare a hidden name produces the same code with the message
-"cannot declare 'secret' — it is hidden in this scope by `hide`".
+"cannot declare 'secret', it is hidden in this scope by `hide`".
 
 ## Interaction with shadowing
 
@@ -230,18 +237,18 @@ hidden:
 ```aether
 {
     hide x
-    var x = 5     // E0304: cannot declare 'x' — it is hidden
+    var x = 5     // E0304: cannot declare 'x', it is hidden
 }
 ```
 
-You MAY declare it in a nested child block — that's a fresh binding in
+You MAY declare it in a nested child block, that's a fresh binding in
 the child's own scope, lexically unrelated to the hidden outer one:
 
 ```aether
 {
     hide x
     {
-        var x = 5     // OK — fresh binding in inner block
+        var x = 5     // OK, fresh binding in inner block
         println(x)    // refers to the inner binding
     }
 }
@@ -257,12 +264,12 @@ This is consistent with normal lexical shadowing and means
 |---|---|
 | `hide a, b, c` | Names `a`, `b`, `c` from outer scopes are not in this block (or any nested block within it). |
 | `seal except a, b, c` | EVERY name from outer scopes is invisible in this block, except `a`, `b`, `c`. Local bindings inside the block are still visible. |
-| `hide x` followed by `var x = …` in the same scope | Compile error — cannot redeclare a hidden name. |
-| `hide x` then a nested block declaring `var x = …` | OK — fresh binding in the child scope. |
-| `hide x` then calling a visible function that reads `x` from its own scope | OK — name resolution at the call site doesn't touch `x`. |
-| `seal except printf, malloc` then trying to call `free` | Compile error — `free` is not in the whitelist. |
-| `hide string` then `string.new("x")` | Compile error — qualified access blocked because the prefix is hidden. |
-| `hide` or `seal except` inside an actor receive arm | Works — receive arm bodies are block scopes like any other. |
+| `hide x` followed by `var x = …` in the same scope | Compile error, cannot redeclare a hidden name. |
+| `hide x` then a nested block declaring `var x = …` | OK, fresh binding in the child scope. |
+| `hide x` then calling a visible function that reads `x` from its own scope | OK, name resolution at the call site doesn't touch `x`. |
+| `seal except printf, malloc` then trying to call `free` | Compile error, `free` is not in the whitelist. |
+| `hide http` then `http.get("x")` | Compile error, qualified access blocked because the prefix is hidden (reported as `E0301` undefined, since the hidden prefix resolves to no symbol). |
+| `hide` or `seal except` inside an actor receive arm | Works, receive arm bodies are block scopes like any other. |
 
 ## Implementation note
 
@@ -273,7 +280,7 @@ scope, `lookup_symbol()` checks the scope's `hidden_names` list and
 `seal_whitelist` before walking to the parent.
 `lookup_qualified_symbol()` checks hide/seal on the dotted prefix
 before namespace resolution, so `hide http` blocks `http.get()` too.
-Local bindings always win — the hide/seal sets only affect the
+Local bindings always win, the hide/seal sets only affect the
 boundary crossing into outer scopes.
 
 There is no runtime overhead. There is no codegen change. The feature
@@ -285,18 +292,18 @@ is a pure compile-time hygiene check.
 
 > Up to here is the language reference. The rest of this document is a
 > long-form worked example showing how `hide` / `seal except` enables
-> a dependency-injection story that's smaller, simpler, and **more
-> enforcing** than the Java `DependencyManager` / `ComponentCache`
-> hierarchy that the `contrib/tinyweb/` Aether port deliberately left
+> a dependency-injection story that is smaller, simpler, and
+> compiler-enforced, in contrast to the Java `DependencyManager` /
+> `ComponentCache` hierarchy that the `contrib/tinyweb/` Aether port left
 > behind. Skip if you only wanted the language reference.
 
 ## Q. Do we now have a solid IoC alternative to Java-style DI?
 
 > *In the `contrib/tinyweb/` Aether conversion of the Java TinyWeb thing
-> (`~/scm/tiny`) we left out `DependencyManager` and `Cache` — do we now
+> (`~/scm/tiny`) we left out `DependencyManager` and `Cache` do we now
 > have a solid inversion-of-control alternative to that Java hackery?*
 
-Yes — with `hide` / `seal except` we now have a **better** alternative
+Yes, with `hide` / `seal except` we now have a **better** alternative
 than the Java pattern, and it's smaller too.
 
 ## The key insight
@@ -309,7 +316,7 @@ Aether (now) doesn't:
 
 Java's default is: every static method, every singleton, every
 classpath-reachable type is one keystroke away from any handler. The DI
-container is a *convention layer* on top of that — it organizes
+container is a *convention layer* on top of that, it organizes
 construction order, caches instances, and handles transitive deps, but
 **it cannot stop a handler from reaching around it**. `static
 Foo.INSTANCE.doStuff()` always wins. The container is fundamentally
@@ -317,7 +324,7 @@ polite, not enforcing.
 
 Aether with `seal except` flips this. The handler **declares its
 dependency surface in one line**, and the compiler enforces it. You
-don't need a framework to give you containment — you have a language
+don't need a framework to give you containment, you have a language
 feature. The "container" is just ~80 lines of map plumbing.
 
 ## What it looks like
@@ -327,7 +334,7 @@ Registration at server-build time:
 ```aether
 srv = web_server(8080) {
 
-    // Three scopes — the factory's scope determines its cache lifetime.
+    // Three scopes, the factory's scope determines its cache lifetime.
     app_factory("inventory") callback { return new_inventory() }
     app_factory("db") callback { return open_db() }
 
@@ -345,15 +352,14 @@ srv = web_server(8080) {
 
     path("/cart") {
         end_point(POST, "/add") |req, res, ctx| {
-            seal except req, res, ctx, dep, response_write, response_status
+            seal except req, res, ctx, dep, response_write, response_write_status
 
             inventory = dep(ctx, "inventory")   // app-scoped (cached for server lifetime)
             cart      = dep(ctx, "cart")        // session-scoped (cached per session)
 
-            sku = request_get_query(req, "sku")
+            sku = request_get_query_param(req, "sku")
             if map_has(inventory, sku) == 0 {
-                response_status(res, 404)
-                response_write(res, "unknown sku")
+                response_write_status(res, "unknown sku", 404)
                 return 0
             }
             cart_add(cart, sku)
@@ -365,7 +371,7 @@ srv = web_server(8080) {
 
 The `seal except` line is **the entire dependency surface** of that
 handler. A reviewer reads it and knows: this handler can touch `req`,
-`res`, `ctx`, `dep`, `response_write`, `response_status`. Nothing else
+`res`, `ctx`, `dep`, `response_write`, `response_write_status`. Nothing else
 from any outer scope. If someone later edits the handler to grab `db`
 directly, the compiler refuses.
 
@@ -375,8 +381,8 @@ directly, the compiler refuses.
 |---|---|---|
 | `dep(Cart.class)` returns typed `Cart` | `dep(ctx, "cart")` returns generic `ptr` | Lose compile-time type safety on lookups. Mitigate with typed wrappers: `cart(ctx)` that internally does `(Cart*) dep(ctx, "cart")`. One line per type. |
 | Constructor-injection static graph analysis at startup | Name-based lookup deferred to first request | Mitigate with a `validate(srv)` pass at `server_start` that walks every registered factory's body and ensures every name it asks for has a registration somewhere. ~30 lines of compile-time-ish reflection over the closure registry. |
-| `@Inject` / `@Component` / `@Singleton` / `@RequestScoped` annotations | Three explicit functions: `app_factory`, `session_factory`, `request_factory` | Aether's wins — you can see at the registration site exactly what scope it's in. No "where is this annotation processed?" hunt. |
-| `ComponentCache` / `DefaultComponentCache` / `UseOnceComponentCache` interface hierarchy | Three maps carried in `ctx`: `app_cache`, `session_cache`, `request_cache` | Aether's wins — no interface, no implementation classes, no factory pattern, just maps. |
+| `@Inject` / `@Component` / `@Singleton` / `@RequestScoped` annotations | Three explicit functions: `app_factory`, `session_factory`, `request_factory` | Aether's wins, you can see at the registration site exactly what scope it's in. No "where is this annotation processed?" hunt. |
+| `ComponentCache` / `DefaultComponentCache` / `UseOnceComponentCache` interface hierarchy | Three maps carried in `ctx`: `app_cache`, `session_cache`, `request_cache` | Aether's wins, no interface, no implementation classes, no factory pattern, just maps. |
 | `DependencyException` when resolution fails | `dep(ctx, name)` returns null + a runtime check, or `validate(srv)` catches it at startup | Comparable. |
 | `RequestContext.dep()` interface | A `dep(ctx, name)` function | Same. |
 
@@ -396,17 +402,17 @@ you try to pass it to a function expecting the wrong shape.
 
 ## What you GAIN over Java
 
-1. **The `seal except` line IS the constructor injection list.** No
-   `@Inject final Cart cart;`, no constructor, no field declaration.
-   Five names on one line.
+1. The `seal except` line is the constructor injection list. There is no
+   `@Inject final Cart cart;`, no constructor, no field declaration,
+   just the names on one line.
 
 2. **The handler is a closure, not a class.** No `new
    CartAddHandler(deps...)` boilerplate, no class file per endpoint, no
    inheritance from `AbstractHandler`. The handler IS the trailing
    block.
 
-3. **Compile-time enforced containment.** Java's DM is a convention —
-   `Foo.INSTANCE` always wins. Aether's `seal except` is enforced — the
+3. **Compile-time enforced containment.** Java's DM is a convention,
+   `Foo.INSTANCE` always wins. Aether's `seal except` is enforced, the
    compiler refuses to resolve `Foo.INSTANCE` at all if it's not
    whitelisted.
 
@@ -427,9 +433,9 @@ you try to pass it to a function expecting the wrong shape.
 5. **Scopes are just maps in a parent chain.** `request_cache →
    session_cache → app_cache → null`. Resolution walks upward. Same
    shape as `SymbolTable`'s parent chain in the compiler's
-   `lookup_symbol()`. Nice symmetry — IoC is name resolution at runtime,
-   exactly as `lookup_symbol` is name resolution at compile time. The
-   same parent-chain pattern carries the same idea.
+   `lookup_symbol()`. IoC here is name resolution at runtime, and
+   `lookup_symbol` is name resolution at compile time; the same
+   parent-chain pattern carries both.
 
 6. **Lifetimes are explicit at the call site.** `app_factory(...)`
    reads as "this lives for the server's life". `session_factory(...)`
@@ -441,14 +447,14 @@ you try to pass it to a function expecting the wrong shape.
 
 Roughly **80 lines** of additions to `module.ae`:
 
-- `app_factory(_ctx, name, factory_fn)` — register at server scope
+- `app_factory(_ctx, name, factory_fn)` register at server scope
   (uses the `_ctx` builder context that `web_server { … }` creates)
-- `session_factory(_ctx, name, factory_fn)` — same
-- `request_factory(_ctx, name, factory_fn)` — same
-- `dep(ctx, name)` — walk request → session → app, build via factory
+- `session_factory(_ctx, name, factory_fn)` same
+- `request_factory(_ctx, name, factory_fn)` same
+- `dep(ctx, name)` walk request → session → app, build via factory
   if not cached, store in the right cache, return
-- cycle detection — small set on the resolution stack
-- `validate(srv)` — optional: walk all factory closures looking for
+- cycle detection, small set on the resolution stack
+- `validate(srv)` optional: walk all factory closures looking for
   `dep(ctx, …)` calls and assert each name resolves to a registered
   factory
 
@@ -457,7 +463,7 @@ id. That's another ~20 lines, and most of it is already implied by
 TinyWeb's existing session handling (which it doesn't yet expose, but
 the hooks are there).
 
-## Solid alternative — verdict
+## Solid alternative, verdict
 
 **Yes, solidly.** The combination of:
 
@@ -470,18 +476,17 @@ the hooks are there).
 …gets you everything Java's DM gives you, **plus enforcement**,
 **minus the framework**. The `DependencyManager` / `ComponentCache` /
 `UseOnceComponentCache` / `DefaultComponentCache` four-class hierarchy
-in Java collapses into "a map and a function that walks a parent
-chain." That's the Aether way.
+in Java collapses into a map and a function that walks a parent chain.
 
 The Java version was load-bearing because Java needed it. Aether
-doesn't — it has `seal except` in the language, which is the
+doesn't, it has `seal except` in the language, which is the
 load-bearing primitive. Everything else is sugar.
 
 ## Test coverage that would ship with the implementation
 
 When this lands in `contrib/tinyweb/`, the test coverage should be
 comparable in shape to the `hide` / `seal except` implementation
-(though smaller — it's all userland Aether, no compiler changes):
+(though smaller, it's all userland Aether, no compiler changes):
 
 - The six-cell matrix of (scope × created-on-first-touch /
   cached-thereafter / cleared-on-session-expiry):

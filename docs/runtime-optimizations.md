@@ -21,7 +21,7 @@ Single-actor programs bypass the scheduler entirely. When only one actor exists,
 When main thread mode is active:
 1. `aether_send_message` calls `aether_send_message_sync` instead of routing through scheduler
 2. **Threaded mode:** The sync path passes the caller's stack pointer directly (no malloc, no memcpy). A TLS flag (`g_skip_free`) prevents the handler from freeing the stack pointer
-3. **Cooperative mode:** The sync path heap-allocates a copy of the message data, because the mailbox may have other messages queued ahead — the immediate `step()` call consumes the oldest message (FIFO), not necessarily the one just sent
+3. **Cooperative mode:** The sync path heap-allocates a copy of the message data, because the mailbox may have other messages queued ahead, the immediate `step()` call consumes the oldest message (FIFO), not necessarily the one just sent
 4. `actor->step()` is called synchronously in the sender's context
 
 ```c
@@ -49,7 +49,7 @@ static inline void aether_send_message_sync(ActorBase* actor, void* message_data
 
 **Per-actor flag:**
 
-The `main_thread_only` field on `ActorBase` signals scheduler threads to skip processing this actor. When a second actor spawns, the flag is cleared on the first actor so scheduler threads can process both normally. In cooperative mode, `main_thread_only` stays set for all actors — the cooperative scheduler always processes them directly.
+The `main_thread_only` field on `ActorBase` signals scheduler threads to skip processing this actor. When a second actor spawns, the flag is cleared on the first actor so scheduler threads can process both normally. In cooperative mode, `main_thread_only` stays set for all actors, the cooperative scheduler always processes them directly.
 
 **Scheduler integration:**
 
@@ -118,9 +118,9 @@ while (i < total) {
 scheduler_send_batch_flush();  // Bulk send with one atomic per core
 ```
 
-The flush snapshots each message's target core, sorts by core using radix sort, then calls `queue_enqueue_batch` for each core. This reduces atomics from N (one per message) to num_cores (one per core). Target cores are read once per message at flush time to produce a consistent snapshot — this prevents buffer overflows that could occur if an actor migrates between the time a message is buffered and the time the batch is flushed.
+The flush snapshots each message's target core, sorts by core using radix sort, then calls `queue_enqueue_batch` for each core. This reduces atomics from N (one per message) to num_cores (one per core). Target cores are read once per message at flush time to produce a consistent snapshot, this prevents buffer overflows that could occur if an actor migrates between the time a message is buffered and the time the batch is flushed.
 
-**Partial batch enqueue:** `queue_enqueue_batch` enqueues as many messages as fit in the queue and returns the count, rather than failing the entire batch when the queue is near full. When the queue can't absorb the full batch, the flush retries with the remaining messages — spinning with `AETHER_PAUSE` and yielding to the OS after 64 failed spins so the consumer thread gets CPU time. This replaces the previous per-message `scheduler_send_remote` fallback which called `sched_yield()` on every iteration, reducing kernel yield overhead in high-throughput fan-out patterns.
+**Partial batch enqueue:** `queue_enqueue_batch` enqueues as many messages as fit in the queue and returns the count, rather than failing the entire batch when the queue is near full. This lets the common case (queue has room) complete with a single atomic store per core. When the queue can't absorb the full batch, the flush falls back to `scheduler_send_remote` for each remaining message, which handles its own routing and counting. The fallback path is rare in practice because the cross-core queue holds 1024 items.
 
 **Runtime auto-detection:** The batch send path automatically detects when Main Thread Actor Mode is active (single-actor programs) and uses the synchronous zero-copy path instead of batching. This ensures single-actor benchmarks like counting use the optimal path while multi-actor fan-out patterns like fork-join benefit from batch send. No manual configuration is required.
 
@@ -179,7 +179,7 @@ Cache line padding on `head` and `tail` prevents false sharing between producer 
 
 **Implementation:** `runtime/actors/aether_spsc_queue.h`
 
-Each actor has a dedicated SPSC (single-producer, single-consumer) queue for receiving messages from its owning scheduler thread or from other actor threads via `scheduler_send_local`. This separates same-core and cross-core message paths.
+`auto_process` actors get a dedicated SPSC (single-producer, single-consumer) queue for receiving messages. The queue is lazy-allocated by `ensure_spsc_queue` on the first enqueue; `scheduler_spawn_pooled` initializes `actor->spsc_queue` to `NULL`, so regular actors never allocate one and receive through their mailbox instead. This separates the auto-process delivery path from ordinary mailbox delivery.
 
 ### Direct Mailbox Delivery
 
@@ -212,7 +212,7 @@ When a cross-core send occurs, the sender sets a `migrate_to` hint on the target
 
 2. **During idle actor scan** (full scan, O(actor_count)): When no messages arrived from cross-core queues, the scheduler scans all local actors for pending migration hints. This catches any hints that were not processed in the targeted path.
 
-Migration uses ascending core-id lock ordering to prevent deadlock between concurrent migration and work-stealing operations. Both locks are acquired via non-blocking try-lock — if either lock is contended, migration is deferred to the next iteration. The actor is always processed before migration is attempted, ensuring progress even under constant migration pressure.
+Migration uses ascending core-id lock ordering to prevent deadlock between concurrent migration and work-stealing operations. Both locks are acquired via non-blocking try-lock, if either lock is contended, migration is deferred to the next iteration. The actor is always processed before migration is attempted, ensuring progress even under constant migration pressure.
 
 ### Inline Single-Field Messages
 
@@ -220,15 +220,15 @@ Migration uses ascending core-id lock ordering to prevent deadlock between concu
 
 The code generator detects messages with exactly one scalar field that fits in `intptr_t` and emits an inline fast path. Instead of heap-allocating the message payload (malloc + memcpy + free), the field value is stored directly in `Message.payload_int`. The receiver reconstructs the struct on the stack. This eliminates all heap allocation for single-field messages.
 
-**Supported field types:** `int`, `long` (int64), `ptr`, `bool`, `actor_ref` — any scalar that fits in 64 bits.
+**Supported field types** (from `is_inlineable_scalar`): `int`, `int64`, `uint64`, `duration`, and `ptr`. Other types, including `bool` and `actor_ref`, are not inlined and take the heap-allocated payload path.
 
 **Impact:** Eliminates malloc/free for single-field messages, which are the most common pattern in tree-spawn and request-response workloads. Run `make benchmark` to measure the effect on your hardware.
 
 ### Computed Goto Dispatch
 
-**Implementation:** `compiler/codegen/codegen.c` (generated code)
+**Implementation:** `compiler/codegen/codegen_actor.c` (generated code)
 
-The code generator emits a dispatch table with GCC computed goto (`goto *dispatch_table[msg_id]`) for message handler selection. This replaces indirect function calls or switch statements with direct label jumps. The message ID is read from `msg.type` rather than dereferencing the payload pointer.
+The code generator emits a `dispatch_table[256]` with GCC computed goto (`goto *dispatch_table[_msg_id]`) for message handler selection. This replaces indirect function calls or switch statements with direct label jumps. The message ID is read from `msg.type` (`int _msg_id = msg.type;`) rather than dereferencing the payload pointer.
 
 ### Progressive Backoff Strategy
 
@@ -263,7 +263,7 @@ typedef struct __attribute__((aligned(64))) {
     char padding[63];
 } OptimizedSpinlock;
 
-#define MAILBOX_SIZE 32   // 32 slots — small per-actor footprint for scaling to millions
+#define MAILBOX_SIZE 32   // 32 slots, small per-actor footprint for scaling to millions
 ```
 
 ### Power-of-2 Buffer Sizing
@@ -347,14 +347,14 @@ Idle detection uses per-core counters instead of a global atomic counter. This e
 ```c
 typedef struct {
     // ...
-    uint64_t messages_sent;      // Messages sent FROM this core
-    uint64_t messages_processed; // Messages processed ON this core
+    _Atomic uint64_t messages_sent;      // Messages sent FROM this core
+    _Atomic uint64_t messages_processed; // Messages processed ON this core
     char counter_padding[48];    // Cache line padding
     // ...
 } Scheduler;
 ```
 
-Each scheduler core increments its local counters without atomic operations. The `wait_for_idle()` Aether builtin lowers to the C function `scheduler_wait()`, which sums across all cores to determine when all in-flight messages have been processed. `scheduler_wait()` is non-destructive -- it only waits for quiescence and does not stop scheduler threads, so it can be called multiple times between phases of message sending.
+Each scheduler core increments only its own counters, so there is no cross-core write contention on the hot path. The counters are declared `_Atomic uint64_t` because they are read cross-thread by the idle check, so the `++` compiles to a relaxed atomic read-modify-write rather than a barrier-heavy sequentially-consistent one; this keeps torn reads off weakly-ordered architectures (e.g. ARM64) without adding contention. The `wait_for_idle()` Aether builtin lowers to the C function `scheduler_wait()`, which sums across all cores to determine when all in-flight messages have been processed. `scheduler_wait()` is non-destructive -- it only waits for quiescence and does not stop scheduler threads, so it can be called multiple times between phases of message sending.
 
 ```c
 // Hot path: no atomic contention
@@ -407,11 +407,11 @@ The Aether compiler (`aetherc`) runs its own optimization passes on the AST befo
 
 ### Hot/Cold Path Fixes (scheduler-level)
 
-**Problem A — `aether_main_thread_mode_active()` branch hint** (`runtime/config/aether_optimization_config.h`)
+**Problem A, `aether_main_thread_mode_active()` branch hint** (`runtime/config/aether_optimization_config.h`)
 
 The inline accessor previously carried `__builtin_expect(..., 0)`, marking the main-thread path as *unlikely*. For single-actor programs this path is always taken, so the hint put the fast code in the cold instruction-cache section. Removed the hint; the C compiler now places the branch neutrally.
 
-**Problem B — Dead branch in generated send code** (`compiler/codegen/codegen_expr.c`)
+**Problem B, Dead branch in generated send code** (`compiler/codegen/codegen_expr.c`)
 
 Generated code for `actor ! Msg` from the main thread previously emitted:
 ```c
@@ -471,7 +471,7 @@ For constant-bound loops the Aether collapse is redundant with clang's scalar ev
 i = 0
 while i < n { i = i + 1 }   // n can be a runtime variable
 ```
-→ `if ((i) < (n)) { i = (n); }` — clang can collapse only when `n` is a compile-time constant.
+→ `if ((i) < (n)) { i = (n); }` clang can collapse only when `n` is a compile-time constant.
 
 **Reported in optimization stats:**
 ```

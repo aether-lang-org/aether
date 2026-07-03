@@ -1,25 +1,29 @@
-<!-- Source: GitHub issue #341 — Cross-reference: Zym vs. Aether comparison (full menu of features to consider/skip) -->
+<!-- Source: GitHub issue #341, Cross-reference: Zym vs. Aether comparison (full menu of features to consider/skip) -->
 <!-- Lifted from issue body so the comparison lives next to the code, discoverable for future contributors. -->
 
-# Aether vs Zym — comparison and lift candidates
+# Aether vs Zym, comparison and lift candidates
 
-Written for the Aether team. Source of truth for Zym: `~/scm/flux_ae/zym/`
-(README + `src/` — the CLI shell and native bindings; the `zym_core/`
-submodule (compiler+VM) was not checked out, so anything below about the
-internals is inferred from the public C ABI in `src/natives/natives.h` and
-behavior described in the README).
+> **Status:** Design-exploration survey (May 2026). A record of what was considered from Zym and what, if anything, was worth adopting into Aether, not a roadmap. Adopted items are noted inline; anything not yet shipped is a candidate, not a commitment.
+>
+> Source project: Zym, <https://github.com/zym-lang/zym>.
 
-This doc is structured to let an Aether implementer skim "what is Zym
+This survey draws on Zym's public repository (README + `src/` the CLI
+shell and native bindings). The `zym_core/` submodule (compiler+VM) was
+not examined, so anything below about the internals is inferred from the
+public C ABI in `src/natives/natives.h` and behavior described in the
+README.
+
+The document is structured to let an Aether implementer skim "what is Zym
 doing that Aether isn't?" and pull in the pieces worth lifting, with
 enough detail to actually write the patch.
 
 ---
 
-## TL;DR — one-paragraph picture
+## TL;DR, one-paragraph picture
 
 Zym is a **bytecode-compiled embeddable scripting language** (think
 Lua/Wren niche). It is *not* a systems language and *not* a C-emit
-compiler — it has its own VM (`ZymVM`), its own bytecode format with a
+compiler, it has its own VM (`ZymVM`), its own bytecode format with a
 `ZYM\0` magic header, and its primary distribution story is "pack the
 bytecode after the runtime binary's `.text` and detect it via a 12-byte
 trailer at exe end." Three things in Zym are genuinely interesting and
@@ -44,30 +48,30 @@ below."
 | Capability                           | Aether                                       | Zym                                         | Lift?                            |
 | ------------------------------------ | -------------------------------------------- | ------------------------------------------- | -------------------------------- |
 | Compilation target                   | C source → native binary                     | Bytecode → VM                               | n/a (different niche)            |
-| Distribution: standalone exe         | `--emit=exe` produces native binary directly | Pack bytecode into runtime binary trailer   | **Maybe — see §1**               |
+| Distribution: standalone exe         | `--emit=exe` produces native binary directly | Pack bytecode into runtime binary trailer   | **Maybe, see §1**               |
 | Distribution: portable bytecode      | none                                         | `.zbc` files                                | No (Aether has native exes)      |
-| Embedding C ABI                      | `--emit=lib` → `aether_<name>` exports       | `zym_newVM()` / `zym_call()` / `ZymValue`   | **Yes — see §2**                 |
-| Capability gating                    | `--emit=lib` capability-empty + `--with=`    | None — full host access from any script     | n/a (Aether's story is stronger) |
-| Cross-VM isolation                   | None (single emit, single binary)            | Nested `ZymVM()` from script                | **Yes — see §3**                 |
-| Coroutines / continuations           | Actors + `send`/`receive`                    | Delimited continuations (`Cont.newPrompt`)  | **Maybe — see §4**               |
-| Preemptive scheduling                | None (actors are cooperative)                | Instruction-count time slicing              | **Maybe — see §5**               |
-| TCO                                  | Implicit (compiler decides)                  | Explicit `@tco aggressive` directive        | Probably no — see §6             |
-| Status-driven yield/resume loop      | None                                         | `ZYM_STATUS_YIELD` + `zym_resume()`         | **Yes — see §2.3**               |
-| Custom allocator hook in CLI         | None visible                                 | `ZymAllocator` struct, default malloc shim  | Low priority — see §7            |
-| PGO build mode                       | None visible                                 | `PGO_MODE=GEN/USE` cmake flag               | Low priority — see §7            |
-| "Tiny" optimized build               | None                                         | `-Oz`+gc-sections+stripped                  | Low priority — see §7            |
-| Preprocess-only / combined-only mode | `--emit=src` (?)                             | `--preprocess`, `--combined` for inspection | **Maybe — see §8**               |
+| Embedding C ABI                      | `--emit=lib` → `aether_<name>` exports       | `zym_newVM()` / `zym_call()` / `ZymValue`   | **Yes, see §2**                 |
+| Capability gating                    | `--emit=lib` capability-empty + `--with=`    | None, full host access from any script     | n/a (Aether's story is stronger) |
+| Cross-VM isolation                   | None (single emit, single binary)            | Nested `ZymVM()` from script                | **Yes, see §3**                 |
+| Coroutines / continuations           | Actors + `send`/`receive`                    | Delimited continuations (`Cont.newPrompt`)  | **Maybe, see §4**               |
+| Preemptive scheduling                | None (actors are cooperative)                | Instruction-count time slicing              | **Maybe, see §5**               |
+| TCO                                  | Implicit (compiler decides)                  | Explicit `@tco aggressive` directive        | Probably no, see §6             |
+| Status-driven yield/resume loop      | None                                         | `ZYM_STATUS_YIELD` + `zym_resume()`         | **Yes, see §2.3**               |
+| Custom allocator hook in CLI         | None visible                                 | `ZymAllocator` struct, default malloc shim  | Low priority, see §7            |
+| PGO build mode                       | None visible                                 | `PGO_MODE=GEN/USE` cmake flag               | Low priority, see §7            |
+| "Tiny" optimized build               | None                                         | `-Oz`+gc-sections+stripped                  | Low priority, see §7            |
+| Preprocess-only / combined-only mode | `--emit=src` (?)                             | `--preprocess`, `--combined` for inspection | **Maybe, see §8**               |
 | Cross-platform packing (`-r`)        | n/a (native cross-compile)                   | `-r runtime` swaps the host stub binary     | n/a                              |
 
 ---
 
-## §1 — The single-binary-pack trick
+## §1, The single-binary-pack trick
 
 **What Zym does.** When you run `zym main.zym -o my_app`, the CLI:
 
 1. Compiles `main.zym` to bytecode (a `ZYM\0…` blob).
 2. Reads its **own executable** off disk (`/proc/self/exe` on Linux,
-   `GetModuleFileNameA` on Windows) — that's the "stub."
+   `GetModuleFileNameA` on Windows), that's the "stub."
 3. Concatenates: `[runtime stub bytes][bytecode bytes][4-byte LE size][8-byte magic "ZYMBCODE"]`.
 4. Writes it as the output exe.
 
@@ -79,27 +83,27 @@ falls back to `full_main()` (the normal compiler CLI). One binary, two
 modes, decided by self-inspection.
 
 ```c
-// src/runtime_loader.c — the trailer format
+// src/runtime_loader.c, the trailer format
 // Bytecode package format:
 // [bytecode][4B size little-endian][8B magic "ZYMBCODE"]
 #define FOOTER_MAGIC "ZYMBCODE"
 #define FOOTER_SIZE 12
 ```
 
-**Why Aether might want this — or not.** Aether already has
+**Why Aether might want this, or not.** Aether already has
 `--emit=exe`. The pack trick is mostly relevant if Aether ever gets a
 **REPL or eval-string mode** that compiles at runtime: then a
 "compile-once, distribute-as-attached-blob" path lets users ship
 without `aetherc` on the target. There's also a cross-platform angle
 Zym uses (`-r runtime.exe` swaps in a Windows runtime stub when packing
-on Linux) — Aether sidesteps this because it generates C and lets the
+on Linux), Aether sidesteps this because it generates C and lets the
 host compiler cross-compile.
 
 **Verdict:** **Don't lift wholesale.** It's a workaround for not having
 a native-emit story, which Aether already has. The *one* piece worth
 borrowing is the **self-inspecting trailer pattern** if you ever want
 to embed a JSON/asset/config blob into the binary post-build without
-re-linking — same trick, different payload.
+re-linking, same trick, different payload.
 
 If you do borrow it: keep the magic ASCII (so `strings` shows it, easy
 forensics), keep the size field LE (matches every other Aether on-disk
@@ -109,12 +113,12 @@ detection doesn't false-positive (e.g. `AEBLOB\0\0` or
 
 ---
 
-## §2 — The embedding C ABI shape
+## §2, The embedding C ABI shape
 
 This is the most concrete thing to study, because Aether has an
 embedding story (`--emit=lib` + `aether_<name>` exports) but it is
-**generation-time** — the C side calls fixed exports. Zym's API is
-**reflective** — the C side asks the VM "do you have a function called
+**generation-time**, the C side calls fixed exports. Zym's API is
+**reflective**, the C side asks the VM "do you have a function called
 `X` with arity 3?" and calls it by name. That difference matters for
 plugin hosts where the script is supplied by the user.
 
@@ -142,7 +146,7 @@ void      zym_freeVM(ZymVM*);
 ZymChunk* zym_newChunk(ZymVM*);
 void      zym_freeChunk(ZymVM*, ZymChunk*);
 
-// Compile pipeline — three phases with intermediate artifacts
+// Compile pipeline, three phases with intermediate artifacts
 ZymStatus zym_preprocess(ZymVM*, const char* src, ZymLineMap*, const char** out);
 ZymStatus zym_compile   (ZymVM*, const char* combined_src, ZymChunk*,
                          ZymLineMap*, const char* entry_path,
@@ -166,7 +170,7 @@ ZymValue  zym_getCallResult(ZymVM*);
   ever wants to be embeddable as a library (host calls into libaetherc
   to compile a string), this is the right shape: each stage allocates
   intermediate artifacts the caller frees explicitly. Note Zym always
-  passes the same `ZymVM*` across stages — the VM is the *arena*, not
+  passes the same `ZymVM*` across stages, the VM is the *arena*, not
   just the runtime.
 - **`include_line_info` is a config flag**, not a separate "strip"
   pass. Aether could use this for `--emit=lib` to optionally drop debug
@@ -177,7 +181,7 @@ ZymValue  zym_getCallResult(ZymVM*);
   `--emit=lib` + `--with=` matrix expressible as a single value. Right
   now those flags are spread across `compiler/aetherc.c` argv parsing.
 
-### 2.2 Calling script functions from C — the variadic fan-out
+### 2.2 Calling script functions from C, the variadic fan-out
 
 ```c
 ZymValue argv_list = zym_newList(vm);
@@ -202,12 +206,12 @@ Two things to lift:
 
 2. **`(name, argc, ...)` variadic call.** Painful to use safely from C
    (no type checking), but it lets the host stay generic. Aether's
-   current `aether_<name>` exports are typed by signature — which is
-   *better* for safety but worse for "I don't know what the script
-   exports until I read it." If you ever want both, the Zym pattern is
-   the escape hatch.
+   current `aether_<name>` exports are typed by signature, which is
+   *better* for safety but worse for the "the script's exports aren't
+   known until it is read" case. If both are ever wanted, the Zym
+   pattern is the escape hatch.
 
-### 2.3 The yield-resume status loop — most underrated piece
+### 2.3 The yield-resume status loop, most underrated piece
 
 Look at *every* call site in `runtime_loader.c` and `full_executor.c`:
 
@@ -225,7 +229,7 @@ single-threaded host can:
 
 - Run multiple Zym scripts cooperatively by interleaving `zym_resume()`
   calls across VM instances.
-- Inject a check between yields ("am I past my time budget?", "did the
+- Inject a check between yields ("is the time budget exceeded?", "did the
   user cancel?").
 - Implement a debugger that yields on breakpoints and pumps UI events
   during the pause.
@@ -234,8 +238,8 @@ single-threaded host can:
 `send`/`receive`), which solve concurrency *within* an Aether program,
 but the **C-host has no equivalent re-entry point**. Once a C caller
 invokes `aether_<name>(args)`, control doesn't return until the
-function does. There's no "Aether yielded, run my UI tick, then call
-me back."
+function does. There's no "Aether yielded, run the host's UI tick, then
+call back into the function."
 
 **Recommendation:** for the embed-as-lib case, add a `aether_yield()`
 runtime intrinsic and a corresponding C-side resume function:
@@ -250,7 +254,7 @@ aether_status aether_resume(struct aether_vm*);
 
 This is roughly the work Lua does with `lua_yield` / `lua_resume`. The
 actor model handles the script-internal case; this handles the
-script-to-host case. Worth a roadmap entry in `docs/next-steps.md` —
+script-to-host case. Worth a roadmap entry in `docs/next-steps.md`,
 probably P3, gated on someone needing it. The CHANGELOG has no record
 of this being requested yet.
 
@@ -269,7 +273,7 @@ encodes both the name and the parameter names. This gives you free
 documentation, free arity inference, and overload dispatch by arity:
 
 ```c
-// Same name, different arities — the VM dispatches by argc
+// Same name, different arities, the VM dispatches by argc
 zym_defineNative(vm, "ProcessSpawn(command)",                  nativeProcess_spawn_1);
 zym_defineNative(vm, "ProcessSpawn(command, args)",            nativeProcess_spawn_2);
 zym_defineNative(vm, "ProcessSpawn(command, args, options)",   nativeProcess_spawn);
@@ -292,17 +296,17 @@ That's strictly better for type safety. But the **dispatcher pattern**
 call time) is something Aether currently fakes by giving each variant a
 distinct name (`fs.read_binary` vs `fs.read_binary_to`). Worth thinking
 about whether `extern` blocks should support a `dispatch` keyword that
-groups them — but this is purely sugar and low priority unless a
+groups them, but this is purely sugar and low priority unless a
 downstream user (svn-aether, for instance) asks.
 
 ---
 
-## §3 — Nested VMs as a script-callable value
+## §3, Nested VMs as a script-callable value
 
 This is the most original idea in Zym and the one most worth lifting.
 
 ```javascript
-// In Zym source — from src/natives/ZymVM.c:737–814 readout
+// In Zym source, from src/natives/ZymVM.c:737–814 readout
 var sandbox = ZymVM();             // creates a fresh, nested ZymVM
 var bc = sandbox.compileSource("func add(a,b) { return a+b; }");
 sandbox.load(bc);                  // or sandbox.loadSource("...") in one shot
@@ -323,12 +327,12 @@ pattern.
 **Cross-VM marshalling** is where this gets interesting
 (`src/natives/marshal.c`):
 
-- Primitives (null, bool, number) cross by value — same `ZymValue`.
+- Primitives (null, bool, number) cross by value, same `ZymValue`.
 - Strings are **copied** into the target VM's allocator
   (`zym_newString(target_vm, str)`).
 - Lists and maps are **deep-copied recursively**.
 - Buffers are deep-copied via the BufferData struct.
-- **Functions, structs, enums are explicitly NOT marshallable** — the
+- **Functions, structs, enums are explicitly NOT marshallable**, the
   call sites all check and return a runtime error:
   ```c
   zym_runtimeError(parent_vm,
@@ -341,7 +345,7 @@ references, only copies. The child VM's heap is independent. Closures
 can't cross. That's a real isolation guarantee.
 
 There's also a concession to ergonomics: Zym registers `call_0` through
-`call_8` (each a separate C function, lots of repetition — see
+`call_8` (each a separate C function, lots of repetition, see
 `ZymVM.c:212–584`) and unifies them via a runtime dispatcher. If
 Aether picks this up, varargs in the C runtime would let you collapse
 those into one. Or just generate the boilerplate.
@@ -357,9 +361,9 @@ Aether's current sandbox story is:
 3. **Runtime:** `libaether_sandbox.so` LD_PRELOAD checks libc calls
    against a builder-DSL grant list.
 
-What's *missing* is a **runtime-spawnable sandbox** — "I'm an Aether
-program and I want to load *this user's untrusted Aether code* into a
-walled-off sub-VM and call functions on it." You can do something
+What's *missing* is a **runtime-spawnable sandbox**, "an Aether program
+that wants to load *a user's untrusted Aether code* into a walled-off
+sub-VM and call functions on it." You can do something
 similar today with the in-process language hosts
 (`contrib.host.python.run_sandboxed(perms, code)` etc.) but Aether
 hosting Aether currently requires a separate process. The README and
@@ -384,13 +388,13 @@ Differences from Zym you'd want for Aether:
 
 - **Typed call surface, not variadic.** Aether already requires arity
   *and* type info to mangle exports. So `child.call_int_int_int(name,
-  3, 4)` or a generated typed binding — not Zym's `call(name, ...)`.
+  3, 4)` or a generated typed binding, not Zym's `call(name, ...)`.
 - **Reuse the existing grant-list DSL.** The child VM should accept the
   same builder-DSL grants `libaether_sandbox.so` already understands;
   don't invent a parallel permissions model.
 - **Cross-VM marshalling rules.** Same as Zym: primitives by value,
   strings/lists/maps/`*StringSeq` deep-copied, **closures and actor
-  refs do not cross**. Actor refs especially — that would punch a hole
+  refs do not cross**. Actor refs especially, that would punch a hole
   through isolation.
 - **Lifecycle parity with grant-list.** Closing the child VM should
   release any grants scoped to it; opening one inside a `seal except`
@@ -398,7 +402,7 @@ Differences from Zym you'd want for Aether:
 
 This is genuinely novel work and probably the single highest-leverage
 thing to lift from Zym. Estimate it as a P2 item gated on a real use
-case — the svn-aether port doesn't need it (they're the host), but a
+case, the svn-aether port doesn't need it (they're the host), but a
 plugin-host scenario (e.g., an Aether-written editor loading
 user-supplied Aether macros) would.
 
@@ -407,7 +411,7 @@ A docs/sandbox-aether-in-aether.md alongside
 
 ---
 
-## §4 — Delimited continuations
+## §4, Delimited continuations
 
 Zym ships `Cont.newPrompt` / `Cont.capture` as first-class primitives
 (README example). The use case advertised is "build fibers, coroutines,
@@ -429,10 +433,10 @@ func worker(name) {
 which is a *higher-level* concurrency primitive than continuations.
 Anything you can build with delimited continuations in Zym
 (generators, async/await, custom schedulers), you can build with
-actors in Aether — usually more clearly.
+actors in Aether, usually more clearly.
 
 **The case for lifting:** delimited continuations let you implement
-the C-host yield/resume hook (§2.3) cleanly *inside* the language —
+the C-host yield/resume hook (§2.3) cleanly *inside* the language,
 `aether_yield()` from Aether code becomes "capture continuation up to
 the embedder's prompt." Without continuations, every yield point has
 to be a compiler-known intrinsic (sleep, await-message, etc.).
@@ -445,13 +449,13 @@ the *C compiler* owns the stack. You'd need stack-copying tricks
 costs and break C interop in subtle ways.
 
 **Verdict:** **don't lift directly.** If the C-host yield case in §2.3
-ever becomes real, do it the Lua way — explicit yield/resume points
+ever becomes real, do it the Lua way, explicit yield/resume points
 that the codegen knows about, not general first-class continuations.
 File this under "interesting but wrong tool for Aether's design."
 
 ---
 
-## §5 — Preemptive instruction-count time slicing
+## §5, Preemptive instruction-count time slicing
 
 README claim:
 
@@ -461,7 +465,7 @@ README claim:
 Implementation isn't visible (it's in the unloaded `zym_core/`
 submodule), but the shape is clear: every N bytecode instructions the
 dispatcher checks a budget and yields if exceeded. This is **not**
-cooperative — the script can't refuse.
+cooperative, the script can't refuse.
 
 **Aether equivalent and gap.** None. Actors yield cooperatively at
 `receive` points. A tight loop like `while (true) {}` in Aether will
@@ -470,14 +474,14 @@ peg a CPU.
 **Why this matters:** combine §3 (in-process sandbox) with §5
 (preemption) and you have **runaway-script-proof embedding**. Without
 preemption, your "sandbox" can DoS the host with `for(;;);`. The
-LD_PRELOAD layer doesn't help — it gates syscalls, not CPU.
+LD_PRELOAD layer doesn't help, it gates syscalls, not CPU.
 
 **The cost for Aether:** Aether emits C. There is no bytecode
 dispatcher to hook. To do this for native-emit, you'd need:
 
 1. The codegen to emit periodic budget-checks (every N basic blocks,
    or at every back-edge). This is doable but adds runtime overhead
-   measurable in benchmarks — even a counter increment + branch on
+   measurable in benchmarks, even a counter increment + branch on
    every loop iteration costs.
 2. A signal-based alternative: `SIGALRM` from a timer thread, signal
    handler sets a flag, codegen checks it at safe points. Lower
@@ -486,7 +490,7 @@ dispatcher to hook. To do this for native-emit, you'd need:
 
 **Verdict:** **only lift if §3 lifts.** A sandboxed nested VM is the
 *reason* you'd want preemption. Without that use case, the cost is
-unjustified. If you do lift §3, file preemption as a follow-up — start
+unjustified. If you do lift §3, file preemption as a follow-up, start
 with the back-edge counter approach (simpler, predictable), measure
 overhead, decide whether to escalate to SIGALRM.
 
@@ -495,7 +499,7 @@ keeps the cost opt-in for embedders who want it.
 
 ---
 
-## §6 — `@tco aggressive` directive
+## §6, `@tco aggressive` directive
 
 ```javascript
 @tco aggressive
@@ -521,13 +525,13 @@ about a deep-recursion overflow, revisit. The svn-aether port hasn't
 hit it. Easier escape hatches: rewrite to iteration; if the
 recursion shape is known, codegen a trampoline.
 
-If you *did* want to lift it, the syntax is fine —
+If you *did* want to lift it, the syntax is fine,
 `@tco(mode="aggressive")` as an Aether attribute on a function is
 clean. But save the cost for when there's demand.
 
 ---
 
-## §7 — Build-system polish (low priority)
+## §7, Build-system polish (low priority)
 
 Three small things in `zym/CMakeLists.txt` worth a glance:
 
@@ -547,7 +551,7 @@ using the profile. Worth ~5–15% on hot-loop-heavy code.
 
 For Aether: a `make pgo-gen && ./build/aetherc tests/regression/*.ae &&
 make pgo-use` cycle would be straightforward to add. Use the
-JSONTestSuite run as the representative workload — it's already in CI
+JSONTestSuite run as the representative workload, it's already in CI
 and exercises the parser + emitter heavily.
 
 Low priority but cheap.
@@ -564,20 +568,20 @@ set(CMAKE_EXE_LINKER_FLAGS_TINY "-Wl,--gc-sections -Wl,-s -Wl,-Map,zym_cli.map")
 Optimize for size, gc unused sections, strip. Useful if `aetherc` is
 being shipped in containers or embedded contexts.
 
-For Aether: less compelling — `aetherc` is already small (it's
+For Aether: less compelling, `aetherc` is already small (it's
 hand-written C) and the *output* binary size is dominated by user code,
 not the compiler. Skip unless someone asks.
 
 ### 7.3 Custom allocator hook
 
-Already covered in §2.1 — `ZymAllocator` is passed in at VM creation.
+Already covered in §2.1, `ZymAllocator` is passed in at VM creation.
 The Aether C runtime uses `malloc` directly in lots of places
 (`std/string/aether_string.c`, etc.). Threading an allocator through
 would be a big mechanical change with unclear payoff. **Skip.**
 
 ---
 
-## §8 — `--preprocess` and `--combined` inspection modes
+## §8, `--preprocess` and `--combined` inspection modes
 
 ```text
 zym <file.zym> --preprocess           # show preprocessed source
@@ -587,13 +591,13 @@ zym <file.zym> --preprocess <out.zym> # write to file
 
 Lets users see exactly what the compiler sees after preprocessing /
 module loading. This is *very* useful for debugging weird parser errors
-and for filing bug reports — instead of "the parser rejects my code,"
-you can attach the post-preprocess output that actually reaches the
-compiler.
+and for filing bug reports, instead of "the parser rejects this code,"
+a reporter can attach the post-preprocess output that actually reaches
+the compiler.
 
-Aether already has a preprocessor (or its equivalent — directives,
-includes, macro expansion all happen somewhere in `compiler/`). I
-can't tell from the LLM.md what the user-facing flag is, if any.
+Aether already has a preprocessor (or its equivalent, directives,
+includes, macro expansion all happen somewhere in `compiler/`). It is
+not clear from the LLM.md what the user-facing flag is, if any.
 
 **Recommendation:** if there isn't already an `aetherc --emit=preproc`
 or similar, **add one**. Cheap to implement (the data is on the heap
@@ -610,7 +614,7 @@ Mention it in `docs/next-steps.md` as a P3 ergonomics item.
 
 ---
 
-## §9 — Things Aether does that Zym does *not* (so don't regress)
+## §9, Things Aether does that Zym does *not* (so don't regress)
 
 Quick inventory so this comparison isn't one-sided.
 
@@ -618,7 +622,7 @@ Quick inventory so this comparison isn't one-sided.
   VM at runtime. Aether's deployment story is strictly simpler for
   systems work.
 - **Capability-empty `--emit=lib`.** Zym's library mode (well, embed
-  mode) gives the script *full* host access by default — every `fileX`,
+  mode) gives the script *full* host access by default, every `fileX`,
   `ProcessSpawn`, `processEnv`, `processExit` is registered
   unconditionally in `setupNatives`. There is no "default-deny." This
   is a real safety advantage for Aether in the embed-untrusted-scripts
@@ -627,7 +631,7 @@ Quick inventory so this comparison isn't one-sided.
   symbol is in scope, it's in scope.
 - **LD_PRELOAD `libaether_sandbox.so`.** Catches violations *below* the
   language layer. Zym has nothing comparable; if you exec via
-  `ProcessSpawn`, it just calls `posix_spawn` — no syscall gate.
+  `ProcessSpawn`, it just calls `posix_spawn` no syscall gate.
 - **Actor model with typed messages.** Higher-level concurrency
   primitive than Zym's continuations.
 - **Strict typing.** Zym is dynamically typed (`var x = ...`). Aether
@@ -640,12 +644,12 @@ Quick inventory so this comparison isn't one-sided.
   arrays.
 
 Don't trade any of these for Zym's features. The lifts in §1–§8 are
-**additive** — every one of them can coexist with Aether's existing
+**additive**, every one of them can coexist with Aether's existing
 guarantees.
 
 ---
 
-## §10 — Ranked lift list
+## §10, Ranked lift list
 
 If you only have time for one: **§3 (nested-VM-as-script-value)**.
 That's the genuine novelty.
@@ -656,11 +660,11 @@ Full ranked priority for the Aether roadmap (`docs/next-steps.md`):
 | --- | ----------------------------------------------- | ------ | --------------------------------------------------------- |
 | P2  | §3 nested aether-in-aether VMs (in-process)     | Large  | Real plugin-host use case, or downstream wish file        |
 | P3  | §2.3 `aether_yield()` / `aether_resume()` C ABI | Medium | Embedder asks for it; pairs with P2                       |
-| P3  | §8 `--emit=preproc` / `--emit=combined`         | Small  | Ergonomics — do it next time you touch `aetherc.c`        |
-| P3  | §2.1 `AetherCompileConfig` struct unification   | Small  | Refactor — bundle when next adding a `--with=` capability |
+| P3  | §8 `--emit=preproc` / `--emit=combined`         | Small  | Ergonomics, do it next time you touch `aetherc.c`        |
+| P3  | §2.1 `AetherCompileConfig` struct unification   | Small  | Refactor, bundle when next adding a `--with=` capability |
 | P4  | §5 instruction-budget preemption                | Large  | Only after §3 lands                                       |
 | P4  | §7.1 PGO build mode                             | Small  | Only if benchmarks say it's worth it                      |
-| ✗   | §1 self-extracting binary trailer               | —      | Aether emits native — not needed                          |
+| ✗   | §1 self-extracting binary trailer               | —      | Aether emits native, not needed                          |
 | ✗   | §4 delimited continuations                      | —      | Wrong tool for C-emit                                     |
 | ✗   | §6 `@tco aggressive`                            | —      | No demand                                                 |
 | ✗   | §7.2 "Tiny" build                               | —      | No demand                                                 |
@@ -668,22 +672,22 @@ Full ranked priority for the Aether roadmap (`docs/next-steps.md`):
 
 ---
 
-## Appendix A — files in zym to read if you're implementing §3
+## Appendix A, files in zym to read if you're implementing §3
 
-In `~/scm/flux_ae/zym/`:
+In the [zym-lang/zym](https://github.com/zym-lang/zym) repository:
 
-- `src/natives/ZymVM.c` (entire file, 814 lines) — the native binding
+- `src/natives/ZymVM.c` (entire file, 814 lines), the native binding
   that exposes `ZymVM()` to scripts. Pattern-match the
   `nativeZymVM_create` builder, the `VMData` struct, the `CREATE_METHOD`
   macro at line 760, and the dispatcher construction at 784–794.
-- `src/natives/marshal.c` (149 lines) — the cross-VM value-copy logic.
+- `src/natives/marshal.c` (149 lines), the cross-VM value-copy logic.
   `marshal_reconstruct_value` at line 125 is the dispatch point;
   primitives pass through, containers recurse, unsupported types
   return null and the call sites check for it.
 - `src/runtime_loader.c` (the `while (result == ZYM_STATUS_YIELD)` loop
-  pattern, lines 172–175 and 189–192) — the embedder-side yield/resume
+  pattern, lines 172–175 and 189–192), the embedder-side yield/resume
   shape that §2.3 recommends.
-- `src/natives/natives.c` (58 lines) — the native registration table.
+- `src/natives/natives.c` (58 lines), the native registration table.
   Useful as a reference for how Zym names script-facing functions; the
   signature-string convention (`"fileOpen(path, mode)"`) is something
   Aether's `extern` blocks could optionally adopt for documentation
@@ -692,27 +696,27 @@ In `~/scm/flux_ae/zym/`:
 The actual VM internals (instruction dispatch, GC, continuation
 machinery) are in the `zym_core/` submodule which wasn't checked out
 when this comparison was written. If you need to lift §5 (preemption)
-specifically, fetch that submodule first — the budget-check site will
+specifically, fetch that submodule first, the budget-check site will
 be in the dispatch loop.
 
-## Appendix B — what was *not* examined
+## Appendix B, what was *not* examined
 
-- `zym_core/` — the compiler+VM. Submodule not checked out. Anything
+- `zym_core/` the compiler+VM. Submodule not checked out. Anything
   about Zym's internal architecture (GC strategy, dispatch model, exact
   bytecode format beyond the `ZYM\0` header) is inferred from external
   signals only.
 - Zym's actual language semantics beyond what the README shows. The
   README claims first-class structs, enums, closures, pattern matching
-  via `[h|t]`-style destructuring (not directly shown — that's actually
+  via `[h|t]`-style destructuring (not directly shown, that's actually
   Aether's syntax, just confirming neither file claims this for Zym),
   and modules. Any deeper claim ("Zym's type coercion rules,"
   "operator precedence," etc.) would need the unloaded submodule.
-- Zym's documentation site (`zym-lang.org`) — not fetched. README
+- Zym's documentation site (`zym-lang.org`), not fetched. README
   links to `/docs-language.html` and `/docs-embedding.html` for the
   authoritative guide.
 
 If this comparison is going to drive a real implementation, validate
-the lift candidate against the live submodule before committing — the
+the lift candidate against the live submodule before committing, the
 README and the `src/natives/` C ABI are consistent and recent, but the
 shape of the bytecode dispatcher and the continuation machinery
 matters for any preemption or yield work.
@@ -721,7 +725,7 @@ matters for any preemption or yield work.
 
 ## TL;DR for triage
 
-The full doc above is a survey of [Zym](https://github.com/zym-lang/zym) — a bytecode-compiled embeddable scripting language (Lua/Wren niche, not a systems language). Like the Flux (#335), Fir (#337), and Flint (#339) comparisons, it's written to let Aether decide deliberately what to absorb.
+The full doc above is a survey of [Zym](https://github.com/zym-lang/zym), a bytecode-compiled embeddable scripting language (Lua/Wren niche, not a systems language). Like the Flux (#335), Fir (#337), and Flint (#339) comparisons, it's written to let Aether decide deliberately what to absorb.
 
 **Key shape difference from the prior surveys**: Zym is a different niche (embed-a-script-VM-in-host, not compile-to-native). Most of its features either don't apply (single-binary trailer, bytecode portability) or are already covered better by Aether (capability discipline, actor concurrency). The doc is more selective in what it recommends.
 
@@ -731,30 +735,30 @@ The full doc above is a survey of [Zym](https://github.com/zym-lang/zym) — a b
 |---|---|---|---|
 | **P2** | §3 nested aether-in-aether VMs (in-process sandbox) | Large | Real plugin-host use case, or downstream wish file |
 | P3 | §2.3 `aether_yield()` / `aether_resume()` C ABI | Medium | Embedder asks for it; pairs with P2 |
-| P3 | §8 `--emit=preproc` / `--emit=combined` | Small | Ergonomics — do it next time you touch aetherc.c |
-| P3 | §2.1 `AetherCompileConfig` struct unification | Small | Refactor — bundle when next adding a --with= capability |
+| P3 | §8 `--emit=preproc` / `--emit=combined` | Small | Ergonomics, do it next time you touch aetherc.c |
+| P3 | §2.1 `AetherCompileConfig` struct unification | Small | Refactor, bundle when next adding a --with= capability |
 | P4 | §5 instruction-budget preemption | Large | Only after §3 lands |
 | P4 | §7.1 PGO build mode | Small | Only if benchmarks say it's worth it |
-| ✗ | §1 self-extracting binary trailer | — | Aether emits native — not needed |
+| ✗ | §1 self-extracting binary trailer | — | Aether emits native, not needed |
 | ✗ | §4 delimited continuations | — | Wrong tool for C-emit |
 | ✗ | §6 `@tco aggressive` | — | No demand |
 
 ## The headline lift: §3 nested in-process VMs
 
-If only one item from this survey lands, it's §3 — Zym's pattern of `var sandbox = ZymVM()` from script code, returning an object with `.compileSource() / .load() / .call(name, args)` and a value-only marshalling boundary (primitives copy, strings/lists deep-copy, **closures and refs do not cross**).
+If only one item from this survey lands, it's §3, Zym's pattern of `var sandbox = ZymVM()` from script code, returning an object with `.compileSource() / .load() / .call(name, args)` and a value-only marshalling boundary (primitives copy, strings/lists deep-copy, **closures and refs do not cross**).
 
-This would give Aether **in-process aether-in-aether sandboxing** — currently the README and LLM.md both note that Aether-hosts-Aether requires a separate process. Real use case: an Aether-written editor loading user-supplied Aether macros, a plugin host loading untrusted user scripts, etc. The svn-aether port doesn't need it (they're the host, not the host-of-untrusted-code), so this is gated on a downstream demand surfacing.
+This would give Aether **in-process aether-in-aether sandboxing**, currently the README and LLM.md both note that Aether-hosts-Aether requires a separate process. Real use case: an Aether-written editor loading user-supplied Aether macros, a plugin host loading untrusted user scripts, etc. The svn-aether port doesn't need it (they're the host, not the host-of-untrusted-code), so this is gated on a downstream demand surfacing.
 
-**Why I'm not filing this as a focused issue**: P2/large effort + explicit "only worth doing if a real use case shows up" gate. Filing prematurely would create implementation pressure without justification. Flag for separate issue when (if) someone files a wish for it.
+**Why this is not filed as a focused issue**: P2/large effort + explicit "only worth doing if a real use case shows up" gate. Filing prematurely would create implementation pressure without justification. Flag for separate issue when (if) someone files a wish for it.
 
 ## Note on overlap with prior surveys
 
 The four comparison docs (#335 Flux, #337 Fir, #339 Flint, #341 Zym) each pull on different parts of the design space:
 
-- **Flux**: bit-precise types (`data{N}`), `from`-cast — binary protocol parsing
-- **Fir**: row-typed errors, `#[derive(...)]`, anonymous records — type-system ergonomics
-- **Flint**: optionals, variants, FIP C-bindings — runtime-shape ergonomics
-- **Zym**: nested-VM sandboxing, yield/resume C ABI — embedder-shape extensions
+- **Flux**: bit-precise types (`data{N}`), `from`-cast, binary protocol parsing
+- **Fir**: row-typed errors, `#[derive(...)]`, anonymous records, type-system ergonomics
+- **Flint**: optionals, variants, FIP C-bindings, runtime-shape ergonomics
+- **Zym**: nested-VM sandboxing, yield/resume C ABI, embedder-shape extensions
 
 Zym is the most distant from Aether's identity (different compilation model). Its useful contributions are mostly **architectural patterns** (the value-only marshalling boundary, the yield/resume status loop) rather than language features.
 
@@ -766,7 +770,7 @@ Zym is the most distant from Aether's identity (different compilation model). It
 
 ## Cross-refs
 
-- Source: `~/scm/aether/COMPARISON.md` (also pasted above for permanence). Zym source: [zym-lang/zym](https://github.com/zym-lang/zym).
+- Zym source: [zym-lang/zym](https://github.com/zym-lang/zym).
 - Sister surveys: #335 (Flux), #337 (Fir), #339 (Flint)
-- §3 nested-VM proposal: not filed as focused issue — gated on real use case
+- §3 nested-VM proposal: not filed as focused issue, gated on real use case
 - §8 `--emit=preproc`: small standalone ergonomics; could be its own focused issue if you want to greenlight it independently of the rest of the survey

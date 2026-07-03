@@ -2,7 +2,7 @@
 
 Complete reference for Aether's standard library modules.
 
-> **Note:** The standard library follows the canonical module pattern in [stdlib-module-pattern.md](stdlib-module-pattern.md) — fallible operations expose a `_raw` extern plus a Go-style `(value, err)` Aether wrapper; pure/infallible operations stay raw without a suffix. See the [error handling example](../examples/basics/error-handling.ae) for how the pattern is used from user code, and [std/fs/module.ae](../std/fs/module.ae) for the reference implementation.
+> **Note:** The standard library follows the canonical module pattern in [stdlib-module-pattern.md](stdlib-module-pattern.md), fallible operations expose a `_raw` extern plus a Go-style `(value, err)` Aether wrapper; pure/infallible operations stay raw without a suffix. See the [error handling example](../examples/basics/error-handling.ae) for how the pattern is used from user code, and [std/fs/module.ae](../std/fs/module.ae) for the reference implementation.
 
 ## Platform support
 
@@ -11,8 +11,8 @@ Complete reference for Aether's standard library modules.
 | Linux / macOS / BSD | full POSIX | full | full | Reference target. |
 | Windows (MSYS2 / mingw-w64) | partial | full | full | Process exec uses POSIX fallbacks; `os.run` is POSIX-only until the `CreateProcessW` backend lands. Some fs operations (`symlink`, `readlink`) are stubs returning clean errors via the Go-style wrappers. |
 | WASI (wasi-sdk) | per preopened paths | none | single-threaded | wasi-libc provides POSIX-compatible `fopen`/`fread`/`stat`/etc., so the normal fs code path compiles. Paths must be under a WASI preopen. |
-| Emscripten (browser WASM) | off by default | off | cooperative | Builds pass `-DAETHER_NO_FILESYSTEM -DAETHER_NO_NETWORKING`. File ops return `(null, "cannot open file")` via the Go-style wrappers — no silent failures. To enable, compile with `-sFORCE_FILESYSTEM=1` and drop the define; untested in CI. |
-| Bare embedded | off | off | cooperative | Same as Emscripten — stubs route all failures through the Go-style error tuples. |
+| Emscripten (browser WASM) | off by default | off | cooperative | Builds pass `-DAETHER_NO_FILESYSTEM -DAETHER_NO_NETWORKING`. File ops return `(null, "cannot open file")` via the Go-style wrappers, no silent failures. To enable, compile with `-sFORCE_FILESYSTEM=1` and drop the define; untested in CI. |
+| Bare embedded | off | off | cooperative | Same as Emscripten, stubs route all failures through the Go-style error tuples. |
 
 When a target lacks a capability, the stub implementations in each stdlib module return `NULL` / `0` so the Go-style wrapper produces a descriptive error string rather than crashing. A call like `file.read("/etc/hosts")` on a no-fs target returns `("", "cannot open file")`, which the caller handles the same way as any other I/O error.
 
@@ -79,7 +79,7 @@ Raw extern: `list_add_raw` (returns 1/0).
 
 ### String list (`string_list_*`)
 
-Refcount-aware list for `AetherString` values. Use this instead of plain `list_*` when the list is meant to hold strings — the plain list stores items as raw `void*` and doesn't bump the refcount, so a string pushed and held while its original variable goes out of scope silently dangles.
+Refcount-aware list for `AetherString` values. Use this instead of plain `list_*` when the list is meant to hold strings, the plain list stores items as raw `void*` and doesn't bump the refcount, so a string pushed and held while its original variable goes out of scope silently dangles.
 
 ```aether
 import std.collections
@@ -100,7 +100,7 @@ main() {
 }
 ```
 
-Plain string literals pass through unchanged — `string_retain` is a no-op on values that don't bear the AetherString magic header.
+Plain string literals pass through unchanged, `string_retain` is a no-op on values that don't bear the AetherString magic header.
 
 **Functions:**
 - `string_list_new()` → `ptr` - Allocate an empty list
@@ -114,7 +114,7 @@ Plain string literals pass through unchanged — `string_retain` is a no-op on v
 - `string_list_sort_lex(list)` - Stable ascending lexicographic (byte-wise) sort, in place
 - `string_list_sort(list, cmp)` - Stable in-place sort by a comparator closure `|a: string, b: string| { ... }` returning negative / 0 / positive (like `strcmp`)
 
-Both sorts reorder the backing slots only — no element is copied or freed — so they sidestep the get/set aliasing trap of a hand-rolled swap (`string_list_get` returns the slot's internal pointer; a naive adjacent swap would free a slot another borrowed pointer still aliases). Issue #967.
+Both sorts reorder the backing slots only, no element is copied or freed, so they sidestep the get/set aliasing trap of a hand-rolled swap (`string_list_get` returns the slot's internal pointer; a naive adjacent swap would free a slot another borrowed pointer still aliases). Issue #967.
 
 ```aether
 names = string_list_new()
@@ -129,7 +129,7 @@ string_list_sort(names, |a: string, b: string| {
 })
 ```
 
-For a similar `string_map`, file an issue — same pattern would apply. Issue #274.
+For a similar `string_map`, file an issue, same pattern would apply. Issue #274.
 
 ### Map (`std.map`)
 
@@ -174,7 +174,7 @@ Raw extern: `map_put_raw` (returns 1/0).
 
 Packed int buffer with O(1) random access. For DP tables, flat
 int-keyed lookup, and other hot paths where `std.list`'s `void*`-boxed
-items cost an allocation per entry. Size is fixed at allocation —
+items cost an allocation per entry. Size is fixed at allocation,
 callers that need growth use `std.list`.
 
 ```aether
@@ -187,7 +187,7 @@ main() {
     dp, err = intarr.new(rows * cols)
     if err != "" { return }
 
-    // Hot loop — _unchecked skips the bounds check (valid index required).
+    // Hot loop, _unchecked skips the bounds check (valid index required).
     r = 0
     while r < rows {
         c = 0
@@ -217,11 +217,11 @@ main() {
 
 ### Fixed-size float array (`std.floatarr`)
 
-Packed double buffer — the float twin of `std.intarr`. Aether's `float`
+Packed double buffer, the float twin of `std.intarr`. Aether's `float`
 lowers to C `double`, so the element type is `double` end-to-end. Same
 fixed-size discipline, same bounds-check policy. Motivating use cases:
 SVG path-command argument storage, rasterizer edge tables, bbox
-accumulators, blur kernel coefficients — any `number[]`-shaped data
+accumulators, blur kernel coefficients, any `number[]`-shaped data
 where boxing each scalar into a `*Pt` struct would chase a pointer per
 element.
 
@@ -267,7 +267,7 @@ main() {
     bytes.copy_from_string(b, 1, "abc", 3)
     bytes.set(b, 4, 93)                    // ']'
 
-    // Hand off to a refcounted AetherString — buffer is consumed.
+    // Hand off to a refcounted AetherString, buffer is consumed.
     s = bytes.finish(b, 5)                 // "[abc]"
 }
 ```
@@ -283,7 +283,7 @@ bytes.copy_within(b, 2, 0, 4)             // dst=2, src=0, length=4
 out = bytes.finish(b, 6)                  // "ABABAB"
 ```
 
-`copy_within` is **forward byte-by-byte** (deliberately not `memmove`-style). When `dst > src`, each iteration `i` reads `data[src + i]` — which earlier iterations of the same call may have just written. That's how runs of repeated bytes get encoded.
+`copy_within` is **forward byte-by-byte** (deliberately not `memmove`-style). When `dst > src`, each iteration `i` reads `data[src + i]` which earlier iterations of the same call may have just written. That's how runs of repeated bytes get encoded.
 
 **Functions:**
 - `bytes.new(initial_capacity)` → `ptr` - Allocate empty buffer with reserved capacity
@@ -308,7 +308,7 @@ out = bytes.finish(b, 6)                  // "ABABAB"
 - `bytes.finish(b, length)` → `string` - Hand off to refcounted AetherString; buffer is consumed
 - `bytes.free(b)` - Discard without finishing (idempotent on null)
 
-The build-then-walk pattern needed by binary-codec encoders (svndiff and similar) is what `bytes.get` / `bytes.{set,get}_le32` are for — accumulate packed-int ops into the same buffer via `set_le32` at known offsets, then walk and read each back at finish time:
+The build-then-walk pattern needed by binary-codec encoders (svndiff and similar) is what `bytes.get` / `bytes.{set,get}_le32` are for, accumulate packed-int ops into the same buffer via `set_le32` at known offsets, then walk and read each back at finish time:
 
 ```aether
 b = bytes.new(0)
@@ -329,7 +329,7 @@ Reference-counted strings with comprehensive operations.
 ### String Types: Plain Strings vs Managed Strings
 
 > **Most users don't need managed strings.** All `std.string` functions work on both plain strings
-> and managed strings transparently. `string.length("hello")` just works — no conversion needed.
+> and managed strings transparently. `string.length("hello")` just works, no conversion needed.
 > Only create managed strings via `string.new()` when you need reference counting.
 
 Aether has two string representations:
@@ -342,9 +342,9 @@ Aether has two string representations:
 | **Knows length?** | Computed via `strlen` | Stored in struct (`O(1)`) |
 | **std.string functions** | All work | All work |
 
-**`string`** — plain C string. String literals like `"hello"` are this type. All `std.string` functions accept these directly.
+**`string`**, plain C string. String literals like `"hello"` are this type. All `std.string` functions accept these directly.
 
-**Managed strings** — heap-allocated objects returned by `string.new()`. Typed as `ptr` in Aether code. Use when you need reference counting or the result of transformation functions like `string.trim()`, `string.to_upper()`.
+**Managed strings**, heap-allocated objects returned by `string.new()`. Typed as `ptr` in Aether code. Use when you need reference counting or the result of transformation functions like `string.trim()`, `string.to_upper()`.
 
 **Converting between them:**
 
@@ -366,7 +366,7 @@ main() {
 ```
 
 **Best practices:**
-- Use `string` for message fields — keeps payloads simple
+- Use `string` for message fields, keeps payloads simple
 - Use managed strings when you need to manipulate text (trim, split, concat)
 - Always `defer string.free()` immediately after creating a managed string
 - Use `string.to_cstr()` when passing managed strings to `print` or message fields
@@ -399,16 +399,16 @@ main() {
     // Substrings
     sub = string.substring(s, 0, 3);  // "Hel"
 
-    // Splitting — pick the shape that matches your access pattern.
+    // Splitting, pick the shape that matches your access pattern.
     csv = string.new("a,b,c");
 
-    // (a) AetherStringArray — O(1) random access via integer index.
+    // (a) AetherStringArray, O(1) random access via integer index.
     parts = string.split(csv, ",");
     count = string.array_size(parts);   // 3
     first = string.array_get(parts, 0);  // "a"
     string.array_free(parts);
 
-    // (b) *StringSeq cons-cell — O(1) head/tail/cons/length, refcount-
+    // (b) *StringSeq cons-cell, O(1) head/tail/cons/length, refcount-
     //     aware, pattern-matches with [h | t]. Reach for this when the
     //     result will be walked recursively or sent across an actor
     //     boundary as a message field. See docs/sequences.md.
@@ -420,7 +420,7 @@ main() {
     string.release(csv);
 
     // Conversion
-    n = string.from_int(42);       // "42"
+    numstr = string.from_int(42);  // "42"
     f = string.from_float(3.14);   // "3.14"
     cstr = string.to_cstr(s);     // raw C string pointer
 
@@ -451,8 +451,8 @@ main() {
 
 **Transformation:**
 - `string.substring(str, start, end)` - Extract substring
-- `string.substring_n(str, str_len_bytes, start, end)` - Length-aware sibling. Caller threads the source length through; `str_len(s)` is not consulted internally. Reach for this when `str` arrived as a `string`-typed parameter at a function boundary AND the content may contain embedded NULs — see [c-interop.md § Length-clamp hazard](c-interop.md#length-clamp-hazard-for-binary-content). Without it, the auto-unwrap (#297) strips the AetherString header at the call site, `str_len` falls through to `strlen`, and binary content gets truncated at the first NUL.
-- `string.length_n(str, known_length)` - Identity helper that documents intent. In code that receives a `string` parameter plus an explicit length, the explicit length IS the truth — don't consult the AetherString header. `n = string.length_n(s, n)` reads as "yes I know my length" instead of looking like a forgotten `string.length(s)` that would have truncated at NUL.
+- `string.substring_n(str, str_len_bytes, start, end)` - Length-aware sibling. Caller threads the source length through; `str_len(s)` is not consulted internally. Reach for this when `str` arrived as a `string`-typed parameter at a function boundary AND the content may contain embedded NULs, see [c-interop.md § Passing string values into C externs (auto-unwrap)](c-interop.md#passing-string-values-into-c-externs-auto-unwrap). Without it, the auto-unwrap (#297) strips the AetherString header at the call site, `str_len` falls through to `strlen`, and binary content gets truncated at the first NUL.
+- `string.length_n(str, known_length)` - Identity helper that documents intent. In code that receives a `string` parameter plus an explicit length, the explicit length IS the truth, don't consult the AetherString header. `n = string.length_n(s, n)` reads as "yes I know my length" instead of looking like a forgotten `string.length(s)` that would have truncated at NUL.
 - `string.to_upper(str)` - Convert to uppercase (returns new string)
 - `string.to_lower(str)` - Convert to lowercase (returns new string)
 - `string.trim(str)` - Remove leading/trailing whitespace
@@ -466,25 +466,25 @@ main() {
 - `string.strip_prefix(s, prefix)` → `(rest, stripped)` - If `s` starts with `prefix`, returns the remainder and 1. Otherwise returns `s` and 0. Cleaner than manual `starts_with` + `substring` length arithmetic.
 
 **Glob-pattern matching (string side, NOT filesystem):**
-- `string.glob_match(pattern, s)` → `int` - Does `pattern` match `s`? POSIX fnmatch(3) syntax: `*` zero-or-more, `?` single-char, `[abc]` / `[a-z]` char classes, `[!abc]` negation, `\*` / `\?` literal escapes. Returns 1 on match, 0 on no-match, -1 on glob-syntax error. Distinct from `fs.glob` which enumerates matching files on disk — this is pure string matching (svn:ignore patterns, message routing, branch-spec matching).
+- `string.glob_match(pattern, s)` → `int` - Does `pattern` match `s`? POSIX fnmatch(3) syntax: `*` zero-or-more, `?` single-char, `[abc]` / `[a-z]` char classes, `[!abc]` negation, `\*` / `\?` literal escapes. Returns 1 on match, 0 on no-match, -1 on glob-syntax error. Distinct from `fs.glob` which enumerates matching files on disk, this is pure string matching (svn:ignore patterns, message routing, branch-spec matching).
 - `string.glob_match_pathname(pattern, s)` → `int` - Same as `glob_match` but `*` and `?` do NOT cross a `/` separator. Use when matching path patterns: `src/*.c` matches `src/foo.c` but not `src/sub/foo.c`.
 
-**Sequences (`*StringSeq` — Erlang/Elixir-shaped cons-cell list):**
+**Sequences (`*StringSeq` Erlang/Elixir-shaped cons-cell list):**
 
-- `string.seq_empty()` → `*StringSeq` — empty list (NULL pointer)
-- `string.seq_cons(head, tail)` → `*StringSeq` — prepend; retains both head and tail
-- `string.seq_head(s)` → `string` — `""` on empty
-- `string.seq_tail(s)` → `*StringSeq` — empty seq on empty
-- `string.seq_is_empty(s)` → `int` — 1 if empty
-- `string.seq_length(s)` → `int` — O(1) cached
-- `string.seq_retain(s)` → `*StringSeq` — bump refcount; pair with `seq_free`
-- `string.seq_free(s)` — iterative spine walk; stops at shared cells
-- `string.seq_from_array(arr, count)` → `*StringSeq` — build from an `AetherStringArray*` (the shape `string.split` returns)
-- `string.seq_to_array(s)` → `ptr` — materialise as `AetherStringArray*` for legacy callers; free with `string.array_free`
-- `string.seq_reverse(s)` → `*StringSeq` — O(n), fresh independent spine
-- `string.seq_concat(a, b)` → `*StringSeq` — O(|a|), `a` copied, `b` shared via refcount bump
-- `string.seq_take(s, n)` → `*StringSeq` — first `n` elements (clamped to length, negative yields empty); fresh independent spine
-- `string.seq_drop(s, n)` → `*StringSeq` — n-th tail retained (clamped to length, negative yields `s` retained); pointer walk only, no allocations
+- `string.seq_empty()` → `*StringSeq` empty list (NULL pointer)
+- `string.seq_cons(head, tail)` → `*StringSeq` prepend; retains both head and tail
+- `string.seq_head(s)` → `string` `""` on empty
+- `string.seq_tail(s)` → `*StringSeq` empty seq on empty
+- `string.seq_is_empty(s)` → `int` 1 if empty
+- `string.seq_length(s)` → `int` O(1) cached
+- `string.seq_retain(s)` → `*StringSeq` bump refcount; pair with `seq_free`
+- `string.seq_free(s)` iterative spine walk; stops at shared cells
+- `string.seq_from_array(arr, count)` → `*StringSeq` build from an `AetherStringArray*` (the shape `string.split` returns)
+- `string.seq_to_array(s)` → `ptr` materialise as `AetherStringArray*` for legacy callers; free with `string.array_free`
+- `string.seq_reverse(s)` → `*StringSeq` O(n), fresh independent spine
+- `string.seq_concat(a, b)` → `*StringSeq` O(|a|), `a` copied, `b` shared via refcount bump
+- `string.seq_take(s, n)` → `*StringSeq` first `n` elements (clamped to length, negative yields empty); fresh independent spine
+- `string.seq_drop(s, n)` → `*StringSeq` n-th tail retained (clamped to length, negative yields `s` retained); pointer walk only, no allocations
 
 Pattern-match `[]` and `[h|t]` arms work directly against `*StringSeq` matched expressions:
 
@@ -499,9 +499,9 @@ Array literal `[a, b, c]` builds a cons chain when the target type is `*StringSe
 - `string.copy(s)` - Return an independently-owned copy of `s`. Equivalent to `string.concat(s, "")` but with a discoverable name; callers use it to snapshot a borrowed TLS buffer before the next C call overwrites it.
 - `string.format(fmt, args)` - Format a string by substituting `{}` placeholders with entries from an `std.list` of strings. `{{` and `}}` are literal braces. Use this for runtime-built strings of N parts where literal `${...}` interpolation isn't an option (e.g. when the format string itself comes from a config file or message-template lookup). Non-string values must be converted via `string.from_int(...)` etc. before being added to the list.
 
-For a `split_once`-style operation (find the first `sep` in `s`, return the halves), use `string.index_of(s, sep)` + two `string.substring` calls — two lines of code that avoid a tuple-unification foot-gun the typechecker currently has around three-string tuples.
+For a `split_once`-style operation (find the first `sep` in `s`, return the halves), use `string.index_of(s, sep)` + two `string.substring` calls, two lines of code that avoid a tuple-unification foot-gun the typechecker currently has around three-string tuples.
 
-> **Note: `string + string` is not defined.** Use `"${a}${b}"` interpolation for literals or `string.concat(a, b)` / `string.format(fmt, args)` for runtime-built strings. The typechecker rejects `+` between two string operands at compile time with a hint pointing at these alternatives — it does NOT silently emit broken pointer arithmetic.
+> **Note: `string + string` is not defined.** Use `"${a}${b}"` interpolation for literals or `string.concat(a, b)` for runtime-built strings; `string.format(fmt, args)` handles the N-part case. The typechecker rejects `+` between two string operands at compile time (E0200) with a hint naming `"${a}${b}"` interpolation and `string.concat(a, b)` it does NOT silently emit broken pointer arithmetic.
 
 **Conversion:**
 - `string.to_cstr(str)` - Get raw C string pointer
@@ -529,7 +529,7 @@ Raw out-parameter externs are preserved as `string_to_int_raw`, `string_to_long_
 
 ### String ownership and the heap-string tracker (issue #405)
 
-Strings reassigned to a variable are reclaimed automatically by a compiler-emitted wrapper — you do **not** write `defer string.free(s)` for in-Aether assignments. For every string variable in a function, the compiler emits a companion `_heap_<name>` tracker at function-entry scope that flips between 0 (current value is a literal) and 1 (current value is heap-allocated) as you reassign. On every reassignment, the wrapper `if (_heap_<name>) free(<old>)` decides whether to release the previous buffer.
+Strings reassigned to a variable are reclaimed automatically by a compiler-emitted wrapper, you do **not** write `defer string.free(s)` for in-Aether assignments. For every string variable in a function, the compiler emits a companion `_heap_<name>` tracker at function-entry scope that flips between 0 (current value is a literal) and 1 (current value is heap-allocated) as you reassign. On every reassignment, the wrapper `if (_heap_<name>) free(<old>)` decides whether to release the previous buffer.
 
 Both the **stdlib** functions in the table above (`string.concat`, `string.substring`, `string.to_upper`, `string.to_lower`, `string.trim`) and **string interpolation** (`"foo ${x}"`) are recognised as heap-allocated.
 
@@ -543,12 +543,12 @@ my_concat(a: string, b: string) -> string {
 s = ""
 i = 0
 while i < 1000000 {
-    s = my_concat(s, "x")              // O(1) memory — old s is freed automatically
+    s = my_concat(s, "x")              // O(1) memory, old s is freed automatically
     i = i + 1
 }
 ```
 
-A function returning a string literal — or a function whose returns mix heap and literal sources — is NOT recognised, and the wrapper won't try to free its result. This is the structural escape analysis added to close issue #405.
+A function returning a string literal, or a function whose returns mix heap and literal sources, is NOT recognised, and the wrapper won't try to free its result. This is the structural escape analysis added to close issue #405.
 
 The function-entry hoist closes the cross-block visibility gap that previously kept the simpler `node_type == TYPE_STRING` recognition unsafe: the tracker is now visible at every nesting depth, so a variable first-assigned in an if-then and reassigned in an else-if (or in a deeply nested loop) sees the same `_heap_<name>` cell and follows the same free/no-free rules.
 
@@ -600,7 +600,7 @@ main() {
 - `file.close(handle)` - Close file
 - `file.size(path)` → `(int, string)` - Get size in bytes
 - `file.delete(path)` → `string` - Delete file
-- `file.exists(path)` - 1 if a **regular file** is at `path`, 0 otherwise. Returns 0 for directories, even if they exist — see `fs.exists` for the path-agnostic check.
+- `file.exists(path)` - 1 if a **regular file** is at `path`, 0 otherwise. Returns 0 for directories, even if they exist, see `fs.exists` for the path-agnostic check.
 
 Raw externs: `file_open_raw`, `file_read_all_raw`, `file_write_raw`, `file_delete_raw`, `file_size_raw`.
 
@@ -642,8 +642,8 @@ main() {
 - `dir.list(path)` → `(ptr, string)` - List contents (caller must `dir.list_free`)
 - `dir.list_count(list)` → `int` - Number of entries
 - `dir.list_get(list, index)` → `string` - Entry name at `index`
-- `dir.list_kind(list, index)` → `int` - Entry's file kind from readdir's `d_type`, avoiding a `stat(2)` per entry: 1 = file, 2 = directory, 3 = symlink (target not followed), 4 = other; 0 = unknown (the filesystem didn't report a type — stat that entry to resolve it). Same encoding as `file_stat`'s kind. Issue #966.
-- `dir.exists(path)` - 1 if a **directory** is at `path`, 0 otherwise. Returns 0 for regular files, even if they exist — see `fs.exists` for the path-agnostic check.
+- `dir.list_kind(list, index)` → `int` - Entry's file kind from readdir's `d_type`, avoiding a `stat(2)` per entry: 1 = file, 2 = directory, 3 = symlink (target not followed), 4 = other; 0 = unknown (the filesystem didn't report a type, stat that entry to resolve it). Same encoding as `file_stat`'s kind. Issue #966.
+- `dir.exists(path)` - 1 if a **directory** is at `path`, 0 otherwise. Returns 0 for regular files, even if they exist, see `fs.exists` for the path-agnostic check.
 - `dir.list_free(list)` - Free directory listing
 
 Raw externs: `dir_create_raw`, `dir_delete_raw`, `dir_list_raw`, `dir_list_count`, `dir_list_get`, `dir_list_kind`, `dir_list_free`.
@@ -665,19 +665,19 @@ n, err = fs.walk(root, |path: string, kind: int, depth: int| {
     return 0                     // 0 continue · 1 skip subtree · 2 stop walk
 })
 
-// Watch: coarse change ping — re-list to see what changed.
+// Watch: coarse change ping, re-list to see what changed.
 w, werr = fs.watch_open(dir)
 changed = fs.watch_wait(w, 1000)   // 1 changed / 0 timeout / -1 error
 fs.watch_close(w)
 ```
 
 **Functions:**
-- `fs.walk(path, cb)` → `(int, string)` - Visit `path` (depth 0) and every entry beneath it. Entry kinds come from readdir's `d_type` (#966) — one sweep per directory, no per-entry `stat(2)`. Symlinks are reported (kind 3) but never followed, so cycles are impossible. `path` inside the callback is borrowed — copy it to keep it. Traversal order within a directory is the platform's readdir order (unspecified). Returns (entries visited, `""`), or (0, error) when `path` can't be read.
+- `fs.walk(path, cb)` → `(int, string)` - Visit `path` (depth 0) and every entry beneath it. Entry kinds come from readdir's `d_type` (#966), one sweep per directory, no per-entry `stat(2)`. Symlinks are reported (kind 3) but never followed, so cycles are impossible. `path` inside the callback is borrowed, copy it to keep it. Traversal order within a directory is the platform's readdir order (unspecified). Returns (entries visited, `""`), or (0, error) when `path` can't be read.
 - `fs.watch_open(path)` → `(ptr, string)` - Watch one directory (or file), non-recursive, over the platform primitive: kqueue `EVFILT_VNODE` (macOS/BSD), inotify (Linux), `FindFirstChangeNotification` (Windows). The handle is single-threaded.
 - `fs.watch_wait(watch, timeout_ms)` → `int` - Block up to `timeout_ms` (negative = forever): 1 = something changed (create/delete/modify/rename inside the watched directory), 0 = timeout, -1 = error. Changes made **between** `watch_open` and `watch_wait` are queued, not lost, and a burst of changes reports once (pending events are drained).
 - `fs.watch_close(watch)` - Release the handle. Safe on null.
 
-The watch event is deliberately coarse — a "something changed here" ping without the file name (that is the only semantics all three platform primitives share; kqueue in particular reports no names). The idiomatic pattern is: wake on the ping, re-list with `dir.list` + `dir.list_kind`, diff against what you rendered. An actor can own the watch and poll with a short timeout in a self-send loop for live refresh.
+The watch event is deliberately coarse, a "something changed here" ping without the file name (that is the only semantics all three platform primitives share; kqueue in particular reports no names). The idiomatic pattern is: wake on the ping, re-list with `dir.list` + `dir.list_kind`, diff against what you rendered. An actor can own the watch and poll with a short timeout in a self-send loop for live refresh.
 
 ### Paths (`std.path`)
 
@@ -709,7 +709,7 @@ main() {
 ### Full-fat filesystem (`std.fs`)
 
 `std.file` / `std.dir` / `std.path` cover most calls; `std.fs` re-exports
-them and adds the accessors that need a bit more plumbing — durable
+them and adds the accessors that need a bit more plumbing, durable
 writes, atomic rename, one-shot stat, binary-safe read.
 
 ```aether
@@ -732,12 +732,12 @@ main() {
 ```
 
 **Functions (beyond those re-exported from `std.file`/`std.dir`/`std.path`):**
-- `fs.exists(path)` → `int` - **Path-agnostic** existence check: 1 if anything is at `path` (regular file, directory, symlink, fifo, ...), 0 otherwise. Distinct from `file.exists` (regular-file-only) and `dir.exists` (directory-only) — those filter by type, this one doesn't. Uses `lstat(2)` so a dangling symlink counts as existing — matches POSIX `test -e`. Reach for this in tooling that probes whether a path is bound without caring what's there (build-system runtime-path discovery, "did the user pass a real path?" CLI validation).
+- `fs.exists(path)` → `int` - **Path-agnostic** existence check: 1 if anything is at `path` (regular file, directory, symlink, fifo, ...), 0 otherwise. Distinct from `file.exists` (regular-file-only) and `dir.exists` (directory-only), those filter by type, this one doesn't. Uses `lstat(2)` so a dangling symlink counts as existing, matches POSIX `test -e`. Reach for this in tooling that probes whether a path is bound without caring what's there (build-system runtime-path discovery, "did the user pass a real path?" CLI validation).
 - `fs.write_atomic(path, data, length)` → `string` - Stage to `<path>.tmp.<pid>.<n>`, fsync, rename over destination. Binary-safe via explicit length. The tmp file is created with `O_CREAT|O_EXCL|O_NOFOLLOW` so an attacker who pre-plants a symlink at the predictable tmp path can't trick the write into following it; permissions track the process umask exactly as the previous `fopen("wb")` would have.
 - `fs.write_binary(path, data, length)` → `string` - Non-atomic `fopen("wb")` + `fwrite` + `fclose`. Binary-safe via explicit length. Cheaper than `write_atomic` when a partial file on crash is acceptable (scratch writes, caches).
 - `fs.rename(from, to)` → `string` - POSIX `rename(2)` wrapper. Atomic when source and target are on the same filesystem.
-- `fs.create_dir_with_mode(path, mode)` → `string` - Like `fs.create_dir` but takes an explicit POSIX mode (0777-masked). Use this for private dirs (e.g. `0o700` for keys) — sets the bits at creation time, closing the `mkdir` → `chmod` race window. Windows ignores the mode at the directory layer; the parameter is accepted for portability.
-- `fs.mtime(path)` → `(int, string)` - File's mtime as Unix epoch seconds, in the standard `(value, err)` shape. Distinguishes "stat failed" from "file's mtime is 0 (1970 epoch)" — the older `file_mtime` extern collapsed both into a single 0 sentinel and is kept only for back-compat.
+- `fs.create_dir_with_mode(path, mode)` → `string` - Like `fs.create_dir` but takes an explicit POSIX mode (0777-masked). Use this for private dirs (e.g. `0o700` for keys), sets the bits at creation time, closing the `mkdir` → `chmod` race window. Windows ignores the mode at the directory layer; the parameter is accepted for portability.
+- `fs.mtime(path)` → `(int, string)` - File's mtime as Unix epoch seconds, in the standard `(value, err)` shape. Distinguishes "stat failed" from "file's mtime is 0 (1970 epoch)", the older `file_mtime` extern collapsed both into a single 0 sentinel and is kept only for back-compat.
 - `fs.file_stat(path)` → `(kind, size, mtime, err)` - One `lstat(2)`; symlinks report kind 3, target is not followed.
 - `fs.read_binary(path)` → `(content, length, err)` - Length-aware read preserving embedded NULs.
 
@@ -760,12 +760,12 @@ if kind == fs.KIND_OK {
 }
 ```
 
-`fs.copy`, `fs.move`, `fs.realpath`, and `fs.chmod` all ship with this structured-error shape. Existing wrappers keep their `(value, err)` shape unchanged — the structured-error shape sits next to it, not in place of it.
+`fs.copy`, `fs.move`, `fs.realpath`, and `fs.chmod` all ship with this structured-error shape. Existing wrappers keep their `(value, err)` shape unchanged, the structured-error shape sits next to it, not in place of it.
 
 **Constants** (exported from `std.fs`):
 | Constant | Value | Errno |
 |---|---|---|
-| `KIND_OK` | 0 | (none — success) |
+| `KIND_OK` | 0 | (none, success) |
 | `KIND_NOT_FOUND` | 1 | `ENOENT` |
 | `KIND_PERMISSION_DENIED` | 2 | `EACCES` / `EPERM` |
 | `KIND_EXISTS` | 3 | `EEXIST` |
@@ -780,21 +780,21 @@ if kind == fs.KIND_OK {
 | `KIND_UNAVAILABLE` | 99 | platform feature compiled out |
 
 **Functions:**
-- `fs.copy(src, dst)` → `(int, int, string)` — Copy file contents; preserves source mode bits. Symlinks in `src` are followed (matches POSIX `cp` without `-P`); `dst` is overwritten if it exists; `dst` cannot be an existing directory (returns `KIND_IS_DIR`). On partial failure, the bytes count reflects how far the copy got.
+- `fs.copy(src, dst)` → `(int, int, string)` Copy file contents; preserves source mode bits. Symlinks in `src` are followed (matches POSIX `cp` without `-P`); `dst` is overwritten if it exists; `dst` cannot be an existing directory (returns `KIND_IS_DIR`). On partial failure, the bytes count reflects how far the copy got.
 
-  Performance: zero-copy via the platform's best primitive — Linux `copy_file_range(2)` (reflinks on btrfs/XFS) → `sendfile(2)`; macOS `fcopyfile(COPYFILE_DATA)` (APFS clone on same-volume); Windows `CopyFileExW` (kernel block copy). An 8 MiB read/write loop is the portable fallback for filesystems that reject the kernel primitives. The byte count saturates at `INT_MAX` for files larger than 2³¹ bytes — the data is still copied correctly; only the reported count is truncated.
+  Performance: zero-copy via the platform's best primitive, Linux `copy_file_range(2)` (reflinks on btrfs/XFS) → `sendfile(2)`; macOS `fcopyfile(COPYFILE_DATA)` (APFS clone on same-volume); Windows `CopyFileExW` (kernel block copy). An 8 MiB read/write loop is the portable fallback for filesystems that reject the kernel primitives. The byte count saturates at `INT_MAX` for files larger than 2³¹ bytes, the data is still copied correctly; only the reported count is truncated.
 
-- `fs.move(src, dst)` → `(int, int, string)` — Move file from `src` to `dst`. Atomic when source and destination are on the same filesystem (POSIX `rename(2)`). On `EXDEV` (cross-device) the call transparently falls back to `fs.copy` + `unlink` — correct, but no longer atomic. Cross-device directory moves surface as `KIND_IS_DIR` (the underlying copy refuses to recurse). Windows uses `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED` so the cross-fs case is handled internally.
+- `fs.move(src, dst)` → `(int, int, string)` Move file from `src` to `dst`. Atomic when source and destination are on the same filesystem (POSIX `rename(2)`). On `EXDEV` (cross-device) the call transparently falls back to `fs.copy` + `unlink` correct, but no longer atomic. Cross-device directory moves surface as `KIND_IS_DIR` (the underlying copy refuses to recurse). Windows uses `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED` so the cross-fs case is handled internally.
 
-- `fs.realpath(path)` → `(string, int, string)` — OS-canonicalise the path: every symlink is followed; `.` and `..` components are folded out. POSIX `realpath(3)`; on Windows `CreateFileW(FILE_FLAG_BACKUP_SEMANTICS)` + `GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED)`, with the `\\?\` prefix stripped before returning. Common kinds: `KIND_NOT_FOUND` for a missing component, `KIND_LOOP` for symlink cycles, `KIND_NAME_TOO_LONG` if the resolved form exceeds the OS limit.
+- `fs.realpath(path)` → `(string, int, string)` OS-canonicalise the path: every symlink is followed; `.` and `..` components are folded out. POSIX `realpath(3)`; on Windows `CreateFileW(FILE_FLAG_BACKUP_SEMANTICS)` + `GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED)`, with the `\\?\` prefix stripped before returning. Common kinds: `KIND_NOT_FOUND` for a missing component, `KIND_LOOP` for symlink cycles, `KIND_NAME_TOO_LONG` if the resolved form exceeds the OS limit.
 
-- `fs.chmod(path, mode)` → `(int, int, string)` — Change permission bits. POSIX `chmod(2)` follows symlinks (matches what shell `chmod` does); `mode` is masked with `07777` internally so set-uid/sgid/sticky high-bits are honoured. On Windows only the user-write bit (`0o200`) is meaningful — read-only is toggled via `SetFileAttributesW(FILE_ATTRIBUTE_READONLY)`; every other bit is silently ignored, matching Python's `os.chmod` documented behaviour.
+- `fs.chmod(path, mode)` → `(int, int, string)` Change permission bits. POSIX `chmod(2)` follows symlinks (matches what shell `chmod` does); `mode` is masked with `07777` internally so set-uid/sgid/sticky high-bits are honoured. On Windows only the user-write bit (`0o200`) is meaningful, read-only is toggled via `SetFileAttributesW(FILE_ATTRIBUTE_READONLY)`; every other bit is silently ignored, matching Python's `os.chmod` documented behaviour.
 
 ---
 
 ## In-process script gateway (`std.http.script_gateway`)
 
-CGI-style ergonomics — one `.ae` script file per route — without paying the per-request fork/exec cost. The script is pre-compiled with `aetherc --emit=lib --with=net script.ae -o script.so` to a shared library; the host server `dlopen()`s it once at mount time and dispatches matched requests via a direct indirect call. Empirically ~50× faster than the equivalent subprocess-spawn dispatch (issue #384).
+CGI-style ergonomics, one `.ae` script file per route, without paying the per-request fork/exec cost. The script is pre-compiled with `aetherc --emit=lib --with=net script.ae -o script.so` to a shared library; the host server `dlopen()`s it once at mount time and dispatches matched requests via a direct indirect call. Empirically ~50× faster than the equivalent subprocess-spawn dispatch (issue #384).
 
 ### Script shape
 
@@ -811,7 +811,7 @@ import std.http
 }
 ```
 
-Build it as a shared library — `--with=net` is required because `std.http` is the `net` capability and `--emit=lib` is capability-empty by default:
+Build it as a shared library, `--with=net` is required because `std.http` is the `net` capability and `--emit=lib` is capability-empty by default:
 
 ```sh
 aetherc --emit=lib --with=net greeting.ae -o /var/aether/scripts/greeting.so
@@ -838,9 +838,9 @@ Now `GET /greet/anything` runs `aether_script_handle` from `greeting.so` directl
 
 ### API
 
-- `script_gateway.mount(server, path_prefix, so_path)` → `(int, int, string)` — Mount the shared library at `so_path` as the request handler for every URL whose path starts with `path_prefix`. Returns `(1, KIND_OK, "")` on successful mount; `(0, KIND_*, msg)` on failure. The dlopen handle is intentionally long-lived (process-lifetime); hot-reload is a separate feature.
+- `script_gateway.mount(server, path_prefix, so_path)` → `(int, int, string)` Mount the shared library at `so_path` as the request handler for every URL whose path starts with `path_prefix`. Returns `(1, KIND_OK, "")` on successful mount; `(0, KIND_*, msg)` on failure. The dlopen handle is intentionally long-lived (process-lifetime); hot-reload is a separate feature.
 
-**Constants** (subset of std.fs's KIND_* — values match so callers can mix the two surfaces):
+**Constants** (subset of std.fs's KIND_*, values match so callers can mix the two surfaces):
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -863,7 +863,7 @@ Per-request hot path is one `strncmp(path, prefix, prefix_len)` plus one indirec
 ## JSON (`std.json`)
 
 JSON parsing, creation, and serialization. RFC 8259 conformant (318/318
-JSONTestSuite cases — all mandatory `y_*` and `n_*` pass).
+JSONTestSuite cases, all mandatory `y_*` and `n_*` pass).
 
 **Implementation.** Arena-allocated parser: every parsed value,
 string, and container backing array comes from a single per-document
@@ -875,8 +875,8 @@ go through an int64 accumulator; fractional/exponential values within
 double's exact range (≤15 significant digits, |exponent| ≤ 22) take a
 `POW10` fast-double path with one multiply and one cast; anything past
 those bounds falls back to `strtod` for correct IEEE-754 rounding.
-Strings are decoded in two phases — a pre-scan locates the closing
-quote so the decode buffer is sized exactly once — and the inner
+Strings are decoded in two phases, a pre-scan locates the closing
+quote so the decode buffer is sized exactly once, and the inner
 fast-loop over safe printable-ASCII bytes dispatches to SSE2 on
 `__SSE2__`, NEON on `__ARM_NEON && __aarch64__`, or a scalar LUT
 fallback compiled in for WASM / embedded / anywhere else. The SIMD
@@ -897,7 +897,7 @@ DoS. First-error-wins diagnostics include `<reason> at <line>:<col>`.
 import std.json
 
 main() {
-    // Parse JSON string — Go-style tuple return
+    // Parse JSON string, Go-style tuple return
     data, err = json.parse("{\"name\": \"Aether\", \"version\": 1}")
     if err != "" {
         println("parse failed: ${err}")
@@ -918,7 +918,7 @@ main() {
     json.array_add(arr, json.create_number(2.0))
     size = json.array_size(arr)
 
-    // Serialize to string — Go-style (output, err) tuple
+    // Serialize to string, Go-style (output, err) tuple
     output, _ = json.stringify(obj)
     println("JSON: ${output}")
 
@@ -973,7 +973,7 @@ main() {
 }
 ```
 
-The `parse_strict` shape is the std.fs pilot from issue #392 extended to a second module — same tuple, same KIND_* convention.
+The `parse_strict` shape is the std.fs pilot from issue #392 extended to a second module, same tuple, same KIND_* convention.
 
 **Type Checking:**
 - `json.type(value)` - Get type constant (0-5)
@@ -1003,15 +1003,15 @@ The `parse_strict` shape is the std.fs pilot from issue #392 extended to a secon
 - `json.create_null()`, `json.create_bool(value)`, `json.create_number(value)`
 - `json.create_string(value)`, `json.create_array()`, `json.create_object()`
 
-**Terse builder / encoder** (issue #628) — thin aliases over the above for
+**Terse builder / encoder** (issue #628), thin aliases over the above for
 assembling a value tree and serializing it without hand-concatenating
 strings (escaping is handled by the encoder):
-- `json.obj()` / `json.arr()` — new empty object / array
-- `json.str(s)` / `json.num(f)` / `json.boolean(0|1)` / `json.null_value()` — scalars
-- `json.set(obj, key, value)` / `json.push(arr, value)` — `""` on success, error
+- `json.obj()` / `json.arr()` new empty object / array
+- `json.str(s)` / `json.num(f)` / `json.boolean(0|1)` / `json.null_value()` scalars
+- `json.set(obj, key, value)` / `json.push(arr, value)` `""` on success, error
   string on wrong-kind target (the orphaned value is reclaimed); the parent
   takes ownership of `value`
-- `json.encode(value)` → `(string, string)` — `(json, "")` on success
+- `json.encode(value)` → `(string, string)` `(json, "")` on success
 
 ```aether
 import std.json
@@ -1034,8 +1034,8 @@ main() {
 
 Coming from Go's `json.Unmarshal`, Java's Jackson, Python's `json.load` + dataclasses, or C#'s `JsonSerializer`, expect to do more by hand:
 
-- **No struct ↔ JSON mapping.** Aether has no runtime reflection — no `instanceof`, no `T.GetType()`, no `reflect.TypeOf` — so a library function that takes a struct type and a JSON tree and populates the struct fields can't exist as a stdlib API. Callers walk the tree by hand: `json.object_get(v, "name")` then `json.get_string(...)`, repeated per field. For tree-shaped or dynamically-shaped JSON the Aether code looks similar to other languages; for struct-shaped JSON it's more verbose. A future codegen step (a `--derive-json` flag on struct definitions, or a build-step macro) could close this gap without runtime reflection, but isn't shipped today.
-- **No annotations / struct tags.** `@JsonProperty("user_name")`, Go struct tags `json:"user_name,omitempty"`, etc. don't apply — there's nothing for them to attach to without struct-mapping in the first place.
+- **No struct ↔ JSON mapping.** Aether has no runtime reflection, no `instanceof`, no `T.GetType()`, no `reflect.TypeOf` so a library function that takes a struct type and a JSON tree and populates the struct fields can't exist as a stdlib API. Callers walk the tree by hand: `json.object_get(v, "name")` then `json.get_string(...)`, repeated per field. For tree-shaped or dynamically-shaped JSON the Aether code looks similar to other languages; for struct-shaped JSON it's more verbose. A future codegen step (a `--derive-json` flag on struct definitions, or a build-step macro) could close this gap without runtime reflection, but isn't shipped today.
+- **No annotations / struct tags.** `@JsonProperty("user_name")`, Go struct tags `json:"user_name,omitempty"`, etc. don't apply, there's nothing for them to attach to without struct-mapping in the first place.
 - **No streaming parse.** The whole document is buffered into the arena before the tree is walkable. For multi-gigabyte JSON, use a different tool. Documents into the tens of MB are fine.
 - **No JSON5 / comments / trailing commas.** Strict RFC 8259 only.
 - **No pretty-print on stringify.** Compact output only. Wrap with a separate prettier if you need one.
@@ -1046,15 +1046,15 @@ Coming from Go's `json.Unmarshal`, Java's Jackson, Python's `json.load` + datacl
 
 Beyond JSON, the stdlib has **no built-in support** for:
 
-- **YAML** — no parser. Configuration files for Aether projects use TOML (read by the build tool internally — not a user-facing stdlib module) or hand-rolled formats.
-- **XML** — `std.xml` provides a pull/SAX reader and an escaping builder (see the XML section above). It deliberately omits XSD, XPath, namespaces, and DTD validation; for those a host-language tool is still the answer.
-- **TOML** — there's a parser at `tools/apkg/toml_parser.c` used internally by the `ae` CLI to read `aether.toml` project files. It's not exposed as `std.toml`. If a project needs TOML, copying that parser or shelling out to a host-language tool are the options today.
-- **INI** — no parser. Trivial to implement on top of `string.split` if needed.
-- **Java-style `.properties`** — no parser. Same shape as INI without sections; same advice.
-- **CSV** — no parser. `string.split(line, ",")` covers the no-quoting / no-embedded-commas case; anything more needs a real CSV parser, which isn't shipped.
-- **Protocol Buffers / MessagePack / CBOR / Avro / Thrift** — no codecs. Same reflection-gap reasoning as struct ↔ JSON: without struct introspection there's no automatic encode/decode.
+- **YAML**, no parser. Configuration files for Aether projects use TOML (read by the build tool internally, not a user-facing stdlib module) or hand-rolled formats.
+- **XML**, `std.xml` provides a pull/SAX reader and an escaping builder (see the XML section above). It deliberately omits XSD, XPath, namespaces, and DTD validation; for those a host-language tool is still the answer.
+- **TOML**, there's a parser at `tools/apkg/toml_parser.c` used internally by the `ae` CLI to read `aether.toml` project files. It's not exposed as `std.toml`. If a project needs TOML, copying that parser or shelling out to a host-language tool are the options today.
+- **INI**, no parser. Trivial to implement on top of `string.split` if needed.
+- **Java-style `.properties`**, no parser. Same shape as INI without sections; same advice.
+- **CSV**, no parser. `string.split(line, ",")` covers the no-quoting / no-embedded-commas case; anything more needs a real CSV parser, which isn't shipped.
+- **Protocol Buffers / MessagePack / CBOR / Avro / Thrift**, no codecs. Same reflection-gap reasoning as struct ↔ JSON: without struct introspection there's no automatic encode/decode.
 
-This isn't a hidden roadmap — these are absent because no downstream user has driven the need yet. If you're starting a project that needs YAML config, expect to write a parser, ship a contrib module, or shell out. Structured-data thinking in the stdlib is currently JSON-shaped and HTTP-adjacent; broader format coverage is open territory.
+This isn't a hidden roadmap, these are absent because no downstream user has driven the need yet. If you're starting a project that needs YAML config, expect to write a parser, ship a contrib module, or shell out. Structured-data thinking in the stdlib is currently JSON-shaped and HTTP-adjacent; broader format coverage is open territory.
 
 ---
 
@@ -1063,7 +1063,7 @@ This isn't a hidden roadmap — these are absent because no downstream user has 
 A deliberately small XML surface (issue #627): a **pull/SAX reader** and an
 **escaping builder**. Enough for S3 / SOAP-ish / config XML. **Not** in
 scope: XSD, XPath, namespaces, DTD validation, or custom entity
-definitions — the five predefined entities (`&amp; &lt; &gt; &quot;
+definitions, the five predefined entities (`&amp; &lt; &gt; &quot;
 &apos;`) and numeric character references (`&#NN;` / `&#xHH;`) are decoded;
 CDATA is passed through raw; the prolog, comments, and processing
 instructions are skipped.
@@ -1102,46 +1102,46 @@ main() {
 `EVENT_TEXT`, `EVENT_EOF`, `EVENT_ERROR`.
 
 **Reader:**
-- `xml.parser(data)` → `ptr` — new pull reader (free with `xml.free`)
-- `xml.next(p)` → `int` — advance; returns an `EVENT_*`
-- `xml.name(p)` → `string` — element name for the current START/END
-- `xml.text(p)` → `string` — entity-decoded character data for the current TEXT
-- `xml.attr(p, key)` → `string` — attribute value on the current START (`""` if absent)
-- `xml.attr_count(p)` / `xml.attr_name(p, i)` / `xml.attr_value(p, i)` — iterate attributes
-- `xml.error(p)` → `string` — message after an `EVENT_ERROR`
-- `xml.free(p)` — release the reader
+- `xml.parser(data)` → `ptr` new pull reader (free with `xml.free`)
+- `xml.next(p)` → `int` advance; returns an `EVENT_*`
+- `xml.name(p)` → `string` element name for the current START/END
+- `xml.text(p)` → `string` entity-decoded character data for the current TEXT
+- `xml.attr(p, key)` → `string` attribute value on the current START (`""` if absent)
+- `xml.attr_count(p)` / `xml.attr_name(p, i)` / `xml.attr_value(p, i)` iterate attributes
+- `xml.error(p)` → `string` message after an `EVENT_ERROR`
+- `xml.free(p)` release the reader
 
 A self-closing `<tag/>` yields a START immediately followed by an END.
 The name/text/attr values are owned copies, safe to hold across `next`.
 
 **Builder:**
-- `xml.writer()` → `ptr` — new builder (named `writer` because `builder` is a keyword; free with `xml.free_builder`)
-- `xml.declaration(b)` — emit `<?xml version="1.0" encoding="UTF-8"?>`
+- `xml.writer()` → `ptr` new builder (named `writer` because `builder` is a keyword; free with `xml.free_builder`)
+- `xml.declaration(b)` emit `<?xml version="1.0" encoding="UTF-8"?>`
 - `xml.start(b, name)` / `xml.attribute(b, name, value)` / `xml.end(b, name)`
-- `xml.text_node(b, content)` — append escaped character data
-- `xml.element(b, name, content)` — `<name>escaped</name>` in one call
-- `xml.finish(b)` → `string` — the document (escaping already applied)
-- `xml.escape(s)` → `string` — escape the five predefined entities (rarely needed directly)
+- `xml.text_node(b, content)` append escaped character data
+- `xml.element(b, name, content)` `<name>escaped</name>` in one call
+- `xml.finish(b)` → `string` the document (escaping already applied)
+- `xml.escape(s)` → `string` escape the five predefined entities (rarely needed directly)
 
 ---
 
 ## Cryptography (`std.cryptography`)
 
-Hash digests + Base64 codec. Pure functions — bytes in, hex digest
+Hash digests + Base64 codec. Pure functions, bytes in, hex digest
 or Base64 string out, binary-safe via an explicit byte length
 (embedded NULs are fine; pass 0 to hash or encode an empty buffer).
 
 Built on OpenSSL's EVP API, which is already linked for `std.net`'s
 TLS support. When the Aether toolchain was built without OpenSSL,
 the wrappers return `("", "openssl unavailable")` rather than
-crashing — callers should always check the error slot.
+crashing, callers should always check the error slot.
 
 ```aether
 import std.cryptography
 import std.fs
 
 main() {
-    // Text payload — length is explicit.
+    // Text payload, length is explicit.
     digest, err = cryptography.sha256_hex("abc", 3)
     // digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
@@ -1151,7 +1151,7 @@ main() {
         d, _ = cryptography.hash_hex(algo, "abc", 3)
     }
 
-    // Base64 — round-trip a binary payload through JSON.
+    // Base64, round-trip a binary payload through JSON.
     b64, _   = cryptography.base64_encode("\x01\x02\x03", 3)   // "AQID"
     raw, n, _ = cryptography.base64_decode(b64)                // 3 bytes
 }
@@ -1162,9 +1162,9 @@ main() {
 - `cryptography.sha256_hex(data, length)` → `(string, string)` - 64-char lowercase hex digest.
 - `cryptography.hash_hex(algo, data, length)` → `(string, string)` - Algorithm-by-name dispatcher. `algo` is `"sha1"`, `"sha256"`, or any other name OpenSSL's `EVP_get_digestbyname()` recognizes (`"sha384"`, `"sha512"`, `"sha3-256"`, ...). Returns `("", "unknown algorithm")` for unrecognized names. Useful when the algorithm is config-driven rather than compile-time.
 - `cryptography.hash_supported(algo)` → `int` - `1` if this build can compute `algo`, `0` otherwise. Always succeeds; never errors. Use at config time to validate user-supplied algorithm names before they hit `hash_hex`.
-- `cryptography.md4_hex(data, length)` / `md5_hex(data, length)` → `(string, string)` - 32-char lowercase hex digest. Legacy interop only (Content-MD5, ETag, zsync, pre-SHA1 fixtures) — NOT collision-resistant, do not use for security. `("", error)` on failure.
+- `cryptography.md4_hex(data, length)` / `md5_hex(data, length)` → `(string, string)` - 32-char lowercase hex digest. Legacy interop only (Content-MD5, ETag, zsync, pre-SHA1 fixtures), NOT collision-resistant, do not use for security. `("", error)` on failure.
 
-**Raw-bytes digests** (same `(bytes, length, error)` tuple as `base64_decode`; `bytes` is an owned AetherString preserving embedded NULs — use when the wire format wants a fixed-width binary digest rather than hex):
+**Raw-bytes digests** (same `(bytes, length, error)` tuple as `base64_decode`; `bytes` is an owned AetherString preserving embedded NULs, use when the wire format wants a fixed-width binary digest rather than hex):
 - `cryptography.sha1_bytes(data, length)` / `sha256_bytes(data, length)` → `(string, int, string)`.
 - `cryptography.md4_bytes(data, length)` / `md5_bytes(data, length)` → `(string, int, string)`.
 - `cryptography.hash_bytes(algo, data, length)` → `(string, int, string)` - Algorithm-by-name binary digest. `("", 0, "unknown algorithm")` for unrecognized names.
@@ -1173,7 +1173,7 @@ main() {
 - `cryptography.hmac_sha256_hex(key, key_len, msg, msg_len)` → `(string, string)` - Hex digest. Natural shape for opaque-token signing and bearer-token derivation.
 - `cryptography.hmac_sha256_bytes(key, key_len, msg, msg_len)` → `(string, int, string)` - Raw 32-byte digest. Use for chained key derivation (SigV4 / HKDF-shaped flows) where each round's output keys the next.
 
-**Cryptographically-secure random** (OS CSPRNG — `getrandom(2)` / `/dev/urandom` on Linux, `arc4random_buf(3)` on macOS/BSD):
+**Cryptographically-secure random** (OS CSPRNG, `getrandom(2)` / `/dev/urandom` on Linux, `arc4random_buf(3)` on macOS/BSD):
 - `cryptography.random_bytes(n)` → `(string, int, string)` - `n` random bytes as `(bytes, length, error)`; `bytes` preserves embedded NULs.
 - `cryptography.random_hex(n)` → `(string, string)` - `n` random bytes as a `2*n`-char lowercase-hex string. For opaque bearer-token / API-key minting.
 - `cryptography.random_base64(n)` → `(string, string)` - `n` random bytes as RFC 4648 §4 unpadded Base64 (~33% denser than hex).
@@ -1187,20 +1187,20 @@ main() {
 
 **Base64 (RFC 4648 §4 standard alphabet):**
 - `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes, **unpadded** output.
-- `cryptography.base64_encode_padded(data, length)` → `(string, string)` - Encode `length` bytes, **with `=` padding** to a multiple of 4. Reach for this when the wire format on the other end expects padded base64 — most non-strict decoders accept either, but some auth headers and JSON-encoded blob formats explicitly require padding.
+- `cryptography.base64_encode_padded(data, length)` → `(string, string)` - Encode `length` bytes, **with `=` padding** to a multiple of 4. Reach for this when the wire format on the other end expects padded base64, most non-strict decoders accept either, but some auth headers and JSON-encoded blob formats explicitly require padding.
 - `cryptography.base64_decode(b64)` → `(string, int, string)` - Decode a Base64 string. Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on malformed input. Accepts both padded and unpadded input; `bytes` is an AetherString preserving embedded NULs.
 
 **What `std.cryptography` doesn't do:**
 
 Coming from Java's `java.security`, Python's `cryptography`, or Go's `crypto/*`, expect to reach for an external library if you need:
 
-- **Public-key crypto (RSA, ECDSA, Ed25519, X25519), symmetric ciphers (AES, ChaCha20-Poly1305), and key derivation (KDFs).** All out of scope for stdlib — the API surface for "real cryptography" is large enough that one obvious shape doesn't exist. These live in [`contrib/cryptography/`](../contrib/cryptography/) (`rsa`, `aes`, `chacha20poly1305`, `ed25519`, `x25519`, `p256`, `secp256k1`, `pem`, `asn1`, ...) where each can evolve without the stdlib stability constraint.
+- **Public-key crypto (RSA, ECDSA, Ed25519, X25519), symmetric ciphers (AES, ChaCha20-Poly1305), and key derivation (KDFs).** All out of scope for stdlib, the API surface for "real cryptography" is large enough that one obvious shape doesn't exist. These live in [`contrib/cryptography/`](../contrib/cryptography/) (`rsa`, `aes`, `chacha20poly1305`, `ed25519`, `x25519`, `p256`, `secp256k1`, `pem`, `asn1`, ...) where each can evolve without the stdlib stability constraint.
 - **URL-safe Base64 (RFC 4648 §5).** Standard alphabet only; URL-safe (`-` / `_` instead of `+` / `/`) is a separate variant the wrappers don't expose.
 - **Constant-time comparison.** Equality checks via `string.equals` are not constant-time; callers comparing hashes for security-sensitive cases need their own constant-time helper.
 
-Raw externs: `cryptography_sha1_hex_raw`, `cryptography_sha256_hex_raw` — return allocated `char*` or NULL on failure. The Go-style wrappers translate the NULL into `("", "openssl unavailable")`.
+Raw externs: `cryptography_sha1_hex_raw`, `cryptography_sha256_hex_raw` return allocated `char*` or NULL on failure. The Go-style wrappers translate the NULL into `("", "openssl unavailable")`.
 
-Public-key crypto, symmetric ciphers, and key derivation are out of scope for `std.cryptography` — see [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion. They live in `contrib/cryptography/`.
+Public-key crypto, symmetric ciphers, and key derivation are out of scope for `std.cryptography` see [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion. They live in `contrib/cryptography/`.
 
 ---
 
@@ -1232,7 +1232,7 @@ main() {
     compressed, nc, cerr = zlib.deflate(msg, n_in, -1)
 
     // Round-trip back to the original bytes. `inflate` doesn't need
-    // to be told the decompressed size — it grows as needed.
+    // to be told the decompressed size, it grows as needed.
     out, nu, uerr = zlib.inflate(compressed, nc)
 
     // Binary payloads work the same way: fs.read_binary gives a
@@ -1247,7 +1247,7 @@ main() {
 - `zlib.deflate(data, length, level)` → `(string, int, string)` - Compress the first `length` bytes of `data` at `level` (0..9, or -1 for default). Out-of-range levels are clamped to default. Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on failure.
 - `zlib.inflate(data, length)` → `(string, int, string)` - Decompress a zlib stream (RFC 1950). Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on corruption, truncation, or empty input.
 
-Gzip-framed helpers for HTTP `Content-Encoding: gzip` are also available: `zlib.gzip_deflate(data, length, level)` and `zlib.gzip_inflate(data, length)`. Streaming APIs remain out of scope for v1 — additive future work under the same module. See [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion.
+Gzip-framed helpers for HTTP `Content-Encoding: gzip` are also available: `zlib.gzip_deflate(data, length, level)` and `zlib.gzip_inflate(data, length)`. Streaming APIs remain out of scope for v1, additive future work under the same module. See [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion.
 
 ---
 
@@ -1255,13 +1255,13 @@ Gzip-framed helpers for HTTP `Content-Encoding: gzip` are also available: `zlib.
 
 ### HTTP (`std.http`)
 
-> **Note:** Use `import std.http` for the `http.*` prefix shown below. You can also `import std.net` which includes both HTTP and TCP functions, but the namespace prefix becomes `net` — e.g. the raw client extern is reached as `net.http_get_raw(url)`, and the Go-style wrapper as `net.get(url)`.
+> **Note:** Use `import std.http` for the `http.*` prefix shown below. You can also `import std.net` which includes both HTTP and TCP functions, but the namespace prefix becomes `net` e.g. the raw client extern is reached as `net.http_get_raw(url)`, and the Go-style wrapper as `net.get(url)`.
 
 ```aether
 import std.http
 
 main() {
-    // HTTP Client — Go-style
+    // HTTP Client, Go-style
     body, err = http.get("http://example.com")
     if err != "" {
         println("failed: ${err}")
@@ -1284,7 +1284,7 @@ main() {
 
 **Client (Go-style):**
 - `http.get(url)` → `(string, string)` - HTTP GET, returns `(body, err)`
-- `http.get_with_timeout(url, timeout)` → `(string, string)` - HTTP GET with a `Duration` per-call timeout. `0ns` keeps `get`'s "block forever" default; positive values are rounded up to whole seconds internally today. For any third-party URL — without a timeout, a hung site stalls the calling actor's whole message handler.
+- `http.get_with_timeout(url, timeout)` → `(string, string)` - HTTP GET with a `Duration` per-call timeout. `0ns` keeps `get`'s "block forever" default; positive values are rounded up to whole seconds internally today. For any third-party URL, without a timeout, a hung site stalls the calling actor's whole message handler.
 - `http.post(url, body, content_type)` → `(string, string)` - HTTP POST
 - `http.put(url, body, content_type)` → `(string, string)` - HTTP PUT
 - `http.delete(url)` → `(string, string)` - HTTP DELETE
@@ -1301,7 +1301,7 @@ All wrappers auto-free the underlying response and return an error string for tr
 
 **Server Lifecycle:**
 - `http.server_create(port)` - Create server (never fails)
-- `http.server_set_host(server, host)` - Set bind address before `server_start`. Default is `"0.0.0.0"`. Pass `"127.0.0.1"` to bind loopback only — useful in tests because macOS / Windows firewalls don't prompt on loopback binds.
+- `http.server_set_host(server, host)` - Set bind address before `server_start`. Default is `"0.0.0.0"`. Pass `"127.0.0.1"` to bind loopback only, useful in tests because macOS / Windows firewalls don't prompt on loopback binds.
 - `http.server_bind(server, host, port)` → `string` - Bind to address, return error string
 - `http.server_start(server)` → `string` - Start serving (blocking), return error string
 - `http.server_stop(server)` - Stop server
@@ -1333,10 +1333,10 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`, `http_server_set_h
 **Request Accessors:**
 - `http.request_method(req)` → `string` - HTTP method (`GET`, `POST`, `PUT`, …); empty if `req` is null.
 - `http.request_path(req)` → `string` - URL path (no query string); empty if `req` is null.
-- `http.request_body(req)` → `string` - Request body as a C-string. **Truncates at the first embedded NUL** when read via `string.length(...)`; pair with `http.request_body_length` for binary-safe access. On a large (streaming) request the first call materializes the body — it drains the remaining wire bytes into one buffer, preserving the v1 whole-body contract at the O(Content-Length) cost the caller asked for. Don't mix it with `request_body_read` on the same request (the consumed prefix is gone; the mixed call returns `""`). Issue #644.
-- `http.request_body_length(req)` → `int` - Byte count of the request body. Returns 0 if `req` is null or has no body. Reach for this whenever the body may contain NUL bytes (svn PUT, image uploads, gzipped JSON) — the length-aware companion to `http.request_body`. On a streaming request this is the declared `Content-Length` until the body is materialized, then the actual received count.
-- `http.request_body_read(req, offset, max)` → `(bytes, n, err)` - Chunked body read. Bodies ≤ 16 KiB are pre-buffered (random-access offsets); larger bodies are **streamed** — the handler is dispatched at headers-complete and each read pulls the next window straight off the socket (sequential offsets only), so peak server RAM per upload is one window, not the object. Backpressure is TCP flow control itself: the server doesn't `recv` until the handler asks. Issues #626/#644.
-- `http.request_body_complete(req)` → `int` - 1 once every declared body byte has arrived (streaming: pulled off the wire; buffered: always 1). The natural chunked-loop terminator. `Transfer-Encoding: chunked` request bodies remain unsupported (no `Content-Length` → length 0, no body) — the deliberate v1 semantics decision of #644.
+- `http.request_body(req)` → `string` - Request body as a C-string. **Truncates at the first embedded NUL** when read via `string.length(...)`; pair with `http.request_body_length` for binary-safe access. On a large (streaming) request the first call materializes the body, it drains the remaining wire bytes into one buffer, preserving the v1 whole-body contract at the O(Content-Length) cost the caller asked for. Don't mix it with `request_body_read` on the same request (the consumed prefix is gone; the mixed call returns `""`). Issue #644.
+- `http.request_body_length(req)` → `int` - Byte count of the request body. Returns 0 if `req` is null or has no body. Reach for this whenever the body may contain NUL bytes (svn PUT, image uploads, gzipped JSON), the length-aware companion to `http.request_body`. On a streaming request this is the declared `Content-Length` until the body is materialized, then the actual received count.
+- `http.request_body_read(req, offset, max)` → `(bytes, n, err)` - Chunked body read. Bodies ≤ 16 KiB are pre-buffered (random-access offsets); larger bodies are **streamed**, the handler is dispatched at headers-complete and each read pulls the next window straight off the socket (sequential offsets only), so peak server RAM per upload is one window, not the object. Backpressure is TCP flow control itself: the server doesn't `recv` until the handler asks. Issues #626/#644.
+- `http.request_body_complete(req)` → `int` - 1 once every declared body byte has arrived (streaming: pulled off the wire; buffered: always 1). The natural chunked-loop terminator. `Transfer-Encoding: chunked` request bodies remain unsupported (no `Content-Length` → length 0, no body), the deliberate v1 semantics decision of #644.
 - `http.request_query(req)` → `string` - Raw query string; empty if absent.
 - `http.get_header(req, name)` - Get request header
 - `http.get_query_param(req, name)` - Get query parameter
@@ -1347,7 +1347,7 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`, `http_server_set_h
 - `http.response_create()` - Create response
 - `http.response_set_status(res, code)` - Set HTTP status code
 - `http.response_set_header(res, name, value)` - Set response header
-- `http.response_set_body(res, body)` - Set response body. Uses `strdup` + `strlen` internally — **truncates at the first embedded NUL**. Fine for text bodies; use `response_set_body_n` for anything that may contain binary.
+- `http.response_set_body(res, body)` - Set response body. Uses `strdup` + `strlen` internally, **truncates at the first embedded NUL**. Fine for text bodies; use `response_set_body_n` for anything that may contain binary.
 - `http.response_set_body_n(res, body, length)` - Length-aware sibling of `response_set_body`. Treats `body` as `length` bytes verbatim, no NUL searching. Reach for this when the body is binary content (gzip / image / packed binary) or may contain NUL bytes mid-payload. `length == 0` clears the body; negative length is a no-op.
 - `http.response_json(res, json)` - Set JSON response
 - `http.server_response_free(res)` - Free response
@@ -1356,7 +1356,7 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`, `http_server_set_h
 
 Composable pre-handler middleware + response transformers. Each
 middleware is a C function pointer registered on the server's
-function-pointer chain — no Aether-side dispatch overhead in the
+function-pointer chain, no Aether-side dispatch overhead in the
 hot path. Aether-side factory wrappers allocate the per-middleware
 config struct and register it.
 
@@ -1474,7 +1474,7 @@ See [`docs/http-reverse-proxy.md`](http-reverse-proxy.md) for the full reference
 
 The `http.get` / `http.post` / `http.put` / `http.delete` one-liners above are good for "no auth, JSON in, 200 means good" calls. Reach for `std.http.client` when you need custom request headers, response-header capture, status discrimination, per-request timeouts, or methods other than the four common verbs (PROPFIND, PATCH, custom RPC verbs all work).
 
-Non-2xx is **not** an error from `send_request`'s perspective — the caller branches on `response_status`. Transport-level failures (DNS, connect, TLS handshake, timeout) populate the `err` slot.
+Non-2xx is **not** an error from `send_request`'s perspective, the caller branches on `response_status`. Transport-level failures (DNS, connect, TLS handshake, timeout) populate the `err` slot.
 
 ```aether
 import std.http
@@ -1522,13 +1522,13 @@ main() {
 - `client.post_json(url, value)` → `(ptr, string)` - Marshal a JSON value (`std.json`), set `Content-Type` + `Accept` to `application/json`, send
 - `client.response_body_json(resp)` → `(ptr, string)` - Wrap `response_body` + `json.parse`; returns `(value, "")` on success or `(null, parse_error)` on malformed JSON
 
-Design notes (why `method: string`, why non-2xx-is-not-an-error, why `send_request` not `send`) live in [`docs/notes/http-client-improvement-plan.md`](notes/http-client-improvement-plan.md); `tests/integration/test_http_client_v2.ae` is the runnable example file.
+Design choices: `method` is an arbitrary string, not a `{GET,POST,PUT,DELETE}` enum, so WebDAV / DeltaV / PATCH / project-specific verbs ride through without a stdlib release (the wrapper validates the token shape and forwards it to `CURLOPT_CUSTOMREQUEST`). A non-2xx status is not an error: `send_request` returns the response cleanly and the caller drives status interpretation, so 404/403/401 are distinguishable rather than collapsed to `"http error"`. The builder is named `send_request` rather than `send` because `send` is reserved for actor messaging (tracked by #233). `tests/integration/test_http_client_v2.ae` is the runnable example file; streaming response bodies for large downloads are tracked in #1004.
 
-### HTTP record/replay (VCR) — moved out of the stdlib
+### HTTP record/replay (VCR), moved out of the stdlib
 
 The Servirtium record/replay engine that used to ship as
 `std.http.server.vcr` has been lifted into its own repository,
-[`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr) —
+[`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr),
 now its authoritative home, alongside its language bindings. It is no
 longer part of the Aether stdlib (it had served its purpose: shaping
 Aether's HTTP server). See [`docs/http-vcr.md`](http-vcr.md) for the
@@ -1544,7 +1544,7 @@ pointer and history.
 import std.tcp
 
 main() {
-    // Client — Go-style
+    // Client, Go-style
     sock, cerr = tcp.connect("localhost", 8080)
     if cerr != "" { println("connect failed: ${cerr}"); return }
 
@@ -1605,7 +1605,7 @@ actor Echo {
             }
         }
         IoReady(fd, events) -> {
-            // Resumed here — no OS thread was blocked while we waited.
+            // Resumed here, no OS thread was blocked while we waited.
             data, rerr = tcp.read(/*...*/)
             // ... process, then re-arm ...
             net.await_io(fd)
@@ -1631,7 +1631,7 @@ arm.
   (not from `main()`). The bridge reads the current actor from a TLS
   set at the top of every generated `_step()` function.
 - Single-actor programs run in main-thread mode which bypasses the
-  scheduler loop — and therefore the I/O reactor. Spawn at least two
+  scheduler loop, and therefore the I/O reactor. Spawn at least two
   actors to force multi-threaded scheduler mode if you want `await_io`
   to function.
 - The fd must outlive the `await_io` registration. If you close the
@@ -1641,7 +1641,7 @@ arm.
 **Performance:** PR #140 (C-level benchmark) demonstrated the raw
 reactor pattern delivering substantially higher HTTP throughput than
 the blocking keep-alive worker it replaced. `await_io` is the
-Aether-language surface over the same runtime machinery — rerun the
+Aether-language surface over the same runtime machinery, rerun the
 HTTP benchmark on your own target host before relying on historical
 numbers.
 
@@ -1702,7 +1702,7 @@ main() {
     code = os.system("echo hello")
     println("Exit: ${code}")
 
-    // Capture command output — Go-style tuple return
+    // Capture command output, Go-style tuple return
     output, err = os.exec("date")
     if err != "" {
         println("exec failed: ${err}")
@@ -1721,22 +1721,22 @@ main() {
 **Functions:**
 - `os.system(cmd)` - Run shell command, returns exit code (0 = success, POSIX convention)
 - `os.exec(cmd)` → `(string, string)` - Run command and capture stdout, return `(output, err)`
-- `os.getenv(name)` - Get environment variable (returns string, or null if not set — infallible)
-- `os.setenv(name, value)` → `string` - Set environment variable, returns "" on success or an error string. Same C-side function as `io.setenv` — use `os.setenv` when you've already imported `std.os` for `os.getenv`.
+- `os.getenv(name)` - Get environment variable (returns string, or null if not set, infallible)
+- `os.setenv(name, value)` → `string` - Set environment variable, returns "" on success or an error string. Same C-side function as `io.setenv` use `os.setenv` when you've already imported `std.os` for `os.getenv`.
 - `os.unsetenv(name)` → `string` - Unset environment variable, returns "" on success or an error string. Same C-side function as `io.unsetenv`.
 - `os.getpid()` → `int` - Process identifier of the current process. POSIX `getpid(2)`; Windows `_getpid()`. Useful for tmpfile names (`/tmp/myprog.${os.getpid()}.tmp`), per-process locks, log prefixes, and stable tagging across forked children. Returns 0 on platforms compiled without filesystem support.
 - `os.now_utc_iso8601()` → `string` - Current UTC time as ISO-8601 (`YYYY-MM-DDThh:mm:ssZ`). Returns `""` (never null) on clock/format failure. Thread-safe.
-- `os.wall_seconds()` → `long` - Whole seconds since the Unix epoch (POSIX `gettimeofday`; Windows `GetSystemTimeAsFileTime`). NTP-jumpable — pair with `wall_micros` for sub-second precision, or use the monotonic accessors below for elapsed-time measurements.
+- `os.wall_seconds()` → `long` - Whole seconds since the Unix epoch (POSIX `gettimeofday`; Windows `GetSystemTimeAsFileTime`). NTP-jumpable, pair with `wall_micros` for sub-second precision, or use the monotonic accessors below for elapsed-time measurements.
 - `os.wall_micros()` → `int` - Sub-second microsecond fraction (0..999999) from the same `struct timeval` as `wall_seconds`.
-- `os.now_monotonic_ms()` → `long` - Monotonic clock, milliseconds since boot / process-start / arbitrary epoch. Value-domain is opaque; only *deltas* are meaningful. POSIX `clock_gettime(CLOCK_MONOTONIC)`; Windows `QueryPerformanceCounter`. Use for animation tick loops, frame-time budgets, microbenchmarks — anything that must survive a wall-clock jump.
+- `os.now_monotonic_ms()` → `long` - Monotonic clock, milliseconds since boot / process-start / arbitrary epoch. Value-domain is opaque; only *deltas* are meaningful. POSIX `clock_gettime(CLOCK_MONOTONIC)`; Windows `QueryPerformanceCounter`. Use for animation tick loops, frame-time budgets, microbenchmarks, anything that must survive a wall-clock jump.
 - `os.now_monotonic_ns()` → `long` - Same source as `now_monotonic_ms`, nanosecond precision. Useful for sub-millisecond timing.
 - `aether_args_count()` → `int` - Number of command-line arguments
 - `aether_args_get(index)` → `string` - Get the i-th argument; null if out of range
 - `aether_argv0()` → `string` - Path the OS launched the current process with (argv[0]); null before `aether_args_init` runs
 - `os.argv0()` → `string` - Convenience wrapper around `aether_argv0()` that returns `""` instead of null and hands back a fresh copy
-- `os.args_seal()` - **One-shot runtime seal** of the argv accessors. After this returns, `aether_args_count()` reports `0`, `aether_args_get(i)` returns null, `os.argv0()` returns `""`, and `aether_argv_raw()` returns null — as if argv had never been initialised. Idempotent (calling twice is a no-op); there is no unseal. Intended use: once `main()` has parsed its CLI flags into config state, call `os.args_seal()` to prevent any later code (imported libraries, plugin callbacks, untrusted Aether modules) from reading the original argv. Complements the compile-time `hide` / `seal except` scope directives — those deny *lexical* access, this denies *runtime* access. Caveat: this is a co-operative Aether-side gate, not a kernel boundary; the OS still has the original argv in process memory (Linux `/proc/self/cmdline`, macOS sysctl) and code that goes around the Aether accessors can still read it. Pair with the LD_PRELOAD libc sandbox if the threat model demands true inaccessibility.
+- `os.args_seal()` - **One-shot runtime seal** of the argv accessors. After this returns, `aether_args_count()` reports `0`, `aether_args_get(i)` returns null, `os.argv0()` returns `""`, and `aether_argv_raw()` returns null, as if argv had never been initialised. Idempotent (calling twice is a no-op); there is no unseal. Intended use: once `main()` has parsed its CLI flags into config state, call `os.args_seal()` to prevent any later code (imported libraries, plugin callbacks, untrusted Aether modules) from reading the original argv. Complements the compile-time `hide` / `seal except` scope directives, those deny *lexical* access, this denies *runtime* access. Caveat: this is a co-operative Aether-side gate, not a kernel boundary; the OS still has the original argv in process memory (Linux `/proc/self/cmdline`, macOS sysctl) and code that goes around the Aether accessors can still read it. Pair with the LD_PRELOAD libc sandbox if the threat model demands true inaccessibility.
 - `os.args_sealed()` → `int` - Returns `1` if `args_seal()` has been called in this process, `0` otherwise. Cheap; useful for cooperative callers that want to check before they call.
-- `os_execv(prog, argv_list)` → `int` - Replace the current process image with `prog`, passing an explicit `list<ptr>` argv. Uses POSIX `execvp(3)` so `prog` is looked up on `PATH` when it does not contain a slash. Flushes stdio before the exec so pre-exec output is not lost. On success this call **never returns**; on failure returns `-1` and the current process continues. Not available on Windows — use `os_run` + `exit(rc)` instead.
+- `os_execv(prog, argv_list)` → `int` - Replace the current process image with `prog`, passing an explicit `list<ptr>` argv. Uses POSIX `execvp(3)` so `prog` is looked up on `PATH` when it does not contain a slash. Flushes stdio before the exec so pre-exec output is not lost. On success this call **never returns**; on failure returns `-1` and the current process continues. Not available on Windows, use `os_run` + `exit(rc)` instead.
 
 Raw extern: `os_exec_raw`.
 
@@ -1781,7 +1781,7 @@ main() {
     t = math.tan(0.5)
 
     // Inverse trig
-    as = math.asin(0.5)
+    asn = math.asin(0.5)
     ac = math.acos(0.5)
     at = math.atan2(1.0, 1.0)
 
@@ -1844,7 +1844,7 @@ main() {
     io.print_int(42)
     io.print_line("")
 
-    // getenv is infallible — returns the value or null if unset
+    // getenv is infallible, returns the value or null if unset
     home = io.getenv("HOME")
     if home != 0 {
         io.print_line(home)
@@ -1867,15 +1867,15 @@ main() {
 - `io.print_float(value)` - Print float
 
 **Unbuffered fd writes (crash-trace use case):**
-- `io.stderr_write(data, length)` → `int` - Write `length` bytes to fd 2 directly, bypassing stdio buffering. Returns the byte count actually written, or -1 on error. Loops on partial writes; retries `EINTR` on POSIX. `data` may contain NULs (binary-safe). Reach for this when output must reach the terminal / pipe before the process aborts — `println` and `io.print` are line-buffered on tty and block-buffered when piped, so the last few lines reliably get lost during a crash.
+- `io.stderr_write(data, length)` → `int` - Write `length` bytes to fd 2 directly, bypassing stdio buffering. Returns the byte count actually written, or -1 on error. Loops on partial writes; retries `EINTR` on POSIX. `data` may contain NULs (binary-safe). Reach for this when output must reach the terminal / pipe before the process aborts, `println` and `io.print` are line-buffered on tty and block-buffered when piped, so the last few lines reliably get lost during a crash.
 - `io.stdout_write(data, length)` → `int` - Same shape as `stderr_write` but writes to fd 1. Useful for shell-pipe-friendly tools that need each record flushed before the next stage reads.
 
 **File-descriptor lifecycle and bulk fd I/O:**
 - `io.fd_open_read(path)` → `(int, string)` - Open `path` for reading (POSIX `O_RDONLY` / Win `_O_RDONLY | _O_BINARY`). Returns `(fd, "")` on success, `(-1, error)` on failure.
-- `io.fd_open_write(path)` → `(int, string)` - Open `path` for writing — implicit `O_CREAT | O_TRUNC` (mode 0644 on POSIX, `_O_BINARY` on Windows). Returns `(fd, "")` / `(-1, error)`. Pair with `fd_close`. For O_APPEND or non-truncating opens, file an issue.
-- `io.fd_close(fd)` → `string` - `""` on success, error string on failure. Single attempt — does not retry on EINTR (Linux requires not retrying; the descriptor is already gone).
-- `io.fd_write_n(fd, data, length)` → `int` - Write exactly `length` bytes to `fd`. Loops on partial writes; retries EINTR on POSIX. Returns 0 on success, -1 on error. Note: when `data` is an Aether `string` parameter that crossed an extern boundary, the auto-unwrap may have stripped the AetherString header and the C side sees a plain `const char*` — strlen-truncation applies for embedded NULs. For binary writes from Aether-side, marshal through `std.bytes` first.
-- `io.fd_read_n(fd, n)` → `(ptr, int, string)` - Read up to `n` bytes from `fd`. Returns `(bytes, count, err)`: `bytes` is a refcounted AetherString carrying the explicit byte count (binary-safe — embedded NULs survive), `count` is the number actually read (1..n on success, 0 on clean EOF or error), `err` is `""` on success or clean EOF, otherwise an error message.
+- `io.fd_open_write(path)` → `(int, string)` - Open `path` for writing, implicit `O_CREAT | O_TRUNC` (mode 0644 on POSIX, `_O_BINARY` on Windows). Returns `(fd, "")` / `(-1, error)`. Pair with `fd_close`. For O_APPEND or non-truncating opens, file an issue.
+- `io.fd_close(fd)` → `string` - `""` on success, error string on failure. Single attempt, does not retry on EINTR (Linux requires not retrying; the descriptor is already gone).
+- `io.fd_write_n(fd, data, length)` → `int` - Write exactly `length` bytes to `fd`. Loops on partial writes; retries EINTR on POSIX. Returns 0 on success, -1 on error. Note: when `data` is an Aether `string` parameter that crossed an extern boundary, the auto-unwrap may have stripped the AetherString header and the C side sees a plain `const char*` strlen-truncation applies for embedded NULs. For binary writes from Aether-side, marshal through `std.bytes` first.
+- `io.fd_read_n(fd, n)` → `(ptr, int, string)` - Read up to `n` bytes from `fd`. Returns `(bytes, count, err)`: `bytes` is a refcounted AetherString carrying the explicit byte count (binary-safe, embedded NULs survive), `count` is the number actually read (1..n on success, 0 on clean EOF or error), `err` is `""` on success or clean EOF, otherwise an error message.
 - `io.fd_read_line(fd)` → `(ptr, string)` - Read one `\n`-delimited line from `fd`. Trailing `\n` is stripped (a preceding `\r` is also stripped, so CRLF input yields content with neither). Returns `(line, "")` on a normal line, `("", "")` on clean EOF before any byte, `(partial, "")` on EOF mid-line (server-side dump streams sometimes omit a trailing newline), `("", error)` on read error.
 
 **File Operations (Go-style):**
@@ -1903,7 +1903,7 @@ Raw externs: `io_read_file_raw`, `io_write_file_raw`, `io_append_file_raw`, `io_
 - `spawn(ActorName())` - Create actor instance
 - `wait_for_idle()` - Block until all actors finish
 - `sleep(milliseconds)` - Pause execution
-- `release(s)` - Decrement an AetherString's refcount and free if it reaches zero. Sugar for `string.release(s)` — argument must be `string`-typed (other heap types call their typed release, e.g. `string.string_seq_free`). Pair with `defer` to undo allocations made by stdlib functions returning ownership: `body, err = http.get(url); defer release(body)`.
+- `release(s)` - Decrement an AetherString's refcount and free if it reaches zero. Sugar for `string.release(s)` argument must be `string`-typed (other heap types call their typed release, e.g. `string.string_seq_free`). Pair with `defer` to undo allocations made by stdlib functions returning ownership: `body, err = http.get(url); defer release(body)`.
 
 ---
 
@@ -1911,7 +1911,7 @@ Raw externs: `io_read_file_raw`, `io_write_file_raw`, `io_append_file_raw`, `io_
 
 ### Arena allocator (`std.arena`)
 
-A bulk allocator for short-lived raw buffers. The arena hands out memory via `arena.alloc()` but cannot free individual allocations — call `arena.reset()` to drop everything in one shot, or `arena.destroy()` to return the underlying memory to the OS.
+A bulk allocator for short-lived raw buffers. The arena hands out memory via `arena.alloc()` but cannot free individual allocations, call `arena.reset()` to drop everything in one shot, or `arena.destroy()` to return the underlying memory to the OS.
 
 The headline use case is a polling loop or parsing pass that allocates many scratch buffers per iteration:
 
@@ -1941,7 +1941,7 @@ main() {
 - `arena.used(arena)` → `int` - Bytes currently allocated (sum across overflow blocks).
 - `arena.size(arena)` → `int` - Total capacity (sum across overflow blocks).
 
-Arenas don't track AetherString refcounts — strings allocated through the regular stdlib still need `release()` (or `defer release(...)`); the arena is for bulk raw allocations that the user controls themselves. Avoid handing arena-allocated pointers to functions that retain them past the next `arena.reset()` or `arena.destroy()`.
+Arenas don't track AetherString refcounts, strings allocated through the regular stdlib still need `release()` (or `defer release(...)`); the arena is for bulk raw allocations that the user controls themselves. Avoid handing arena-allocated pointers to functions that retain them past the next `arena.reset()` or `arena.destroy()`.
 
 ### Content-addressed store (`std.cas`)
 
@@ -1957,7 +1957,7 @@ main() {
 
     if cas.has(digest) {
         gerr = cas.get(digest, "./fetched.so")
-        // fetched.so's bytes hash to `digest` — verified on the way out.
+        // fetched.so's bytes hash to `digest`, verified on the way out.
     }
 }
 ```
@@ -1975,16 +1975,16 @@ The store layout is intentionally flat (one file per digest). Grow to two-level 
 
 ## Process state
 
-Aether deliberately rejects mutable assignment to module-level identifiers — the design philosophy is "if state is mutable, it lives inside an actor or a runtime registry." Two stdlib modules give you the **set-during-init, read-everywhere** shape that BEAM achieves with `persistent_term` and `register/whereis`, without spawning a long-lived actor or paying message round-trip on the read path.
+Aether deliberately rejects mutable assignment to module-level identifiers, the design philosophy is "if state is mutable, it lives inside an actor or a runtime registry." Two stdlib modules give you the **set-during-init, read-everywhere** shape that BEAM achieves with `persistent_term` and `register/whereis`, without spawning a long-lived actor or paying message round-trip on the read path.
 
 These are the right tool when:
 - A handler is entered from a C-callback and can't take an Aether-typed parameter (the `void* user_data` slot doesn't carry typed values).
 - The state is genuinely process-wide (CLI flags, current-user identity, the long-lived registry of named actors).
 - You'd otherwise reach for a `static` C global.
 
-**Don't** use these for per-request / per-tenant state — that should live in the actor or function that owns the work, plumbed through call parameters or actor messages.
+**Don't** use these for per-request / per-tenant state, that should live in the actor or function that owns the work, plumbed through call parameters or actor messages.
 
-### `std.config` — string→string KV
+### `std.config` string→string KV
 
 ```aether
 import std.config
@@ -2007,9 +2007,9 @@ handle_request(req: ptr, res: ptr, ud: ptr) {
 - `config.size()` → `int` - Number of keys currently registered.
 - `config.clear()` - Wipe all keys. Tests use this for isolation; production code rarely needs it.
 
-Storage: a single process-global hashmap protected by a reader/writer lock. Implementation models BEAM's `persistent_term`. Returned `get` strings are borrowed — they remain valid until the next `put` / `clear` that touches the same key, which is fine for the "set once at startup" pattern and lets reads avoid an allocation. Copy via `string.copy(value)` if you need a value that survives a later `put`.
+Storage: a single process-global hashmap protected by a reader/writer lock. Implementation models BEAM's `persistent_term`. Returned `get` strings are borrowed, they remain valid until the next `put` / `clear` that touches the same key, which is fine for the "set once at startup" pattern and lets reads avoid an allocation. Copy via `string.copy(value)` if you need a value that survives a later `put`.
 
-### `std.actors` — name → actor_ref registry
+### `std.actors` name → actor_ref registry
 
 ```aether
 import std.actors
@@ -2038,9 +2038,9 @@ handle_request(req: ptr, res: ptr, ud: ptr) {
 - `actors.registry_size()` → `int` - Number of currently-registered names.
 - `actors.registry_clear()` - Wipe all bindings.
 
-Models BEAM's `erlang:register` / `whereis`. The registry doesn't track actor liveness — if the actor exits, `whereis` keeps returning the stale ref until something explicitly calls `unregister`. Match BEAM's behaviour for non-link'd registrations.
+Models BEAM's `erlang:register` / `whereis`. The registry doesn't track actor liveness, if the actor exits, `whereis` keeps returning the stale ref until something explicitly calls `unregister`. Match BEAM's behaviour for non-link'd registrations.
 
-**Why the module name is plural**: `actor` (singular) is a reserved keyword in Aether and can't appear as a namespace prefix. `actors.register(...)` parses; `actor.register(...)` does not. The plural also reads correctly — "the actors registry."
+**Why the module name is plural**: `actor` (singular) is a reserved keyword in Aether and can't appear as a namespace prefix. `actors.register(...)` parses; `actor.register(...)` does not. The plural also reads correctly, "the actors registry."
 
 ---
 

@@ -23,7 +23,7 @@ main() {
 
 - **Declaration:** `type Name = distinct Base` at top level. `type` and
   `distinct` are contextual identifiers (usable as names elsewhere).
-- **Zero cost:** a distinct type lowers to its base C type — no boxing, no
+- **Zero cost:** a distinct type lowers to its base C type, no boxing, no
   vtable. `USD` is a C `double`, `Fd` a C `int`.
 - **Nominal identity:** the type checker treats `USD` as separate from `float`
   and from any other distinct type. Crossing the boundary requires an explicit
@@ -32,7 +32,7 @@ main() {
 - **Enforced at:** variable declarations / assignments (a raw `float` cannot
   initialise a `USD`, and vice-versa) **and** call-argument boundaries (a
   function taking `Fd` cannot be passed a raw `int`, nor an `EUR` where `USD`
-  is wanted) — the capability-token discipline the design below describes.
+  is wanted), the capability-token discipline the design below describes.
   (Aether's argument checking is otherwise lenient; the distinct check is
   scoped to distinct types.)
 - **Base kinds:** scalars (`int`/`long`/`uint64`/`float`/`byte`/`bool`),
@@ -69,7 +69,7 @@ Four pulls, in order of how directly the language design touches each:
    expressed in types. Today the contract is doc-prose; the compiler
    can't enforce that a function expecting a granted FD didn't get
    handed an arbitrary `int`. Distinct types make the narrowing
-   point — where an `int` becomes a `GrantedFD` — the obvious place
+   point, where an `int` becomes a `GrantedFD` the obvious place
    to validate the grant.
 
 2. **Composes with `Isolated[T]`** (sibling issue #479). An
@@ -115,7 +115,7 @@ main() {
 C lowering: `Path` emits as `const char*`, `Port` as `int`. No tag,
 no struct wrapper. The same ABI as the underlying type.
 
-## Lowering — confirmed (not TBD)
+## Lowering, confirmed (not TBD)
 
 A `type X = distinct Y` does **not** generate a new C type. It is a
 compile-time-only nominal layer over `Y`. The `aether_<name>` ABI
@@ -128,7 +128,7 @@ This matches Aether's "compiles to C" mandate and matches the
 only). Distinct types are the generalisation: the same trick
 without the unit-conversion machinery.
 
-## Surface — confirmed (not TBD)
+## Surface, confirmed (not TBD)
 
 Declaration syntax:
 
@@ -143,7 +143,7 @@ another distinct type). The result is a new type that shares
 This matches the issue's proposed shape and matches Nim's
 `type X = distinct Y` precedent.
 
-## Open design questions — TBD
+## Open design questions, TBD
 
 The remaining decisions need to land before implementation can start.
 Each option lists what the choice implies for users and for the type
@@ -158,7 +158,7 @@ underlying type?
 |---|---|---|---|---|
 | **A. Nim-style postfix** | `Path("/etc/foo")` | `p.string` | familiar from Nim; reads left-to-right | postfix `.string` looks like a field/method access; could surprise readers |
 | **B. Constructor-style both ways** | `Path("/etc/foo")` | `string(p)` | uniform syntax | conflicts with constructor syntax for structs / actors |
-| **C. C-style cast** | `(Path)"/etc/foo"` | `(string)p` | matches the C mental model | Aether elsewhere rejects C-style casts (memory: `[[feedback_aether_no_c_cast]]`) |
+| **C. C-style cast** | `(Path)"/etc/foo"` | `(string)p` | matches the C mental model | Aether elsewhere rejects C-style casts |
 | **D. Mixed (issue's sketch)** | `Path("/etc/foo")` | `p.string` (postfix only) | matches the issue body | only one direction is symmetric |
 
 **Maintainer call.** Once chosen, the parser, type checker, and the
@@ -208,7 +208,7 @@ should users go through the cast?
 | **C. No pattern support at all** | Distinct types can't be matched. Users go through `if`-on-type or explicit casts. |
 
 **Maintainer call.** Option A is the most ergonomic but introduces a
-new syntactic form. Option C is the most conservative — Aether's
+new syntactic form. Option C is the most conservative, Aether's
 pattern matching is currently struct-focused (`docs/...`), and adding
 distinct-type arms is a parser+typechecker change.
 
@@ -224,7 +224,7 @@ need `"${p.string}"` (explicit unwrap)?
 
 **Maintainer call.** Option A is friendlier; option B is more in line
 with the strictness option B suggests for parameter passing. The
-choice may track TBD-2 (operator inheritance) — if operators are
+choice may track TBD-2 (operator inheritance), if operators are
 inherited by default, interpolation probably should be too.
 
 ### TBD-6: Layered distinct (distinct over distinct)
@@ -260,17 +260,17 @@ Each phase gets its own follow-up issue.
 
 ## References
 
-- Issue #480 — this design's umbrella issue.
-- Sibling issue #479 — `Isolated[T]`, composes with distinct types.
-- Issue #524 — `Duration`, the first tagged-int type in Aether;
+- Issue #480, this design's umbrella issue.
+- Sibling issue #479, `Isolated[T]`, composes with distinct types.
+- Issue #524, `Duration`, the first tagged-int type in Aether;
   serves as the operator-inheritance precedent (see TBD-2).
-- Issue #586 — bare-int → Duration at parameter-passing rejected;
+- Issue #586, bare-int → Duration at parameter-passing rejected;
   the strictness precedent for distinct types at call sites.
 - `LLM.md` § "Runtime sequence of strings → `*StringSeq`, not
-  `string[]`" — exactly the class of mistake distinct types diagnose.
-- `LLM.md` § "Ownership of `ptr`-typed returns" —
+  `string[]`", exactly the class of mistake distinct types diagnose.
+- `LLM.md` § "Ownership of `ptr`-typed returns",
   borrowed-vs-ref-counted is another candidate distinction.
-- `docs/containment-sandbox.md` — capability tokens, the prime use
+- `docs/containment-sandbox.md` capability tokens, the prime use
   case.
-- Nim manual § "Distinct type" — reference design including the
+- Nim manual § "Distinct type", reference design including the
   `borrow` annotation (TBD-2 option C / D).

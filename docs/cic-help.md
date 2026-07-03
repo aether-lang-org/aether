@@ -1,6 +1,6 @@
-# `aether help <script>` — Offline diagnostics for config-IS-code
+# `ae help <script>` Offline diagnostics for config-IS-code
 
-A companion command to `aether run` and `aetherc`. Goal:
+A companion command to `ae run` and `aetherc`. Goal:
 catch the common mistakes a less-experienced operator makes when
 authoring a closure-DSL config script (`my_server.ae`-shaped files in
 the [`config-is-code.md`](config-is-code.md) sense), and translate the
@@ -13,7 +13,7 @@ the sections below note where behaviour matches the implementation.
 
 > Closely scoped: this is not a general "make my Aether code work"
 > assistant. It targets the narrow band of mistakes people make when
-> they're using a builder-DSL library someone else wrote — where the
+> they're using a builder-DSL library someone else wrote, where the
 > *grammar* is wrong but the *intent* is usually clear from context.
 
 ## Why a separate command
@@ -25,16 +25,16 @@ Two reasons the typer alone isn't enough:
    the right behaviour for a build tool. It is not, however, the
    signal an operator who's never written Aether before needs to
    unstick themselves.
-2. The closest existing equivalent — feeding the error to a remote
-   LLM service — is **off-limits** for this use case. Config-IS-code
+2. The closest existing equivalent, feeding the error to a remote
+   LLM service, is **off-limits** for this use case. Config-IS-code
    files routinely contain secrets: API keys, super-tokens, internal
    hostnames, paths into private mounts. Sending them to a third
    party for "help interpreting the error" leaks them. See [Privacy
    model](#privacy-model) below.
 
-`aether help <script>` is a separate, opt-in tool with a different
-operating point: forgiving, verbose, heuristic, and **fully
-on-machine**.
+`ae help <script>` is a separate, opt-in tool with a different
+operating point: it is forgiving where the typer is strict, prints
+more context, matches heuristically, and runs fully on-machine.
 
 ## Privacy model
 
@@ -57,26 +57,27 @@ Hard requirements:
   themselves.
 
 These are the same rules `aetherc` already follows for the build
-path. `aether help` extends them to a diagnostic surface without
+path. `ae help` extends them to a diagnostic surface without
 relaxing them.
 
 ## Command surface
 
 ```
-aether help <script.ae>           # run all checks, print findings
-aether help <script.ae> --fix     # apply safe rewrites in place,
-                                  #   print a diff first
-aether help <script.ae> --json    # machine-readable findings
+ae help <script.ae>           # run all checks, print findings
+ae help <script.ae> --fix     # apply safe rewrites in place,
+                              #   print a diff first
+ae help <script.ae> --json    # machine-readable findings
+ae help <script.ae> --llm <gguf>  # optional local-LLM escalation
 ```
 
-The argument is required — `aether help` with no argument falls
+The argument is required, `ae help` with no argument falls
 through to the existing CLI usage banner. Disambiguation happens on
 "is the next token a path that exists with `.ae` extension."
 
-Alternative names considered: `aether explain`, `aether check`, `ae
-lint`. `help` reads naturally given the form ("Aether, help me with
-this script"). Final naming is a small bikeshed; the capability is
-what matters.
+Alternative names considered: `ae explain`, `ae check`, `ae lint`.
+`help` reads naturally given the form ("Aether, help me with this
+script"). Final naming is a small bikeshed; the capability is what
+matters.
 
 ## What it does
 
@@ -115,7 +116,7 @@ non-Aether shapes:
 | `port("9990")` | `port(9990)` (drop quotes; setter expects int) |
 | `- name: alpha` | `repo("alpha", "/path")` |
 
-The list is bounded by what people actually do — keep it short and
+The list is bounded by what people actually do, keep it short and
 high-precision. False positives are worse than misses here, since
 the user is already confused.
 
@@ -150,14 +151,14 @@ file alongside their `.ae` source. The format is structured
 markdown:
 
 ```markdown
-# avnserver — common authoring mistakes
+# avnserver, common authoring mistakes
 
 ## bind shadows libc
 
 If your DSL block uses `bind(...)` as a setter name (or you wrote
 your own helper named `bind`), the C linker will silently pick the
 libc symbol and your listening socket will fail to attach. Use
-`host(...)` instead — same intent, no collision.
+`host(...)` instead, same intent, no collision.
 
 Pattern: setter or function definition named `bind`, `listen`,
         `accept`, `connect`, `socket`, `select`.
@@ -181,13 +182,13 @@ Pattern: `no_compress(1)` call where the script doesn't also set
         `STAGE != "prod"` first.
 ```
 
-`aether help` reads these (only for libraries the script imports),
+`ae help` reads these (only for libraries the script imports),
 matches each section's `Pattern:` clause against the AST, and
 surfaces only the matching ones. The library author absorbs the
 institutional knowledge once; every novice script gets the benefit
 without the typer growing library-specific rules.
 
-The pattern language can stay simple — start with literal-name
+The pattern language can stay simple, start with literal-name
 matches and AST-shape predicates; resist the urge to grow it into a
 rule engine. If a library's hints need more than that, the library
 should ship better docstrings on its setters instead.
@@ -216,7 +217,7 @@ avnserver.serve { repo("a", "/x"); port(9990) }
 ```
 
 The typer's complaint will be structural and confusing.
-`aether help`:
+`ae help`:
 
 ```
 Line 2: serve { ... } is at top-level. Aether scripts run main()
@@ -230,7 +231,7 @@ as the entry point. Wrap it:
 ### 8. Side-by-side canonical template
 
 The library author can ship `_examples/serve.ae` (or whatever name
-their hint file points at). On any failure, `aether help` prints
+their hint file points at). On any failure, `ae help` prints
 the user's broken script next to the canonical example. For someone
 mid-transition from YAML, this is often more useful than the most
 precise error message.
@@ -259,28 +260,27 @@ For mechanical replacements where the intent is unambiguous:
 - Missing imports inferred uniquely from undefined names
 
 Always print the diff first; require explicit confirmation. The
-goal is teach-by-correction, not a magic black box.
+user sees the correction and can learn from it rather than having
+edits applied silently.
 
 ## What it does NOT do
 
-These are deliberately out of scope:
-
-- **No network.** No telemetry, no remote services, no LLM API.
-- **No script execution.** Static analysis only.
-- **No "ask an AI."** See the next section for the local-LLM
-  escalation path, which is opt-in and still offline.
-- **No general code-improvement suggestions** beyond the
-  closure-DSL config use case. This is not a linter for arbitrary
-  Aether — there are other tools for that.
-- **No library-author rule DSL.** `*.help.md` patterns stay simple;
-  if a library needs more expressive hints, the project's `.ae`
-  source and docstrings are the right place.
+These are deliberately out of scope. There are no network calls of
+any kind: no telemetry, no remote services, no LLM API. The script
+is never executed; analysis is static only. There is no
+"ask-an-AI" path beyond the opt-in local-LLM escalation described in
+the next section, which is still offline. It offers no general
+code-improvement suggestions outside the closure-DSL config use
+case, since it isn't a linter for arbitrary Aether. And it exposes
+no library-author rule DSL: `*.help.md` patterns stay simple, and a
+library that needs more expressive hints should use its `.ae` source
+and docstrings instead.
 
 ## Optional escalation: local LLM (`--llm`)
 
 Past a point, heuristic pattern-matching has diminishing returns.
-A small on-device language model — llama.cpp-flavoured, a 3-7B
-weights file the user supplies — pushes the diagnostic quality
+A small on-device language model, llama.cpp-flavoured, a 3-7B
+weights file the user supplies, pushes the diagnostic quality
 further by:
 
 - Synthesising plain-English explanations for errors the heuristics
@@ -291,7 +291,7 @@ further by:
 This stays strictly opt-in:
 
 ```
-aether help my_script.ae --llm /path/to/model.gguf
+ae help my_script.ae --llm /path/to/model.gguf
 ```
 
 The flag does three things and only three things:
@@ -303,7 +303,7 @@ The flag does three things and only three things:
 3. Streams the model's response to stdout.
 
 No network. No "we'll cache your queries." If the user doesn't pass
-`--llm`, the LLM code path doesn't run at all — the embedded shim
+`--llm`, the LLM code path doesn't run at all, the embedded shim
 is gated behind the `AETHER_ENABLE_LLM` compile-time flag, so a
 stripped distribution (the default build) omits the binary cost
 entirely. Without that flag the `--llm` option prints a build-time
@@ -318,25 +318,30 @@ own weights.
 
 The pieces, as built in `tools/ae_help.c`:
 
-- **Error source.** Rather than carving a "diagnose" mode into the
-  typer, `ae help` runs the real `aetherc` as a subprocess, captures
-  its stderr, and parses the already-structured `error[Eabcd]: …`
-  lines into findings. This avoids any risk of typer regressions
-  from a parallel code path; the tradeoff is that it only sees the
-  errors `aetherc` already surfaces.
-- **Hint loader.** Walks the imported libraries, finds any
-  `<name>.help.md` next to their `module.ae` / source, and parses the
-  structured sections into synthetic findings.
-- **Pattern matchers.** Per-pattern predicates over the script text:
-  Levenshtein-1 name suggestions, YAML/HCL shape detection inside
-  DSL blocks, and top-level-DSL detection. The set is kept small and
-  high-precision.
-- **Renderer.** Pretty-prints findings — line, original, suggestion,
-  doc cross-ref, diff if applicable — in human form, or as `--json`.
-- **`--fix` applicator.** Takes findings flagged "safe-fix," applies
-  them to the source, and writes back atomically (write to a temp
-  file, then `rename` over the original), printing a before/after
-  diff. It refuses to run non-interactively (requires a TTY).
+The error source is `aetherc` itself. Rather than carving a
+"diagnose" mode into the typer, `ae help` runs the real `aetherc` as
+a subprocess, captures its stderr, and parses the already-structured
+`error[Eabcd]: …` lines into findings. This avoids any risk of typer
+regressions from a parallel code path; the tradeoff is that it only
+sees the errors `aetherc` already surfaces.
+
+The hint loader walks the imported libraries, finds any
+`<name>.help.md` next to their `module.ae` / source, and parses the
+structured sections into synthetic findings.
+
+The pattern matchers are per-pattern predicates over the script
+text: Levenshtein-1 name suggestions, YAML/HCL shape detection
+inside DSL blocks, and top-level-DSL detection. The set is kept
+small and high-precision.
+
+The renderer pretty-prints findings (line, original, suggestion, doc
+cross-ref, and a diff where applicable) in human form, or as
+`--json`.
+
+The `--fix` applicator takes findings flagged "safe-fix," applies
+them to the source, and writes back atomically: it writes to a temp
+file, then `rename`s over the original, printing a before/after
+diff. It refuses to run non-interactively (requires a TTY).
 
 Total surface: comparable in size to a moderately-featured linter.
 The `--llm` mode is an additive feature gate; the heuristic core
@@ -344,10 +349,10 @@ stands alone.
 
 ## Cross-references
 
-- [`config-is-code.md`](config-is-code.md) — the pattern this command
+- [`config-is-code.md`](config-is-code.md), the pattern this command
   serves; the "library author recipe" section defines the surface
-  `aether help` introspects.
-- [`closures-and-builder-dsl.md`](closures-and-builder-dsl.md) — the
+  `ae help` introspects.
+- [`closures-and-builder-dsl.md`](closures-and-builder-dsl.md), the
   syntax/semantics the help command's pattern matcher walks.
-- [`getting-started.md`](getting-started.md) — where the help command
+- [`getting-started.md`](getting-started.md), where the help command
   itself should be cross-linked once it ships.

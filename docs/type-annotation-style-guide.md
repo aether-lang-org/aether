@@ -65,10 +65,12 @@ find_user(int id): User {
 **Public APIs and library functions**
 ```aether
 // Export functions should have explicit types
+import std.math
+
 export calculate_distance(p1: Point, p2: Point): float {
     dx = p2.x - p1.x
     dy = p2.y - p1.y
-    return sqrt(dx * dx + dy * dy)
+    return math.sqrt(dx * dx + dy * dy)
 }
 ```
 
@@ -77,9 +79,9 @@ export calculate_distance(p1: Point, p2: Point): float {
 import std.map
 import std.list
 
-// When type inference might fail or be unclear
-ptr my_map = map.new()
-ptr users = list.new()
+// map.new() / list.new() return an opaque ptr; let inference bind it
+my_map = map.new()
+users = list.new()
 
 // Explicit type prevents ambiguity
 int result = parse_number(input)  // Clarifies we want int, not float
@@ -105,7 +107,6 @@ struct User {
     string name
     string email
     bool active
-    string[] tags
 }
 ```
 
@@ -182,19 +183,19 @@ subtract(a, b) {
 ### Arrays
 
 ```aether
-// Explicit array type (suffix form)
-int[] numbers = [1, 2, 3, 4, 5]
-string[] names = ["Alice", "Bob"]
-
-// Type inference from elements
+// Type inference from elements (the working form for array literals)
 numbers = [1, 2, 3, 4, 5]  // Inferred as int[]
 names = ["Alice", "Bob"]   // Inferred as string[]
+
+// const binding, also inferred from the literal
+const primes[] = [2, 3, 5, 7]
 ```
 
-> **Note:** The array type syntax is the C-style suffix `T[]`, not the prefix
-> `[T]`. Earlier drafts of this guide used the prefix form; the parser has
-> never accepted it. If you see `[string]` in older code or docs, replace it
-> with `string[]`.
+> **Note:** Bind an array literal with inference (`numbers = [...]`) or a
+> `const name[] = [...]` declaration. The explicit prefix-type form
+> `int[] numbers = [...]` does not compile: codegen lowers the annotation to
+> a scalar pointer and the literal spills as excess initializers. The prefix
+> array syntax `[T]` is not accepted either.
 
 ### Complex Types
 
@@ -202,11 +203,11 @@ names = ["Alice", "Bob"]   // Inferred as string[]
 import std.map
 import std.list
 
-// Explicit for complex types
-ptr user_map = map.new()
-ptr points = list.new()
+// map/list constructors return an opaque ptr, inference is the norm
+user_map = map.new()
+points = list.new()
 
-// Inference for simple cases
+// Same pattern for other constructors
 my_map = map.new()
 my_points = list.new()
 counter = spawn(Counter())
@@ -235,6 +236,8 @@ main() {
 
 ```aether
 // Public library with clear contracts
+import std.math
+
 export struct Point {
     float x
     float y
@@ -243,7 +246,7 @@ export struct Point {
 export distance(p1: Point, p2: Point): float {
     float dx = p2.x - p1.x
     float dy = p2.y - p1.y
-    return sqrt(dx * dx + dy * dy)
+    return math.sqrt(dx * dx + dy * dy)
 }
 
 export midpoint(p1: Point, p2: Point): Point {
@@ -263,10 +266,12 @@ import std.file
 process_file(string filename): int {
     int count = 0
 
-    // Inference for simple local variables
-    f = file.open(filename, "r")
-    content = file.read_all(f)
-    file.close(f)
+    // Inference for simple local variables.
+    // file.read opens, reads, and closes the path, returning (content, err).
+    content, err = file.read(filename)
+    if err != "" {
+        return count
+    }
 
     println("Read file: ${filename}")
     println(content)
@@ -313,7 +318,7 @@ fibonacci(int n): int {
 | Struct fields | Explicit | `struct User { int id }` |
 | Actor state | Explicit (prefix) | `state int count` |
 | Loop variables | Inference | `for i in 0..10` |
-| Complex types | Explicit | `ptr my_map = map.new()` |
+| Complex types | Inference | `my_map = map.new()` |
 | Public APIs | Explicit | All types annotated |
 | Scripts/prototypes | Inference | Minimal annotations |
 

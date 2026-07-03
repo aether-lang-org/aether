@@ -105,6 +105,28 @@ stdlib, or runtime behaviour change._
   message Bump { volatile: int }
   ```
 
+### Documentation
+
+- **Documentation overhaul (docs only, no code or behavioural change).** A
+  corpus-wide accuracy and de-slop pass across the docs, followed by a
+  structural cleanup:
+  - Design-rationale and concurrency-pattern docs are grouped under a new
+    `docs/design/` section (closure lineage, parse-don't-validate, the
+    Chlipala lens, the rules-engine exploration, sharded actor map, snapshot
+    cell, concurrent-cache benchmark).
+  - `docs/cross-references/` is reworked from internal issue-body drafts into
+    professional design-history surveys of Fir, Flint, Zym, and
+    GoogleCloudPlatform/Aether, each with a status header and a public source
+    URL. The Flux comparison was dropped: its source is a proprietary,
+    all-rights-reserved spec that cannot be verified or safely reproduced.
+  - The `docs/notes/` handoff files were retired; their still-open items are
+    tracked as #1002 (release-workflow CHANGELOG guard), #1003 (std.capsicum
+    follow-ups), and #1004 (std.http streaming response bodies).
+  - Em-dashes are removed from all documentation prose in favour of commas.
+  - The root `README.md` is the single documentation index (the `docs/design/`
+    and `docs/cross-references/` subfolder READMEs were removed, and the design
+    docs are listed directly in the README). Every internal doc link and
+    heading anchor was re-audited and resolves clean.
 ## [0.344.0]
 
 _CHANGELOG reconstruction (0.340/0.342/0.343 gaps) + zsync-port added to LLM.md

@@ -4,15 +4,15 @@ Aether supports closures, trailing blocks, and a builder-style DSL pattern inspi
 Smalltalk's blocks, Ruby's blocks/procs, and Groovy's closures. This document covers the
 syntax, semantics, and the builder context mechanism that enables pseudo-declarative DSLs.
 
-The compact name for this whole language feature — closures + trailing blocks executing
-in the caller's context to give pseudo-declarative scripts — is **"DSL with scope"**,
+The compact name for this whole language feature, closures + trailing blocks executing
+in the caller's context to give pseudo-declarative scripts, is **"DSL with scope"**,
 the term Yukihiro "Matz" Matsumoto (Ruby's creator) said he's always used for it. See
 [Paul Hammant's "That Ruby and Groovy Language Feature" (2024-02-14)][matz-dsl-scope]
 for the genealogy from Smalltalk through Ruby, Groovy, Kotlin, SwiftUI, and the
 side-by-side calculator-app comparison across each.
 
 (Another lens on the same idea, less catchy but mechanically descriptive: *"closure
-with context"* — the trailing block is a closure that runs with an implicit
+with context"*, the trailing block is a closure that runs with an implicit
 context object available to its body, which is what `_ctx: ptr` injection and the
 builder context stack provide in Aether.)
 
@@ -22,7 +22,7 @@ builder context stack provide in Aether.)
 
 Two **independent** axes describe every trailing-block usage:
 
-**Axis 1 — Trailing-block form (what the *caller* writes after `)`):**
+**Axis 1, Trailing-block form (what the *caller* writes after `)`):**
 
 | Form | Syntax | Runs | Captures |
 |------|--------|------|----------|
@@ -30,7 +30,7 @@ Two **independent** axes describe every trailing-block usage:
 | **Closure (parameterised)** | `func() \|x\| { body }` or `\|x\| -> expr` | Later, when invoked via `call(...)` | Explicit parameters; captures enclosing locals by value |
 | **Callback** | `func() callback { body }` (optionally `callback \|x\|` or `callback \|x\| -> expr`) | Later, when invoked via `call(...)` | Implicit capture of enclosing-scope locals (closure with no required params) |
 
-**Axis 2 — Trailing-block-accepting function (what the *definition* declares):**
+**Axis 2, Trailing-block-accepting function (what the *definition* declares):**
 
 | Flavour | Definition | Order | Block provides | Function provides |
 |---------|------------|-------|----------------|--------------------|
@@ -38,24 +38,24 @@ Two **independent** axes describe every trailing-block usage:
 | **Builder** | `builder func(...)` (optionally `with <factory>` for the config object) | **Block first**, then function | Configuration (a config object filled via setter calls) | The action that uses the filled config |
 
 **The axes multiply.** Any of the three forms on the call side can target either flavour on the
-definition side, giving six legal combinations. Builder is NOT a fourth trailing-block form;
-it's a different function-side contract that any trailing-block form can attach to.
+definition side, giving six legal combinations. Builder is not a fourth trailing-block form.
+It's a function-side contract that any of the three trailing-block forms can attach to.
 
 **Related supporting machinery (covered later):**
 
 - **Builder context stack** (`_ctx: ptr` auto-injection, `builder_context()`, `_aether_ctx_push/pop`)
-  — wires parents to children automatically inside Immediate trailing blocks.
-- **Block-receiver scoping** — `receiver.method(...) { body }` falls back through `<receiver>_<name>` for bare-name calls inside `body` (issue #333).
-- **Ref cells** (`ref(v)` / `ref_get` / `ref_set`) — shared mutable state for closures (which otherwise capture by value).
-- **Boxed closures** (`box_closure` / `unbox_closure`) — heap-allocate a closure so it can be stored in `std.list` / struct fields.
-- **`fn` type** — the parameter type for "this function takes a closure"; invoked with `call(fn_var, args...)`.
+  wires parents to children automatically inside Immediate trailing blocks.
+- **Block-receiver scoping**, `receiver.method(...) { body }` falls back through `<receiver>_<name>` for bare-name calls inside `body` (issue #333).
+- **Ref cells** (`ref(v)` / `ref_get` / `ref_set`), shared mutable state for closures (which otherwise capture by value).
+- **Boxed closures** (`box_closure` / `unbox_closure`), heap-allocate a closure so it can be stored in `std.list` / struct fields.
+- **`fn` type**, the parameter type for "this function takes a closure"; invoked with `call(fn_var, args...)`.
 
 **Same-line rule** (line 100+): a trailing block is attached to a call only when `{`
 appears on the same line as the call's closing `)`. A `{` on the next line is an
 independent block. This is what stops `result = build()\n{ ... }` from greedily
 consuming the bare block as `build`'s closure (issue #286).
 
-**Separate axis — fluent method chaining (UFCS):** the two axes above are the
+**Separate axis, fluent method chaining (UFCS):** the two axes above are the
 *block* DSL (a trailing block fills structure). The *value-chain* primitive is
 orthogonal: `x.f(args)` desugars to `f(x, args)` when `f`'s first parameter
 matches `typeof(x)`, so calls chain left-to-right
@@ -65,8 +65,8 @@ and is a strict last-resort that never shadows a module/field call. See
 
 ## Background
 
-The builder-style DSL pattern — where nested blocks of code describe structure
-declaratively while retaining full imperative power — originated in Smalltalk's
+The builder-style DSL pattern, where nested blocks of code describe structure
+declaratively while retaining full imperative power, originated in Smalltalk's
 block-based APIs, was popularized by Ruby (Shoes, Sinatra, RSpec), and refined by
 Groovy (SwingBuilder, MarkupBuilder). Kotlin (Compose, TornadoFX) and Swift (SwiftUI)
 carry the tradition forward.
@@ -180,7 +180,7 @@ base_body = read_blob(repo, sha)
 }
 ```
 
-keep the obvious lexical scoping — the bare block sees `base_body`,
+keep the obvious lexical scoping, the bare block sees `base_body`,
 because it was never folded into `read_blob`'s argument list. Without
 the same-line rule, the parser greedily consumed any `{` that followed
 a call as a trailing closure (whether the call was an assignment RHS
@@ -196,7 +196,7 @@ self-diagnosing.
 ### Closure blocks (callbacks)
 
 A `|| { }` or `|params| { }` after a function call creates a real closure that is
-passed as an argument — it runs later when invoked:
+passed as an argument, it runs later when invoked:
 
 ```aether
 save_handler = || { println("saved!") }
@@ -233,17 +233,17 @@ through as an explicit parameter. At the call site, `call(handler)` is enough.
 Callback blocks also support explicit params and arrow bodies:
 
 ```aether
-// With params — invoked as call(adder, 3, 4)
+// With params, invoked as call(adder, 3, 4)
 store(action) callback |a: int, b: int| { return a + b }
 
-// Arrow body — shorthand for single-expression callbacks
+// Arrow body, shorthand for single-expression callbacks
 store(action) callback |x: int| -> x * 2
 ```
 
 ## DSL Block Receiver Scoping (#333)
 
-When a trailing closure is bound to a member-access call —
-`receiver.method(args) { body }` — bare-name function references
+When a trailing closure is bound to a member-access call,
+`receiver.method(args) { body }` bare-name function references
 inside `body` fall back through the receiver's namespace before
 erroring as undefined. Resolution order:
 
@@ -268,7 +268,7 @@ main() {
 }
 ```
 
-Post-fix, the second `import bash (...)` line is unnecessary —
+Post-fix, the second `import bash (...)` line is unnecessary,
 bare-name calls inside the trailing block fall back to
 `bash_script` / `bash_jobs` automatically:
 
@@ -296,7 +296,7 @@ struct name (e.g. `b: Builder` → receiver = `Builder`).
 
 Nested DSL blocks stack naturally: `outer.method(o) { mark("o");
 inner.method(i) { note("i") } }` resolves `mark` as
-`outer_mark` and `note` as `inner_note` — the inner block's
+`outer_mark` and `note` as `inner_note` the inner block's
 receiver wins for inner-namespace names; outer's receiver applies
 to outer-namespace names by the natural scope-walk in
 `lookup_symbol`.
@@ -312,7 +312,8 @@ import std.list
 each(l: ptr, f: fn) {
     n = list.size(l)
     for (i = 0; i < n; i++) {
-        call(f, list.get(l, i))
+        val, _ = list.get(l, i)    // list.get returns (value, err)
+        call(f, val)
     }
 }
 
@@ -320,7 +321,8 @@ map(l: ptr, f: fn) {
     result = list.new()
     n = list.size(l)
     for (i = 0; i < n; i++) {
-        list.add(result, call(f, list.get(l, i)))
+        val, _ = list.get(l, i)
+        list.add(result, call(f, val))
     }
     return result
 }
@@ -329,7 +331,7 @@ filter(l: ptr, f: fn) {
     result = list.new()
     n = list.size(l)
     for (i = 0; i < n; i++) {
-        val = list.get(l, i)
+        val, _ = list.get(l, i)
         if call(f, val) != 0 { list.add(result, val) }
     }
     return result
@@ -397,7 +399,7 @@ main() {
 The `_ctx: ptr` convention is the key to making builder DSLs feel declarative.
 When a function's first parameter is named `_ctx` with type `ptr`:
 
-1. **The parameter is hidden from callers** — it doesn't count toward arity
+1. **The parameter is hidden from callers**, it doesn't count toward arity
 2. **Inside trailing blocks**, the compiler auto-injects `builder_context()` as the
    first argument
 3. **Outside trailing blocks**, the function can still be called explicitly with a
@@ -439,7 +441,7 @@ _aether_ctx_push(frame_result);
 _aether_ctx_pop();
 ```
 
-## Builder Functions — "Configure Then Execute"
+## Builder Functions, "Configure Then Execute"
 
 Regular trailing blocks run the function first, then decorate the result. **Builder
 functions** flip this: the block runs first to fill a configuration, then the function
@@ -459,12 +461,12 @@ on the definition:
 import std.map
 
 builder compile(src: string) {
-    // _builder is implicitly available — it's the config the block filled
+    // _builder is implicitly available, it's the config the block filled
     // It's null when called without a trailing block
     rel = ""
     if _builder != null {
         if map_has(_builder, "release") == 1 {
-            rel = map_get(_builder, "release")
+            rel = map_get_raw(_builder, "release")
         }
     }
     println("compiling ${src} with release=${rel}")
@@ -477,18 +479,18 @@ The caller never sees it.
 ### Calling a builder function
 
 ```aether
-// With trailing block — block fills config, then compile() runs
+// With trailing block, block fills config, then compile() runs
 compile("Main.java") {
     set_release("21")
     set_lint("all")
 }
 
-// Without trailing block — _builder is null, zero-config
+// Without trailing block, _builder is null, zero-config
 compile("Test.java")
 ```
 
 The setter functions (`set_release`, `set_lint`) are regular DSL functions
-with `_ctx: ptr` — they work on whatever was pushed to the context stack. The
+with `_ctx: ptr` they work on whatever was pushed to the context stack. The
 compiler creates the config object (currently a map), pushes it, runs the block,
 pops, then calls the function with the filled config.
 
@@ -499,7 +501,7 @@ builder make_greeting(name: string): string {
     prefix = "Hello"
     if _builder != null {
         if map_has(_builder, "prefix") == 1 {
-            prefix = map_get(_builder, "prefix")
+            prefix = map_get_raw(_builder, "prefix")
         }
     }
     return "${prefix}, ${name}!"
@@ -519,16 +521,16 @@ By default, the compiler creates the config object via `map_new()`. The `with`
 clause lets the SDK author specify any zero-argument factory function:
 
 ```aether
-// Default — map_new
+// Default, map_new
 builder compile(src: string) { ... }
 
-// List — ordered collection of flags
+// List, ordered collection of flags
 builder run_command(name: string) with list_new { ... }
 
-// Custom builder — any user-defined factory
+// Custom builder, any user-defined factory
 query_builder_new() {
     m = map_new()
-    map_put(m, "_type", "query")
+    map_put_raw(m, "_type", "query")
     return m
 }
 builder execute_query(db: string) with query_builder_new { ... }
@@ -536,7 +538,7 @@ builder execute_query(db: string) with query_builder_new { ... }
 
 The factory just needs to be a zero-argument function returning `ptr`. The
 trailing block's setter functions and the builder function body must agree on the
-protocol — the compiler doesn't care what the object is, only that it can be
+protocol, the compiler doesn't care what the object is, only that it can be
 pushed to the context stack as `void*`.
 
 ### Generated code
@@ -565,7 +567,7 @@ _aether_ctx_push((void*)(intptr_t)frame("App"));  // 1. function runs
 _aether_ctx_pop();                                  // 3. pop
 ```
 
-## Ref Cells — Shared Mutable State for Closures
+## Ref Cells, Shared Mutable State for Closures
 
 Aether closures capture variables by value. This means a closure that does
 `count = count + 1` modifies its own copy, not the original. For callbacks
@@ -582,14 +584,14 @@ call(inc, count)
 println(ref_get(count))  // 2
 ```
 
-Ref cells work because closures capture the pointer by value — all closures
+Ref cells work because closures capture the pointer by value, all closures
 holding the same pointer see the same heap location.
 
 **API:**
-- `ref(value)` — create a ref cell (heap-allocated `intptr_t`)
-- `ref_get(r)` — read the value
-- `ref_set(r, value)` — write a new value
-- `ref_free(r)` — free the cell (or use `defer ref_free(r)`)
+- `ref(value)` create a ref cell (heap-allocated `intptr_t`)
+- `ref_get(r)` read the value
+- `ref_set(r, value)` write a new value
+- `ref_free(r)` free the cell (or use `defer ref_free(r)`)
 
 ### Storing Closures in Collections
 
@@ -639,18 +641,18 @@ handler = unbox_closure(list.get(list.get(g, 1), cur))
 call(handler, num, prev, op)
 ```
 
-Each button's behavior is declared alongside the button — not in a separate
+Each button's behavior is declared alongside the button, not in a separate
 dispatch table. The ref cells provide shared mutable state across all callbacks.
 
 ## Fluent Method Chaining (UFCS)
 
-Everything above describes the **block** DSL — a function accepts a trailing
+Everything above describes the **block** DSL, a function accepts a trailing
 block that fills structure (`describe("x") { ... }`). UFCS adds the
 orthogonal **value-chain** primitive: calling a method on a value and getting
 a value back, so calls read left-to-right like prose
 (`expect(5).to_equal(5).to_be_gt(0)`). This is the shape every fluent
-assertion / query / builder API is built on, and it composes with — but is
-distinct from — the trailing-block forms.
+assertion / query / builder API is built on. It composes with the
+trailing-block forms but is distinct from them.
 
 **The rule.** `x.f(args)` desugars to `f(x, args)` when `f` is a free
 function whose **first parameter type matches `typeof(x)`**. No new
@@ -671,12 +673,12 @@ expect(5).to_equal(5)            // -> to_equal(expect(5), 5)
 expect(5).to_equal(5).to_be_gt(0) // chains: each step returns a Subject
 ```
 
-The receiver can be any expression — a call result (`expect(5).to_*`), a
+The receiver can be any expression, a call result (`expect(5).to_*`), a
 stored value (`s = expect(5); s.to_equal(5)`), or a pointer
 (`c.bump()` → `bump(c)` for `c: *Counter`, mutating in place).
 
 **Works across the import boundary.** The fluent surface is normally provided
-by a *library* and chained in *consumer* code — a test framework's matchers,
+by a *library* and chained in *consumer* code, a test framework's matchers,
 a query API's combinators. `value.method()` resolves a `method` exported by
 an imported module whose first parameter matches `typeof(value)`, honoring the
 same visibility as a normal qualified `mod.method(value)` call:
@@ -689,24 +691,24 @@ r = assert.expect_int(5).to_equal(5).to_be_gt(0)  // matchers imported, chain lo
 **Resolution & precedence.** UFCS is a strict *last resort*: module-qualified
 calls (`string.length(s)`), struct-field access, and function-pointer-field
 dispatch all keep priority. A dotted call only falls back to UFCS when it
-would otherwise be an "Undefined function" — so nothing that compiled before
+would otherwise be an "Undefined function", so nothing that compiled before
 changes meaning. Same-file functions win over imported ones; a receiver whose
 type doesn't match the candidate's first parameter declines cleanly (no
 silent coercion). There is no codegen change: the rewritten `f(x, args)` is an
 ordinary call, and a small by-value struct threaded through an N-step chain is
-N register-width copies the C backend elides — fluent chains are cheap.
+N register-width copies the C backend elides, fluent chains are cheap.
 
 **Ambient state for a facade.** A fluent facade often carries a shared
 "current context" cell (set by `init()`, read by the chained matchers). Use a
 module-level `var` (which persists across the import boundary) or
-`std.config` for that — see [Ref Cells](#ref-cells--shared-mutable-state-for-closures)
+`std.config` for that, see [Ref Cells](#ref-cells-shared-mutable-state-for-closures)
 for the closure-capture case.
 
 ## Comparison with Other Languages
 
 For the broader "why this shape exists" comparison against Lisp,
 Smalltalk, Rust, and Zig, see
-[`closure-lineage-and-runtime-tradeoffs.md`](closure-lineage-and-runtime-tradeoffs.md).
+[`closure-lineage-and-runtime-tradeoffs.md`](design/closure-lineage-and-runtime-tradeoffs.md).
 
 | Feature | Smalltalk | Ruby | Groovy | Aether |
 |---------|-----------|------|--------|--------|
@@ -731,7 +733,7 @@ The builder context stack is a simple C array:
 - Maximum nesting depth: 64 levels
 - Zero overhead when not used (the stack is static, no allocation)
 
-Trailing blocks (parameterless `{ }`) are inlined at the call site — no closure
+Trailing blocks (parameterless `{ }`) are inlined at the call site, no closure
 allocation, no function pointer overhead. They are pure syntactic sugar for
 sequential code with automatic context management.
 

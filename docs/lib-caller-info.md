@@ -6,14 +6,14 @@ host stamps `(identity, attributes, deadline_ms)` before invoking
 an `aether_<name>` export; the loaded module reads it via
 `host.caller_*` accessors.
 
-## Trust model — explicit non-goal
+## Trust model, explicit non-goal
 
 This is **not a security boundary**. The host always has more
 authority than the loaded `.so` (it controls the process, the FD
 table, the address space). Adding cryptographic signing in-process
 buys nothing the host couldn't fake anyway. Treat caller-info as
-**plumbing for advisory per-call context** — identity, role flags,
-soft deadlines — not as authenticated facts.
+**plumbing for advisory per-call context**, identity, role flags,
+soft deadlines, not as authenticated facts.
 
 If you need cross-machine trustworthy caller identity (the WASM
 guest in Pollen had this need because the host and guest live in
@@ -30,7 +30,7 @@ and have the Aether code verify the signature.
  * key/value/identity bytes would exceed AETHER_CALLER_INFO_MAX_BYTES
  * (4096 default) or the attribute count would exceed
  * AETHER_CALLER_INFO_MAX_ATTRS (32 default). On overflow the slot
- * is left in its previous state — no partial population. */
+ * is left in its previous state, no partial population. */
 int aether_set_caller(const char* identity,
                       const char** attr_keys,
                       const char** attr_vals,
@@ -50,7 +50,7 @@ be freed after the call returns. `n == 0` is allowed for
 identity-only / deadline-only stamps; `attr_keys` / `attr_vals`
 may then be NULL.
 
-`deadline_ms` is opaque to the runtime — whatever convention the
+`deadline_ms` is opaque to the runtime, whatever convention the
 host wants (milliseconds since epoch, absolute monotonic-clock
 milliseconds). Pair with the per-call deadline tripwire from
 issue #343 to enforce.
@@ -68,7 +68,7 @@ main() {
 ```
 
 All accessors are NULL/unset-safe. A guest that doesn't import
-`std.host` or doesn't read these accessors works fine — no
+`std.host` or doesn't read these accessors works fine, no
 requirement to consume.
 
 ## Lifetime
@@ -88,7 +88,7 @@ Default caps:
   included).
 - 32 attribute pairs.
 
-Both are tuneable at compile time — `-DAETHER_CALLER_INFO_MAX_BYTES=N`
+Both are tuneable at compile time, `-DAETHER_CALLER_INFO_MAX_BYTES=N`
 / `-DAETHER_CALLER_INFO_MAX_ATTRS=N`. `aether_set_caller` returns
 `-1` on overflow and leaves the previous state intact.
 

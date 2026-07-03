@@ -6,7 +6,7 @@ Aether's sandboxing story (see [containment-sandbox.md](containment-sandbox.md),
 [emit-lib.md](emit-lib.md), [hide-and-seal.md](hide-and-seal.md)) is about
 *runtime* containment: a compiled Aether program, or a hosted interpreter, is
 restricted in what it may touch. This document is about the layer beneath that:
-**what the build toolchain itself — `aetherc`, `ae`, `aeb` — is permitted to
+**what the build toolchain itself, `aetherc`, `ae`, `aeb` is permitted to
 touch, and why some conveniences are permanently off the table.**
 
 A sandbox that only constrains the program-under-execution but trusts the
@@ -26,7 +26,7 @@ on-demand includes" for C and C++:
 
 The trick is an `LD_PRELOAD` shim that intercepts the C preprocessor's
 `open()` and, when the path looks like a URL, fetches it over the network.
-The post is a joke — the "feature" *is* the vulnerability. But it is a
+The post is a joke, the "feature" *is* the vulnerability. But it is a
 precise threat model, and it states the failure mode cleanly:
 
 1. **Transparent remote resolution.** `#include <https://...>` looks
@@ -36,7 +36,7 @@ precise threat model, and it states the failure mode cleanly:
    the preprocessor has ambient authority to call `open()`, `connect()`,
    and anything else libc exposes. Nobody constrains it.
 3. **Provenance is invisible.** The resulting binary depends on whatever
-   the remote server returned *at build time* — uncached, unpinned,
+   the remote server returned *at build time*, uncached, unpinned,
    unaudited, and different on the next build.
 
 Aether already has the machinery to be the foil to all three. This document
@@ -56,17 +56,17 @@ nothing else:
 
 | Capability | Why the toolchain needs it | Wildcard? |
 |------------|----------------------------|-----------|
-| **Filesystem read** | `*.ae` sources under the invoked project root; the stdlib/contrib tree under `<prefix>/lib/aether` and `<prefix>/share/aether` | **No** — two fixed roots |
-| **Filesystem write** | The build output directory and a temp dir for generated `.c` | **No** — output dir only |
-| **Process execution** | The C compiler (`cc`/`gcc`/`clang`) and the linker | **No** — toolchain binaries only |
+| **Filesystem read** | `*.ae` sources under the invoked project root; the stdlib/contrib tree under `<prefix>/lib/aether` and `<prefix>/share/aether` | **No**, two fixed roots |
+| **Filesystem write** | The build output directory and a temp dir for generated `.c` | **No**, output dir only |
+| **Process execution** | The C compiler (`cc`/`gcc`/`clang`) and the linker | **No**, toolchain binaries only |
 | **Network** | Never | **Never** |
-| **Environment** | A short fixed list (`CC`, `PATH`, `AETHER_*`, install-layout vars) | **No** |
+| **Environment** | A short fixed list (`PATH`, `AETHER_*`, install-layout vars) | **No** |
 
 The recommendation: a documented, opt-in `--sandboxed-build` mode (not yet
 implemented) that runs `aetherc` under a grant list matching exactly the
 table above. Anything
-outside it — a network handle, a read outside the two roots, an `exec` of a
-non-toolchain binary — is a hard build failure, not a warning. This turns
+outside it, a network handle, a read outside the two roots, an `exec` of a
+non-toolchain binary, is a hard build failure, not a warning. This turns
 "could a malicious `import` or a hostile build script reach the network
 during compilation" from a trust question into a compile-time-enforced one.
 
@@ -76,17 +76,17 @@ This is the inverse of the lcamtuf shim: instead of an `LD_PRELOAD` that
 ### 2. Imports never resolve to anything fetched at build time
 
 Aether's glob and selective imports (`import std.math (*)`,
-`import std.math (sqrt, pow)` — see [module-system-design.md](module-system-design.md)
+`import std.math (sqrt, pow)` see [module-system-design.md](module-system-design.md)
 and the language reference's "Glob Import" section) resolve to exactly three
 kinds of target:
 
-- **stdlib** — `<prefix>/lib/aether` / `<prefix>/share/aether`, shipped with the toolchain
-- **contrib** — same tree, vendored
-- **local modules** — `.ae` files under the project root
+- **stdlib**, `<prefix>/lib/aether` / `<prefix>/share/aether`, shipped with the toolchain
+- **contrib**, same tree, vendored
+- **local modules**, `.ae` files under the project root
 
 There is no fourth kind, and there must never be one that is fetched
 transparently. An `import` is a pointer into the local filesystem, period.
-The lcamtuf post's core horror — `#include <https://...>` looking local — is
+The lcamtuf post's core horror, `#include <https://...>` looking local, is
 structurally impossible in Aether because the import grammar has no URL
 production and the resolver has no network code path.
 
@@ -96,10 +96,10 @@ statement.
 
 ### 3. If remote packages ever exist, fetch is a separate, audited, pinned step
 
-`aeb` (the multi-package build system — see
-[build-system.md](build-system.md) and [install-layout.md](install-layout.md))
+`aeb` (the external multi-package build system, github.com/aether-lang-org/aeb)
 reads `share/aether/MANIFEST` to discover link-suitable runtime/stdlib `.c`
-files. Today it operates entirely on the local install tree.
+files; [install-layout.md](install-layout.md) documents the MANIFEST contract it
+consumes. Today it operates entirely on the local install tree.
 
 Should `aeb` ever grow remote package fetch, the lcamtuf post is the
 cautionary tale for *how not to do it*. The non-negotiable constraints:
@@ -111,7 +111,7 @@ cautionary tale for *how not to do it*. The non-negotiable constraints:
   on mismatch. The build's inputs are reproducible and auditable.
 - **Fetched code is contrib-vendored, then reviewed.** A fetched package
   lands as files on disk that a human (or CI) can diff before it is ever
-  compiled — not streamed straight into the compiler.
+  compiled, not streamed straight into the compiler.
 - **Fetch runs without compiler authority.** The thing that touches the
   network is not the thing that generates code.
 
@@ -123,12 +123,12 @@ separable from the build.
 
 - **Capability sandboxing** ([containment-sandbox.md](containment-sandbox.md))
   constrains the *program*. This document constrains the *toolchain*. They
-  are the same idea (deny-by-default, enumerate grants, no wildcards where a
-  fixed list will do) applied one layer down.
-- **Effect tags** (proposed — see the per-function capability-axis issue)
+  are the same idea, applied one layer down: deny by default, and prefer a
+  fixed grant list to a wildcard.
+- **Effect tags** (proposed, see the per-function capability-axis issue)
   would let `aetherc` reason about whether a given `.ae` *needs* `fs`/`net`
   at runtime. That is orthogonal to whether the *compiler* touched the
-  network — but the two together give a full picture: provenance of inputs
+  network, but the two together give a full picture: provenance of inputs
   *and* authority of outputs.
 - **`--emit=lib` capability-emptiness** ([emit-lib.md](emit-lib.md)) is the
   same deny-by-default reflex: a library built for embedding starts with no
@@ -146,18 +146,18 @@ separable from the build.
   wildcard. Adding a network grant or a `--fetch-during-build` backdoor is
   the lcamtuf vulnerability, re-introduced.
 - Fetched third-party code is vendored to disk and reviewable *before* it
-  reaches the compiler — never streamed into `aetherc` directly.
+  reaches the compiler, never streamed into `aetherc` directly.
 
 ## References
 
 - lcamtuf, "A breakthrough in C/C++ dependency management",
-  *lcamtuf's thing*, 2026-04-26 — the satirical post that frames the threat
+  *lcamtuf's thing*, 2026-04-26, the satirical post that frames the threat
   model (the "feature" is the vulnerability)
-- [containment-sandbox.md](containment-sandbox.md) — the runtime sandbox this
+- [containment-sandbox.md](containment-sandbox.md), the runtime sandbox this
   mirrors at the toolchain layer
-- [emit-lib.md](emit-lib.md) — `--emit=lib` capability-emptiness, the same
+- [emit-lib.md](emit-lib.md), `--emit=lib` capability-emptiness, the same
   deny-by-default reflex
-- [build-system.md](build-system.md), [install-layout.md](install-layout.md) —
-  `aeb` and the MANIFEST contract that any remote-fetch design must respect
-- [module-system-design.md](module-system-design.md) — import resolution; the
+- [install-layout.md](install-layout.md), the MANIFEST contract that `aeb`
+  consumes and that any remote-fetch design must respect
+- [module-system-design.md](module-system-design.md), import resolution; the
   three (and only three) kinds of import target

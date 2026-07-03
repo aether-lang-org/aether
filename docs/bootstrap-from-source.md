@@ -1,20 +1,20 @@
 # Bootstrapping Aether from source (HEAD)
 
 For **consumers** who want to build and use Aether straight from this
-repository — because they're tracking `HEAD`, or want a feature that
+repository, because they're tracking `HEAD`, or want a feature that
 hasn't reached a tagged release / package manager yet, or are a
 downstream project (avn, aether-ui, aeb, servirtium-dotnet, …) that
 links against the toolchain.
 
 This is **not** the contributor flow. You do **not** need to run the
-test suite to use Aether — building the binaries and (optionally) the
+test suite to use Aether, building the binaries and (optionally) the
 contrib libraries is enough. The test targets (`make test`,
 `make test-ae`, `make ci`) are entirely separate and only matter if
 you're changing Aether itself. See [CONTRIBUTING.md](../CONTRIBUTING.md)
 for that.
 
 If you just want the latest *released* build, prefer `./install.sh` (see
-the README) or `ae version install <vX.Y.Z>` — this document is for the
+the README) or `ae version install <vX.Y.Z>` this document is for the
 from-source / HEAD case specifically.
 
 ---
@@ -25,7 +25,7 @@ from-source / HEAD case specifically.
 git clone https://github.com/aether-lang-org/aether.git
 cd aether
 
-make ae                      # build the compiler (aetherc) + the `ae` CLI — no tests
+make ae                      # build the compiler (aetherc) + the `ae` CLI, no tests
 sudo make install            # install ae, aetherc, libaether.a, stdlib to /usr/local
 
 # Optional: native contrib modules (sqlite, host_python, …), built only
@@ -63,7 +63,7 @@ the build):
 
 Optional, only if you want the corresponding **contrib** module built
 natively (each is independently probed and **skipped if its dev library
-is absent** — a skip is normal, not an error):
+is absent**, a skip is normal, not an error):
 
 | Contrib module | Needs | Probe |
 |---|---|---|
@@ -89,7 +89,7 @@ make ae
 ```
 
 `make ae` builds both `build/aetherc` (the compiler) and `build/ae` (the
-CLI front-end — `ae` depends on `compiler`). It does **not** depend on
+CLI front-end, `ae` depends on `compiler`). It does **not** depend on
 any test target, so nothing runs the suite. To sanity-check the build
 without installing:
 
@@ -99,7 +99,7 @@ without installing:
 ```
 
 If you want to stay entirely in the source tree (no system install),
-you can stop here and use `./build/ae` directly — its `cflags` will
+you can stop here and use `./build/ae` directly, its `cflags` will
 point the linker at `build/libaether.a` in this tree (run `make stdlib`
 once so that archive exists).
 
@@ -110,7 +110,7 @@ sudo make install            # PREFIX defaults to /usr/local
 ```
 
 `make install` builds the optimized compiler, the `ae` CLI, and the
-stdlib archive, then lays them down — **it has no test dependency**.
+stdlib archive, then lays them down, **it has no test dependency**.
 Override the location with `PREFIX`:
 
 ```sh
@@ -127,11 +127,11 @@ $(PREFIX)/share/aether/…                     # shipped source, MANIFEST, contr
 
 Make sure `$(PREFIX)/bin` is on your `PATH`.
 
-> **Alternative — user-local install via `./install.sh`.** This
+> **Alternative, user-local install via `./install.sh`.** This
 > source-builds and installs to `~/.aether` and patches your shell rc.
 > Note it installs `ae`/`aetherc` and the contrib *descriptors* (so
 > `import contrib.X` resolves) but does **not** build the contrib native
-> `.a` archives — for those, run the contrib targets below against the
+> `.a` archives, for those, run the contrib targets below against the
 > same prefix.
 
 ### 3. Contrib modules (optional, deps-permitting)
@@ -155,8 +155,8 @@ looks like:
   host_tcl           SKIP (dev library not found)
 ```
 
-A `SKIP` is not a failure — it means the dev library wasn't found and
-that module simply isn't built. `install-contrib` places each built
+A `SKIP` is not a failure, it means the dev library wasn't found and
+that module isn't built. `install-contrib` places each built
 archive at `$(PREFIX)/lib/aether/libaether_<module>.a` and its
 `module.ae` + headers under `$(PREFIX)/share/aether/contrib/<module>/`.
 
@@ -166,12 +166,12 @@ archive at `$(PREFIX)/lib/aether/libaether_<module>.a` and its
 
 Once installed (or built in-tree), a downstream project uses it two ways:
 
-**As `.ae` source** — `import std.X` and `import contrib.X` resolve
+**As `.ae` source**, `import std.X` and `import contrib.X` resolve
 against the installed `share/aether/` tree automatically. Build/run with
 `ae build` / `ae run`. Per-project config (entry point, link flags) goes
 in `aether.toml`.
 
-**As a C-linkable library** — always get the flags from the toolchain,
+**As a C-linkable library**, always get the flags from the toolchain,
 never hand-write them:
 
 ```sh
@@ -180,10 +180,10 @@ cc myhost.c $(ae cflags) -o myhost
 
 `ae cflags` emits the correct include paths plus
 `-L<prefix>/lib/aether -laether -pthread -lm` for whichever install is in
-effect (in-tree, user, or system) — a bare `-laether` won't find the
+effect (in-tree, user, or system), a bare `-laether` won't find the
 prefixed archive path on its own.
 
-**Linking a native contrib module** — add its libs in `aether.toml`:
+**Linking a native contrib module**, add its libs in `aether.toml`:
 
 ```toml
 [build]
@@ -198,7 +198,7 @@ To move to a newer `HEAD`:
 
 ```sh
 git pull
-make clean && make ae        # clean rebuild — incremental sometimes misses aetherc reshapes
+make clean && make ae        # clean rebuild, incremental sometimes misses aetherc reshapes
 sudo make install
 make contrib && sudo make install-contrib   # if you use contrib
 ```
@@ -221,7 +221,7 @@ make ae
 # 2. Install to a writable prefix (avoids sudo in CI/sandboxes).
 make install PREFIX="$PWD/.aether-prefix"
 
-# 3. Optional contrib — never fatal; missing dev libs are SKIPped.
+# 3. Optional contrib, never fatal; missing dev libs are SKIPped.
 make contrib
 make install-contrib PREFIX="$PWD/.aether-prefix"
 
@@ -233,38 +233,36 @@ printf 'main() { println("ok") }\n' > /tmp/smoke.ae
 
 Rules of thumb:
 
-- **Do not run the test suite** (`make test`, `make test-ae`, `make ci`,
-  `make check`) to *use* Aether — those validate changes *to* Aether and
+- **Do not run the test suite** (`make test`, `make test-ae`, `make ci`)
+  to *use* Aether, those validate changes *to* Aether and
   are slow. Building + installing is sufficient and touches no test code.
-- **Treat contrib `SKIP` lines as success**, not failure — they mean a
+- **Treat contrib `SKIP` lines as success**, not failure, they mean a
   dev library is absent. Only a non-zero exit from `make contrib` /
   `make install-contrib` is a real failure.
-- **Always link downstream C with `$(ae cflags)`** — do not synthesize
+- **Always link downstream C with `$(ae cflags)`**, do not synthesize
   `-I` / `-L` / `-laether` by hand; the include path and the
   `lib/aether/` archive location vary by install mode and `ae cflags`
   resolves them.
-- **Idempotent / re-runnable.** Re-running `make ae` / `make install` is
-  safe. After a `git pull`, run `make clean && make ae` before
-  reinstalling so the version stamp and any compiler reshape are picked
-  up.
-- **Prefix choice.** Use a writable `PREFIX=…` to avoid `sudo`; ensure
+- Re-running `make ae` / `make install` is safe. After a `git pull`, run
+  `make clean && make ae` before reinstalling so the version stamp and
+  any compiler reshape are picked up.
+- Use a writable `PREFIX=…` to avoid `sudo`, and make sure
   `$(PREFIX)/bin` is on `PATH` (or invoke `ae` by absolute path as
   above). The default `PREFIX` is `/usr/local`.
-- **Failure triage.** A `--emit=lib` link error mentioning
-  `recompile with -fPIC` means a stale pre-0.181 `libaether.a` — rebuild
-  from current `HEAD`. A version mismatch between `ae version` and the
-  CHANGELOG/`VERSION` usually means stale git tags: `git fetch --tags`
-  then `make clean && make ae`.
+- A `--emit=lib` link error mentioning `recompile with -fPIC` means a
+  stale pre-0.181 `libaether.a`; rebuild from current `HEAD`. A version
+  mismatch between `ae version` and the CHANGELOG/`VERSION` usually means
+  stale git tags: `git fetch --tags` then `make clean && make ae`.
 
 ---
 
 ## See also
 
-- [install-layout.md](install-layout.md) — exactly what `make install` /
+- [install-layout.md](install-layout.md), exactly what `make install` /
   `install.sh` lay down, and the MANIFEST contract aeb relies on.
-- [getting-started.md](getting-started.md) — first program, project
+- [getting-started.md](getting-started.md), first program, project
   config, error handling, the language tour.
-- [emit-lib.md](emit-lib.md) — building Aether as a `.so`/`.dylib` for
+- [emit-lib.md](emit-lib.md), building Aether as a `.so`/`.dylib` for
   FFI hosts (`--emit=lib`).
-- [CONTRIBUTING.md](../CONTRIBUTING.md) — the contributor flow, including
+- [CONTRIBUTING.md](../CONTRIBUTING.md), the contributor flow, including
   the full CI suite you'd run if you were changing Aether itself.

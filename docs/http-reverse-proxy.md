@@ -1,4 +1,4 @@
-# `std.http.proxy` — reverse proxy
+# `std.http.proxy` reverse proxy
 
 nginx-class outbound HTTP forwarding for the Aether server.
 Forward inbound requests to a pool of upstream HTTP servers, with:
@@ -9,7 +9,7 @@ Forward inbound requests to a pool of upstream HTTP servers, with:
 - per-upstream circuit breaker (closed / open / half-open)
 - in-memory LRU response cache with Vary-aware keying and TTL eviction
 - idempotent retry on 5xx + transport with exponential backoff +
-  full jitter — re-picks a different upstream per attempt (nginx
+  full jitter, re-picks a different upstream per attempt (nginx
   `proxy_next_upstream` semantics)
 - per-upstream token-bucket rate limiting
 - active drain (take a host out of rotation without removing it
@@ -22,7 +22,7 @@ The proxy is a middleware plugged into the existing
 `http_server_use_middleware` chain. It short-circuits the chain
 (returns 0) and owns the response.
 
-## Quick start — single upstream
+## Quick start, single upstream
 
 ```aether
 import std.http
@@ -42,7 +42,7 @@ to balance against), default opts, and the given timeout. Mounts
 the middleware on `path_prefix`. `"/"` forwards everything;
 `"/api"` forwards just the `/api` subtree.
 
-## Pool form — load balancing + health + cache + breaker
+## Pool form, load balancing + health + cache + breaker
 
 ```aether
 import std.http
@@ -103,9 +103,9 @@ to a primary while other reads fan out to replicas.
 
 | Algorithm | Selection rule | When to pick |
 |---|---|---|
-| `round_robin` | atomic counter mod N (skips ineligible upstreams via retry) | default — even distribution, no per-request decision cost |
+| `round_robin` | atomic counter mod N (skips ineligible upstreams via retry) | default, even distribution, no per-request decision cost |
 | `least_conn` | iterate eligible upstreams; pick smallest in-flight count | upstream response times vary; long-running requests should avoid stacking on one upstream |
-| `ip_hash` | FNV-1a over X-Forwarded-For (or X-Real-IP, or "anonymous") mod N | sticky sessions for clients without explicit cookies; soft sticky — falls back to RR if the natural pick is ineligible |
+| `ip_hash` | FNV-1a over X-Forwarded-For (or X-Real-IP, or "anonymous") mod N | sticky sessions for clients without explicit cookies; soft sticky, falls back to RR if the natural pick is ineligible |
 | `weighted_rr` | smooth weighted RR (the algorithm nginx uses) | mixed-capacity backends; produces interleaved sequences (3:1 → A,A,A,B,A,A,A,B) instead of batched |
 | `cookie_hash` | FNV-1a over the value of a configured cookie name (set via `proxy.pool_set_cookie_name`) mod N; falls back to RR if the cookie is absent | application-layer sticky sessions where the client carries a session cookie and the upstream pool has per-instance state |
 
@@ -123,7 +123,7 @@ proxy.pool_set_cookie_name(pool, "SESSIONID")
 
 ## Health checks
 
-One pthread per pool (not per upstream — N-thread blow-up). The
+One pthread per pool (not per upstream, N-thread blow-up). The
 thread iterates the upstream list every `interval_ms`, fires
 `GET probe_path` against each `base_url`, classifies the response,
 and flips `_Atomic int healthy` once the threshold trips:
@@ -160,7 +160,7 @@ threads simultaneously timing out the open window don't both admit
 count as failures. 4xx is treated as ok (client error, not upstream
 fault).
 
-`failure_threshold = 0` disables the breaker (default — opt in via
+`failure_threshold = 0` disables the breaker (default, opt in via
 `proxy.breaker_configure`).
 
 ## Response cache
@@ -176,23 +176,23 @@ LRU list. Cacheability gates per RFC 7234 conservative subset:
 - Body length ≤ `max_body_bytes`.
 
 TTL resolution: response `Cache-Control: max-age` (clamped to 1
-hour for v1 conservatism) → `s-maxage` → `Expires` →
-`default_ttl_sec`.
+hour for v1 conservatism), else `default_ttl_sec`. `s-maxage` and
+`Expires` are not consulted in v1.
 
 ### Key strategies
 
 | Strategy | Key | Use when |
 |---|---|---|
-| `url` | `path?query` | method-agnostic — POST/GET share entries (rare; usually wrong) |
-| `method_url` | `METHOD path?query` | safe default — GET and HEAD don't share entries with each other or with POST |
+| `url` | `path?query` | method-agnostic, POST/GET share entries (rare; usually wrong) |
+| `method_url` | `METHOD path?query` | safe default, GET and HEAD don't share entries with each other or with POST |
 | `method_url_vary` | as above + `\0name=value` for each header in upstream's `Vary:` | the response varies on `Accept-Encoding` / `Accept-Language` / etc. |
 
-## Idempotent retry — `proxy_next_upstream` semantics
+## Idempotent retry, `proxy_next_upstream` semantics
 
 Off by default. Opt in with:
 
 ```aether
-proxy.opts_set_retry_policy(opts, max_retries=3, backoff_base_ms=100)
+proxy.opts_set_retry_policy(opts, 3, 100)   // max_retries=3, backoff_base_ms=100
 ```
 
 When a 5xx or transport error comes back from an upstream and the
@@ -202,13 +202,13 @@ the middleware:
 1. Charges the failure against the failing upstream's circuit
    breaker (so a flapping host trips the breaker normally).
 2. Releases the inflight count on that upstream.
-3. Calls the load-balancer picker again — usually selecting a
+3. Calls the load-balancer picker again, usually selecting a
    different upstream.
 4. Backs off for `backoff_base_ms × 2^(attempt-1)` with full jitter
    (uniform random in `[0, current_backoff]`), capped at 10 s.
 5. Retries.
 
-`POST` and `PATCH` are **never retried** — at-most-once delivery is
+`POST` and `PATCH` are **never retried**, at-most-once delivery is
 preserved so the proxy never silently double-applies a non-idempotent
 request. The total retry budget is `1 + max_retries` attempts; if
 no eligible upstream remains, the proxy returns 503 with
@@ -219,7 +219,7 @@ no eligible upstream remains, the proxy returns 503 with
 Off by default. Configure once on the pool:
 
 ```aether
-proxy.rate_limit_set(pool, max_rps=200, burst=50)
+proxy.rate_limit_set(pool, 200, 50)   // max_rps=200, burst=50
 ```
 
 Each upstream gets an independent token bucket: tokens refill at
@@ -253,7 +253,7 @@ health-check thread owns).
 Two modes per mount:
 
 ```aether
-proxy.opts_set_trace_inject(opts, 0)   // default — passthrough
+proxy.opts_set_trace_inject(opts, 0)   // default, passthrough
 proxy.opts_set_trace_inject(opts, 1)   // generate when missing
 ```
 
@@ -263,8 +263,8 @@ to the upstream. End-to-end traces propagate naturally. If the
 inbound has no `traceparent`, none is added.
 
 **Inject** (`inject=1`): same passthrough behaviour for incoming
-trace headers, *plus* — when the inbound request has no
-`traceparent` — the proxy generates a fresh W3C-compliant one
+trace headers, *plus*, when the inbound request has no
+`traceparent` the proxy generates a fresh W3C-compliant one
 (`00-<32-hex>-<16-hex>-01`) and stamps it on the outbound request.
 Use this on the edge of your service mesh so every upstream gets a
 trace context even from trace-naïve clients.
@@ -306,9 +306,9 @@ Surface (HELP + TYPE blocks elided in this table):
 | `aether_proxy_upstream_healthy` | gauge | `upstream` | 1 if the health-check thread considers the upstream up |
 | `aether_proxy_upstream_breaker_state` | gauge | `upstream` | 0=closed, 1=open, 2=half_open |
 | `aether_proxy_upstream_draining` | gauge | `upstream` | 1 if operator-drained |
-| `aether_proxy_cache_hits_total` | counter | (none — pool-level) | Cache hits |
+| `aether_proxy_cache_hits_total` | counter | (none, pool-level) | Cache hits |
 | `aether_proxy_cache_misses_total` | counter | (none) | Cache misses |
-| `aether_proxy_cache_revalidations_total` | counter | (none) | Conditional GETs that returned 304 |
+| `aether_proxy_cache_revalidations_total` | counter | (none) | Conditional GETs that returned 304. Reserved for v2 conditional revalidation; always 0 in v1. |
 | `aether_proxy_503_no_upstream_total` | counter | (none) | 503s due to no eligible upstream |
 
 Latency is exposed as `_sum + _count` so a Grafana panel can
@@ -350,24 +350,23 @@ Each carries an `X-Aether-Proxy-Error` header for log aggregators:
 | 502 | upstream connect / DNS / TLS handshake failure | `upstream_transport` |
 | 502 | request body exceeds `opts.max_body_bytes` | `request_body_too_large` |
 | 502 | upstream response exceeds `opts.max_body_bytes` | `response_too_large` |
-| 502 | request carries `Upgrade:` (WebSocket / h2 upstream — v2 follow-up) | `upgrade_unsupported` |
+| 502 | request carries `Upgrade:` (WebSocket / h2 upstream, v2 follow-up) | `upgrade_unsupported` |
 | 503 | LB picker found no eligible upstream (all unhealthy or breaker open). Includes `Retry-After: 1`. | `no_upstream` |
 | 504 | `request_timeout_sec` elapsed before upstream responded | `upstream_timeout` |
-| 5xx upstream | passed through verbatim — operators see the actual error | (none — body is upstream's) |
+| 5xx upstream | passed through verbatim, operators see the actual error | (none, body is upstream's) |
 
 ## Limitations (v1)
 
-- **Buffered bodies.** Request and response bodies are buffered in
-  memory up to `opts.max_body_bytes` (default 8 MiB). Streaming
-  pass-through is the next major feature.
-- **No WebSocket / SSE upstreams.** Requests with `Upgrade:`
-  headers are refused with 502. The upstream can serve
-  Server-Sent Events to clients via the existing `std.http`
-  surface; just don't put the proxy in front of those routes.
-- **HTTP/1.1 upstreams only.** The proxy calls upstreams via
-  `std.http.client` which negotiates HTTP/1.1. Inbound HTTP/2
-  works (the inbound side is independent); upstream HTTP/2 is
-  v2 follow-up.
+- Request and response bodies are buffered in memory up to
+  `opts.max_body_bytes` (default 8 MiB). Streaming pass-through is
+  the next major feature.
+- WebSocket and SSE upstreams are unsupported: requests with
+  `Upgrade:` headers are refused with 502. The upstream can still
+  serve Server-Sent Events to clients via the existing `std.http`
+  surface, so long as the proxy is not in front of those routes.
+- Upstreams are called over HTTP/1.1 via `std.http.client`. Inbound
+  HTTP/2 works (the inbound side is independent); upstream HTTP/2 is
+  a v2 follow-up.
 - **In-memory cache only.** No disk-backed cache, no shared
   cache across processes.
 - **Sharded cache lock is a v2 follow-up.** Single mutex around
@@ -436,11 +435,11 @@ non-empty is an error message.
 
 ## See also
 
-- [`docs/http-server.md`](http-server.md) — the inbound side
+- [`docs/http-server.md`](http-server.md), the inbound side
   (routes, middleware, TLS, h2, WS, SSE, health probes,
   metrics, graceful shutdown).
 - [`examples/stdlib/http-reverse-proxy.ae`](../examples/stdlib/http-reverse-proxy.ae)
-  — minimal single-upstream demo.
+  minimal single-upstream demo.
 - [`examples/stdlib/http-reverse-proxy-pool.ae`](../examples/stdlib/http-reverse-proxy-pool.ae)
-  — full enterprise stack: pool, health, breaker, cache, retry,
+  full enterprise stack: pool, health, breaker, cache, retry,
   rate limit, drain, trace-context, Prometheus metrics.

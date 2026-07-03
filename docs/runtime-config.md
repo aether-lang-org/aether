@@ -2,8 +2,6 @@
 
 ## What Does "Lock-Free" Mean?
 
-**Simple Explanation:**
-
 **With Locks (Old):**
 ```
 Thread 1: Lock → Do Work → Unlock
@@ -42,7 +40,7 @@ Multiple threads work simultaneously.
 3. **Runtime Configuration API**
    - Control optimizations via flags
    - Auto-detect CPU features
-   - Best out-of-the-box experience
+   - Enabled by default without manual configuration
 
 ---
 
@@ -63,10 +61,10 @@ int main() {
 ```
 
 **Example output on a modern CPU:**
-- Lock-free mailboxes: active
-- Lock-free pools: active
-- MWAIT idle: active
-- AVX2 SIMD: active
+- Lock-free mailboxes: ENABLED
+- Lock-free pools: ENABLED
+- MWAIT idle: ENABLED
+- AVX2 SIMD: ENABLED
 
 ---
 
@@ -103,8 +101,8 @@ aether_runtime_init(0,
 // ========================================
 // CPU: <detected processor>
 // Active Optimizations:
-//   Lock-free mailbox: active
-//   Lock-free pools:   active
+//   Lock-free mailbox: ENABLED
+//   Lock-free pools:   ENABLED
 //   ...
 ```
 
@@ -168,7 +166,7 @@ int main() {
 
 ### Example 2: Query Configuration
 ```c
-const AetherRuntimeConfig* config = aether_runtime_get_config();
+const AetherRuntimeInitConfig* config = aether_runtime_get_config();
 
 if (config->use_lockfree_mailbox) {
     printf("Using lock-free mailboxes!\n");
@@ -198,8 +196,12 @@ aether_runtime_init(0, AETHER_FLAG_AUTO_DETECT | AETHER_FLAG_VERBOSE);
 ```
 
 ### Run Configuration Example
+
+Build and run the C example under `runtime/examples/`:
 ```bash
-./build/runtime_example.exe
+cd runtime/examples
+gcc -O2 -o runtime_config runtime_config_example.c ../../runtime/*.c -I../..
+./runtime_config
 ```
 
 ---
@@ -288,11 +290,11 @@ if (pool->is_thread_local) {
 | **WebAssembly** (Emscripten) | N/A | No | No | No | Cooperative scheduler |
 | **Embedded** (ARM bare-metal) | N/A | No | No | No | Cooperative scheduler |
 
-Runtime automatically uses best available optimizations for each platform.
+With `AETHER_FLAG_AUTO_DETECT`, the runtime enables the optimizations each platform supports.
 
 ### Cooperative Mode
 
-On platforms without pthreads (WASM, embedded), or when threading is explicitly disabled (`-DAETHER_NO_THREADING`), the cooperative scheduler handles all actor processing on a single thread. Multi-actor programs work correctly — messages are processed cooperatively during `wait_for_idle()`.
+On platforms without pthreads (WASM, embedded), or when threading is explicitly disabled (`-DAETHER_NO_THREADING`), the cooperative scheduler handles all actor processing on a single thread. Multi-actor programs work correctly, messages are processed cooperatively during `wait_for_idle()`.
 
 ```bash
 # Force cooperative mode on native (for testing):

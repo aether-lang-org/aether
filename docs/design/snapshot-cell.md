@@ -1,7 +1,7 @@
-# `std.snapshot` — Copy-on-Write Snapshot Cell
+# `std.snapshot` Copy-on-Write Snapshot Cell
 
 A **copy-on-write snapshot cell** for read-mostly shared data: configuration,
-routing tables, feature flags — anything read on nearly every request but
+routing tables, feature flags, anything read on nearly every request but
 rebuilt only rarely.
 
 > **Reads are lock-free.** A read is a single atomic acquire load of a
@@ -23,14 +23,14 @@ The cell holds **one atomic pointer** to an immutable value (the "snapshot").
 Many actors read the current snapshot concurrently. A single writer
 occasionally builds a brand-new snapshot and publishes it by swapping the
 pointer. Because a read is just an acquire load of that pointer, readers touch
-no shared lock and contend nothing but the pointer's cache line — and only when
+no shared lock and contend nothing but the pointer's cache line, and only when
 it actually changes.
 
 This is the read-mostly answer. It is the structure behind Go's
 `atomic.Pointer`, Linux's RCU, and Java's `CopyOnWriteArrayList`. Aether
 differs from all three in one decisive way: **Aether has no garbage collector**,
 so reclaiming the displaced snapshot is the caller's job and must be done with
-care. See [Reclamation contract](#reclamation-contract-read-this) — it is the
+care. See [Reclamation contract](#reclamation-contract-read-this), it is the
 whole point of this page.
 
 ---
@@ -56,7 +56,7 @@ accounted by whoever allocates them.
 pairing is mandatory, not a tuning knob: it guarantees that a reader which
 observes a freshly-published pointer also observes every write the writer made
 while building that snapshot. Relaxed ordering would let a reader see the new
-pointer but a stale, half-built value — a real data race.
+pointer but a stale, half-built value, a real data race.
 
 ---
 
@@ -73,10 +73,10 @@ in-flight reader that called `load` microseconds before the swap:
 reader:  p = load(cell)          // got snapshot N
 writer:                  store(cell, N+1) -> returns N
 reader:  ...still reading p (N)...
-writer:  free(N)                 // USE-AFTER-FREE — reader still holds N
+writer:  free(N)                 // USE-AFTER-FREE, reader still holds N
 ```
 
-So the writer must **defer** the free until a **grace period** has elapsed —
+So the writer must **defer** the free until a **grace period** has elapsed,
 an interval during which every reader that could be holding the old pointer has
 finished its read. This is exactly the RCU `synchronize` / `call_rcu`
 discipline. It is **not** a workaround; it is the correct, standard approach for
@@ -91,7 +91,7 @@ reclaiming lock-free-read data in a language without a garbage collector.
 In Aether's actor model the grace period falls out naturally. Route all writes
 through a single **writer-actor**. Readers are other actors that `load` and
 finish handling one message before processing the next. Because an actor reads
-the snapshot, uses it, and returns — all within one message handler — a reader
+the snapshot, uses it, and returns, all within one message handler, a reader
 cannot hold a pointer across two of the writer's publishes. So the writer can
 safely **defer one generation**: when it publishes snapshot N+1, it frees
 snapshot N−1.
@@ -113,7 +113,7 @@ actor ConfigWriter {
             displaced = snapshot.store(cell, next)
 
             // By now every reader that could hold N-1 (`prev`) has long
-            // since finished — each processed at least one message
+            // since finished, each processed at least one message
             // between the publish of N-1 and now. Reclaim it.
             if prev != null {
                 free_config(prev)
@@ -141,7 +141,7 @@ loop {
     cur  = snapshot.load(cell)
     next = build_next_from(cur)        // pure; allocates `next`
     if snapshot.cas(cell, cur, next) == 1 {
-        // Won. `cur` is now displaced — reclaim it after a grace
+        // Won. `cur` is now displaced, reclaim it after a grace
         // period (defer it), NOT immediately.
         defer_reclaim(cur)
         break
@@ -158,7 +158,7 @@ and frees it before retrying.
 
 ---
 
-## When to use it — and when not to
+## When to use it, and when not to
 
 **Use `std.snapshot` for read-mostly data:**
 
@@ -172,11 +172,11 @@ and frees it before retrying.
 
 - **Write-heavy data.** Every publish rebuilds the entire value, so a write
   costs O(value size). If writes are frequent, that copy cost dominates.
-- **Large values that change often.** Same reason — the per-write rebuild is
+- **Large values that change often.** Same reason, the per-write rebuild is
   the cost you are trading reads against.
 - **Fine-grained mutation.** This cell swaps a whole value atomically; it is not
   a concurrent map with per-key updates. For a write-heavy, well-spread key
-  space, use the [sharded actor map](sharded-actor-map.md) instead — it
+  space, use the [sharded actor map](sharded-actor-map.md) instead, it
   partitions per-key writes across `N` owner actors.
 
 ### Why not `RWMutex`?
@@ -186,7 +186,7 @@ a shared cache line on every acquire/release, so readers contend with each other
 even though they only read; under heavy read load that line ping-pongs across
 cores. And a write lock starves readers for the duration of the rebuild. The COW
 cell's read path touches nothing shared but the snapshot pointer, and only when
-it actually changes — so N readers cost nothing extra beyond N pointer loads,
+it actually changes, so N readers cost nothing extra beyond N pointer loads,
 and a publish never blocks a reader. For read-mostly data the COW cell is the
 better answer.
 
@@ -194,10 +194,10 @@ better answer.
 
 ## See also
 
-- [`docs/memory-management.md`](memory-management.md) — Aether's
+- [`docs/memory-management.md`](../memory-management.md), Aether's
   deterministic, no-GC memory model and `defer`.
-- [`docs/actor-concurrency.md`](actor-concurrency.md) — the actor model that
+- [`docs/actor-concurrency.md`](../actor-concurrency.md), the actor model that
   makes the one-generation grace period natural.
-- [`docs/sharded-actor-map.md`](sharded-actor-map.md) — the complementary
+- [`docs/design/sharded-actor-map.md`](sharded-actor-map.md), the complementary
   pattern for **write-heavy, well-spread** key spaces (this cell is for
   read-mostly data).

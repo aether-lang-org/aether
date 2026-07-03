@@ -170,7 +170,7 @@ diff before.txt after.txt
 
 Look for operations with the highest cycle counts and compare them across runs:
 
-- `Actor Step` dominating the report is the load signal — investigate handler code.
+- `Actor Step` dominating the report is the load signal, investigate handler code.
 - `SPSC Queue` cycles indicate same-core fast-path health; a sudden rise hints at queue-full or cache-line contention.
 - `Mailbox` cycles are the cross-core baseline; use it as the reference for relative changes.
 
@@ -178,7 +178,7 @@ Look for operations with the highest cycle counts and compare them across runs:
 
 Build your staging binary with profiling enabled to catch regressions before
 production. Profiling is a **compile-time** switch (`-DAETHER_PROFILE`), not a
-runtime setting — the `AETHER_PROFILE` *environment variable* is unrelated (it
+runtime setting, the `AETHER_PROFILE` *environment variable* is unrelated (it
 selects a runtime memory profile and does **not** enable profiling output).
 
 ```bash
@@ -204,7 +204,7 @@ fi
 
 Uses `__rdtsc()` intrinsic for cycle-accurate measurements:
 - Resolution: 1 CPU cycle
-- Overhead: small, fixed per measurement — consult the Intel/AMD manual for your target
+- Overhead: small, fixed per measurement, consult the Intel/AMD manual for your target
 - Accuracy: good for relative comparison on the same host; absolute cycle-to-wall-time conversion depends on TSC frequency
 
 ### Atomic Statistics
