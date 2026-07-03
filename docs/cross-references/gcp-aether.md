@@ -1,62 +1,63 @@
-<!-- Source: GitHub issue #346 — Cross-reference: GoogleCloudPlatform/Aether vs. our Aether comparison -->
-<!-- Lifted from issue body so the comparison lives next to the code, discoverable for future contributors. -->
+# GoogleCloudPlatform/Aether vs. Aether — feature comparison
 
-# GoogleCloudPlatform/Aether vs. our Aether — feature comparison
+> **Status:** Design-exploration survey (May 2026). A record of what was considered from GoogleCloudPlatform/Aether (a separate, stalled project that shares this project's name) and what, if anything, was worth adopting — not a roadmap. Adopted items are noted inline; anything not yet shipped is a candidate, not a commitment.
+>
+> Source project: GoogleCloudPlatform/Aether — <https://github.com/GoogleCloudPlatform/Aether>.
 
-This is a compare-and-contrast against `GoogleCloudPlatform/Aether`
+This document is a compare-and-contrast against `GoogleCloudPlatform/Aether`
 (hereafter **GCP-Aether** or just **GA**), a stalled "vibe-coded
-demo" repo from Google that happens to share our project's name —
-they came after we did. License Apache-2.0; not a supported Google
-product. Status banner in their README: "**Production Ready**" with
-"360 unit tests" — but their own `docs/unimplemented_features.md`
+demo" repo from Google that happens to share this project's name —
+it appeared later than Aether. License Apache-2.0; not a supported Google
+product. Status banner in its README: "**Production Ready**" with
+"360 unit tests" — but its own `docs/unimplemented_features.md`
 flatly contradicts this (ownership keywords have no parser, contracts
 have AST nodes but no parser, mutability not enforced, etc.). Treat
 the README claims as marketing; treat the feature docs as design
 notes for an aspirational system, partially backed by a real Rust /
 LLVM compiler.
 
-The point of this document is **not** to mock GA — they explored an
-interesting design corner that we've largely ignored. The point is
+The point of this document is **not** to mock GA — it explored an
+interesting design corner that Aether has largely ignored. The point is
 to identify pieces of that design that would be **attractive to lift
-into our Aether** (lib-level or, if it pays off, language-level), and
-to capture them at a level of detail sufficient for us to implement.
+into Aether** (lib-level or, if it pays off, language-level), and
+to capture them at a level of detail sufficient to implement.
 
-I (= Paul, with Claude assisting) have read their `FINAL_DESIGN.md`,
+This survey draws on GA's `FINAL_DESIGN.md`,
 `LANGUAGE_REFERENCE.md`, `docs/{enhanced_verification,
 function_metadata, ownership_design, resource_management,
 llm_optimized_errors, missing_features, unimplemented_features,
 error_handling}.md`, the four representative `examples/*/main.aether`
 that show actual code shape, the `stdlib/{io,concurrency}/*.aether`
-surfaces, and `runtime/src/lib.rs` for the panic hook. Where I claim
-GA does or doesn't have something, that's the basis.
+surfaces, and `runtime/src/lib.rs` for the panic hook. Claims below
+about what GA does or does not have rest on those sources.
 
 ---
 
 ## 1. The two languages at a glance
 
-| Axis | Our Aether | GCP-Aether |
+| Axis | Aether | GCP-Aether |
 |---|---|---|
-| Audience | Humans (with LLM assist) | "LLMs are the primary authors. Humans may read but never write" — their words |
+| Audience | Humans (with LLM assist) | "LLMs are the primary authors. Humans may read but never write" — GA's words |
 | Surface syntax | Go-ish: `func(x: int) -> int { … }` | S-expressions: `(DEFINE_FUNCTION (NAME 'f') (ACCEPTS_PARAMETER (NAME 'x') (TYPE INTEGER)) (RETURNS INTEGER) (BODY …))` |
 | Backend | Compiles to C, then C compiler | LLVM IR via `inkwell`, written in Rust |
 | Concurrency model | First-class actors (Erlang-shape: `actor`, `message`, `receive`, `send`) | Threads + mutex + channel as stdlib types; no language-level actor |
-| Memory | Refcounted strings + arena-owned, drop-on-scope at codegen, manual at the C runtime layer | Designed: ownership tokens `^T` / `&T` / `&mut T` / `~T` à la Rust. Per their own `unimplemented_features.md`, **none of this is wired through** — keywords lex, AST nodes exist, parser is a stub, no semantic enforcement, no codegen. |
-| Sandbox / capability | Three real layers — `--emit=lib` capability-empty default + `--with=fs,net,os` opt-in, `hide` / `seal except` lexical denylist, `libaether_sandbox.so` LD_PRELOAD libc-call gate | None. Their stdlib has unconditional `std.io` / `std.net` / `std.concurrency`. No capability concept in the design. |
+| Memory | Refcounted strings + arena-owned, drop-on-scope at codegen, manual at the C runtime layer | Designed: ownership tokens `^T` / `&T` / `&mut T` / `~T` à la Rust. Per GA's own `unimplemented_features.md`, **none of this is wired through** — keywords lex, AST nodes exist, parser is a stub, no semantic enforcement, no codegen. |
+| Sandbox / capability | Three real layers — `--emit=lib` capability-empty default + `--with=fs,net,os` opt-in, `hide` / `seal except` lexical denylist, `libaether_sandbox.so` LD_PRELOAD libc-call gate | None. GA's stdlib has unconditional `std.io` / `std.net` / `std.concurrency`. No capability concept in the design. |
 | Hosting other languages | `contrib.host.{lua,python,perl,ruby,tcl,js}.run_sandboxed(perms, code)` in-process; Java / Go / aether-host-aether out-of-process; `--emit=lib` produces ABI-stable `aether_<name>` exports for ctypes / Panama / Fiddle | None |
 | Distinguishing strength | Real compiler with real users (svn-aether port). Capability discipline is genuinely original. | Verification metadata vocabulary, intent annotations, structured-error format, LLM-as-author framing |
 | Distinguishing weakness | No formal verification or contracts story; ergonomics-only | Most of the headline features are docs-only; ownership system designed but never connected end-to-end |
 
-The two languages are pointed in **different directions**: ours is a
-working systems language with a sandbox story, theirs is a design
+The two languages are pointed in **different directions**: Aether is a
+working systems language with a sandbox story, GA is a design
 exercise about what an LLM-target language *should look like*. That
-asymmetry is what makes the comparison interesting — there's nothing
-to copy structurally, but there are individual ideas we could lift.
+asymmetry is what makes the comparison interesting — there is nothing
+to copy structurally, but there are individual ideas worth lifting.
 
 ---
 
 ## 2. Feature-by-feature
 
-### 2.1 Surface syntax (theirs: extreme S-expression / ours: terse Go-ish)
+### 2.1 Surface syntax (GA's: extreme S-expression / Aether's: terse Go-ish)
 
 GA's everything-is-a-keyword-S-expression shape:
 
@@ -71,18 +72,18 @@ GA's everything-is-a-keyword-S-expression shape:
     (RETURN_VALUE (EXPRESSION_ADD (VARIABLE_REFERENCE 'a') (VARIABLE_REFERENCE 'b')))))
 ```
 
-Ours:
+Aether:
 
 ```aether
 add(a: int, b: int) -> int { return a + b }
 ```
 
-**Verdict — do not adopt.** Their syntax is the keystone of the
+**Verdict — do not adopt.** GA's syntax is the keystone of the
 "LLMs as authors" thesis: every node is fully named, parameters are
 positional-by-keyword, there's "one way to express each concept".
 For LLM generation this *might* improve guardrails, but for human
-readability it's lost. Our tagline is "Go's ergonomics + Rust's
-capability discipline + Erlang's actor syntax"; adopting their
+readability it's lost. Aether's tagline is "Go's ergonomics + Rust's
+capability discipline + Erlang's actor syntax"; adopting the GA
 S-expressions would torpedo the first leg. **Reject.**
 
 ### 2.2 INTENT strings on functions / modules / parameters
@@ -100,11 +101,11 @@ score.
 ```
 
 **Verdict — partially attractive. Adopt as a doc-comment convention,
-not a language feature.** We already use `///` doc comments and
+not a language feature.** Aether already uses `///` doc comments and
 top-of-function prose. Formalizing an `@intent("…")` attribute that
 flows into `std.docs` / `aether describe` and the LLM extension
-context would cost us nothing and be useful. The "compare prose to
-behavior with confidence score" angle is vapor-grade in their repo
+context would cost nothing and be useful. The "compare prose to
+behavior with confidence score" angle is vapor-grade in the GA repo
 (the `intent_analysis` module is pattern-match heuristics, not
 anything that would actually catch a bug); skip that part.
 
@@ -117,8 +118,8 @@ anything that would actually catch a bug); skip that part.
 - `aether describe` (already exists) gains an `--intent` flag to
   print intent fields alongside signatures.
 - LSP hover surfaces it.
-- **No** "intent verification" pass; that's a research project we
-  don't need to fund.
+- **No** "intent verification" pass; that's a research project not
+  worth funding here.
 
 ### 2.3 Preconditions / postconditions / invariants (Eiffel-style contracts)
 
@@ -151,15 +152,15 @@ that's never reached.
 
 **Verdict — adopt the runtime-checked subset; defer SMT.**
 
-This is the single most LLM-attractive idea in their design that we
-don't already have. Aether's `assert(...)` macro exists but is
+This is the single most LLM-attractive idea in the GA design that
+Aether does not already have. Aether's `assert(...)` macro exists but is
 positional and untyped in terms of contract role. A pre/post pair
 attached to a function declaration is a **better surface** for LLMs
 to generate than scattered asserts at the top and bottom of the body,
 because the metadata stays attached to the signature and survives in
 the doc / lib export.
 
-What I'd actually build:
+The shape worth building:
 
 ```aether
 add(a: int, b: int) -> int
@@ -183,7 +184,7 @@ add(a: int, b: int) -> int
   compiler walks the body and inserts the check before each return
   (and at function-end for void/falloff).
 - **Failure mode:** a single mode — `panic`. Skip the
-  `LOG_WARNING` / `THROW_EXCEPTION` enum; we don't have exceptions,
+  `LOG_WARNING` / `THROW_EXCEPTION` enum; Aether has no exceptions,
   panics are the established failure path, and adding three modes
   costs design surface for no real win.
 - **Compile-time eval:** when both sides of a `requires` are constant-
@@ -201,7 +202,7 @@ add(a: int, b: int) -> int
   of "discharge contracts at compile time" is a research project
   with a 10-year horizon; runtime-checked contracts have been a
   shipping feature in Eiffel and D for decades and pay back at the
-  level we care about (catching bugs, communicating intent, giving
+  level that matters here (catching bugs, communicating intent, giving
   LLMs a target shape).
 
 **Effort estimate:** 3-5 days. Lexer + parser + an entry-block check
@@ -211,7 +212,7 @@ Test surface: `tests/regression/test_requires_ensures.ae`,
 
 **Where this lands in `docs/next-steps.md`:** new P2 entry, ahead
 of the speculative fs.realpath etc. The reason it ranks: every
-downstream user we have writes asserts; this is a strict ergonomic
+downstream user writes asserts; this is a strict ergonomic
 improvement to a thing they already do. The svn-aether port
 specifically has hand-written `if (!(cond)) panic("…")` shapes that
 this would replace 1:1.
@@ -235,8 +236,8 @@ The full grid (idempotent, pure, deterministic, thread_safe,
 may_block, side-effects, timeout, retry policy, exception safety,
 purity spec) is too much. But three of these have real bite:
 
-- **`@pure`** — useful for the optimizer and for memoization. We
-  could use it to mark stdlib functions that are safe to constant-
+- **`@pure`** — useful for the optimizer and for memoization. It
+  could mark stdlib functions that are safe to constant-
   fold in `const X = …` contexts (recall: 0.110.0 closed the silent-
   wrong-results trap for `const X = some_function_call()`).
   `@pure` would be the explicit allow-list mechanism — `const X =
@@ -254,7 +255,7 @@ purity spec) is too much. But three of these have real bite:
 
 Skip `idempotent`, `deterministic`, `timeout_ms`, `retry_policy`,
 `side_effects.modifies`, `exception_safety`. These are documentation,
-not type-system, and we already have doc comments.
+not type-system, and doc comments already cover them.
 
 **Implementation sketch:**
 
@@ -308,8 +309,8 @@ That's strictly more readable than the GA shape, gets the same
 "cleanup guaranteed" semantics, and doesn't need a new keyword.
 Skip `RESOURCE_SCOPE`.
 
-The **runtime resource limit** part is genuinely novel and I haven't
-seen us think about it. The shape:
+The **runtime resource limit** part is genuinely novel and has no
+counterpart in Aether's design so far. The shape:
 
 ```aether
 process_request(req: Request) -> string
@@ -327,7 +328,7 @@ message when the cap is hit. It also pairs with `--emit=lib`: a host
 embedding Aether-as-DSL wants to cap untrusted scripts.
 
 **Verdict on this sub-feature — attractive enough to file as a P3
-in `next-steps.md`.** Not P1: we don't have the runtime tracking
+in `next-steps.md`.** Not P1: Aether lacks the runtime tracking
 infrastructure (no per-fd accounting, no memory accounting outside
 the arena). It's the kind of thing that wants the LD_PRELOAD
 sandbox first as the substrate, then `@max_open_fds` is a thin
@@ -343,12 +344,12 @@ declaration on top.
 - Failure: panic with the budget name and the call that pushed over.
 
 This is several weeks of work and has prerequisites; **defer** until
-we have a concrete user.
+a concrete user asks.
 
 ### 2.6 Ownership system (`^T`, `&T`, `&mut T`, `~T`)
 
 GA's docs describe Rust-shape ownership with four kinds: owned,
-borrowed-immut, borrowed-mut, refcounted-shared. Per their own
+borrowed-immut, borrowed-mut, refcounted-shared. Per GA's own
 `docs/unimplemented_features.md`:
 
 > Keywords exist but no implementation at any level. AST has full
@@ -358,17 +359,17 @@ borrowed-immut, borrowed-mut, refcounted-shared. Per their own
 > LLVM codegen for ownership.
 
 **Verdict — explicitly reject.** This is the headline gap between
-their stated goals and what was built; copying it would be copying
+GA's stated goals and what was built; copying it would be copying
 the most-broken part of the project. More importantly, the design
-direction is wrong for us. Our `LLM.md` is unambiguous:
+direction is wrong for Aether. The `LLM.md` guidance is unambiguous:
 
 > NOT Rust — no borrow checker, no ownership, no lifetimes. Strings
 > are ref-counted or arena-owned; you release explicitly where it
 > matters, drop-on-scope-exit elsewhere.
 
-Pony-style capabilities, *not* Rust ownership, are our model. This
-isn't a "missing feature" for us; it's an explicit design rejection
-that's already paid back (no borrow-checker user-friction, codegen
+Pony-style capabilities, *not* Rust ownership, are the Aether model. This
+isn't a "missing feature"; it's an explicit design rejection
+that has already paid back (no borrow-checker user-friction, codegen
 stays simple, FFI is direct). Move on.
 
 ### 2.7 Structured / LLM-optimized error format
@@ -399,23 +400,23 @@ anyway".
 What works:
 - **Stable error codes.** `AETHER-E0042: …`, addressable by URL.
   These are useful for documentation cross-linking and for the LSP /
-  editor extension to show a "more info" link. We should have them.
+  editor extension to show a "more info" link. Aether should have them.
 - **Machine-parseable error output mode.** `aetherc --diagnostic-format=json`
   emitting one JSON object per diagnostic. This is the right shape
   for editor integration, LLM tool-use loops, and CI annotation
-  bots. We already emit human-readable; adding a JSON mode is small
-  and well-bounded.
+  bots. Aether already emits human-readable output; adding a JSON mode
+  is small and well-bounded.
 
 What doesn't work:
 - **Auto-fix suggestions with confidence scores** — every existing
   attempt at this in mainstream compilers (Rust, TypeScript, Swift)
   is hand-curated per-error-kind. Building a generic infrastructure
-  for it is overhead until you have specific high-frequency errors
+  for it is overhead until specific high-frequency errors exist
   to target. Defer.
 - **Intent mismatch detection** — needs the `@intent` infra first
   (see 2.2), and even then is heuristic. Skip.
-- **`PARTIAL_COMPILATION_RESULT`** — doesn't match how our compiler
-  works (single-pass, errors are fatal at the module level). Skip.
+- **`PARTIAL_COMPILATION_RESULT`** — doesn't match how the Aether
+  compiler works (single-pass, errors are fatal at the module level). Skip.
 
 **Implementation sketch:**
 
@@ -460,8 +461,8 @@ Filter strips Rust internals (`std::`, `core::`, `backtrace::`,
 `rust_begin_unwind`), leaves only AetherScript-relevant frames,
 demangles via `rustc_demangle`, exits 101.
 
-**Verdict — strongly attractive. Adopt with our toolchain (libunwind
-+ symbolization), not theirs (Rust panic hook).**
+**Verdict — strongly attractive. Adopt with the Aether toolchain
+(libunwind + symbolization), not GA's (Rust panic hook).**
 
 Aether currently panics via `aether_panic_handler` in
 `compiler/runtime/aether.h` (or wherever — check) which prints the
@@ -476,9 +477,9 @@ at math.ae:15`."
 - New runtime file `runtime/aether_backtrace.c`. POSIX:
   `backtrace(3)` + `backtrace_symbols(3)` (glibc) or libunwind
   (better, portable). Windows: `CaptureStackBackTrace`.
-- Demangling is unnecessary — we generate plain C with stable
-  names, so `aether_<module>_<function>` is already readable. We
-  can pretty-print by stripping the `aether_` prefix and turning
+- Demangling is unnecessary — Aether generates plain C with stable
+  names, so `aether_<module>_<function>` is already readable. The
+  pretty-printer can strip the `aether_` prefix and turn
   underscores back into dots (`aether_std_string_concat` →
   `std.string.concat`).
 - Filter rule: drop frames whose symbol is in libc, the runtime
@@ -518,8 +519,8 @@ metadata.** These are hand-asserted documentation; nothing in the
 GA compiler verifies them (and the closed-form verification of "is
 this actually O(n log n)" is undecidable). At best they're harness
 input for a benchmarking tool that warns when measured perf drifts
-from declared. We have `benches/` already; if we wanted this, it
-would live as a YAML sidecar in the bench harness, not as a language
+from declared. Aether already has `benches/`; were this ever wanted,
+it would live as a YAML sidecar in the bench harness, not as a language
 attribute. Skip.
 
 ### 2.11 Verified / typed semantic types (`(DEFINE_SEMANTIC_TYPE …)`)
@@ -535,7 +536,7 @@ attribute. Skip.
 
 **Verdict — reject.** This is the "newtype with validation" pattern.
 It's a real design space (refinement types, F#-style units of
-measure), but the cost/value for our user base is poor. Aether
+measure), but the cost/value for the Aether user base is poor. Aether
 projects that want it can write a struct wrapper:
 
 ```aether
@@ -545,9 +546,9 @@ parse_email(s: string) -> (EmailAddress, string) { … }
 
 …with the validation in the parser fn. The language stays small.
 
-### 2.12 Stdlib comparison (theirs: aspirational; ours: real and growing)
+### 2.12 Stdlib comparison (GA's: aspirational; Aether's: real and growing)
 
-GA's stated stdlib (their `docs/standard_library.md`):
+GA's stated stdlib (its `docs/standard_library.md`):
 - `std.io` — file ops, console, list_directory
 - `std.collections` — sort, binary_search, filter, map, reduce
 - `std.math` — safe_add, safe_multiply, sqrt, sin/cos/tan, log, exp
@@ -559,23 +560,23 @@ Most of this is `.aether` source declaring the surface plus stub Rust
 implementations in `runtime/src/`. The HTTP server example is the
 one part that demonstrably works.
 
-Ours (per `docs/stdlib-reference.md` and `std/`):
+Aether (per `docs/stdlib-reference.md` and `std/`):
 `std.{actors, bytes, collections, config, cryptography, dir, dl, file,
 fs, host, http, intarr, io, json, list, log, map, math, net, os, path,
 string, tcp, zlib}` — and more contrib. Real, tested, used by
 downstream svn-aether.
 
-**Verdict — they have nothing we need.** If anything, the comparison
-runs the other way: their `std.io` is a strict subset of ours (we
-have fd-level surface, glob, atomic write, binary-safe read, etc.).
-Their `std.concurrency` is a thread+mutex shape; we have first-class
-actors which is a higher abstraction. Their `std.net` is an HTTP-
-client + raw-TCP shape; we have `std.http` server + `std.tcp`.
+**Verdict — GA has nothing Aether needs.** If anything, the comparison
+runs the other way: GA's `std.io` is a strict subset of Aether's (which
+has fd-level surface, glob, atomic write, binary-safe read, etc.).
+GA's `std.concurrency` is a thread+mutex shape; Aether has first-class
+actors, a higher abstraction. GA's `std.net` is an HTTP-
+client + raw-TCP shape; Aether has `std.http` server + `std.tcp`.
 
-**One caveat:** their `std.time` has a more developed `datetime` /
-`duration` / ISO-8601 model than our current `std.time` (which is
+**One caveat:** GA's `std.time` has a more developed `datetime` /
+`duration` / ISO-8601 model than Aether's current `std.time` (which is
 mostly Unix-timestamp arithmetic — confirm with a quick read). If
-our `std.time` is thinner than I remember, the GA module shape is a
+Aether's `std.time` is in fact thinner, the GA module shape is a
 reasonable reference for what to add: `datetime` struct, `duration`
 struct with nanosecond precision, ISO-8601 parse/format, timezone
 offset awareness. Worth a separate audit, but file as P3.
@@ -591,8 +592,8 @@ offset awareness. Worth a separate audit, but file as P3.
 ```
 
 **Verdict — reject.** Belongs in editor / LLM extension config, not
-in the language. Our `editor/` already has VS Code config; if we
-want LLM-style nudges, that's the layer.
+in the language. Aether's `editor/` already has VS Code config; if
+LLM-style nudges are wanted, that's the layer.
 
 ### 2.14 Verified pattern library / DEFINE_PATTERN
 
@@ -601,14 +602,14 @@ response handler, transactional operation, etc.) that the LLM can
 target as a building block. None of it is implemented. This is the
 same idea as Rust macros + Eiffel design-by-contract had a child.
 
-**Verdict — reject.** We have closures, builder DSLs, and trailing
+**Verdict — reject.** Aether has closures, builder DSLs, and trailing
 closures (per `docs/closures-and-builder-dsl.md`). The composability
 is already there at a higher level. Adding a "PATTERN" abstraction
 on top is a layer of indirection without a payoff.
 
 ---
 
-## 3. Things they have that we should genuinely consider — summary table
+## 3. Things GA has that are worth genuine consideration — summary table
 
 | # | Feature | Verdict | Effort | Where in next-steps.md |
 |---|---|---|---|---|
@@ -620,15 +621,15 @@ on top is a layer of indirection without a payoff.
 | 2.5 (sub) | `@max_open_fds` / `@max_memory_mb` runtime budgets | Defer | weeks (needs sandbox plumbing) | P4 |
 | 2.12 | `std.time` datetime/duration/ISO-8601 audit | Investigate | TBD | P3 (audit) |
 
-## 4. Things they have that we should explicitly reject
+## 4. Things GA has that Aether should explicitly reject
 
 | # | Feature | Why reject |
 |---|---|---|
-| 2.1 | S-expression syntax | Costs the human-readable leg of our value prop |
-| 2.4 (rest) | `@idempotent`, `@deterministic`, `@timeout_ms`, `@retry_policy`, etc. | Documentation, not type system; we already have doc comments |
+| 2.1 | S-expression syntax | Costs the human-readable leg of the value prop |
+| 2.4 (rest) | `@idempotent`, `@deterministic`, `@timeout_ms`, `@retry_policy`, etc. | Documentation, not type system; doc comments already cover it |
 | 2.5 | `RESOURCE_SCOPE` construct | `defer` already covers this with less ceremony |
-| 2.6 | Rust-shape `^T` / `&T` / `&mut T` ownership | Explicit design rejection in our `LLM.md`; their own impl is a stub |
-| 2.7 (rest) | Auto-fix suggestions, intent-mismatch detection, partial compilation | High infra cost, low payoff at our scale |
+| 2.6 | Rust-shape `^T` / `&T` / `&mut T` ownership | Explicit design rejection in Aether's `LLM.md`; GA's own impl is a stub |
+| 2.7 (rest) | Auto-fix suggestions, intent-mismatch detection, partial compilation | High infra cost, low payoff at Aether's scale |
 | 2.10 | Performance / complexity expectation attributes | Hand-asserted docs; cannot be verified |
 | 2.11 | `DEFINE_SEMANTIC_TYPE` / refinement types | Wrapper struct + parser fn covers the use case |
 | 2.13 | Generation hints baked into language | Belongs in editor/LLM extension config |
@@ -637,15 +638,15 @@ on top is a layer of indirection without a payoff.
 ## 5. Things that don't translate at all
 
 GA was designed around **LLMs as authors**. A meaningful chunk of
-their feature surface (extreme S-expression syntax, intent verification,
+its feature surface (extreme S-expression syntax, intent verification,
 generation hints, pattern templates, `PARTIAL_COMPILATION_RESULT`,
-auto-fix-with-confidence) only makes sense under that thesis. Our
+auto-fix-with-confidence) only makes sense under that thesis. Aether's
 thesis is **humans as authors with LLM assist** — the design center
 is human ergonomics and the LLM gets the same surface humans do, no
 special accommodations.
 
-That asymmetry means **most of GA isn't useful to us**, including
-the parts they thought were most distinctive. The pieces worth
+That asymmetry means **most of GA isn't useful here**, including
+the parts GA treated as most distinctive. The pieces worth
 lifting are the ones that happen to be useful regardless of authorship
 model: contracts (2.3) and stack traces (2.8) help any developer
 catch any bug. Error codes (2.7) help any IDE integrate with any
@@ -706,8 +707,8 @@ that's nice to have but not load-bearing.
 +
 + Read GoogleCloudPlatform/Aether's `std.time` design (`datetime` struct,
 + `duration` with nanosecond precision, `format_iso8601` /
-+ `parse_iso8601`, timezone offset awareness) and compare against our
-+ current `std.time`. If we're meaningfully thinner, build the missing
++ `parse_iso8601`, timezone offset awareness) and compare against Aether's
++ current `std.time`. If it is meaningfully thinner, build the missing
 + pieces. Reference: GoogleCloudPlatformAether_COMPARISON.md §2.12.
 +
 + ## P4 — runtime resource budgets (`@max_open_fds`, `@max_memory_mb`)
@@ -729,30 +730,30 @@ Their FINAL_DESIGN.md says:
 > expressing intent and LLMs generating verified, correct
 > implementations.
 
-We disagree. The future of programming is humans writing code with
-LLM assistance — humans still need to read, debug, modify, and
-reason about the code. A language designed exclusively for LLM
-generation throws away the readability that makes software
-maintainable. That said, several of their concrete language-feature
+Aether takes the opposite view. The future of programming is humans
+writing code with LLM assistance — humans still need to read, debug,
+modify, and reason about the code. A language designed exclusively
+for LLM generation throws away the readability that makes software
+maintainable. That said, several of GA's concrete language-feature
 ideas (contracts, stack traces, error codes, attributes) are useful
 **regardless of authorship model**, and worth picking up.
 
-The headline-feature delta in the other direction is bigger: our
+The headline-feature delta in the other direction is bigger: Aether's
 sandbox / capability story (`--emit=lib` + `--with=` + `hide` /
-`seal except` + LD_PRELOAD libc gate), our actor model, and our
-host-other-languages framework have no analog in GA. They went deep
-on metadata; we went deep on what the binary actually does. Both
-choices are coherent; ours has shipping users.
+`seal except` + LD_PRELOAD libc gate), its actor model, and its
+host-other-languages framework have no analog in GA. GA went deep
+on metadata; Aether went deep on what the binary actually does. Both
+choices are coherent; Aether's has shipping users.
 
 ---
 
 ## TL;DR for triage
 
-The full doc above compares our Aether against [GoogleCloudPlatform/Aether](https://github.com/GoogleCloudPlatform/Aether) ("GA" or "GCP-Aether" in the doc) — a stalled exploration repo from Google that happens to share our project's name. They came after we did. License Apache-2.0, not a supported Google product, design-doc-heavy with much of the headline functionality unimplemented per their own `unimplemented_features.md`.
+The full doc above compares Aether against [GoogleCloudPlatform/Aether](https://github.com/GoogleCloudPlatform/Aether) ("GA" or "GCP-Aether" in the doc) — a stalled exploration repo from Google that happens to share this project's name. GA appeared later than Aether. License Apache-2.0, not a supported Google product, design-doc-heavy with much of the headline functionality unimplemented per GA's own `unimplemented_features.md`.
 
-This survey is the fifth in a series (sister umbrellas: #335 Flux, #337 Fir, #339 Flint, #341 Zym). It differs from the others in shape: GCP-Aether's design center is **"LLMs as authors"** vs ours **"humans with LLM assist"**. That asymmetry means most of their distinctive features (extreme S-expression syntax, intent verification, generation hints, pattern templates, partial-compilation envelopes) don't translate. The pieces worth lifting are the ones useful **regardless of authorship model** — contracts, stack traces, error codes, attributes.
+This survey is the fifth in a series (sister umbrellas: #335 Flux, #337 Fir, #339 Flint, #341 Zym). It differs from the others in shape: GCP-Aether's design center is **"LLMs as authors"** vs Aether's **"humans with LLM assist"**. That asymmetry means most of GA's distinctive features (extreme S-expression syntax, intent verification, generation hints, pattern templates, partial-compilation envelopes) don't translate. The pieces worth lifting are the ones useful **regardless of authorship model** — contracts, stack traces, error codes, attributes.
 
-**Tone note**: the comparison doc is deliberately kind — GCP-Aether "explored an interesting design corner that we've largely ignored." If we ever ping their maintainers about the name collision (we came first, they're stalled), the framing should stay collaborative rather than competitive.
+**Tone note**: the comparison doc is deliberately kind — GCP-Aether "explored an interesting design corner that Aether has largely ignored." Should Aether's maintainers ever approach GA's maintainers about the name collision (Aether came first, GA is stalled), the framing should stay collaborative rather than competitive.
 
 ## The doc's verdict table (§3 + §4)
 
@@ -772,17 +773,17 @@ This survey is the fifth in a series (sister umbrellas: #335 Flux, #337 Fir, #33
 
 | § | Feature | Why |
 |---|---|---|
-| 2.1 | S-expression syntax | Costs the human-readable leg of our value prop |
-| 2.4 (rest) | `@idempotent`, `@deterministic`, `@timeout_ms`, `@retry_policy`, etc. | Documentation, not type system; we already have doc comments |
+| 2.1 | S-expression syntax | Costs the human-readable leg of the value prop |
+| 2.4 (rest) | `@idempotent`, `@deterministic`, `@timeout_ms`, `@retry_policy`, etc. | Documentation, not type system; doc comments already cover it |
 | 2.5 | `RESOURCE_SCOPE` construct | `defer` already covers this with less ceremony |
-| 2.6 | Rust-shape `^T` / `&T` / `&mut T` ownership | Explicit design rejection in our LLM.md; their own impl is a stub |
-| 2.7 (rest) | Auto-fix suggestions, intent-mismatch detection, partial compilation | High infra cost, low payoff at our scale |
+| 2.6 | Rust-shape `^T` / `&T` / `&mut T` ownership | Explicit design rejection in Aether's LLM.md; GA's own impl is a stub |
+| 2.7 (rest) | Auto-fix suggestions, intent-mismatch detection, partial compilation | High infra cost, low payoff at Aether's scale |
 | 2.10 | Performance / complexity expectation attributes | Hand-asserted docs; cannot be verified |
 | 2.11 | `DEFINE_SEMANTIC_TYPE` / refinement types | Wrapper struct + parser fn covers the use case |
 | 2.13 | Generation hints baked into language | Belongs in editor/LLM extension config |
 | 2.14 | Verified pattern library | Closures + builder DSL already cover composability |
 
-**Following the prior umbrella pattern:** I've filed the two strongest-fit Tier-1 items as focused issues — the P1 panic-stack-trace work and the P2 `requires`/`ensures` contracts. The other adopt-list items (error codes, attributes, time audit, runtime budgets) are smaller / depend on other things first; flag for individual issues if you greenlight them.
+**Following the prior umbrella pattern:** the two strongest-fit Tier-1 items have been filed as focused issues — the P1 panic-stack-trace work and the P2 `requires`/`ensures` contracts. The other adopt-list items (error codes, attributes, time audit, runtime budgets) are smaller / depend on other things first; each is a candidate for an individual issue once greenlit.
 
 ## Comparison vs the four prior surveys
 
@@ -792,20 +793,20 @@ The five comparison docs each emphasise a different design axis:
 - **Fir** (#337 / #338): row-typed errors, `#[derive(...)]`, anonymous records — type-system ergonomics
 - **Flint** (#339 / #340): optionals, variants, FIP C-bindings — runtime-shape ergonomics
 - **Zym** (#341): nested-VM sandboxing — embedder-shape extensions
-- **GCP-Aether** (this issue): contracts, stack traces, attributes — debuggability + LLM-target metadata
+- **GCP-Aether** (this survey): contracts, stack traces, attributes — debuggability + LLM-target metadata
 
 The closest overlap is with the Pollen `--emit=lib` issues (#343 resource caps, #344 caller info) — GCP-Aether's runtime-budget proposal (§2.5) is a similar shape to Pollen's resource caps but at the function-attribute layer rather than the host-side setter. Worth considering them together if/when the runtime accounting infrastructure lands.
 
-## What this issue is NOT asking
+## What this survey is NOT asking
 
 - Not a roadmap. "Use this as a menu, not a roadmap."
 - Not asking for any single feature to ship as-listed.
-- Not litigating the rejection list — those are correctly identified as wrong-fit for our identity.
-- Not making a name-collision claim. We came first; their repo is stalled. If/when we approach them about the name, that's a separate conversation, not part of this technical comparison.
+- Not litigating the rejection list — those are correctly identified as wrong-fit for Aether's identity.
+- Not making a name-collision claim. Aether came first; the GA repo is stalled. If and when Aether's maintainers approach GA about the name, that's a separate conversation, not part of this technical comparison.
 
 ## Cross-refs
 
-- Source: `~/scm/flux_ae/GoogleCloudPlatformAether_COMPARISON.md` (also pasted above for permanence). Their repo: [GoogleCloudPlatform/Aether](https://github.com/GoogleCloudPlatform/Aether).
+- Source project: [GoogleCloudPlatform/Aether](https://github.com/GoogleCloudPlatform/Aether); the survey material is captured above for permanence.
 - Sister surveys: #335 (Flux), #337 (Fir), #339 (Flint), #341 (Zym)
 - Sibling `--emit=lib` work: #343 (Pollen resource caps), #344 (Pollen caller-info)
 - Filed as focused issues: P1 panic stack traces (separate), P2 contracts (separate)

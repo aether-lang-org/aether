@@ -1,16 +1,20 @@
-<!-- Source: GitHub issue #339 — Cross-reference: Flint vs. Aether comparison (full menu of features to consider/skip) -->
-<!-- Lifted from issue body so the comparison lives next to the code, discoverable for future contributors. -->
+<!-- Cross-reference: Flint vs. Aether comparison (full menu of features to consider/skip). -->
+<!-- Kept next to the code so the comparison is discoverable for future contributors. -->
 
 # Aether vs Flint — feature-by-feature, with reimplementation notes
 
-A side-by-side comparison of [Aether](../aether/) and [Flint](flintc/) (compiler:
-`flintc`, source ext: `.ft`). Written for the Aether maintainers (me + Nic) so
+> **Status:** Design-exploration survey (May 2026). A record of what was considered from Flint and what, if anything, was worth adopting into Aether — not a roadmap. Adopted items are noted inline; anything not yet shipped is a candidate, not a commitment.
+>
+> Source project: Flint — <https://github.com/flint-lang/flintc>.
+
+A side-by-side comparison of [Aether](../../README.md) and [Flint](https://github.com/flint-lang/flintc) (compiler:
+`flintc`, source ext: `.ft`). Written for the Aether maintainers so that
 attractive missing pieces can be ported across the C-vs-LLVM-IR codegen gap.
 
 This is **harder than other comparisons** because Flint emits LLVM IR via the
 LLVM C++ API and embeds `lld` for linking — Aether emits portable C and shells
-out to the system C compiler. Anything we lift from Flint has to be re-derived
-in C terms. Where that's nontrivial, I call it out in the "C-codegen
+out to the system C compiler. Anything lifted from Flint has to be re-derived
+in C terms. Where that is nontrivial, this survey calls it out in the "C-codegen
 reimplementation note" boxes.
 
 ## At a glance
@@ -37,9 +41,9 @@ reimplementation note" boxes.
 | Build mode flags | `--emit=exe` / `--emit=lib` + `--with=fs,net,os` | `--file`, `--test`, `--out`, `--flags=`, `--no-colors` |
 | Editor support | (whatever ad hoc) | LSP in-tree (`fls/`) — ships with the compiler |
 
-## What I think is worth lifting (ranked)
+## What is worth lifting (ranked)
 
-These are the items I'd reach for first. Each links to its dedicated section
+These are the items to reach for first. Each links to its dedicated section
 below.
 
 1. **[Optionals (`T?`, `?.`, `!`, `??`)](#1-optionals)** — small surface, huge
@@ -63,7 +67,7 @@ below.
 7. **[Switch expressions](#7-switch-expressions)** — `let x = switch e: A -> 1; B -> 2;`
    collapses a lot of code Aether currently writes with intermediate `var`s.
 8. **[DCMP / entity model](#8-dcmp--entity-composition)** — interesting but big.
-   Probably not worth taking on unless we want a full OOP-replacement story.
+   Probably not worth taking on unless Aether wants a full OOP-replacement story.
 9. **[Bitset and SIMD primitives](#9-simd--bitset-primitives)** — `i32x4` etc.
    are wonderful but require codegen-to-C-vector-extension or an emulation
    layer, which is a whole subproject.
@@ -107,9 +111,9 @@ For data fields too — `Vec2? vm = v;` then `vm!.x`.
 ### Why it's a fit for Aether
 
 Aether's current `(value, err string)` convention is good for *fallible*
-operations but oversells when you just want "maybe a value." We end up
+operations but oversells when the intent is just "maybe a value." It forces
 synthesizing `(value, "missing")` sentinels everywhere. `T?` is strictly
-additive — keep the Go-style returns for I/O, layer optionals on top.
+additive — the Go-style returns stay for I/O, with optionals layered on top.
 
 ### Codegen-to-C reimplementation note
 
@@ -139,7 +143,7 @@ if (!e.has) { /* none arm */ } else { T v = e.val; /* v arm */ }
 
 Pure-expression form (`x = switch …: A -> 1; …`) compiles to a C ternary chain
 or a GCC statement-expression `({ … })` for non-trivial arms. Aether already
-has both available since we're emitting C99 + GCC extensions on the systems
+has both available since it emits C99 + GCC extensions on the systems
 path.
 
 ### Reserved-keyword note
@@ -239,9 +243,9 @@ against* the FIP-resolved symbol — signature mismatch is a compile-time error
 ### Why it's a fit for Aether
 
 Aether's `extern fs_foo_raw() -> string` + the split-accessor TLS pattern
-documented in `aether/LLM.md` exists exactly because we can't synthesize
-length-aware bindings automatically. FIP-style header introspection would let
-us:
+documented in `aether/LLM.md` exists exactly because Aether can't synthesize
+length-aware bindings automatically. FIP-style header introspection would
+enable:
 
 - Emit Aether stubs for C ABI-stable libraries automatically.
 - Verify that hand-written `extern` matches the C reality at compile time.
@@ -251,15 +255,15 @@ us:
 
 ### Codegen-to-C reimplementation note
 
-**Aether has the easier job here, not harder.** We already emit C — the FIP
+**Aether has the easier job here, not harder.** Aether already emits C — the FIP
 output (`.fip/generated/c.ft` is just Aether-syntax declarations) drops in as
 a normal `.ae` file with `extern` decls.
 
 Minimum viable path:
 
 1. **`aether-bindgen`**: a separate tool. Parses a C header (libclang, or a
-   trimmed-down hand-rolled C parser; we don't need full preprocessor
-   coverage). Emits a `.ae` file with `extern` decls + matching `data` types.
+   trimmed-down hand-rolled C parser; full preprocessor coverage is not
+   required). Emits a `.ae` file with `extern` decls + matching `data` types.
    Same shape as `.fip/generated/c.ft`.
 2. **`.fip` directory convention**: keep it. `aetherc` learns to consult
    `.fip/config/fip-c.toml` at parse time, invoke `aether-bindgen` if cache
@@ -274,12 +278,13 @@ Minimum viable path:
    Flint's "no `T*` in non-extern code" rule.
 5. **No IPC needed initially**. Flint went IPC because it wanted a plugin
    architecture for many languages (Java/Python/Ruby). For Aether's purposes
-   "C only, in-process" is already a giant win. Defer multi-language until we
-   actually need it.
+   "C only, in-process" is already a giant win. Defer multi-language until it
+   is actually needed.
 
 Skip for now: Java/Panama, Python ctypes, Ruby Fiddle FIP modules — Aether
 already covers those via `--emit=lib` + ABI-stable `aether_<name>` exports. The
-direction in FIP is *ingest*; ours stays *export*. Don't conflate them.
+direction in FIP is *ingest*; Aether's stays *export*. The two should not be
+conflated.
 
 ### Where it lands in Aether's invariants
 
@@ -330,8 +335,8 @@ Switch as expression form: `i32 r = switch v: i32(i) -> i + 3; ...;`
 ### Why Aether needs this
 
 Aether has none. The `(value, err)` convention covers binary outcomes; for
-n-ary outcomes (parser tokens, AST nodes, JSON values) we currently roll
-hand-tagged structs in C and lean on convention. JSON especially is a
+n-ary outcomes (parser tokens, AST nodes, JSON values) Aether currently rolls
+hand-tagged structs in C and leans on convention. JSON especially is a
 canonical multi-arm sum type.
 
 ### Codegen-to-C reimplementation note
@@ -378,7 +383,7 @@ Exhaustiveness check is a parser/analyzer obligation, like Flint already does.
 
 Aether's actor model declares message types. Those are *closed* sums
 (per-actor mailbox spec). `variant` would generalize the same machinery into
-a value-level construct. Worth scoping: do we share the codegen path?
+a value-level construct. Worth scoping: should the codegen path be shared?
 Probably yes — message-typed fields in receivers already lower to discriminated
 unions; `variant` is the same shape exposed to user code.
 
@@ -418,7 +423,7 @@ Flint code — there's no `assert.h`-shaped runtime.
 
 `tests/regression/*.ae` is fine, but it's per-file and ad-hoc — naming
 conventions encode metadata (`fix_block_scope_restoration.ae`). Inline `test`
-blocks would let multiple cases share file context and let us annotate
+blocks would let multiple cases share file context and allow annotating
 expected failures or perf-only tests in-grammar.
 
 ### Codegen-to-C reimplementation note
@@ -464,10 +469,10 @@ str s = $"err = {err_val}";  // "err = ErrArithmetic.NullDivision"
 
 The pattern is "every primitive type has a canonical string representation
 the compiler knows." For Aether this means `aether_string_from_*` for every
-new built-in we add. Cheap, formulaic, eats real friction.
+new built-in that gets added. Cheap, formulaic, eats real friction.
 
-Specifically: any time we add a new primitive or a SIMD-shaped tuple (§9), we
-should add the `from_*` companion at the same time. Make it part of the
+Specifically: any time a new primitive or a SIMD-shaped tuple (§9) is added,
+the `from_*` companion should be added at the same time. This belongs on the
 checklist for new primitives in `LLM.md`'s "Invariants to not break" section.
 
 ### Codegen-to-C reimplementation note
@@ -584,7 +589,7 @@ switch (me) {
 
 Aether's MSVC cross-build matters here — GCC statement-expressions don't
 work on MSVC. Default to the hoisted-temp lowering for portability; reserve
-the statement-expression form for cases where we know the target is gcc/clang.
+the statement-expression form for cases where the target is known to be gcc/clang.
 
 ---
 
@@ -652,20 +657,20 @@ The pitch: take the data-vs-behavior split that ECS has and the
 method-on-receiver dispatch that OOP has, glue them together at composition
 time.
 
-### Why I'd skip lifting it
+### Why to skip lifting it
 
 - Aether's actor model already supplies a "data + behavior + dispatch" story
   (actor = data + receive handlers). DCMP would compete with it, not extend it.
 - The lift is large: parser changes, analyzer rules for "func F requires X
   attached to entity that contains X," codegen for vtable-or-direct-dispatch.
 - The win is mostly stylistic. Aether doesn't have an OOP gap users are
-  asking us to fill.
+  asking it to fill.
 
 What *is* worth borrowing piecemeal: the `data D: f1; f2; D(f1, f2);` syntax
 where the constructor signature is auto-derived from the field list. Aether
 already has plain structs; the auto-constructor sugar is a small parser job.
 
-### If we ever do lift it
+### If it is ever lifted
 
 Codegen path:
 - `data` → C struct.
@@ -679,7 +684,7 @@ Codegen path:
   Method resolution order is parser-determined.
 
 This is very tractable codegen. The cost is in parser/analyzer + the cultural
-question of "do we want a second composition story alongside actors."
+question of whether Aether wants a second composition story alongside actors.
 
 ---
 
@@ -774,7 +779,7 @@ These are worth being aware of but aren't standalone sections.
 
 - **`++`/`--` post-increment**: present in Flint (`n--`, `i++`). Aether
   doesn't have these. Tradeoff: they introduce expression/statement
-  ambiguity and we've gotten by without.
+  ambiguity, and Aether has gotten by without them.
 
 - **Annotations as `#name`**: `#test_performance`, `#test_should_fail`. Cheap
   hashtag-syntax for parser-recognized markers. Could also drive
@@ -797,17 +802,17 @@ These are worth being aware of but aren't standalone sections.
   pure UX improvement.
 
 - **In-tree LSP**: Flint ships `fls/` (Flint Language Server) in the same
-  repo, built alongside `flintc`. Aether has nothing here; first user to
+  repo, built alongside `flintc`. Aether has nothing here; the first user to
   ask for editor support gets to write it. The fact that Flint's LSP shares
   parser/analyzer code with the compiler (build.zig builds both) is the
-  right architecture and worth replicating when we get to it.
+  right architecture and worth replicating whenever Aether gets to it.
 
 ---
 
 ## What Aether has that Flint doesn't
 
-For completeness — these are the directions where Aether is ahead and we
-shouldn't lose ground while porting features in.
+For completeness — these are the directions where Aether is ahead and where
+it shouldn't lose ground while porting features in.
 
 - **Capability discipline** — `--emit=lib` capability-empty + `--with=`
   opt-in is a story Flint has nothing equivalent to. Flint extern code is
@@ -853,9 +858,9 @@ shouldn't lose ground while porting features in.
 
 ---
 
-## Implementation order, if I were doing this
+## Implementation order
 
-If we wanted to lift the high-payoff pieces in priority order:
+If the high-payoff pieces were to be lifted, in priority order:
 
 1. **Optionals** (§1). Two weeks of parser + codegen + runtime work. Single
    biggest ergonomic delta per line of compiler code touched.
@@ -867,7 +872,7 @@ If we wanted to lift the high-payoff pieces in priority order:
    only.
 5. **Grouped field access/assign** (§6). Couple of days; pure desugaring.
 6. **String interpolation coverage** (§5). Continuous; add `from_<T>` per
-   primitive as we go.
+   primitive incrementally.
 7. **FIP-shaped C interop** (§2). Largest project. Probably a month for an
    `aether-bindgen` MVP that covers C99 + GCC attributes that real libraries
    use, plus the `.fip/` cache integration in `aetherc`. Strongly worth it
@@ -887,7 +892,7 @@ biggest gap in Aether's type system as it stands.
 
 ## TL;DR for triage
 
-The full doc above is a survey of Flint ($HOME/scm/flux_ae/flintc — the [flint-lang/flintc](https://github.com/flint-lang/flintc) project on GitHub; not to be confused with the older static-analyzer Flint). Like the Flux (#335) and Fir (#337) comparisons, it's written to let Aether decide deliberately what to absorb.
+The full doc above is a survey of Flint — the [flint-lang/flintc](https://github.com/flint-lang/flintc) project on GitHub; not to be confused with the older static-analyzer Flint. Like the Flux (#335) and Fir (#337) comparisons, it's written to let Aether decide deliberately what to absorb.
 
 Flint is a Python-ish (indentation + `;`) systems language compiling to LLVM IR with embedded `lld`. Distinguishers vs Aether: first-class optionals (`T?`), variant/tagged-union types, FIP (auto-generated C bindings from headers), built-in test syntax, SIMD primitives, and DCMP (entity composition).
 
@@ -903,7 +908,7 @@ Flint is a Python-ish (indentation + `;`) systems language compiling to LLVM IR 
 8. **SIMD primitives** — defer until a downstream user asks.
 9. **DCMP / entity composition** — explicit skip; competes with actor model rather than complementing it.
 
-**The single most attractive landing per the doc:** Optionals + Variants together (§1 + §3). They cooperate (`?(T)` extract returns an optional), share tagged-union codegen, and address the biggest gap in Aether's type system. I've filed Optionals as a focused issue; Variants would be a natural follow-up issue if you greenlight Optionals.
+**The single most attractive landing per the doc:** Optionals + Variants together (§1 + §3). They cooperate (`?(T)` extract returns an optional), share tagged-union codegen, and address the biggest gap in Aether's type system. Optionals is filed as a focused issue; Variants would be a natural follow-up issue once Optionals lands.
 
 ## Note on overlap with Flux (#335) and Fir (#337) comparisons
 
@@ -914,7 +919,7 @@ The three comparison docs converge on a few themes:
 - **String interpolation type coverage**: Flint and Flux both have this; Fir uses backticks. Aether already has interpolation; the question is whether to broaden the auto-formatted type set.
 - **Bit-precise types vs. SIMD**: Flux pulls hard on `data{N}` (#336); Flint pulls on `i32x4`/`f32x8`. Both target hot-path / binary-format code but at different abstraction levels.
 
-The biggest divergence: **Flint's FIP** has no analogue in the other comparisons. Auto-generating Aether `extern` decls + matching `data` types from a C header would replace a category of friction (split-accessor TLS pattern, length-aware `_get_*_length` accessors, hand-rolled bindings for vendored C libs). That's potentially worth its own focused issue separate from this umbrella — flag if you want me to extract it.
+The biggest divergence: **Flint's FIP** has no analogue in the other comparisons. Auto-generating Aether `extern` decls + matching `data` types from a C header would replace a category of friction (split-accessor TLS pattern, length-aware `_get_*_length` accessors, hand-rolled bindings for vendored C libs). That's potentially worth its own focused issue separate from this umbrella.
 
 ## What this issue is NOT asking
 
@@ -928,6 +933,6 @@ The biggest divergence: **Flint's FIP** has no analogue in the other comparisons
 - Optionals (§1): filed as separate issue
 - Variants (§3): not filed — flag for separate issue if/when Optionals lands (they share codegen)
 - FIP (§2): not filed — flag for separate issue if you want it pursued separately from this umbrella
-- Source: `~/scm/flux_ae/COMPARISON.md` (also pasted above for permanence). Flint's repo: [flint-lang/flintc](https://github.com/flint-lang/flintc).
+- Source project: Flint's repo: [flint-lang/flintc](https://github.com/flint-lang/flintc).
 - Sister surveys: #335 (Flux), #337 (Fir)
 - Concrete `extern` boilerplate FIP would target: any of the `*_raw` + `*_get_*` + `*_get_*_length` + `*_release_*` quartets in std/* (e.g. `fs_try_read_binary` family pre-#271)

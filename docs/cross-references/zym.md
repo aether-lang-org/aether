@@ -3,13 +3,17 @@
 
 # Aether vs Zym — comparison and lift candidates
 
-Written for the Aether team. Source of truth for Zym: `~/scm/flux_ae/zym/`
-(README + `src/` — the CLI shell and native bindings; the `zym_core/`
-submodule (compiler+VM) was not checked out, so anything below about the
-internals is inferred from the public C ABI in `src/natives/natives.h` and
-behavior described in the README).
+> **Status:** Design-exploration survey (May 2026). A record of what was considered from Zym and what, if anything, was worth adopting into Aether — not a roadmap. Adopted items are noted inline; anything not yet shipped is a candidate, not a commitment.
+>
+> Source project: Zym — <https://github.com/zym-lang/zym>.
 
-This doc is structured to let an Aether implementer skim "what is Zym
+This survey draws on Zym's public repository (README + `src/` — the CLI
+shell and native bindings). The `zym_core/` submodule (compiler+VM) was
+not examined, so anything below about the internals is inferred from the
+public C ABI in `src/natives/natives.h` and behavior described in the
+README.
+
+The document is structured to let an Aether implementer skim "what is Zym
 doing that Aether isn't?" and pull in the pieces worth lifting, with
 enough detail to actually write the patch.
 
@@ -203,9 +207,9 @@ Two things to lift:
 2. **`(name, argc, ...)` variadic call.** Painful to use safely from C
    (no type checking), but it lets the host stay generic. Aether's
    current `aether_<name>` exports are typed by signature — which is
-   *better* for safety but worse for "I don't know what the script
-   exports until I read it." If you ever want both, the Zym pattern is
-   the escape hatch.
+   *better* for safety but worse for the "the script's exports aren't
+   known until it is read" case. If both are ever wanted, the Zym
+   pattern is the escape hatch.
 
 ### 2.3 The yield-resume status loop — most underrated piece
 
@@ -225,7 +229,7 @@ single-threaded host can:
 
 - Run multiple Zym scripts cooperatively by interleaving `zym_resume()`
   calls across VM instances.
-- Inject a check between yields ("am I past my time budget?", "did the
+- Inject a check between yields ("is the time budget exceeded?", "did the
   user cancel?").
 - Implement a debugger that yields on breakpoints and pumps UI events
   during the pause.
@@ -234,8 +238,8 @@ single-threaded host can:
 `send`/`receive`), which solve concurrency *within* an Aether program,
 but the **C-host has no equivalent re-entry point**. Once a C caller
 invokes `aether_<name>(args)`, control doesn't return until the
-function does. There's no "Aether yielded, run my UI tick, then call
-me back."
+function does. There's no "Aether yielded, run the host's UI tick, then
+call back into the function."
 
 **Recommendation:** for the embed-as-lib case, add a `aether_yield()`
 runtime intrinsic and a corresponding C-side resume function:
@@ -357,9 +361,9 @@ Aether's current sandbox story is:
 3. **Runtime:** `libaether_sandbox.so` LD_PRELOAD checks libc calls
    against a builder-DSL grant list.
 
-What's *missing* is a **runtime-spawnable sandbox** — "I'm an Aether
-program and I want to load *this user's untrusted Aether code* into a
-walled-off sub-VM and call functions on it." You can do something
+What's *missing* is a **runtime-spawnable sandbox** — "an Aether program
+that wants to load *a user's untrusted Aether code* into a walled-off
+sub-VM and call functions on it." You can do something
 similar today with the in-process language hosts
 (`contrib.host.python.run_sandboxed(perms, code)` etc.) but Aether
 hosting Aether currently requires a separate process. The README and
@@ -587,13 +591,13 @@ zym <file.zym> --preprocess <out.zym> # write to file
 
 Lets users see exactly what the compiler sees after preprocessing /
 module loading. This is *very* useful for debugging weird parser errors
-and for filing bug reports — instead of "the parser rejects my code,"
-you can attach the post-preprocess output that actually reaches the
-compiler.
+and for filing bug reports — instead of "the parser rejects this code,"
+a reporter can attach the post-preprocess output that actually reaches
+the compiler.
 
 Aether already has a preprocessor (or its equivalent — directives,
-includes, macro expansion all happen somewhere in `compiler/`). I
-can't tell from the LLM.md what the user-facing flag is, if any.
+includes, macro expansion all happen somewhere in `compiler/`). It is
+not clear from the LLM.md what the user-facing flag is, if any.
 
 **Recommendation:** if there isn't already an `aetherc --emit=preproc`
 or similar, **add one**. Cheap to implement (the data is on the heap
@@ -670,7 +674,7 @@ Full ranked priority for the Aether roadmap (`docs/next-steps.md`):
 
 ## Appendix A — files in zym to read if you're implementing §3
 
-In `~/scm/flux_ae/zym/`:
+In the [zym-lang/zym](https://github.com/zym-lang/zym) repository:
 
 - `src/natives/ZymVM.c` (entire file, 814 lines) — the native binding
   that exposes `ZymVM()` to scripts. Pattern-match the
@@ -745,7 +749,7 @@ If only one item from this survey lands, it's §3 — Zym's pattern of `var sand
 
 This would give Aether **in-process aether-in-aether sandboxing** — currently the README and LLM.md both note that Aether-hosts-Aether requires a separate process. Real use case: an Aether-written editor loading user-supplied Aether macros, a plugin host loading untrusted user scripts, etc. The svn-aether port doesn't need it (they're the host, not the host-of-untrusted-code), so this is gated on a downstream demand surfacing.
 
-**Why I'm not filing this as a focused issue**: P2/large effort + explicit "only worth doing if a real use case shows up" gate. Filing prematurely would create implementation pressure without justification. Flag for separate issue when (if) someone files a wish for it.
+**Why this is not filed as a focused issue**: P2/large effort + explicit "only worth doing if a real use case shows up" gate. Filing prematurely would create implementation pressure without justification. Flag for separate issue when (if) someone files a wish for it.
 
 ## Note on overlap with prior surveys
 
@@ -766,7 +770,7 @@ Zym is the most distant from Aether's identity (different compilation model). It
 
 ## Cross-refs
 
-- Source: `~/scm/aether/COMPARISON.md` (also pasted above for permanence). Zym source: [zym-lang/zym](https://github.com/zym-lang/zym).
+- Zym source: [zym-lang/zym](https://github.com/zym-lang/zym).
 - Sister surveys: #335 (Flux), #337 (Fir), #339 (Flint)
 - §3 nested-VM proposal: not filed as focused issue — gated on real use case
 - §8 `--emit=preproc`: small standalone ergonomics; could be its own focused issue if you want to greenlight it independently of the rest of the survey

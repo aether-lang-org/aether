@@ -1,11 +1,15 @@
-<!-- Source: GitHub issue #337 — Cross-reference: Fir vs. Aether comparison (full menu of features to consider/skip) -->
-<!-- Lifted from issue body so the comparison lives next to the code, discoverable for future contributors. -->
+<!-- Cross-reference: Fir vs. Aether comparison (full menu of features to consider/skip). -->
+<!-- Kept alongside the code so the comparison stays discoverable for future contributors. -->
 
 # Fir vs. Aether — feature comparison for cross-pollination
 
-Audience: Aether maintainers (Paul + me) deciding what, if anything, from Fir
-is worth porting. Written 2026-05-02 against Fir at `/home/paul/scm/flux_ae/fir`
-(the in-tree snapshot in this directory) and Aether per `~/scm/aether/LLM.md`.
+> **Status:** Design-exploration survey (May 2026). A record of what was considered from Fir and what, if anything, was worth adopting into Aether — not a roadmap. Adopted items are noted inline; anything not yet shipped is a candidate, not a commitment.
+>
+> Source project: Fir — https://github.com/fir-lang/fir.
+
+This survey is written for Aether's maintainers, weighing what, if anything,
+from Fir is worth porting. It compares the in-tree Fir snapshot in this
+directory against Aether as described in Aether's LLM.md.
 
 This document is intentionally detailed enough that an Aether implementer can
 read **only this file** and start designing a port of any individual feature
@@ -543,7 +547,7 @@ parsed by a small dedicated state machine in `src/interpolation.rs`.
 
 **Aether status.** Aether already has string interpolation per `LLM.md`
 ("string interpolation, pattern matching"), so the question is **shape**
-rather than "should we add this".
+rather than whether to add it at all.
 
 **Porting note.** If Aether's interpolation is currently `${expr}`-shaped
 (C-template-string-like), Fir's choice is interesting because backticks
@@ -698,8 +702,8 @@ foreclose options:
 
 ## 5. Recommended adoption sequence
 
-If everything above were on the table, here is the order I'd actually
-ship things in, smallest+highest-leverage first:
+If everything above were on the table, this is the order to ship things
+in, smallest+highest-leverage first:
 
 1. **`#[derive(eq, format, clone, hash)]`** (§3.5).
    No type-system changes; pure code generation. Lands as a single PR.
@@ -782,8 +786,8 @@ The Fir features worth Aether's attention, ranked by value-per-effort:
 | Traits with associated types                        | §3.4    | Very large | High   | Only if polymorphism = traits  |
 | Indentation-sensitive syntax                        | §3.7    | Catastrophic | Cosmetic | **No**                       |
 
-The single thing I'd push hardest is **§3.1 (open variant errors)**:
-it composes perfectly with Aether's existing capability discipline
+The single thing this survey pushes hardest is **§3.1 (open variant
+errors)**: it composes perfectly with Aether's existing capability discipline
 ("compile-time-known sets of things you can do/throw/touch"), it
 addresses a real ergonomics ceiling in the current `(value, err)`
 convention, and it's the entry point that makes the rest of the row
@@ -796,7 +800,7 @@ Everything else is a "yes if you have the bandwidth" rather than a
 
 ## TL;DR for triage
 
-The full doc above is a survey of Fir ($HOME/scm/flux_ae/fir) — an indentation-sensitive, ML-family typed functional language with row-typed records/variants and an effect system. Like the Flux comparison (issue #335) it's written to let Aether decide deliberately what to absorb.
+The full doc above is a survey of Fir — an indentation-sensitive, ML-family typed functional language with row-typed records/variants and an effect system. Like the Flux comparison (issue #335) it's written to let Aether decide deliberately what to absorb.
 
 **The doc's own recommended adoption sequence (Section 5):**
 
@@ -833,5 +837,5 @@ The biggest divergence between the two surveys: **Flux pulled hard on bit-precis
 
 - `#[derive(...)]` (§3.5): filed as separate issue (small, low-cost, high-leverage)
 - Open variant errors (§3.1): noted as the doc's headline recommendation; flag for separate issue if/when you greenlight it (it's bigger work and depends on anonymous records §3.3 landing first)
-- Source: `~/scm/flux_ae/COMPARISON.md` (also pasted above for permanence). Fir's own repo at `~/scm/flux_ae/fir`.
+- Source project: Fir, https://github.com/fir-lang/fir.
 - Sister survey: #335 (Flux comparison, complementary recommendations)

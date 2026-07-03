@@ -1,27 +1,26 @@
-# Cross-references — comparisons against other languages / projects
+# Cross-references — comparisons against adjacent languages and projects
 
-Side-by-side feature comparisons between Aether and adjacent
-projects, written for the Aether maintainers as decision support:
-"what is X doing that we aren't, and is it worth porting?"
+Side-by-side surveys of Aether against nearby language and runtime projects,
+written as design history: for each project, what is it doing that Aether isn't,
+and is any of it worth adopting? Each survey enumerates the other project's
+features against Aether's surface at the time of writing and tags each one as a
+candidate to absorb, to skip, or as already-covered-differently.
 
-Each doc enumerates X's features against Aether's current surface
-and tags each one as a candidate to absorb, skip, or treat as
-already-covered-differently. The point is **not** to argue Aether
-should become any of these — it's to surface attractive ideas
-without losing track of where each one came from.
+These are **not** roadmap proposals and **not** an argument that Aether should
+become any of these projects. They are a record of what was considered and why,
+so an attractive idea and its origin stay discoverable. Ideas that were adopted
+are noted inline; anything not yet shipped is a candidate, not a commitment.
 
-| File | Subject | Notes |
-|------|---------|-------|
-| [gcp-aether.md](gcp-aether.md) | `GoogleCloudPlatform/Aether` (name-collision repo) | Stalled "vibe-coded demo" with our project's name. Issue #346. |
-| [zym.md](zym.md)               | Zym | CLI shell + native bindings. Issue #341. |
-| [flint.md](flint.md)           | Flint | LLVM-IR codegen via `lld`. Harder to port from since Aether emits portable C. Issue #339. |
-| [fir.md](fir.md)               | Fir | Issue #337. |
-| [flux.md](flux.md)             | Flux | Audience: Aether maintainers deliberately choosing what to absorb. Issue #335. |
+| Survey | Subject | Source |
+|--------|---------|--------|
+| [gcp-aether.md](gcp-aether.md) | `GoogleCloudPlatform/Aether` — a separate, stalled project that shares this project's name | [GoogleCloudPlatform/Aether](https://github.com/GoogleCloudPlatform/Aether) |
+| [zym.md](zym.md) | Zym — embeddable bytecode scripting language | [zym-lang/zym](https://github.com/zym-lang/zym) |
+| [flint.md](flint.md) | Flint — Python-ish systems language, LLVM-IR codegen via `lld` (harder to port from, since Aether emits portable C) | [flint-lang/flintc](https://github.com/flint-lang/flintc) |
+| [fir.md](fir.md) | Fir — ML-family typed functional language, compiles to C | [fir-lang/fir](https://github.com/fir-lang/fir) |
 
-Each doc was originally drafted in the corresponding GitHub issue
-body; lifted into the repo so it stays discoverable next to the
-code and survives issue-tracker churn.
+Each survey was first drafted in the corresponding GitHub issue and lifted into
+the repository so it stays next to the code and survives issue-tracker churn.
 
-For a broader lineage note that is about Aether's own closure/runtime
-tradeoff rather than one comparison target, see
+For a lineage note about Aether's own closure/runtime tradeoff rather than one
+comparison target, see
 [`../design/closure-lineage-and-runtime-tradeoffs.md`](../design/closure-lineage-and-runtime-tradeoffs.md).
