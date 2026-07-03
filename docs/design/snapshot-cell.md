@@ -198,6 +198,6 @@ better answer.
   deterministic, no-GC memory model and `defer`.
 - [`docs/actor-concurrency.md`](actor-concurrency.md) — the actor model that
   makes the one-generation grace period natural.
-- [`docs/sharded-actor-map.md`](sharded-actor-map.md) — the complementary
+- [`docs/design/sharded-actor-map.md`](sharded-actor-map.md) — the complementary
   pattern for **write-heavy, well-spread** key spaces (this cell is for
   read-mostly data).

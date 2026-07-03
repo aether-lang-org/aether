@@ -19,9 +19,9 @@ clock (`os.now_monotonic_ns`) and printing **ops/sec**.
 
 | # | Design | Read path | Write path | Source |
 |---|--------|-----------|------------|--------|
-| 1 | **Single-owner actor** | `?` ask to the one owner | `!` to the one owner | the "one mutex" trap (`docs/sharded-actor-map.md`) |
+| 1 | **Single-owner actor** | `?` ask to the one owner | `!` to the one owner | the "one mutex" trap (`docs/design/sharded-actor-map.md`) |
 | 2 | **Sharded actor map** | `?` ask to `shards[hash(key)%N]` | `!` to `shards[hash(key)%N]` | `examples/actors/sharded-map.ae` |
-| 3 | **COW snapshot cell** | lock-free `snapshot.load`, no mailbox | rebuild the whole map, `snapshot.store`, defer-free the displaced snapshot by one generation | `std.snapshot` / `docs/snapshot-cell.md` |
+| 3 | **COW snapshot cell** | lock-free `snapshot.load`, no mailbox | rebuild the whole map, `snapshot.store`, defer-free the displaced snapshot by one generation | `std.snapshot` / `docs/design/snapshot-cell.md` |
 
 **Workload mixes** (each runs a fixed 100 000-op budget over 64 keys):
 
@@ -128,7 +128,7 @@ gaps, and the refinement that would close them:
    shines (a hot read key is just a repeated lock-free load). **Refinement:**
    add a Zipfian key generator (skew parameter `s ≈ 0.99`) and report a
    second table under skew. See the "skew caveat" in
-   [`docs/sharded-actor-map.md`](sharded-actor-map.md).
+   [`docs/design/sharded-actor-map.md`](sharded-actor-map.md).
 
 3. **Single run, no warmup statistics.** One timed pass per design × mix,
    no median-of-N or coefficient-of-variation. The
@@ -144,9 +144,9 @@ three designs, not artifacts of one machine.
 
 ## See also
 
-- [`docs/sharded-actor-map.md`](sharded-actor-map.md) — the sharded
+- [`docs/design/sharded-actor-map.md`](sharded-actor-map.md) — the sharded
   design, shard-count guidance, and the Zipfian skew caveat.
-- [`docs/snapshot-cell.md`](snapshot-cell.md) — the COW cell, the
+- [`docs/design/snapshot-cell.md`](snapshot-cell.md) — the COW cell, the
   reclamation contract, and when read-mostly is the right call.
 - [`examples/actors/sharded-map.ae`](../examples/actors/sharded-map.ae) —
   the canonical sharded-map example the benchmark's design 2 mirrors.

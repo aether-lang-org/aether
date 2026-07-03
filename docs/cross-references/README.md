@@ -24,4 +24,4 @@ code and survives issue-tracker churn.
 
 For a broader lineage note that is about Aether's own closure/runtime
 tradeoff rather than one comparison target, see
-[`../closure-lineage-and-runtime-tradeoffs.md`](../closure-lineage-and-runtime-tradeoffs.md).
+[`../design/closure-lineage-and-runtime-tradeoffs.md`](../design/closure-lineage-and-runtime-tradeoffs.md).

@@ -169,7 +169,7 @@ operations must reach the one actor that owns it.
 If your access pattern is **read-mostly and hot-key-skewed** (a config
 blob, a routing table, feature flags hammered on every request),
 **sharding is the wrong tool** — point those reads at the **copy-on-write
-snapshot cell** instead: [`std.snapshot` / `docs/snapshot-cell.md`](snapshot-cell.md)
+snapshot cell** instead: [`std.snapshot` / `docs/design/snapshot-cell.md`](snapshot-cell.md)
 (issue [#840](https://github.com/aether-lang-org/aether/issues/840)). There a
 read is a single lock-free atomic load, so a thousand readers of the same
 hot key never contend at all. Sharding is for **write-heavy, well-spread**
@@ -237,5 +237,5 @@ follows:
 A runnable scaling study that measures all three under read-only,
 read-heavy, balanced, and write-heavy mixes lives at
 [`benchmarks/concurrent-cache/concurrent_cache_bench.ae`](../benchmarks/concurrent-cache/concurrent_cache_bench.ae);
-see [`docs/concurrent-cache-benchmark.md`](concurrent-cache-benchmark.md)
+see [`docs/design/concurrent-cache-benchmark.md`](concurrent-cache-benchmark.md)
 for how to run it and how to read the ops/sec it prints.

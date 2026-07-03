@@ -304,6 +304,6 @@ metadata) and raw AST printing (that's `aetherc --emit=ast`).
 - [`aether-embedded-in-host-applications.md`](aether-embedded-in-host-applications.md)
   — when `ae run` isn't the deployment vehicle and you're embedding
   the script inside another binary.
-- [`aether-dsl-as-a-rules-engine.md`](aether-dsl-as-a-rules-engine.md)
+- [`aether-dsl-as-a-rules-engine.md`](design/aether-dsl-as-a-rules-engine.md)
   — the same closure-DSL machinery applied to business rules rather
   than start-the-thing config.

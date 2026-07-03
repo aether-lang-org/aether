@@ -708,7 +708,7 @@ for the closure-capture case.
 
 For the broader "why this shape exists" comparison against Lisp,
 Smalltalk, Rust, and Zig, see
-[`closure-lineage-and-runtime-tradeoffs.md`](closure-lineage-and-runtime-tradeoffs.md).
+[`closure-lineage-and-runtime-tradeoffs.md`](design/closure-lineage-and-runtime-tradeoffs.md).
 
 | Feature | Smalltalk | Ruby | Groovy | Aether |
 |---------|-----------|------|--------|--------|
