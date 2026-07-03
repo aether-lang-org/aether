@@ -1505,6 +1505,22 @@ static const char* get_link_flags(void) {
 }
 
 // --------------------------------------------------------------------------
+// C-backend compiler override: honor $AE_CC then $CC (mirrors the Makefile's
+// CC=). This selects the compiler that turns Aether's generated C into the
+// final object / executable / library; it never affects aetherc (the
+// Aether->C front end, selected via tc.compiler). Returns NULL when neither
+// is set, so each platform keeps its existing default (gcc on POSIX,
+// WinLibs/gcc on Windows).
+// --------------------------------------------------------------------------
+static const char* c_backend_env_override(void) {
+    const char* cc = getenv("AE_CC");
+    if (cc && *cc) return cc;
+    cc = getenv("CC");
+    if (cc && *cc) return cc;
+    return NULL;
+}
+
+// --------------------------------------------------------------------------
 // Windows: auto-install bundled GCC (WinLibs) if none found on PATH
 // --------------------------------------------------------------------------
 #ifdef _WIN32
@@ -1524,6 +1540,15 @@ static bool s_gcc_ready      = false; // set after first successful check
 // Returns true when gcc is usable; false means the user must intervene.
 static bool ensure_gcc_windows(void) {
     if (s_gcc_ready) return true;
+
+    // 0. Explicit $AE_CC / $CC override wins over PATH and the WinLibs
+    //    auto-download: the user picked the C-backend compiler, so trust it.
+    const char* ov = c_backend_env_override();
+    if (ov) {
+        snprintf(s_gcc_bin, sizeof(s_gcc_bin), "%s", ov);
+        s_gcc_ready = true;
+        return true;
+    }
 
     // 1. Already on PATH?
     if (system("gcc --version >nul 2>&1") == 0) {
@@ -2037,18 +2062,39 @@ static void build_gcc_cmd(char* cmd, size_t size,
     }
 #else
     // POSIX (Linux/macOS): -pthread for POSIX threads, -lm for math
-    // Pre-flight check: ensure gcc (or cc) is available
-    if (system("command -v gcc >/dev/null 2>&1") != 0 &&
-        system("command -v cc >/dev/null 2>&1") != 0) {
-        fprintf(stderr, "Error: C compiler not found (gcc or cc).\n");
+    // C-backend compiler: honor $AE_CC then $CC (mirrors the Makefile's CC=),
+    // else default to gcc. C-backend only; aetherc selection is untouched.
+    const char* cc = c_backend_env_override();
+    if (cc) {
+        // Pre-flight the chosen compiler. CC may carry flags ("gcc -m32"), so
+        // resolve only its first token via `command -v`.
+        char first[256];
+        size_t n = strcspn(cc, " \t");
+        if (n >= sizeof(first)) n = sizeof(first) - 1;
+        snprintf(first, sizeof(first), "%.*s", (int)n, cc);
+        char probe[512];
+        snprintf(probe, sizeof(probe), "command -v %s >/dev/null 2>&1", first);
+        if (system(probe) != 0) {
+            fprintf(stderr, "Error: C compiler '%s' (from $%s) not found.\n",
+                    first, (getenv("AE_CC") && *getenv("AE_CC")) ? "AE_CC" : "CC");
+            snprintf(cmd, size, "false");
+            return;
+        }
+    } else {
+        cc = "gcc";
+        // Pre-flight check: ensure gcc (or cc) is available
+        if (system("command -v gcc >/dev/null 2>&1") != 0 &&
+            system("command -v cc >/dev/null 2>&1") != 0) {
+            fprintf(stderr, "Error: C compiler not found (gcc or cc).\n");
 #ifdef __APPLE__
-        fprintf(stderr, "Install Xcode Command Line Tools: xcode-select --install\n");
+            fprintf(stderr, "Install Xcode Command Line Tools: xcode-select --install\n");
 #else
-        fprintf(stderr, "Install GCC: sudo apt install gcc  (Debian/Ubuntu)\n");
-        fprintf(stderr, "             sudo dnf install gcc  (Fedora)\n");
+            fprintf(stderr, "Install GCC: sudo apt install gcc  (Debian/Ubuntu)\n");
+            fprintf(stderr, "             sudo dnf install gcc  (Fedora)\n");
 #endif
-        snprintf(cmd, size, "false");
-        return;
+            snprintf(cmd, size, "false");
+            return;
+        }
     }
     char opt[600];
     // --emit=lib adds -fPIC -shared so the output is loadable via dlopen.
@@ -2150,8 +2196,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         // BEFORE -laether on the link line — gcc resolves undefined
         // references left-to-right through static archives.
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -rdynamic -L%s %s -laether -o \"%s\" -pthread -lm %s %s %s %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, g_host_bridge_link, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, casper_libs, link_flags, g_binimport_link);
+            "%s %s %s \"%s\"%s %s -rdynamic -L%s %s -laether -o \"%s\" -pthread -lm %s %s %s %s %s %s %s",
+            cc, opt, tc.include_flags, c_file, config_c, extra, lib_dir, g_host_bridge_link, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, casper_libs, link_flags, g_binimport_link);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
@@ -2164,8 +2210,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         // symbols defined in tc.runtime_srcs (aether_shared_map_*,
         // etc.), so they appear BEFORE the runtime source list.
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, g_host_bridge_link, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, casper_libs, link_flags, g_binimport_link);
+            "%s %s %s \"%s\"%s %s %s %s -rdynamic -o \"%s\" -pthread -lm %s %s %s %s %s %s %s",
+            cc, opt, tc.include_flags, c_file, config_c, extra, g_host_bridge_link, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, casper_libs, link_flags, g_binimport_link);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "

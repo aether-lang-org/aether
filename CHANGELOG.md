@@ -11,6 +11,19 @@ next version number before tagging the release.
 
 ## [0.350.0]
 
+### Added
+
+- **`ae build` honors `$AE_CC` then `$CC` for the C-backend compiler** (#994),
+  mirroring the Makefile's `CC=` override. This selects the compiler that turns
+  Aether's generated C into the final binary; `aetherc` (the Aether-to-C front
+  end) is untouched. It unlocks the same-OS, cross-arch case with no new
+  codegen, e.g. `CC=aarch64-linux-gnu-gcc ae build --emit=lib foo.ae -o
+  libfoo.so` emits an arm64 `.so` on an x86_64 host. Unset `$AE_CC` / `$CC`
+  keeps the current default (`gcc`, WinLibs-bundled gcc on Windows) byte for
+  byte. A missing compiler now fails with a clear `C compiler '<name>' (from
+  $CC) not found` instead of a downstream link error. Applies to `ae build`,
+  `ae run`, and `ae build --emit=lib`.
+
 ## [0.349.0]
 
 _Docs only — LLM.md / CONTRIBUTING / README corrections (#997). No compiler,
