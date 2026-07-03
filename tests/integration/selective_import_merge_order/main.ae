@@ -1,0 +1,23 @@
+// Regression: aether#1009 — a selective import in the consumer must not stop a
+// dependency's qualified namespace from resolving, regardless of where that
+// module sits in the dependency's import list.
+//
+// `dep` whole-imports std.os (as its SECOND import) and calls
+// os.now_monotonic_ns() qualified. This file ALSO selectively imports std.os
+// (`getenv`) — which never even gets called. Before the fix, merely having the
+// selective import poisoned the dependency's qualified os.* surface:
+//   error[E0301]: Undefined function 'os.now_monotonic_ns'
+// After the fix the merger clones std.os's wrappers regardless of import order,
+// so dep.dep_now() links and returns a monotonic-ns timestamp.
+
+import dep
+import std.os (getenv)
+
+extern exit(code: int)
+
+main() {
+    ns = dep.dep_now()          // must resolve os.now_monotonic_ns() inside dep
+    // A non-empty numeric string proves the qualified os.* call ran.
+    println("OK ${ns}")
+    exit(0)
+}
