@@ -1,7 +1,7 @@
-# `std.json` — Design Notes
+# `std.json` Design Notes
 
 This document explains *why* `aether_json.c` is shaped the way it is.
-It's meant to be read alongside the source — not as a standalone spec,
+It's meant to be read alongside the source, not as a standalone spec,
 but as a map to the design decisions so future maintainers know what
 can be changed freely and what's load-bearing.
 
@@ -13,7 +13,7 @@ can be changed freely and what's load-bearing.
    Clang, MinGW (32+64-bit), Emscripten under `-Wall -Wextra -Werror
    -pedantic`. SIMD kernels gated behind compile-time feature detection
    (`__SSE2__`, `__ARM_NEON`) with a scalar fallback that's always
-   compiled — no target is SIMD-only.
+   compiled, no target is SIMD-only.
 3. **Fast enough that JSON isn't a bottleneck.** Every byte in the hot
    path is touched at most once. Allocations happen from a per-document
    arena, not per-node. Hot classification decisions are a single LUT
@@ -47,7 +47,7 @@ The arena is a singly-linked list of `ArenaChunk`s. First chunk is 16 KB
 (big enough that tiny documents never grow), subsequent chunks double
 in size up to a 2 MB cap. An allocation bigger than the current chunk's
 remaining space triggers a new chunk sized at least as large as the
-requested bytes — so a single 5 MB string doesn't force the allocator
+requested bytes, so a single 5 MB string doesn't force the allocator
 to keep doubling until it exceeds the request.
 
 Alignment is fixed at 8 bytes. All allocations round up.
@@ -58,11 +58,11 @@ Several fast parsers store parsed values in a **tape**: a flat array of
 fixed-size slots indexed by position, with parent/child relationships
 encoded via sibling offsets. That layout is maximally cache-friendly
 but it couples value lifetimes to the tape and makes the creation path
-(`json_create_string`, `json_object_set`, …) awkward — a standalone
+(`json_create_string`, `json_object_set`, …) awkward, a standalone
 value has nowhere to live without a tape to sit in.
 
-We preserve the API shape — values are reachable through a tree of
-pointers — and recover cache locality from the arena's chunk-local
+We preserve the API shape, values are reachable through a tree of
+pointers, and recover cache locality from the arena's chunk-local
 allocation. Values allocated close in time end up close in memory, and
 `JsonValue` itself is sized to fit two per 64-byte cache line
 (see "JsonValue sizing" below). A full tape representation is possible
@@ -102,7 +102,7 @@ while (s->p < s->end && (CC(*s->p) & CC_STR_OK)) p_advance(s);
 The table is initialized once on first parse via `cc_init()` (the
 static initializer handles the digit/hex/structural entries; runtime
 code fills `CC_STR_OK` for the rest of printable ASCII). `cc_init` is
-idempotent and guarded by a simple non-atomic flag — the race on first
+idempotent and guarded by a simple non-atomic flag, the race on first
 parse is benign because both racing threads would compute the same
 table contents.
 
@@ -117,13 +117,13 @@ readable declaration. The check is predicted cold after the first parse.
 
 `parse_string_raw` is two-phase:
 
-1. **Pre-scan** — walk forward from the opening `"`, skipping
+1. **Pre-scan**, walk forward from the opening `"`, skipping
    `\\<byte>` pairs verbatim, until the closing `"` is found.
    This gives us the exact span length. We allocate a decode buffer
-   of `span + 1` bytes in the arena — tight upper bound because
+   of `span + 1` bytes in the arena, tight upper bound because
    JSON escapes cannot *grow* their output (a 6-byte `\uXXXX` decodes
    to at most 3 UTF-8 bytes; a 12-byte surrogate pair to 4).
-2. **Decode** — walk again, this time with the LUT fast loop:
+2. **Decode**, walk again, this time with the LUT fast loop:
 
    ```c
    while (s->p < s->end && (CC(*s->p) & CC_STR_OK)) {
@@ -157,14 +157,14 @@ codepoints > U+10FFFF, continuation bytes in lead position.
 
 The DFA state `UTF8_ACCEPT = 0` starts a new codepoint,
 `UTF8_REJECT = 12` latches an error, any other value means mid-sequence.
-Per-byte cost: one table load + two arithmetic ops — much cheaper than
+Per-byte cost: one table load + two arithmetic ops, much cheaper than
 branching on each byte's bit pattern.
 
 ## SIMD string fast-loop
 
 The string parser's inner loop skips over "safe" printable ASCII bytes
 (>= 0x20, < 0x80, not `"`, not `\`). That loop is in the hot path of
-every non-trivial JSON document and is embarrassingly parallel — each
+every non-trivial JSON document and is embarrassingly parallel, each
 byte is classified in isolation.
 
 `scan_str_safe()` picks one implementation at **compile time**, never
@@ -180,13 +180,13 @@ at runtime:
 - `__ARM_NEON && __aarch64__` → NEON kernel. Same classification as
   SSE2, different intrinsics. NEON lacks `movemask`, so we use the
   canonical `vshrn_n_u16` narrow-to-nibbles trick to produce a u64
-  where each input byte contributes 4 bits — `__builtin_ctzll >> 2`
+  where each input byte contributes 4 bits, `__builtin_ctzll >> 2`
   gives the first-set-byte offset.
 - fallback → a scalar loop over the CC_STR_OK lookup table. Byte-at-
   a-time but branch-predictor-friendly. Active on WASM, embedded, or
   any target that lacks both intrinsic headers.
 
-All three produce byte-identical results — SIMD is purely additive
+All three produce byte-identical results, SIMD is purely additive
 acceleration, never a semantic shift. The SIMD path always leaves a
 scalar tail loop to clean up 0-15 bytes at the end. No runtime feature
 detection = no per-call branch cost on the happy path.
@@ -207,7 +207,7 @@ structural step is tape representation, not more SIMD.
 RFC 8259 numbers have a strict grammar:
 `[ minus ] int [ frac ] [ exp ]` where `int` rejects leading zeros.
 We walk the grammar explicitly **and accumulate all three fields in a
-single pass** — sign, integer mantissa (int64), fractional mantissa
+single pass**, sign, integer mantissa (int64), fractional mantissa
 (int64) with digit count, signed exponent.
 
 Three paths, chosen by which accumulators are in-range:
@@ -219,7 +219,7 @@ Three paths, chosen by which accumulators are in-range:
    `POW10_POS[n]` is exactly representable in a double). Fuse int and
    frac into one integer mantissa, multiply/divide by
    `POW10_POS[|exp|]` once. One multiply, one cast, one negate.
-3. **Fallback.** Any of the above conditions fails — typically 16+
+3. **Fallback.** Any of the above conditions fails, typically 16+
    significant digits, huge exponents, denormals, or overflow of the
    int64 mantissa. Hand the validated span off to `strtod` for
    correctly-rounded IEEE-754. Guarantees we never silently return a
@@ -235,7 +235,7 @@ fallback is the only correct answer.
 
 ## Containers: flat arrays + one indirection for objects
 
-`JsonValue::arr` is `{ JsonValue** items; uint32_t count, capacity }` —
+`JsonValue::arr` is `{ JsonValue** items; uint32_t count, capacity }`,
 a pointer to an arena-owned array plus inline count/capacity.
 
 `JsonValue::obj` holds the same count/capacity pair inline but reaches
@@ -249,13 +249,13 @@ typedef struct JsonObjBlock {
 } JsonObjBlock;
 ```
 
-Reading an object field is `obj->data.obj.blk->values[i]` — one extra
+Reading an object field is `obj->data.obj.blk->values[i]` one extra
 pointer load compared to inlining the three arrays in `JsonValue`. The
 payoff is that the `obj` union variant is 16 bytes instead of 32, which
 collapses `sizeof(JsonValue)` from 48 to 32 and lets two values share a
 64-byte cache line on every machine we care about (see the next
 section). Since every non-trivial object access is going to miss cache
-*somewhere* — either on the value struct or on the block — putting the
+*somewhere*, either on the value struct or on the block, putting the
 indirection at the block level is essentially free, and halving the
 value struct's footprint pays back across the whole parsed tree.
 
@@ -264,10 +264,10 @@ Growth uses simple doubling with an initial capacity of
 the 5–15 key range, so starting at 8 skips one doubling cycle in the
 common case; tiny objects waste a few unused pointers which round-off
 into the arena anyway. Old buffers become arena garbage until the arena
-is freed — waste is bounded by `O(final size)` per container.
+is freed, waste is bounded by `O(final size)` per container.
 
 **Iteration order.** The parallel-array layout means objects iterate
-in insertion order by construction — the parser appends to the tail as
+in insertion order by construction, the parser appends to the tail as
 it reads each `key: value` pair, and the builder's `json_object_set_raw`
 does the same on first insert. The public iteration API
 (`json_object_size_raw` / `json_object_key_at` / `json_object_value_at`,
@@ -282,16 +282,16 @@ need sorted iteration copy the keys and sort.
 struct JsonValue {
     uint8_t type;           // 1
     uint8_t flags;          // 1  (JV_FLAG_ROOT | JV_FLAG_HEAP_STRUCT | JV_FLAG_INTEGER)
-    uint8_t _pad[6];        // 6  — needed to align the union at offset 8
+    uint8_t _pad[6];        // 6, needed to align the union at offset 8
     union {
         int       boolean;                          // 4
         double    number;                           // 8
-        long long integer;                          // 8  — used when JV_FLAG_INTEGER set
+        long long integer;                          // 8, used when JV_FLAG_INTEGER set
         struct { const char* data; uint32_t length; } str;  // 16
         struct { JsonValue** items; uint32_t c, cap; } arr; // 16
         struct { JsonObjBlock* blk; uint32_t c, cap; } obj; // 16
-    } data;                 // 16 bytes — widest variant is str / arr / obj
-    Arena* arena;           // 8  — set on root only (interior: NULL)
+    } data;                 // 16 bytes, widest variant is str / arr / obj
+    Arena* arena;           // 8, set on root only (interior: NULL)
 };                          // 32 bytes total
 ```
 
@@ -302,7 +302,7 @@ any code that reads the fields.
 
 The `_pad[6]` after `type`/`flags` is forced by the union's 8-byte
 alignment (it contains a `double`). The `arena` pointer lives on the
-root only — interior values keep it `NULL` and use it as a
+root only, interior values keep it `NULL` and use it as a
 "is-this-a-root" marker when the mutation path needs to branch.
 
 ### Object lookup: linear scan
@@ -328,7 +328,7 @@ go through a separate `err_set_no_pos(reason)`. Both share the
 calls no-op. This preserves the innermost diagnostic, which is almost
 always the most specific.
 
-Position accuracy is maintained by `p_advance(s)` — every cursor
+Position accuracy is maintained by `p_advance(s)` every cursor
 motion goes through it, incrementing `line` on `\n` and `col`
 otherwise. The fast string loop calls `p_advance` in every iteration
 (not just on the escape branch), which costs a little throughput but
@@ -341,20 +341,20 @@ The base parser surfaces errors via `err_set` (human string) plus the
 parallel surface that callers can switch on programmatically without
 parsing English:
 
-- `g_json_err_kind` — one of `AETHER_JSON_KIND_*` (`OK`, `PARSE_ERROR`,
+- `g_json_err_kind` one of `AETHER_JSON_KIND_*` (`OK`, `PARSE_ERROR`,
   `OUT_OF_MEMORY`, `INVALID_INPUT`). `err_set` only ever assigns
   `OUT_OF_MEMORY` or `PARSE_ERROR`: OOM detection is a single-site
   `strstr(msg, "out of memory")` check, so the dozens of existing
   `err_set("out of memory ...")` sites need no change, and everything
   else falls through to `PARSE_ERROR`. `INVALID_INPUT` comes only from
   `err_set_no_pos`, which handles the null/empty-input path.
-- `g_json_err_line` / `_col` — the same 1-based position the human
+- `g_json_err_line` / `_col` the same 1-based position the human
   message reports, but as integers for callers that want to point at
   source.
-- `json_last_error_kind()` / `_line()` / `_col()` — public C accessors
+- `json_last_error_kind()` / `_line()` / `_col()` public C accessors
   for the three thread-locals. Aether-side wrappers in
   `std/json/module.ae` re-export them.
-- `parse_strict(json_str) -> (ptr, int, string)` — Aether wrapper that
+- `parse_strict(json_str) -> (ptr, int, string)` Aether wrapper that
   returns `(value, kind, message)` per call. The kind is read from
   the thread-local immediately after parse so concurrent callers from
   different threads each see their own; the tuple shape is the
@@ -375,12 +375,12 @@ and remains the recommended path for callers that just need
 Hard cap at `JSON_MAX_DEPTH = 256`. Enforced on every container entry
 via `parse_value_depth(depth + 1)`. Prevents both stack overflow on
 pathological input and denial-of-service via deeply nested JSON
-bombs (which DOS many naive parsers). No way to disable at runtime —
+bombs (which DOS many naive parsers). No way to disable at runtime,
 it's a bounded recursion guarantee, not a configurable limit.
 
 ## Thread safety
 
-The parser itself is **reentrant and thread-safe** — there is no
+The parser itself is **reentrant and thread-safe**, there is no
 mutable global state during parse. The five `_Thread_local` globals
 (`g_json_err_buf`, `g_json_err_set`, and the structured-error trio
 `g_json_err_kind` / `_line` / `_col`) and the `JSON_CC_RW` init flag
@@ -401,7 +401,7 @@ bound starts to pinch.
 The fastest contemporary JSON parsers store parsed values in a flat
 slot array ("tape") with parent/child relationships encoded as sibling
 offsets. That layout is maximally cache-dense for traversal but assumes
-the whole tree is written once and never mutated — "insert a child"
+the whole tree is written once and never mutated, "insert a child"
 would invalidate every downstream sibling offset.
 
 Our `json_object_set` / `json_array_add` mutation APIs let callers add
@@ -440,36 +440,36 @@ always compiled. Anything beyond that depends on tape landing first.
 
 ### Things we deliberately don't do
 
-- **Streaming / incremental parsing** — everything is parsed into
+- **Streaming / incremental parsing**, everything is parsed into
   memory in one go. JSON payloads that don't fit in RAM are rare and
   streaming complicates both the arena and the error-reporting path.
-- **UTF-16 / UTF-32 input** — RFC 8259 mandates UTF-8. We reject
+- **UTF-16 / UTF-32 input**, RFC 8259 mandates UTF-8. We reject
   anything else at the byte layer.
-- **Canonical JSON output / pretty-printing** — `json_stringify_raw`
+- **Canonical JSON output / pretty-printing**, `json_stringify_raw`
   emits compact JSON. A pretty option is a trivial add if asked for.
-- **Schema validation** — not a parser concern.
-- **Runtime CPU feature detection** — compile-time dispatch only. If
+- **Schema validation**, not a parser concern.
+- **Runtime CPU feature detection**, compile-time dispatch only. If
   a binary is built for a target that has SSE2, it uses SSE2
   everywhere that target runs. No dispatch cost on the happy path.
 
 ## Testing surface
 
-- **`tests/runtime/test_runtime_json.c`** — C-level unit tests,
+- **`tests/runtime/test_runtime_json.c`**, C-level unit tests,
   8 tests covering parse/create/stringify for each type.
-- **`tests/regression/test_json_*.ae`** — Aether-level regression
+- **`tests/regression/test_json_*.ae`**, Aether-level regression
   tests for edge cases (escapes, Unicode, RFC rejection, position
   errors, error tuples, edge-case wrappers).
-- **`tests/conformance/json/`** — 318-file JSONTestSuite corpus.
+- **`tests/conformance/json/`**, 318-file JSONTestSuite corpus.
   `make test-json-conformance` checks every file. Gates CI on
   `y_*` + `n_*` (283 cases); records `i_*` (35 cases) as
   implementation-defined.
-- **`make test-json-asan`** — parses the bench corpus under
+- **`make test-json-asan`**, parses the bench corpus under
   `-fsanitize=address,undefined`. Catches leaks, OOB, UB.
-- **`make test-json-valgrind`** — Valgrind run where available.
-- **`make bench-json` / `make bench-json-compare`** — reproducible
+- **`make test-json-valgrind`**, Valgrind run where available.
+- **`make bench-json` / `make bench-json-compare`**, reproducible
   benchmark harness; see
   [benchmarks/json/baseline.md](../benchmarks/json/baseline.md) for
-  the methodology. Absolute throughput numbers are not committed — run
+  the methodology. Absolute throughput numbers are not committed, run
   the harness on the machine you care about.
 
 ## When to change what

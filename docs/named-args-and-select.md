@@ -21,7 +21,7 @@ greet("alice", 3)
 greet("alice", count: 3)
 ```
 
-Named arguments are documentation at the call site — they make code
+Named arguments are documentation at the call site, they make code
 more readable but don't change semantics. The C compiler receives
 positional arguments regardless.
 
@@ -56,7 +56,7 @@ one = [42]
 
 Arrays are fixed-size C arrays. Element access uses `[]` subscript.
 
-## select() — Platform Conditional
+## select(), Platform Conditional
 
 Compile-time platform selection using named arguments:
 

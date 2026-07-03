@@ -45,7 +45,7 @@ can only grant a subset of what its parent has.
 ### Permission model
 
 Permissions are capabilities granted to a scope. A child scope cannot
-exceed its parent's permissions — it can only narrow them.
+exceed its parent's permissions, it can only narrow them.
 
 ```
 outermost: grant("*")              → everything allowed
@@ -57,17 +57,17 @@ outermost: grant("*")              → everything allowed
 
 The sandbox uses:
 - **Builder DSL** (`_ctx: ptr`) for declarative nesting
-- **Closures** (`fn` params) for isolation — contained code runs in a
+- **Closures** (`fn` params) for isolation, contained code runs in a
   hoisted function, cannot reach parent locals
 - **Ref cells / lists** for the permissions registry
 - **Wrapper functions** that check permissions before executing
 
 ### The key insight
 
-Trailing blocks `{ }` are inlined — they CAN reach the enclosing scope.
+Trailing blocks `{ }` are inlined, they CAN reach the enclosing scope.
 These are used for **configuration** (granting permissions).
 
-Closures `|ctx| { }` are hoisted — they CANNOT reach the enclosing scope
+Closures `|ctx| { }` are hoisted, they CANNOT reach the enclosing scope
 unless explicitly passed. These are used for **contained code**.
 
 This maps directly to the container/contained boundary:
@@ -89,7 +89,7 @@ add_permission(_ctx: ptr, category: string, pattern: string) {
     list.add(_ctx, pattern)
 }
 
-// Convenience grant functions — configure what the contained can do
+// Convenience grant functions, configure what the contained can do
 grant_all(_ctx: ptr) {
     add_permission("*", "*")
 }
@@ -114,7 +114,7 @@ grant_env(_ctx: ptr, var_name: string) {
     add_permission("env", var_name)
 }
 
-// Create a sandbox scope — returns the permission list
+// Create a sandbox scope, returns the permission list
 sandbox(name: string) {
     perms = list.new()
     println("sandbox: ${name}")
@@ -208,7 +208,7 @@ main() {
         grant_tcp("api.example.com", 443)
     }
 
-    // Run contained code — each closure is isolated
+    // Run contained code, each closure is isolated
     println("")
     println("=== db-worker ===")
     worker_code = |perms: ptr| {
@@ -293,7 +293,7 @@ It receives only `perms` as its argument. It cannot access:
 The closure is compiled to:
 ```c
 static void _closure_fn_N(_closure_env_N* _env, void* perms) {
-    // Can only use 'perms' — nothing else from parent scope
+    // Can only use 'perms', nothing else from parent scope
     sandboxed_tcp_connect(perms, "db.internal", 5432);
 }
 ```
@@ -311,17 +311,17 @@ outer = sandbox("outer") {
 inner = sandbox("inner") {
     // Can only grant what outer has
     grant_tcp("db.corp", 5432)   // narrowed to one host
-    // fs_read not granted — inner cannot read files
+    // fs_read not granted, inner cannot read files
 }
 ```
 
 The `check_permission` function only looks at the scope's own grants.
-If the parent didn't grant something, the child can't either — because
+If the parent didn't grant something, the child can't either, because
 the child's grant functions only add to the child's own permission list.
 
 ### The `*` wildcard
 
-`grant_all()` adds `("*", "*")` — a wildcard category and pattern.
+`grant_all()` adds `("*", "*")` a wildcard category and pattern.
 `check_permission` checks wildcards first, so `grant_all()` permits
 everything. Individual grants like `grant_tcp("host", port)` add
 specific entries. The check function matches exact or wildcard.
@@ -346,7 +346,7 @@ specific entries. The check function matches exact or wildcard.
 | Volume mount (read-only) | `grant_fs_read("/path")` |
 | Volume mount (read-write) | `grant_fs_write("/path")` |
 | Port mapping | `grant_tcp("host", port)` |
-| `--cap-drop ALL` | No `grant_all()` — deny by default |
+| `--cap-drop ALL` | No `grant_all()` deny by default |
 | `--cap-add NET_RAW` | `grant_tcp("*", 0)` |
 | Entrypoint/CMD | `run_contained(perms, code)` |
 | Namespace isolation | Closure cannot reach parent scope |
@@ -354,25 +354,25 @@ specific entries. The check function matches exact or wildcard.
 ## What's enforced
 
 The sandbox intercepts at the **stdlib level**. These calls are checked
-transparently — the contained code uses normal stdlib wrappers and
+transparently, the contained code uses normal stdlib wrappers and
 cannot tell it's sandboxed. The check happens inside the underlying
 `_raw` C function, so both the Go-style wrapper (`tcp.connect`) and
 direct calls to the raw extern (`tcp_connect_raw`) are enforced.
 
 | Wrapper | Raw C symbol | Category | Enforced |
 |---------|--------------|----------|----------|
-| `tcp.connect(host, port)` | `tcp_connect_raw` | `"tcp"` | Yes — wrapper returns `(null, "connect failed")` if denied |
-| `tcp.listen(port)` | `tcp_listen_raw` | `"tcp_listen"` | Yes — wrapper returns `(null, "listen failed")` if denied |
-| `file.open(path, "r")` | `file_open_raw` | `"fs_read"` | Yes — wrapper returns `(null, "cannot open file")` if denied |
-| `file.open(path, "w")` | `file_open_raw` | `"fs_write"` | Yes — wrapper returns `(null, "cannot open file")` if denied |
-| `file.exists(path)` | `file_exists` | `"fs_read"` | Yes — returns 0 if denied |
-| `file.delete(path)` | `file_delete_raw` | `"fs_write"` | Yes — wrapper returns `"cannot delete file"` if denied |
-| `file.size(path)` | `file_size_raw` | `"fs_read"` | Yes — wrapper returns `(0, "cannot stat file")` if denied |
-| `os.system(cmd)` | `os_system` | `"exec"` | Yes — returns -1 if denied |
-| `os.exec(cmd)` | `os_exec_raw` | `"exec"` | Yes — wrapper returns `("", "command failed")` if denied |
-| `os.getenv(name)` | `os_getenv` | `"env"` | Yes — returns null if denied |
+| `tcp.connect(host, port)` | `tcp_connect_raw` | `"tcp"` | Yes, wrapper returns `(null, "connect failed")` if denied |
+| `tcp.listen(port)` | `tcp_listen_raw` | `"tcp_listen"` | Yes, wrapper returns `(null, "listen failed")` if denied |
+| `file.open(path, "r")` | `file_open_raw` | `"fs_read"` | Yes, wrapper returns `(null, "cannot open file")` if denied |
+| `file.open(path, "w")` | `file_open_raw` | `"fs_write"` | Yes, wrapper returns `(null, "cannot open file")` if denied |
+| `file.exists(path)` | `file_exists` | `"fs_read"` | Yes, returns 0 if denied |
+| `file.delete(path)` | `file_delete_raw` | `"fs_write"` | Yes, wrapper returns `"cannot delete file"` if denied |
+| `file.size(path)` | `file_size_raw` | `"fs_read"` | Yes, wrapper returns `(0, "cannot stat file")` if denied |
+| `os.system(cmd)` | `os_system` | `"exec"` | Yes, returns -1 if denied |
+| `os.exec(cmd)` | `os_exec_raw` | `"exec"` | Yes, wrapper returns `("", "command failed")` if denied |
+| `os.getenv(name)` | `os_getenv` | `"env"` | Yes, returns null if denied |
 
-Nested sandboxes are intersected — an inner sandbox cannot escalate
+Nested sandboxes are intersected, an inner sandbox cannot escalate
 beyond what the outer sandbox grants.
 
 ## Per-function effect tags (#481)
@@ -392,13 +392,13 @@ classify(req: Request) -> int { ... }            // must touch no filesystem
 - `@pure` forbids all of fs/net/os; `@no_fs` / `@no_net` / `@no_os` forbid one
   capability each (stackable: `@no_fs @no_net f() {}`).
 - A whole-program pass walks the call graph from each tagged function. If it
-  reaches a capability-gated stdlib call — `file.*`/`dir.*`/`path.*` (fs),
-  `tcp.*`/`http.*` (net), `os.*` (os) — directly or through another function,
+  reaches a capability-gated stdlib call, `file.*`/`dir.*`/`path.*` (fs),
+  `tcp.*`/`http.*` (net), `os.*` (os), directly or through another function,
   the compile fails with the offending call path named.
 - Composes with `--with=`: that switch says the *program* may use fs; an
   effect tag says *this function* must not. The two axes are independent.
 - A raw `extern` call is unclassifiable (the compiler can't know a foreign
-  symbol's effects), so it is not flagged — the same boundary the `--with=`
+  symbol's effects), so it is not flagged, the same boundary the `--with=`
   import gate has.
 
 ## Pattern matching
@@ -421,10 +421,10 @@ granted prefix can no longer escape it.
 
 When the path doesn't exist yet (writing a new file), the resolver
 falls back to resolving the parent directory and reattaching the
-basename — the kernel will refuse the create syscall otherwise, and
+basename, the kernel will refuse the create syscall otherwise, and
 the parent must be real for any meaningful operation. If even the
 parent can't be resolved (truly unusable path), the original string
-is matched as a baseline — same behaviour as before this fix, so the
+is matched as a baseline, same behaviour as before this fix, so the
 gate never silently tightens or loosens at the edges.
 
 Non-fs categories (`tcp`, `env`, `exec`) carry no path semantics;
@@ -450,7 +450,7 @@ compile and run without restriction.
 
 **Impact:** the sandbox is effective when you control compilation and
 don't put `extern` declarations in contained code. It's the same trust
-model as Docker — you trust the container runtime (Aether's stdlib),
+model as Docker, you trust the container runtime (Aether's stdlib),
 but the contained code must use the provided APIs.
 
 ### Proposed fix: compiler-enforced extern check
@@ -465,7 +465,7 @@ passed to `run_sandboxed`. Implementation:
 3. Emit a compile error: `"extern calls not permitted in sandboxed code"`
 
 This is a typechecker/codegen change, not a runtime change. It would
-make the sandbox inescapable at compile time — analogous to Java's
+make the sandbox inescapable at compile time, analogous to Java's
 ClassLoader preventing contained code from seeing restricted classes.
 
 The key insight: extern restriction is a **compilation** concern. The
@@ -519,14 +519,14 @@ exactly what to grant. Self-service.
 ## Audit trail
 
 Denial logging above covers the **cross-process** (LD_PRELOAD) layer.
-The **in-process** layer — the stdlib grant checks an in-program
+The **in-process** layer, the stdlib grant checks an in-program
 `sandbox { }` block drives, and the checks embedded/hosted plugins go
-through — has its own audit trail, recording every permission decision,
+through, has its own audit trail, recording every permission decision,
 *allowed as well as denied*.
 
 ### Live sink
 
-Set `AETHER_SANDBOX_AUDIT` — same shape as `AETHER_SANDBOX_LOG`:
+Set `AETHER_SANDBOX_AUDIT` same shape as `AETHER_SANDBOX_LOG`:
 
 | Mode | Env var | Behaviour |
 |------|---------|-----------|
@@ -534,12 +534,12 @@ Set `AETHER_SANDBOX_AUDIT` — same shape as `AETHER_SANDBOX_LOG`:
 | **Stderr** | `AETHER_SANDBOX_AUDIT=stderr` | `AETHER_ALLOWED:` / `AETHER_DENIED:` lines as checks happen. |
 | **File** | `AETHER_SANDBOX_AUDIT=file` | Same lines appended to `./aether-sandbox.log`. |
 
-Off by default because — unlike denial-only logging — auditing records
+Off by default because, unlike denial-only logging, auditing records
 *allowed* checks too and is verbose. Denials keep the `AETHER_DENIED:`
 prefix the rest of the tooling greps for; allowed checks get a parallel
 `AETHER_ALLOWED:`.
 
-### Queryable log — `std.audit`
+### Queryable log, `std.audit`
 
 The last 256 checks are also held in an in-memory ring buffer that the
 program can read back through the `std.audit` module:
@@ -572,7 +572,7 @@ interception model requires.
 | Platform | Runtime sandbox | Notes |
 |----------|----------------|-------|
 | **Linux** | LD_PRELOAD (`libaether_sandbox.so`) | Preload locates itself via `/proc/self/exe`. Intercepts the glibc large-file (`open64`/`fopen64`/`mmap64`) and `clone3` entry points in addition to the common surface. |
-| **FreeBSD** | LD_PRELOAD + **Capsicum self-sandbox** + **Casper** | LD_PRELOAD works as on Linux (preload locates itself via `sysctl(KERN_PROC_PATHNAME)` — no `/proc`; no `*64`/`clone3`). An Aether process launched with `AETHER_CAPSICUM=1` enters FreeBSD capability mode at startup — kernel-enforced, unbypassable containment; `spawn_sandboxed` sets that for Aether children automatically. `std.casper` lets a capability-mode process still resolve DNS / read passwd / read sysctl by delegating to the Casper daemon. See [`aether_compared_to_capsicum.md`](aether_compared_to_capsicum.md). |
+| **FreeBSD** | LD_PRELOAD + **Capsicum self-sandbox** + **Casper** | LD_PRELOAD works as on Linux (preload locates itself via `sysctl(KERN_PROC_PATHNAME)` no `/proc`; no `*64`/`clone3`). An Aether process launched with `AETHER_CAPSICUM=1` enters FreeBSD capability mode at startup, kernel-enforced, unbypassable containment; `spawn_sandboxed` sets that for Aether children automatically. `std.casper` lets a capability-mode process still resolve DNS / read passwd / read sysctl by delegating to the Casper daemon. See [`aether_compared_to_capsicum.md`](aether_compared_to_capsicum.md). |
 | **macOS** | Not supported | `DYLD_INSERT_LIBRARIES` exists but the hardened runtime ignores it for system binaries. `spawn_sandboxed` is a stub that fails loudly. |
 | **Windows** | Not supported | No `LD_PRELOAD` equivalent. `spawn_sandboxed` is a stub. |
 
@@ -586,7 +586,7 @@ Before signing off an Aether sandboxed deployment, verify:
 ### 1. LD_PRELOAD is active
 
 The sandbox preload library must be in the LD_PRELOAD chain.
-Without it, there is no interception — all libc calls pass through
+Without it, there is no interception, all libc calls pass through
 unfiltered.
 
 ```bash
@@ -613,7 +613,7 @@ grant_exec("echo *")
 
 ### 3. No statically linked binaries in granted paths
 
-A statically linked binary doesn't use libc — it talks to the kernel
+A statically linked binary doesn't use libc, it talks to the kernel
 directly, bypassing all LD_PRELOAD interception. Verify no static
 binaries exist in any path accessible to the sandbox:
 
@@ -623,7 +623,7 @@ find /usr/bin -type f -exec file {} \; | grep "statically linked"
 # Should return nothing on stock Debian/Ubuntu
 ```
 
-Go binaries are the primary risk — they're often statically linked.
+Go binaries are the primary risk, they're often statically linked.
 Don't grant `fs_read` to directories containing Go binaries unless
 the sandbox needs them.
 
@@ -636,7 +636,7 @@ Don't grant it unless necessary. Without it:
 - Python `ctypes.CDLL("libc.so.6")` is blocked
 - Perl `DynaLoader::dl_load_file("libc.so.6")` is blocked
 - Ruby `Fiddle.dlopen("libc.so.6")` loads but calls are still intercepted
-- Lua has no FFI — not a vector
+- Lua has no FFI, not a vector
 
 ### 5. Grant list follows least privilege
 
@@ -648,7 +648,7 @@ worker = sandbox("worker") {
     grant_env("DATABASE_URL")       // needs DB connection string
     grant_fs_read("/app/config/*")  // needs config files
     grant_tcp("db.internal")        // talks to database
-    // Nothing else — deny by default
+    // Nothing else, deny by default
 }
 ```
 
@@ -664,7 +664,7 @@ No `grant_env("*")`.
 
 ### 7. Sandbox code is auditable
 
-The sandbox policy is Aether source code — readable, diffable,
+The sandbox policy is Aether source code, readable, diffable,
 reviewable in a PR. Unlike Docker's layered Dockerfile + compose +
 k8s manifests, the entire policy is in one place:
 
@@ -691,20 +691,20 @@ cat sandbox-config.ae
 
 | Attack vector | Why |
 |--------------|-----|
-| Statically linked binaries | Don't use libc — bypass LD_PRELOAD entirely. Process creation by such binaries is still caught by the seccomp-bpf clone fence (see below). |
+| Statically linked binaries | Don't use libc, bypass LD_PRELOAD entirely. Process creation by such binaries is still caught by the seccomp-bpf clone fence (see below). |
 | `ptrace` self | Can modify own process memory to skip checks |
-| Kernel exploits | We're userspace — can't defend against kernel bugs |
+| Kernel exploits | We're userspace, can't defend against kernel bugs |
 
 For these vectors, combine with OS-level sandboxing (seccomp-bpf,
 Linux namespaces, OpenBSD pledge/unveil) for defence in depth.
 
-### Kernel-level fence for process creation — the clone3 gap, closed
+### Kernel-level fence for process creation, the clone3 gap, closed
 
 The LD_PRELOAD layer cannot intercept syscalls that don't go through
 exported libc symbols. Two notable bypasses, both common:
 
 - **glibc `__vfork`** on x86_64 is an inline `syscall` instruction in
-  libc's text. LD_PRELOAD never sees it — there's no symbol to interpose.
+  libc's text. LD_PRELOAD never sees it, there's no symbol to interpose.
 - Any program calling `syscall(SYS_clone3, …)` (or issuing the raw
   syscall instruction directly).
 
@@ -724,11 +724,11 @@ is automatic and not configurable through the grant grammar: if
 `fork:*` is granted, the filter isn't installed at all; otherwise it
 fires unconditionally. If the kernel doesn't support seccomp, the
 child aborts with `exit(126)` rather than silently running uncontained
-— a `spawn_sandboxed` that asked for containment we can't deliver
+a `spawn_sandboxed` that asked for containment we can't deliver
 must not exec.
 
-This closes issue #668. The complementary gap — `connect()` and
-`execve()` issued by statically-linked binaries or raw asm — remains.
+This closes issue #668. The complementary gap, `connect()` and
+`execve()` issued by statically-linked binaries or raw asm, remains.
 Those callers can still skip the LD_PRELOAD layer for network reach
 and exec, since the seccomp filter here targets only the
 process-creation family. Adding seccomp arms for `connect`/`execve`
@@ -736,7 +736,7 @@ is a natural extension but introduces a much wider filter that needs
 its own discussion (an allowlist by host/path becomes a per-call BPF
 program); not done here.
 
-### Interception surface — what LD_PRELOAD sees and what it doesn't
+### Interception surface, what LD_PRELOAD sees and what it doesn't
 
 **Lesson from Google App Engine (2013):** An intern broke out of
 App Engine's Java sandbox by exploiting a gap between what the
@@ -753,7 +753,7 @@ so you can reason about it explicitly rather than assume coverage.
 See `docs/next-steps.md` → *Interception surface expansion* for the
 in-flight work to widen the LD_PRELOAD surface.
 
-#### Filesystem — not intercepted
+#### Filesystem, not intercepted
 
 | Function / syscall | What it does | Risk |
 |-------------------|-------------|------|
@@ -765,30 +765,30 @@ in-flight work to widen the LD_PRELOAD surface.
 | `io_uring` | Async I/O submission ring | Submits read/write/open ops that bypass libc entirely |
 | `readlink()` / `readlinkat()` | Read symlink target | Information leak about filesystem layout |
 | `stat()` / `fstat()` / `lstat()` | File metadata | Can probe existence of files we intend to hide |
-| `access()` / `faccessat()` | Check file permissions | Same as stat — probes file existence |
+| `access()` / `faccessat()` | Check file permissions | Same as stat, probes file existence |
 | `getdents64()` | Read directory entries | Lists files in granted directories |
 
-#### Network — not intercepted
+#### Network, not intercepted
 
 | Function / syscall | What it does | Risk |
 |-------------------|-------------|------|
 | `sendto()` / `sendmsg()` | Send data on already-open socket | If socket was opened before sandbox |
-| `recvfrom()` / `recvmsg()` | Receive data | Same — works on pre-existing sockets |
+| `recvfrom()` / `recvmsg()` | Receive data | Same, works on pre-existing sockets |
 | `accept4()` | Accept incoming connection (Linux variant) | Only `accept()` is intercepted; `accept4()` is not |
 | `socketpair()` | Create paired sockets | Local IPC bypass |
 | UDP (`SOCK_DGRAM`) | Connectionless networking | `connect` interception only checks TCP |
 
-#### Process / execution — not intercepted
+#### Process / execution, not intercepted
 
 | Function / syscall | What it does | Risk |
 |-------------------|-------------|------|
 | `execveat()` | Execute by fd (Linux 3.19+) | Alternative to `execve` |
-| `clone()` (arch-specific) | Create new process/thread | Variadic, arch-dependent — hard to intercept portably |
+| `clone()` (arch-specific) | Create new process/thread | Variadic, arch-dependent, hard to intercept portably |
 | `prctl()` | Process control | Can disable dumpable, change name, etc. |
 | `ptrace()` | Debug/modify another process | Can modify own memory to skip checks |
 | `process_vm_readv/writev()` | Read/write another process's memory | Cross-process data exfiltration |
 
-#### Memory — not intercepted (beyond mmap/mprotect)
+#### Memory, not intercepted (beyond mmap/mprotect)
 
 | Function / syscall | What it does | Risk |
 |-------------------|-------------|------|
@@ -800,7 +800,7 @@ in-flight work to widen the LD_PRELOAD surface.
 
 Every item above is a path that our LD_PRELOAD interception doesn't
 see. For **cooperative containment** (plugins, workers, hosted
-languages) this doesn't matter — Python's `os.getenv()` goes through
+languages) this doesn't matter, Python's `os.getenv()` goes through
 libc `getenv()`, not raw `syscall(SYS_getenv)`. Normal code uses
 the functions we intercept.
 
@@ -828,7 +828,7 @@ from an absent resource.
 ## Sandboxing bash scripts
 
 Bash is a common choice for build steps, deployment scripts, and
-system orchestration. It can be sandboxed via `spawn_sandboxed` —
+system orchestration. It can be sandboxed via `spawn_sandboxed`,
 but with an important caveat.
 
 ### The model: Aether orchestrates, bash works
@@ -857,20 +857,20 @@ spawn_sandboxed(deploy_sandbox, "bash", "-c 'scp build/bin/app deploy.internal:/
 ```
 
 Each bash step inherits LD_PRELOAD. Every external command that bash
-spawns (`gcc`, `scp`, `curl`, `cat`) is sandboxed — checked against
+spawns (`gcc`, `scp`, `curl`, `cat`) is sandboxed, checked against
 the step's grants.
 
 ### What's sandboxed and what's not
 
 | Bash operation | Sandboxed? | Why |
 |---------------|-----------|-----|
-| `gcc src/*.c` | Yes | External command — inherits LD_PRELOAD |
-| `cat /etc/shadow` | Yes | External command — `open()` intercepted |
-| `curl http://evil.com` | Yes | External command — `connect()` intercepted |
-| `scp file host:path` | Yes | External command — `connect()` intercepted |
-| `echo $SECRET` | No | Shell builtin — no libc call |
+| `gcc src/*.c` | Yes | External command, inherits LD_PRELOAD |
+| `cat /etc/shadow` | Yes | External command, `open()` intercepted |
+| `curl http://evil.com` | Yes | External command, `connect()` intercepted |
+| `scp file host:path` | Yes | External command, `connect()` intercepted |
+| `echo $SECRET` | No | Shell builtin, no libc call |
 | `read -r line < /etc/shadow` | No | Shell builtin redirection |
-| `exec 3<>/dev/tcp/host/80` | No | Bash built-in network — direct kernel |
+| `exec 3<>/dev/tcp/host/80` | No | Bash built-in network, direct kernel |
 
 ### Why builtins don't matter
 
@@ -878,11 +878,11 @@ The builtin gap sounds alarming but isn't a practical concern:
 
 - **`echo`** doesn't access protected resources. It writes to stdout.
   If stdout is a terminal, the output is visible to the user who
-  launched the sandbox — not an escalation.
+  launched the sandbox, not an escalation.
 - **`read < file`** is a concern in theory, but bash scripts that
   read files almost always use `cat` or other external commands
   which ARE sandboxed.
-- **`/dev/tcp`** is the real risk — bash can open TCP connections
+- **`/dev/tcp`** is the real risk, bash can open TCP connections
   without an external command. However, `/dev/tcp` is a compile-time
   option in bash and is disabled in many distributions (Debian,
   Ubuntu disable it by default).
@@ -890,7 +890,7 @@ The builtin gap sounds alarming but isn't a practical concern:
 ### The Docker analogy
 
 This is the same model as Docker. A Docker container doesn't restrict
-what the shell does internally — it restricts what resources are
+what the shell does internally, it restricts what resources are
 mounted and what network is available. Bash can `echo` all it wants
 inside a container. It can't `curl` to a host that isn't in the
 container's network.
@@ -909,7 +909,7 @@ the practical approach.
 ### Not recommended: rbash
 
 Bash's restricted mode (`rbash`) disables `cd`, PATH changes, and
-redirections. It solves a different problem — restricting the user
+redirections. It solves a different problem, restricting the user
 FROM bash features, not restricting bash's access to resources.
 It's not a substitute for sandbox grants.
 
@@ -923,7 +923,7 @@ that is unknowingly sandboxed by the same grants.
 
 Aether spawns the child process with `LD_PRELOAD=libaether_sandbox.so`.
 This shared library intercepts libc calls and checks against the Aether
-grant list — the child process has no idea.
+grant list, the child process has no idea.
 
 ```
 Aether process                     Python process
@@ -951,33 +951,33 @@ spawn_sandboxed(worker,            os.getenv("AWS_SECRET_KEY")          → deni
    | `execve()` | `grant_exec` against command path | Returns `EPERM` |
    | `getenv()` | `grant_env` against variable name | Returns `NULL` |
 
-4. Python, Ruby, Node — anything using libc — hits the interception.
+4. Python, Ruby, Node, anything using libc, hits the interception.
    No language-specific hooks needed.
 
 ### Why LD_PRELOAD, not kernel features
 
 | Approach | Keeps Aether's grant model? | Cross-language? | Nesting? |
 |----------|---------------------------|-----------------|----------|
-| **LD_PRELOAD** (recommended) | Yes — same patterns, same checker | Yes — any libc language | Yes — grants in shared memory |
-| seccomp-bpf | No — only sees syscall numbers, not paths | Yes | No nesting model |
-| Landlock | Partial — filesystem only, no env/exec globs | Yes | No |
-| Linux namespaces | No — coarse-grained isolation | Yes | No |
-| gVisor | No — full kernel reimpl, massive dependency | Yes | No |
+| **LD_PRELOAD** (recommended) | Yes, same patterns, same checker | Yes, any libc language | Yes, grants in shared memory |
+| seccomp-bpf | No, only sees syscall numbers, not paths | Yes | No nesting model |
+| Landlock | Partial, filesystem only, no env/exec globs | Yes | No |
+| Linux namespaces | No, coarse-grained isolation | Yes | No |
+| gVisor | No, full kernel reimpl, massive dependency | Yes | No |
 
 LD_PRELOAD is the only approach that preserves:
-- **Same grant DSL** — `grant_tcp("*.example.com")` works identically
-- **Same glob patterns** — prefix, suffix, wildcard, exact
-- **Same invisibility** — the child can't tell it's sandboxed
-- **Same nesting** — parent and child share a grant stack via shared memory
-- **Zero kernel dependencies** — works on stock Linux, macOS, FreeBSD
+- **Same grant DSL**, `grant_tcp("*.example.com")` works identically
+- **Same glob patterns**, prefix, suffix, wildcard, exact
+- **Same invisibility**, the child can't tell it's sandboxed
+- **Same nesting**, parent and child share a grant stack via shared memory
+- **Zero kernel dependencies**, works on stock Linux, macOS, FreeBSD
 
 ### Precedent
 
 This technique is proven in production:
-- **proxychains** / **tsocks** — intercept `connect()` to route through SOCKS
-- **faketime** — intercept `time()` / `gettimeofday()` to lie about the clock
-- **libeatmydata** — intercept `fsync()` to skip disk flushes for test speed
-- **Electric Fence** — intercept `malloc()` for memory debugging
+- **proxychains** / **tsocks**, intercept `connect()` to route through SOCKS
+- **faketime**, intercept `time()` / `gettimeofday()` to lie about the clock
+- **libeatmydata**, intercept `fsync()` to skip disk flushes for test speed
+- **Electric Fence**, intercept `malloc()` for memory debugging
 
 ### What it looks like in Aether
 
@@ -1003,7 +1003,7 @@ spawn_sandboxed(worker, "python3", "plugin.py")
 The preload library (`libaether_sandbox.so`) would be ~200 lines of C:
 
 ```c
-// libaether_sandbox.so — LD_PRELOAD interception
+// libaether_sandbox.so, LD_PRELOAD interception
 
 #include <dlfcn.h>    // dlsym for real libc functions
 #include <sys/mman.h> // shared memory for grant list
@@ -1042,7 +1042,7 @@ char* getenv(const char* name) {
 }
 ```
 
-The grant checking logic is identical to the in-process checker — same
+The grant checking logic is identical to the in-process checker, same
 glob patterns, same prefix/suffix matching. One codebase, two enforcement
 points: in-process (stdlib checks) and cross-process (LD_PRELOAD).
 
@@ -1052,21 +1052,21 @@ points: in-process (stdlib checks) and cross-process (LD_PRELOAD).
 
 | Aspect | Java SecurityManager | Aether Sandbox |
 |--------|---------------------|----------------|
-| Enforcement | JVM runtime — every Socket(), FileInputStream() checked | Stdlib runtime — every tcp_connect(), file_open() checked |
+| Enforcement | JVM runtime, every Socket(), FileInputStream() checked | Stdlib runtime, every tcp_connect(), file_open() checked |
 | Granularity | Per-classloader (code origin) | Per-scope (builder block nesting) |
 | Policy format | External `.policy` file | Inline DSL in Aether code |
-| Nesting | ClassLoader hierarchy | Context stack — inner can't escalate |
+| Nesting | ClassLoader hierarchy | Context stack, inner can't escalate |
 | Visibility | SecurityException thrown (contained knows) | Returns null/0 (contained can't tell) |
 | Bypass | Reflection, `setSecurityManager(null)` | Extern C calls (proposed fix above) |
-| Deny grants | Yes (grant then deny) | No — deny-by-default, grant only |
-| Deprecated/removed | Deprecated 17, removed 24 — too complex, everyone disabled it | N/A |
+| Deny grants | Yes (grant then deny) | No, deny-by-default, grant only |
+| Deprecated/removed | Deprecated 17, removed 24, too complex, everyone disabled it | N/A |
 
 ### gVisor (Google, Go)
 
 | Aspect | gVisor | Aether Sandbox |
 |--------|--------|----------------|
 | Intercepts | Linux syscalls (200+) | Stdlib functions (tcp, fs, os, env) |
-| Enforcement | Kernel boundary — inescapable | Stdlib boundary — extern bypasses |
+| Enforcement | Kernel boundary, inescapable | Stdlib boundary, extern bypasses |
 | Performance | Significant (every syscall through Go) | Near zero (pointer check + list scan) |
 | Nesting | Containers don't nest | Sandboxes nest, inner restricted |
 | Implementation | 100k+ lines of Go | ~80 lines of C + codegen |
@@ -1082,7 +1082,7 @@ points: in-process (stdlib checks) and cross-process (LD_PRELOAD).
 | Volume mount read-write | `grant_fs_write("/path/*")` |
 | `--network=none` | No `grant_tcp` |
 | Entrypoint | `run_sandboxed(perms) \|ctx\| { ... }` |
-| Nested containers | Nested sandboxes — inner can't escalate |
+| Nested containers | Nested sandboxes, inner can't escalate |
 
 ### OpenBSD pledge / unveil
 
@@ -1094,7 +1094,7 @@ capabilities it will use; the kernel kills it if it tries anything else.
 pledge("stdio rpath inet", NULL);  // only stdio, read files, and network
 unveil("/etc", "r");               // only /etc readable
 unveil("/tmp", "rwc");             // /tmp read-write-create
-unveil(NULL, NULL);                // lock it down — no more unveil calls
+unveil(NULL, NULL);                // lock it down, no more unveil calls
 ```
 
 ```aether
@@ -1108,17 +1108,17 @@ worker = sandbox("worker") {
 
 | Aspect | pledge/unveil | Aether Sandbox |
 |--------|--------------|----------------|
-| Enforcement | Kernel — process killed on violation | Stdlib — returns null/0 on violation |
+| Enforcement | Kernel, process killed on violation | Stdlib, returns null/0 on violation |
 | Granularity | Category-level (pledge) + path-level (unveil) | Both in one grant system |
-| Irreversible | Yes — can only narrow after pledge | Yes — inner sandbox can't escalate |
+| Irreversible | Yes, can only narrow after pledge | Yes, inner sandbox can't escalate |
 | Visibility | Process gets SIGABRT (knows it was caught) | Returns null (can't tell why) |
-| Nesting | Not nested — one pledge per process | Nested sandboxes with intersection |
+| Nesting | Not nested, one pledge per process | Nested sandboxes with intersection |
 
-**Inspiration:** pledge's simplicity — a flat list of capability strings.
+**Inspiration:** pledge's simplicity, a flat list of capability strings.
 No XML, no policy files, no 30 permission classes. Aether follows this:
 `grant_tcp`, `grant_fs_read`, `grant_exec`. That's it.
 
-**Inspiration:** unveil's path model — lock down the filesystem view
+**Inspiration:** unveil's path model, lock down the filesystem view
 before running untrusted code. Aether's `grant_fs_read("/etc/*")` is
 unveil with glob syntax.
 
@@ -1144,17 +1144,17 @@ app = sandbox("app") {
 
 | Aspect | Deno | Aether Sandbox |
 |--------|------|----------------|
-| Enforcement | V8 runtime — every fetch(), readFile() checked | Stdlib — every tcp_connect(), file_open() checked |
+| Enforcement | V8 runtime, every fetch(), readFile() checked | Stdlib, every tcp_connect(), file_open() checked |
 | Policy format | CLI flags | Builder DSL (code) |
-| Granularity | Per-domain, per-path, per-env | Same — with glob patterns |
+| Granularity | Per-domain, per-path, per-env | Same, with glob patterns |
 | Nesting | No nested permissions | Nested sandboxes with intersection |
-| Prompt mode | `--prompt` asks user at runtime | No — grants declared upfront |
+| Prompt mode | `--prompt` asks user at runtime | No, grants declared upfront |
 | Visibility | Throws PermissionDenied error | Returns null (invisible) |
 | Language | TypeScript/JavaScript (interpreted) | Aether (compiled to C) |
 
 **Inspiration:** Deno proved that per-resource grants work in practice
 for real applications. The `--allow-net=host` model maps directly to
-`grant_tcp("host")`. Deno's mistake was CLI flags — policy should be
+`grant_tcp("host")`. Deno's mistake was CLI flags, policy should be
 code, not command-line arguments. Aether's builder DSL fixes this.
 
 **Inspiration:** Deno's deny-by-default. Before Deno, Node.js had no
@@ -1166,7 +1166,7 @@ developers adapt quickly. Aether follows the same principle.
 WASI takes the most extreme position: no ambient authority at all.
 A WASM module receives only the file handles and capabilities that
 the host explicitly passes to it. There are no global functions like
-`fopen` — everything comes through explicit parameters.
+`fopen` everything comes through explicit parameters.
 
 ```javascript
 // Host (JavaScript) passes only what the module can use
@@ -1178,15 +1178,15 @@ const wasi = new WASI({
 
 | Aspect | WASI | Aether Sandbox |
 |--------|------|----------------|
-| Model | Capability-based — no ambient authority | Grant-based — ambient authority filtered |
-| Enforcement | WASM runtime — hardware-level isolation | Stdlib — software checks |
-| Bypass | Impossible — no syscalls available | Extern C calls (proposed fix) |
+| Model | Capability-based, no ambient authority | Grant-based, ambient authority filtered |
+| Enforcement | WASM runtime, hardware-level isolation | Stdlib, software checks |
+| Bypass | Impossible, no syscalls available | Extern C calls (proposed fix) |
 | Nesting | Host composes capabilities | Nested sandboxes |
-| Ergonomics | Verbose — every capability threaded through | Clean — normal API calls, transparent checks |
+| Ergonomics | Verbose, every capability threaded through | Clean, normal API calls, transparent checks |
 
 **Inspiration:** WASI's "no ambient authority" ideal. Aether can't
 fully achieve this (compiled C has ambient access to everything), but
-the extern restriction proposal moves toward it — contained code
+the extern restriction proposal moves toward it, contained code
 would have no way to access capabilities not granted by the sandbox.
 
 ### Cloudflare Workers / V8 Isolates
@@ -1198,7 +1198,7 @@ and returns a response.
 
 | Aspect | Workers | Aether Sandbox |
 |--------|---------|----------------|
-| Model | Stripped API — missing functions, not checked functions | Full API — checked transparently |
+| Model | Stripped API, missing functions, not checked functions | Full API, checked transparently |
 | Filesystem | None | Granted per-path |
 | Network | `fetch()` only | `tcp_connect()` checked per-host |
 | Isolation | V8 isolate (separate heap) | Closure (separate scope) |
@@ -1221,13 +1221,13 @@ AccessController.doPrivileged(() -> {
 });
 ```
 
-This was a containment violation by design — the contained code reaches
+This was a containment violation by design, the contained code reaches
 upward for capabilities it shouldn't have.
 
 The IoC / Dependency Injection pattern (originating with Stefano Mazzocchi's
 Inversion of Control in Apache Avalon, later refined in PicoContainer,
 Spring, and others) eliminates the need entirely. The **container** does
-the privileged work and **injects the result** into the contained — as
+the privileged work and **injects the result** into the contained, as
 a constructor argument, a closure parameter, or a service interface.
 
 The injected dependency isn't limited to read-only data. It can be a
@@ -1238,16 +1238,16 @@ service with full business logic, including mutation:
 db = connect_database("/etc/app/db-config.yaml")
 
 // The db service has methods: query, insert, update, delete
-// It encapsulates the privileged connection — the worker never
+// It encapsulates the privileged connection, the worker never
 // sees the filesystem or raw TCP
 
 worker = sandbox("worker") {
-    // No grant_fs_read, no grant_tcp — worker can't touch either
+    // No grant_fs_read, no grant_tcp, worker can't touch either
     // But it CAN use the db service that was injected
 }
 
 run_sandboxed(worker) |ctx: ptr| {
-    // Worker calls db.query(), db.insert() — business logic with
+    // Worker calls db.query(), db.insert(), business logic with
     // mutation, not just read-only data. The privileged connection
     // is behind the service interface. Worker never escalates.
     result = call(db_query, db, "SELECT * FROM users")
@@ -1256,25 +1256,25 @@ run_sandboxed(worker) |ctx: ptr| {
 ```
 
 The contained code has no filesystem access, no TCP access, but full
-database read/write capability — because the container injected a
+database read/write capability, because the container injected a
 service that encapsulates the privilege. The privilege boundary is
 the service interface, not a `doPrivileged` escalation.
 
 This is the IoC principle applied to sandboxing: **inject capabilities,
 don't let the contained reach for them.**
 
-## Design influences — summary
+## Design influences, summary
 
 The Aether sandbox draws from:
 
 | Source | What we took |
 |--------|-------------|
-| Apache Avalon / IoC | Inversion of Control — the container wires, the contained receives |
+| Apache Avalon / IoC | Inversion of Control, the container wires, the contained receives |
 | OpenBSD pledge | Flat list of capability grants, irreversible narrowing |
 | OpenBSD unveil | Path-level filesystem grants with glob patterns |
 | Deno | Per-resource grants (host, path, env), deny-by-default |
 | Java SecurityManager | Stack-based permission checking, nested scopes |
-| Java doPrivileged | What NOT to do — IoC eliminates the need to escalate |
+| Java doPrivileged | What NOT to do, IoC eliminates the need to escalate |
 | gVisor | API-level interception (stdlib, not kernel) |
 | WASI | No ambient authority ideal (extern restriction proposal) |
 | Docker | Container/contained metaphor, nested restriction |
@@ -1289,12 +1289,12 @@ sandboxes. Each hosted language is a module under `contrib/host/`.
 ### Available modules
 
 ```
-contrib/host/python/  — import contrib.host.python   (CPython 3.x)
-contrib/host/lua/     — import contrib.host.lua      (Lua 5.3)
-contrib/host/js/      — import contrib.host.js       (Duktape ES5)
-contrib/host/perl/    — import contrib.host.perl     (Perl 5.x)
-contrib/host/ruby/    — import contrib.host.ruby     (CRuby 3.x)
-contrib/host/tcl/     — import contrib.host.tcl      (Tcl 8.5+)
+contrib/host/python/, import contrib.host.python   (CPython 3.x)
+contrib/host/lua/, import contrib.host.lua      (Lua 5.3)
+contrib/host/js/, import contrib.host.js       (Duktape ES5)
+contrib/host/perl/, import contrib.host.perl     (Perl 5.x)
+contrib/host/ruby/, import contrib.host.ruby     (CRuby 3.x)
+contrib/host/tcl/, import contrib.host.tcl      (Tcl 8.5+)
 ```
 
 ### Two containment models
@@ -1304,7 +1304,7 @@ contrib/host/tcl/     — import contrib.host.tcl      (Tcl 8.5+)
 | **LD_PRELOAD interception** | Intercept libc calls (connect, open, getenv, execve). The hosted language has ambient access to libc; we filter it. | Python, Lua, Perl, Ruby, Tcl |
 | **Native bindings only** | The hosted engine has NO ambient access. We expose only the functions we choose (env, readFile, etc.), each with a sandbox check built in. | JS (Duktape) |
 
-The native bindings model (Duktape) is the purest containment — there
+The native bindings model (Duktape) is the purest containment, there
 is nothing to intercept because there is nothing ambient. The hosted
 code can only call functions we explicitly provide.
 
@@ -1322,7 +1322,7 @@ code can only call functions we explicitly provide.
 | **File access** | libc open/fopen (intercepted) | libc fopen (intercepted) | `readFile()` binding (checked) | libc open (intercepted) | libc open (intercepted) | libc open (intercepted) |
 | **Network** | libc connect (intercepted) | libc connect (intercepted) | Not exposed | libc connect (intercepted) | libc connect (intercepted) | libc connect (intercepted) |
 | **Process exec** | libc execve (intercepted) | libc execve (intercepted) | Not exposed | libc execve (intercepted) | libc execve (intercepted) | libc execve (intercepted) |
-| **Env cache issue** | Yes — os.environ cached at startup; use ctypes.CDLL(None).getenv | No — os.getenv goes through libc | No — no cache | Yes — %ENV cached; scrubbed by host module | Yes — ENV cached; scrubbed by host module | Yes — ::env cached; not auto-scrubbed |
+| **Env cache issue** | Yes, os.environ cached at startup; use ctypes.CDLL(None).getenv | No, os.getenv goes through libc | No, no cache | Yes, %ENV cached; scrubbed by host module | Yes, ENV cached; scrubbed by host module | Yes, ::env cached; not auto-scrubbed |
 | **Sandbox grants honoured** | Yes | Yes | Yes | Yes | Yes | Yes |
 | **Glob patterns work** | Yes (prefix, suffix, exact, wildcard) | Yes | Yes | Yes | Yes | Yes |
 | **Nested sandbox** | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -1332,7 +1332,7 @@ code can only call functions we explicitly provide.
 
 Perl, Ruby, and Tcl keep a single long-lived interpreter across calls.
 `run_sandboxed` scrubs the environment on entry and leaves the scrubbed
-state in place on exit — a subsequent unsandboxed `run()` in the same
+state in place on exit, a subsequent unsandboxed `run()` in the same
 process sees the scrubbed environment. Two stable usage patterns:
 (a) one mode per process, restart the host between modes; or
 (b) have the host snapshot the environment from the guest language
@@ -1343,7 +1343,7 @@ Lua and JS don't cache the environment at all.
 Ruby behavior to be aware of: `Fiddle.dlopen("libc.so.6")` inside a
 sandbox succeeds and returns a handle, but any libc function invoked
 through that handle still goes through the Aether preload layer and
-respects grants. The `dlopen` succeeding isn't a sandbox escape — it's
+respects grants. The `dlopen` succeeding isn't a sandbox escape, it's
 the expected result, since interception is on the call, not the load.
 
 ### Usage pattern
@@ -1360,11 +1360,11 @@ worker = sandbox("worker") {
     grant_fs_read("/etc/hostname")
 }
 
-// Run hosted code — it uses normal APIs, has no idea it's contained
+// Run hosted code, it uses normal APIs, has no idea it's contained
 python.run_sandboxed(worker, <<SCRIPT
 import os
 print(os.getenv("HOME"))        # allowed
-print(os.getenv("AWS_SECRET"))   # returns None — sandboxed
+print(os.getenv("AWS_SECRET"))   # returns None, sandboxed
 SCRIPT
 )
 ```
@@ -1387,7 +1387,7 @@ tell it's sandboxed.
 
 Aether and hosted languages exchange data through a token-guarded
 string:string map. All values are strings. The map has function call
-semantics — inputs flow in, outputs flow out. It is not a
+semantics, inputs flow in, outputs flow out. It is not a
 bidirectional messaging channel.
 
 ### Contract
@@ -1411,11 +1411,11 @@ bidirectional messaging channel.
 ### How it works
 
 1. **Aether creates the map** and puts input key-value pairs
-2. **Inputs are frozen** before hosted code runs — hosted code
+2. **Inputs are frozen** before hosted code runs, hosted code
    can read them but cannot overwrite them
 3. **Hosted code writes outputs** as new keys via `aether_map_put`
-4. **Hosted code returns** — Aether reads output keys
-5. **Token is revoked** — the map is inaccessible from the hosted side
+4. **Hosted code returns**, Aether reads output keys
+5. **Token is revoked**, the map is inaccessible from the hosted side
 6. **Aether frees the map** when done
 
 ### Token guard
@@ -1451,7 +1451,7 @@ map = shared_map_new(&token)
 shared_map_put(map, "user", "alice")
 shared_map_put(map, "threshold", "42")
 
-// Run Python — it reads inputs, writes outputs
+// Run Python, it reads inputs, writes outputs
 python.run_sandboxed_with_map(worker, <<PY
     user = aether_map_get("user")
     threshold = aether_map_get("threshold")
@@ -1501,7 +1501,7 @@ db.credentials.user = admin
 ```
 
 The hosted code splits on dots if it wants to reconstruct a tree.
-The map stays a single-level key-value store — simple, auditable,
+The map stays a single-level key-value store, simple, auditable,
 and with no deserialization attack surface.
 
 ### Future: string:bytes mode
@@ -1518,15 +1518,15 @@ systems readers already know.
 
 ### Three enforcement layers
 
-1. **Module boundary** — under `--emit=lib` the compiler rejects
+1. **Module boundary**, under `--emit=lib` the compiler rejects
    imports of `std.fs`, `std.net`, `std.os` at build time; the host
    opts each one in with `--with=fs[,net,os]`. See [`emit-lib.md`](emit-lib.md).
-2. **Scope boundary** — `hide <names>` and `seal except <allowlist>`
+2. **Scope boundary**, `hide <names>` and `seal except <allowlist>`
    let any lexical block (closure, trailing-block DSL, actor
    handler) decline to see selected enclosing names; reading,
    assigning, or re-declaring a hidden name is a compile error, and
    the denial travels with the block. See [`hide-and-seal.md`](hide-and-seal.md).
-3. **Runtime process boundary** — `libaether_sandbox.so` (LD_PRELOAD)
+3. **Runtime process boundary**, `libaether_sandbox.so` (LD_PRELOAD)
    intercepts libc (`open*`, `connect` / `bind` / `accept`, `execve`
    / `fork`, `mmap` / `mprotect`, `dlopen`, `getenv`) against a
    builder-DSL grant list, inherited across `execve`. Covers
@@ -1539,23 +1539,23 @@ systems readers already know.
 Aether plays either side of the embedding relationship, with the
 same permissions registry and LD_PRELOAD checker either way.
 
-- **Aether as guest** — a host-language app loads an Aether `.so`
+- **Aether as guest**, a host-language app loads an Aether `.so`
   built via `--emit=lib`, which carries a typed namespace manifest
   (`aether_describe()`) used by `ae build --namespace` to generate
   per-language SDKs. Shipped: Python (ctypes), Java (Panama, JDK
-  22+), Ruby (Fiddle). Go stubbed. Host-side is normal methods —
+  22+), Ruby (Fiddle). Go stubbed. Host-side is normal methods,
   no JNI, SWIG, `MemorySegment`, or `ctypes.CDLL` boilerplate.
   Callback model is Hohpe's *claim check*: script emits
   `notify(event, id)`, host calls back through the typed downcall
   API for detail. See [`embedded-namespaces-and-host-bindings.md`](embedded-namespaces-and-host-bindings.md)
   (typed-SDK story) and [`aether-embedded-in-host-applications.md`](aether-embedded-in-host-applications.md)
   (rationale + YAML/HCL/Pkl/Jsonnet/Starlark comparison).
-- **Aether as host** — an Aether `main()` executable embeds
+- **Aether as host**, an Aether `main()` executable embeds
   `contrib.host.<lang>.run_sandboxed(perms, code)` for Lua, Python
   (CPython), Perl, Ruby, Tcl, JavaScript in-process. Java, Go, and
   aether-hosts-aether are separate-process (Aether is compiled, so
   aether-hosts-aether uses fork+exec with LD_PRELOAD on the child).
-  `hide` / `seal except` are Aether compile-time constructs — they
+  `hide` / `seal except` are Aether compile-time constructs, they
   do NOT travel into hosted non-Aether interpreters, which have
   their own scoping; containment for those is grants + LD_PRELOAD
   only. `hide` / `seal except` still shape the Aether-side
@@ -1564,12 +1564,12 @@ same permissions registry and LD_PRELOAD checker either way.
 
 ### What it's most like
 
-- **Pony object capabilities** — closest analogue in a systems
+- **Pony object capabilities**, closest analogue in a systems
   language. Aether's grants are coarser (stdlib category at the
   module level, name at the scope level, libc entry point at the
   runtime level); Pony attaches capability modes to individual
   references.
-- **Java's removed SecurityManager** — same structural idea
+- **Java's removed SecurityManager**, same structural idea
   (`java.policy` grants, `AccessController.doPrivileged`), same
   layer (interpreter / VM-level check on sensitive operations).
   Deprecated in JDK 17, removed in JDK 24 because the maintenance
@@ -1578,7 +1578,7 @@ same permissions registry and LD_PRELOAD checker either way.
   the scope is narrower (the grant list is populated by a builder
   DSL in the same codebase, not by a system-wide policy file
   parsed from XML) and the enforcement point is libc, not the VM.
-- **A fraction of gVisor** — both intercept at a boundary
+- **A fraction of gVisor**, both intercept at a boundary
   (gVisor's Sentry emulates syscalls; Aether's LD_PRELOAD wraps
   libc). gVisor is kernel-level (process-scoped, every syscall)
   and handles adversarial workloads. Aether is userspace-level
@@ -1589,21 +1589,21 @@ same permissions registry and LD_PRELOAD checker either way.
 
 ### What it is NOT
 
-- **NOT Ruby / Smalltalk / Groovy's builder-style closures** —
+- **NOT Ruby / Smalltalk / Groovy's builder-style closures**,
   those languages interpret the trailing block at runtime with
   full access to the interpreter's reflection surface. Aether
   compiles the closure to C; the sandbox grant list is the
   compiled function's only handle to privileged operations.
   `hide` / `seal except` are checked by the compiler, not by a
   runtime SecurityManager.
-- **NOT a runtime wrapper** (WASI, gVisor, Firejail) — `--emit=lib`
+- **NOT a runtime wrapper** (WASI, gVisor, Firejail), `--emit=lib`
   changes what the compiler will emit at all, not what the runtime
   will permit later.
 - **NOT a library flag** (Deno's `--allow-net`, Node's
-  experimental permission model) — those are process-wide
+  experimental permission model), those are process-wide
   allowlists checked at API call sites. Aether's gate is at
   compile time and at scope entry, plus an optional runtime check.
-- **NOT an annotation convention** (Rust crates, Go build tags) —
+- **NOT an annotation convention** (Rust crates, Go build tags),
   those require ecosystem buy-in and don't prevent a dependency
   from pulling in what it needs. Aether rejects the import.
 
@@ -1620,20 +1620,20 @@ directions (guest + host) behind one permissions model.
 Active work listed in [`../contrib/host/TODO.md`](../contrib/host/TODO.md)
 and [`next-steps.md`](next-steps.md) → *Host Language Bridges*:
 
-- Capturing stdout/stderr from hosted scripts — pipe rewire vs.
+- Capturing stdout/stderr from hosted scripts, pipe rewire vs.
   shared-map key vs. pass-through, design undecided.
-- Native shared-map bindings for Perl and Ruby — currently
+- Native shared-map bindings for Perl and Ruby, currently
   tied-hash via `eval`, which swallows writes. Python, Lua, Tcl,
   JS already have proper native C bindings.
-- `bytes` mode on the shared map — so callers don't have to
+- `bytes` mode on the shared map, so callers don't have to
   base64 binary payloads across the boundary.
 
 ### Worked examples and tests
 
-- `examples/embedded-java/trading/` — direction 1 (Aether as
+- `examples/embedded-java/trading/` direction 1 (Aether as
   guest, Java host).
-- `examples/sandbox-spawn.ae`, `examples/sandbox-demo.ae` —
+- `examples/sandbox-spawn.ae`, `examples/sandbox-demo.ae`,
   direction 2 (Aether as host).
 - `tests/integration/namespace_{python,ruby,java}/`,
-  `tests/integration/embedded_java_trading_e2e/` — per-SDK
+  `tests/integration/embedded_java_trading_e2e/` per-SDK
   regression tests for direction 1.

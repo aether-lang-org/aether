@@ -1,7 +1,7 @@
 # Compile-time `when` / static-if
 
 `when` is a compile-time `if`. The condition is evaluated by the compiler,
-and **only the selected arm is type-checked and emitted** — the other arm
+and **only the selected arm is type-checked and emitted**, the other arm
 parses but is pruned before any later phase ever sees it. This lets `.ae`
 source fork by platform or build capability *visibly in Aether* instead of
 pushing `#ifdef` into the generated C.
@@ -15,7 +15,7 @@ when target.os == "windows" {
 }
 ```
 
-On a non-Windows host the `windows` arm — extern binding and all — is
+On a non-Windows host the `windows` arm, extern binding and all, is
 discarded before type-checking. `win_only` never has to exist, type-check,
 or link. That is the whole point: platform-specific externs and bindings
 are gated cleanly, with no dead symbol leaking into the build.
@@ -31,7 +31,7 @@ when <const-condition> {
 ```
 
 - Works as a **statement** inside a function body (the arms hold
-  statements), and at **top level** around declarations — functions,
+  statements), and at **top level** around declarations, functions,
   externs, imports, structs (the arms hold declarations). The two forms
   are distinguished by where the `when` appears; you write them the same
   way.
@@ -78,7 +78,7 @@ These compose freely with `&&`, `||`, and `!`.
 
 A condition that is **not** a compile-time constant (e.g. a runtime
 variable, an unsupported call, a comparison the folder doesn't recognise)
-is a **hard compile error** — the build fails with a message listing the
+is a **hard compile error**, the build fails with a message listing the
 supported forms. `when` never guesses an arm; if the compiler can't decide
 the condition at compile time, it stops.
 
@@ -121,7 +121,7 @@ The condition is evaluated by a pre-typecheck pass
 Because this runs **before** type-checking and symbol collection, the
 unselected arm is never type-checked, never collects symbols, and is never
 handed to codegen. An undefined function or a platform-only `extern` in the
-dead arm is therefore harmless — it is gone before anything can object to
+dead arm is therefore harmless, it is gone before anything can object to
 it. This is what makes `when` sound for gating platform bindings, rather
 than a cosmetic `if` that still requires the dead branch to compile.
 
@@ -132,7 +132,7 @@ than a cosmetic `if` that still requires the dead branch to compile.
   step (`select(linux: a, macos: b, other: c)`). Every arm of a `select()`
   must type-check, because the value is chosen in C, not in Aether. Use
   `select()` to pick a constant per platform; use `when` to fork *which
-  code exists at all* — to gate an entire extern, function, or import that
+  code exists at all*, to gate an entire extern, function, or import that
   only makes sense on one platform. See
   [`named-args-and-select.md`](named-args-and-select.md).
 
@@ -141,7 +141,7 @@ than a cosmetic `if` that still requires the dead branch to compile.
   decides *which declarations are in the program* before the capability
   gate runs. The pruning pass runs before the `--emit=lib` import gate, so
   an `import std.net` gated behind a `when` arm that the target doesn't
-  select is removed before the gate inspects the import set — a platform
+  select is removed before the gate inspects the import set, a platform
   whose arm doesn't pull in `std.net` won't trip the net-capability check.
   See [`emit-lib.md`](emit-lib.md).
 
@@ -149,7 +149,7 @@ than a cosmetic `if` that still requires the dead branch to compile.
   is the value-level analogue: it folds constant *expressions* to literals.
   `when` is the statement/declaration-level analogue: it folds a constant
   *condition* to a choice of arm. The same capability-gate discipline
-  applies — the `when` condition evaluator is a small, audited folder
+  applies, the `when` condition evaluator is a small, audited folder
   (OS/arch strings, bool/numeric literals, `== != && || !`), not a general
   interpreter, so resolving a `when` performs no I/O.
 

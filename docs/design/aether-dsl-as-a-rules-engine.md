@@ -2,14 +2,14 @@
 
 A design exploration: using Aether's trailing-block DSL and `hide`/`seal
 except` to build a rules engine where business rules live in `.ae` files
-alongside — but deployed independently of — the application binary.
+alongside, but deployed independently of, the application binary.
 
 > **Status (2026-04-18):** the **embedding foundation is built and v2
 > namespaces have shipped**. `aetherc --emit=lib` produces a `.so`/`.dylib`
 > with stable C-ABI exports (see [`emit-lib.md`](../emit-lib.md)), and
 > `ae build --namespace <dir>` (PR #172) generates idiomatic per-language
 > SDKs (Python ctypes, Java Panama, Ruby Fiddle) plus `notify(event, id)`
-> for script → host event signaling — see
+> for script → host event signaling, see
 > [`embedded-namespaces-and-host-bindings.md`](../embedded-namespaces-and-host-bindings.md)
 > for the typed-SDK story. What's still future work for the rules-engine
 > vision specifically:
@@ -21,7 +21,7 @@ alongside — but deployed independently of — the application binary.
 > | Per-language host SDK generators | ✅ Done (v2: Python/Java/Ruby; Go stubbed) |
 > | Script → host event signaling (`notify(event, id)`) | ✅ Done (v2) |
 > | `rules` stdlib module (`field`, `is_email`, `to_int`, `>>`, etc.) | 📋 Future, ~200-300 lines |
-> | Host-side callbacks (`host_call`, callback registry) — script *calling into* the host | 📋 Future (Shape B) |
+> | Host-side callbacks (`host_call`, callback registry), script *calling into* the host | 📋 Future (Shape B) |
 > | `ae eval` subprocess + JSON serializer | 📋 Future (possibly obsolete given lib mode) |
 > | File-watch + hot-swap | 📋 Future, optional |
 > | Wall-clock timeout / allocation budget | 📋 Future |
@@ -42,7 +42,7 @@ rules for "what counts as a valid order" change weekly.  Grules solved
 this by putting rules in standalone Groovy scripts:
 
 ```groovy
-// OrderGrules.groovy — deployed independently of the app JAR
+// OrderGrules.groovy, deployed independently of the app JAR
 email isEmail ["Invalid email"]
 age toPositiveInt ["Invalid age"] >> {it > 18} ["Must be adult"]
 sku isAlphanum >> isIn(activeCatalog) ["Unknown SKU"]
@@ -60,13 +60,13 @@ if (result.invalidParameters.isEmpty()) {
 ```
 
 Key properties:
-- Rules were **declarative** — a DSL, not general-purpose code
-- Rules were **chainable** — `>>` piped a converted value to the next check
-- Rules were **separately deployable** — update `OrderGrules.groovy`,
+- Rules were **declarative**, a DSL, not general-purpose code
+- Rules were **chainable**, `>>` piped a converted value to the next check
+- Rules were **separately deployable**, update `OrderGrules.groovy`,
   restart the rule loader, no app redeploy
-- Rules had **built-in type coercion** — `toPositiveInt` converts and
+- Rules had **built-in type coercion**, `toPositiveInt` converts and
   validates in one step
-- Results were **categorized** — clean, invalid, missing, not-validated
+- Results were **categorized**, clean, invalid, missing, not-validated
 
 The limitation: Groovy's dynamic typing meant rule errors surfaced at
 runtime, not compile time.  And being JVM-only, it couldn't serve as a
@@ -79,17 +79,17 @@ cross-language rules format.
 Aether's trailing-block DSL, closures, and `hide`/`seal except` can
 express the same pattern with two advantages grules never had:
 
-1. **Compile-time scope enforcement** — a rule block can declare exactly
+1. **Compile-time scope enforcement**, a rule block can declare exactly
    which names it's allowed to reference.  A pricing rule that shouldn't
    see the customer's payment details can `hide` them.
-2. **Compiled to native code** — rules compile to C, not interpreted
+2. **Compiled to native code**, rules compile to C, not interpreted
    Groovy.  The performance ceiling is higher and the deployment artifact
    is a `.so`/`.dylib`, not a classfile.
 
 ### What the DSL could look like
 
 ```aether
-// order_rules.ae — lives next to the app binary, deployed separately
+// order_rules.ae, lives next to the app binary, deployed separately
 
 import rules   // hypothetical rules stdlib module
 
@@ -114,7 +114,7 @@ rules("order_validation") {
         >> is_less_than(max_order_qty) ["Exceeds maximum order quantity"]
     }
 
-    // Computed field — derives from validated inputs
+    // Computed field, derives from validated inputs
     computed("total") {
         seal except quantity, unit_price, discount_rate
         return quantity * unit_price * (1.0 - discount_rate)
@@ -134,7 +134,7 @@ Consider a multi-tier rule set for an e-commerce checkout:
 
 checkout_rules(order: ptr, customer: ptr, payment: ptr) {
 
-    // Tier 1: Order validation — can see order + catalog, nothing else
+    // Tier 1: Order validation, can see order + catalog, nothing else
     rules("order") {
         seal except order, active_catalog, field, to_int,
                     to_positive_int, is_alphanum, is_in, is_greater_than
@@ -142,21 +142,21 @@ checkout_rules(order: ptr, customer: ptr, payment: ptr) {
         field("quantity") { to_positive_int >> is_greater_than(0) }
     }
 
-    // Tier 2: Customer validation — can see customer, NOT payment
+    // Tier 2: Customer validation, can see customer, NOT payment
     rules("customer") {
         hide payment
         field("email") { is_email }
         field("shipping_country") { is_in(allowed_countries) }
     }
 
-    // Tier 3: Payment validation — can see payment, NOT full customer record
+    // Tier 3: Payment validation, can see payment, NOT full customer record
     rules("payment") {
         hide customer
         field("card_last4") { is_length(4) >> is_numeric }
         field("amount") { to_positive_decimal >> is_less_than(charge_limit) }
     }
 
-    // Tier 4: Fraud scoring — can see everything (no hide/seal)
+    // Tier 4: Fraud scoring, can see everything (no hide/seal)
     // Only this tier gets the full picture.
     rules("fraud") {
         score = fraud_score(order, customer, payment)
@@ -166,7 +166,7 @@ checkout_rules(order: ptr, customer: ptr, payment: ptr) {
 ```
 
 Each tier declares its own visibility boundary.  The order validation
-rules literally *cannot* reference `payment.card_number` — the compiler
+rules literally *cannot* reference `payment.card_number` the compiler
 rejects it.  This isn't a runtime policy; it's a compile-time guarantee
 that the rule author encoded into the rule file.
 
@@ -180,7 +180,7 @@ block touches *these* names and nothing else.
 The key grules insight was: **rules change faster than application code.**
 A pricing formula changes quarterly.  A fraud threshold changes weekly.
 A validation regex changes when a new TLD is registered.  The application
-binary — the HTTP server, the database layer, the deployment pipeline —
+binary, the HTTP server, the database layer, the deployment pipeline,
 changes on a different, slower cadence.
 
 Aether can support this with a simple model:
@@ -230,7 +230,7 @@ abi() {
 ```
 
 ```java
-// Java host — using the generated SDK
+// Java host, using the generated SDK
 try (OrderRules rules = new OrderRules("rules/liborder_rules.so")) {
     rules.setMaxOrderQty(1000);
     rules.setChargeLimit(100_000);
@@ -243,20 +243,20 @@ try (OrderRules rules = new OrderRules("rules/liborder_rules.so")) {
 **What works today:** typed setters per `input(...)`, typed event
 handlers per `event(...)`, methods named after each Aether function,
 `AutoCloseable` lifecycle. The script signals events via
-`notify("OrderRejected", id)` — claim-check pattern, host looks up
+`notify("OrderRejected", id)` claim-check pattern, host looks up
 detail by id. Worked end-to-end test in
 `tests/integration/embedded_java_trading_e2e/`.
 
 **What needs Shape B (the callback half):** rules that need to *call
 into* the host (look up a SKU in the live catalog, fetch a fraud score
 from a Java service) need `host_call`. Until that ships, those lookups
-have to be passed in as arguments — i.e. the host pre-computes anything
+have to be passed in as arguments, i.e. the host pre-computes anything
 the rule might need and hands it in as a map (or as typed input
 declarations in the manifest). Workable for many cases, limiting for
 others where the script needs to make ad-hoc lookups mid-evaluation.
 
 **The facade is the security boundary.**  The rules file sees only what
-the host exposes — if the host doesn't provide a `db_drop()` function,
+the host exposes, if the host doesn't provide a `db_drop()` function,
 the rules script cannot drop the database.  Period.  The host author
 decides the attack surface.
 
@@ -283,7 +283,7 @@ native code.
 
 The compile + dlopen pieces all work today. The file watcher itself
 and the dlclose-then-dlopen plumbing in the host application are not
-shipped — they'd be a small shim around the existing primitives.
+shipped, they'd be a small shim around the existing primitives.
 
 ---
 
@@ -291,8 +291,8 @@ shipped — they'd be a small shim around the existing primitives.
 
 A rules file that executes as real code introduces risks that a static
 rules format (JSON, CSV lookup tables) doesn't have.  These risks apply
-to *any* programmable rules engine — grules, Starlark, Lua in Redis,
-Aether — and must be addressed head-on.
+to *any* programmable rules engine, grules, Starlark, Lua in Redis,
+Aether, and must be addressed head-on.
 
 **1. Network access.**  If the rules runtime can open sockets, a rule
 file could exfiltrate data, call home, or listen for commands.  The
@@ -301,7 +301,7 @@ embedded Aether runtime **must not link `std.tcp`, `std.http`, or
 rules script communicates with the outside world.
 
 **2. File system access.**  A rules script that can read `/etc/shadow`
-or write to disk is not a rules script — it's a backdoor.  The embedded
+or write to disk is not a rules script, it's a backdoor.  The embedded
 runtime **must not link `std.fs` or `std.file`** unless the host
 explicitly opts in.
 
@@ -344,14 +344,14 @@ full stdlib is linked) and must be a distinct compiler/linker mode.
 ### What Aether adds that grules couldn't
 
 1. **The facade as a hard boundary.**  Grules rules ran inside the JVM
-   with full access to the classpath — any rule could instantiate any
+   with full access to the classpath, any rule could instantiate any
    class, open any socket, read any file.  The Groovy binding was a
    convenience layer, not a security boundary.  Aether's embedded mode
    with a capability-empty runtime and a host-controlled facade is a
    genuine containment mechanism.
 
 2. **Author-side hygiene with `hide`/`seal except`.**  Within the rules
-   file itself, rule authors can organize tiers of visibility — "the
+   file itself, rule authors can organize tiers of visibility, "the
    pricing rule shouldn't touch the payment object."  This is *self-
    discipline tooling*, not a security feature, but it makes rule files
    more readable and auditable.  Grules had no equivalent.
@@ -362,8 +362,8 @@ full stdlib is linked) and must be a distinct compiler/linker mode.
    scoring, packet filtering), this matters.
 
 4. **Cross-language embedding.** Grules was JVM-only.  Aether's C ABI
-   means any language with FFI — Java (Panama), Go (cgo), Rust (extern C),
-   Python (ctypes), Node (N-API) — can load and run Aether rules.
+   means any language with FFI, Java (Panama), Go (cgo), Rust (extern C),
+   Python (ctypes), Node (N-API), can load and run Aether rules.
 
 ---
 
@@ -372,7 +372,7 @@ full stdlib is linked) and must be a distinct compiler/linker mode.
 ### In Aether's stdlib  📋 Future
 
 A `rules` module providing:
-- `field(name)` — DSL function that binds a parameter name for validation
+- `field(name)` DSL function that binds a parameter name for validation
 - Built-in validators: `is_email`, `is_alphanum`, `is_length`, `is_in`,
   `is_greater_than`, `is_less_than`, `is_between`, `matches`, etc.
 - Built-in converters: `to_int`, `to_float`, `to_positive_int`,
@@ -380,7 +380,7 @@ A `rules` module providing:
 - `>>` chaining (already supported as a language operator or function
   composition)
 - Result aggregation: clean/invalid/missing parameter categorization
-- `computed(name)` — derived fields from validated inputs
+- `computed(name)` derived fields from validated inputs
 
 ### In the compiler
 
@@ -400,7 +400,7 @@ A `rules` module providing:
 - 📋 **Future, optional**: file-watch + hot-swap infrastructure
   (for Option C)
 - 📋 **Future**: `host_call` registry for the bidirectional model
-  — script *calling into* the host (Shape B)
+  script *calling into* the host (Shape B)
 
 ### Effort
 
@@ -410,7 +410,7 @@ and **landed there first**, then the
 [v2 namespace layer](../embedded-namespaces-and-host-bindings.md)
 shipped on top of it. The rules-specific remaining work is:
 - The `rules` stdlib module (~200-300 lines of validation functions
-  and the `field()` / `computed()` DSL wrappers) — pure stdlib code,
+  and the `field()` / `computed()` DSL wrappers), pure stdlib code,
   no compiler changes.
 - Optionally, the host-side callback registry for rules that need to
   call back into the host application (Shape B).
@@ -429,8 +429,8 @@ runtime sandboxing (Starlark, Lua in Redis).
 
 Aether offers a third option: **a real programming language with a
 capability-empty embedded runtime and a host-controlled facade.**  Rule
-authors write real code — closures, maps, string interpolation, control
-flow — but everything the rules script can *do* comes through functions
+authors write real code, closures, maps, string interpolation, control
+flow, but everything the rules script can *do* comes through functions
 the host explicitly exposed.  No ambient network.  No ambient filesystem.
 No `exec`.
 
@@ -438,7 +438,7 @@ Status: the **capability-empty runtime is shipped** (`aetherc --emit=lib`
 rejects the I/O-heavy stdlib modules at compile time), and the **typed
 host SDK** is shipped (v2: `ae build --namespace` emits a Python ctypes
 module / Java Panama class / Ruby Fiddle module per declared binding).
-**Host-controlled facade is half-shipped** — host → script *data* flow
+**Host-controlled facade is half-shipped**, host → script *data* flow
 works today via typed input setters; script → host *event* flow works
 today via `notify(event, id)`; only script → host *function calls*
 (`host_call`) are still future work. Until that ships, the host
@@ -449,8 +449,8 @@ manifest's `input(...)` declarations.
 their own visibility within the file, making rules more readable and
 auditable.  But it's the facade that provides containment.
 
-That's grules' vision — rules adjacent to the app, deployed independently
-— with the hard boundary that grules never had: the rules script literally
+That's grules' vision, rules adjacent to the app, deployed independently
+with the hard boundary that grules never had: the rules script literally
 cannot do anything the host didn't hand it a function for.
 
 ### Aether hosting Aether rules
@@ -467,5 +467,5 @@ This gives two containment layers: the **facade** controls what functions
 the script can *name* (compile-time), and **LD_PRELOAD** controls what
 syscalls the script can *execute* (runtime).  Together they cover both
 escape paths.  See
-[Aether as a Config Language, Part 4](../aether-embedded-in-host-applications.md#part-4-aether-hosting-aether--ld_preload-containment)
+[Aether as a Config Language, Part 4](../aether-embedded-in-host-applications.md#part-4-aether-hosting-aether-ld_preload-containment)
 for the full design.

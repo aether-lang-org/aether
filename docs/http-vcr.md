@@ -1,11 +1,11 @@
-# HTTP Record/Replay (VCR) — moved out of Aether
+# HTTP Record/Replay (VCR), moved out of Aether
 
 The Servirtium record/replay engine that used to ship in the Aether
 stdlib as **`std.http.server.vcr`** has moved to its own repository:
 
 > **https://github.com/aether-lang-org/servirtium-vcr**
 
-That monorepo is now its authoritative home — the VCR core (`core/vcr.ae`,
+That monorepo is now its authoritative home, the VCR core (`core/vcr.ae`,
 `core/embed.ae`, `core/aether_vcr.c`) plus its language bindings (.NET, Go,
 Java, Rust, JavaScript, Python, Ruby, PHP, Elixir, Dart, Haskell, Pharo)
 and the Servirtium interop suites live there together.
@@ -26,12 +26,12 @@ so the removal has no effect on the stdlib surface.
 Depend on the `servirtium-vcr` monorepo and `import core.vcr` (the module
 was renamed from `module.ae` to `vcr.ae`). The API is the same one
 documented here previously, and has since gained `untaped()` (don't-record
-/ serve-404 paths) — see the monorepo's `core/TODO.md`.
+/ serve-404 paths), see the monorepo's `core/TODO.md`.
 
 ## What stayed in Aether
 
 The pure `std.http.client` behaviour the VCR work motivated remains in the
-stdlib and keeps its own coverage here — e.g. transparent de-chunking of
+stdlib and keeps its own coverage here, e.g. transparent de-chunking of
 `Transfer-Encoding: chunked` responses
 (`tests/integration/http_client_dechunk/`).
 

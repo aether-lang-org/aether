@@ -1,4 +1,4 @@
-# `ae help <script>` — Offline diagnostics for config-IS-code
+# `ae help <script>` Offline diagnostics for config-IS-code
 
 A companion command to `ae run` and `aetherc`. Goal:
 catch the common mistakes a less-experienced operator makes when
@@ -13,7 +13,7 @@ the sections below note where behaviour matches the implementation.
 
 > Closely scoped: this is not a general "make my Aether code work"
 > assistant. It targets the narrow band of mistakes people make when
-> they're using a builder-DSL library someone else wrote — where the
+> they're using a builder-DSL library someone else wrote, where the
 > *grammar* is wrong but the *intent* is usually clear from context.
 
 ## Why a separate command
@@ -25,8 +25,8 @@ Two reasons the typer alone isn't enough:
    the right behaviour for a build tool. It is not, however, the
    signal an operator who's never written Aether before needs to
    unstick themselves.
-2. The closest existing equivalent — feeding the error to a remote
-   LLM service — is **off-limits** for this use case. Config-IS-code
+2. The closest existing equivalent, feeding the error to a remote
+   LLM service, is **off-limits** for this use case. Config-IS-code
    files routinely contain secrets: API keys, super-tokens, internal
    hostnames, paths into private mounts. Sending them to a third
    party for "help interpreting the error" leaks them. See [Privacy
@@ -70,7 +70,7 @@ ae help <script.ae> --json    # machine-readable findings
 ae help <script.ae> --llm <gguf>  # optional local-LLM escalation
 ```
 
-The argument is required — `ae help` with no argument falls
+The argument is required, `ae help` with no argument falls
 through to the existing CLI usage banner. Disambiguation happens on
 "is the next token a path that exists with `.ae` extension."
 
@@ -116,7 +116,7 @@ non-Aether shapes:
 | `port("9990")` | `port(9990)` (drop quotes; setter expects int) |
 | `- name: alpha` | `repo("alpha", "/path")` |
 
-The list is bounded by what people actually do — keep it short and
+The list is bounded by what people actually do, keep it short and
 high-precision. False positives are worse than misses here, since
 the user is already confused.
 
@@ -151,14 +151,14 @@ file alongside their `.ae` source. The format is structured
 markdown:
 
 ```markdown
-# avnserver — common authoring mistakes
+# avnserver, common authoring mistakes
 
 ## bind shadows libc
 
 If your DSL block uses `bind(...)` as a setter name (or you wrote
 your own helper named `bind`), the C linker will silently pick the
 libc symbol and your listening socket will fail to attach. Use
-`host(...)` instead — same intent, no collision.
+`host(...)` instead, same intent, no collision.
 
 Pattern: setter or function definition named `bind`, `listen`,
         `accept`, `connect`, `socket`, `select`.
@@ -188,7 +188,7 @@ surfaces only the matching ones. The library author absorbs the
 institutional knowledge once; every novice script gets the benefit
 without the typer growing library-specific rules.
 
-The pattern language can stay simple — start with literal-name
+The pattern language can stay simple, start with literal-name
 matches and AST-shape predicates; resist the urge to grow it into a
 rule engine. If a library's hints need more than that, the library
 should ship better docstrings on its setters instead.
@@ -279,8 +279,8 @@ and docstrings instead.
 ## Optional escalation: local LLM (`--llm`)
 
 Past a point, heuristic pattern-matching has diminishing returns.
-A small on-device language model — llama.cpp-flavoured, a 3-7B
-weights file the user supplies — pushes the diagnostic quality
+A small on-device language model, llama.cpp-flavoured, a 3-7B
+weights file the user supplies, pushes the diagnostic quality
 further by:
 
 - Synthesising plain-English explanations for errors the heuristics
@@ -303,7 +303,7 @@ The flag does three things and only three things:
 3. Streams the model's response to stdout.
 
 No network. No "we'll cache your queries." If the user doesn't pass
-`--llm`, the LLM code path doesn't run at all — the embedded shim
+`--llm`, the LLM code path doesn't run at all, the embedded shim
 is gated behind the `AETHER_ENABLE_LLM` compile-time flag, so a
 stripped distribution (the default build) omits the binary cost
 entirely. Without that flag the `--llm` option prints a build-time
@@ -349,10 +349,10 @@ stands alone.
 
 ## Cross-references
 
-- [`config-is-code.md`](config-is-code.md) — the pattern this command
+- [`config-is-code.md`](config-is-code.md), the pattern this command
   serves; the "library author recipe" section defines the surface
   `ae help` introspects.
-- [`closures-and-builder-dsl.md`](closures-and-builder-dsl.md) — the
+- [`closures-and-builder-dsl.md`](closures-and-builder-dsl.md), the
   syntax/semantics the help command's pattern matcher walks.
-- [`getting-started.md`](getting-started.md) — where the help command
+- [`getting-started.md`](getting-started.md), where the help command
   itself should be cross-linked once it ships.

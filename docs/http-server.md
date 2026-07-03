@@ -5,7 +5,7 @@ chain, TLS termination, HTTP/1.1 keep-alive, per-connection actor
 dispatch, HTTP/2 (h2 + h2c via libnghttp2 with ALPN, GOAWAY graceful
 shutdown, per-stream concurrent dispatch via a server-level pthread
 pool), WebSocket (RFC 6455), Server-Sent Events, structured access
-logs, Prometheus metrics, graceful shutdown, health probes — all in
+logs, Prometheus metrics, graceful shutdown, health probes, all in
 `std.http` and `std.http.middleware`.
 
 ---
@@ -90,17 +90,17 @@ main() {
 
 What the toggle changes:
 
-- **ALPN** — the TLS handshake now advertises `h2` first and
+- **ALPN**, the TLS handshake now advertises `h2` first and
   `http/1.1` as the fallback. Modern clients (curl `--http2`,
   Chrome, Firefox, Envoy, fan-out gateways) negotiate HTTP/2;
   older clients keep working on HTTP/1.1 transparently.
-- **h2c upgrade** — plain (non-TLS) connections now honour
+- **h2c upgrade**, plain (non-TLS) connections now honour
   `Upgrade: h2c` + `HTTP2-Settings` headers per RFC 7540 §3.2.
-- **Prior-knowledge h2** — clients that send the HTTP/2
+- **Prior-knowledge h2**, clients that send the HTTP/2
   connection preface immediately (e.g. `curl
   --http2-prior-knowledge`) on a plain socket are auto-detected
   and switched to HTTP/2 without an HTTP/1.1 round trip.
-- **Stream demux** — every h2 stream dispatches into the same
+- **Stream demux**, every h2 stream dispatches into the same
   route table as HTTP/1.1, so all middleware (gzip / cors / auth
   / ratelimit / vhost / rewrite / static), all metrics + access
   logs, and all health probes apply uniformly.
@@ -112,7 +112,7 @@ value advertised to peers. Pass `0` for libnghttp2's default
 ### Per-stream concurrent dispatch
 
 By default, h2 streams within one connection dispatch sequentially
-on the connection thread — each handler runs to completion before
+on the connection thread, each handler runs to completion before
 the next stream's handler begins. For workloads where handlers do
 non-trivial work (database queries, large I/O, downstream HTTP
 calls), this caps the throughput a single TCP connection can drive.
@@ -135,13 +135,13 @@ Sizing guidance:
 | `n` | When to use |
 |----|-------------|
 | `0` (default) | Handlers are CPU-light or already async. Sequential dispatch keeps memory + thread count low. |
-| `4`  | Most servers — handlers do a DB hit / upstream call per request. |
-| `8`–`16` | Heavy fan-out — handlers block on slow I/O. |
+| `4`  | Most servers, handlers do a DB hit / upstream call per request. |
+| `8`–`16` | Heavy fan-out, handlers block on slow I/O. |
 | `> 16` | Diminishing returns; bound by physical cores and the connection accept queue. The setter caps at 64. |
 
 #### Why pthreads, not actors?
 
-Aether actors are **virtual** — N actors are M:N-scheduled over a
+Aether actors are **virtual**, N actors are M:N-scheduled over a
 small pool of OS threads. They're ideal for non-blocking,
 cooperative work: spawning 10,000 actors costs near-zero memory
 and switches happen in user-space. They're *wrong* for HTTP
@@ -150,7 +150,7 @@ blocking C/Aether code (`sleep`, `fs.read`, `db.query`,
 `http.client_get`). A blocking actor monopolises its scheduler
 thread until it returns. With the actor scheduler holding only a
 few worker threads, blocking handlers under load would starve the
-host's entire actor system — including unrelated actors that have
+host's entire actor system, including unrelated actors that have
 nothing to do with HTTP.
 
 Dedicated pthreads sidestep that: each blocked handler ties up
@@ -162,7 +162,7 @@ units may block.
 
 The pool is shared across all h2 connections on the server. With a
 per-connection pool of size 4 and 1,000 keep-alive clients, the
-process would carry 4,000 pthreads — most of them idle. The
+process would carry 4,000 pthreads, most of them idle. The
 server-level pool keeps the OS thread count bounded by `n`
 regardless of connection fan-out, mirroring how
 `HttpConnectionPool` (the existing HTTP/1.1 worker pool) is sized
@@ -170,12 +170,12 @@ once at server startup.
 
 Per-session state (the wake pipe + ready queue) stays local
 because the connection thread doing nghttp2 serialisation is
-per-connection — targeted wake-up means a worker finishing a task
+per-connection, targeted wake-up means a worker finishing a task
 on connection A doesn't bother connection B's poll loop.
 
 #### Lifetime + correctness
 
-- nghttp2_session is **not** thread-safe — only the connection
+- nghttp2_session is **not** thread-safe, only the connection
   thread calls into it. Workers receive the (request, response)
   pair, run the route handler, and post the result back via the
   session's ready queue. The connection thread submits the
@@ -187,7 +187,7 @@ on connection A doesn't bother connection B's poll loop.
 - The pool itself is freed by `http_server_free`, after all
   sessions have already been torn down.
 - Graceful shutdown (`http_server_shutdown_graceful`) waits for
-  in-flight tasks to complete before flipping `want_close` —
+  in-flight tasks to complete before flipping `want_close`,
   workers can't be discarded mid-handler.
 
 **Smoke test:**
@@ -222,20 +222,20 @@ HTTP/1.1 path) feed the same chain:
 |--------|------------|
 | `middleware.use_cors`         | ✓ |
 | `middleware.use_basic_auth`   | ✓ |
-| `middleware.use_bearer_auth`  | ✓ — RFC 6750 challenges (`error="invalid_token"` for malformed credentials) emitted regardless of protocol |
-| `middleware.use_session_auth` | ✓ — `Cookie:` header parsed identically on h2 streams; redirect-on-failure works |
+| `middleware.use_bearer_auth`  | ✓, RFC 6750 challenges (`error="invalid_token"` for malformed credentials) emitted regardless of protocol |
+| `middleware.use_session_auth` | ✓, `Cookie:` header parsed identically on h2 streams; redirect-on-failure works |
 | `middleware.use_rate_limit`   | ✓ |
 | `middleware.use_vhost`        | ✓ |
 | `middleware.use_static_files` | ✓ |
 | `middleware.use_rewrite`      | ✓ |
-| `middleware.use_real_ip`      | ✓ — X-Real-IP appended to the request, visible to handlers + downstream middleware on every h2 stream |
-| `middleware.use_gzip` (response transformer) | ✓ — `Content-Encoding: gzip` rides on the h2 HEADERS frame |
+| `middleware.use_real_ip`      | ✓, X-Real-IP appended to the request, visible to handlers + downstream middleware on every h2 stream |
+| `middleware.use_gzip` (response transformer) | ✓, `Content-Encoding: gzip` rides on the h2 HEADERS frame |
 | `middleware.use_error_pages`  | ✓ |
 | `http_server_set_health_probes` | ✓ |
 | `http_server_set_metrics`     | ✓ |
-| `http_server_set_access_log`  | ✓ — every h2 stream is one log entry |
+| `http_server_set_access_log`  | ✓, every h2 stream is one log entry |
 
-WebSocket and SSE remain HTTP/1.1-only — they use protocol-
+WebSocket and SSE remain HTTP/1.1-only, they use protocol-
 specific upgrade paths that don't apply to h2. Clients that need
 real-time pushes over h2 should use h2 server-streamed responses
 (periodic DATA frames) instead, or open an h1 connection
@@ -268,7 +268,7 @@ specifically for WS/SSE alongside the h2 traffic.
   provisions a server-level pthread pool of `n` workers shared
   across every h2 connection on the server. Stream handlers run
   on the pool while the connection thread keeps reading frames
-  and serialising responses. nghttp2_session is not thread-safe —
+  and serialising responses. nghttp2_session is not thread-safe,
   only the connection thread calls into it; the pool wakes the
   connection thread via a self-pipe whose read end is exposed as
   `aether_h2_session_wake_fd` for the caller to poll alongside
@@ -287,23 +287,23 @@ specifically for WS/SSE alongside the h2 traffic.
 
 **Troubleshooting.**
 
-- *"HTTP/2 unavailable: built without libnghttp2"* — install
+- *"HTTP/2 unavailable: built without libnghttp2"*, install
   `libnghttp2-dev` (or distro equivalent) and rebuild. Auto-
   detected via `pkg-config libnghttp2`.
 - *Curl reports `http_version=1.1` even though h2 is enabled*
-  — the client either isn't asking for h2 (`curl --http2` or
+  the client either isn't asking for h2 (`curl --http2` or
   `--http2-prior-knowledge`) or is using TLS without ALPN
   support. Check `curl --version` mentions `nghttp2` in the
   feature list.
-- *Curl `--http2` over plain HTTP shows `1.1`* — this is
-  curl's "passive upgrade" — it falls back if the upgrade
+- *Curl `--http2` over plain HTTP shows `1.1`*, this is
+  curl's "passive upgrade", it falls back if the upgrade
   isn't probed. `--http2-prior-knowledge` forces h2 from the
   first byte.
-- *PROTOCOL_ERROR on the wire* — the server rejected a
+- *PROTOCOL_ERROR on the wire*, the server rejected a
   malformed request (most likely a forbidden connection-
   specific header per RFC 7540 §8.1.2.2). Check the access
   log for the offending stream.
-- *h2c upgrade succeeds but no h2 data follows* — keep-alive
+- *h2c upgrade succeeds but no h2 data follows*, keep-alive
   must be enabled (`http.server_set_keepalive(server, 1, …)`)
   for the connection to survive past the upgrade response.
 
@@ -332,7 +332,7 @@ max=M` headers per response.
 ## Per-connection actor dispatch
 
 ```aether
-// User actor step function — replaces the thread-pool worker path
+// User actor step function, replaces the thread-pool worker path
 @c_callback worker_step(msg_ptr: ptr) {
     msg = unwrap_msg_http_connection(msg_ptr)
     http.server_drain_connection(g_server, msg.client_fd)
@@ -352,13 +352,13 @@ to the thread-pool worker path.
 ## Middleware
 
 Eleven production middleware in `std.http.middleware`. All registered
-via the existing function-pointer chain — hot path stays C function
+via the existing function-pointer chain, hot path stays C function
 pointers, no closure indirection.
 
 ```aether
 import std.http.middleware
 
-// CORS — open it up to one origin
+// CORS, open it up to one origin
 middleware.use_cors(server,
     "https://example.com",
     "GET, POST, OPTIONS",
@@ -372,11 +372,11 @@ middleware.use_rate_limit(server, 100, 60000)
 // Virtual host gate
 middleware.use_vhost(server, "api.example.com,app.example.com")
 
-// Basic auth (verifier is a @c_callback Aether function — receives
+// Basic auth (verifier is a @c_callback Aether function, receives
 // decoded username + password, returns 1 if valid, 0 otherwise)
 middleware.use_basic_auth(server, "Restricted", verify_creds_cb, null)
 
-// Bearer token auth — RFC 6750. The verifier receives the raw
+// Bearer token auth, RFC 6750. The verifier receives the raw
 // token (the substring after `Bearer `); validation is up to the
 // caller (JWT signature check / opaque-token DB lookup / OAuth
 // introspection). On failure the response is 401 with
@@ -385,7 +385,7 @@ middleware.use_basic_auth(server, "Restricted", verify_creds_cb, null)
 // from "bad credentials."
 middleware.use_bearer_auth(server, "api", verify_token_cb, null)
 
-// Session-cookie auth — reads a named cookie and hands the value
+// Session-cookie auth, reads a named cookie and hands the value
 // to a verifier (DB lookup / signed-token verify). On failure,
 // when redirect_url is non-empty, browsers get a 302 to the
 // login page; pass "" to return a JSON-API-style 401 instead.
@@ -410,7 +410,7 @@ middleware.error_pages_register(ep, 404, "<h1>Not found</h1>", "text/html")
 middleware.error_pages_register(ep, 500, "<h1>Server error</h1>", "text/html")
 middleware.use_error_pages(server, ep)
 
-// Real-IP / X-Forwarded-For — extracts the original client IP
+// Real-IP / X-Forwarded-For, extracts the original client IP
 // when the server is behind a load balancer / reverse proxy / CDN.
 // Reads the configured header (default "X-Forwarded-For"), takes
 // the leftmost IP, and adds X-Real-IP to the request so downstream
@@ -429,10 +429,10 @@ handler emits the response. Order is registration order.
 **Real-IP trust model.** `use_real_ip` does NOT validate that the
 request actually came through a trusted proxy. Operators must only
 run it behind trusted edge infrastructure that strips any
-client-supplied X-Forwarded-For — typical setups are a firewall-
+client-supplied X-Forwarded-For, typical setups are a firewall-
 restricted port plus a load-balancer rule, or a CDN that overwrites
 X-Forwarded-For. Without that guarantee, callers can spoof their
-apparent client IP. The middleware is idempotent — running it
+apparent client IP. The middleware is idempotent, running it
 twice (or running it after the edge already set X-Real-IP) doesn't
 double-tag the request.
 
@@ -441,7 +441,7 @@ double-tag the request.
 ## Reverse proxy
 
 `std.http.proxy` adds the outbound side: forward inbound requests
-to a pool of upstream HTTP servers. nginx-class feature set —
+to a pool of upstream HTTP servers. nginx-class feature set,
 weighted load balancing (round-robin / least-conn / ip-hash /
 smooth weighted RR), active health checks, in-memory LRU response
 cache with RFC 7234 cacheability rules, per-upstream circuit
@@ -600,22 +600,22 @@ while doing other work (and stop it later with `http_server_stop`).
 This is the *embedded* mode and behaves like a library, not a CLI:
 
 - **No banner.** It does not print `Server running at …` /
-  `Press Ctrl+C to stop` — an embedded server is controlled by
+  `Press Ctrl+C to stop` an embedded server is controlled by
   `http_server_stop`, not a terminal. (Foreground `server_start` still
   prints the banner.)
 - **Quiet signals.** Its detached accept/worker threads block async
-  signals (`pthread_sigmask` — SIGURG, SIGINT, SIGTERM, SIGPIPE, …), so
+  signals (`pthread_sigmask` SIGURG, SIGINT, SIGTERM, SIGPIPE, …), so
   the server's threads never intercept a process-directed signal meant
   for the host application; the synchronous fault signals
   (SEGV/FPE/BUS/…) stay deliverable.
 
-**Reap it — don't leave it lingering.** A backgrounded server left alive
+**Reap it, don't leave it lingering.** A backgrounded server left alive
 past the end of a command is a finite process the surrounding harness
 (a sandboxed agent, CI runner, build tool) must still account for; some
 supervisors charge the *foreground* command a non-zero/SIGURG exit for a
 lingering multi-threaded child. Always tear an embedded server down
-explicitly — `http_server_stop` (or `server_shutdown_graceful`), then
-let the process exit — rather than orphaning it.
+explicitly, `http_server_stop` (or `server_shutdown_graceful`), then
+let the process exit, rather than orphaning it.
 
 ---
 
@@ -670,7 +670,7 @@ Kubernetes / Docker probe conventions.
   sessions and SSE/WebSocket. Default thread-pool path is fine for
   short-lived requests.
 - gzip: turn on for text responses ≥ 1KB. Skip for already-compressed
-  content (images, video) — the middleware skips automatically based
+  content (images, video), the middleware skips automatically based
   on the absence of the `Content-Encoding` header from the handler.
 - Response transformer chain: keep transformers cheap. They run on
   every response; expensive transforms (template rendering, image

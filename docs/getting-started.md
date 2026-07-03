@@ -62,10 +62,10 @@ apk add build-base
 
 **Windows:**
 
-The easiest way is to download the pre-built release binary — no MSYS2, no manual toolchain required:
+The easiest way is to download the pre-built release binary, no MSYS2, no manual toolchain required:
 
 1. Download `aether-*-windows-x86_64.zip` from [GitHub Releases](https://github.com/nicolasmd87/aether/releases)
-2. Extract to any folder — e.g. `C:\aether`
+2. Extract to any folder, e.g. `C:\aether`
 3. Add `C:\aether\bin` to your PATH (System Settings → Environment Variables → Path)
 4. **Restart your terminal** (so PATH takes effect)
 5. Open any terminal (PowerShell or CMD):
@@ -171,7 +171,7 @@ ae add codeberg.org/user/repo         # Codeberg
 
 ## Error Handling
 
-Functions that can fail return `(value, error)` tuples. Check the error first, handle it, then continue — no `else` needed:
+Functions that can fail return `(value, error)` tuples. Check the error first, handle it, then continue, no `else` needed:
 
 ```aether
 safe_divide(a: int, b: int) -> {
@@ -197,7 +197,7 @@ main() {
 
 ## Function Contracts (`requires` / `ensures`)
 
-Aether supports Eiffel-style runtime contracts — pre/postconditions you attach directly to a function declaration. They document intent at the boundary, fire as `aether_panic` on violation (which prints the failed predicate by name), and elide entirely when the predicate is provably constant-true at compile time.
+Aether supports Eiffel-style runtime contracts, pre/postconditions you attach directly to a function declaration. They document intent at the boundary, fire as `aether_panic` on violation (which prints the failed predicate by name), and elide entirely when the predicate is provably constant-true at compile time.
 
 ```aether
 add(a: int, b: int) -> int
@@ -218,7 +218,7 @@ safe_div(a: int, b: int) -> int
 
 - `requires <expr>` runs at function entry, with parameters in scope.
 - `ensures <expr>` runs before each `return`, with `result` bound to the value about to be returned.
-- Multiple clauses, freely interleaved — each is checked independently so the panic message names the specific failed predicate.
+- Multiple clauses, freely interleaved, each is checked independently so the panic message names the specific failed predicate.
 - `aetherc --no-contracts` (analog of `-DNDEBUG`) drops every check at codegen for release builds.
 
 See [Function contracts](language-reference.md#function-contracts-requires--ensures-issue-348) for the full semantics, the const-fold elision rules, and v1 limitations.
@@ -304,7 +304,7 @@ main() {
 ```
 
 Functions are called using **namespace-style syntax**: `namespace.function()`.
-Stdlib functions that can fail return Go-style `(value, err)` tuples —
+Stdlib functions that can fail return Go-style `(value, err)` tuples,
 check `err` first, then use `value`:
 
 ```aether
@@ -334,7 +334,7 @@ advanced callers who need direct access to the underlying ptr or status code.
 
 ### Creating Your Own Modules
 
-You can write reusable modules in pure Aether — no C required. Place your module in `lib/<name>/module.ae`:
+You can write reusable modules in pure Aether, no C required. Place your module in `lib/<name>/module.ae`:
 
 **lib/mymath/module.ae:**
 ```aether
@@ -348,7 +348,7 @@ export add(a, b) {
     return a + b
 }
 
-// Private helper — not accessible from outside
+// Private helper, not accessible from outside
 multiply(a, b) {
     return a * b
 }
@@ -366,7 +366,7 @@ main() {
 }
 ```
 
-Use `export` to control which functions and constants are part of your module's public API. Non-exported symbols are private — they can be used internally by exported functions but are not accessible to importers. If a module has no `export` declarations, all symbols are public (backwards compatible).
+Use `export` to control which functions and constants are part of your module's public API. Non-exported symbols are private, they can be used internally by exported functions but are not accessible to importers. If a module has no `export` declarations, all symbols are public (backwards compatible).
 
 Modules support functions, constants, intra-module calls (functions calling other functions in the same module), and export visibility. See [Module System Design](module-system-design.md#pure-aether-modules) for full details.
 
@@ -393,7 +393,7 @@ Aether includes a standard library with the following modules:
 See [stdlib-api.md](stdlib-api.md) for the full API reference.
 
 > When you read a file or get data from stdlib functions, the result is a
-> regular string — you can `print()` it, use it in `"${interpolation}"`, or pass it in messages
+> regular string, you can `print()` it, use it in `"${interpolation}"`, or pass it in messages
 > directly. No conversion needed.
 
 ### Error Handling and Memory
@@ -558,11 +558,11 @@ main() {
 }
 ```
 
-The builtin `getenv()` also works without an import for quick scripts (returns a malloc'd string — use `defer free()`).
+The builtin `getenv()` also works without an import for quick scripts (returns a malloc'd string, use `defer free()`).
 
 ## When something doesn't compile
 
-Aether's typer is precise — `error[E0301]: Undefined function 'super_token'` is the right output for a build pipeline but not always for an operator authoring a config script. `ae help <script.ae>` translates the typer's terse output into actionable, on-machine suggestions:
+Aether's typer is precise, `error[E0301]: Undefined function 'super_token'` is the right output for a build pipeline but not always for an operator authoring a config script. `ae help <script.ae>` translates the typer's terse output into actionable, on-machine suggestions:
 
 ```bash
 ae help my_script.ae              # Human-readable findings
@@ -631,13 +631,13 @@ Versions are stored in `~/.aether/versions/`. The active version is symlinked to
 - If both exist but it still fails, set `AETHER_HOME`: `set AETHER_HOME=C:\aether`
 
 **"gcc: command not found" (Windows)**
-- This should not happen with the pre-built binary — `ae` auto-downloads GCC (~80 MB) on first run
+- This should not happen with the pre-built binary, `ae` auto-downloads GCC (~80 MB) on first run
 - If you built from source via MSYS2, open the "MSYS2 MinGW 64-bit" shell, not plain PowerShell
-- Verify: `gcc --version` — should show MinGW-w64 GCC
+- Verify: `gcc --version` should show MinGW-w64 GCC
 
 **"pthread.h: No such file or directory"**
 - Linux: `sudo apt-get install libpthread-stubs0-dev`
-- Windows: The Aether runtime uses Win32 threads natively — no pthread library needed
+- Windows: The Aether runtime uses Win32 threads natively, no pthread library needed
 
 **Test failures**
 - Run `make test` for unit tests, `make test-ae` for integration tests
@@ -647,7 +647,7 @@ Versions are stored in `~/.aether/versions/`. The active version is symlinked to
 
 1. Rebuild from scratch if anything looks stale: `make clean && make`.
 2. On Windows, launch `ae` from a directory where your user can write (the first run downloads GCC into `~\.aether\`).
-3. Inside an actor body, `state` is a reserved keyword — pick a different local-variable name; outside actor bodies it has no special meaning.
+3. Inside an actor body, `state` is a reserved keyword, pick a different local-variable name; outside actor bodies it has no special meaning.
 
 ### WebAssembly and Embedded Targets
 
@@ -659,7 +659,7 @@ make stdlib PLATFORM=wasm
 # Or force cooperative mode on native for testing:
 make stdlib EXTRA_CFLAGS="-DAETHER_NO_THREADING"
 
-# Build for embedded ARM (syntax-check only — requires arm-none-eabi-gcc)
+# Build for embedded ARM (syntax-check only, requires arm-none-eabi-gcc)
 make ci-embedded
 
 # Docker-based cross-compilation (no local toolchain needed):
@@ -667,7 +667,7 @@ make docker-ci-wasm        # Emscripten + Node.js execution
 make docker-ci-embedded    # ARM Cortex-M4 syntax-check
 ```
 
-On threadless platforms, the cooperative scheduler (`aether_scheduler_coop.c`) replaces the multi-core scheduler. All actors run on a single thread via `aether_scheduler_poll()`. Multi-actor programs work correctly — messages are processed cooperatively during `wait_for_idle()`.
+On threadless platforms, the cooperative scheduler (`aether_scheduler_coop.c`) replaces the multi-core scheduler. All actors run on a single thread via `aether_scheduler_poll()`. Multi-actor programs work correctly, messages are processed cooperatively during `wait_for_idle()`.
 
 Stdlib modules that depend on filesystem or networking return errors gracefully (NULL, 0, -1). Console I/O (`print`, `println`) always works.
 
@@ -686,7 +686,7 @@ Stdlib modules that depend on filesystem or networking return errors gracefully 
 
 **Windows:**
 - Pre-built binaries work in any terminal (PowerShell, CMD, Windows Terminal)
-- GCC is auto-downloaded on first `ae run` — no MSYS2 or manual setup required
-- The runtime uses Win32 threads natively — no pthreads library required
+- GCC is auto-downloaded on first `ae run` no MSYS2 or manual setup required
+- The runtime uses Win32 threads natively, no pthreads library required
 - Full thread affinity support via `SetThreadAffinityMask`
 - **Building from source:** Use MSYS2 MinGW 64-bit shell with `make ae`

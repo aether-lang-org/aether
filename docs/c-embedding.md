@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
 # Compile Aether code
 aetherc counter.ae counter.c
 
-# Build with runtime — `ae cflags` emits the right -I / -L / -l for
+# Build with runtime, `ae cflags` emits the right -I / -L / -l for
 # the install in effect. Don't hand-craft the linker flags: the
 # install layout (`<prefix>/lib/aether/libaether.a`) requires an
 # explicit `-L<prefix>/lib/aether` that bare `-laether` won't find.
@@ -323,7 +323,7 @@ void my_actor_step(void* self) {
 ### Makefile Example
 
 `ae cflags` is the canonical way to obtain the include and link flags
-— it covers in-tree dev builds, `~/.aether` user installs, and
+it covers in-tree dev builds, `~/.aether` user installs, and
 `/usr/local` system installs uniformly. Do not hand-craft `-I` / `-L`
 / `-l`: the install layout puts the archive at `<prefix>/lib/aether/`
 (not flat under `<prefix>/lib/`), so `-laether` alone wouldn't find
@@ -374,7 +374,7 @@ The C host and the Aether runtime share a process but have distinct ownership ru
 
 ## Header Generation
 
-Pass `--emit-header` to `aetherc` to generate a C header alongside the C output. The header contains message struct definitions, `MSG_*` constants, and actor spawn prototypes — everything needed to send messages to Aether actors from C without copying struct definitions by hand.
+Pass `--emit-header` to `aetherc` to generate a C header alongside the C output. The header contains message struct definitions, `MSG_*` constants, and actor spawn prototypes, everything needed to send messages to Aether actors from C without copying struct definitions by hand.
 
 ```bash
 aetherc --emit-header counter.ae counter.c
@@ -399,7 +399,7 @@ Example generated header:
 #define MSG_GetValue  1
 #define MSG_Reset     2
 
-// Message structs — first field is the message ID; single-int payloads
+// Message structs, first field is the message ID; single-int payloads
 // widen to intptr_t to match Message.payload_int.
 typedef struct { int _message_id; intptr_t amount; } Increment;
 
@@ -415,7 +415,7 @@ Include the header in your C host application and use the constants with `schedu
 
 ## Polling from a C Event Loop
 
-When a C event loop (raylib, SDL, game loop, etc.) holds the main thread, Aether actors in main-thread mode cannot process messages — the scheduler has no opportunity to run.
+When a C event loop (raylib, SDL, game loop, etc.) holds the main thread, Aether actors in main-thread mode cannot process messages, the scheduler has no opportunity to run.
 
 Use `aether_scheduler_poll()` to drain pending messages from C code between frames:
 
@@ -424,7 +424,7 @@ Use `aether_scheduler_poll()` to drain pending messages from C code between fram
 
 // In your render/game loop:
 while (!window_should_close()) {
-    // Drain actor messages — process up to 64 per actor per call.
+    // Drain actor messages, process up to 64 per actor per call.
     // Pass 0 for unlimited (processes all pending).
     aether_scheduler_poll(64);
 

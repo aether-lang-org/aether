@@ -16,7 +16,7 @@ flag = true         // inferred: bool
 p = null            // inferred: ptr
 ```
 
-A bare integer literal always infers as `int` — there is no `long`
+A bare integer literal always infers as `int` there is no `long`
 literal or `long <value>` prefix. To get a `long` (64-bit) binding,
 annotate the declaration explicitly:
 
@@ -197,7 +197,7 @@ The `null` keyword is typed as `ptr`:
 
 ```aether
 conn = null                  // inferred: ptr
-conn = tcp_connect_raw(...)  // still ptr — type is consistent
+conn = tcp_connect_raw(...)  // still ptr, type is consistent
 ```
 
 Integer `0` interoperates with `ptr` only in limited cases. Assigning `0`

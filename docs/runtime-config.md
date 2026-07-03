@@ -294,7 +294,7 @@ With `AETHER_FLAG_AUTO_DETECT`, the runtime enables the optimizations each platf
 
 ### Cooperative Mode
 
-On platforms without pthreads (WASM, embedded), or when threading is explicitly disabled (`-DAETHER_NO_THREADING`), the cooperative scheduler handles all actor processing on a single thread. Multi-actor programs work correctly — messages are processed cooperatively during `wait_for_idle()`.
+On platforms without pthreads (WASM, embedded), or when threading is explicitly disabled (`-DAETHER_NO_THREADING`), the cooperative scheduler handles all actor processing on a single thread. Multi-actor programs work correctly, messages are processed cooperatively during `wait_for_idle()`.
 
 ```bash
 # Force cooperative mode on native (for testing):

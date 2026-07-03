@@ -21,7 +21,7 @@ Single-actor programs bypass the scheduler entirely. When only one actor exists,
 When main thread mode is active:
 1. `aether_send_message` calls `aether_send_message_sync` instead of routing through scheduler
 2. **Threaded mode:** The sync path passes the caller's stack pointer directly (no malloc, no memcpy). A TLS flag (`g_skip_free`) prevents the handler from freeing the stack pointer
-3. **Cooperative mode:** The sync path heap-allocates a copy of the message data, because the mailbox may have other messages queued ahead — the immediate `step()` call consumes the oldest message (FIFO), not necessarily the one just sent
+3. **Cooperative mode:** The sync path heap-allocates a copy of the message data, because the mailbox may have other messages queued ahead, the immediate `step()` call consumes the oldest message (FIFO), not necessarily the one just sent
 4. `actor->step()` is called synchronously in the sender's context
 
 ```c
@@ -49,7 +49,7 @@ static inline void aether_send_message_sync(ActorBase* actor, void* message_data
 
 **Per-actor flag:**
 
-The `main_thread_only` field on `ActorBase` signals scheduler threads to skip processing this actor. When a second actor spawns, the flag is cleared on the first actor so scheduler threads can process both normally. In cooperative mode, `main_thread_only` stays set for all actors — the cooperative scheduler always processes them directly.
+The `main_thread_only` field on `ActorBase` signals scheduler threads to skip processing this actor. When a second actor spawns, the flag is cleared on the first actor so scheduler threads can process both normally. In cooperative mode, `main_thread_only` stays set for all actors, the cooperative scheduler always processes them directly.
 
 **Scheduler integration:**
 
@@ -118,7 +118,7 @@ while (i < total) {
 scheduler_send_batch_flush();  // Bulk send with one atomic per core
 ```
 
-The flush snapshots each message's target core, sorts by core using radix sort, then calls `queue_enqueue_batch` for each core. This reduces atomics from N (one per message) to num_cores (one per core). Target cores are read once per message at flush time to produce a consistent snapshot — this prevents buffer overflows that could occur if an actor migrates between the time a message is buffered and the time the batch is flushed.
+The flush snapshots each message's target core, sorts by core using radix sort, then calls `queue_enqueue_batch` for each core. This reduces atomics from N (one per message) to num_cores (one per core). Target cores are read once per message at flush time to produce a consistent snapshot, this prevents buffer overflows that could occur if an actor migrates between the time a message is buffered and the time the batch is flushed.
 
 **Partial batch enqueue:** `queue_enqueue_batch` enqueues as many messages as fit in the queue and returns the count, rather than failing the entire batch when the queue is near full. This lets the common case (queue has room) complete with a single atomic store per core. When the queue can't absorb the full batch, the flush falls back to `scheduler_send_remote` for each remaining message, which handles its own routing and counting. The fallback path is rare in practice because the cross-core queue holds 1024 items.
 
@@ -212,7 +212,7 @@ When a cross-core send occurs, the sender sets a `migrate_to` hint on the target
 
 2. **During idle actor scan** (full scan, O(actor_count)): When no messages arrived from cross-core queues, the scheduler scans all local actors for pending migration hints. This catches any hints that were not processed in the targeted path.
 
-Migration uses ascending core-id lock ordering to prevent deadlock between concurrent migration and work-stealing operations. Both locks are acquired via non-blocking try-lock — if either lock is contended, migration is deferred to the next iteration. The actor is always processed before migration is attempted, ensuring progress even under constant migration pressure.
+Migration uses ascending core-id lock ordering to prevent deadlock between concurrent migration and work-stealing operations. Both locks are acquired via non-blocking try-lock, if either lock is contended, migration is deferred to the next iteration. The actor is always processed before migration is attempted, ensuring progress even under constant migration pressure.
 
 ### Inline Single-Field Messages
 
@@ -263,7 +263,7 @@ typedef struct __attribute__((aligned(64))) {
     char padding[63];
 } OptimizedSpinlock;
 
-#define MAILBOX_SIZE 32   // 32 slots — small per-actor footprint for scaling to millions
+#define MAILBOX_SIZE 32   // 32 slots, small per-actor footprint for scaling to millions
 ```
 
 ### Power-of-2 Buffer Sizing
@@ -407,11 +407,11 @@ The Aether compiler (`aetherc`) runs its own optimization passes on the AST befo
 
 ### Hot/Cold Path Fixes (scheduler-level)
 
-**Problem A — `aether_main_thread_mode_active()` branch hint** (`runtime/config/aether_optimization_config.h`)
+**Problem A, `aether_main_thread_mode_active()` branch hint** (`runtime/config/aether_optimization_config.h`)
 
 The inline accessor previously carried `__builtin_expect(..., 0)`, marking the main-thread path as *unlikely*. For single-actor programs this path is always taken, so the hint put the fast code in the cold instruction-cache section. Removed the hint; the C compiler now places the branch neutrally.
 
-**Problem B — Dead branch in generated send code** (`compiler/codegen/codegen_expr.c`)
+**Problem B, Dead branch in generated send code** (`compiler/codegen/codegen_expr.c`)
 
 Generated code for `actor ! Msg` from the main thread previously emitted:
 ```c
@@ -471,7 +471,7 @@ For constant-bound loops the Aether collapse is redundant with clang's scalar ev
 i = 0
 while i < n { i = i + 1 }   // n can be a runtime variable
 ```
-→ `if ((i) < (n)) { i = (n); }` — clang can collapse only when `n` is a compile-time constant.
+→ `if ((i) < (n)) { i = (n); }` clang can collapse only when `n` is a compile-time constant.
 
 **Reported in optimization stats:**
 ```

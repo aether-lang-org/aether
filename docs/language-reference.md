@@ -18,27 +18,27 @@ Aether is a **hybrid that leans closer to functional than object-oriented**, sit
                               Aether
 ```
 
-The placement is deliberate — Aether picks the pieces of each tradition that compose cleanly and skips the ones (deep inheritance hierarchies, monad transformers, etc.) that don't earn their cost in a compiles-to-C language. Concretely:
+The placement is deliberate, Aether picks the pieces of each tradition that compose cleanly and skips the ones (deep inheritance hierarchies, monad transformers, etc.) that don't earn their cost in a compiles-to-C language. Concretely:
 
 ### Where Aether leans functional
 
 - **Closures + trailing blocks are first-class** and are *the* idiomatic control-flow construction. The "DSL with scope" pattern (`window("Demo") { vg { circle(...) { fill("#F00") } } }`) is built from closures running in the caller's lexical scope, not from method dispatch on a builder object. See [Closures and Builder DSL](closures-and-builder-dsl.md).
 - **No classes, no inheritance, no `self` / `this`.** Structs are plain data records (`struct Circle { cx: float, cy: float, r: float }`) with no methods attached. Behaviour comes from free functions taking the struct as an argument: `circle_area(c)` not `c.area()`.
-- **Type-annotated parameters with full inference** and **Go-style multi-return** (`-> (long, string)` for value+error tuples) — result-type-via-tuple rather than exceptions on the happy path. This is the Go / Rust functional-pragmatic family, not OO error handling.
-- **Modules with explicit `exports`** — namespaced free functions, not classes-as-namespaces. The visible surface of a module is the export list, not a public-method set.
-- **`fn` as a first-class type** — passed, stored, boxed, unboxed. Aether's closures lower to `_AeClosure { void(*fn)(void); void* env; }` with structural sharing through ref cells (`ref()` / `ref_get` / `ref_set`); the runtime treats them as values, not as method receivers.
-- **No method-dispatch machinery in the compiler.** There's no vtable, no virtual call. Every function call resolves to a direct C function call. The bare-fn-to-closure adapter machinery and the `fn ↔ ptr` coercion rules exist to make first-class function values work end-to-end — a strictly functional priority.
+- **Type-annotated parameters with full inference** and **Go-style multi-return** (`-> (long, string)` for value+error tuples), result-type-via-tuple rather than exceptions on the happy path. This is the Go / Rust functional-pragmatic family, not OO error handling.
+- **Modules with explicit `exports`**, namespaced free functions, not classes-as-namespaces. The visible surface of a module is the export list, not a public-method set.
+- **`fn` as a first-class type**, passed, stored, boxed, unboxed. Aether's closures lower to `_AeClosure { void(*fn)(void); void* env; }` with structural sharing through ref cells (`ref()` / `ref_get` / `ref_set`); the runtime treats them as values, not as method receivers.
+- **No method-dispatch machinery in the compiler.** There's no vtable, no virtual call. Every function call resolves to a direct C function call. The bare-fn-to-closure adapter machinery and the `fn ↔ ptr` coercion rules exist to make first-class function values work end-to-end, a strictly functional priority.
 
 ### Where Aether borrows from OO (in a limited way)
 
-- **Actors** with state and message-receive handlers are the one piece of OO-shape machinery present — encapsulated state behind a message boundary. This is the Erlang / Pony actor model rather than Smalltalk-OO: no polymorphism, no inheritance, no method overriding. An actor is a stateful object reachable only through messages.
+- **Actors** with state and message-receive handlers are the one piece of OO-shape machinery present, encapsulated state behind a message boundary. This is the Erlang / Pony actor model rather than Smalltalk-OO: no polymorphism, no inheritance, no method overriding. An actor is a stateful object reachable only through messages.
 - **The `_ctx` / builder-context stack DSL** lets you write code that *reads* like a fluent OO method chain (`panel("Settings") { button("OK") }`), but the underlying mechanism is closure scope + an implicit context argument, not method dispatch. The compiler injects `_ctx` automatically; no receiver is involved.
-- **Receiver-namespace fallback** for trailing blocks (`bash.test(b) { script("...") }` resolves `script` as `bash_script` — issue #333) makes free-function calls look OO at the call site, but it's a name-resolution rule, not method dispatch.
-- **Struct-field assignment and member access** (`h.cb = c`, `c.r`) are present, but they're data-oriented (record reads/writes) — the same shape Go and C have without claiming OO.
+- **Receiver-namespace fallback** for trailing blocks (`bash.test(b) { script("...") }` resolves `script` as `bash_script` issue #333) makes free-function calls look OO at the call site, but it's a name-resolution rule, not method dispatch.
+- **Struct-field assignment and member access** (`h.cb = c`, `c.r`) are present, but they're data-oriented (record reads/writes), the same shape Go and C have without claiming OO.
 
-### Where Aether is neither — it's just systems-pragmatic
+### Where Aether is neither, it's just systems-pragmatic
 
-- Manual heap discipline is visible — `box_closure` / `unbox_closure`, `ref()` cells, the automatic heap-string ownership tracker (`_heap_<name>` companion flags), `defer` for resource cleanup. Closer to Rust's explicit ownership story than to either paradigm's purist position.
+- Manual heap discipline is visible, `box_closure` / `unbox_closure`, `ref()` cells, the automatic heap-string ownership tracker (`_heap_<name>` companion flags), `defer` for resource cleanup. Closer to Rust's explicit ownership story than to either paradigm's purist position.
 - Aether's closure model deliberately trades Lisp/Smalltalk-style runtime-owned environments for generated C structs whose lifetimes are mostly inferred by the compiler. See [Closure lineage and runtime tradeoffs](design/closure-lineage-and-runtime-tradeoffs.md) for the comparison.
 - The C ABI / `extern` boundary is a first-class concern, not a hidden detail. The typechecker pragmatically allows `int ↔ ptr` and `fn ↔ ptr` coercions because surface ergonomics matter more than type-purity at the FFI boundary.
 - The capability + sandbox system (compile-time module gate / scope-level `hide` / `seal except` / LD_PRELOAD libc gate) is its own concern, orthogonal to both paradigms.
@@ -47,7 +47,7 @@ The placement is deliberate — Aether picks the pieces of each tradition that c
 
 If you've written Go, you'll recognise the shape immediately: free functions, structs, channels (`!` send, `?` ask), explicit error returns, no classes. If you've written Elixir, the actor model and trailing-block DSLs will feel familiar. If you've written Ruby or Groovy, the "DSL with scope" idiom is borrowed directly from your lineage (Matz's term for it). If you're coming from Java or Python, the biggest adjustment is the absence of method dispatch (`circle_area(c)` instead of `c.area()`); the rest of the surface is approachable.
 
-Aether is not, and has no plans to be, a pure FP language (no Hindley-Milner inference, no purity tracking, no monadic effects). It's also not, and has no plans to be, a class-based OO language (no inheritance, no virtual dispatch, no `self`). It picks the cross-paradigm subset that survives compilation to readable C and stays useful for systems work — concurrent servers, language ports, build tooling, embedded scripting.
+Aether is not, and has no plans to be, a pure FP language (no Hindley-Milner inference, no purity tracking, no monadic effects). It's also not, and has no plans to be, a class-based OO language (no inheritance, no virtual dispatch, no `self`). It picks the cross-paradigm subset that survives compilation to readable C and stays useful for systems work, concurrent servers, language ports, build tooling, embedded scripting.
 
 ## Table of Contents
 
@@ -86,14 +86,14 @@ Aether is not, and has no plans to be, a pure FP language (no Hindley-Milner inf
 | `byte` | Unsigned 8-bit (0..255) | `byte b = 0xFF` |
 | `void`¹ | No value (for functions) | `extern free(p: ptr) -> void` |
 | `long` | 64-bit signed integer | `long x = 0` |
-| `longdouble` | C `long double` — widest float (C interop) | `extern strtold(...) -> longdouble` |
+| `longdouble` | C `long double` widest float (C interop) | `extern strtold(...) -> longdouble` |
 | `ptr` | Raw pointer (for C interop) | `null` |
 
-¹ `void` is **not** a reserved word — there is no `void` token; it is a plain identifier used by convention to spell the absence of a return value. A function that omits its `-> Type` annotation is the canonical void declaration (see [Functions](#functions)). It is never a value type and cannot be used for a variable or field.
+¹ `void` is **not** a reserved word, there is no `void` token; it is a plain identifier used by convention to spell the absence of a return value. A function that omits its `-> Type` annotation is the canonical void declaration (see [Functions](#functions)). It is never a value type and cannot be used for a variable or field.
 
-#### `byte` — unsigned 8-bit
+#### `byte` unsigned 8-bit
 
-The `byte` type maps to `unsigned char` in C. Use it for type-precision in struct fields, function parameters, returns, and locals where a value is genuinely an octet — packed-tag bytes (`flags & 0x80`), opcode discriminators, NaN-boxing pointer tags, network protocol headers, on-disk file format fields. For *bulk* byte storage (binary buffers, byte arrays), reach for `std.bytes` (the mutable byte buffer) instead.
+The `byte` type maps to `unsigned char` in C. Use it for type-precision in struct fields, function parameters, returns, and locals where a value is genuinely an octet, packed-tag bytes (`flags & 0x80`), opcode discriminators, NaN-boxing pointer tags, network protocol headers, on-disk file format fields. For *bulk* byte storage (binary buffers, byte arrays), reach for `std.bytes` (the mutable byte buffer) instead.
 
 ```aether
 struct OpCode {
@@ -117,9 +117,9 @@ main() {
 
 **Arithmetic.** `byte op byte → byte`; mixed `byte op int → int` (the wider type wins). This keeps NaN-boxing / packed-tag patterns expressible (`tag & 0x07` stays a byte) while letting general arithmetic widen naturally.
 
-#### `longdouble` — C `long double`
+#### `longdouble` C `long double`
 
-The `longdouble` type maps to C `long double`, the widest floating type — for exact-decimal numeric paths a C interop layer expects it (libc `strtold`, `INCRBYFLOAT`-style score conversion). It supports arithmetic (`+ - * /`), comparison, and conversion to/from `int` and `float`; as the widest numeric it wins promotion (`longdouble op int` / `longdouble op float` → `longdouble`). It's usable in locals, function params/returns, struct fields, and `extern` signatures. There is no `longdouble` literal — values arrive from an extern (`extern strtold(s: cstring_const, end: ptr) -> longdouble`) or by widening an `int`/`float`. Interpolation and `print` format it with `%Lg`/`%Lf`.
+The `longdouble` type maps to C `long double`, the widest floating type, for exact-decimal numeric paths a C interop layer expects it (libc `strtold`, `INCRBYFLOAT`-style score conversion). It supports arithmetic (`+ - * /`), comparison, and conversion to/from `int` and `float`; as the widest numeric it wins promotion (`longdouble op int` / `longdouble op float` → `longdouble`). It's usable in locals, function params/returns, struct fields, and `extern` signatures. There is no `longdouble` literal, values arrive from an extern (`extern strtold(s: cstring_const, end: ptr) -> longdouble`) or by widening an `int`/`float`. Interpolation and `print` format it with `%Lg`/`%Lf`.
 
 ```aether
 extern strtold(s: cstring_const, end: ptr) -> longdouble
@@ -151,7 +151,7 @@ string[5] names;           // Array of 5 strings
 float[100] values;         // Array of 100 floats
 ```
 
-**Array-to-pointer decay.** A named fixed-size array decays to a pointer to its first element in pointer context — when assigned to an inferred binding, passed as a `ptr`-typed argument, or compared against a pointer (the same rule C uses):
+**Array-to-pointer decay.** A named fixed-size array decays to a pointer to its first element in pointer context, when assigned to an inferred binding, passed as a `ptr`-typed argument, or compared against a pointer (the same rule C uses):
 
 ```aether
 byte[128] static_ids
@@ -167,7 +167,7 @@ This is the stack-buffer-with-heap-fallback idiom (`T buf[N]; T* p = buf; if (n 
 
 ### Sequence Types (`*StringSeq`)
 
-`*StringSeq` is a cons-cell linked list of strings — Erlang/Elixir-shaped, with O(1) head/tail/cons/length and refcount-based structural sharing. Empty list is the `NULL` pointer; each cell carries a cached length.
+`*StringSeq` is a cons-cell linked list of strings, Erlang/Elixir-shaped, with O(1) head/tail/cons/length and refcount-based structural sharing. Empty list is the `NULL` pointer; each cell carries a cached length.
 
 ```aether
 import std.string
@@ -218,7 +218,7 @@ All numeric literal formats work with bitwise operators and in any expression co
 Variables support both explicit types and automatic type inference:
 
 ```aether
-// Type inference (recommended) — bare assignment is the canonical form
+// Type inference (recommended), bare assignment is the canonical form
 x = 10
 y = 20
 name = "Alice"
@@ -232,19 +232,19 @@ float temperature = 98.6
 
 Variables are inferred from their initialization or usage context.
 
-**`let` / `var` are optional keywords**, accepted but not required. Bare Python-style assignment is the canonical form and is what most stdlib code uses. `let x = 10` and `var x = 10` parse identically to `x = 10`. There is no semantic distinction between `let` and `var` — Aether is not Rust; mutability is a property of the binding's later use, not its declaration.
+**`let` / `var` are optional keywords**, accepted but not required. Bare Python-style assignment is the canonical form and is what most stdlib code uses. `let x = 10` and `var x = 10` parse identically to `x = 10`. There is no semantic distinction between `let` and `var` Aether is not Rust; mutability is a property of the binding's later use, not its declaration.
 
 **Semicolons are optional.** Aether parses end-of-line as a statement terminator. The samples above use no semicolons; older samples in this doc may show `;` for clarity. Either is fine.
 
 ### Casting between types
 
 Aether has **no general-purpose cast operator**. The `as` keyword is reserved for module aliasing and three specific value-cast forms:
-- `import mod as alias` — module aliasing (only inside `import` statements)
-- `expr as *StructName` — pointer-overlay struct cast (a leading `*` then a struct name; see [§ Pointer-to-struct type](#pointer-to-struct-type--structname-and-expr-as-structname) below)
-- `expr as fn(T1, T2, ...) -> R` — function-pointer cast (call a stored pointer with type checking; see [§ Function-pointer parameters](#function-pointer-parameters--fnt1-t2---r) below)
-- `expr as T[]` — typed-array view cast (reinterpret a raw pointer as a `T[]`)
+- `import mod as alias` module aliasing (only inside `import` statements)
+- `expr as *StructName` pointer-overlay struct cast (a leading `*` then a struct name; see [§ Pointer-to-struct type](#pointer-to-struct-type-structname-and-expr-as-structname) below)
+- `expr as fn(T1, T2, ...) -> R` function-pointer cast (call a stored pointer with type checking; see [§ Function-pointer parameters](#function-pointer-parameters-fnt1-t2---r) below)
+- `expr as T[]` typed-array view cast (reinterpret a raw pointer as a `T[]`)
 
-`buf as string`, `n as int`, `p as ptr` and similar primitive casts **do not parse** — after `as`, the parser accepts only `*StructName`, `fn(...) -> R`, or `T[]`. Convert between primitives this way instead:
+`buf as string`, `n as int`, `p as ptr` and similar primitive casts **do not parse**, after `as`, the parser accepts only `*StructName`, `fn(...) -> R`, or `T[]`. Convert between primitives this way instead:
 
 | From → To | How |
 |---|---|
@@ -252,7 +252,7 @@ Aether has **no general-purpose cast operator**. The `as` keyword is reserved fo
 | `string` → C `const char*` (passing a `string` to a C extern) | Implicit. The auto-unwrap injects `aether_string_data(arg)` at call sites for `string`-typed extern parameters. |
 | `int` → `string` | `string.from_int(n)` (and `string.from_long(n)`, `string.from_float(f)`). |
 | C `const char*` → Aether `string` | Assignment to a `string`-typed variable, or returning from a function declared `-> string`. The returned `ptr` is treated as a borrowed C-string until it crosses into refcounted-string territory. |
-| `int` ↔ `int64` / `byte` ↔ `int` | Implicit safe widenings (`byte → int`, `int → int64`). The narrowing direction (`int → byte`) requires a literal-range check and truncates non-literals at runtime. See [§ `byte`](#byte--unsigned-8-bit). |
+| `int` ↔ `int64` / `byte` ↔ `int` | Implicit safe widenings (`byte → int`, `int → int64`). The narrowing direction (`int → byte`) requires a literal-range check and truncates non-literals at runtime. See [§ `byte`](#byte-unsigned-8-bit). |
 | Reinterpret a raw `ptr` as a typed struct view, function pointer, or array | `expr as *StructName`, `expr as fn(...) -> R`, or `expr as T[]` (the only `as` forms for values). |
 
 ### Null
@@ -281,11 +281,11 @@ main() {
 }
 ```
 
-Constants are emitted as `#define` in generated C — zero runtime cost.
+Constants are emitted as `#define` in generated C, zero runtime cost.
 
-#### Module-level constant arrays — lookup tables
+#### Module-level constant arrays, lookup tables
 
-A `const` array lowers to a file-scope `static const` table, allocated once and shared across every call (not re-initialised per call) — the right shape for a table-driven algorithm:
+A `const` array lowers to a file-scope `static const` table, allocated once and shared across every call (not re-initialised per call), the right shape for a table-driven algorithm:
 
 ```aether
 const PRIMES[] = [2, 3, 5, 7, 11]          // element type inferred (int)
@@ -293,7 +293,7 @@ const CRC16TAB: uint16[256] = [ 0x0000, 0x1021, /* ... */ ]   // element type pi
 ```
 
 - `const NAME[] = [...]` infers the element type from the literals (`int` for integer literals).
-- `const NAME: T[N] = [...]` pins the C element type — `T` may be `uint8` / `uint16` / `uint32` / `uint64` / `int` / `long` — so e.g. a CRC16 table emits `static const uint16_t NAME[256]` rather than a 4×-wider `int[]`, and matches a C header that expects the packed type. Integer literals narrow to the chosen element type (the explicit, compile-time-constant intent, like `byte b = 5`). Indexed access (`NAME[i]`) emits `NAME[i]`; the array is read-only.
+- `const NAME: T[N] = [...]` pins the C element type, `T` may be `uint8` / `uint16` / `uint32` / `uint64` / `int` / `long` so e.g. a CRC16 table emits `static const uint16_t NAME[256]` rather than a 4×-wider `int[]`, and matches a C header that expects the packed type. Integer literals narrow to the chosen element type (the explicit, compile-time-constant intent, like `byte b = 5`). Indexed access (`NAME[i]`) emits `NAME[i]`; the array is read-only.
 
 **The RHS of `const` must be a compile-time constant expression.** Allowed forms: literals (int / float / bool / string / null), other consts referenced by name, unary / binary expressions over those, and string interpolation where every interpolated value is itself const. **Function calls are rejected** at typecheck time:
 
@@ -302,23 +302,23 @@ const G_BUF = malloc(64)        // ERROR: const initializer must be a
                                  // compile-time constant expression
 ```
 
-The reason is `const`'s substitution-at-each-use semantics: the compiler inlines the RHS at every reference rather than storing the value. For literal RHSs this is fine; for `make_thing()` it would re-call the function on every reference, allocating fresh state. If you need a process-global heap object initialised once and read everywhere, use [`std.config`](stdlib-reference.md#stdconfig--stringstring-kv) for string state or [`std.actors`](stdlib-reference.md#stdactors--name--actor_ref-registry) for actor references — both are described in the stdlib reference.
+The reason is `const`'s substitution-at-each-use semantics: the compiler inlines the RHS at every reference rather than storing the value. For literal RHSs this is fine; for `make_thing()` it would re-call the function on every reference, allocating fresh state. If you need a process-global heap object initialised once and read everywhere, use [`std.config`](stdlib-reference.md#stdconfig-stringstring-kv) for string state or [`std.actors`](stdlib-reference.md#stdactors-name--actor_ref-registry) for actor references, both are described in the stdlib reference.
 
-**Exception — `sizeof` / `offsetof`.** The two layout builtins `sizeof(T)` and `offsetof(T, field)` *are* allowed in a `const` initializer (and arithmetic over them), even though they are spelled with call syntax. They lower to C compile-time constant expressions (`(int)sizeof(struct T)` / `(int)offsetof(struct T, field)`) — no evaluation, allocation, or side effect — so the substitution-at-each-use semantics are harmless:
+**Exception, `sizeof` / `offsetof`.** The two layout builtins `sizeof(T)` and `offsetof(T, field)` *are* allowed in a `const` initializer (and arithmetic over them), even though they are spelled with call syntax. They lower to C compile-time constant expressions (`(int)sizeof(struct T)` / `(int)offsetof(struct T, field)`), no evaluation, allocation, or side effect, so the substitution-at-each-use semantics are harmless:
 
 ```aether
 extern struct JSString { gc_mark: uint64 : 1  len: uint64 : 60  buf: byte[] }
 
-const SIZEOF_JSSTRING = sizeof(JSString)          // ok — folds to a C constant
+const SIZEOF_JSSTRING = sizeof(JSString)          // ok, folds to a C constant
 const STR_BUF_OFFSET  = offsetof(JSString, buf)   // ok
 const STR_PADDED      = sizeof(JSString) + 8      // arithmetic over them is ok too
 ```
 
-This lets a port that mirrors C structs as `extern struct` overlays centralise its offset/size table as named consts that are **self-verifying by construction** — the C compiler computes each value, so it cannot drift from the real layout — instead of hand-maintaining numeric offsets plus `_Static_assert` drift guards. The general "no function calls in a `const` initializer" rule is unchanged; these two layout builtins are the only carve-out.
+This lets a port that mirrors C structs as `extern struct` overlays centralise its offset/size table as named consts that are **self-verifying by construction**, the C compiler computes each value, so it cannot drift from the real layout, instead of hand-maintaining numeric offsets plus `_Static_assert` drift guards. The general "no function calls in a `const` initializer" rule is unchanged; these two layout builtins are the only carve-out.
 
 ### Mutable module-level globals
 
-Where a `const` is a fixed value, a module-level `var` is **one persistent, mutable word of state** shared by every function in the module — a PRNG seed, a monotonic counter, a one-slot cache:
+Where a `const` is a fixed value, a module-level `var` is **one persistent, mutable word of state** shared by every function in the module, a PRNG seed, a monotonic counter, a one-slot cache:
 
 ```aether
 var rand48_x: uint64 = 0x1234ABCD330E      // module scope, mutable
@@ -330,18 +330,18 @@ next_rand() -> uint64 {
 ```
 
 - The type annotation is optional: `var hits = 0` infers `int` from the initializer, exactly like a local.
-- A `var` lowers to a **file-scope `static`** in the generated C. Reads and writes from same-module functions are plain identifier access — no accessors, no indirection. A `name = expr` statement whose name is a module `var` always writes that global (the name is in scope everywhere in the module); pick a different name for a function-local.
-- The **initializer must be a compile-time constant expression**, the same restriction as `const` (and for the same underlying reason — C requires a `static`'s initializer to be constant). Initialize to a constant and compute the live value from a function at startup if you need more.
+- A `var` lowers to a **file-scope `static`** in the generated C. Reads and writes from same-module functions are plain identifier access, no accessors, no indirection. A `name = expr` statement whose name is a module `var` always writes that global (the name is in scope everywhere in the module); pick a different name for a function-local.
+- The **initializer must be a compile-time constant expression**, the same restriction as `const` (and for the same underlying reason, C requires a `static`'s initializer to be constant). Initialize to a constant and compute the live value from a function at startup if you need more.
 - Globals are **module-private** and **non-atomic**, matching the C statics they replace. They are not shared across modules and carry no built-in synchronization; guard concurrent access yourself (or keep such state on an [actor](actor-concurrency.md)).
 
 ---
 
 ## Functions
 
-Aether functions have **two canonical declaration forms** — pick by whether you want explicit types:
+Aether functions have **two canonical declaration forms**, pick by whether you want explicit types:
 
 ```aether
-// 1. Inferred (no type annotations) — the most compact form
+// 1. Inferred (no type annotations), the most compact form
 add(a, b) {
     return a + b
 }
@@ -350,7 +350,7 @@ greet(name) {
     println("Hello, ${name}")
 }
 
-// 2. Explicit types — the recommended form for stdlib / public APIs.
+// 2. Explicit types, the recommended form for stdlib / public APIs.
 //    Parameter types after `:`, return type after `->`.
 add(a: int, b: int) -> int {
     return a + b
@@ -361,7 +361,7 @@ greet(name: string) -> string {
 }
 ```
 
-Both forms parse cleanly. The `name(params) -> ReturnType { … }` shape is what every stdlib module uses (`std/string/module.ae`, `std/bytes/module.ae`, …) — match that style for new code.
+Both forms parse cleanly. The `name(params) -> ReturnType { … }` shape is what every stdlib module uses (`std/string/module.ae`, `std/bytes/module.ae`, …), match that style for new code.
 
 **Form to avoid: C-style prefix `int add(int a, int b) { … }`.** This form parses for backwards compatibility but is not the recommended style and isn't used in any stdlib module. New code should use the arrow form (`add(a: int, b: int) -> int { … }`) instead.
 
@@ -373,9 +373,9 @@ print_hello() {
 }
 ```
 
-There is no `void` keyword in the return-type position — a missing return-type annotation IS the void declaration. The `main()` function is the entry point and is always void.
+There is no `void` keyword in the return-type position, a missing return-type annotation IS the void declaration. The `main()` function is the entry point and is always void.
 
-**`main()` takes no parameters.** There is no Aether-side `main(argc, argv)` form — the signature is uniform across every program. The runtime stashes the C-side `argc` / `argv` at startup (the codegen wraps your zero-arg `main()` in a C `int main(int argc, char** argv)` that calls `aether_args_init(argc, argv)` before any user code runs), and Aether code reaches command-line arguments through `std.os`:
+**`main()` takes no parameters.** There is no Aether-side `main(argc, argv)` form, the signature is uniform across every program. The runtime stashes the C-side `argc` / `argv` at startup (the codegen wraps your zero-arg `main()` in a C `int main(int argc, char** argv)` that calls `aether_args_init(argc, argv)` before any user code runs), and Aether code reaches command-line arguments through `std.os`:
 
 ```aether
 import std.os
@@ -409,14 +409,14 @@ Rules:
 - By convention, defaults should trail required parameters (the Python
   shape): once a default appears, every subsequent parameter should
   also have one. This is a style convention, not a compiler-enforced
-  rule — the typechecker does not currently reject a default that is
+  rule, the typechecker does not currently reject a default that is
   followed by a required parameter, but positional calls to such a
   function are awkward, so don't write them.
 - The default expression is evaluated at the **call site**, not the
   declaration site. Default expressions cannot reference other
   parameters of the same function (they're typechecked in the
   caller's scope where parameter values aren't visible).
-- The default-fill happens at typecheck time — codegen sees a
+- The default-fill happens at typecheck time, codegen sees a
   fully-populated call.
 
 ### Source-location intrinsics
@@ -442,7 +442,7 @@ main() {
 }
 ```
 
-Used as **default values**, they substitute the caller's location —
+Used as **default values**, they substitute the caller's location,
 the killer ergonomic for logging / assertion frameworks:
 
 ```aether
@@ -650,7 +650,7 @@ for (i = 0; i < 10; i = i + 1) {
 
 #### Labeled break / continue
 
-A `while` or `for` loop may carry a label (`label: while ...`), and `break label` / `continue label` then target that loop from inside a nested loop — `break label` exits the labeled loop, `continue label` jumps to its next iteration. This replaces the boolean-flag dance a C port would otherwise need for a nested-loop early exit (the C `goto cleanup` / labeled-break idiom):
+A `while` or `for` loop may carry a label (`label: while ...`), and `break label` / `continue label` then target that loop from inside a nested loop, `break label` exits the labeled loop, `continue label` jumps to its next iteration. This replaces the boolean-flag dance a C port would otherwise need for a nested-loop early exit (the C `goto cleanup` / labeled-break idiom):
 
 ```aether
 outer: while have_more() {
@@ -667,7 +667,7 @@ outer: while have_more() {
 
 - The label sits before the loop keyword (`outer: while`, `scan: for`). It must be on the same line as the `break` / `continue` that references it.
 - A `break label` / `continue label` whose label names no enclosing loop is a compile-time error.
-- Defers in the loop scopes a labeled break/continue unwinds still run (in LIFO order) before the jump — the same cleanup guarantee as an ordinary scope exit.
+- Defers in the loop scopes a labeled break/continue unwinds still run (in LIFO order) before the jump, the same cleanup guarantee as an ordinary scope exit.
 - Unlabeled `break` / `continue` are unchanged and act on the innermost loop.
 
 ---
@@ -805,9 +805,9 @@ example() {
 
 ## Scope Directives: `hide` and `seal except`
 
-Two scope-level directives let a block decline to see selected names from its enclosing lexical scopes. Both are compile-time only — no runtime overhead, no codegen change. Error code: `E0304`.
+Two scope-level directives let a block decline to see selected names from its enclosing lexical scopes. Both are compile-time only, no runtime overhead, no codegen change. Error code: `E0304`.
 
-### `hide` — blacklist specific names
+### `hide` blacklist specific names
 
 ```aether
 {
@@ -817,7 +817,7 @@ Two scope-level directives let a block decline to see selected names from its en
 }
 ```
 
-### `seal except` — whitelist
+### `seal except` whitelist
 
 ```aether
 handler(req, res) {
@@ -909,7 +909,7 @@ safe_divide(a: int, b: int) -> {
 }
 
 main() {
-    // Check error first, handle it, then continue — no else needed
+    // Check error first, handle it, then continue, no else needed
     result, err = safe_divide(10, 3)
     if err != "" {
         println("Error: ${err}")
@@ -954,7 +954,7 @@ checked_op(x: int) -> {
 
 #### The `T!` result type and `or` / `!` sugar (issue #913)
 
-`-> T!` is shorthand for the `(T, string)` result tuple above — it *names* the
+`-> T!` is shorthand for the `(T, string)` result tuple above, it *names* the
 convention and unlocks ergonomic sugar for the three things you do with a
 fallible call. There is no hidden machinery: `T!` is the same tuple you can
 always destructure by hand, so the sugar and the manual form interoperate
@@ -968,13 +968,13 @@ safe_divide(a: int, b: int) -> int! {
 }
 ```
 
-**`expr or default` — use the value, or a fallback on error:**
+**`expr or default` use the value, or a fallback on error:**
 
 ```aether
 q = safe_divide(10, 0) or -1      // q == -1
 ```
 
-**`expr or { ... }` — run a block on error, with `err` bound to the message.**
+**`expr or { ... }` run a block on error, with `err` bound to the message.**
 The block is expected to exit (like a `match` arm's block body): `return`,
 `break`, `continue`, or `panic`. For a computed fallback *value*, use the
 `or <expr>` form instead.
@@ -986,7 +986,7 @@ q = safe_divide(x, y) or {
 }
 ```
 
-**`expr!` — propagate the error.** Inside a function that itself returns `T!`,
+**`expr!` propagate the error.** Inside a function that itself returns `T!`,
 `!` returns `(zero, err)` to the caller when the error slot is non-empty, so an
 inner failure short-circuits without manual `if err != ""` plumbing:
 
@@ -1018,7 +1018,7 @@ add(a: int, b: int) -> int
 **Lowering**:
 
 - `requires <expr>` lowers to `if (!(<expr>)) aether_panic("precondition violation: <expr> in <fn>");` emitted at function entry, after parameters are declared and before any user code runs. Parameters are in scope.
-- `ensures <expr>` lowers to a pre-return wrapper `{ <T> result = <return-expr>; if (!(<expr>)) aether_panic("postcondition violation: <expr> in <fn>"); return result; }` emitted before each `return` statement. The synthetic `result` local is the return value about to be returned and is scoped to the wrapper block — it shadows any outer `result` cleanly.
+- `ensures <expr>` lowers to a pre-return wrapper `{ <T> result = <return-expr>; if (!(<expr>)) aether_panic("postcondition violation: <expr> in <fn>"); return result; }` emitted before each `return` statement. The synthetic `result` local is the return value about to be returned and is scoped to the wrapper block, it shadows any outer `result` cleanly.
 
 Multiple clauses in any order, freely interleaved. Each is checked independently, so the panic message names the specific failed predicate. The diagnostic plays nicely with `panic` stack traces for actionable error reporting.
 
@@ -1030,12 +1030,12 @@ aetherc --no-contracts script.ae out.c    # zero per-call cost
 
 Suppresses contract-check emission entirely. Equivalent to C's `-DNDEBUG` for `assert`. Intended for release builds where the contracts have been validated upstream.
 
-**Const-fold elision**: When the predicate is provably constant-true at compile time (e.g. `requires true`, `ensures 1 > 0`, `requires 1 + 1 == 2`, `ensures !false`), the codegen drops the runtime check entirely and emits a `/* precondition elided (always-true): <text> */` comment in its place. Generated C is byte-for-byte identical to a function written without the clause — the user keeps the documentation; the binary takes zero overhead. The folder handles literals, `< <= > >= == !=`, `&& ||`, `+ - * / %`, unary `!` and unary `-`. Anything with an identifier reference, function call, or member access (i.e., anything the optimizer can't prove pure-and-known) keeps the runtime check.
+**Const-fold elision**: When the predicate is provably constant-true at compile time (e.g. `requires true`, `ensures 1 > 0`, `requires 1 + 1 == 2`, `ensures !false`), the codegen drops the runtime check entirely and emits a `/* precondition elided (always-true): <text> */` comment in its place. Generated C is byte-for-byte identical to a function written without the clause, the user keeps the documentation; the binary takes zero overhead. The folder handles literals, `< <= > >= == !=`, `&& ||`, `+ - * / %`, unary `!` and unary `-`. Anything with an identifier reference, function call, or member access (i.e., anything the optimizer can't prove pure-and-known) keeps the runtime check.
 
 **Limitations / out-of-scope for v1**:
 
-- Postconditions are checked only at explicit `return <expr>` statements with a single value. Multi-value (tuple) returns and fall-off-the-end of void functions are not yet wrapped — calling `aether_panic` from those paths is a follow-up.
-- The const-fold elision is conservative — short-circuit folding (`x || true` → drop) is intentionally not performed, because the runtime evaluation of `x` may carry a side effect the user expects to fire.
+- Postconditions are checked only at explicit `return <expr>` statements with a single value. Multi-value (tuple) returns and fall-off-the-end of void functions are not yet wrapped, calling `aether_panic` from those paths is a follow-up.
+- The const-fold elision is conservative, short-circuit folding (`x || true` → drop) is intentionally not performed, because the runtime evaluation of `x` may carry a side effect the user expects to fire.
 - The `--emit=lib` `aether_describe()` metadata doesn't yet surface contracts to FFI consumers; that's the next layer.
 
 See [examples/basics/contracts.ae](../examples/basics/contracts.ae) for runnable demos. Closes issue #348.
@@ -1044,7 +1044,7 @@ See [examples/basics/contracts.ae](../examples/basics/contracts.ae) for runnable
 
 ### String ownership for `-> string` functions
 
-Strings are special-cased in the memory model: every reassignment to a string variable that previously held a heap-allocated value frees the old buffer through a compiler-emitted wrapper. **You do not write `defer string.free(s)` for in-Aether assignments** — the compiler tracks ownership transitions automatically per [docs/memory-management.md "String memory model"](memory-management.md#string-memory-model-heap-string-tracker).
+Strings are special-cased in the memory model: every reassignment to a string variable that previously held a heap-allocated value frees the old buffer through a compiler-emitted wrapper. **You do not write `defer string.free(s)` for in-Aether assignments**, the compiler tracks ownership transitions automatically per [docs/memory-management.md "String memory model"](memory-management.md#string-memory-model-heap-string-tracker).
 
 A user-defined function declared `-> string` is treated as **heap-returning** iff every return statement in its body yields a heap-string-expression (recursive structural escape analysis):
 
@@ -1056,17 +1056,17 @@ my_concat(a: string, b: string) -> string {
 s = ""
 i = 0
 while i < 1000000 {
-    s = my_concat(s, "x")              // O(1) memory — old s freed automatically
+    s = my_concat(s, "x")              // O(1) memory, old s freed automatically
     i = i + 1
 }
 ```
 
-A function returning a string literal — or whose returns mix heap and literal sources — is **not** recognised. The wrapper won't try to free its result. This is the conservative stance taken to avoid free-of-literal aborts:
+A function returning a string literal, or whose returns mix heap and literal sources, is **not** recognised. The wrapper won't try to free its result. This is the conservative stance taken to avoid free-of-literal aborts:
 
 ```aether
 banner(name: string) -> string {
     if string.length(name) == 0 {
-        return "guest"                 // literal — banner is NOT heap-returning
+        return "guest"                 // literal, banner is NOT heap-returning
     }
     return string.concat("hi ", name)  // heap, but the function as a whole isn't heap-returning
 }
@@ -1080,18 +1080,18 @@ See [examples/basics/string-ownership.ae](../examples/basics/string-ownership.ae
 
 ## Optionals
 
-An optional type `T?` holds either a value of type `T` or the empty sentinel `none`. It is the type for "maybe a value" — distinct from the `(value, err)` result convention, which is for *fallible* operations. Use `(value, err)` when an operation can fail and you want to say why; use `T?` when a value is simply present or absent (a missing map key, an empty list's first element, a search that found nothing).
+An optional type `T?` holds either a value of type `T` or the empty sentinel `none`. It is the type for "maybe a value", distinct from the `(value, err)` result convention, which is for *fallible* operations. Use `(value, err)` when an operation can fail and you want to say why; use `T?` when a value is simply present or absent (a missing map key, an empty list's first element, a search that found nothing).
 
 ```aether
-let maybe: int? = 69        // a present value — implicitly wrapped
+let maybe: int? = 69        // a present value, implicitly wrapped
 let empty: int? = none      // the absent sentinel
 ```
 
-`T?` works for any element type — value types (`int?`, `float?`, `bool?`) and reference types (`string?`, `*Node?`) alike — with one uniform representation, so there is no ambiguity between "the value is a null pointer" and "the key was absent".
+`T?` works for any element type, value types (`int?`, `float?`, `bool?`) and reference types (`string?`, `*Node?`) alike, with one uniform representation, so there is no ambiguity between "the value is a null pointer" and "the key was absent".
 
 ### `none` and equality
 
-`none` is a reserved literal (like `true`, `false`, and `null`) — it cannot be used as a variable name. Compare against it with `==` / `!=`:
+`none` is a reserved literal (like `true`, `false`, and `null`), it cannot be used as a variable name. Compare against it with `==` / `!=`:
 
 ```aether
 if empty == none {
@@ -1111,7 +1111,7 @@ let n: int = maybe!         // 69
 let boom: int = empty!      // panics: "forced unwrap of `none`"
 ```
 
-Use it only where absence is a programmer error. For a safe default, prefer `??`. (Postfix `!` is shared with the `(value, err)` unwrap-or-trap: on an optional it unwraps the value, on a tuple it unwraps the first slot and traps on a non-empty error — the meaning follows the operand type.)
+Use it only where absence is a programmer error. For a safe default, prefer `??`. (Postfix `!` is shared with the `(value, err)` unwrap-or-trap: on an optional it unwraps the value, on a tuple it unwraps the first slot and traps on a non-empty error, the meaning follows the operand type.)
 
 ### Null-coalesce `??`
 
@@ -1135,19 +1135,19 @@ let xm: int? = v?.x          // some(7)
 let x:  int  = v?.x ?? 0     // 7
 
 let nv: Vec2? = none
-let zm: int? = nv?.x         // none — short-circuited
+let zm: int? = nv?.x         // none, short-circuited
 ```
 
 Chain *assignment* is a no-op when the receiver is `none`:
 
 ```aether
-v?.x  = 42                   // writes — v is present
-nv?.x = 99                   // skipped — nv is none, no crash
+v?.x  = 42                   // writes, v is present
+nv?.x = 99                   // skipped, nv is none, no crash
 ```
 
 ### Matching on optionals
 
-`match` destructures an optional with the `none` and `some(binding)` arms — as a statement or as an expression:
+`match` destructures an optional with the `none` and `some(binding)` arms, as a statement or as an expression:
 
 ```aether
 match maybe {
@@ -1182,7 +1182,7 @@ describe(x: int?) -> string {
 }
 
 main() {
-    println(describe(5))          // "got 5"   — 5 wrapped into int?
+    println(describe(5))          // "got 5", 5 wrapped into int?
     println(describe(none))       // "nothing"
     let r: int = first_positive(3)!   // 3
 }
@@ -1208,7 +1208,7 @@ type Shape = Circle | Rect | Empty
 Each variant is an existing struct. A sum needs at least two variants (a
 single-name `type T = A` alias is not a supported form).
 
-### Constructing — implicit wrap
+### Constructing, implicit wrap
 
 A variant struct value flows into a `Shape` slot directly; there is no
 `some(...)`-style constructor. The wrap happens at `let` bindings, function
@@ -1220,7 +1220,7 @@ draw(Rect { w: 3.0, h: 4.0 })         // wraps at the argument
 make() -> Shape { return Empty {} }   // wraps at the return
 ```
 
-### Matching — narrowing + exhaustiveness
+### Matching, narrowing + exhaustiveness
 
 `match` over a sum dispatches on the variant and **narrows** the scrutinee to
 that variant struct inside the arm, so `s.field` reads the right member:
@@ -1237,7 +1237,7 @@ area(s: Shape) -> float {
 ```
 
 The match must be **exhaustive**: every variant must be handled, or a `_`
-wildcard arm must catch the rest. Omitting a variant is a compile error — the
+wildcard arm must catch the rest. Omitting a variant is a compile error, the
 payoff that tells you, when you add a variant, exactly which matches to update.
 An arm naming something that isn't a variant is also rejected. Narrowing applies
 when the scrutinee is a plain variable (`match s { … }`).
@@ -1254,7 +1254,7 @@ type Tree = Leaf | Pair
 
 ### Codegen
 
-A sum lowers to a tag enum plus a tagged union — no allocation, no vtable:
+A sum lowers to a tag enum plus a tagged union, no allocation, no vtable:
 
 ```c
 typedef enum { Shape__Circle, Shape__Rect, Shape__Empty } Shape_tag;
@@ -1304,9 +1304,9 @@ struct Config {
 }
 ```
 
-### Function-pointer struct fields — a vtable of callbacks
+### Function-pointer struct fields, a vtable of callbacks
 
-A struct field can be a function pointer (`fn(T1, T2) -> R`) — the `dictType`-style vtable. The field emits as the C function-pointer member `R (*name)(T1, T2)`, and a call through it is a real indirect call:
+A struct field can be a function pointer (`fn(T1, T2) -> R`), the `dictType`-style vtable. The field emits as the C function-pointer member `R (*name)(T1, T2)`, and a call through it is a real indirect call:
 
 ```aether
 struct Ops {
@@ -1326,7 +1326,7 @@ dispatch(p: *Ops, k: int) -> int {
 
 Assign each field an Aether function's address via `as fn(...)` (or a C function pointer from an extern). Dispatch works for a value struct (`o.field(args)`) and a pointer-to-struct (`p.field(args)` lowers to `p->field(args)`); the receiver must be a single local, and the field's signature is taken from the struct definition. This is the field form of the same typed-fn-pointer machinery as `as fn(...)` locals.
 
-### Pointer-to-struct type — `*StructName` and `expr as *StructName`
+### Pointer-to-struct type, `*StructName` and `expr as *StructName`
 
 For systems-programming code that overlays a struct header on a raw `ptr` (e.g. linked-list nodes in C-allocated memory, on-disk file headers read into a buffer), Aether has a first-class pointer-to-struct type spelled `*StructName` and a postfix `as` cast operator that produces a value of that type:
 
@@ -1340,7 +1340,7 @@ struct ListHead {
     flags: int
 }
 
-// `*ListHead` is usable in any type position — params, returns,
+// `*ListHead` is usable in any type position, params, returns,
 // struct fields, locals.
 init_head(h: *ListHead) {
     h.next  = 0
@@ -1356,15 +1356,15 @@ main() {
 }
 ```
 
-The cast is a view, not an allocation — the operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). Reach for this only when the storage is C-allocated and Aether wants to manipulate fields. For Aether-owned data, use the normal struct-literal form (`Point { x: 1, y: 2 }`) so refcounting and lifetime tracking apply.
+The cast is a view, not an allocation, the operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). Reach for this only when the storage is C-allocated and Aether wants to manipulate fields. For Aether-owned data, use the normal struct-literal form (`Point { x: 1, y: 2 }`) so refcounting and lifetime tracking apply.
 
-**`as` accepts `*StructName`, `fn(...) -> R`, or `T[]` — there is no general-purpose primitive cast.** After `as` the parser accepts a struct overlay (`*` then a struct name), a function-pointer cast (`fn(T1, T2, ...) -> R`), or a typed-array view (`T[]`). Forms like `buf as string`, `n as int`, `raw as ptr` do not parse. For converting between primitive types, see the [Casting between types](#casting-between-types) table above — most conversions are either implicit (Aether's type system inserts the necessary cast in the generated C) or use a named helper (`string.from_int`, `string.from_long`, …).
+**`as` accepts `*StructName`, `fn(...) -> R`, or `T[]` there is no general-purpose primitive cast.** After `as` the parser accepts a struct overlay (`*` then a struct name), a function-pointer cast (`fn(T1, T2, ...) -> R`), or a typed-array view (`T[]`). Forms like `buf as string`, `n as int`, `raw as ptr` do not parse. For converting between primitive types, see the [Casting between types](#casting-between-types) table above, most conversions are either implicit (Aether's type system inserts the necessary cast in the generated C) or use a named helper (`string.from_int`, `string.from_long`, …).
 
-The `as` keyword is the same token used for `import x as y` aliasing; the two parses don't collide because import-aliasing is recognised only inside `import` statements. Full semantics (operand type rules, error cases, the shared-token interaction) are in [c-interop.md § Struct overlay on raw pointers](c-interop.md#struct-overlay-on-raw-pointers--structname-and-expr-as-structname).
+The `as` keyword is the same token used for `import x as y` aliasing; the two parses don't collide because import-aliasing is recognised only inside `import` statements. Full semantics (operand type rules, error cases, the shared-token interaction) are in [c-interop.md § Struct overlay on raw pointers](c-interop.md#struct-overlay-on-raw-pointers-structname-and-expr-as-structname).
 
 #### Constructors returning `*StructName`
 
-The constructor shape — allocate raw storage, overlay the struct, initialise the fields, return the typed view — is the natural way to retire C "container holder" shims to Aether:
+The constructor shape, allocate raw storage, overlay the struct, initialise the fields, return the typed view, is the natural way to retire C "container holder" shims to Aether:
 
 ```aether
 struct Txn {
@@ -1393,7 +1393,7 @@ Pointer-to-struct fields may point back at the enclosing struct, which is how re
 struct ErrChain {
     code:  int
     msg:   string
-    cause: *ErrChain      // self-pointer — chain cell or null
+    cause: *ErrChain      // self-pointer, chain cell or null
     file:  string
     line:  int
 }
@@ -1416,7 +1416,7 @@ walk(e: *ErrChain) {
 }
 ```
 
-Lifetime is the operand's — `mk_err` owns the raw allocation it returned, and the caller is responsible for freeing the chain. (For Aether-managed lifetimes on a similar shape with refcount-aware structural sharing, see `*StringSeq` in [sequences.md](sequences.md).)
+Lifetime is the operand's, `mk_err` owns the raw allocation it returned, and the caller is responsible for freeing the chain. (For Aether-managed lifetimes on a similar shape with refcount-aware structural sharing, see `*StringSeq` in [sequences.md](sequences.md).)
 
 ---
 
@@ -1518,10 +1518,10 @@ counter ! Reset {};
 The `?` operator sends a message and blocks until the actor replies. The compiler
 infers the reply type from the actor's receive handler and extracts the first field
 of the reply message automatically. Multiple concurrent asks to the same actor are
-supported — each message carries its own reply slot.
+supported, each message carries its own reply slot.
 
 ```aether
-// Synchronous request-reply — result is an int (from Result.value)
+// Synchronous request-reply, result is an int (from Result.value)
 result = calculator ? Add { a: 5, b: 3 };
 ```
 
@@ -1701,12 +1701,12 @@ main() {
 
 If `sqrt` internally calls a sibling helper that *isn't* in the import list, the helper is still pulled into the merged build so the imported function can resolve its calls. Only the names you actually listed are visible to your code; the transitive pull-in is bookkeeping the compiler does on your behalf.
 
-### Module Public API — `exports (…)`
+### Module Public API, `exports (…)`
 
 Each module declares its public surface once at the top of the file via
 an Erlang-style `exports (…)` list. Names in the list are callable from
 outside the module via either qualified (`mod.name(…)`) or short-alias
-(`import mod (*)`) forms. Names **not** in the list are private — still
+(`import mod (*)`) forms. Names **not** in the list are private, still
 callable from inside the module's own functions, but rejected at
 qualified-call sites from outside.
 
@@ -1717,11 +1717,11 @@ exports (say_hello, greet_world, GREETING)
 const GREETING = "hello"
 
 say_hello() {
-    return GREETING                  // public — listed
+    return GREETING                  // public, listed
 }
 
 greet_world() {
-    return _format(GREETING, "world")  // public — listed; calls private helper
+    return _format(GREETING, "world")  // public, listed; calls private helper
 }
 
 // Not listed → private. Leading underscore is a naming convention only;
@@ -1742,7 +1742,7 @@ a one-shot deprecation warning per module. Migrate by collecting every
 removing the `export` keywords from each declaration. Mixing both forms
 in one module is a hard error.
 
-### Glob Import — `import mod (*)` (a.k.a. unqualified import)
+### Glob Import, `import mod (*)` (a.k.a. unqualified import)
 
 Expose **every public name** in a module as an unqualified short alias,
 without enumerating each symbol individually. Names with a leading
@@ -1755,13 +1755,13 @@ import" (Rust's `use mod::*;`, Java's `import static mod.*`, Python's
 import std.math (*)
 
 main() {
-    x = sqrt(16.0)         // works — short alias registered
+    x = sqrt(16.0)         // works, short alias registered
     y = pow(2.0, 3.0)      // works
     z = math.sin(1.0)      // qualified form still works alongside the glob
 }
 ```
 
-It also applies to any module with a wide, short-named surface — e.g.
+It also applies to any module with a wide, short-named surface, e.g.
 `std.bits`, where unqualified `popcount32(...)` / `rotl32(...)` /
 `clz32(...)` reads better than the namespace-prefixed form:
 
@@ -1769,10 +1769,10 @@ It also applies to any module with a wide, short-named surface — e.g.
 import std.bits (*)
 
 main() {
-    println(popcount32(0xFF))    // 8 — one-bits set
-    println(rotl32(1, 4))        // 16 — rotate left
-    println(clz32(1))            // 31 — leading zeros
-    println(bits.lsr32(256, 4))  // 16 — qualified form still works
+    println(popcount32(0xFF))    // 8, one-bits set
+    println(rotl32(1, 4))        // 16, rotate left
+    println(clz32(1))            // 31, leading zeros
+    println(bits.lsr32(256, 4))  // 16, qualified form still works
 }
 ```
 
@@ -1785,15 +1785,15 @@ same way selective and qualified imports are.)
 
 Use the glob form when you'd otherwise list 20+ symbols just to use
 the module without the namespace prefix. Bare `import std.math` (no
-parens) loads the module but does **not** register short aliases —
+parens) loads the module but does **not** register short aliases,
 you have to write `math.sqrt(...)` for everything. The selective form
 `import std.math (sqrt, pow)` aliases only the named symbols and
-keeps everything else qualified — the same shape as `import static`
+keeps everything else qualified, the same shape as `import static`
 in Java, useful when you want exactly two or three symbols bare and
 the rest namespaced.
 
 **The qualified `mod.fn(...)` surface is always available** whenever a
-module is imported in *any* form — bare, selective, or glob — the way
+module is imported in *any* form, bare, selective, or glob, the way
 Java's fully-qualified name is always legal regardless of imports. A
 selective import is purely **additive**: `import std.math (sqrt)` adds the
 bare-name binding `sqrt(...)` *on top of* the always-available qualified
@@ -1806,14 +1806,14 @@ import std.math (sqrt)
 
 main() {
     a = sqrt(16.0)            // bare-name binding the selective import adds
-    b = math.pow(2.0, 3.0)    // qualified — always available, even un-selected
+    b = math.pow(2.0, 3.0)    // qualified, always available, even un-selected
 }
 ```
 
 ### Import with Alias
 
 The `import mod as alias` syntax parses and records the alias, but calls through
-the alias prefix (`str.new(...)`) do not currently resolve — the aliased name is
+the alias prefix (`str.new(...)`) do not currently resolve, the aliased name is
 not wired into namespace lookup, so the call fails typechecking. Until that lands,
 use the module's own namespace directly:
 
@@ -1878,7 +1878,7 @@ Externs are useful for:
 
 ### Typed and qualified C pointers
 
-Plain `ptr` lowers to C `void *`. C headers use richer pointer spellings, and when an Aether `extern` (or an Aether-owned public function) must match a header **exactly** — so the generated C compiles with that header force-included, and the C compiler still cross-checks the signature against every caller — use these forms. Each affects only the *emitted C spelling*; the Aether-side `kind` (and so all typechecking) is unchanged.
+Plain `ptr` lowers to C `void *`. C headers use richer pointer spellings, and when an Aether `extern` (or an Aether-owned public function) must match a header **exactly**, so the generated C compiles with that header force-included, and the C compiler still cross-checks the signature against every caller, use these forms. Each affects only the *emitted C spelling*; the Aether-side `kind` (and so all typechecking) is unchanged.
 
 | Aether spelling | Emitted C | For |
 |---|---|---|
@@ -1901,7 +1901,7 @@ pqsort(a: ptr, n: size_t, es: size_t, cmp: const ptr, lr: size_t, rr: size_t) { 
 
 Passing a plain `ptr` where the C conversion is safe stays allowed at call sites; only the *emitted prototype* carries the exact spelling. C ABI scalar aliases (`size_t`, `uint64_t`, …) emit their exact C name the same way. `const`-qualification survives into the generated C so the C compiler diagnoses writes; Aether-side write rejection is not (yet) enforced.
 
-### `@extern("c_name")` — bind to a renamed C symbol
+### `@extern("c_name")` bind to a renamed C symbol
 
 When the Aether-side name should differ from the C symbol (for example, to expose a clean module surface without trailing `_raw` suffixes), prefix the declaration with `@extern("c_symbol")`:
 
@@ -1910,11 +1910,11 @@ When the Aether-side name should differ from the C symbol (for example, to expos
 @extern("strerror") describe_errno(errno: int) -> string
 ```
 
-The Aether-side name is what callers write; the annotated C symbol is what the linker sees. No wrapper function is emitted. See [`docs/c-interop.md`](c-interop.md#renaming-a-c-symbol--externc_name) for the full FFI reference.
+The Aether-side name is what callers write; the annotated C symbol is what the linker sees. No wrapper function is emitted. See [`docs/c-interop.md`](c-interop.md#renaming-a-c-symbol-externc_name) for the full FFI reference.
 
-### `extern const NAME: type @c_import` — import an object-like C macro
+### `extern const NAME: type @c_import` import an object-like C macro
 
-Object-like C macros (`EAGAIN`, `O_NONBLOCK`, `LLONG_MAX`, a generated `REDIS_GIT_SHA1`, …) are invisible to Aether — there is no symbol to link against. `extern const … @c_import` makes one usable by **name**:
+Object-like C macros (`EAGAIN`, `O_NONBLOCK`, `LLONG_MAX`, a generated `REDIS_GIT_SHA1`, …) are invisible to Aether, there is no symbol to link against. `extern const … @c_import` makes one usable by **name**:
 
 ```aether
 extern const EAGAIN: int @c_import
@@ -1925,11 +1925,11 @@ if syncio_errno() == EAGAIN { ... }
 ```
 
 - The declaration teaches the typechecker a name and an Aether type; **the type is trusted as declared**, the same model as `extern` functions.
-- Generated C emits the macro name **verbatim** at every use site and emits **nothing** for the declaration itself — no value, no `#define`, no forward declaration. The macro's value is never needed at Aether compile time, so per-platform values come out right by construction: the including translation unit's headers are the sole source of truth. Ensure the owning header is in scope (e.g. `cflags = "-include errno.h"` in `aether.toml`, or a header your build already force-includes).
-- Usable in expression and comparison contexts. `@c_import` is required — it is the marker that selects the emit-verbatim semantics.
+- Generated C emits the macro name **verbatim** at every use site and emits **nothing** for the declaration itself, no value, no `#define`, no forward declaration. The macro's value is never needed at Aether compile time, so per-platform values come out right by construction: the including translation unit's headers are the sole source of truth. Ensure the owning header is in scope (e.g. `cflags = "-include errno.h"` in `aether.toml`, or a header your build already force-includes).
+- Usable in expression and comparison contexts. `@c_import` is required, it is the marker that selects the emit-verbatim semantics.
 - **Object-like macros only.** Function-like macros (`CPU_SET(i, &set)`) are out of scope; wrap those in a small `extern` C function.
 
-### `@c_callback` — export an Aether function as a C callback
+### `@c_callback` export an Aether function as a C callback
 
 The inverse of `@extern`. Marks an Aether function as having a stable, externally-visible C symbol so it can be passed across the linkage boundary as a function pointer to C externs that take callbacks (HTTP route handlers, signal handlers, `qsort` comparators, libcurl write callbacks, sqlite hooks):
 
@@ -1946,9 +1946,9 @@ main() {
 }
 ```
 
-By default the C symbol matches the Aether-side name (or its namespace-prefixed form when the function lives in an imported module). For a specific C symbol, use the parenthesised form: `@c_callback("aether_signal_handler") on_sigint(sig: int) { … }`. See [`docs/c-interop.md`](c-interop.md#exporting-an-aether-function-as-a-c-callback--c_callback) for the full reference.
+By default the C symbol matches the Aether-side name (or its namespace-prefixed form when the function lives in an imported module). For a specific C symbol, use the parenthesised form: `@c_callback("aether_signal_handler") on_sigint(sig: int) { … }`. See [`docs/c-interop.md`](c-interop.md#exporting-an-aether-function-as-a-c-callback-c_callback) for the full reference.
 
-### Function-pointer parameters — `fn(T1, T2) -> R`
+### Function-pointer parameters, `fn(T1, T2) -> R`
 
 A parameter typed `fn(T1, T2) -> R` is a typed C function pointer: it emits the exact `R (*name)(T1, T2)` in the generated prototype and is directly callable in the body, so callback-taking functions port cleanly:
 
@@ -1962,11 +1962,11 @@ reduce(f: fn(int, int) -> int, x: int, y: int) -> int {
 }
 ```
 
-Pass an Aether function's address with the `as fn(...)` cast — `walk(my_handler as fn(ptr, ptr) -> void, p, q)` — or a C function pointer obtained from an extern. This is the parameter form of the same typed-fn-pointer machinery used by `as fn(...)` locals and function-pointer struct fields; the prototype matches the C signature exactly (needed for callback APIs like `qsort`, `dictScan`, signal handlers, libcurl/sqlite hooks).
+Pass an Aether function's address with the `as fn(...)` cast, `walk(my_handler as fn(ptr, ptr) -> void, p, q)` or a C function pointer obtained from an extern. This is the parameter form of the same typed-fn-pointer machinery used by `as fn(...)` locals and function-pointer struct fields; the prototype matches the C signature exactly (needed for callback APIs like `qsort`, `dictScan`, signal handlers, libcurl/sqlite hooks).
 
-### `@derive(eq)` — synthesize an equality helper for a struct
+### `@derive(eq)` synthesize an equality helper for a struct
 
-Annotate a struct definition with `@derive(eq)` and the compiler synthesizes `int <StructName>_eq(<StructName> a, <StructName> b)` automatically — a field-by-field `==` chain that returns `1` when every field matches, `0` otherwise:
+Annotate a struct definition with `@derive(eq)` and the compiler synthesizes `int <StructName>_eq(<StructName> a, <StructName> b)` automatically, a field-by-field `==` chain that returns `1` when every field matches, `0` otherwise:
 
 ```aether
 @derive(eq)
@@ -1981,7 +1981,7 @@ main() {
 
 Supported field types in v1: primitive numeric (`int`, `long`, `float`, `byte`, `bool`) and `string`. The codegen lowers `string == string` to `strcmp(...) == 0` automatically, so the synthesizer doesn't need a special path.
 
-`@derive(format)` / `clone` / `hash` and nested-struct fields surface a precise compile-time diagnostic — they're explicitly out of v1 scope and tracked for follow-up commits.
+`@derive(format)` / `clone` / `hash` and nested-struct fields surface a precise compile-time diagnostic, they're explicitly out of v1 scope and tracked for follow-up commits.
 
 Issue #338.
 
@@ -2016,7 +2016,7 @@ When used directly inside `print`/`println`, the compiler optimizes to a `printf
 
 ### Heredoc strings
 
-`<<MARKER … MARKER` captures a multi-line **literal** string — no `${}`
+`<<MARKER … MARKER` captures a multi-line **literal** string, no `${}`
 interpolation and no escape processing, so it's ideal for embedding another
 language's source verbatim (SQL, a `contrib.host.*` snippet) without escaping
 the guest's own quotes. The heredoc only triggers when `<<` is immediately
@@ -2032,15 +2032,15 @@ SQL
 
 The body runs from the line after `<<MARKER` to the **closing-marker line**: a
 line that is, in full, optional leading whitespace followed by exactly `MARKER`
-and then the end of the line. The closing marker **may be indented** — it does
-not have to sit at column 0 — but its indentation must be **at or below** the
+and then the end of the line. The closing marker **may be indented**, it does
+not have to sit at column 0, but its indentation must be **at or below** the
 shallowest body line (the terminator lives at the content's base level). Windows
 `\r\n` is normalized to `\n`, and the single newline immediately before the
 closing marker is dropped (it's syntax, not content).
 
 Because the terminator sits at the content's base level, a body line that is
 *more* indented than the rest but happens to read exactly like the marker is
-**body content, not a terminator** — so it can never silently truncate the
+**body content, not a terminator**, so it can never silently truncate the
 string. (Conversely, a lone marker indented *past* the body matches nothing and
 the heredoc is reported as unterminated, rather than dropping content. Put the
 closing marker at column 0, or aligned with the body's base indent, and it
@@ -2067,7 +2067,7 @@ Rules:
   blank line won't force the prefix to zero), but they're still emitted.
 - The prefix match is **character-exact**: if one line indents with spaces and
   another with a tab at the same column, that's a disagreement and the strip
-  stops there — Aether never shifts past a column where lines differ. To keep a
+  stops there, Aether never shifts past a column where lines differ. To keep a
   literal common indent in the string, indent one line one notch less than the
   rest (so the common prefix is shorter than the indent you want kept).
 - A line indented *less* than the common prefix simply loses what leading
@@ -2108,7 +2108,7 @@ Variables declared but never referenced produce a warning. Prefix with `_` to su
 ```aether
 main() {
     x = 42          // warning[W1001]: unused variable 'x'
-    _unused = 42    // no warning — intentional discard
+    _unused = 42    // no warning, intentional discard
     y = 10
     println(y)      // y is used, no warning
 }
@@ -2135,14 +2135,14 @@ Use `ae check file.ae` to see warnings without compiling. It skips codegen and l
 `match` can be used as a statement or as an expression:
 
 ```aether
-// Statement — executes the matching arm
+// Statement, executes the matching arm
 match status {
     0 -> println("ok")
     1 -> println("warning")
     _ -> println("error")
 }
 
-// Expression — assigns the matching arm's value
+// Expression, assigns the matching arm's value
 msg = match status {
     0 -> "ok"
     1 -> "warning"
@@ -2178,9 +2178,9 @@ The following identifiers are reserved:
 | `when` | Guard clauses |
 | `int`, `float`, `string`, `bool`, `ptr`, `long` | Type names |
 
-Note: `state` is context-sensitive — it is a keyword only inside actor bodies. In all other code, `state` can be used as a regular variable name.
+Note: `state` is context-sensitive, it is a keyword only inside actor bodies. In all other code, `state` can be used as a regular variable name.
 
-Note: **`ptr`, `byte`, `func`, `state` and `after` are usable as ordinary value identifiers** — parameter names, local names, struct field names, struct-literal fields, and field-access targets — *without* the backtick escape. These tokens have meaning only in type position (`ptr`/`byte`), as a declaration head (`func`), or as a statement head (`state`/`after`), none of which overlaps a value position, so a bare `ptr`/`byte`/`func`/`state`/`after` in value position is unambiguously a name:
+Note: **`ptr`, `byte`, `func`, `state` and `after` are usable as ordinary value identifiers**, parameter names, local names, struct field names, struct-literal fields, and field-access targets, *without* the backtick escape. These tokens have meaning only in type position (`ptr`/`byte`), as a declaration head (`func`), or as a statement head (`state`/`after`), none of which overlaps a value position, so a bare `ptr`/`byte`/`func`/`state`/`after` in value position is unambiguously a name:
 
 ```aether
 add(ptr: int) -> int { return ptr + 1 }     // `ptr` is the parameter name
@@ -2188,15 +2188,15 @@ struct Node { func: int  after: int }        // keyword-spelled field names
 main() { let byte = 7  println("${byte}") }  // keyword-spelled local
 ```
 
-Two members of that family stay reserved in value position: `match` (it heads a match expression, so `match` as a bare value is genuinely ambiguous) and `union` (a C keyword — a value named `union` could not be emitted as valid C). For those, rename or use the backtick escape below. As a type keyword, `byte`/`ptr` still works in type position too: `byte b` declares `b` of type `byte` (the `<type> <name>` C-style form), while `byte: int` / `byte` in name position is the name.
+Two members of that family stay reserved in value position: `match` (it heads a match expression, so `match` as a bare value is genuinely ambiguous) and `union` (a C keyword, a value named `union` could not be emitted as valid C). For those, rename or use the backtick escape below. As a type keyword, `byte`/`ptr` still works in type position too: `byte b` declares `b` of type `byte` (the `<type> <name>` C-style form), while `byte: int` / `byte` in name position is the name.
 
-Note: `void` is **not** a reserved word — there is no `void` token. It is a plain identifier used by convention to *spell* the absence of a return value (e.g. `extern free(p: ptr) -> void`); a function that omits its `-> Type` annotation is the canonical void declaration. See [Functions](#functions).
+Note: `void` is **not** a reserved word, there is no `void` token. It is a plain identifier used by convention to *spell* the absence of a return value (e.g. `extern free(p: ptr) -> void`); a function that omits its `-> Type` annotation is the canonical void declaration. See [Functions](#functions).
 
-### Raw identifiers — using a keyword as a name
+### Raw identifiers, using a keyword as a name
 
 A backtick-delimited identifier, `` `name` ``, is always lexed as an ordinary
 identifier, bypassing keyword reservation. This lets a reserved word be used
-verbatim wherever an identifier is expected — parameter, local, struct-field,
+verbatim wherever an identifier is expected, parameter, local, struct-field,
 message-field, or function name:
 
 ```aether
@@ -2217,7 +2217,7 @@ use is keeping a C→Aether port faithful: C APIs routinely use names like
 `reply`, `message`, and `when` that collide with Aether keywords.
 
 (For the common port collisions `ptr`, `byte`, `func`, `state` and `after`,
-the backtick escape is **not** required — they are accepted bare as value
+the backtick escape is **not** required, they are accepted bare as value
 identifiers, see the note under [Keywords](#keywords) above. The escape is
 still the way to use a fully-reserved keyword such as `reply`, `message`,
 `when`, `match`, or `union` as a name.)
@@ -2279,7 +2279,7 @@ aetherc --dump-ast program.ae
 
 ## Type System
 
-Aether uses static typing with full type inference — explicit annotations are never required, but are always accepted.
+Aether uses static typing with full type inference, explicit annotations are never required, but are always accepted.
 
 ### Inference rules
 
@@ -2301,7 +2301,7 @@ Annotations are useful for documentation or when the type cannot be determined f
 
 ### `extern` requires annotations
 
-The compiler cannot infer types of external C functions — parameter types must be declared explicitly:
+The compiler cannot infer types of external C functions, parameter types must be declared explicitly:
 
 ```aether
 extern malloc(n: int) -> ptr

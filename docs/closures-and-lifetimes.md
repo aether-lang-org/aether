@@ -13,7 +13,7 @@ work: emission-ordering for cross-referenced closures, nested-lambda
 return-type bubble-up, and captures across trailing blocks. All three
 are fixed on main.
 
-Five patterns are tracked — three around dynamic `call()` dispatch
+Five patterns are tracked, three around dynamic `call()` dispatch
 (L1, L2, L3), one correctness hazard in closures inside actor handlers
 (L4), and one memory-handling contract on closure-var reassignment
 (L5). L4 is now rejected at compile time with a clear error; the rest
@@ -28,7 +28,7 @@ Regression tests live at `tests/syntax/test_closure_*.ae` and
 ### 1. Captured `ptr` parameters typed `int`
 
 A closure capturing a `ptr` parameter of its enclosing function got
-`int <name>` in the env struct — pointer truncated on store, segfault on
+`int <name>` in the env struct, pointer truncated on store, segfault on
 deref. Capture-type resolution in `compiler/codegen/codegen_expr.c` walked
 only top-level `AST_VARIABLE_DECLARATION` nodes across all functions and
 returned the first match by name, so it never saw function parameters and
@@ -44,7 +44,7 @@ unknown.
 ### 2. Mutable captures miscompiled
 
 `count = count + 1` inside a closure body emitted a shadowing local that
-wrote to uninitialised stack — silent wrong answers, even in-scope. Two
+wrote to uninitialised stack, silent wrong answers, even in-scope. Two
 collaborating problems: `is_local_var` treated any assignment target as a
 fresh local, and the closure prologue unconditionally aliased each capture
 to a read-only C local.
@@ -57,7 +57,7 @@ shadowing: if the RHS does not read `x`, treat `x` as a fresh local.
 
 **Semantics preserved:** closures capture by value (as documented in
 `docs/closures-and-builder-dsl.md`). Mutations inside a closure mutate the
-env's copy — which persists across calls — but are not visible to the
+env's copy, which persists across calls, but are not visible to the
 enclosing scope. Shared mutable state still requires ref cells.
 
 ### 3. Escaping-closure use-after-free
@@ -72,7 +72,7 @@ closure variable that appears (including `box_closure` wrappers) and
 transitively any closure vars they capture. `emit_all_defers_protected`
 skips the matching env-free defers and emits a
 `/* deferred (suppressed: escapes via return) */` marker in their place.
-Ownership transfers to the caller — matching the documented contract for
+Ownership transfers to the caller, matching the documented contract for
 `box_closure`.
 
 ### 4. Closure return types hardcoded to `int`/`void`
@@ -123,7 +123,7 @@ bodies and constructors. A closure body can reference any
 `has_return_value` walked an AST subtree looking for return
 statements with values. A nested lambda's `return` bubbled up and
 mis-typed the enclosing closure as `int`, producing a
-`static int _closure_fn_N(...) { ...; }` with no return statement —
+`static int _closure_fn_N(...) { ...; }` with no return statement,
 undefined behavior caught by `-Wreturn-type`.
 
 **Fix:** `has_return_value` stops at `AST_CLOSURE` boundaries. A
@@ -146,7 +146,7 @@ transparently while still stopping at real closures.
 `subtree_declares` recurses through trailing blocks; a new
 `scope_declares_at_top_level` helper is used by
 `is_top_level_decl_in_function` to walk trailing blocks but NOT
-nested if/for/while blocks — preserving the "fresh body-local in
+nested if/for/while blocks, preserving the "fresh body-local in
 nested block" Python-style rule that `calculator-tui` relies on.
 
 ## Code layout
@@ -171,7 +171,7 @@ lifetime"):
 - **Transient callback.** A capturing closure created inline and passed to
   a parameter that only *calls* it and neither stores nor returns it
   (`run(cb) { cb() }`) is dead once the call returns, so its env is freed
-  right after the call. This is gated on a proven non-escape — invoking a
+  right after the call. This is gated on a proven non-escape, invoking a
   closure parameter (`cb()`, an indirect-`call` node whose first child is
   the callee) is not an escape, whereas a stored or returned closure
   suppresses the drain so its env follows the owner.
@@ -180,7 +180,7 @@ lifetime"):
   (the `fn → ptr` coercion) and the list owns the box; `list.free` now
   reclaims the captured env as well as the box (`owned_flags == 2`).
 
-Still a leak (the safe side of the leak-vs-UAF trade): **L5 below** —
+Still a leak (the safe side of the leak-vs-UAF trade): **L5 below**,
 reassigning a closure *variable* drops the previous env, because without
 whole-program escape analysis the codegen can't prove the old env is
 unreachable (it may be aliased through a `box_closure` copy).
@@ -188,7 +188,7 @@ unreachable (it may be aliased through a `box_closure` copy).
 ## Closure patterns and workarounds
 
 L1–L3 are ergonomic patterns with known workarounds you can apply today.
-L4 is a compile-time rejection — previously silent wrong answers, now
+L4 is a compile-time rejection, previously silent wrong answers, now
 surfaced at compile time with a clear error. L5 is a memory-handling
 contract around reassignment. Each has a near-term workaround; the
 "proper fix" notes describe the larger language work each leans on. See
@@ -206,7 +206,7 @@ r = call(h)                   // h's return type is unknown at codegen
 ```
 
 `call(h)` falls back to generic dispatch: `((int(*)(void*))h.fn)(h.env)`
-— it assumes `int` return even if the stored closure returns a string
+it assumes `int` return even if the stored closure returns a string
 or pointer. Strings get their pointer truncated; pointers become
 garbage.
 
@@ -215,14 +215,14 @@ garbage.
 that `int`-returning dynamic closures are the only safely dispatchable
 kind today.
 
-**Why a quick `intptr_t` widening doesn't fix it:** the obvious patch —
+**Why a quick `intptr_t` widening doesn't fix it:** the obvious patch,
 emit `((intptr_t(*)(void*))h.fn)(h.env)` instead of `((int(*)(void*))`
-— fixes the cast in isolation but leaves `r`'s declared C type as
+fixes the cast in isolation but leaves `r`'s declared C type as
 `int`, so the return narrows right back. Widening `r` requires changing
 the variable's registration in the symbol table (not just the AST
 decl); downstream `print(r)` looks up `r`'s type from the symbol table
 and picks `%d` for anything registered as `TYPE_INT`. Propagating
-`TYPE_PTR` through the AST alone was attempted — it segfaulted four
+`TYPE_PTR` through the AST alone was attempted, it segfaulted four
 existing tests whose `call(x)` returns are used in arithmetic or
 comparisons. A real fix threads through the typechecker.
 
@@ -251,7 +251,7 @@ chains fall through to generic dispatch.
 
 **Proper fix for L1/L2/L3:** parameterised closure types (`fn[T]`, like
 Rust's `Fn(i32) -> i32`) or full typechecker return-type propagation.
-Either is a medium-sized language feature — until it lands, the
+Either is a medium-sized language feature, until it lands, the
 workaround sections on each limit apply.
 
 ### L4. Closure inside actor handler mutating actor state
@@ -269,11 +269,11 @@ actor Counter {
 ```
 
 Closures inside actor handlers correctly capture and mutate arm-local
-variables (Route 1 + arm promotion — tested by
+variables (Route 1 + arm promotion, tested by
 `tests/syntax/test_closure_in_actor_handler.ae`). But when the closure
 writes a name that's an actor **state field**, the closure has no
 access to `self`, so state accesses would compile to unscoped local
-reads — a silent wrong answer.
+reads, a silent wrong answer.
 
 **Current status (as of this branch):** codegen walks every closure
 body inside every actor receive-arm and, for each write to a state
@@ -300,7 +300,7 @@ op = |x: int| { return x * 2 }  // old env (malloc'd) is leaked
 When a closure variable is reassigned, the auto-defer-free fires only
 on the first assignment (to avoid double-free at scope exit, since
 reassignment overwrites `.env` in the variable). The previous env's
-heap block is unreachable — leaked.
+heap block is unreachable, leaked.
 
 **Why not just free on reassignment:** the old env may still be
 reachable via a `box_closure()` copy or another closure's transitive
@@ -309,9 +309,9 @@ so we lean safe (leak) over unsafe (UAF).
 
 Paired tests pin this trade-off:
 
-- `tests/syntax/test_closure_reassign_leaks_env.ae` — 100-iteration
+- `tests/syntax/test_closure_reassign_leaks_env.ae` 100-iteration
   reassignment loop exits cleanly.
-- `tests/syntax/test_closure_reassign_after_box.ae` — box_closure'd
+- `tests/syntax/test_closure_reassign_after_box.ae` box_closure'd
   copy survives reassignment of the source variable.
 
 **Proper fix:** escape analysis. Track whether a closure variable has

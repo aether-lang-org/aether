@@ -4,7 +4,7 @@
 > `937b029`). The per-bug **Cause** sections describe pre-fix code that
 > no longer exists; the **Fix** sections describe what landed. Read the
 > "Putting it together" invariant and the litmus test as the durable
-> takeaways — the bug-by-bug archaeology is frozen in time and will
+> takeaways, the bug-by-bug archaeology is frozen in time and will
 > drift as `type_inference.c` evolves.
 
 The Go-style `(value, err)` tuple return migration in stdlib (`std.map`,
@@ -42,7 +42,7 @@ result. Each is fixable in isolation; the test
 `tests/integration/multi_return_destructure_chain/` exercises the
 combination.
 
-## Bug 1 — cross-module local-var pollution
+## Bug 1, cross-module local-var pollution
 
 **Symptom.** Two modules each declare a local with the same name (e.g.
 `mod_name`, one a string from a parameter assignment, the other a ptr
@@ -52,7 +52,7 @@ an unrelated `target = mod_name` line.
 
 **Cause.** `collect_function_constraints` added function-local symbols
 to a flat global symbol table without scoping. Two functions' locals
-collided at the table level — `lookup_symbol` returned whichever was
+collided at the table level, `lookup_symbol` returned whichever was
 added more recently.
 
 **Fix.** Snapshot `ctx->symbols->symbols` (the head of the linked list)
@@ -65,7 +65,7 @@ unaffected.
 fixed"). Test:
 `tests/integration/tuple_destructure_cross_module/`.
 
-## Bug 2 — empty-string literal mis-typed as int
+## Bug 2, empty-string literal mis-typed as int
 
 **Symptom.** A function ending in `return value, ""` (or with `""` in
 any tuple slot) gets its return inferred as `(T, int)` instead of
@@ -84,19 +84,19 @@ string → `TYPE_STRING`, which is what every caller of the wrapper
 already expects.
 
 **Why it stayed latent.** Stdlib wrappers conventionally write
-`return null, "literal-error-message"` for failure — never `return X,
+`return null, "literal-error-message"` for failure, never `return X,
 ""` because the success path uses an explicit non-empty string.
 Downstream `aetherBuild`'s cache module is the first first-party
 caller to hit this with `return "", rerr` (success means rerr is
 empty; the caller needs the empty-string value as the meaningful
 "no error" signal).
 
-## Bug 3 — partial tuple sticks across iterations
+## Bug 3, partial tuple sticks across iterations
 
 **Symptom.** A function whose return is correctly typed as
 `TUPLE(string, UNKNOWN)` after iteration N never gets refined, even
 though iteration N+1 has enough information to resolve the second
-slot. Codegen emits the UNKNOWN slot as `int` (its "default" — see
+slot. Codegen emits the UNKNOWN slot as `int` (its "default", see
 the `unresolved type in codegen, defaulting to int` warning).
 
 **Cause.** `infer_function_return_types`'s gate to re-run inference
@@ -112,7 +112,7 @@ A function whose `node_type` was already a `TUPLE` (even a partially-
 resolved one) fell off the gate's right side and never re-inferred.
 `merge_tuple_returns` did walk return statements to fill UNKNOWN
 slots, but only from `val->node_type` and `AST_LITERAL` value-shape
-heuristics — not from `AST_IDENTIFIER` lookups, which is where
+heuristics, not from `AST_IDENTIFIER` lookups, which is where
 destructured locals' types live.
 
 **Fix.** Extend the re-inference gate to also fire when the current
@@ -124,7 +124,7 @@ is *strictly* more specific (fewer UNKNOWN slots). The strictness is
 load-bearing: without it, syncing TUPLE(s, UNKNOWN) → TUPLE(s,
 UNKNOWN) loops forever and exhausts `MAX_INFERENCE_ITERATIONS`.
 
-## Bug 4 — nested return doesn't pre-resolve outer-scope locals
+## Bug 4, nested return doesn't pre-resolve outer-scope locals
 
 **Symptom.** A multi-value `return a, b` inside an `if`/`while`/`for`
 body can't see locals defined by destructure in the surrounding block.
@@ -143,11 +143,11 @@ hash_file(p: string) {
 `rerr`'s `AST_IDENTIFIER` inside the `return "", rerr` has no
 `node_type` set (no symbol-table entry survives across iterations
 after the bug-1 unwind), and `infer_return_type_impl` for the nested
-return falls back to `lookup_symbol`, which doesn't have it — so the
+return falls back to `lookup_symbol`, which doesn't have it, so the
 slot is UNKNOWN.
 
 **Cause.** The `AST_BLOCK` case of `infer_return_type_impl` had a
-pre-resolve pass for direct single-value `return v` returns —
+pre-resolve pass for direct single-value `return v` returns,
 calling `resolve_local_var_type(v, body, i, symbols)` to pull the
 type from a preceding sibling. But:
 
@@ -208,7 +208,7 @@ Or via `make test-ae` for the full suite.
 1. **Bidirectional type flow.** The current pipeline is bottom-up
    (returns drive function types, function types drive call-site
    types, call-site types drive caller's local types). It does not
-   propagate caller's expectation back into a callee's return — a
+   propagate caller's expectation back into a callee's return, a
    function whose body returns `(0, 0)` will still infer `(int, int)`
    even when every caller destructures it as `(string, string)`. The
    destructure-aware fallback at call sites prevents this from
@@ -218,7 +218,7 @@ Or via `make test-ae` for the full suite.
 2. **Same-name lvalue in destructure and outer scope.**
    `mod_name = some_string()` followed by `mod_name, _ = some_call()`
    in the same block "reassigns" `mod_name` semantically. Type
-   inference doesn't track reassignment — the second binding wins for
+   inference doesn't track reassignment, the second binding wins for
    subsequent reads but the first's type is what `resolve_local_var_type`
    returns when walking from a later return. In practice this hasn't
    bitten anyone yet because reassignment-with-different-type is rare
@@ -227,7 +227,7 @@ Or via `make test-ae` for the full suite.
 
 3. **Tuple slots resolved by union.** A function with two returns
    `(string, "literal")` and `(string, some_call())` whose call is a
-   tuple-typed function — the slots are not unified. Whichever return
+   tuple-typed function, the slots are not unified. Whichever return
    is encountered first wins, and `merge_tuple_returns` fills only
    UNKNOWN slots. This is fine for the wrapper-style functions that
    dominate the stdlib; if it bites someone with a more complex

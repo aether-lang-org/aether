@@ -92,7 +92,7 @@ extern my_c_function(x: int) -> ptr
 
 ```c
 typedef struct AetherString {
-    unsigned int magic;    // Always 0xAE57C0DE — enables runtime type detection
+    unsigned int magic;    // Always 0xAE57C0DE, enables runtime type detection
     int ref_count;
     size_t length;
     size_t capacity;
@@ -288,25 +288,25 @@ Raw externs: `io_read_file_raw`, `io_write_file_raw`, `io_append_file_raw`, `io_
 
 ### Shell execution
 
-- `os.system(cmd)` → `int` — Run a shell command, return exit code
-- `os.exec(cmd)` → `(string, string)` — Run a command and capture stdout; returns `(output, err)` tuple
-- `os.getenv(name)` → `string` — Read environment variable; returns null if unset
+- `os.system(cmd)` → `int` Run a shell command, return exit code
+- `os.exec(cmd)` → `(string, string)` Run a command and capture stdout; returns `(output, err)` tuple
+- `os.getenv(name)` → `string` Read environment variable; returns null if unset
 
-The shell-execution path passes `cmd` to `/bin/sh -c` (`cmd.exe /c` on Windows), which means quoting, glob expansion, and `$VAR` interpolation all happen before the child sees the string. **Prefer `os.run_capture` (below)** for any input that touches user data — it skips the shell entirely and is binary-safe.
+The shell-execution path passes `cmd` to `/bin/sh -c` (`cmd.exe /c` on Windows), which means quoting, glob expansion, and `$VAR` interpolation all happen before the child sees the string. **Prefer `os.run_capture` (below)** for any input that touches user data, it skips the shell entirely and is binary-safe.
 
 ### Process spawn (argv-based, no shell)
 
 The argv-based path is the recommended way to launch a child binary. Argv is passed as a list of strings, no shell sits in the middle, paths with spaces / quotes / `$`-signs are safe, and there's no command-injection surface for user-provided values.
 
-- `os.run(prog, argv, env)` → `int` — Spawn `prog`, wait for it to finish, return the exit code. `argv` is a `list<ptr>` of C strings (element 0 is conventionally the program name; the OS sees this as `argv[0]` for the child). `env` is the same shape, or `null` to inherit. `prog` is looked up on `PATH` if it does not contain a slash.
+- `os.run(prog, argv, env)` → `int` Spawn `prog`, wait for it to finish, return the exit code. `argv` is a `list<ptr>` of C strings (element 0 is conventionally the program name; the OS sees this as `argv[0]` for the child). `env` is the same shape, or `null` to inherit. `prog` is looked up on `PATH` if it does not contain a slash.
 
-- `os.run_capture(prog, argv, env)` → `(stdout: string, exit_code: int, stderr: string)` — Same as `os.run`, but captures the child's stdout and stderr. The child's three outputs come back as a single tuple. The `exit_code` slot lets callers distinguish "ran cleanly" (`exit_code == 0`) from "ran but exited non-zero" — important for tools like `diff3 -m` (returns 1 on conflicts), `grep` (returns 1 on no-match), or `gcc` (returns non-zero on compile errors), where non-zero is meaningful information rather than a hard failure.
+- `os.run_capture(prog, argv, env)` → `(stdout: string, exit_code: int, stderr: string)` Same as `os.run`, but captures the child's stdout and stderr. The child's three outputs come back as a single tuple. The `exit_code` slot lets callers distinguish "ran cleanly" (`exit_code == 0`) from "ran but exited non-zero", important for tools like `diff3 -m` (returns 1 on conflicts), `grep` (returns 1 on no-match), or `gcc` (returns non-zero on compile errors), where non-zero is meaningful information rather than a hard failure.
 
 Raw externs (rarely needed directly; the wrappers above are idiomatic):
 
-- `os_run(prog, argv, env)` → `int` — Same as `os.run`.
-- `os_run_capture_raw(prog, argv, env)` → `string` — Captures stdout only; exit code is discarded. Use `os.run_capture` instead unless the exit code is genuinely irrelevant.
-- `os_run_capture_status_raw(prog, argv, env)` → `(string, int, string)` — The tuple-returning extern that `os.run_capture` wraps.
+- `os_run(prog, argv, env)` → `int` Same as `os.run`.
+- `os_run_capture_raw(prog, argv, env)` → `string` Captures stdout only; exit code is discarded. Use `os.run_capture` instead unless the exit code is genuinely irrelevant.
+- `os_run_capture_status_raw(prog, argv, env)` → `(string, int, string)` The tuple-returning extern that `os.run_capture` wraps.
 
 Worked example:
 
@@ -335,16 +335,16 @@ main() {
 
 ### Argv discovery
 
-- `aether_args_count()` → `int` — Number of command-line arguments
-- `aether_args_get(index)` → `string` — Get the i-th argument; returns null if out of range
-- `aether_argv0()` → `string` — Path the OS launched the current process with (argv[0]); returns null before `aether_args_init` has run
-- `os.argv0()` → `string` — Convenience wrapper around `aether_argv0()` that returns `""` instead of null
+- `aether_args_count()` → `int` Number of command-line arguments
+- `aether_args_get(index)` → `string` Get the i-th argument; returns null if out of range
+- `aether_argv0()` → `string` Path the OS launched the current process with (argv[0]); returns null before `aether_args_init` has run
+- `os.argv0()` → `string` Convenience wrapper around `aether_argv0()` that returns `""` instead of null
 
 Typical use: a tool that needs to find its own binary (to locate sibling helpers next to itself, re-exec with different flags, or print a self-path in a diagnostic) can call `os.argv0()` and skip the argv-index bookkeeping.
 
 ### Process replacement
 
-- `os_execv(prog, argv_list)` → `int` — Replace the current process image with `prog`, passing an explicit argv list. `argv_list` is a `list<ptr>` of C strings (element 0 is argv[0] for the new program). On success this call **never returns**; on failure it returns `-1` and the current process keeps running. `prog` is looked up on `PATH` if it does not contain a slash. Not available on Windows — returns `-1`.
+- `os_execv(prog, argv_list)` → `int` Replace the current process image with `prog`, passing an explicit argv list. `argv_list` is a `list<ptr>` of C strings (element 0 is argv[0] for the new program). On success this call **never returns**; on failure it returns `-1` and the current process keeps running. `prog` is looked up on `PATH` if it does not contain a slash. Not available on Windows, returns `-1`.
 
 Paired with `os.run` / `os.run_capture` (see [Process spawn](#process-spawn-argv-based-no-shell) above), this gives Aether programs a full argv-based process-launch surface with no shell in the middle, so paths with spaces, quotes, or `$`-signs are safe. Stdio is flushed before the exec, so pre-exec diagnostics are not lost.
 
@@ -415,7 +415,7 @@ main() {
 import std.json
 
 main() {
-    // Parse — Go-style (value, err) tuple.
+    // Parse, Go-style (value, err) tuple.
     v, err = json.parse("{\"name\":\"Aether\",\"count\":42}")
     if err != "" {
         println("parse failed: ${err}")
@@ -429,7 +429,7 @@ main() {
     count = json.get_int(count_val)
     println("${name} / ${count}")
 
-    // Build values — each create_* allocates a standalone value. Passing
+    // Build values, each create_* allocates a standalone value. Passing
     // it to object_set / array_add transfers ownership to the container.
     obj = json.create_object()
     _ = json.object_set(obj, "x", json.create_number(1.5))
@@ -454,34 +454,34 @@ Fallible calls return Go-style tuples. The typed readers (`get_bool` /
 `get_number` / `get_int`) return sentinels (0, 0.0) on wrong-type input
 so they stay infallible.
 
-- `json.parse(str)` → `(ptr, string)` — parse into a tree. Error is a
+- `json.parse(str)` → `(ptr, string)` parse into a tree. Error is a
   position-qualified message like `"expected ':' at 3:17"`.
-- `json.stringify(value)` → `(string, string)` — `(output, err)`.
-- `json.free(value)` — release the value. Safe on both parsed roots
+- `json.stringify(value)` → `(string, string)` `(output, err)`.
+- `json.free(value)` release the value. Safe on both parsed roots
   (frees the arena) and standalone-created values.
-- `json.get_string(value)` → `(string, string)` — `(text, err)`; errors
+- `json.get_string(value)` → `(string, string)` `(text, err)`; errors
   if `value` is not a `JSON_STRING`.
-- `json.object_get(obj, key)` → `(ptr, string)` — `(child, err)`.
+- `json.object_get(obj, key)` → `(ptr, string)` `(child, err)`.
   Absent key returns `(null, "")`, which is distinct from the error
   case `(null, "not an object")`.
-- `json.object_set(obj, key, value)` → `string` — error string or `""`.
-- `json.array_get(arr, index)` → `(ptr, string)` — same shape;
+- `json.object_set(obj, key, value)` → `string` error string or `""`.
+- `json.array_get(arr, index)` → `(ptr, string)` same shape;
   out-of-range returns `(null, "")`.
-- `json.array_add(arr, value)` → `string` — error string or `""`.
+- `json.array_add(arr, value)` → `string` error string or `""`.
 
 Infallible externs (no tuple):
 
-- `json.type(value)` → `int` — returns one of the `JSON_*` constants.
+- `json.type(value)` → `int` returns one of the `JSON_*` constants.
 - `json.is_null(value)` → `int`.
-- `json.get_bool(value)` → `int` — 0 on wrong type.
-- `json.get_number(value)` → `float` — 0.0 on wrong type.
-- `json.get_int(value)` → `int` — truncates the double.
+- `json.get_bool(value)` → `int` 0 on wrong type.
+- `json.get_number(value)` → `float` 0.0 on wrong type.
+- `json.get_int(value)` → `int` truncates the double.
 - `json.object_has(obj, key)` → `int`.
 - `json.array_size(arr)` → `int`.
 - `json.create_null()`, `json.create_bool(v)`, `json.create_number(v)`,
   `json.create_string(s)`, `json.create_array()`, `json.create_object()`
-  → `ptr` — allocate standalone values.
-- `json.last_error()` → `string` — the last parser error on the current
+  → `ptr` allocate standalone values.
+- `json.last_error()` → `string` the last parser error on the current
   thread; redundant with `json.parse`'s tuple but useful when calling
   the raw extern directly.
 
@@ -546,11 +546,11 @@ main() {
 - `cryptography.sha256_hex(data, length)` → `(string, string)` - 64-char lowercase hex digest.
 - `cryptography.hash_hex(algo, data, length)` → `(string, string)` - Algorithm-by-name dispatcher. `algo` is `"sha1"`, `"sha256"`, or any name `EVP_get_digestbyname()` recognizes (`"sha384"`, `"sha512"`, `"sha3-256"`, ...). Returns `("", "unknown algorithm")` for unrecognized names.
 - `cryptography.hash_supported(algo)` → `int` - `1` if this build can compute `algo`, `0` otherwise. Always succeeds. Use to validate user-supplied algorithm names before calling `hash_hex`.
-- `cryptography.md4_hex(data, length)` / `md5_hex(data, length)` → `(string, string)` - 32-char hex digest. Legacy interop only (Content-MD5, ETag, zsync) — NOT collision-resistant.
+- `cryptography.md4_hex(data, length)` / `md5_hex(data, length)` → `(string, string)` - 32-char hex digest. Legacy interop only (Content-MD5, ETag, zsync), NOT collision-resistant.
 - `cryptography.sha1_bytes(data, length)` / `sha256_bytes(data, length)` / `md4_bytes(data, length)` / `md5_bytes(data, length)` → `(string, int, string)` - Raw-bytes digest, `(bytes, length, err)`; `bytes` preserves embedded NULs.
 - `cryptography.hash_bytes(algo, data, length)` → `(string, int, string)` - Algorithm-by-name binary digest.
 
-`length` is explicit so binary payloads with embedded NULs survive. `data` may be either a plain string literal or an AetherString from `fs.read_binary` — the runtime unwraps automatically.
+`length` is explicit so binary payloads with embedded NULs survive. `data` may be either a plain string literal or an AetherString from `fs.read_binary` the runtime unwraps automatically.
 
 ### HMAC, Random, and Streaming Digests
 
@@ -568,11 +568,11 @@ main() {
 
 - `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes, **unpadded** output.
 - `cryptography.base64_encode_padded(data, length)` → `(string, string)` - Encode `length` bytes, **with `=` padding** to a multiple of 4. For wire formats (auth headers, JSON-encoded blobs) that require padded output.
-- `cryptography.base64_decode(b64)` → `(string, int, string)` - Decode. Returns `(bytes, byte_count, "")` on success — `bytes` is an AetherString preserving embedded NULs. Accepts both padded and unpadded input.
+- `cryptography.base64_decode(b64)` → `(string, int, string)` - Decode. Returns `(bytes, byte_count, "")` on success, `bytes` is an AetherString preserving embedded NULs. Accepts both padded and unpadded input.
 
 ### What's not in `std.cryptography`
 
-Public-key crypto (RSA, ECDSA, Ed25519, X25519), symmetric ciphers (AES, ChaCha20-Poly1305), key derivation (KDFs), URL-safe Base64 (RFC 4648 §5), and constant-time comparison are out of scope — the public-key and cipher families live in `contrib/cryptography/`. See [stdlib-reference.md](stdlib-reference.md) §"What `std.cryptography` doesn't do" for the rationale.
+Public-key crypto (RSA, ECDSA, Ed25519, X25519), symmetric ciphers (AES, ChaCha20-Poly1305), key derivation (KDFs), URL-safe Base64 (RFC 4648 §5), and constant-time comparison are out of scope, the public-key and cipher families live in `contrib/cryptography/`. See [stdlib-reference.md](stdlib-reference.md) §"What `std.cryptography` doesn't do" for the rationale.
 
 ---
 
@@ -691,7 +691,7 @@ Response transformers (run after the route handler emits the response):
 
 ### HTTP Client Builder (`std.http.client`)
 
-Builder-shaped requests with full response access. The `http.get` / `http.post` / `http.put` / `http.delete` one-liners above are good for "no auth, JSON in, 200 means good" calls; reach for `std.http.client` when you need custom request headers, response-header capture, status discrimination, per-request timeouts, or methods other than the four common verbs (PROPFIND, PATCH, custom RPC verbs all work). Method is an arbitrary string. Non-2xx is not an error — the caller checks `response_status`.
+Builder-shaped requests with full response access. The `http.get` / `http.post` / `http.put` / `http.delete` one-liners above are good for "no auth, JSON in, 200 means good" calls; reach for `std.http.client` when you need custom request headers, response-header capture, status discrimination, per-request timeouts, or methods other than the four common verbs (PROPFIND, PATCH, custom RPC verbs all work). Method is an arbitrary string. Non-2xx is not an error, the caller checks `response_status`.
 
 ```aether
 import std.http.client
@@ -778,7 +778,7 @@ main() {
 
 Full reference: [`docs/http-reverse-proxy.md`](http-reverse-proxy.md).
 
-### HTTP Record/Replay (VCR) — moved out of the stdlib
+### HTTP Record/Replay (VCR), moved out of the stdlib
 
 The Servirtium record/replay engine that used to ship as
 `std.http.server.vcr` has been lifted into its own repository,
@@ -821,7 +821,7 @@ actor Worker {
         Connection(fd) -> {
             req = ae_http_recv(fd)
             http_response_json(res, "{\"hello\":\"world\"}")
-            net.await_io(fd)   // suspends — zero CPU until data arrives
+            net.await_io(fd)   // suspends, zero CPU until data arrives
         }
         IoReady(fd, events) -> {
             // Resumed here when fd is readable again
@@ -841,19 +841,19 @@ that arm.
 
 Functions:
 
-- `net.await_io(fd)` → `string` — Register `fd` with the current
+- `net.await_io(fd)` → `string` Register `fd` with the current
   core's I/O poller and mark the calling actor as waiting. Returns
   `""` on success, error string otherwise (invalid fd, no active
   actor context, or scheduler refused the registration). One-shot:
   the fd is automatically unregistered after the `IoReady` delivery.
-- `net.ae_io_cancel(fd)` — Abandon a prior `await_io` without waiting
+- `net.ae_io_cancel(fd)` Abandon a prior `await_io` without waiting
   for the message. Rare; the one-shot policy makes this unnecessary
   in most flows.
 
 Performance note: PR #140 demonstrated the raw reactor pattern
 delivering substantially higher HTTP throughput than a blocking
 keep-alive worker. `await_io` is the Aether-language surface over
-that same machinery — rerun the HTTP benchmark on your target host
+that same machinery, rerun the HTTP benchmark on your target host
 to get a current figure for your environment.
 
 ---
@@ -1031,11 +1031,11 @@ main() {
 
 ### Guidelines
 
-- **`defer type.free(x)`** — primary cleanup pattern for all allocations
-- **Stack allocations** — freed automatically (no `defer` needed)
-- **Actors** — managed by the runtime
-- **Managed strings** — reference-counted internally; use `string.free()` (alias for `string.release()`)
-- **`string.retain(str)`** — advanced: increment reference count when sharing ownership across C callbacks
+- **`defer type.free(x)`**, primary cleanup pattern for all allocations
+- **Stack allocations**, freed automatically (no `defer` needed)
+- **Actors**, managed by the runtime
+- **Managed strings**, reference-counted internally; use `string.free()` (alias for `string.release()`)
+- **`string.retain(str)`**, advanced: increment reference count when sharing ownership across C callbacks
 
 ---
 

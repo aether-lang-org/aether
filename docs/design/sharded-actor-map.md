@@ -1,4 +1,4 @@
-# Sharded Actor Map — Lock Striping, the Actor-Native Way
+# Sharded Actor Map, Lock Striping, the Actor-Native Way
 
 A pattern for a **hot shared map** that has to serve many concurrent
 readers and writers without collapsing onto a single core.
@@ -6,7 +6,7 @@ readers and writers without collapsing onto a single core.
 > **The short version.** One actor owning a shared map is the "one mutex"
 > trap: every `get`/`set` funnels through a single mailbox and serializes,
 > so it cannot scale past one core. The fix is the actor counterpart of
-> **lock striping** — spawn `N` owner actors, route each key to
+> **lock striping**, spawn `N` owner actors, route each key to
 > `hash(key) % N`, and operations on different keys land on different
 > mailboxes. Contention drops roughly `N×`.
 
@@ -35,8 +35,8 @@ actor MapOwner {
 ```
 
 This is correct, and it is also a trap. An actor processes its mailbox
-**one message at a time**. Every caller — no matter how many cores are
-running, no matter that they touch completely unrelated keys — lines up
+**one message at a time**. Every caller, no matter how many cores are
+running, no matter that they touch completely unrelated keys, lines up
 behind the same mailbox and waits its turn. The map owner is a serial
 section with extra steps.
 
@@ -45,13 +45,13 @@ This is *exactly* the behaviour of a single global mutex:
 - **It serializes all access.** Two cores reading two different keys still
   take turns. The data structure supports concurrency; the single
   guard does not.
-- **It negatively scales.** Add cores and throughput does not rise — it
+- **It negatively scales.** Add cores and throughput does not rise, it
   often *falls*, because the contending cores now also fight over the one
   mailbox's cache line. The line holding the mailbox head/tail
   ping-pongs between cores on every enqueue and dequeue; each transfer is
   a cross-core cache miss. More contenders means more ping-pong, not more
   work done. This is the same cache-line story that makes one mutex a
-  scalability ceiling — the actor's mailbox *is* the contended line.
+  scalability ceiling, the actor's mailbox *is* the contended line.
 - **Tail latency balloons.** A slow handler (a big rebuild, a `?` ask that
   blocks) stalls every other caller behind it, because they are all in
   the same queue.
@@ -94,7 +94,7 @@ for the base pattern.
 
 ### Routing hash
 
-Routing needs a fast, well-distributing, **non-cryptographic** hash —
+Routing needs a fast, well-distributing, **non-cryptographic** hash,
 distribution and speed matter, collision-resistance does not. The example
 uses **FNV-1a** over the key's bytes, masked to a non-negative 31-bit
 value so the `% N` stays in range:
@@ -117,7 +117,7 @@ shard_for(key: string, nshards: int) -> int {
 
 FNV-1a is a standard, byte-at-a-time hash with good avalanche for short
 string keys. Reach for a stdlib digest (`std.cryptography`) only if you
-need cryptographic properties — for routing it is pure overhead (it
+need cryptographic properties, for routing it is pure overhead (it
 allocates and returns a hex string, where you want a cheap integer).
 
 ---
@@ -126,11 +126,11 @@ allocates and returns a hex string, where you want a cheap integer).
 
 This is where the actor version **diverges from the lock-striping
 literature**. Striped-lock maps default to a fixed stripe count set
-independently of the core count — Java's `ConcurrentHashMap`, for
+independently of the core count, Java's `ConcurrentHashMap`, for
 instance, historically used a default concurrency level of **16**. Do
 **not** copy such a number for actors.
 
-A lock stripe is nearly free: a word in an array. An actor shard is not —
+A lock stripe is nearly free: a word in an array. An actor shard is not,
 each one is a live entity with a **mailbox, a scheduler slot, and a cache
 footprint**, and is itself a serialization point. Past a small multiple of
 the core count you stop buying parallelism (you only have so many cores to
@@ -145,7 +145,7 @@ N  ≈  core_count × small_factor          // small_factor ∈ ~1..4
 
 - Start at roughly **core count** (`1×`). This gives one busy shard per
   core in the steady state.
-- Nudge up to **2×–4×** if handlers are short and you see imbalance — extra
+- Nudge up to **2×–4×** if handlers are short and you see imbalance, extra
   shards smooth out uneven load and reduce the odds that two hot keys share
   a shard.
 - Going much past that is counter-productive: more mailboxes than cores
@@ -159,16 +159,16 @@ runtime core count.
 ## The skew caveat (hot keys)
 
 Sharding assumes keys are **roughly uniformly accessed**. Real workloads
-often are not — they are **Zipfian**: a handful of keys take the lion's
+often are not, they are **Zipfian**: a handful of keys take the lion's
 share of traffic. Those hot keys hash to a few specific shards, and *those*
 shards become serial bottlenecks again, exactly like the single-actor case
-— just at `1/N` scale instead of `1/1`. Adding shards does **not** help: a
+just at `1/N` scale instead of `1/1`. Adding shards does **not** help: a
 single hot key cannot be split across shards, because all of its
 operations must reach the one actor that owns it.
 
 If your access pattern is **read-mostly and hot-key-skewed** (a config
 blob, a routing table, feature flags hammered on every request),
-**sharding is the wrong tool** — point those reads at the **copy-on-write
+**sharding is the wrong tool**, point those reads at the **copy-on-write
 snapshot cell** instead: [`std.snapshot` / `docs/design/snapshot-cell.md`](snapshot-cell.md)
 (issue [#840](https://github.com/aether-lang-org/aether/issues/840)). There a
 read is a single lock-free atomic load, so a thousand readers of the same
@@ -181,7 +181,7 @@ key spaces; the snapshot cell is for **read-heavy** ones.
 
 This is deliberately **not** a `sync.Map`-style drop-in: there is no shared
 object you call `.get()`/`.set()` on from many threads with the runtime
-hiding the synchronization. That API shape runs *against* the actor grain —
+hiding the synchronization. That API shape runs *against* the actor grain,
 it reintroduces shared mutable state and the very contention the actor
 model exists to remove. The sharded actor map keeps the grain intact:
 **state lives inside actors, and you reach it by sending messages.** The
@@ -232,7 +232,7 @@ follows:
 |----------------|-----|-----|
 | General concurrent map (mixed read/write, well-spread keys) | **Sharded actor map** (this page) | per-key routing across `N` mailboxes; the general winner |
 | Read-mostly (config, routing tables, flags) | **COW snapshot cell** ([`std.snapshot`](snapshot-cell.md)) | lock-free reads; each write rebuilds the whole value |
-| Genuinely low contention | Single owner-actor | the simplest correct thing — until contention rises |
+| Genuinely low contention | Single owner-actor | the simplest correct thing, until contention rises |
 
 A runnable scaling study that measures all three under read-only,
 read-heavy, balanced, and write-heavy mixes lives at

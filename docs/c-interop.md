@@ -4,7 +4,7 @@ Aether interoperates with C code, so you can call existing libraries like SQLite
 
 ## Calling C Functions
 
-Aether compiles to C, and the generated code already includes `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<math.h>`, etc. To call any C function — whether from the standard library, your own `.c` files, or a third-party library — you declare it with `extern`:
+Aether compiles to C, and the generated code already includes `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<math.h>`, etc. To call any C function, whether from the standard library, your own `.c` files, or a third-party library, you declare it with `extern`:
 
 ```aether
 extern abs(x: int) -> int
@@ -107,7 +107,7 @@ gcc -c my_math.c -o my_math.o -lm
 aetherc main.ae main.c
 
 # Link everything together. `ae cflags` emits the right -I / -L / -l
-# flags for the install in effect — never hand-craft them: the install
+# flags for the install in effect, never hand-craft them: the install
 # layout (and the linker search path it requires) is unstable across
 # releases.
 gcc main.c my_math.o $(ae cflags) -o myapp
@@ -115,7 +115,7 @@ gcc main.c my_math.o $(ae cflags) -o myapp
 ./myapp
 ```
 
-## Tuple Return Types — `extern foo(...) -> (T1, T2, ...)`
+## Tuple Return Types, `extern foo(...) -> (T1, T2, ...)`
 
 C functions that return more than one logical value typically pack the results into a struct returned by value. Aether mirrors this on the FFI side: declare the extern with a parenthesised tuple return type, and the codegen synthesises the matching C struct typedef so the call site can destructure the result like any Aether-side tuple-returning function:
 
@@ -174,13 +174,13 @@ The codegen builds the typedef name from the element types' lowercase Aether nam
 | `(ptr, int, string)`          | `_tuple_ptr_int_string`       |
 | `(int, float, string)`        | `_tuple_int_float_string`     |
 
-Element types use `string` for `const char*` and `ptr` for `void*`. The typedef is emitted once per unique tuple shape — multiple externs returning the same tuple share the typedef.
+Element types use `string` for `const char*` and `ptr` for `void*`. The typedef is emitted once per unique tuple shape, multiple externs returning the same tuple share the typedef.
 
 ### When to reach for it
 
 Tuple returns are the natural shape for any C function that produces a value plus an error message, a value plus a length, or any other small product type. Before this form was available, FFI authors worked around the single-scalar return by either packing values into a delimited string or splitting the operation into 4+ split-accessor externs (`<op>_raw` + `<op>_get` + `<op>_get_length` + `<op>_release` with TLS-backed storage). The tuple form replaces both patterns with a single declaration.
 
-## Renaming a C Symbol — `@extern("c_name")`
+## Renaming a C Symbol, `@extern("c_name")`
 
 Sometimes the C symbol you want to bind has a name that clashes with a wrapper you'd like to expose, or that doesn't fit the module's naming style. Use the `@extern` annotation to bind an Aether-side name to a chosen C symbol:
 
@@ -190,7 +190,7 @@ Sometimes the C symbol you want to bind has a name that clashes with a wrapper y
 @extern("strerror") describe_errno(errno: int) -> string
 ```
 
-The Aether-side name (`md_ctx_new`, `describe_errno`) is what callers write. The compiler emits the forward declaration and every call site using the C symbol from the annotation — no wrapper function is generated. This is exactly equivalent to writing:
+The Aether-side name (`md_ctx_new`, `describe_errno`) is what callers write. The compiler emits the forward declaration and every call site using the C symbol from the annotation, no wrapper function is generated. This is exactly equivalent to writing:
 
 ```aether
 extern EVP_MD_CTX_new() -> ptr
@@ -212,11 +212,11 @@ An `@extern` declaration is part of its module's public surface: unlike a bare `
 append_format(b: ptr, fmt: string, ...) -> int
 ```
 
-Call sites pass any number of trailing arguments literally. This is the only way to give a variadic C function a clean module-qualified name — an ordinary Aether wrapper cannot forward a `...` tail (Aether has no varargs-defining syntax, only varargs-declaring).
+Call sites pass any number of trailing arguments literally. This is the only way to give a variadic C function a clean module-qualified name, an ordinary Aether wrapper cannot forward a `...` tail (Aether has no varargs-defining syntax, only varargs-declaring).
 
-## Exporting an Aether Function as a C Callback — `@c_callback`
+## Exporting an Aether Function as a C Callback, `@c_callback`
 
-The inverse of `@extern`. When a C library wants you to hand it a function pointer — HTTP route handlers, signal handlers, `qsort` comparators, libcurl callbacks, sqlite hooks — annotate the Aether function with `@c_callback`. The compiler emits a stable, externally-visible C symbol that the linker can resolve from any translation unit:
+The inverse of `@extern`. When a C library wants you to hand it a function pointer, HTTP route handlers, signal handlers, `qsort` comparators, libcurl callbacks, sqlite hooks, annotate the Aether function with `@c_callback`. The compiler emits a stable, externally-visible C symbol that the linker can resolve from any translation unit:
 
 ```aether
 extern http_server_add_route(server: ptr, method: string, path: string, handler: ptr, user_data: ptr)
@@ -231,14 +231,14 @@ main() {
 }
 ```
 
-`my_handler` here is a normal Aether function — direct calls work the same as any other function. The annotation only changes two things:
+`my_handler` here is a normal Aether function, direct calls work the same as any other function. The annotation only changes two things:
 
 1. **The C symbol stays addressable across the linkage boundary.** Without `@c_callback`, an imported function would be emitted as `static` (so each translation unit gets a private copy and macOS's `ld64` doesn't trip on duplicate symbols). With `@c_callback`, the function is non-`static` and the symbol resolves at link time wherever it's referenced.
-2. **The function name used as a value** (when you pass it as a `ptr` argument like the `http_server_add_route` example above) emits the C symbol the annotation binds to — not the namespace-mangled Aether name.
+2. **The function name used as a value** (when you pass it as a `ptr` argument like the `http_server_add_route` example above) emits the C symbol the annotation binds to, not the namespace-mangled Aether name.
 
 ### Optional explicit symbol
 
-By default, the C symbol matches the Aether-side name (or the namespace-prefixed form `<module>_<name>` when defined inside an imported module — e.g. `vcr_dispatch`). Pass an explicit string when you need a specific C name:
+By default, the C symbol matches the Aether-side name (or the namespace-prefixed form `<module>_<name>` when defined inside an imported module, e.g. `vcr_dispatch`). Pass an explicit string when you need a specific C name:
 
 ```aether
 @c_callback("aether_signal_handler")
@@ -260,7 +260,7 @@ on_sigint(sig: int) {
 - libuv `uv_*_cb` callbacks.
 - sqlite update/commit/rollback hooks.
 
-For plain Aether-to-Aether function-pointer use within a single program, no annotation is needed — top-level functions are already addressable as values. The annotation is specifically for the cross-language path.
+For plain Aether-to-Aether function-pointer use within a single program, no annotation is needed, top-level functions are already addressable as values. The annotation is specifically for the cross-language path.
 
 ### Companion: `@extern("c_symbol")`
 
@@ -321,15 +321,15 @@ link_flags = ["-lsqlite3"]
 ## Best Practices
 
 1. **Prefer Aether's standard library** for common operations when available (e.g. `import std.list` rather than hand-rolling a linked list in C)
-2. **Use `extern` for any C function** you want to call — including standard library functions like `abs`, `atoi`, `puts`, etc.
-3. **Do not redeclare stdlib symbols via `extern`** as a workaround. If you find yourself writing `extern list_add_raw(list: ptr, item: ptr) -> int` (or similar mirrors of `std.list` / `std.map` / `std.string` raw functions) in your own code, stop and use `import std.list` (etc.) instead. Older Aether had link-time issues with shared modules importing stdlib (Issue #309-era) which made the manual-extern shape look attractive as a workaround; those bugs are closed. The import-then-namespace shape (`list.add(out, x)`) is the only supported path today — it gives compile-time type checking against the stdlib's declared signatures, automatic API tracking when stdlib evolves, and consistency with every other Aether codebase. Manual externs of stdlib symbols are fragile (signature drift bites at runtime), bypass type-safety, and grow into per-feature maintenance debt.
+2. **Use `extern` for any C function** you want to call, including standard library functions like `abs`, `atoi`, `puts`, etc.
+3. **Do not redeclare stdlib symbols via `extern`** as a workaround. If you find yourself writing `extern list_add_raw(list: ptr, item: ptr) -> int` (or similar mirrors of `std.list` / `std.map` / `std.string` raw functions) in your own code, stop and use `import std.list` (etc.) instead. Older Aether had link-time issues with shared modules importing stdlib (Issue #309-era) which made the manual-extern shape look attractive as a workaround; those bugs are closed. The import-then-namespace shape (`list.add(out, x)`) is the only supported path today, it gives compile-time type checking against the stdlib's declared signatures, automatic API tracking when stdlib evolves, and consistency with every other Aether codebase. Manual externs of stdlib symbols are fragile (signature drift bites at runtime), bypass type-safety, and grow into per-feature maintenance debt.
 4. **Document your C dependencies** in your project's README
 5. **Handle errors** - C functions often return error codes
 6. **Memory management** - Be careful with C memory; use Aether's memory management where possible
 
 ## Built-in primitives and the `aether_` C-symbol convention
 
-Aether's built-in primitives that have a corresponding libc function (e.g. `sleep(ms)`) lower to `aether_`-prefixed runtime symbols rather than the bare libc name. For `sleep(ms)`, the generated C calls `aether_sleep_ms(ms)` — a thin wrapper provided by `libaether.a` that handles `Sleep()` on Win32 and `usleep()` on POSIX.
+Aether's built-in primitives that have a corresponding libc function (e.g. `sleep(ms)`) lower to `aether_`-prefixed runtime symbols rather than the bare libc name. For `sleep(ms)`, the generated C calls `aether_sleep_ms(ms)` a thin wrapper provided by `libaether.a` that handles `Sleep()` on Win32 and `usleep()` on POSIX.
 
 This matters when your Aether program (or any module it imports) declares its own `extern sleep(...)` for some other purpose. Without the prefix, the codegen-emitted forward declaration of the user's `extern sleep` would conflict with libc's `unsigned int sleep(unsigned int)` and break compilation:
 
@@ -340,7 +340,7 @@ note:  previous declaration … 'unsigned int(unsigned int)'
 
 To avoid this collision class entirely:
 
-- **Built-ins are routed through `aether_`-prefixed runtime helpers** in the generated C — they never emit a bare libc symbol.
+- **Built-ins are routed through `aether_`-prefixed runtime helpers** in the generated C, they never emit a bare libc symbol.
 - **User `extern` declarations of well-known libc names** (e.g. `sleep`, `exit`, `printf`, `puts`, `malloc`, `read`, `write`, `time`, …) are recognized and the compiler **suppresses the C forward declaration**. The libc header (already included by the prelude) supplies the canonical prototype, and call-site code generation still uses the registered Aether parameter types for type-aware casting.
 
 When you write a C shim or third-party binding, you can follow the same convention: prefix exported symbols with `aether_<module>_` (e.g. `aether_vcr_record`, `aether_http_get`) so they don't collide with vendor libraries the user might link via `[build] extra_sources = […]`.
@@ -365,7 +365,7 @@ main() {
 
 ### Passing Integers to `ptr` Parameters
 
-When an extern function expects a `ptr` parameter and you pass an `int`, the compiler automatically emits the correct `(void*)(intptr_t)` cast — no explicit casting required:
+When an extern function expects a `ptr` parameter and you pass an `int`, the compiler automatically emits the correct `(void*)(intptr_t)` cast, no explicit casting required:
 
 ```aether
 import std.list
@@ -376,7 +376,7 @@ main() {
 
     i = 0
     while i < 5 {
-        list.add(items, i)   // int passed to void* — cast emitted automatically
+        list.add(items, i)   // int passed to void*, cast emitted automatically
         i = i + 1
     }
     print(list.size(items))
@@ -388,7 +388,7 @@ The generated C is `list_add(items, (void*)(intptr_t)(i))`, which is the well-de
 
 ## Consuming `-> string` Returns From C
 
-An extern declared `-> string` does NOT give the C side a plain `const char*`. It returns an `AetherString*` — a 32-byte, magic-tagged header whose `data` field points at the actual bytes:
+An extern declared `-> string` does NOT give the C side a plain `const char*`. It returns an `AetherString*` a 32-byte, magic-tagged header whose `data` field points at the actual bytes:
 
 ```c
 struct AetherString {
@@ -422,11 +422,11 @@ void load(const char* path, char* out, size_t cap) {
 
 Both helpers accept either an `AetherString*` (the common case) or a raw `char*` (legacy TLS-arena externs whose names end in `_raw`), so shims can be agnostic about which flavour they got. Both are safe on NULL.
 
-> **Historical note:** older shims open-coded this unwrap by pattern-matching the magic number themselves (`#define AETHER_STRING_MAGIC 0xAE57C0DE` + cast). `aether_string_data` / `aether_string_length` have replaced that pattern — downstream projects can delete the open-coded unwrap once they pick up the new headers.
+> **Historical note:** older shims open-coded this unwrap by pattern-matching the magic number themselves (`#define AETHER_STRING_MAGIC 0xAE57C0DE` + cast). `aether_string_data` / `aether_string_length` have replaced that pattern, downstream projects can delete the open-coded unwrap once they pick up the new headers.
 
 ### Passing `string` values INTO C externs (auto-unwrap)
 
-The symmetric direction — Aether code passing a `string` value to a C extern declared `const char*` — is handled by the codegen automatically. When the call site has the form:
+The symmetric direction, Aether code passing a `string` value to a C extern declared `const char*` is handled by the codegen automatically. When the call site has the form:
 
 ```aether
 extern probe_consume(content: string, len: int) -> int
@@ -446,18 +446,18 @@ This means C shim authors don't have to remember to unwrap on the receiving side
 **Sophisticated-consumer escape hatch.** A C function that *wants* the AetherString header pointer (e.g. so it can call `aether_string_data` / `aether_string_length` itself to recover the stored length on binary content) should declare its parameter as `ptr` rather than `string`:
 
 ```aether
-// Naive consumer — receives payload bytes; codegen auto-unwraps:
+// Naive consumer, receives payload bytes; codegen auto-unwraps:
 extern memcpy_into_buf(content: string, len: int) -> int
 
-// Sophisticated consumer — receives raw pointer; consumer dispatches:
+// Sophisticated consumer, receives raw pointer; consumer dispatches:
 extern parse_with_explicit_length(s: ptr) -> int
 ```
 
-The C function then takes `const void*` (or `const AetherString*`) and goes through the helpers manually. This is the escape hatch for any FFI shim that needs binary-safe length reads — declaring `s: string` would auto-unwrap and `aether_string_length` would fall back to `strlen`, truncating at the first NUL.
+The C function then takes `const void*` (or `const AetherString*`) and goes through the helpers manually. This is the escape hatch for any FFI shim that needs binary-safe length reads, declaring `s: string` would auto-unwrap and `aether_string_length` would fall back to `strlen`, truncating at the first NUL.
 
-### Aether-emitted receivers — `name: @aether string`
+### Aether-emitted receivers, `name: @aether string`
 
-The auto-unwrap above is correct for **naive C externs** — functions that receive a `const char*` and call `memcpy`/`strlen` on it. But `extern foo(s: string)` is also the spelling used to call into **another Aether-emitted module** (e.g. a function exported via `--emit=lib` from a separate `.ae` file). Aether-emitted receivers don't behave like naive C: their `string.length(s)` / `string.char_at(s, i)` already dispatch on the AetherString magic via `str_len`. If the call site auto-unwraps before the value crosses the boundary, the receiver's dispatch sees only payload bytes, the magic check fails, and `str_len` falls through to `strlen` — truncating binary content at the first NUL.
+The auto-unwrap above is correct for **naive C externs**, functions that receive a `const char*` and call `memcpy`/`strlen` on it. But `extern foo(s: string)` is also the spelling used to call into **another Aether-emitted module** (e.g. a function exported via `--emit=lib` from a separate `.ae` file). Aether-emitted receivers don't behave like naive C: their `string.length(s)` / `string.char_at(s, i)` already dispatch on the AetherString magic via `str_len`. If the call site auto-unwraps before the value crosses the boundary, the receiver's dispatch sees only payload bytes, the magic check fails, and `str_len` falls through to `strlen` truncating binary content at the first NUL.
 
 The fix is per-param, opt-in: annotate the param with `@aether` to mark it as receiving an AetherString pointer (header preserved) rather than an unwrapped `const char*`:
 
@@ -489,7 +489,7 @@ extern do_thing(aether_msg: @aether string,
 
 **When NOT to reach for it:**
 
-- The receiver is hand-written C that takes `const char*`. Use bare `s: string` — the auto-unwrap is doing the right thing.
+- The receiver is hand-written C that takes `const char*`. Use bare `s: string` the auto-unwrap is doing the right thing.
 - The receiver works on text content with no NULs. `strlen()` and the stored length agree, so either annotation works; bare is simpler.
 
 The `@aether` annotation is a sibling to the `: ptr` escape hatch above. Both opt out of the auto-unwrap; they differ in what the receiving side sees:
@@ -497,12 +497,12 @@ The `@aether` annotation is a sibling to the `: ptr` escape hatch above. Both op
 | Param declaration | Call site emits | Receiver sees |
 |---|---|---|
 | `s: string` | `foo(aether_string_data(s))` | unwrapped `const char*` (strlen-bounded) |
-| `s: @aether string` | `foo(s)` | AetherString pointer with header — dispatches via `str_len` |
-| `s: ptr` | `foo(s)` | `void*` — caller dispatches manually with `aether_string_data` / `aether_string_length` |
+| `s: @aether string` | `foo(s)` | AetherString pointer with header, dispatches via `str_len` |
+| `s: ptr` | `foo(s)` | `void*` caller dispatches manually with `aether_string_data` / `aether_string_length` |
 
 Closes #351. The regression range was v0.97.0 → v0.98.0 (commit 718d13d added the blanket auto-unwrap to fix #297); the `@aether` annotation restores the v0.97.0 behaviour for Aether-to-Aether crossings without re-breaking the v0.98.0 fix for naive C externs.
 
-**Length-clamp hazard for binary content.** Once the auto-unwrap has fired, a C shim that receives a `string`-typed parameter has only payload bytes — no header, no stored length. A common defensive pattern is fatal here:
+**Length-clamp hazard for binary content.** Once the auto-unwrap has fired, a C shim that receives a `string`-typed parameter has only payload bytes, no header, no stored length. A common defensive pattern is fatal here:
 
 ```c
 // HAZARD post-#297. `s` is auto-unwrapped payload; aether_string_length
@@ -514,12 +514,12 @@ int shim(const char* s, int caller_len) {
 }
 ```
 
-Pre-#297 the AetherString header leaked through into the shim, and the dispatch inside `aether_string_length` correctly returned the stored length. Post-#297 the header is stripped at the call site, the dispatch falls through to `strlen`, and binary content gets truncated at the first embedded NUL — silently producing corrupted output on disk / in messages / etc.
+Pre-#297 the AetherString header leaked through into the shim, and the dispatch inside `aether_string_length` correctly returned the stored length. Post-#297 the header is stripped at the call site, the dispatch falls through to `strlen`, and binary content gets truncated at the first embedded NUL, silently producing corrupted output on disk / in messages / etc.
 
-**Rule:** when a C shim takes a `string` parameter from Aether AND an explicit length, **trust the length**. Don't re-derive via `aether_string_length(s)` — that path is now unreachable for header-bearing values (auto-unwrap stripped the header), and the strlen fallback corrupts binary content. The Aether-side caller knows the length; pass it across the boundary.
+**Rule:** when a C shim takes a `string` parameter from Aether AND an explicit length, **trust the length**. Don't re-derive via `aether_string_length(s)` that path is now unreachable for header-bearing values (auto-unwrap stripped the header), and the strlen fallback corrupts binary content. The Aether-side caller knows the length; pass it across the boundary.
 
 ```c
-// CORRECT — caller-supplied length is the source of truth.
+// CORRECT, caller-supplied length is the source of truth.
 int shim(const char* s, int len) {
     return process(s, len);
 }
@@ -530,7 +530,7 @@ If a shim genuinely needs to dispatch on the header (e.g. for a polymorphic API 
 **The same hazard fires inside Aether code.** Any Aether library that exports a `string`-typed parameter and tries to derive length / slice / iterate is at risk for the symmetric reason: the auto-unwrap fires at the `.ae→.ae` extern boundary, replacing the length-aware AetherString with a raw payload pointer. By the time the helper sees its argument, calls to `string.length(s)`, `string.substring(s, …)`, or `string.char_at(s, i)` go through `str_len` → `strlen` and truncate binary content at the first embedded NUL.
 
 ```aether
-// HAZARD — looks safe; truncates binary content at the auto-unwrap.
+// HAZARD, looks safe; truncates binary content at the auto-unwrap.
 export slice_from(s: string, start: int, end: int) -> string {
     n = string.length(s)        // strlen on auto-unwrapped payload!
     if end > n { end = n }      // clamps to first-NUL-prefix length
@@ -538,7 +538,7 @@ export slice_from(s: string, start: int, end: int) -> string {
 }
 ```
 
-**The proper fix is the `@aether` annotation on the caller's `extern` declaration** (see "Aether-emitted receivers" above). Mark the boundary on the caller side and the auto-unwrap is suppressed for that arg slot — the receiver sees the AetherString pointer intact, `string.length` reads the stored length, and binary content with embedded NULs round-trips correctly:
+**The proper fix is the `@aether` annotation on the caller's `extern` declaration** (see "Aether-emitted receivers" above). Mark the boundary on the caller side and the auto-unwrap is suppressed for that arg slot, the receiver sees the AetherString pointer intact, `string.length` reads the stored length, and binary content with embedded NULs round-trips correctly:
 
 ```aether
 // caller.ae
@@ -546,12 +546,12 @@ extern slice_from(s: @aether string, start: int, end: int) -> string
 //                ^^^^^^^ marks the receiver as Aether-emitted
 ```
 
-The `slice_from` definition above can stay as-written — `string.length(s)` now sees the stored length because the header survived the boundary.
+The `slice_from` definition above can stay as-written, `string.length(s)` now sees the stored length because the header survived the boundary.
 
-**Alternative — explicit-length parameter.** If the call site is a hand-written C shim that can't use `@aether`, or you want to be defensive about the input type, the explicit-length companions in `std.string` work:
+**Alternative, explicit-length parameter.** If the call site is a hand-written C shim that can't use `@aether`, or you want to be defensive about the input type, the explicit-length companions in `std.string` work:
 
 ```aether
-// CORRECT — caller threads the length through; no internal strlen.
+// CORRECT, caller threads the length through; no internal strlen.
 export slice_from(s: string, s_len: int, start: int, end: int) -> string {
     n = string.length_n(s, s_len)   // identity; documents intent
     if end > n { end = n }
@@ -559,11 +559,11 @@ export slice_from(s: string, s_len: int, start: int, end: int) -> string {
 }
 ```
 
-`string.substring_n(s, s_len, start, end)` and `string.length_n(s, s_known)` exist specifically to make this pattern available without falling back to a C shim. If you find yourself accumulating `_n`-suffixed externs (`some_op_n`, `some_op_n_n`) at the FFI boundary, that's a sign the function should accept the length as a regular parameter on the Aether side too — or the caller's extern declaration should use `@aether` to skip the unwrap entirely.
+`string.substring_n(s, s_len, start, end)` and `string.length_n(s, s_known)` exist specifically to make this pattern available without falling back to a C shim. If you find yourself accumulating `_n`-suffixed externs (`some_op_n`, `some_op_n_n`) at the FFI boundary, that's a sign the function should accept the length as a regular parameter on the Aether side too, or the caller's extern declaration should use `@aether` to skip the unwrap entirely.
 
-### Struct overlay on raw pointers — `*StructName` and `expr as *StructName`
+### Struct overlay on raw pointers, `*StructName` and `expr as *StructName`
 
-Systems-programming code often needs to overlay a struct header on a raw `ptr`: a linked-list node whose `next` field lives at offset 8 of a malloc'd block, a tagged-pointer JSValue, an arena-allocator chunk header, etc. Writing a parallel API of width-typed intrinsics (`ptr_set_int`, `ptr_set_ptr`, `ptr_set_long`, …) for every field width is the wrong shape — it doesn't generalise to mixed-field structs and locks the language into an opaque-pointer style that's harder to read than C itself.
+Systems-programming code often needs to overlay a struct header on a raw `ptr`: a linked-list node whose `next` field lives at offset 8 of a malloc'd block, a tagged-pointer JSValue, an arena-allocator chunk header, etc. Writing a parallel API of width-typed intrinsics (`ptr_set_int`, `ptr_set_ptr`, `ptr_set_long`, …) for every field width is the wrong shape, it doesn't generalise to mixed-field structs and locks the language into an opaque-pointer style that's harder to read than C itself.
 
 Aether's answer is a first-class **pointer-to-struct type** spelled `*StructName`, plus an `as` cast operator that produces a value of that type from a raw `ptr`. The pointer-ness is part of the spelled type so callers can declare it on parameters, returns, struct fields, and locals:
 
@@ -599,7 +599,7 @@ main() {
 
 - The operand of `as` must be a `ptr` value (or `int` / `int64`, since Aether already coerces ptr-shaped integers to and from `ptr`). A struct value, string, or other type produces a typecheck error.
 - The named struct must be defined and visible at the cast site. Unknown struct names produce a typecheck error.
-- The cast itself is a view — **it does not allocate, refcount, or auto-free**. The operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). If the underlying memory is freed while a struct view still references it, you have a use-after-free; Aether does not track this.
+- The cast itself is a view, **it does not allocate, refcount, or auto-free**. The operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). If the underlying memory is freed while a struct view still references it, you have a use-after-free; Aether does not track this.
 - Two views of the same memory alias each other (writes through one are visible through the other). This is the whole point.
 - A `ptr`-typed field of a struct view can itself be re-cast: `head.next as *ListHead` reaches the next list element.
 - `*StructName` is accepted in any type position: variable annotations, function parameters, function return types, struct fields, extern declarations.
@@ -612,13 +612,13 @@ main() {
 
 **When NOT to reach for it**
 
-- For Aether-owned data that participates in the language's normal value semantics, declare a struct and use struct-literal construction (`Point { x: 1, y: 2 }`) — that path runs constructors / refcounting / lifetime tracking. The `*T` cast is specifically the unsafe-by-design escape hatch for crossing into raw memory; reaching for it on Aether-owned data sidesteps the safety machinery for no benefit.
+- For Aether-owned data that participates in the language's normal value semantics, declare a struct and use struct-literal construction (`Point { x: 1, y: 2 }`), that path runs constructors / refcounting / lifetime tracking. The `*T` cast is specifically the unsafe-by-design escape hatch for crossing into raw memory; reaching for it on Aether-owned data sidesteps the safety machinery for no benefit.
 
 **Token-sharing with `import x as y`**
 
 The `as` keyword is the same token already used for module-import aliasing (`import std.cryptography as crypto`). The two parses don't collide because import-aliasing is recognised only inside `import` statements; expression-level `as *T` is recognised only as a postfix operator on expressions. Both forms continue to work in the same source file.
 
-### Address of a field — `&lvalue`
+### Address of a field, `&lvalue`
 
 The prefix `&` operator takes the address of an lvalue and lowers directly to C's `&`. This is what a C extern with a `&struct->field` out-parameter needs (in-place mutation, a sub-field written by the callee, a `memcpy`/resize destination):
 
@@ -634,14 +634,14 @@ shrink(ctx: ptr, p: ptr, new_len: int) {
 }
 ```
 
-- `&(p as *T).field` lowers to `&((T*)p)->field` — the address of a field on an `extern struct` / `*StructName` overlay.
-- `&local.field` lowers to `&local.field` — the address of a field on an Aether-owned value struct.
+- `&(p as *T).field` lowers to `&((T*)p)->field` the address of a field on an `extern struct` / `*StructName` overlay.
+- `&local.field` lowers to `&local.field` the address of a field on an Aether-owned value struct.
 - `&local` and `&arr[i]` work the same way (address of a local, address of an array element).
 - The result is typed as a pointer to the field's type (`*T`), assignable to a bare `ptr` parameter. Like the overlay casts, it is a raw view: the pointer is valid only while the underlying storage is.
 
 Without `&`, a `&struct->field` out-param forces raw `mem.long_to_ptr(base + OFFSET)` offset math, re-introducing the hand-maintained offset constant the typed overlay was meant to eliminate.
 
-### Typed array view — `expr as T[]`
+### Typed array view, `expr as T[]`
 
 The third axis of the `as` family (after `*StructName` and `fn(...) -> R`). Views a raw `ptr` as a typed C element-pointer so subscript access scales by `sizeof(T)` automatically. Use this whenever the underlying storage is a `malloc`'d typed buffer and you'd otherwise be writing `mem.set_int(buf, 4*i, v)` boilerplate.
 
@@ -662,9 +662,9 @@ main() {
 
 - C lowering: `arr = raw as int[]` emits `int* arr = ((int*)(raw));`. Subsequent `arr[i]` emits `arr[i]` which C scales by `sizeof(int) == 4`.
 - Covered element types: `int`, `long`, `byte`, `ptr`, `float` (and struct types, though for those you usually want `*Struct` member-access instead).
-- The `[]` syntax (no size) reads as "I don't know the bound — trust me to index inside it." A fixed-size `as int[10]` parses too but adds no extra checking; useful only as documentation.
+- The `[]` syntax (no size) reads as "I don't know the bound, trust me to index inside it." A fixed-size `as int[10]` parses too but adds no extra checking; useful only as documentation.
 - Like `as *StructName`, this is a **view**. It does NOT allocate, free, or bounds-check. The buffer's lifetime stays with whoever produced the original `ptr`.
-- Aliasing: two views of the same memory alias each other. `arr = raw as int[]` and `arr_b = raw as byte[]` see the same bytes — that's the point.
+- Aliasing: two views of the same memory alias each other. `arr = raw as int[]` and `arr_b = raw as byte[]` see the same bytes, that's the point.
 
 **When to reach for it**
 
@@ -676,7 +676,7 @@ main() {
 - For Aether-owned data; prefer fixed-size stack arrays (`int[5] arr`) or the higher-level collections in `std.collections`. The `as T[]` cast is the systems-programming escape hatch, not the everyday array.
 - When you want bounds-checked storage. There is none here.
 
-### `@c_struct` typed overlays — width-correct field access over a raw `ptr`
+### `@c_struct` typed overlays, width-correct field access over a raw `ptr`
 
 When you're porting C that overlays a struct on memory the **C side owns**
 (`s->length--`, `max->ms = id->ms`), the raw way is hand-rolled offset math
@@ -689,7 +689,7 @@ mem.set_long(s, ST_LENGTH, mem.get_long(s, ST_LENGTH) - 1)   // s->length--
 
 The footgun is the **accessor width**: picking `get_long` (8 bytes) for a
 `uint32` field silently pulls the next field/padding. A `@c_struct` overlay
-fixes that *structurally* — declare the layout once with explicit offsets, and
+fixes that *structurally*, declare the layout once with explicit offsets, and
 field access lowers to a width-correct `mem` accessor the **compiler** chooses:
 
 ```aether
@@ -701,31 +701,31 @@ field access lowers to a width-correct `mem` accessor the **compiler** chooses:
 @c_struct stream {
     rax:         ptr      @0
     length:      uint64   @8
-    slen:        uint32   @16     // 32-bit field — read/written at 4 bytes
+    slen:        uint32   @16     // 32-bit field, read/written at 4 bytes
     last_id:     streamID @24     // nested overlay
     max_deleted: streamID @40
 }
 
-s = robj_get_ptr(kv) as *stream   // reuse the `as *Name` cast — same syntax
+s = robj_get_ptr(kv) as *stream   // reuse the `as *Name` cast, same syntax
 s.length = s.length - 1           // mem_set_long at offset 8 (uint64 width)
 s.slen   = 42                     // mem_set_uint32 at offset 16 (NOT get_long!)
 s.max_deleted.ms = s.last_id.ms   // nested: offsets add (40+0, 24+0)
 ```
 
-- **The width is derived from the field type** — `uint8`/`byte`→1, `uint16`→2,
+- **The width is derived from the field type**, `uint8`/`byte`→1, `uint16`→2,
   `uint32`/`int`→4, `int64`/`uint64`→8, `float64`→8, `ptr`→pointer-width. The
   `--audit-mem` (#868) class of bug is gone for overlay-declared structs: you
   never hand-pick the accessor.
-- **The offsets stay explicit** — Aether can't see the C headers, so you probe
+- **The offsets stay explicit**, Aether can't see the C headers, so you probe
   them (as before). But they live in one declaration, not a scattered `const`
   block, and a `ptr` field can be re-cast (`s.rax as *otherStruct`) to chase
   links.
 - **It's a pure-Aether lens, not a C struct.** No `extern struct`, no
-  `#include`, no C type is emitted — the overlay lowers to `aether_mem_*` calls
+  `#include`, no C type is emitted, the overlay lowers to `aether_mem_*` calls
   over a `void*`. The C side keeps owning the allocation; the overlay never
-  allocates, frees, or bounds-checks. **No `import std.mem` needed** — the
+  allocates, frees, or bounds-checks. **No `import std.mem` needed**, the
   overlay *is* the access surface (the accessor prototypes are emitted for you).
-- Access reuses the existing `expr as *Name` cast and `s.field` member syntax —
+- Access reuses the existing `expr as *Name` cast and `s.field` member syntax,
   nothing new to learn at the call site. Nested overlays add offsets along the
   chain (`s.last_id.seq` → 24+8).
 
@@ -733,7 +733,7 @@ Choose `@c_struct` when the C side owns the memory and you want by-name,
 width-safe access; choose `extern struct` (below) only when a C header genuinely
 owns the struct type and you're linking against it.
 
-### `extern struct` unions — `union { ... }` and nested `struct { ... }`
+### `extern struct` unions, `union { ... }` and nested `struct { ... }`
 
 C structs that span an FFI boundary often contain unions. mquickjs's `JSPropDef` has six variants overlayed on the same 32-byte tail; every tagged-union C shape (Lua `TValue`, JSON value, ...) hits the same problem.
 
@@ -742,17 +742,17 @@ extern struct JSPropDef {
     def_type: int          //  0
     name: ptr              //  8
     u: union {             // 16
-        f64: float        //   16  — variant: JS_DEF_PROP_DOUBLE
-        str: ptr          //   16  — variant: JS_DEF_PROP_STRING
-        class1: ptr       //   16  — variant: JS_DEF_CLASS
+        f64: float        //   16, variant: JS_DEF_PROP_DOUBLE
+        str: ptr          //   16, variant: JS_DEF_PROP_STRING
+        class1: ptr       //   16, variant: JS_DEF_CLASS
         func: struct {
-            length: byte  //   16  — start of variant: JS_DEF_CFUNC
+            length: byte  //   16, start of variant: JS_DEF_CFUNC
             magic: ptr    //   24
             cproto_name: ptr //  32
             func_name: ptr   //  40
         }
         getset: struct {
-            magic: ptr     //   16  — start of variant: JS_DEF_CGETSET
+            magic: ptr     //   16, start of variant: JS_DEF_CGETSET
             cproto_name: ptr //  24
             get_func_name: ptr //  32
             set_func_name: ptr //  40
@@ -765,16 +765,16 @@ Access via dotted notation: `d.u.f64`, `d.u.func.length`, `d.u.getset.get_func_n
 
 **What you get**
 
-- C lowering emits a real `union { ... }` (and nested `struct { ... }` where present) — the same C body any hand-rolled FFI declaration would write.
+- C lowering emits a real `union { ... }` (and nested `struct { ... }` where present), the same C body any hand-rolled FFI declaration would write.
 - The compiler trusts the user's offsets; it does not synthesize the C layout from anything other than the literal field declarations.
-- Heap-string ownership tracking (the `_heap_<name>` companion ints emitted for `string`-typed fields) does NOT descend into unions — use `ptr`-typed fields instead. Mixed string-and-union ownership is poorly defined in C; declining to support it keeps the boundary clean.
+- Heap-string ownership tracking (the `_heap_<name>` companion ints emitted for `string`-typed fields) does NOT descend into unions, use `ptr`-typed fields instead. Mixed string-and-union ownership is poorly defined in C; declining to support it keeps the boundary clean.
 
 **Where it's not allowed**
 
-- Pure Aether structs (without the `extern` annotation) reject `union { ... }` at parse time — Aether's normal value semantics aren't compatible with overlapping fields.
+- Pure Aether structs (without the `extern` annotation) reject `union { ... }` at parse time, Aether's normal value semantics aren't compatible with overlapping fields.
 - `union` is now a reserved keyword and can't be used as an identifier name anywhere.
 
-### Packed structs — `extern struct ... @packed`
+### Packed structs, `extern struct ... @packed`
 
 A `@packed` attribute on an `extern struct` emits the C body with `__attribute__((packed))`, so the layout has **no inter-field padding** and no trailing alignment:
 
@@ -783,15 +783,15 @@ extern struct sdshdr16 @packed { len: uint16  alloc: uint16  flags: byte }
 // sizeof == 5 (not 6); offsetof(flags) == 4
 ```
 
-This is the shape a packed C header struct needs — e.g. the Redis `sdshdr8/16/32/64` headers, where the length/alloc/flags sit at fixed packed offsets immediately before the string data. `sizeof(StructName)` and `offsetof(StructName, field)` lower to C and therefore report the packed numbers, and a `*StructName` overlay on a raw buffer reads/writes the fields at their packed offsets.
+This is the shape a packed C header struct needs, e.g. the Redis `sdshdr8/16/32/64` headers, where the length/alloc/flags sit at fixed packed offsets immediately before the string data. `sizeof(StructName)` and `offsetof(StructName, field)` lower to C and therefore report the packed numbers, and a `*StructName` overlay on a raw buffer reads/writes the fields at their packed offsets.
 
-- `@packed` governs only a struct body **Aether emits**. It is mutually exclusive with `@c_import` (whose layout — including packing — comes from the included C header); combining them is a parse error.
+- `@packed` governs only a struct body **Aether emits**. It is mutually exclusive with `@c_import` (whose layout, including packing, comes from the included C header); combining them is a parse error.
 - Bit-width fields (`name: type : NN`) and a trailing flexible array still work under `@packed`, exactly as for a plain `extern struct`.
 
 #### Recipe: header-before-the-pointer strings (the `sds` pattern)
 
 Redis-style strings hand around a pointer to the *data* while the packed
-header lives at negative offsets — `SDS_HDR(T, s)` is just `s -
+header lives at negative offsets, `SDS_HDR(T, s)` is just `s -
 sizeof(struct sdshdrT)`, and `s[-1]` is the flags byte that selects the
 variant. Both halves compose from `@packed` + `std.mem`:
 
@@ -817,12 +817,12 @@ n = hdr.len
 
 `mem.get_uint8(p, offset)` and friends accept negative offsets (they index
 a `uint8_t*` with a signed int), and the recovered overlay aliases the same
-memory — a write through `hdr.len` is visible through every other view.
+memory, a write through `hdr.len` is visible through every other view.
 End-to-end proof: `tests/regression/test_issue747_sds_floor.ae`.
 
 ### Aether-side string-builder return types
 
-Every Aether-side primitive that builds a string returns an `AetherString*` — a refcounted, length-aware header that is binary-safe (embedded NULs preserved via the stored length):
+Every Aether-side primitive that builds a string returns an `AetherString*` a refcounted, length-aware header that is binary-safe (embedded NULs preserved via the stored length):
 
 | Returns `AetherString*` (length-aware, binary-safe) |
 |-----------------------------------------------------|
@@ -832,9 +832,9 @@ Every Aether-side primitive that builds a string returns an `AetherString*` — 
 | `string_concat`, `string_concat_wrapped` |
 | `string_substring`, `string_to_upper`, `string_to_lower`, `string_trim` |
 
-These all mint their result through `string_adopt_caps_buffer`, which sets the magic header and stores the byte length. Aether's `string` type is `void*`-shaped at the C level, and the runtime helpers (`str_data`, `str_len`) dispatch on the AetherString magic header — so `string.length(value)` on any of these results reads the stored length, not `strlen()`, and does not truncate at an embedded NUL.
+These all mint their result through `string_adopt_caps_buffer`, which sets the magic header and stores the byte length. Aether's `string` type is `void*`-shaped at the C level, and the runtime helpers (`str_data`, `str_len`) dispatch on the AetherString magic header, so `string.length(value)` on any of these results reads the stored length, not `strlen()`, and does not truncate at an embedded NUL.
 
-`string_concat_wrapped` is retained as an explicit alias for `string_concat`: both return an `AetherString*` with the same contract. The truncation hazard only appears when a value has been reduced to a bare `char*` — for example a string literal, or a `string` argument whose AetherString header was stripped by the #297 auto-unwrap at an extern call boundary (see "Aether-emitted receivers" above). On such a bare pointer, `str_len` falls through to `strlen()` and truncates at the first embedded NUL.
+`string_concat_wrapped` is retained as an explicit alias for `string_concat`: both return an `AetherString*` with the same contract. The truncation hazard only appears when a value has been reduced to a bare `char*` for example a string literal, or a `string` argument whose AetherString header was stripped by the #297 auto-unwrap at an extern call boundary (see "Aether-emitted receivers" above). On such a bare pointer, `str_len` falls through to `strlen()` and truncates at the first embedded NUL.
 
 > **Historical note (#270):** `string_concat` originally returned a plain `char*`, so downstream `string.length(string.concat(a, b))` patterns truncated binary content at the first NUL. `string_concat` now returns an `AetherString*` (via `string_adopt_caps_buffer`), and `string_concat_wrapped` is kept as an alias for the same contract. Existing call sites don't need to change.
 
@@ -844,10 +844,10 @@ When an Aether function takes the result of a C extern `-> string` call and assi
 
 - **Hardcoded heap-returning stdlib calls** (`string.concat`, `string.substring`, `string.{to_upper, to_lower, trim}`) and **string interpolation** are always treated as heap.
 - **A user-defined Aether `-> string` function** is heap-returning iff the codegen's recursive structural-escape-analysis pass can prove every return statement yields a heap-string-expression (chain into another heap-returning function counts).
-- **A C extern `-> string`** is NOT analysed structurally — the codegen has no body to walk. It's treated as **non-heap** by default (literal-shape contract). If your C extern returns malloc'd memory that the caller is expected to free, capture its result via `ptr` and free it explicitly:
+- **A C extern `-> string`** is NOT analysed structurally, the codegen has no body to walk. It's treated as **non-heap** by default (literal-shape contract). If your C extern returns malloc'd memory that the caller is expected to free, capture its result via `ptr` and free it explicitly:
 
 ```aether
-// Heap-returning C extern — declare result as ptr, free explicitly.
+// Heap-returning C extern, declare result as ptr, free explicitly.
 extern my_strdup_raw(s: string) -> ptr
 
 main() {
@@ -871,16 +871,16 @@ If you want to embed Aether actors in your existing C application (the reverse d
 
 ## C symbol namespace (libc collision avoidance)
 
-Aether is free with its identifier space — you can define an Aether
+Aether is free with its identifier space, you can define an Aether
 function called `bind`, `listen`, `accept`, or `connect` without
 upsetting the parser. At the C-codegen layer, however, those names
 collide with libc's own `bind(2)`, `listen(2)`, etc., and the linker
-silently picks the wrong symbol — your `bind` either never runs, or
+silently picks the wrong symbol, your `bind` either never runs, or
 runs when libc's was expected.
 
 Mitigation (issue #436 facet B): the codegen keeps a curated list of
 libc / POSIX symbol names (see `compiler/codegen/codegen.c`'s
-`is_c_reserved_word` for the full set — it covers C keywords, the
+`is_c_reserved_word` for the full set, it covers C keywords, the
 entire BSD/POSIX network sockets API, POSIX I/O, process control,
 memory + dynamic linking, string + stdio, and time + env). Any
 Aether function whose name appears in the list gets transparently
@@ -897,7 +897,7 @@ emitted with an `ae_` prefix in the C output:
 | `fork`               | `ae_fork`        |
 | `malloc`             | `ae_malloc`      |
 
-The renaming is **invisible to Aether source** — you call your
+The renaming is **invisible to Aether source**, you call your
 function `bind(...)` and the compiler does the right thing. The only
 place you see the prefix is in the emitted C (useful if you're
 debugging with `nm`, `objdump`, or a stack trace).
@@ -905,8 +905,8 @@ debugging with `nm`, `objdump`, or a stack trace).
 ### When to use `@c_callback` instead
 
 If your Aether function specifically needs a **stable, unprefixed C
-symbol** — e.g. it's going to be looked up via `dlsym()` from a host
-program, or passed as a function pointer to a C library — annotate
+symbol**, e.g. it's going to be looked up via `dlsym()` from a host
+program, or passed as a function pointer to a C library, annotate
 it with `@c_callback("desired_c_name")`. That bypasses the prefix
 logic and emits exactly the symbol you ask for.
 
@@ -914,7 +914,7 @@ logic and emits exactly the symbol you ask for.
 
 A handful of libc names also happen to be Aether keywords (`send` is
 reserved for actor messaging). Those are caught one layer earlier by
-the parser with `error[E0100]` — the codegen mitigation never sees
+the parser with `error[E0100]` the codegen mitigation never sees
 them.
 
 ## See Also

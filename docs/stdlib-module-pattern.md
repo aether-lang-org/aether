@@ -4,16 +4,16 @@ This is the canonical shape for an Aether standard-library module. Use it
 when adding a new `std/<name>/` module or retrofitting an existing one.
 
 The worked example throughout this document is
-[`std/fs/module.ae`](../std/fs/module.ae) — read it alongside this doc.
+[`std/fs/module.ae`](../std/fs/module.ae), read it alongside this doc.
 
 ## The shape
 
 Every `std/<name>/module.ae` has two layers:
 
-1. **Raw externs** — thin declarations of the underlying C functions.
+1. **Raw externs**, thin declarations of the underlying C functions.
    Fallible externs use a `_raw` suffix and return the old C conventions
    (`ptr` for nullable, `int` for 1/0 success flags).
-2. **Go-style wrappers** — Aether functions that call the raw externs
+2. **Go-style wrappers**, Aether functions that call the raw externs
    and translate C-style returns into Go-style `(value, err)` tuples
    (or just `err` for operations with no return value).
 
@@ -28,7 +28,7 @@ Every `std/<name>/module.ae` has two layers:
 
 // ---- raw externs ----
 extern X_op_raw(args) -> ptr
-extern X_pure_op(args) -> int     // infallible — no _raw, no wrapper
+extern X_pure_op(args) -> int     // infallible, no _raw, no wrapper
 
 // ---- Go-style wrappers ----
 // Short docstring stating: what it does, and exactly what shape it
@@ -46,7 +46,7 @@ op(args) -> {
 
 ### When to add a `_raw` extern + wrapper
 
-Any operation that can **fail at runtime** — open a file that doesn't
+Any operation that can **fail at runtime**, open a file that doesn't
 exist, allocate when memory is tight, parse malformed input, look up an
 absent key, etc. These get:
 
@@ -67,14 +67,14 @@ operations that are:
   `map_has`).
 - **Sentinel-returning infallibles** where the sentinel is part of the
   contract, not an error. Example: `file_mtime` returns `0` for missing
-  files or stat failure — callers already handle zero as "no mtime", so
+  files or stat failure, callers already handle zero as "no mtime", so
   wrapping would just add noise.
 - **Intentionally void fire-and-forget operations.** Example:
-  [`log_write`](../std/log/module.ae) in `std.log` — the module
+  [`log_write`](../std/log/module.ae) in `std.log` the module
   deliberately degrades to stderr if the log file is unopenable, so
   callers don't need an error from each write.
 - **Structural/DSL builders.** Example: the manifest DSL in
-  [`std.host`](../std/host/module.ae) — `describe`, `input`, `event`,
+  [`std.host`](../std/host/module.ae), `describe`, `input`, `event`,
   `bindings`, `java`, … are void because they structurally append to a
   global registry. They're not silent failures, they're a different
   pattern.
@@ -88,11 +88,11 @@ operations that are:
 | Lookup that can be absent | `(value, "")` / `(null, "")` for absent | `(null, "reason")` for error |
 
 For the lookup row: distinguish **absent** from **error**. An absent key
-is not an error — the caller asked if X exists. Only return a non-empty
+is not an error, the caller asked if X exists. Only return a non-empty
 error string when something actually went wrong (null receiver, wrong
 type, allocation failure).
 
-### Structured errors (pilot — issue #392)
+### Structured errors (pilot, issue #392)
 
 A small set of newer wrappers extends the (value, err) shape with a
 **third element**: an integer "kind" that lets callers
@@ -122,7 +122,7 @@ Modules that use kinds **must** also export a matching
 and the Aether surface stay in lock-step.
 
 This shape is **opt-in and additive**. Existing wrappers keep their
-(value, err) or string-error returns — converting them is a
+(value, err) or string-error returns, converting them is a
 non-breaking but wider change tracked separately. The pilot scope is
 `std.fs.{copy, move, realpath, chmod}`. Future modules may adopt the
 shape after the pilot has shaken out.
@@ -148,7 +148,7 @@ open(path: string, mode: string) -> {
 If the underlying C function returns a borrowed `const char*` (pointer
 into another object's memory), the wrapper **must** copy it before
 returning so the caller's string outlives the source object. The
-idiomatic copy in Aether is `string_concat(borrowed, "")` — see
+idiomatic copy in Aether is `string_concat(borrowed, "")` see
 [`std.fs`](../std/fs/module.ae)'s `readlink` wrapper for the pattern.
 
 ## Worked example: `std.fs`
@@ -166,9 +166,9 @@ implementation. Skim it start-to-finish; it demonstrates:
 
 ## Modules that follow this pattern
 
-`fs`, `io`, `http`, `net`, `os`, `string`, `tcp`, `dir`, `file` — full
-wrapper coverage. `json`, `collections`, `list`, `map` — completed in
-the stdlib-consistency pass alongside this doc. `log` and `host` —
+`fs`, `io`, `http`, `net`, `os`, `string`, `tcp`, `dir`, `file` full
+wrapper coverage. `json`, `collections`, `list`, `map` completed in
+the stdlib-consistency pass alongside this doc. `log` and `host`,
 intentionally follow domain-specific variants (fire-and-forget logging;
 DSL builders) as described above.
 

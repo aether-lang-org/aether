@@ -11,7 +11,7 @@ whenever this file and the tree disagree.
 Systems language. Compiles to C. Two emit modes: `--emit=exe` (default,
 produces a binary with a `main()`) and `--emit=lib` (produces `.so`/`.dylib`
 with ABI-stable `aether_<name>` exports for FFI from C / Python / Ruby / Java
-via ctypes/SWIG/Panama). `--emit=lib` is capability-empty by default —
+via ctypes/SWIG/Panama). `--emit=lib` is capability-empty by default,
 `std.fs` / `std.net` / `std.os` imports are rejected. The opt-in is
 `--with=fs[,net,os]`, an explicit per-build flag for projects that ARE
 the host and want full syscall access (e.g. implementing a systems tool
@@ -22,12 +22,12 @@ in Aether + a thin C driver).
 Think of it as: **Go's ergonomics + Rust's capability discipline +
 Erlang's actor syntax, compiling via C.**
 
-- **NOT Rust** — no borrow checker, no ownership, no lifetimes. Strings
+- **NOT Rust**, no borrow checker, no ownership, no lifetimes. Strings
   are ref-counted or arena-owned; you release explicitly where it
   matters, drop-on-scope-exit elsewhere.
-- **NOT Go** — no GC. Memory is manual at the runtime C level; Aether
+- **NOT Go**, no GC. Memory is manual at the runtime C level; Aether
   code mostly avoids the issue via RAII-via-codegen.
-- **NOT C** — has closures, tuples, Go-style `(value, err)` returns,
+- **NOT C**, has closures, tuples, Go-style `(value, err)` returns,
   string interpolation, pattern matching.
 - **Actor model is Erlang-ish** but message types are declared, not
   duck-typed: `message Foo { f: T }` declares each type; the mailbox
@@ -47,7 +47,7 @@ Erlang's actor syntax, compiling via C.**
   direction: `--emit=lib` → Python ctypes / Java Panama / Ruby
   Fiddle SDKs auto-generated from `aether_describe()`.
 - **NOT quite Ruby/Smalltalk/Groovy's builder-style closures**
-  — those all run on a VM (MRI, the Smalltalk image, the JVM)
+  those all run on a VM (MRI, the Smalltalk image, the JVM)
   where the block has runtime reflection access to its surrounding
   scope, regardless of whether it was reached by interpretation
   (Ruby, classic Smalltalk) or bytecode compilation (Groovy since
@@ -62,7 +62,7 @@ Erlang's actor syntax, compiling via C.**
   but can't compute; Pulumi/CDK can compute but read like glue code. The
   closure-DSL sits between them, which is what makes the next bullet
   possible.
-- **NOT a YAML/HCL/Helm host** (related) — and won't be. Building on
+- **NOT a YAML/HCL/Helm host** (related), and won't be. Building on
   the closure-DSL above, Aether's pitch for server-shaped libraries
   is **config IS code**: don't ship a YAML loader, expose your
   start-surface as a closure-DSL block and let the operator's
@@ -70,93 +70,93 @@ Erlang's actor syntax, compiling via C.**
   config + validation + conditionals + entry point; no second
   parser, no template language, no embedded scripting hack.
   Sandboxing (`--emit=lib --with=...`, `hide`, `seal except`)
-  keeps untrusted configs safe — the same machinery that makes the
+  keeps untrusted configs safe, the same machinery that makes the
   embedded-DSL case work. If a downstream user asks "should we add
   a YAML config loader?", point them at `docs/config-is-code.md`
   and the trailing-block DSL pattern.
 
-Sandbox more info: Full comparison (who brings what — Pony's per-reference
+Sandbox more info: Full comparison (who brings what, Pony's per-reference
   granularity, Java SecManager's policy-file ancestry, gVisor's
   syscall scope, plus WASI/Deno/Rust) lives in
   `docs/containment-sandbox.md` → *How Aether compares to other
   capability / sandbox systems*.
 
 Syntax looks Go-ish at a glance (braces, `func_name(x: int) -> int`).
-Don't overshoot — there's no `go` keyword, no channels (send-to-actor
+Don't overshoot, there's no `go` keyword, no channels (send-to-actor
 plays that role), no interfaces.
 
 ## Files/dirs worth knowing
 
-- `CHANGELOG.md` — reverse-chron; the `[current]` section holds
+- `CHANGELOG.md` reverse-chron; the `[current]` section holds
   unreleased work (everything since the last tagged release). Read its
   top ~40 lines at session start for recent feature/fix context.
-- `docs/emit-lib.md` — the capability-opt-in doc. Canonical reference
+- `docs/emit-lib.md` the capability-opt-in doc. Canonical reference
   for why `std.fs` is banned under `--emit=lib` by default.
-- `docs/config-is-code.md` — the "don't ship a YAML loader" pitch.
+- `docs/config-is-code.md` the "don't ship a YAML loader" pitch.
   Library authors with a "start the thing" surface should expose
   it as a trailing-block DSL, not a config-file format. Pair with
   `docs/closures-and-builder-dsl.md` for the mechanism. `docs/cic-help.md`
   is the (implemented and shipped) `ae help <script>` companion that
-  catches operator-side mistakes in those scripts — built into the `ae`
+  catches operator-side mistakes in those scripts, built into the `ae`
   driver via `tools/ae_help.c`, dispatched from `tools/ae.c`.
-- `docs/next-steps.md` — roadmap, in priority order. Check it before
+- `docs/next-steps.md` roadmap, in priority order. Check it before
   speccing a new stdlib addition, but treat its "done" ticks as
-  authoritative over its priority labels — the `std.fs` completeness
+  authoritative over its priority labels, the `std.fs` completeness
   bundle (`fs.copy` / `fs.move` / `fs.chmod` / `fs.symlink` /
   `fs.realpath`) has shipped, for instance.
-- `std/<module>/module.ae` — the Aether-facing surface. Raw externs
+- `std/<module>/module.ae` the Aether-facing surface. Raw externs
   end in `_raw`; Go-style wrappers return `(value, err)` tuples.
-- `std/<module>/aether_<module>.c` — the C runtime behind the externs.
-- `contrib/<module>/` — opt-in modules NOT in `libaether.a`. Same
+- `std/<module>/aether_<module>.c` the C runtime behind the externs.
+- `contrib/<module>/` opt-in modules NOT in `libaether.a`. Same
   shape as `std/*` (module.ae + aether_*.c + README), but consumers
   add `extra_sources` + `link_flags` per the contrib README rather
   than getting auto-link. **Always check `contrib/` before deciding
-  a stdlib gap is real** — a porter writing a downstream port may
+  a stdlib gap is real**, a porter writing a downstream port may
   not realise the module is there. Today's top-level dirs are
   `contrib/{cryptography, host, parsers, sqlite, templating, tinyweb}`:
   `parsers/xml_expat` (SAX XML via libexpat), `sqlite`,
   `templating/{liquid,native}`, and `host/<lang>` embedded interpreters
   for js, lua, perl, python, ruby, tcl, duktape, tinygo, go, java, factor,
   racket, rhombus, and aether-in-aether.
-- `compiler/aetherc.c` — CLI entry. `--emit=lib`, `--with=`, and the
+- `compiler/aetherc.c` CLI entry. `--emit=lib`, `--with=`, and the
   capability import gate (search for `--with=` argv parsing and the
   "Step 2.7: --emit=lib capability-empty check" enforcement block).
-- `build/aetherc`, `build/ae` — the compiled binaries. `make && make
+- `build/aetherc`, `build/ae` the compiled binaries. `make && make
   install` to rebuild. If `aetherc --help` lacks a feature the CHANGELOG
-  `[current]` documents, the local binary is stale — rebuild.
+  `[current]` documents, the local binary is stale, rebuild.
 - Downstream feature requests tend to arrive as concrete spec documents
   (exact API shape, call-site census, rationale) rather than vague asks;
   match that level when responding. Landed ones are folded into the
   CHANGELOG and the relevant `docs/` page rather than kept as loose
   planning files.
-- `tests/regression/` — one `.ae` file per feature; the CI gate.
-  `tests/integration/` — integration test directories (e.g.
+- `tests/regression/` one `.ae` file per feature; the CI gate.
+  `tests/integration/` integration test directories (e.g.
   `emit_lib_with_capability/` for the `--with=` opt-in).
 
 ## Idioms that keep biting
 
 - **String/int dispatch → `match`, not an `if` chain.** `match (mode) {
-  "check" -> {…} "up" -> {…} _ -> {…} }` — string arms compare by content,
+  "check" -> {…} "up" -> {…} _ -> {…} }`, string arms compare by content,
   int arms by value, `_` is the wildcard. Beats a chained `if mode == "…"`
   and a C-style `switch` (`case V:`, literals, no binding). `match` also
   captures/destructures lists (`[h|t]`); for range/relational branching use
-  **guarded function clauses** (`grade(s) when s >= 90 -> "A"` — the Erlang-
+  **guarded function clauses** (`grade(s) when s >= 90 -> "A"` the Erlang-
   style multi-clause form), and an `if`-expression for a value-producing
   two-way choice. `match`/`switch` arms are literal-only; guards are the
   escape to conditions. NB: this clause-level `when` (a runtime guard) is a
   *different* construct from the top-level/statement **compile-time `when`**
   (static-if: `when target.os == "windows" { … } else { … }`, only the
-  selected arm is type-checked/emitted — see `docs/when-static-if.md`). Same
+  selected arm is type-checked/emitted, see `docs/when-static-if.md`). Same
   keyword, two unrelated meanings.
 - **Go-style returns, not tuples-as-values.** `fs.write_atomic(path,
-  data, len) -> string` — empty string = success, non-empty = error
+  data, len) -> string`, empty string = success, non-empty = error
   message. Don't "improve" the convention, it's consistent across all
   of `std`.
 - **Actor syntax.** `message Add { value: int }` declares a typed
   message; an `actor Name { state x = 0; receive { Add(value) -> { … } } }`
   holds per-actor `state` and matches messages by type in `receive`.
   `spawn(Name())` returns a handle; `handle ! Add { value: 10 }` sends
-  (fire-and-forget, async). `state` fields are private to the actor — no
+  (fire-and-forget, async). `state` fields are private to the actor, no
   shared globals, which is how Aether gets concurrency without locks.
 - **`defer expr` runs at scope exit, LIFO.** Use it to pair an acquire
   with its release at the same site (`defer ref_free(x)`,
@@ -166,7 +166,7 @@ plays that role), no interfaces.
   `call(fn, args)`.** They capture enclosing variables by value and lower
   to plain C functions (no VM). Distinct from the **trailing-block /
   `builder`** call shape (`f(x) { … }`, see below), which is the DSL lever
-  — a closure value is data you pass to `call`, a trailing block is sugar
+  a closure value is data you pass to `call`, a trailing block is sugar
   attached to a call site.
 - **Split-accessor pattern for multi-return.** Where a wrapper needs
   more than one return value and the language can't yet unify tuples
@@ -181,9 +181,9 @@ plays that role), no interfaces.
   storage, not through the `fs.read_binary` wrapper.
 - **Reserved keywords that trip users up**: `state`, `match`,
   `message` (actor-model hangover), and the literal `none` (the empty
-  optional — reserved like `true`/`false`/`null`, so it can't be a variable
+  optional, reserved like `true`/`false`/`null`, so it can't be a variable
   name). Fails in extern param names too.
-  `after` parses as something scanner-special too — symptom is a
+  `after` parses as something scanner-special too, symptom is a
   "Expected statement in block" at an `if x = call(), …` use site.
   **Prefer the backtick escape over renaming**: a backtick-delimited
   identifier (`` `reply` ``, `` `message` ``, `` `after` ``, `` `when` ``,
@@ -194,21 +194,21 @@ plays that role), no interfaces.
   with the escape taught.
 - **Runtime sequence of strings → `*StringSeq`, not `string[]`.**
   `string[]` lowers to bare `const char**` (no length, no refcount).
-  `*StringSeq` (`std.string` surface — `string.seq_cons`,
+  `*StringSeq` (`std.string` surface, `string.seq_cons`,
   `string.seq_head`, `string.seq_tail`, `string.seq_length`,
   `string.seq_free`, etc.) is O(1) head/tail/cons/length, refcount-
   aware, structurally shared, pattern-matches with `[h|t]`. Same
   `[a, b, c]` literal builds a cons chain when target is
   `*StringSeq` (message field) or a static C array when target is
   `string[]`. `string.split_to_seq` is the runtime entry point.
-- **Unqualified imports are spelt `import mod (*)`, not `import mod unqualified`.** Aether ships glob imports — `import std.math (*)` brings every public symbol into the bare namespace, no `math.` prefix. Selective form `import std.math (sqrt, pow)` is the same shape with an enumeration. There is no `unqualified` keyword and no `use mod::*` (Rust) or `from mod import *` (Python) spelling — just the parenthesised `(*)`. Applies equally to stdlib, contrib, and local modules. When a porter or doc asks for "Java-style import static" or "Rust use", point at this. (Language reference: "Glob Import" section.)
+- **Unqualified imports are spelt `import mod (*)`, not `import mod unqualified`.** Aether ships glob imports, `import std.math (*)` brings every public symbol into the bare namespace, no `math.` prefix. Selective form `import std.math (sqrt, pow)` is the same shape with an enumeration. There is no `unqualified` keyword and no `use mod::*` (Rust) or `from mod import *` (Python) spelling, just the parenthesised `(*)`. Applies equally to stdlib, contrib, and local modules. When a porter or doc asks for "Java-style import static" or "Rust use", point at this. (Language reference: "Glob Import" section.)
 - **`<<MARKER … MARKER` heredocs.** Literal string, no
-  interpolation/escaping — reach for them to embed another language's
+  interpolation/escaping, reach for them to embed another language's
   source verbatim (`contrib.host.*` snippets, SQL) so the guest's own
   `"…"` need no `\"`. Use a normal `"…"` string when you want `${}`.
   Closing marker is `MARKER` alone on its line; it MAY be indented, but
   only at or below the body's shallowest line (it sits at the content's
-  base level — column 0 always works). A more-indented line that reads
+  base level, column 0 always works). A more-indented line that reads
   like the marker is content, not a terminator, so it can't silently
   truncate the body; a marker indented past the body is an unterminated-
   heredoc error. The common leading-whitespace prefix is stripped (so you
@@ -224,21 +224,21 @@ plays that role), no interfaces.
   (`AetherString*` with a magic sentinel). Safe to pass to other
   string ops without explicit release; they get dropped when the
   last ref goes. Strings returned by `extern fs_foo_raw() -> string`
-  are borrowed from a TLS buffer or arena — valid only until the
+  are borrowed from a TLS buffer or arena, valid only until the
   next same-kind call or explicit release. If it smells like `ptr`,
   assume borrowed; if it smells like `string` from a builtin, assume
   ref-counted.
 - **`@heap` on a `-> string` extern makes its return OWNED.** By default an
-  `extern f() -> string` return is *borrowed* (see above) — a raw pointer the
+  `extern f() -> string` return is *borrowed* (see above), a raw pointer the
   caller must copy-before-free. Annotate the extern return `@heap` (`extern
   http_response_body(r: ptr) -> string @heap`; `@borrow` is the explicit
   default) and codegen tracks the result as a heap string (`_heap_<var>=1`) and
-  releases it at scope exit via `aether_heap_str_free` — which dispatches on the
+  releases it at scope exit via `aether_heap_str_free` which dispatches on the
   AetherString magic header, so the C side must return a *real* `AetherString*`
   (retain it if it's aliasing something the callee will free). This is what lets
   a value survive its source being freed. `std.http.client.response_body` is now
   `@heap`-owned for exactly this reason: reading the body *after*
-  `response_free(resp)` is safe (the old borrowed pointer dangled — the
+  `response_free(resp)` is safe (the old borrowed pointer dangled, the
   serve-and-dial "garbled body" footgun). The borrowed C variant lives on as
   `http_response_body_str` for `_str`/proxy callers that copy-on-use. When you
   need a callee-freed extern string to outlive the callee, reach for `@heap` +
@@ -252,7 +252,7 @@ plays that role), no interfaces.
   heap-boxed struct owns its string fields (a field store adopts the heap
   string and frees the previous one; `heap.free(p)` releases every owned field
   before freeing the box). So a handler-context like
-  `struct AppCtx { db: ptr; data_dir: string }` uses `heap.new` directly —
+  `struct AppCtx { db: ptr; data_dir: string }` uses `heap.new` directly,
   don't reach for a raw `malloc(...) as *T` for string-bearing structs.
 - **Auditing `std.mem` accessor widths → `aetherc --audit-mem`.** Lists every
   raw `mem.get_*`/`mem.set_*` offset access with the byte width its accessor
@@ -262,7 +262,7 @@ plays that role), no interfaces.
 - **Spawning a child binary uses `std.os`, not a separate process
   module.** `os.run_capture(prog, argv, env) -> (stdout: string,
   exit_code: int, spawn_err: string)` is the canonical "fork + exec
-  + wait + capture-stdout" — argv-based, no shell, binary-safe.
+  + wait + capture-stdout", argv-based, no shell, binary-safe.
   Caveat: only stdout is captured; child stderr passes
   through to the parent process. The third return slot is the
   spawn-error string ("" on successful spawn even if exit_code != 0;
@@ -271,23 +271,23 @@ plays that role), no interfaces.
   `system(3)` shell-out, prefer `run_capture`), `os_execv` (replace
   current process). Don't propose a new `std.process`.
 - **XML parsing lives in `contrib`, not `std`.** `contrib.parsers.xml_expat`
-  is a SAX-style libexpat wrapper — start/end/text callbacks,
+  is a SAX-style libexpat wrapper, start/end/text callbacks,
   attribute access, entity decoding, multi-chunk streaming. Add
   `extra_sources = ["contrib/parsers/xml_expat/aether_xml_expat.c"]` and
   `link_flags = "-lexpat"` per the contrib README. Don't hand-roll
-  an `index_of`-based parser — that exact mistake landed in
+  an `index_of`-based parser, that exact mistake landed in
   fbs-core's S3 port (#627) because the porter didn't realise
   `contrib.parsers.xml_expat` existed.
 - **Operator-supplied Liquid templates → `contrib.templating.liquid`.**
   Pure-Aether Shopify-Liquid port. Use it for email bodies, dashboards,
-  generated reports — anywhere a trusted-human operator writes a
+  generated reports, anywhere a trusted-human operator writes a
   template but you don't want their template to execute arbitrary
   code. `{% include %}` / `{% render %}` need an explicit
   `context_set_include_root(ctx, root)` (path traversal blocked via
   `fs.is_within_base`). Phase 1 ships scalar typed bindings
   (`context_put_int`/`_float`/`_bool`/`_nil`); array / object / dotted
   path access is Phase 2. Don't hand-roll a Mustache or own-syntax
-  templater unless you have a specific reason — this is the supported
+  templater unless you have a specific reason, this is the supported
   path.
 - **HTTP client lives in two tiers, server in one.** `import
   std.http` gives v1 client one-liners (`http.get(url) -> (body,
@@ -295,12 +295,12 @@ plays that role), no interfaces.
   server surface (`http.server_create(port)`, route handlers, etc).
   `import std.http.client` gives a v2 builder (`client.request(method,
   url)` → `set_header` → `set_timeout` → `send_request`) when the
-  one-liners are insufficient — anything needing custom request
+  one-liners are insufficient, anything needing custom request
   headers, custom HTTP methods, response status discrimination,
   per-request timeouts, or response headers. Reach for v2 by default
   for non-trivial client work; v1 is fine for "GET, expect 200, want
   body". Server-side stays in `std.http` (there's no v2 server).
-  Record/replay HTTP testing (Servirtium VCR) is NOT in the stdlib — it's
+  Record/replay HTTP testing (Servirtium VCR) is NOT in the stdlib, it's
   a separate repo,
   [`servirtium-vcr`](https://github.com/aether-lang-org/servirtium-vcr)
   (`import core.vcr`). Don't look for `std.http.server.vcr`.
@@ -308,9 +308,9 @@ plays that role), no interfaces.
 ## Type-system & effect features worth reaching for
 
 Compiler-checked capabilities an LLM should know exist before speccing a
-workaround — they cover cases a porter often hand-rolls.
+workaround, they cover cases a porter often hand-rolls.
 
-- **Optionals `T?` for "maybe a value" — not `(value, "missing")`.** When a
+- **Optionals `T?` for "maybe a value", not `(value, "missing")`.** When a
   value is simply present or absent (a missing map key, an empty list's first
   element, a search that found nothing), reach for `T?` instead of a sentinel
   tuple. `let m: int? = 69` / `let z: int? = none`; test with `== none`;
@@ -325,14 +325,14 @@ workaround — they cover cases a porter often hand-rolls.
   operand type, so it never collides with the actor-send `!` (followed by a
   message type) or `match` arms.
 - **Distinct types: `type Name = distinct Base`.** Zero-cost nominal wrapper
-  over a scalar / `string` / `ptr` — `type USD = distinct float`,
+  over a scalar / `string` / `ptr` `type USD = distinct float`,
   `type Fd = distinct int`. Lowers to the base C type (no boxing) but is
   nominally separate: crossing the boundary needs an explicit `as`
   (`9.99 as USD` to wrap, `usd as float` to unwrap). A `Fd` param rejects a raw
   `int`; `EUR` is rejected where `USD` is wanted. The compiler-checked way to
   give capability tokens / units / handles their own type.
 - **Gradual `where` contracts on params.** `divide(a: int, b: int where b != 0)`
-  — a runtime-checked precondition that lowers to an entry guard; a violation is
+  a runtime-checked precondition that lowers to an entry guard; a violation is
   a hard panic (`precondition violation: b != 0 in divide`), a programmer-error
   signal, **not** a `(value, err)`. Opt-in/gradual (a param with no `where` is
   unchecked); `and`-composable; suppressed by `--no-contracts`.
@@ -343,23 +343,23 @@ workaround — they cover cases a porter often hand-rolls.
   Compile-time builtin `__pure(fn)` folds to a `true`/`false` constant so code
   can branch on purity at compile time. A raw `extern` is unclassifiable →
   treated as impure, matching the `--with=` boundary.
-- **`@scoped` bindings — opt-in escape analysis.** `@scoped let buf =
+- **`@scoped` bindings, opt-in escape analysis.** `@scoped let buf =
   make_buffer()` declares the value must not outlive its lexical block; the
   typechecker rejects every escape (return, alias into another binding/field,
   aggregate literal, closure capture, `list.add`/`map.put`). Only a scalar
-  *derived* from it may escape (`return buf.len()`). Not a borrow checker — one
+  *derived* from it may escape (`return buf.len()`). Not a borrow checker, one
   opt-in annotation turning a non-escape into a checked invariant.
 
 ## Working with downstream users
 
 - **aether-ui** (`https://github.com/aether-lang-org/aether-ui`) 
-  — cross-platform widget toolkit (GTK4 / AppKit / Win32) with an
+  cross-platform widget toolkit (GTK4 / AppKit / Win32) with an
   AetherUIDriver HTTP test server. Was `contrib/aether_ui/` in this
   repo until the spin-out; now consumes Aether the same way external
   users do (install + `$(ae cflags)`). Useful reference for the
   embedded-DSL pattern: the toolkit's surface IS a closure-DSL (think QML or Flutter)
 - **aeb** (`https://github.com/aether-lang-org/aeb`) 
-  — multi-package and multi-language build system, the second major sibling.
+  multi-package and multi-language build system, the second major sibling.
   Bazel-shaped in ambition but stops short of full reproducibility.
   Reads `share/aether/MANIFEST` to discover
   link-suitable runtime/stdlib `.c` files and orchestrates per-package
@@ -369,43 +369,43 @@ workaround — they cover cases a porter often hand-rolls.
   install-layout / shipped source / link contract, ping aeb side.
   See also google-monorepo-sim (../google-monorepo-sim) which showcases aeb.
 - **aeo** (`https://github.com/aether-lang-org/aeo`) 
-  — the third major sibling:
+  the third major sibling:
   an infrastructure orchestrator that stands up / tears down a dependency-
   ordered tree of VMs + containers (FreeBSD jail/bhyve, Linux
   podman·docker/KVM) from one Aether composition (`aeo up|status|down|
-  dry-run compose.ae`). Not a build system and not an aeb SDK — it's
+  dry-run compose.ae`). Not a build system and not an aeb SDK, it's
   *built by* aeb and shells *to* aeb across a plain artifact+CLI seam. Its
   compose surface is the `config IS code` closure-DSL applied to live
-  infra — the canonical proof the DSL pitch works beyond config files.
+  infra, the canonical proof the DSL pitch works beyond config files.
   Has an `aeo-agent` and attempt to adhere to the principles of containment.
 - **aeocha** (`https://github.com/aether-lang-org/aeocha`)
-  — BDD-style test framework for Aether (`describe` / `it` / `before_each` /
+  BDD-style test framework for Aether (`describe` / `it` / `before_each` /
   `after_each` via trailing blocks + closures, Cuppa-inspired). The
   reference consumer of the trailing-block/closure DSL for a test surface;
   look here for a worked example of the `builder`-shaped API in practice.
   There is a co-located mutation testing facility too.
 - **svn-aether port (avn)** (`https://github.com/aether-lang-org/avn`) 
-  — is a big
+  is a big
   real-world consumer. Port is methodical C → Aether, one-leaf-per-
-  commit. Downstream finds the gaps before anyone else — every
+  commit. Downstream finds the gaps before anyone else, every
   cross-`import` typer issue (struct visibility, selective-import
   propagation, 128-decl cap) was filed by avn before showing up
   anywhere else. As much as anything it was used to shake out
   missing features and bugs for Aether.
 - **mquickjs-port** (`https://github.com/aether-lang-org/mquickjs-port`)
-  — a full C→Aether port of Bellard & Gordon's
+  a full C→Aether port of Bellard & Gordon's
   MicroQuickJS (ES5-subset embedded JS engine, tracing GC, ~10 kB RAM). The
   end state is pure Aether: `mquickjs.c` deleted entirely, every engine leaf
   now an `ae/*.ae` file, built with `aeb`, tested via the `c.tests` runner.
   This is the extern-removal / no-C-consumers exemplar the memory notes keep
-  referencing — it drove the hardest low-level features (const arrays for the
+  referencing, it drove the hardest low-level features (const arrays for the
   atoms table, signed-bitfield emission, shift-width and `as int`-narrowing
   fixes, the `--audit-mem` accessor-width check). `migration_assessment.md` 
   and `ae/PORT_STATUS.md` were used in the port but could be out of date. 
   `dtoa.c` stays C by decision; the double-to-string path is not worth
   reimplementing in Aether.
 - **servirtium-vcr** (`https://github.com/servirtium/servirtium-vcr`)
-   — record/replay for HTTP service tests in the
+   record/replay for HTTP service tests in the
   [Servirtium](https://servirtium.dev) markdown-tape format, as a **one-engine-
   many-thin-bindings** monorepo. The engine is a single pure-Aether module
   (`core/vcr.ae` + `core/embed.ae` C-ABI) built once as `libservirtium_vcr.so`
@@ -413,14 +413,14 @@ workaround — they cover cases a porter often hand-rolls.
   crypto); 17+ language bindings (Go/cgo, Python/ctypes, Java·Panama, Ruby·
   Fiddle, Rust, Node·koffi, Haskell, Elixir/Erlang-NIF, …, plus the JVM family
   over the Java jar) are thin FFI wrappers over that one artifact, so they
-  can't drift — cross-language Servirtium compatibility is a build-time
+  can't drift, cross-language Servirtium compatibility is a build-time
   guarantee, not a test target. The canonical proof of the `--emit=lib` +
   auto-generated-SDK story at scale, and the reference for how a downstream
   wires many FFI consumers through one `aeb` run. Aether-side entry is
-  `import core.vcr` — it's a separate repo, not part of `std.http` (the
+  `import core.vcr` it's a separate repo, not part of `std.http` (the
   HTTP-client idiom above says the same).
 - **zsync-port** (`https://github.com/aether-lang-org/zsync-port`)
-  — a pure-Aether port of zsync (rsync-over-HTTP: fetch only the changed blocks
+  a pure-Aether port of zsync (rsync-over-HTTP: fetch only the changed blocks
   of a file, driven by a `.zsync` control file). ~3.4k lines of Aether + one
   small Artistic-licensed C shim (`rcksum/fileio.c`, positional file I/O); the
   rolling-checksum engine, control-file format, HTTP-range downloader, and a
@@ -430,7 +430,7 @@ workaround — they cover cases a porter often hand-rolls.
   parity-gated byte-exact against the original Go (`legacy_golang` branch is the
   oracle), which surfaced three stdlib gaps filed + landed upstream (#637 md4_hex,
   #640, #641). Also the **licensing-boundary** case: it's **Artistic-2.0, NOT
-  MIT** — keep its import graph free of MIT aeb/aeocha *modules*, but building it
+  MIT**, keep its import graph free of MIT aeb/aeocha *modules*, but building it
   *with* aeb (a tool, like make/gcc) or linking a zsync `.so` is fine and does
   not relicense (Artistic §7/§8). Builds two ways (Makefile via `build/ae`, or
   `aeb cmd/zsync/.build.ae`); the aeb path wants the *installed* Aether's nested
@@ -442,7 +442,7 @@ workaround — they cover cases a porter often hand-rolls.
   rationale, call-site census. Match that level when responding.
 - **Don't gate on things that aren't real threats.** `--emit=lib`
   capability-empty is right for the embedded-DSL case (host accepts
-  untrusted Aether). avn / aether-ui / aeb / aeo are the opposite case —
+  untrusted Aether). avn / aether-ui / aeb / aeo are the opposite case,
   they are hosts. The `--with=fs` opt-in covers both cleanly.
   Similar dualities will come up; watch for them.
 - **Downstream embedding link line: ALWAYS `$(ae cflags)`.** Don't
@@ -460,7 +460,7 @@ workaround — they cover cases a porter often hand-rolls.
 - C unit tests: `make test` (builds and runs `build/test_runner`). Hot
   inner loop during feature work: `make test-ae` (parallel runner for the
   `.ae` regression/integration tests). `make ci` runs both as steps 4 and 5.
-- JSON conformance: `make test-json-conformance` — must pass 95/95
+- JSON conformance: `make test-json-conformance` must pass 95/95
   `y_*` + 188/188 `n_*` for JSONTestSuite.
 - Sanitizers: `make test-json-asan` / `make test-json-valgrind`.
 - **Version drift after fetch.** Makefile derives `AETHER_VERSION`
@@ -470,14 +470,14 @@ workaround — they cover cases a porter often hand-rolls.
   then `make clean && make`.
 - **Coverage path is gcc `--coverage` + gcov, no custom mapper.**
   Codegen emits `#line N "src.ae"` directives, so gcov reads them
-  natively — `gcc --coverage` on a generated .c produces a `src.ae.gcov`
+  natively, `gcc --coverage` on a generated .c produces a `src.ae.gcov`
   (line + branch hits against .ae source) with no extra plumbing. To wire
   `make ci-coverage`: add `-fprofile-arcs -ftest-coverage` to the build
   (mirror the `build/asan-obj/` variant pattern), run the tests, shell
   `gcov` over the .gcda files.
 - **Rebuild-trigger → minimum-test table** ("I touched X, so rebuild Y, run
   Z"). `build/ae` *execs* `build/aetherc` (it doesn't link the compiler in),
-  so a compiler change takes effect the moment `aetherc` is rebuilt — no need
+  so a compiler change takes effect the moment `aetherc` is rebuilt, no need
   to relink `ae`.
 
   | Touched | Rebuild | Then run |
@@ -490,7 +490,7 @@ workaround — they cover cases a porter often hand-rolls.
   | `contrib/**` | `make contrib MODULES=<m>` | that module's `tests/integration/` test |
 
 - **Never overlap a build with a test run.** Running `make test-ae` while
-  `make compiler`/`make stdlib` is still in flight gives *false* failures —
+  `make compiler`/`make stdlib` is still in flight gives *false* failures,
   tests compile against a half-written `build/aetherc` / `libaether.a`. The
   tell: a wave of `(compile error)` / `(shell test)` failures that all **pass
   when re-run standalone**. Let the build finish, then test.
@@ -520,7 +520,7 @@ workaround — they cover cases a porter often hand-rolls.
   dirs (`compiler/`, `std/`, `runtime/`, `tools/`); any change to diagnostic
   text or ordering, codegen output shape, or a public CLI flag; and committing
   or pushing (the standing rule above). A doc-only sweep across many files is
-  fine — just call it out.
+  fine, just call it out.
 
 ## Invariants to not break
 
@@ -530,7 +530,7 @@ workaround — they cover cases a porter often hand-rolls.
 - The `aether_<name>()` ABI mangling is stable across releases. If
   you rename an export, the old name stays as an alias.
 - `std.string.from_int(int)` and `string.from_long(long)` are
-  separate — don't merge. `long` is 64-bit on every target including
+  separate, don't merge. `long` is 64-bit on every target including
   MSVC (where C `long` is 32 bit) because Aether's `long` type is
   defined as `long long` at the C level.
 - Iteration order in `std.json` is insertion order across both parse
@@ -541,7 +541,7 @@ workaround — they cover cases a porter often hand-rolls.
   minimal `RUNTIME_FILES` list (not `RUNTIME_SRC`); add new runtime
   files there too, and keep the symbol self-guarded so it's a no-op
   object off its target OS. Otherwise `wasm-ld` errors `undefined
-  symbol` while every native platform is green — a failure mode that
+  symbol` while every native platform is green, a failure mode that
   hides until the WASM job runs (e.g. an OS-specific startup hook).
 
 ## When stuck
@@ -553,7 +553,7 @@ workaround — they cover cases a porter often hand-rolls.
 - The CHANGELOG has working-memory for what-landed-when. Treat it as
   authoritative for "is feature X available yet."
 - **Map generated C back to a codegen site.** Drop a unique marker at the
-  suspect emit — `fprintf(gen->output, "/*AEDBG1*/ ...")` — `make compiler`,
+  suspect emit, `fprintf(gen->output, "/*AEDBG1*/ ...")` `make compiler`,
   then `build/aetherc x.ae /tmp/x.c` (or `build/ae build --emit-c x.ae`) and
   grep `/tmp/x.c` for `AEDBG1` to see which path fired and what surrounds it.
   Same trick with a `fprintf(stderr, ...)` in the parser/typechecker to trace

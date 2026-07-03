@@ -203,7 +203,7 @@ const primes[] = [2, 3, 5, 7]
 import std.map
 import std.list
 
-// map/list constructors return an opaque ptr — inference is the norm
+// map/list constructors return an opaque ptr, inference is the norm
 user_map = map.new()
 points = list.new()
 

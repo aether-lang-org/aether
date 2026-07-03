@@ -1,6 +1,6 @@
 # Aether Language Tutorial
 
-This tutorial walks through Aether's core features with working examples you can run. Aether is a compiled language built around the **actor model** — lightweight concurrent entities that communicate through messages.
+This tutorial walks through Aether's core features with working examples you can run. Aether is a compiled language built around the **actor model**, lightweight concurrent entities that communicate through messages.
 
 Run any example with:
 ```bash
@@ -40,7 +40,7 @@ main() {
 
 **What you see:**
 - `main()` is the entry point
-- Variables use **type inference** — no explicit types needed
+- Variables use **type inference**, no explicit types needed
 - `println` prints with a newline; `print` prints without
 - `${variable}` embeds a value into a string
 
@@ -48,7 +48,7 @@ main() {
 
 ## 2. Your First Actor
 
-Actors are the core abstraction in Aether — lightweight concurrent entities that process messages.
+Actors are the core abstraction in Aether, lightweight concurrent entities that process messages.
 
 ```aether
 message Ping {}
@@ -82,11 +82,11 @@ Count: 3
 ```
 
 **Key concepts:**
-- `message Ping {}` — defines a message type (empty here, but can have fields)
-- `actor Counter { state ... receive { ... } }` — an actor with private state
-- `spawn(Counter())` — creates a Counter actor; returns a handle
-- `c ! Ping {}` — sends an asynchronous message
-- `wait_for_idle()` — blocks until all actors have finished processing
+- `message Ping {}` defines a message type (empty here, but can have fields)
+- `actor Counter { state ... receive { ... } }` an actor with private state
+- `spawn(Counter())` creates a Counter actor; returns a handle
+- `c ! Ping {}` sends an asynchronous message
+- `wait_for_idle()` blocks until all actors have finished processing
 
 Without `wait_for_idle()`, main could exit before the actor processes its messages.
 
@@ -142,7 +142,7 @@ Current value: 12
 Current value: 0
 ```
 
-Messages are processed **in order** within a single actor. State (`count`) is private — nothing outside the actor can access it directly.
+Messages are processed **in order** within a single actor. State (`count`) is private, nothing outside the actor can access it directly.
 
 ---
 
@@ -461,18 +461,18 @@ main() {
 
 ### Best Practices
 
-1. **One responsibility per actor** — keep actors focused on a single task
-2. **No shared state** — communicate only through messages, never share memory
+1. **One responsibility per actor**, keep actors focused on a single task
+2. **No shared state**, communicate only through messages, never share memory
 3. **Always `wait_for_idle()`** when you need to read actor state or coordinate completion
-4. **Descriptive message names** — `Increment` is clearer than `Update`
+4. **Descriptive message names**, `Increment` is clearer than `Update`
 
 ### Further Reading
 
-- [Getting Started](getting-started.md) — Installation and project setup
-- [Language Reference](language-reference.md) — Complete syntax specification
-- [Standard Library](stdlib-reference.md) — Collections, I/O, networking
-- [Architecture](architecture.md) — Compiler and runtime internals
-- [Runtime Optimizations](runtime-optimizations.md) — Performance details
+- [Getting Started](getting-started.md), Installation and project setup
+- [Language Reference](language-reference.md), Complete syntax specification
+- [Standard Library](stdlib-reference.md), Collections, I/O, networking
+- [Architecture](architecture.md), Compiler and runtime internals
+- [Runtime Optimizations](runtime-optimizations.md), Performance details
 
 ---
 

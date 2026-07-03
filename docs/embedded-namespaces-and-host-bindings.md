@@ -1,7 +1,7 @@
-# Aether as a Configuration Language — v2: Namespaces and Generated Bindings
+# Aether as a Configuration Language, v2: Namespaces and Generated Bindings
 
 A host application embedding Aether scripts gets a typed, idiomatic SDK
-in its own language (Java, Python, Ruby — Go stubbed) generated from a
+in its own language (Java, Python, Ruby, Go stubbed) generated from a
 single manifest written in Aether itself. The host developer never
 writes JNI, never writes SWIG `.i` files, never registers callback
 function pointers by hand.
@@ -12,7 +12,7 @@ function pointers by hand.
 > `tests/integration/embedded_java_trading_e2e/`.
 >
 > Out of scope for v1 (each tracked below):
-> - Live host-supplied callbacks (`host_call`) — Shape B
+> - Live host-supplied callbacks (`host_call`), Shape B
 > - Escape-hatch `import trading.manifest` for a non-sibling script
 > - `@private_to_file` annotation
 > - Wall-clock timeout / allocation budget
@@ -23,7 +23,7 @@ function pointers by hand.
 **Goals.**
 
 1. The Aether-side surface a *script* author writes is unchanged from
-   what they write today — top-level functions, trailing-block DSLs,
+   what they write today, top-level functions, trailing-block DSLs,
    `notify()` for events back to the host. No mention of the host
    language. No FFI ceremony.
 
@@ -33,8 +33,8 @@ function pointers by hand.
    Methods, events, fields, named like the Aether functions they wrap.
 
 3. The generated SDK is **discoverable at runtime**. A standard
-   `aether_describe()` entry point returns the namespace's manifest —
-   typed, machine-readable, embedded in the `.so` — so version
+   `aether_describe()` entry point returns the namespace's manifest,
+   typed, machine-readable, embedded in the `.so` so version
    checks, IDE tooling, and reflective frameworks all work without
    shipping a sidecar JSON.
 
@@ -108,9 +108,9 @@ abi() {
 ```
 
 The grammar shipped slightly different from the original `namespace("trading") {...}` design:
-the outermost call is `abi()` (Application Binary Interface — a less-overloaded acronym
+the outermost call is `abi()` (Application Binary Interface, a less-overloaded acronym
 than "API," which now connotes HTTP-over-JSON). Inside, `describe("name") { ... }` carries
-the nested builders. Every form is a function call with a trailing block — pure Aether,
+the nested builders. Every form is a function call with a trailing block, pure Aether,
 no new lexer or parser work, same trailing-block + `_ctx`-injection idiom as
 TinyWeb's `path() { end_point(...) }` or `examples/calculator-tui.ae`'s
 `grid() { btn(...) callback { ... } }`.
@@ -137,7 +137,7 @@ What's worth noticing about the script:
 
 - It mentions no host language. Nothing about Java, JVM, JNI.
 - `notify(event, id)` is the only host-callback primitive. It's the
-  claim check — the host gets the ID, and if it wants the trade detail
+  claim check, the host gets the ID, and if it wants the trade detail
   it calls `get_ticker()` (or whatever the script exposes) over the
   normal downcall path.
 - `[ae]` prefix on `println` is a convention so the demo's stdout makes
@@ -151,20 +151,20 @@ import com.example.trading.Trading;
 
 try (Trading t = new Trading("aether/libtrading.so")) {
 
-    // Discovery — confirm the loaded namespace is what we expected.
+    // Discovery, confirm the loaded namespace is what we expected.
     Trading.Manifest m = t.describe();
     System.out.println("Loaded " + m);
 
-    // Inputs — typed setters generated per `input(...)` declaration.
+    // Inputs, typed setters generated per `input(...)` declaration.
     t.setMaxOrder(100_000);
 
-    // Event handlers — typed `LongConsumer` per `event(...)` declaration.
+    // Event handlers, typed `LongConsumer` per `event(...)` declaration.
     t.onOrderPlaced(id -> trades.put(id, "PLACED"));
     t.onTradeKilled(id -> trades.put(id, "KILLED"));
     t.onOrderRejected(id -> System.out.println("[event] OrderRejected " + id));
     t.onUnknownTicker(id -> System.out.println("[event] UnknownTicker " + id));
 
-    // Direct downcalls — typed methods named after the Aether functions.
+    // Direct downcalls, typed methods named after the Aether functions.
     int rc = t.placeTrade(100L, 50_000, 1);
     t.killTrade(100L);
     String ticker = t.getTicker("ACME");
@@ -196,7 +196,7 @@ Layered on top by v2 (the rest of the branch):
 
 | New piece | Where it lives | Purpose |
 |---|---|---|
-| `std.host` Aether module | `std/host/module.ae` + `runtime/aether_host.{h,c}` | DSL: `describe`, `input`, `event`, `bindings`, `java`, `python`, `ruby`, `go` — the manifest grammar |
+| `std.host` Aether module | `std/host/module.ae` + `runtime/aether_host.{h,c}` | DSL: `describe`, `input`, `event`, `bindings`, `java`, `python`, `ruby`, `go` the manifest grammar |
 | `notify(event: string, id: int64)` extern | `runtime/aether_host.c` | Claim check; the only host-callback primitive |
 | Manifest extractor | `aetherc --emit-namespace-manifest <m.ae>` | Walks the parsed AST, prints declaration-order JSON to stdout |
 | Embedded discovery struct | `aetherc --emit-namespace-describe <m.ae> <out.c>` | Self-contained `.c` stub: static const `AetherNamespaceManifest` + `aether_describe()` entry |
@@ -210,7 +210,7 @@ is plumbing underneath.
 ## The manifest grammar in detail
 
 `std.host` defines the manifest builder. Every form below is a function
-call (or builder block) — pure Aether, no new lexer or parser work.
+call (or builder block), pure Aether, no new lexer or parser work.
 
 ```aether
 import std.host
@@ -222,14 +222,14 @@ abi() {
 
         input(<name>, <type_signature>)
             // Declares a host-supplied value the namespace makes
-            // available. v1: stored on the SDK instance — the script
+            // available. v1: stored on the SDK instance, the script
             // doesn't yet read inputs back at runtime (host_call /
             // ambient input access is Shape B).
             //
             // The type signature is a string parsed by the generator:
             // "int", "long", "float", "bool", "string", "map", "list",
             // "fn(string) -> bool", etc. Nothing at runtime restricts it
-            // to primitives — v1's intent is to keep inputs to primitives
+            // to primitives, v1's intent is to keep inputs to primitives
             // and strings (see marshalling costs below), but that is
             // convention, not an enforced check.
 
@@ -253,10 +253,10 @@ Two compiler enhancements were needed to make the trailing-block
 manifest grammar land cleanly (commit `67ffa43`):
 
 1. The `_ctx`-first builder pre-pass in `codegen.c` now also recognizes
-   externs from imported modules — previously it only walked locally-defined
+   externs from imported modules, previously it only walked locally-defined
    functions, so `std.host`'s externs were missed.
 2. Auto-injection at call sites fires whenever the user's arg count is
-   exactly one less than the function's declared param count — previously
+   exactly one less than the function's declared param count, previously
    gated on `gen->in_trailing_block > 0`, which broke the outermost call
    in a manifest's body.
 
@@ -327,7 +327,7 @@ covers. Each per-language SDK supplies its own trampoline:
 Why claim check and not richer callbacks:
 
 - **Marshalling.** `notify(name, id)` crosses the boundary as
-  `(const char*, int64_t)` — two primitives. No struct marshalling.
+  `(const char*, int64_t)` two primitives. No struct marshalling.
 - **Auth and freshness on the host side.** The host's `getIfAuthorized(id)`
   decides whether the listener is allowed to see this trade, and gets
   current state. The script doesn't know or need to know.
@@ -337,21 +337,21 @@ Why claim check and not richer callbacks:
 
 When you genuinely need richer host → script communication, the
 script's typed downcall functions (`get_ticker(symbol)`, `kill_trade(id)`)
-already give you that — the host calls them directly, no events involved.
+already give you that, the host calls them directly, no events involved.
 
 ### Stdio interleaving
 
 When loaded as a `.so` by a host (Java/Python/Ruby) via `dlopen`,
 libc's `stdout` is fully buffered (the `.so` doesn't see a TTY).
 Without intervention, script-side `println()` calls accumulate in
-the C-side buffer and only flush at process exit — so demo console
+the C-side buffer and only flush at process exit, so demo console
 output appears scrambled (host event-handler `println`s land in
 order, but the Aether script's preceding lines all come out at the
 very end).
 
 `notify()` calls `fflush(NULL)` before invoking the registered handler
 so anything the script printed leading up to the event surfaces in
-the right order. Cosmetic-only — the values returned by the script
+the right order. Cosmetic-only, the values returned by the script
 are unaffected; only the on-screen ordering of pre-event log output.
 
 ## What works today vs. what's Shape B
@@ -370,7 +370,7 @@ statement after `placeTrade` returns), the host makes a second typed
 downcall to fetch detail by id from its own service.
 
 > **A note on the lifelines.** All four lifelines below are one OS
-> process — the JVM `dlopen`s `libtrading.so` and the `.so` runs in
+> process, the JVM `dlopen`s `libtrading.so` and the `.so` runs in
 > the JVM's address space, on the JVM's threads. There's no IPC, no
 > fork, no separate scheduler. The lifelines mark where calls cross
 > a *marshalling* boundary, not an execution one: `Host`↔`SDK` is a
@@ -383,8 +383,8 @@ downcall to fetch detail by id from its own service.
 sequenceDiagram
     autonumber
     participant Host as Java host JVM<br/>(TradingDemo + its TradeService field)
-    participant SDK as Trading.class<br/>(generated SDK — in the same JVM)
-    participant Lib as libtrading.so<br/>(Aether script — loaded via dlopen)
+    participant SDK as Trading.class<br/>(generated SDK, in the same JVM)
+    participant Lib as libtrading.so<br/>(Aether script, loaded via dlopen)
     participant Reg as event registry<br/>(in libtrading.so)
 
     Note over Host,Reg: setup (once)
@@ -424,7 +424,7 @@ owns.
 
 What if `place_trade` needs the *current* fraud score from a running
 Java service mid-evaluation? The score isn't an `input` we can
-pre-pass — it depends on the order amount and is recomputed live.
+pre-pass, it depends on the order amount and is recomputed live.
 And it's not something the script can `notify` for, because `notify`
 is fire-and-forget with no return value.
 
@@ -437,7 +437,7 @@ ad-hoc lookup against host state.
 boundary in the script → host direction, returning a value the
 script can branch on.
 
-> Same lifeline convention as the first diagram — all four are one
+> Same lifeline convention as the first diagram, all four are one
 > OS process, the lifelines mark marshalling boundaries, not
 > execution contexts.
 
@@ -445,12 +445,12 @@ script can branch on.
 sequenceDiagram
     autonumber
     participant Host as Java host JVM<br/>(TradingDemo + its FraudService field)
-    participant SDK as Trading.class<br/>(generated SDK — in the same JVM)
+    participant SDK as Trading.class<br/>(generated SDK, in the same JVM)
     participant Lib as libtrading.so<br/>(Aether script)
-    participant HReg as host_call registry<br/>(Shape B — not built)
+    participant HReg as host_call registry<br/>(Shape B, not built)
 
     rect rgba(255, 220, 220, 0.4)
-    Note over Host,HReg: Entire flow below is Shape B — none of these arrows work today
+    Note over Host,HReg: Entire flow below is Shape B, none of these arrows work today
     Note over Host,HReg: setup
     Host->>SDK: t.exposeHostCall("fraud_score", order -> fraudService.score(order))
     SDK->>HReg: aether_host_call_register("fraud_score", trampoline)
@@ -471,7 +471,7 @@ sequenceDiagram
     end
 ```
 
-The pink-shaded rect marks every arrow inside as not implemented today —
+The pink-shaded rect marks every arrow inside as not implemented today,
 the `host_call` registry, the script-side `host_call("name", ...)`
 extern, and the host-side `exposeHostCall(...)` registration API are
 all illustrative. The actual API will be settled when the work is
@@ -494,7 +494,7 @@ Why this is harder than `notify`:
   trampoline has to outlive the script's call into it. Same keepalive
   problem as event handlers, just on the other side of the boundary.
 
-These are tractable — none of them are research problems — but they're
+These are tractable, none of them are research problems, but they're
 the reason Shape B is a deliberate v2 deferral and not a one-day add.
 
 ## Marshalling: cost and safety
@@ -510,18 +510,18 @@ magnitude; measure in your own host before optimizing.
 
 | Crossing | What happens | Cost |
 |---|---|---|
-| `int`, `int64`, `bool` | Register-passed primitive — Panama / ctypes / Fiddle widen or pun bits, no allocation | ~tens of ns per call. JIT can't inline across the FFI but otherwise free |
+| `int`, `int64`, `bool` | Register-passed primitive, Panama / ctypes / Fiddle widen or pun bits, no allocation | ~tens of ns per call. JIT can't inline across the FFI but otherwise free |
 | `string` (host → script) | Java `String` (UTF-16 internally) → encode UTF-8 → `arena.allocateFrom` → null-terminate → pass `MemorySegment.address()` as `const char*` | One allocation + one encoding pass + linear copy, all O(length). Cheap for `"ACME"`, real for >1 KB |
 | `string` (script → host) | Aether returns `const char*` (already UTF-8) → host does `MemorySegment.getString(0)` → scan for `\0` → decode UTF-8 → allocate a Java `String` | One allocation + one decoding pass + linear scan + linear copy. Same shape as the inbound direction |
 | Event handler registration | `Linker.upcallStub(MethodHandle, FunctionDescriptor, Arena)` generates a tiny native trampoline at runtime that, when called from C, marshals back into the JVM and invokes the handler | One-time cost per `on<Event>(...)` call (microseconds). Subsequent invocations pay the trampoline overhead (~tens of ns per call) |
-| `notify(name, id)` (script → host event) | `(const char*, int64_t)` — primitives only. No allocation, no encoding | Two register-passes + a strcmp-based dispatch lookup + the trampoline overhead. Sub-microsecond |
-| Maps / lists / structs | **Not in v1** — Aether composite values would marshal via `aether_config_*` accessors, one FFI call per field walk | Quadratic in the worst case (FFI per accessor × depth). The reason `input(...)` is restricted to primitives + strings |
+| `notify(name, id)` (script → host event) | `(const char*, int64_t)` primitives only. No allocation, no encoding | Two register-passes + a strcmp-based dispatch lookup + the trampoline overhead. Sub-microsecond |
+| Maps / lists / structs | **Not in v1**, Aether composite values would marshal via `aether_config_*` accessors, one FFI call per field walk | Quadratic in the worst case (FFI per accessor × depth). The reason `input(...)` is restricted to primitives + strings |
 
 The asymmetry worth flagging: **strings cost more than primitives in
 both directions** (encoding/decoding + allocation), and **callbacks
 pay a one-time setup cost but a per-invocation trampoline cost
 forever.** A trading scenario calling `place_trade(id, amount, ticker_known)`
-once per HTTP request is unaffected — three primitive args are
+once per HTTP request is unaffected, three primitive args are
 microseconds at most. A scenario passing 10 KB JSON strings through
 `label("...", ...)` at 100 K calls/sec would feel it.
 
@@ -534,15 +534,15 @@ but some are unavoidable in v1. Honest accounting:
 
 | Hazard | Risk in v1 | What protects you |
 |---|---|---|
-| **Buffer overflow (write)** | Low | Aether `string` is `const char*` and the host's marshallers (`MemorySegment.getString`, `ctypes.c_char_p`, `Fiddle::Pointer.to_str`) all allocate fresh host-language strings — they never write through the C pointer |
-| **Read past end of unterminated string** | Low — but real if a future Aether stdlib function returns a non-null-terminated buffer | Convention: every `const char*` returned by an Aether function is null-terminated. The compiler's string codegen guarantees this today; a hand-written extern could break it |
-| **Use-after-free: returned strings** | Medium | Strings returned by `aether_<name>(...)` are borrowed pointers into Aether's heap. Lifetime is "until the next Aether call into the same `.so`." Hosts that hold the pointer past that point will see freed memory. Each per-language SDK eagerly copies the string out (via `getString` / decode) before the call returns, which is the right pattern — but a host author bypassing the SDK and calling the raw `aether_<name>` symbol directly could trip on this |
+| **Buffer overflow (write)** | Low | Aether `string` is `const char*` and the host's marshallers (`MemorySegment.getString`, `ctypes.c_char_p`, `Fiddle::Pointer.to_str`) all allocate fresh host-language strings, they never write through the C pointer |
+| **Read past end of unterminated string** | Low, but real if a future Aether stdlib function returns a non-null-terminated buffer | Convention: every `const char*` returned by an Aether function is null-terminated. The compiler's string codegen guarantees this today; a hand-written extern could break it |
+| **Use-after-free: returned strings** | Medium | Strings returned by `aether_<name>(...)` are borrowed pointers into Aether's heap. Lifetime is "until the next Aether call into the same `.so`." Hosts that hold the pointer past that point will see freed memory. Each per-language SDK eagerly copies the string out (via `getString` / decode) before the call returns, which is the right pattern, but a host author bypassing the SDK and calling the raw `aether_<name>` symbol directly could trip on this |
 | **Use-after-free: callback trampolines** | Medium | The Python/Ruby/Java SDKs hold each registered callback in `self._callbacks` / `@callbacks` / a final field on the SDK instance so the host-language GC doesn't reclaim it while C still has the function pointer. If a host author rebinds those collections (`self._callbacks = []`) or replaces the SDK instance while a `notify` is in flight on another thread (see concurrency, below), UAF |
 | **Double-free** | Low | The script doesn't hand the host any owned memory the host is supposed to free. Everything returned is borrowed from Aether's heap. If a future ABI version adds owned-string returns, this risk reappears |
-| **Integer truncation / sign confusion** | Low | `notify(name, id)` is `int64_t`. Java `long`, Python arbitrary-precision `int` (ctypes silently masks to 64-bit), Ruby `Integer` (Fiddle truncates). Garbage-in/garbage-out, no crash — but a Python host passing `2**70` will see a different `id` on the script side than it expected |
+| **Integer truncation / sign confusion** | Low | `notify(name, id)` is `int64_t`. Java `long`, Python arbitrary-precision `int` (ctypes silently masks to 64-bit), Ruby `Integer` (Fiddle truncates). Garbage-in/garbage-out, no crash, but a Python host passing `2**70` will see a different `id` on the script side than it expected |
 | **String encoding mismatch** | Low | All three SDKs default to UTF-8 for the FFI marshal. A host that explicitly forces UTF-16 or Latin-1 would see garbage |
 | **Concurrency: races on the dispatch table** | **Real and undocumented** | The Aether runtime is single-threaded. The `g_events[]` registry and `g_manifest` are NOT mutex-guarded. A Java host calling into the `.so` from two threads concurrently can race `aether_event_register` against `notify`, with possible UAF on the handler pointer. **Today's contract is "host serializes all calls into the SDK."** Not enforced anywhere; not even mentioned in the SDK comments. Worth fixing before v1 ships to anyone who didn't write the runtime |
-| **Capability escape via raw `extern`** | **Real gap** | The capability-empty link profile excludes `std.fs`, `std.net`, etc. — so `import std.fs` in a script is rejected. But a malicious script author can declare their own `extern open(path: ptr, flags: int) -> int` directly, and the linker (which doesn't know about Aether's capability model) will happily resolve it against libc. The compile-time capability check inspects imports, not raw externs. This is a real escape — though "malicious script author" is a meaningful threat model only when the host is loading scripts from untrusted sources |
+| **Capability escape via raw `extern`** | **Real gap** | The capability-empty link profile excludes `std.fs`, `std.net`, etc. so `import std.fs` in a script is rejected. But a malicious script author can declare their own `extern open(path: ptr, flags: int) -> int` directly, and the linker (which doesn't know about Aether's capability model) will happily resolve it against libc. The compile-time capability check inspects imports, not raw externs. This is a real escape, though "malicious script author" is a meaningful threat model only when the host is loading scripts from untrusted sources |
 
 The two **real and undocumented** rows above (concurrency and raw
 `extern` escape) are the items most worth fixing before this layer
@@ -656,7 +656,7 @@ A handful of decisions deferred from the v1 ship:
 3. **How the event handler gets called when the script is on a
    different thread than the host's main loop.** The runtime is
    single-threaded today and `notify` is synchronous, so v1 inherits
-   that — events fire on whatever thread is currently running Aether
+   that, events fire on whatever thread is currently running Aether
    code. Documented; revisit if multi-threading lands.
 
 4. **Annotation syntax for `@private_to_file`.** Aether doesn't have
@@ -712,4 +712,4 @@ Neither side knows about the boundary.
 
 The transport layer (`--emit=lib`, `aether_config.h`, opaque
 `AetherValue*`) folds in as the foundation. There is no v1 to maintain
-backward compatibility against — v2 is the first shipped surface.
+backward compatibility against, v2 is the first shipped surface.

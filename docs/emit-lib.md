@@ -55,7 +55,7 @@ int main(void) {
 
 | Flag | Effect |
 |---|---|
-| `--emit=exe` *(default)* | Current behaviour — produces an executable. |
+| `--emit=exe` *(default)* | Current behaviour, produces an executable. |
 | `--emit=lib` | No `main()` in the output; every top-level Aether function gets an `aether_<name>()` C-ABI alias; built with `-fPIC -shared`. |
 | `--emit=both` | Produces both an executable AND a shared library from one source. `ae build --emit=both foo.ae -o foo` writes `foo` (the exe) and `foo.dylib` / `foo.so` (the lib) side by side. With no `-o`, defaults are `<base>` (exe) and `lib<base>.<ext>` (lib). Internally dispatches `cmd_build` twice (once per emit mode); the lib pass appends the platform lib extension to the user's `-o` so the second pass doesn't overwrite the first. |
 
@@ -71,7 +71,7 @@ Every exported Aether function becomes `aether_<name>` in the library:
 
 The internal `sum`, `greet`, etc. symbols are **also present** in the
 library with external linkage. Callers should use the `aether_<name>`
-entry points for ABI stability — the un-prefixed names are an
+entry points for ABI stability, the un-prefixed names are an
 implementation detail and may be hidden in a future version. See
 [Symbol visibility matrix](#symbol-visibility-matrix) below for the
 full picture across emit modes.
@@ -105,7 +105,7 @@ surface:
   `aether_*` alias. This lets two `.ae` files in the same project
   declare their own `record_start_` without colliding at link time
   and without leaking either into the public ABI. The convention is
-  enforced by codegen, so adding the `_` is enough — no annotation.
+  enforced by codegen, so adding the `_` is enough, no annotation.
 - **Tuple-returning helpers**: `helper(n: int) -> { return n, n+1 }`
   returns a `_tuple_int_int` struct that doesn't fit the public ABI
   table. The function itself is fine; the alias is skipped. Wrap
@@ -114,7 +114,7 @@ surface:
 
 ## The `AetherValue*` accessor API
 
-Composite Aether values — maps, lists, generic `ptr`s — come back to the
+Composite Aether values, maps, lists, generic `ptr`s, come back to the
 host as `AetherValue*` handles. The host walks them with the functions
 declared in `runtime/aether_config.h`:
 
@@ -146,9 +146,9 @@ void aether_config_free(AetherValue* root);
 
 | Return value | Ownership |
 |---|---|
-| Root `AetherValue*` from an `aether_<name>()` call | **Owned** — call `aether_config_free(root)` |
-| Nested map/list handle from `_get_map` / `_get_list` / `_list_get` | **Borrowed** — valid until the root is freed; do NOT free individually |
-| `const char*` from `_get_string` / `_list_get_string` | **Borrowed** — points into the tree; copy if you need it past `aether_config_free` |
+| Root `AetherValue*` from an `aether_<name>()` call | **Owned**, call `aether_config_free(root)` |
+| Nested map/list handle from `_get_map` / `_get_list` / `_list_get` | **Borrowed**, valid until the root is freed; do NOT free individually |
+| `const char*` from `_get_string` / `_list_get_string` | **Borrowed**, points into the tree; copy if you need it past `aether_config_free` |
 
 ### Behaviour of missing keys / out-of-range indices
 
@@ -158,22 +158,22 @@ void aether_config_free(AetherValue* root);
 
 ### Type contract
 
-Aether maps and lists are **untyped** internally — values are stored as
+Aether maps and lists are **untyped** internally, values are stored as
 opaque `void*` with no runtime tag. The accessors reinterpret the stored
 value as the requested type; they do not verify it. That makes the
 script-to-host interface a straight FFI contract: document what the
 script writes at each key, and the host must read it back with the
 matching accessor. If the script stored an `int` at `"port"` and the
-host asks for a string, the host gets garbage — treat this exactly the
+host asks for a string, the host gets garbage, treat this exactly the
 way you would treat any other cross-language value exchange.
 
 ## Capability-empty default
 
 `--emit=lib` rejects `.ae` files that import:
 
-- `std.net`, `std.http`, `std.tcp` — networking
-- `std.fs` — filesystem
-- `std.os` — process / environment / shell
+- `std.net`, `std.http`, `std.tcp` networking
+- `std.fs` filesystem
+- `std.os` process / environment / shell
 
 The rationale: a library embedded in a host process shouldn't have
 ambient network, filesystem, or process-spawning access. Those are
@@ -186,9 +186,9 @@ other capability-free standard modules are allowed.
 
 ### Opting in: `--with=<capabilities>`
 
-Projects that **are** the host — code that compiles `.ae` and
+Projects that **are** the host, code that compiles `.ae` and
 handwritten C into one binary, rather than embedding Aether as an
-untrusted user script — opt into specific capability categories:
+untrusted user script, opt into specific capability categories:
 
 ```sh
 ae build --emit=lib --with=fs           file.ae   # std.fs
@@ -202,7 +202,7 @@ ae build --emit=lib --with=all          file.ae   # alias for fs,net,os
 The gate stays default-deny: a build without `--with=fs` still rejects
 `import std.fs`. Unknown capability names are a hard error (typos
 shouldn't silently leave a gate closed). The categories mirror the
-banned-import groupings above — three buckets, chosen coarsely enough
+banned-import groupings above, three buckets, chosen coarsely enough
 that opting in is an auditable event in a project's build invocation.
 
 `--with=first-party` and `--with=all` both expand to `fs,net,os`.
@@ -212,12 +212,12 @@ trusted-as-first-party, give it everything"; `all` reads as a literal
 shorthand for the full set. Using either one is appropriate for tools
 like build systems and SDK generators where the `.ae` files ship with
 the toolchain itself; it is **not** appropriate for plugin / user-
-script scenarios — see "When NOT to use this" below.
+script scenarios, see "When NOT to use this" below.
 
 **When to use this.** Systems code where the `.ae` files are
 first-party and version-controlled the same way as the `.c` files.
 The Aether-side `file_open_raw` is no different from the C side
-calling `fopen` — there's no privilege boundary to police.
+calling `fopen` there's no privilege boundary to police.
 
 **When NOT to use this.** Anywhere the library could run untrusted
 Aether (user scripts, a plugin loader, a DSL evaluator). Leave the
@@ -236,14 +236,14 @@ different `.ae` sources are linked into one binary.
 | Local with trailing `_` (`helper_`) | **`static`** | **`static`** (no `aether_<name>` alias) |
 | Local with tuple return type        | external     | external (no `aether_<name>` alias)     |
 | Imported Aether wrapper             | **`static`** | **`static`** (no `aether_<name>` alias) |
-| `extern` declaration (any module)   | declaration only — refers to external symbol from `libaether.a` or another TU |
+| `extern` declaration (any module)   | declaration only, refers to external symbol from `libaether.a` or another TU |
 | Stdlib C externs (`std/*/aether_*.c`) | linked from `libaether.a`; no per-TU duplication |
 
 Two consequences worth highlighting:
 
 **Imported Aether wrappers are private to each TU.** When module A
 and module B both `import std.string`, both generated `.c` files
-contain `static const char* string_copy(...)` — a private copy each.
+contain `static const char* string_copy(...)` a private copy each.
 Linking the two `.o` files together produces no duplicate-symbol
 errors, even on linkers that don't support
 `-Wl,--allow-multiple-definition` (notably macOS ld64). This is
@@ -258,7 +258,7 @@ files both define a function with the same name (e.g. both define
 `helper`), they DO collide at link time. `--emit=lib` adds an
 `aether_<name>` alias on top, but the un-aliased local symbol is
 still external. This is the symmetric opposite of the imported case
-and is intentional — local functions are the unit of inter-TU
+and is intentional, local functions are the unit of inter-TU
 linking; the user program structures around their names.
 
 **Implication for downstream tools.** Multi-TU binaries that import
@@ -266,7 +266,7 @@ the same SDK module across many `.ae` files do not need
 `-Wl,--allow-multiple-definition`. The static-marking on imported
 wrappers handles deduplication at the source level. Tools building
 this shape can drop the link flag and gain macOS compatibility for
-free — `ld64` (Apple's linker) silently rejects
+free, `ld64` (Apple's linker) silently rejects
 `--allow-multiple-definition`, and the static-marking removes the
 need for it.
 
@@ -289,7 +289,7 @@ swig -java -package com.example.aether runtime/aether_config.i
 ```
 
 The generated bindings wrap `AetherValue*` as a proxy class per target
-language — Python gets `AetherValue`, Java gets a `class AetherValue`,
+language, Python gets `AetherValue`, Java gets a `class AetherValue`,
 etc. Users see idiomatic API calls; the opaque pointer is hidden.
 
 See `tests/integration/emit_lib_swig/` for a worked Python round-trip.
@@ -317,7 +317,7 @@ if (aether_deadline_tripped()) {
 **Memory cap.** Process-wide. The cap-aware allocators (`std/string`,
 `std/collections`, `runtime/memory/{arena,pool}`) check + account
 against a single `_Atomic uint64_t` counter. The counter tracks
-**current usage**, not high-water-mark — long-running guests that
+**current usage**, not high-water-mark, long-running guests that
 allocate-and-free in a loop don't trip the cap on cumulative churn.
 Allocations past the cap return NULL through the existing
 error-string convention; stdlib functions surface "out of memory:
@@ -327,13 +327,13 @@ disable.
 **Wall-clock deadline.** Per-thread monotonic (`CLOCK_MONOTONIC`).
 The codegen emits `if (aether_caps_deadline_tripped()) {
 __aether_abort_call(); break; }` at every `for` / `while` loop head
-under `--emit=lib` — not under `--emit=exe` (zero overhead on
+under `--emit=lib` not under `--emit=exe` (zero overhead on
 non-sandboxed builds). On trip the sticky flag flips; subsequent
 loop heads in the same call exit too, so any depth of nested loops
 unwinds in O(N) tripwire-bounded breaks. Pass `0` to disable; pass
 a fresh ms value to clear the sticky flag and re-arm.
 
-The trip is observable via `aether_deadline_tripped()` — the host
+The trip is observable via `aether_deadline_tripped()` the host
 checks after the call to know whether the result was complete or
 truncated. Retrying a tripped deadline is the host's policy:
 re-arm + call again with a more generous budget, or surface
@@ -341,20 +341,20 @@ re-arm + call again with a more generous budget, or surface
 
 ## What's out of scope for v1
 
-1. **Callbacks held live** — a host can't pass a closure into Aether and
+1. **Callbacks held live**, a host can't pass a closure into Aether and
    have it retained. If you want this (the ARexx / rules-engine model),
    track the "Shape B" design note in
    [aether-embedded-in-host-applications.md](aether-embedded-in-host-applications.md).
-2. **Per-function capability grants** — `--with=` flags are coarse
+2. **Per-function capability grants**, `--with=` flags are coarse
    (fs / net / os). Fine-grained gates like "allow file_open but not
    dir_delete" don't match any concrete threat model for the
    default-deny shape, and every additional flag is API surface.
-3. **Typed returns beyond `void*`** — functions returning `map`/`list`
+3. **Typed returns beyond `void*`**, functions returning `map`/`list`
    come back as `AetherValue*` with no schema. Host knows the shape.
 
 ## Kind discrimination + deep-free (`aether_value_kind`, `aether_config_free_deep`)
 
-Aether's collections are intentionally untyped at the storage level — a
+Aether's collections are intentionally untyped at the storage level, a
 map's value slot is `void*`, and the host knows the schema. That
 historically meant schema-mismatch bugs (script stores an int where a
 map was expected) degraded into host-side segfaults. v1 closes that
@@ -381,12 +381,12 @@ scalars that were intptr-cast to `AetherValue*` (e.g. `(void*)(intptr_t)42`
 from a schema-mismatched `_get_map` call). The probe applies two
 layers of safety:
 
-1. **Low-address guard** — the zero page + first 64 KiB are unmapped
+1. **Low-address guard**, the zero page + first 64 KiB are unmapped
    on every supported OS (Linux's `vm.mmap_min_addr` default is
    65536; macOS reserves more; Windows likewise). Any pointer below
    `0x10000` is filtered before any deref attempt, so common
    intptr-cast scalars never reach the magic check.
-2. **32-bit magic check** — for higher-address values that survive
+2. **32-bit magic check**, for higher-address values that survive
    the guard, the leading 4 bytes either match one of the two known
    constants (`AETHER_KIND_LIST_MAGIC` / `AETHER_KIND_MAP_MAGIC`) or
    the predicate reports `UNKNOWN`. False-match probability for a
@@ -403,7 +403,7 @@ either container shape uniformly.
 AetherValue* root = aether_build_config("prod", 8080);
 
 if (aether_value_is_map(root)) {
-    /* Defensive — confirm what the script actually returned. */
+    /* Defensive, confirm what the script actually returned. */
 }
 
 AetherValue* db = aether_config_get_map(root, "db");
@@ -421,7 +421,7 @@ releasing the struct's memory, so a use-after-free probe via
 rather than a stale match on the freed-but-still-readable original
 value.
 
-## Reflection: the symbol catalog (`aether_lib_meta`) — #403
+## Reflection: the symbol catalog (`aether_lib_meta`), #403
 
 Every `--emit=lib` artifact exports a single reflection entry point:
 
@@ -430,8 +430,8 @@ const AetherLibMeta* aether_lib_meta(void);
 ```
 
 declared in `runtime/aether_lib_meta.h`. The returned struct describes
-every exported function — Aether name, C symbol, public signature,
-source file, source line — in a layout-stable, allocation-free form
+every exported function, Aether name, C symbol, public signature,
+source file, source line, in a layout-stable, allocation-free form
 that any FFI consumer (Python ctypes, Java Panama, Ruby Fiddle,
 Node-API, hand-rolled `dlsym`) can walk directly.
 
@@ -457,7 +457,7 @@ typedef struct {
 } AetherLibMeta;
 ```
 
-No JSON, no parsing, no dynamic allocation — the struct is `static const`
+No JSON, no parsing, no dynamic allocation, the struct is `static const`
 in the artifact and the catalog literally lives in `.rodata`. Schema is
 versioned; within `1.x` only additive fields appear at the struct tail,
 so a "1.0" reader walks a "1.1" or "1.2" artifact unchanged (it reads
@@ -476,7 +476,7 @@ trailing-underscore privates) are also omitted from it.
 The flattened function table above is the foreign-FFI surface; it drops
 closures, real types, and the builder-DSL shape. The `closures` array is
 the complement: the closure surface a *downstream Aether* consumer needs
-to reconstruct a closure-with-context builder DSL at full fidelity —
+to reconstruct a closure-with-context builder DSL at full fidelity,
 rather than the lowest-common-denominator C ABI a foreign host links
 against. Each record:
 
@@ -497,18 +497,18 @@ typedef struct {
 
 Three sources populate it, all reachable from the set of top-level,
 non-imported, non-`_`-suffixed functions (which is broader than the
-ABI function table — a builder or a `fn`-parameter function is exactly
+ABI function table, a builder or a `fn`-parameter function is exactly
 what the ABI gate excludes, yet its bare symbol is still linkable by an
 Aether consumer):
 
-- **`builder`** — an export that takes an injected `_ctx` (the `builder`
+- **`builder`**, an export that takes an injected `_ctx` (the `builder`
   keyword or the `_ctx: ptr` first-param convention). The "call me with
   a trailing block" signal; `capture_count` is 0.
-- **`param`** — a closure-typed (`fn`) parameter of an export. `name` is
+- **`param`**, a closure-typed (`fn`) parameter of an export. `name` is
   the parameter, `signature` its `|...| -> R` shape.
-- **`trailing-block`** — a trailing-block closure literal in an export's
+- **`trailing-block`**, a trailing-block closure literal in an export's
   body.
-- **`literal`** — any other hoisted closure literal in an export's body.
+- **`literal`**, any other hoisted closure literal in an export's body.
   For both of these, `captures` lists the enclosing variables the closure
   closes over with their rendered Aether types.
 
@@ -518,14 +518,14 @@ time. Captures and parameter types are exact.
 
 #### Consuming a published library from Aether (`import`)
 
-The records above are not just for inspection — they are what lets an
+The records above are not just for inspection, they are what lets an
 *Aether* program consume a precompiled `--emit=lib` artifact as a
 first-class `import`, with the call site reading as if the library were
 compiled in the same cycle:
 
 ```aether
 import std.map        // builder default factory (map_new) lives here
-import gizmo          // resolves libgizmo.so — no gizmo.ae source needed
+import gizmo          // resolves libgizmo.so, no gizmo.ae source needed
 
 main() {
     println(gizmo.greet("world"))     // a function export
@@ -543,7 +543,7 @@ function export, and a trailing-block `builder` wrapper for each
 function's `(..., _builder)` entry point). The stub is dropped onto the
 module search path, so the *existing* source-import machinery
 (typecheck, namespace prefixing, builder registration) rehydrates the
-library — no special call-site syntax. The artifact is linked in
+library, no special call-site syntax. The artifact is linked in
 (absolute path + `-rpath`), and the host's `-rdynamic` + static
 `libaether` satisfy the `.so`'s runtime symbols.
 
@@ -554,12 +554,12 @@ Scope of the current implementation:
   config factory is a `std.map` facility used at the call site).
 - **Higher-order exports** (a function taking a closure `fn` parameter)
   are described in the metadata but not yet callable across the binary
-  boundary — passing an Aether closure into an imported function is a
+  boundary, passing an Aether closure into an imported function is a
   follow-on (the closure ABI across the boundary).
 - POSIX only for now (the prepass is gated on `dlopen`); Windows DLL
   hosting is a follow-up, matching `ae lib-info`.
 
-### `ae lib-info <path>` — inspect any artifact
+### `ae lib-info <path>` inspect any artifact
 
 The `ae` CLI ships a turnkey reader that `dlopen`s a `.so`/`.dylib`,
 calls `aether_lib_meta`, and prints a human-readable dump:
@@ -583,11 +583,11 @@ Aether Library: build/libscript.so
 ```
 
 The `c_symbol:` line is suppressed when the symbol equals `aether_<name>`
-(the default for plain exports — printing it would just be noise).
+(the default for plain exports, printing it would just be noise).
 `@c_callback`-marked functions whose Aether name *is* the C symbol show
 no `c_symbol:` line either; they are their own export.
 
-Windows is a follow-up — `ae lib-info` returns 1 with a "DLL hosting is
+Windows is a follow-up, `ae lib-info` returns 1 with a "DLL hosting is
 a follow-up" message; the metadata struct *is* still emitted into the
 DLL's `.rodata` and is reachable via `LoadLibrary` +
 `GetProcAddress("aether_lib_meta")` from any host.
@@ -638,8 +638,8 @@ The integration suite under `tests/integration/` covers:
 | `emit_lib_dual_build/` | Same source → exe AND lib via separate invocations |
 | `emit_lib_swig/` | SWIG Python round-trip (skips if `swig` missing) |
 | `emit_lib_with_capability/` | `--with=fs,net,os` opt-ins; `--with=first-party` and `--with=all` aliases |
-| `lib_meta/` | `aether_lib_meta` + `ae lib-info` round-trip — schema, source, function count, three signatures, c_symbol gating, source refs |
-| `emit_lib_kind_safe/` | Kind-discriminator predicates + deep-free safety — adversarial low-address probe (`(AetherValue*)42`) survives, kind correctly classifies map/list/scalar slots, deep-free walks nested map+list+scalars, magic-clear-on-free defends UAF probes |
+| `lib_meta/` | `aether_lib_meta` + `ae lib-info` round-trip, schema, source, function count, three signatures, c_symbol gating, source refs |
+| `emit_lib_kind_safe/` | Kind-discriminator predicates + deep-free safety, adversarial low-address probe (`(AetherValue*)42`) survives, kind correctly classifies map/list/scalar slots, deep-free walks nested map+list+scalars, magic-clear-on-free defends UAF probes |
 
 Run them with the standard `make test-ae` or individually:
 
