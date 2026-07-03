@@ -6,7 +6,7 @@ that falls out of it.
 
 Issue [#841](https://github.com/aether-lang-org/aether/issues/841).
 Benchmark:
-[`benchmarks/concurrent-cache/concurrent_cache_bench.ae`](../benchmarks/concurrent-cache/concurrent_cache_bench.ae).
+[`benchmarks/concurrent-cache/concurrent_cache_bench.ae`](../../benchmarks/concurrent-cache/concurrent_cache_bench.ae).
 
 ---
 
@@ -132,7 +132,7 @@ gaps, and the refinement that would close them:
 
 3. **Single run, no warmup statistics.** One timed pass per design × mix,
    no median-of-N or coefficient-of-variation. The
-   [cross-language runner](../benchmarks/cross-language/run_benchmarks.ae)
+   [cross-language runner](../../benchmarks/cross-language/run_benchmarks.ae)
    shows the median-of-N + CV% pattern to adopt here. **Refinement:**
    wrap each timed loop in a runs/warmup loop and report median + spread.
 
@@ -148,5 +148,5 @@ three designs, not artifacts of one machine.
   design, shard-count guidance, and the Zipfian skew caveat.
 - [`docs/design/snapshot-cell.md`](snapshot-cell.md) — the COW cell, the
   reclamation contract, and when read-mostly is the right call.
-- [`examples/actors/sharded-map.ae`](../examples/actors/sharded-map.ae) —
+- [`examples/actors/sharded-map.ae`](../../examples/actors/sharded-map.ae) —
   the canonical sharded-map example the benchmark's design 2 mirrors.

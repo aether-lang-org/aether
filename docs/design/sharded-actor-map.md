@@ -13,9 +13,9 @@ readers and writers without collapsing onto a single core.
 Issue [#839](https://github.com/aether-lang-org/aether/issues/839).
 
 See the runnable example at
-[`examples/actors/sharded-map.ae`](../examples/actors/sharded-map.ae) and
+[`examples/actors/sharded-map.ae`](../../examples/actors/sharded-map.ae) and
 the regression test under
-[`tests/integration/sharded_actor_map/`](../tests/integration/sharded_actor_map/).
+[`tests/integration/sharded_actor_map/`](../../tests/integration/sharded_actor_map/).
 
 ---
 
@@ -89,7 +89,7 @@ got = shards[idx] ? Get { key: key }       // read:  synchronous ask
 This is built **entirely** on Aether's existing ask/reply primitive (the
 `?` operator + the `reply` statement); the sharded map adds no runtime
 machinery. See [`actor-concurrency.md`](../actor-concurrency.md) for the
-ask/reply mechanics and [`examples/actors/ask-pattern.ae`](../examples/actors/ask-pattern.ae)
+ask/reply mechanics and [`examples/actors/ask-pattern.ae`](../../examples/actors/ask-pattern.ae)
 for the base pattern.
 
 ### Routing hash
@@ -236,6 +236,6 @@ follows:
 
 A runnable scaling study that measures all three under read-only,
 read-heavy, balanced, and write-heavy mixes lives at
-[`benchmarks/concurrent-cache/concurrent_cache_bench.ae`](../benchmarks/concurrent-cache/concurrent_cache_bench.ae);
+[`benchmarks/concurrent-cache/concurrent_cache_bench.ae`](../../benchmarks/concurrent-cache/concurrent_cache_bench.ae);
 see [`docs/design/concurrent-cache-benchmark.md`](concurrent-cache-benchmark.md)
 for how to run it and how to read the ops/sec it prints.
