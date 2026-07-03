@@ -6,11 +6,11 @@ alongside — but deployed independently of — the application binary.
 
 > **Status (2026-04-18):** the **embedding foundation is built and v2
 > namespaces have shipped**. `aetherc --emit=lib` produces a `.so`/`.dylib`
-> with stable C-ABI exports (see [`emit-lib.md`](emit-lib.md)), and
+> with stable C-ABI exports (see [`emit-lib.md`](../emit-lib.md)), and
 > `ae build --namespace <dir>` (PR #172) generates idiomatic per-language
 > SDKs (Python ctypes, Java Panama, Ruby Fiddle) plus `notify(event, id)`
 > for script → host event signaling — see
-> [`embedded-namespaces-and-host-bindings.md`](embedded-namespaces-and-host-bindings.md)
+> [`embedded-namespaces-and-host-bindings.md`](../embedded-namespaces-and-host-bindings.md)
 > for the typed-SDK story. What's still future work for the rules-engine
 > vision specifically:
 >
@@ -213,7 +213,7 @@ covers the same use case without a serialization round-trip.
 **Option B: Embedded library** (faster)  ✅ Substantially shipped / 📋 Callbacks future
 
 Using the v2 embedded-namespace model from
-[Aether as a Config Language v2](embedded-namespaces-and-host-bindings.md):
+[Aether as a Config Language v2](../embedded-namespaces-and-host-bindings.md):
 
 ```aether
 // rules/manifest.ae
@@ -405,9 +405,9 @@ A `rules` module providing:
 ### Effort
 
 The embedding infrastructure overlapped with the
-[config language proposal](aether-embedded-in-host-applications.md)
+[config language proposal](../aether-embedded-in-host-applications.md)
 and **landed there first**, then the
-[v2 namespace layer](embedded-namespaces-and-host-bindings.md)
+[v2 namespace layer](../embedded-namespaces-and-host-bindings.md)
 shipped on top of it. The rules-specific remaining work is:
 - The `rules` stdlib module (~200-300 lines of validation functions
   and the `field()` / `computed()` DSL wrappers) — pure stdlib code,
@@ -458,7 +458,7 @@ cannot do anything the host didn't hand it a function for.
 The host application doesn't have to be Java or Go.  An Aether
 application can host Aether rules scripts with the same containment, using
 the `LD_PRELOAD`-based sandbox (`libaether_sandbox.so`) already documented
-in [containment-sandbox.md](containment-sandbox.md).  The host compiles
+in [containment-sandbox.md](../containment-sandbox.md).  The host compiles
 the rules script to a `.so`, runs it in a child process with
 `LD_PRELOAD` active, and libc calls (`connect`, `open`, `execve`, etc.)
 are intercepted at the OS level against a grant list.
@@ -467,5 +467,5 @@ This gives two containment layers: the **facade** controls what functions
 the script can *name* (compile-time), and **LD_PRELOAD** controls what
 syscalls the script can *execute* (runtime).  Together they cover both
 escape paths.  See
-[Aether as a Config Language, Part 4](aether-embedded-in-host-applications.md#part-4-aether-hosting-aether--ld_preload-containment)
+[Aether as a Config Language, Part 4](../aether-embedded-in-host-applications.md#part-4-aether-hosting-aether--ld_preload-containment)
 for the full design.

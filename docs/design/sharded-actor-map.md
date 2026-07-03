@@ -88,7 +88,7 @@ got = shards[idx] ? Get { key: key }       // read:  synchronous ask
 
 This is built **entirely** on Aether's existing ask/reply primitive (the
 `?` operator + the `reply` statement); the sharded map adds no runtime
-machinery. See [`actor-concurrency.md`](actor-concurrency.md) for the
+machinery. See [`actor-concurrency.md`](../actor-concurrency.md) for the
 ask/reply mechanics and [`examples/actors/ask-pattern.ae`](../examples/actors/ask-pattern.ae)
 for the base pattern.
 
