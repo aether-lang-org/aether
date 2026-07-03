@@ -56,17 +56,17 @@ cached ASTs — each module file is read and parsed exactly once.
 | Import | Namespace | Functions |
 |--------|-----------|-----------|
 | `import std.string` | `string` | `string.new()`, `string.length()`, `string.release()` |
-| `import std.file` | `file` | `file.open()`, `file.read_all()`, `file.write()`, `file.exists()`, `file.close()`, `file.delete()`, `file.size()` |
+| `import std.file` | `file` | `file.open()`, `file.read()`, `file.write()`, `file.exists()`, `file.close()`, `file.delete()`, `file.size()` |
 | `import std.dir` | `dir` | `dir.exists()`, `dir.create()`, `dir.delete()`, `dir.list()` |
 | `import std.path` | `path` | `path.join()`, `path.dirname()`, `path.basename()`, `path.extension()`, `path.is_absolute()` |
-| `import std.fs` | `file`, `dir`, `path` | Combined module — re-exports `file.*`, `dir.*`, and `path.*` operations |
+| `import std.fs` | `fs` | Monolithic file/dir/path module — call under the `fs` namespace, e.g. `fs.read()`, `fs.exists()`, `fs.list_dir()`, `fs.clean()` (not `file.*`/`dir.*`/`path.*`) |
 | `import std.json` | `json` | `json.parse()`, `json.create_object()`, `json.free()` |
 | `import std.http` | `http` | `http.get()`, `http.server_create()`, `http.server_start()` |
 | `import std.tcp` | `tcp` | `tcp.connect()`, `tcp.write()`, `tcp.listen()` |
-| `import std.net` | `tcp`, `http` | Combined module — re-exports `tcp.*` and `http.*` operations |
+| `import std.net` | `net` | Monolithic networking module under the `net` namespace; redeclares the same TCP/HTTP externs over shared C symbols. Does not re-export the `tcp`/`http` namespaces, so `http.get()` fails after `import std.net` — import `std.http`/`std.tcp` for those |
 | `import std.list` | `list` | `list.new()`, `list.add()`, `list.get()`, `list.set()`, `list.remove()` |
 | `import std.map` | `map` | `map.new()`, `map.put()`, `map.get()`, `map.has()`, `map.remove()` |
-| `import std.collections` | `list`, `map` | Combined module — re-exports `list.*` and `map.*` operations |
+| `import std.collections` | `collections` | Monolithic list/map module. Functions keep their raw names; the qualified `collections.X` surface only reaches the Aether wrappers (`collections.list_add()`, `collections.map_put()`, `collections.map_get()`). Raw externs like `list_new`/`map_new` register globally and are callable unqualified, not as `collections.list_new()`. For a namespaced `list.new()`/`map.new()` surface, import `std.list`/`std.map` |
 | `import std.math` | `math` | `math.abs_int()`, `math.sqrt()`, `math.sin()`, `math.random_int()` |
 | `import std.log` | `log` | `log.init()`, `log.write()`, `log.shutdown()` |
 | `import std.io` | `io` | `io.print()`, `io.read_file()`, `io.getenv()` |
@@ -197,7 +197,7 @@ get synthetic imports during merge.
 
 Work planned on top of the current module system:
 
-- `import math.geometry as geo` — import aliases (parser accepts them; wiring through the typechecker and symbol table is next).
+- `import math.geometry as geo` — import aliases. The parser accepts them and the typechecker records the alias via `add_module_alias`, but qualified calls through the alias (`geo.distance()`) do not yet resolve; completing that lookup is the remaining work.
 - Exporting structs and actors from modules.
 - Re-exports (module A re-exporting module B's symbols).
 - Transitive dependency resolution.
@@ -237,31 +237,31 @@ mypackage/
 
 ### Package Manifest (aether.toml)
 
-Every package has an `aether.toml` file:
+Every package has an `aether.toml` file. This is what `ae init mypackage`
+scaffolds:
 
 ```toml
 [package]
 name = "mypackage"
 version = "0.1.0"
-authors = ["Your Name <you@example.com>"]
+description = "A new Aether project"
 license = "MIT"
-description = "My awesome Aether package"
-
-[dependencies]
-# Add with: ae add github.com/user/repo
-# github.com/user/mylib = "v1.0.0"
-
-[dev-dependencies]
-# Test dependencies
-
-[build]
-target = "native"
-optimizations = "aggressive"
 
 [[bin]]
 name = "mypackage"
 path = "src/main.ae"
+
+[dependencies]
+
+[build]
+target = "native"
+# link_flags = "-lsqlite3 -lcurl"  # Add extra linker flags
 ```
+
+Only a subset of the manifest is honored today: the `[[bin]]` entries
+(`name`/`path`/`extra_sources`) and the `[build]` `target`, `link_flags`,
+and `cflags` keys. The `[package]` metadata and `[dependencies]` table are
+recorded but not yet acted on by the toolchain.
 
 ### Creating Local Modules
 

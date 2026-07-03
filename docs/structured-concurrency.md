@@ -70,9 +70,8 @@ actor outside its whitelist. **No new mechanism is needed** — just the
 existing scope-denial check applied at two more compile-time sites
 (spawn, send).
 
-The two compose beautifully: a supervised subtree that is also sealed
-gives you both bounded lifetime and bounded blast radius. No other
-actor language pairs both.
+The two compose: a supervised subtree that is also sealed gives you both
+bounded lifetime and bounded blast radius.
 
 ## Phase 1 — supervision primitives
 
@@ -80,8 +79,8 @@ The runtime change needed is small: actor failure notification.
 
 ### What the runtime must expose
 
-1. When an actor's handler returns abnormally — explicit `exit(reason)`,
-   or a panic caught by the scheduler — the scheduler delivers a
+1. When an actor's handler returns abnormally (an explicit `exit(reason)`,
+   or a panic caught by the scheduler), the scheduler delivers a
    `Down { ref, reason }` message to every actor that registered
    interest in the failed actor.
 2. Registration is one of two kinds:
@@ -150,7 +149,7 @@ applied to ordinary reads:
 
 - `spawn(X())` — rejected if `X` is hidden or not on the seal whitelist.
 - `ref ! Msg {}` — rejected if `ref` is hidden or not whitelisted.
-- `ask ref { Request {} } after N` — same check on `ref`.
+- `ref ? Request {}` (the `?` ask operator) — same check on `ref`.
 
 The error message reuses the existing `E0304` (hidden in this scope)
 diagnostic.
@@ -167,7 +166,7 @@ sandbox("payment-handler") {
     // It cannot send to any actor reference not named here.
     // It cannot ask any outside service.
 
-    result = ask payment_client { Charge { amount: req.amount } } after 5000
+    result = payment_client ? Charge { amount: req.amount }
     if result != null {
         logger ! Audit { who: req.user, what: "charged", amount: req.amount }
         res.status = 200

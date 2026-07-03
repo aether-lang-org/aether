@@ -420,7 +420,7 @@ main() {
     string.release(csv);
 
     // Conversion
-    n = string.from_int(42);       // "42"
+    numstr = string.from_int(42);  // "42"
     f = string.from_float(3.14);   // "3.14"
     cstr = string.to_cstr(s);     // raw C string pointer
 
@@ -501,7 +501,7 @@ Array literal `[a, b, c]` builds a cons chain when the target type is `*StringSe
 
 For a `split_once`-style operation (find the first `sep` in `s`, return the halves), use `string.index_of(s, sep)` + two `string.substring` calls — two lines of code that avoid a tuple-unification foot-gun the typechecker currently has around three-string tuples.
 
-> **Note: `string + string` is not defined.** Use `"${a}${b}"` interpolation for literals or `string.concat(a, b)` / `string.format(fmt, args)` for runtime-built strings. The typechecker rejects `+` between two string operands at compile time with a hint pointing at these alternatives — it does NOT silently emit broken pointer arithmetic.
+> **Note: `string + string` is not defined.** Use `"${a}${b}"` interpolation for literals or `string.concat(a, b)` for runtime-built strings; `string.format(fmt, args)` handles the N-part case. The typechecker rejects `+` between two string operands at compile time (E0200) with a hint naming `"${a}${b}"` interpolation and `string.concat(a, b)` — it does NOT silently emit broken pointer arithmetic.
 
 **Conversion:**
 - `string.to_cstr(str)` - Get raw C string pointer
@@ -1781,7 +1781,7 @@ main() {
     t = math.tan(0.5)
 
     // Inverse trig
-    as = math.asin(0.5)
+    asn = math.asin(0.5)
     ac = math.acos(0.5)
     at = math.atan2(1.0, 1.0)
 

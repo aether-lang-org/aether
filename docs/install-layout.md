@@ -9,7 +9,8 @@ $PREFIX/
 ├── bin/                          # toolchain binaries
 │   ├── ae                        # the user-facing CLI (`ae build`, `ae run`, …)
 │   ├── aetherc                   # the compiler (lower-level; ae usually wraps)
-│   └── aether-lsp                # language server
+│   └── aether-lsp                # language server (install.sh only, if built;
+│                                  # `make install` does not install it)
 │
 ├── lib/aether/
 │   └── libaether.a               # prebuilt static archive — link target for downstream
@@ -45,7 +46,7 @@ Two consumption shapes, in priority order:
 
    `ae cflags` resolves to the right `-I<prefix>/include/aether/...`
    plus `-L<prefix>/lib/aether -laether` plus the OS-level deps
-   (`-lm`, `-lpthread`, plus `-lssl -lcrypto -lz -lnghttp2 -ldl` if
+   (`-pthread -lm`, plus `-lssl -lcrypto -lz -lnghttp2 -ldl` if
    the build picked them up at install time). It works identically
    for in-tree dev builds, `~/.aether` user installs, and `/usr/local`
    system installs.
@@ -79,8 +80,8 @@ Two consumption shapes, in priority order:
    # Read MANIFEST + build the link command:
    cd $PREFIX/share/aether
    src=$(grep -v -E '^(#|$)' MANIFEST)
-   gcc your.c $src -I include/aether/runtime -I include/aether/std \
-       -lm -lpthread -lssl -lcrypto -lz -lnghttp2 \
+   gcc your.c $src -I $PREFIX/include/aether/runtime -I $PREFIX/include/aether/std \
+       -pthread -lm -lssl -lcrypto -lz -lnghttp2 \
        -o your-program
    ```
 
@@ -149,25 +150,27 @@ Apps that #include runtime/std headers and link against
 `libaether.a` from a plain `make install` tree must compile with
 the **same preprocessor defines** the install was built with —
 otherwise the header-side macros and the library-side symbols
-disagree. The two flags that matter today:
+disagree. The flag that matters:
 
 - **`-DAETHER_HAS_SANDBOX`** — gates `aether_sandbox_check()`.
-  When defined, the header declares a real function and the
-  library provides it; when undefined, the header defines it as
-  a no-op macro that always returns 1. If your build compiles
-  the header without the flag but links against the library
-  built with it, you'll see linker errors for the sandbox
-  symbols (or worse — silent loss of sandbox enforcement). The
-  shipped `libaether.a` is always built with this flag (see
-  `Makefile:196` `CFLAGS`), so downstream consumers should
-  compile with it too.
+  When defined, `runtime/aether_sandbox.h` provides a `static
+  inline aether_sandbox_check()` that consults the global
+  `_aether_sandbox_checker` (defined in `libaether.a`); when
+  undefined, the header replaces it with a no-op macro that
+  always returns 1. There's no linker error on skew — the
+  function is inline in both branches — so a build that compiles
+  the header without the flag silently loses sandbox enforcement
+  even when linked against a sandbox-enabled library. The shipped
+  `libaether.a` is always built with this flag (see `CFLAGS` in
+  the Makefile, which carries `-DAETHER_HAS_SANDBOX`), so
+  downstream consumers should compile with it too.
 
 - Any future `AETHER_HAS_*` flags introduced for optional
   runtime subsystems will follow the same pattern.
 
 The version stamp at `lib/aether/VERSION` catches the
 ae-vs-libaether version skew separately; the define skew is its
-own thing and silent unless a symbol actually missing.
+own thing and silent unless a symbol is actually missing.
 
 The MANIFEST never references trimmed paths — the regression test
 at `tests/integration/install_manifest/` verifies this on every
@@ -184,7 +187,7 @@ layout:
   in `tools/ae.c` that runs when `libaether.a` is missing
   (e.g. cross-built / partial installs).
 
-- **(B) Ship `MANIFEST`** (this PR). Conservative — keeps the
+- **(B) Ship `MANIFEST`** (the shipped choice). Conservative — keeps the
   source-fallback path working as a backstop, gives downstream
   tools an authoritative list, no breakage.
 

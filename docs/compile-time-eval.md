@@ -95,9 +95,17 @@ the compile-time builtin `__pure(funcName)` folds to a `true`/`false` constant
 reflecting it:
 
 ```aether
-when __pure(parse_config) { ... }      // compile-time branch on purity
 let safe = __pure(transform)           // bool constant, no runtime cost
+if __pure(parse_config) { ... }        // branch on purity; folded to a literal
 ```
+
+`__pure` folds during typecheck, so it is usable anywhere an expression is
+(a `let` initializer, an `if` condition, a comparison). It is *not* a valid
+`when` condition: `when` is resolved before typecheck (`resolve_when_statements`,
+`compiler/codegen/optimizer.c`), so it never sees the folded bool and rejects
+`when __pure(fn)` with "`when` condition is not a compile-time constant".
+`when` conditions are limited to `target.os`/`target.arch` comparisons, bool
+literals, and `&&`/`||`/`!` combinations of those.
 
 A function is **pure** when, transitively, it:
 

@@ -4,7 +4,7 @@ A runnable scaling study comparing the **three** concurrency designs
 Aether ships for a shared, concurrently-accessed map, and the guidance
 that falls out of it.
 
-Issue [#841](https://github.com/aether-lang/aether/issues/841).
+Issue [#841](https://github.com/aether-lang-org/aether/issues/841).
 Benchmark:
 [`benchmarks/concurrent-cache/concurrent_cache_bench.ae`](../benchmarks/concurrent-cache/concurrent_cache_bench.ae).
 
@@ -21,9 +21,9 @@ clock (`os.now_monotonic_ns`) and printing **ops/sec**.
 |---|--------|-----------|------------|--------|
 | 1 | **Single-owner actor** | `?` ask to the one owner | `!` to the one owner | the "one mutex" trap (`docs/sharded-actor-map.md`) |
 | 2 | **Sharded actor map** | `?` ask to `shards[hash(key)%N]` | `!` to `shards[hash(key)%N]` | `examples/actors/sharded-map.ae` |
-| 3 | **COW snapshot cell** | lock-free `snapshot.load` inside a reader actor | writer rebuilds the whole map, `snapshot.store`, defer-frees N−1 | `std.snapshot` / `docs/snapshot-cell.md` |
+| 3 | **COW snapshot cell** | lock-free `snapshot.load`, no mailbox | rebuild the whole map, `snapshot.store`, defer-free the displaced snapshot by one generation | `std.snapshot` / `docs/snapshot-cell.md` |
 
-**Workload mixes** (each runs a fixed 200 000-op budget over 64 keys):
+**Workload mixes** (each runs a fixed 100 000-op budget over 64 keys):
 
 - **read-only** — 100 % reads
 - **read-heavy** — 90 % reads / 10 % writes
@@ -34,12 +34,15 @@ A single 31-bit LCG produces the read/write split and key selection, and
 every design replays the **same** stream for a given mix, so the only
 variable across the three numbers in a row is the data structure itself.
 
-Reads are driven through **multiple reader actors** to exercise
-concurrency: the sharded design fans reads out across `N` owner
-mailboxes by key, and the COW design round-robins reads across 8 reader
-actors that each do a lock-free `snapshot.load`. Writes go to the single
-owner (design 1), the routed shard (design 2), or the single writer-actor
-(design 3, which rebuilds and republishes the whole snapshot).
+All operations are issued from the single `main` loop; there are no
+separate reader actors. Reads exercise each design's read path: an `?`
+ask to the one owner (design 1), an `?` ask routed to `shards[hash(key)%N]`
+(design 2), or a direct lock-free `snapshot.load` (design 3). Writes go
+to the single owner (design 1), the routed shard (design 2), or, for COW,
+rebuild the whole map inline and republish it with `snapshot.store`.
+Fanning reads out across concurrent driver actors to expose the sharded
+read path's parallelism is a documented out-of-scope refinement (see
+"Honest limitations" below).
 
 ### Run it
 

@@ -108,8 +108,8 @@ if (!node->node_type ||
     node->node_type->kind == TYPE_VOID) { ... }
 ```
 
-A function whose `node_type` was already a `TUPLE` — even a partially-
-resolved one — fell off the gate's right side and never re-inferred.
+A function whose `node_type` was already a `TUPLE` (even a partially-
+resolved one) fell off the gate's right side and never re-inferred.
 `merge_tuple_returns` did walk return statements to fill UNKNOWN
 slots, but only from `val->node_type` and `AST_LITERAL` value-shape
 heuristics — not from `AST_IDENTIFIER` lookups, which is where

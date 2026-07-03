@@ -5,7 +5,7 @@ for Aether maintainers planning language/runtime work to accelerate the in-situ
 Redis-to-Aether migration in sibling repo `aedis/`. It intentionally excludes
 features already present in `0.169`.*
 
-> **Status update (as of v0.303.0).** This is a historical wishlist written
+> **Status update (last reviewed at v0.347.0).** This is a historical wishlist written
 > at v0.169.0; the original analysis below is preserved verbatim. Several of
 > the P0/P1/P2 items have since landed in the compiler and stdlib. Each
 > delivered item is annotated inline with a `✅ DELIVERED` marker and the
@@ -20,7 +20,7 @@ features already present in `0.169`.*
 > - P1 C Constants And Macros — **DELIVERED** (`extern const NAME: type @c_import`, #702)
 > - P2 `std.mem` Bulk And Endian Helpers — **DELIVERED** (`mem.copy/move/compare/set`, LE/BE 16/32/64)
 >
-> Still open at v0.303.0: P2 SDS And Length-Aware String Boundary, and the
+> Still open at v0.347.0: P2 SDS And Length-Aware String Boundary, and the
 > P3/P4 build-integration and ergonomics items.
 
 ## Current Port Shape
@@ -68,10 +68,11 @@ The remaining asks below are narrower than the older wishlist.
 > header*: Aether typechecks field access and `*client` overlays against the
 > declared fields, but codegen emits **no** `typedef struct client { … }
 > client;` and no forward typedef, so it cannot collide with the header's.
-> Parser: `compiler/parser/parser.c:3547` (attribute → annotation
+> Parser: `compiler/parser/parser.c:4033-4083` (attribute → annotation
 > `extern_c_import`, mutually exclusive with `@packed`). Codegen suppresses
-> the body/typedef at `compiler/codegen/codegen_func.c:1727`, and emits the
-> portable `struct Name*` pointer form at `compiler/codegen/codegen_func.c:607`.
+> the body/typedef at `compiler/codegen/codegen_func.c:1804-1806`, and emits the
+> portable `struct Name*` pointer form at `compiler/codegen/codegen.c:1761`
+> (`aether_is_c_import_struct`).
 > *(Original gap analysis preserved below.)*
 
 ### Problem
@@ -161,8 +162,9 @@ Primary targets:
 > access); `*Name` is its typed pointer, and `const ptr` (→ `const void*`),
 > `const *T` (→ `const T*`), `cstring` (→ `char*`) and `cstring_const`
 > (→ `const char*`) cover the qualified surface. Parser: `extern type`
-> at `compiler/parser/parser.c:3521` (annotation `extern_opaque`).
-> Documented in `docs/language-reference.md:1577`. Regression test:
+> at `compiler/parser/parser.c:4007-4021` (annotation `extern_opaque`).
+> Documented in `docs/language-reference.md:1879` ("Typed and qualified C
+> pointers"). Regression test:
 > `tests/regression/test_c_typed_pointers.ae` exercises the doc's acceptance
 > list (`uint64_t h(const void *, size_t)`, `int f(const char *)`, opaque
 > `*handle` param, no conflicting-declaration warnings).
@@ -233,8 +235,9 @@ command handlers, networking, module APIs, and storage code.
 > **✅ DELIVERED (as of v0.303.0):** the built-in-alias spelling proposed below
 > (`size_t n = 0`, `uint32_t flags = 0`) is implemented. The fixed-width and
 > platform C type names are recognised as type keywords and mapped to Aether's
-> integer types, which emit the matching exact C spelling. Mappings at
-> `compiler/parser/parser.c:137-153`, including `uint8_t`→`TYPE_UINT8`,
+> integer types, which emit the matching exact C spelling. Mappings in the
+> `c_abi_alias_kind()` table at `compiler/parser/parser.c:160-181`, including
+> `uint8_t`→`TYPE_UINT8`,
 > `uint16_t`→`TYPE_UINT16`, `uint32_t`→`TYPE_UINT32`, `int64_t`/`uint64_t`→
 > `TYPE_INT64`/`TYPE_UINT64`, `intptr_t`/`uintptr_t`→`TYPE_INT64`/`TYPE_UINT64`,
 > `size_t`→`TYPE_UINT64`, `ssize_t`/`off_t`/`time_t`→`TYPE_INT64`. Used directly
@@ -308,9 +311,9 @@ RDB/AOF, process helpers, and platform-specific code.
 
 > **✅ DELIVERED (as of v0.303.0):** the `longdouble` ABI type is implemented
 > (#749). The `longdouble` type name parses to `TYPE_LONGDOUBLE`
-> (`compiler/parser/parser.c:531`, declared in `compiler/ast.h:196`) and lowers
-> to C `long double` in every codegen position (`compiler/codegen/codegen.c:65`,
-> `:1217`, `:1430`, `:1584`). It works in extern params/returns, locals, and
+> (`compiler/parser/parser.c:583-588`, declared in `compiler/ast.h:238`) and lowers
+> to C `long double` in every codegen position (`compiler/codegen/codegen.c:221`,
+> `:1451`, `:1710`, `:1902`). It works in extern params/returns, locals, and
 > arithmetic, so direct libc externs such as `strtold` are expressible.
 > *(Original gap analysis preserved below.)*
 
@@ -451,8 +454,8 @@ C trampoline code:
 > for the declaration itself, so per-platform macro values come out right by
 > construction (the including TU's headers are the source of truth). Object-like
 > macros only; function-like macros stay wrapped in a C extern. Parser:
-> `compiler/parser/parser.c:3624` (annotation `c_import_const`, `@c_import`
-> required). Documented in `docs/language-reference.md:1599`. The header-driven
+> `compiler/parser/parser.c:4110-4152` (annotation `c_import_const`, `@c_import`
+> required). Documented in `docs/language-reference.md:1915`. The header-driven
 > codegen tool described under "Better path" is not part of this; constants
 > are imported by name, not generated. *(Original gap analysis preserved below.)*
 

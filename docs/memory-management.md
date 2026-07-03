@@ -5,7 +5,7 @@ Aether's memory model is **deterministic scope-exit cleanup**, not garbage colle
 The guiding principle:
 > **Allocations visible at call site. Cleanup explicit and composable. `defer` is your primary tool.**
 
-No hidden allocations. No GC pauses. No magic.
+Allocations are visible at the call site, and there are no GC pauses.
 
 ### Why `defer`?
 
@@ -333,7 +333,7 @@ function that mints a fresh owned buffer belongs here.
 
 ### User-defined `-> string` functions (issue #405)
 
-A user-defined function that returns `string` is treated as heap-returning **iff *any* return statement in its body yields a heap-string-expression** (recursively considering other heap-returning user functions) — an OR-fold across the return sites. A function whose returns are *all* string literals or forwarded borrowed parameters is NOT heap-returning, and the wrapper won't try to free its results. A function that *mixes* the two — one branch `return string.concat(...)`, another `return "constant"` — *is* heap-returning: its literal branches are malloc-duplicated through the uniform-heap return wrap (see [Return-ownership contract](#return-ownership-contract-uniform-heap-return-escape) below) so the caller can free every branch identically.
+A user-defined function that returns `string` is treated as heap-returning **iff *any* return statement in its body yields a heap-string-expression** (recursively considering other heap-returning user functions) — an OR-fold across the return sites. A function whose returns are *all* string literals or forwarded borrowed parameters is NOT heap-returning, and the wrapper won't try to free its results. A function that *mixes* the two (one branch `return string.concat(...)`, another `return "constant"`) *is* heap-returning: its literal branches are malloc-duplicated through the uniform-heap return wrap (see [Return-ownership contract](#return-ownership-contract-uniform-heap-return-escape) below) so the caller can free every branch identically.
 
 ```aether
 my_concat(a: string, b: string) -> string {
@@ -374,7 +374,7 @@ The same wrapper fires when a heap string is unpacked from a tuple. For user-def
 
 One case vetoes the OR-fold: a **whole-tuple passthrough** return — `return g(...)` where `g` is itself tuple-typed — forwards `g`'s tuple opaquely and cannot be wrapped position-by-position. Such a position is freeable only if `g` already guarantees it (`g`'s own per-position analysis); if `g` doesn't, the position is forced non-heap, so the caller is never told to free a value the passthrough left borrowed.
 
-(Earlier releases AND-folded instead — a position counted as heap only if *every* return-site made it heap — which classified the mixed `decode`-shaped functions non-heap and leaked their success-path allocation at every caller. The OR-fold + uniform-heap wrap + passthrough veto replaced it; see CHANGELOG 0.167.0 and the `new_string_len_something.md` follow-up.)
+(Earlier releases AND-folded instead — a position counted as heap only if *every* return-site made it heap — which classified the mixed `decode`-shaped functions non-heap and leaked their success-path allocation at every caller. The OR-fold + uniform-heap wrap + passthrough veto replaced it.)
 
 ```aether
 build_pair(prefix: string, name: string) -> (string, string) {
@@ -441,7 +441,7 @@ Other tuple-returning string-position externs in the stdlib stay at default `@bo
 
 The wrapper-on-reassignment frees the **previous** value when a heap-string variable is assigned to. The function-exit defer-free closes the complementary case: a heap-string variable assigned **once** and never reassigned still has a live allocation when the function exits — without an exit-time free, that allocation leaks per-call.
 
-The codegen now emits `if (_heap_<name>) { aether_heap_str_free(<name>); <name> = NULL; _heap_<name> = 0; }` at every function-exit and explicit `return` for every hoisted heap-string variable that is **not** escaped. `aether_heap_str_free` dispatches on the AetherString magic header — `string_release` for refcounted AetherStrings, plain `free` for malloc'd `char*`. The escape walker — same one the wrapper consults — decides which variables are held by something that outlives the call (return, closure capture, `ptr`-typed param, `@retain`-typed param, recursive escape via another store) and skips the defer for those.
+The codegen now emits `if (_heap_<name>) { aether_heap_str_free(<name>); <name> = NULL; _heap_<name> = 0; }` at every function-exit and explicit `return` for every hoisted heap-string variable that is **not** escaped. `aether_heap_str_free` dispatches on the AetherString magic header: `string_release` for refcounted AetherStrings, plain `free` for malloc'd `char*`. The escape walker (the same one the wrapper consults) decides which variables are held by something that outlives the call (return, closure capture, `ptr`-typed param, `@retain`-typed param, recursive escape via another store) and skips the defer for those.
 
 ```aether
 foo(b64: string) -> int {
@@ -456,7 +456,7 @@ Cost: zero on functions that don't allocate heap strings; one inline conditional
 
 ### `@retain` per-parameter annotation on extern declarations
 
-For functions that *store* (or take a strong reference on) a string pointer beyond the call — refcount operations, owning map keys — the default "string parameter is read-only" treatment from the escape walker is wrong: it would let the function-exit defer-free reclaim the bytes while the recipient still holds the pointer — UAF. The `@retain` annotation fixes this:
+For functions that *store* (or take a strong reference on) a string pointer beyond the call, such as refcount operations and owning map keys, the default "string parameter is read-only" treatment from the escape walker is wrong: it would let the function-exit defer-free reclaim the bytes while the recipient still holds the pointer, a use-after-free. The `@retain` annotation fixes this:
 
 ```aether
 extern string_retain(str: @retain string)
@@ -533,7 +533,7 @@ A heap string stored as a container *value* is owned by the container and releas
 - **Statically heap** (`string.concat(...)`, interpolation, a heap-returning call, or a local proven heap-assigned in the enclosing body): routed to the owning variant (`map_put_string_owned` / `list_add_string_owned`, which adopt the caller's single reference — no retain, so the refcount balances at free time). The escape walker marks the same value escaped, so the caller doesn't also free it; the value is freed exactly once, by the container.
 - **A literal**, or a value whose ownership can't be proven at the put site, stays on the non-owning `*_raw` path; the container never frees it.
 
-**Ownership through a `string` parameter — the container borrows.** A value reaching a container *through a `string` parameter* of a storing wrapper (`pr(m, k, v) { map.put(m, k, v) }`) is left on the **non-owning** path: the put site sees only a `string` param, which can hold either an owned heap string the caller minted *or* a borrowed/literal one, and the two are indistinguishable there. The container therefore **borrows** such a value — it does not free it at teardown — and the **program** owns and frees it. (Dispatching at runtime on the AetherString magic header is *not* a sound shortcut: the magic header proves heap *representation*, not caller-transferred *ownership*, so a borrowed magic string still owned by another scope would be double-freed. Representation is not ownership — and a double-free is worse than a leak.) This matches the proxy/opts-map idiom (`std.map` holding both owned and borrowed values): retrieve the heap values via their owning handles and `string.free` them before `map.free`.
+**Ownership through a `string` parameter — the container borrows.** A value reaching a container *through a `string` parameter* of a storing wrapper (`pr(m, k, v) { map.put(m, k, v) }`) is left on the **non-owning** path: the put site sees only a `string` param, which can hold either an owned heap string the caller minted *or* a borrowed/literal one, and the two are indistinguishable there. The container therefore **borrows** such a value (it does not free it at teardown), and the **program** owns and frees it. (Dispatching at runtime on the AetherString magic header is *not* a sound shortcut: the magic header proves heap *representation*, not caller-transferred *ownership*, so a borrowed magic string still owned by another scope would be double-freed. Representation is not ownership, and a double-free is worse than a leak.) This matches the proxy/opts-map idiom (`std.map` holding both owned and borrowed values): retrieve the heap values via their owning handles and `string.free` them before `map.free`.
 
 The key is always interned by the container (copied via `string_new`), so a heap key is the caller's to reclaim — see the `@retain` note above.
 

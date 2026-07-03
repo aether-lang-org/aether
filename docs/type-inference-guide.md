@@ -42,7 +42,8 @@ result = x * y        // inferred: float
 ```aether
 // Return type inferred from return statement
 add(a, b) {
-    return a + b      // If used with ints -> int, if with floats -> float
+    return a + b      // monomorphizes to one signature from the first
+                      // inferred call site (not per-call polymorphism)
 }
 
 // Parameters inferred from usage
@@ -186,7 +187,8 @@ Once inferred, types are validated for consistency:
 
 ```aether
 x = 42
-x = "hello"   // ERROR: Can't assign string to int
+x = "hello"   // rejected at the C-compile stage (-Wint-conversion),
+              // not by an Aether type-inference diagnostic
 ```
 
 ## Null and Pointer Inference
@@ -198,11 +200,21 @@ conn = null                  // inferred: ptr
 conn = tcp_connect_raw(...)  // still ptr — type is consistent
 ```
 
-Integer `0` is compatible with `ptr` for null-initialization patterns:
+Integer `0` interoperates with `ptr` only in limited cases. Assigning `0`
+to a variable that is already `ptr`-typed is fine (a null slot). But
+`0`-first-then-`ptr` widening is not a general rule: the pass in
+`compiler/analysis/type_inference.c` (`widen_ptr_assigned_locals`) only
+retypes a `0`-initialized local as `ptr` when that local lives inside a
+`ptr`-returning function. The same pattern in a plain `int`-returning
+`main()` keeps the local as `int` and fails to compile with
+`incompatible pointer to integer conversion`:
 
 ```aether
-server = 0                   // initially int
-server = tcp_listen_raw(80)  // tcp_listen_raw returns ptr — type widens to ptr
+listen(): ptr {
+    server = 0                   // widened to ptr: this function returns ptr
+    server = tcp_listen_raw(80)  // OK
+    return server
+}
 ```
 
 ### Constants
@@ -218,10 +230,14 @@ const NAME = "hello"     // inferred: string
 
 ### Ambiguous Types
 
+A local declaration uses C-style prefix syntax (`type name = value`), not
+the postfix `name: type` form. A bare `x: int` local does not parse; it
+reports `error[E0100]: Expected statement in block`. Postfix `name: type`
+is valid only for function parameters and struct fields.
+
 ```aether
-// This FAILS - can't infer type without usage
-x: int              // Declare with explicit type
-x = get_value()     // OK - type is known
+// Give the local an explicit type up front
+int x = get_value()   // OK - x is int
 ```
 
 ### Generic Functions
@@ -303,22 +319,24 @@ main() {
 
 ## Error Messages
 
-When inference fails, Aether provides helpful errors:
+Compiler diagnostics are E-coded (for example `E0100`, `E0301`) and print
+with a source span and a `help:` line. There is no free-form "Type
+inference failed" message. For instance, a call to a name the compiler
+cannot resolve reports:
 
-```aether
-x = unknown_value()   // Type cannot be inferred
-
-// Error: Type inference failed
-//   Line 1: Variable 'x' has ambiguous type
-//   help: Add type annotation: x: int = unknown_value()
 ```
+error[E0301]: Undefined function 'unknown_value'
+```
+
+When you do need to pin a local's type, use the C-style prefix form
+`int x = ...`; the postfix `x: int = ...` form does not parse.
 
 ## Summary
 
-- **Inference is powerful** - Handles most common cases automatically
-- **Explicit types are documentation** - Use strategically for public APIs
-- **No runtime cost** - Type inference is compile-time only
-- **Fully type-safe** - Same guarantees as explicit types
+- Inference covers literals, simple expressions, and single-call-site functions.
+- Explicit types double as documentation; use them for public APIs and exports.
+- Inference is compile-time only, with no runtime cost.
+- Inferred types carry the same guarantees as explicit ones.
 
-Type inference gives Aether the expressiveness of ML/Haskell while maintaining C-level type safety and performance.
+Type inference removes most annotations while keeping the generated C strictly typed.
 

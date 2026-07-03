@@ -281,11 +281,12 @@ need sorted iteration copy the keys and sort.
 ```c
 struct JsonValue {
     uint8_t type;           // 1
-    uint8_t flags;          // 1  (JV_FLAG_ROOT)
+    uint8_t flags;          // 1  (JV_FLAG_ROOT | JV_FLAG_HEAP_STRUCT | JV_FLAG_INTEGER)
     uint8_t _pad[6];        // 6  — needed to align the union at offset 8
     union {
-        int      boolean;                           // 4
-        double   number;                            // 8
+        int       boolean;                          // 4
+        double    number;                           // 8
+        long long integer;                          // 8  — used when JV_FLAG_INTEGER set
         struct { const char* data; uint32_t length; } str;  // 16
         struct { JsonValue** items; uint32_t c, cap; } arr; // 16
         struct { JsonObjBlock* blk; uint32_t c, cap; } obj; // 16
@@ -319,10 +320,13 @@ for objects above some threshold. Not v1.
 
 ## Error reporting
 
-All error paths funnel through `err_set(line, col, fmt, ...)` which
-formats into a `_Thread_local` buffer. **First error wins**: once
-`g_json_err_set` is true, subsequent calls no-op. This preserves the
-innermost diagnostic, which is almost always the most specific.
+Positioned errors funnel through `err_set(line, col, fmt, ...)` which
+formats into a `_Thread_local` buffer. Input-level failures with no
+cursor position (null input, arena-create OOM in `json_parse_raw_n`)
+go through a separate `err_set_no_pos(reason)`. Both share the
+**first error wins** rule: once `g_json_err_set` is true, subsequent
+calls no-op. This preserves the innermost diagnostic, which is almost
+always the most specific.
 
 Position accuracy is maintained by `p_advance(s)` — every cursor
 motion goes through it, incrementing `line` on `\n` and `col`
@@ -338,11 +342,12 @@ parallel surface that callers can switch on programmatically without
 parsing English:
 
 - `g_json_err_kind` — one of `AETHER_JSON_KIND_*` (`OK`, `PARSE_ERROR`,
-  `OUT_OF_MEMORY`, `INVALID_INPUT`). Set alongside `g_json_err_buf` in
-  every `err_set` call. OOM detection is a single-site
-  `strstr(msg, "out of memory")` check inside `err_set`, so the
-  dozens of existing `err_set("out of memory ...")` sites need no
-  change.
+  `OUT_OF_MEMORY`, `INVALID_INPUT`). `err_set` only ever assigns
+  `OUT_OF_MEMORY` or `PARSE_ERROR`: OOM detection is a single-site
+  `strstr(msg, "out of memory")` check, so the dozens of existing
+  `err_set("out of memory ...")` sites need no change, and everything
+  else falls through to `PARSE_ERROR`. `INVALID_INPUT` comes only from
+  `err_set_no_pos`, which handles the null/empty-input path.
 - `g_json_err_line` / `_col` — the same 1-based position the human
   message reports, but as integers for callers that want to point at
   source.
@@ -376,8 +381,9 @@ it's a bounded recursion guarantee, not a configurable limit.
 ## Thread safety
 
 The parser itself is **reentrant and thread-safe** — there is no
-mutable global state during parse. The two `_Thread_local` globals
-(`g_json_err_buf`, `g_json_err_set`) and the `JSON_CC_RW` init flag
+mutable global state during parse. The five `_Thread_local` globals
+(`g_json_err_buf`, `g_json_err_set`, and the structured-error trio
+`g_json_err_kind` / `_line` / `_col`) and the `JSON_CC_RW` init flag
 isolate per-thread parses from each other. Two threads parsing
 concurrently hold independent arenas and see independent error slots.
 

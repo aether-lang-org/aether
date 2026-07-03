@@ -247,10 +247,11 @@ contain `static const char* string_copy(...)` — a private copy each.
 Linking the two `.o` files together produces no duplicate-symbol
 errors, even on linkers that don't support
 `-Wl,--allow-multiple-definition` (notably macOS ld64). This is
-deliberate; see [`compiler/aether_module.c:1126`](../compiler/aether_module.c)
-where `clone->is_imported = 1` is set, and
-[`compiler/codegen/codegen_func.c:297`](../compiler/codegen/codegen_func.c)
-where the `static` keyword gets emitted.
+deliberate; see [`compiler/aether_module.c`](../compiler/aether_module.c)
+where cloned imported functions get `clone->is_imported = 1`, and
+[`compiler/codegen/codegen_func.c`](../compiler/codegen/codegen_func.c)
+where the `static ` prefix is emitted for functions guarded by
+`func->is_imported || trailing_underscore_private`.
 
 **Locally-defined functions retain external linkage.** If two `.ae`
 files both define a function with the same name (e.g. both define
@@ -444,22 +445,28 @@ typedef struct {
 } AetherLibFunction;
 
 typedef struct {
-    const char* schema_version;   /* "1.0" funcs only; "1.1" w/ closures */
+    const char* schema_version;   /* "1.0" funcs; "1.1" closures; "1.2" consts */
     const char* aether_version;   /* compiler version                  */
     const char* primary_source;   /* the .ae passed to aetherc         */
     int                       function_count;
     const AetherLibFunction*  functions;
     int                       closure_count;   /* v2: closure-surface records */
     const AetherLibClosure*   closures;        /* NULL when closure_count==0 */
+    int                       constant_count;  /* v3: exported-constant records */
+    const AetherLibConstant*  constants;       /* NULL when constant_count==0 */
 } AetherLibMeta;
 ```
 
 No JSON, no parsing, no dynamic allocation — the struct is `static const`
 in the artifact and the catalog literally lives in `.rodata`. Schema is
 versioned; within `1.x` only additive fields appear at the struct tail,
-so a "1.0" reader walks a "1.1" artifact unchanged (it reads
-`function_count`/`functions` and ignores the closure slots — they were
-always present, just NULL before). The function table includes every
+so a "1.0" reader walks a "1.1" or "1.2" artifact unchanged (it reads
+`function_count`/`functions` and ignores the closure and constant slots;
+those fields were always present, just NULL before). `schema_version` is
+"1.0" for function-only artifacts, "1.1" once closure records are
+present, and "1.2" once exported-constant records
+(`constant_count`/`constants`, of type `AetherLibConstant`) are present.
+The function table includes every
 Aether-defined function the linker exports; functions skipped from the
 `aether_<name>` alias surface (unsupported types, tuple returns,
 trailing-underscore privates) are also omitted from it.
@@ -478,7 +485,7 @@ typedef struct { const char* name; const char* type; } AetherLibCapture;
 
 typedef struct {
     const char* name;              /* param / closure name, or ""       */
-    const char* role;              /* "builder" | "param" | "literal"   */
+    const char* role;              /* "builder"|"param"|"trailing-block"|"literal" */
     const char* enclosing_export;  /* the export it is reachable from   */
     const char* signature;         /* "|int, string| -> bool"           */
     int                     capture_count;
@@ -499,8 +506,11 @@ Aether consumer):
   a trailing block" signal; `capture_count` is 0.
 - **`param`** — a closure-typed (`fn`) parameter of an export. `name` is
   the parameter, `signature` its `|...| -> R` shape.
-- **`literal`** — a hoisted closure literal in an export's body, with the
-  enclosing variables it captures and their rendered Aether types.
+- **`trailing-block`** — a trailing-block closure literal in an export's
+  body.
+- **`literal`** — any other hoisted closure literal in an export's body.
+  For both of these, `captures` lists the enclosing variables the closure
+  closes over with their rendered Aether types.
 
 Closure-literal return types are best-effort: rendered when resolved,
 `?` when the body type-checks lazily and the type isn't known at emit

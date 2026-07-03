@@ -10,7 +10,7 @@ readers and writers without collapsing onto a single core.
 > `hash(key) % N`, and operations on different keys land on different
 > mailboxes. Contention drops roughly `N×`.
 
-Issue [#839](https://github.com/aether-lang/aether/issues/839).
+Issue [#839](https://github.com/aether-lang-org/aether/issues/839).
 
 See the runnable example at
 [`examples/actors/sharded-map.ae`](../examples/actors/sharded-map.ae) and
@@ -125,9 +125,10 @@ allocates and returns a hex string, where you want a cheap integer).
 ## How many shards?
 
 This is where the actor version **diverges from the lock-striping
-literature**. The well-known Java `ConcurrentHashMap` / Go
-`ConcurrentMap` studies land on figures like **256** stripes. Do **not**
-copy that number for actors.
+literature**. Striped-lock maps default to a fixed stripe count set
+independently of the core count — Java's `ConcurrentHashMap`, for
+instance, historically used a default concurrency level of **16**. Do
+**not** copy such a number for actors.
 
 A lock stripe is nearly free: a word in an array. An actor shard is not —
 each one is a live entity with a **mailbox, a scheduler slot, and a cache
@@ -169,11 +170,10 @@ If your access pattern is **read-mostly and hot-key-skewed** (a config
 blob, a routing table, feature flags hammered on every request),
 **sharding is the wrong tool** — point those reads at the **copy-on-write
 snapshot cell** instead: [`std.snapshot` / `docs/snapshot-cell.md`](snapshot-cell.md)
-(issue [#840](https://github.com/aether-lang/aether/issues/840)). There a
+(issue [#840](https://github.com/aether-lang-org/aether/issues/840)). There a
 read is a single lock-free atomic load, so a thousand readers of the same
 hot key never contend at all. Sharding is for **write-heavy, well-spread**
-key spaces; the snapshot cell is for **read-heavy** ones. They are
-complementary, not competitors.
+key spaces; the snapshot cell is for **read-heavy** ones.
 
 ---
 

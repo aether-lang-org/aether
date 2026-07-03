@@ -288,7 +288,7 @@ pointer is freed with `string.array_free`.
 
 ## Sending across actor boundaries
 
-`*StringSeq` field on a message just works:
+A `*StringSeq` field on a message is sent as-is:
 
 ```aether
 message AnalyzeBatch {

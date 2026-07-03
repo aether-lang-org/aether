@@ -95,7 +95,7 @@ and "know where the binary lives" patterns common in CLI tools:
   on failure: replaces the current process image with another. Thin
   wrapper over POSIX `execvp()` and Windows `_execvp()`.
 
-### P4 — `std.fs` completeness bundle ✅ done
+### ~~P4~~ — `std.fs` completeness bundle — **SHIPPED**
 
 The six filesystem primitives that used to force Aether users to
 shell out are now in `std.fs`:
@@ -133,10 +133,6 @@ hit them.
 
 `ae add` supports versioned packages (`ae add github.com/user/repo@v1.0.0`) and the module resolver finds installed packages. Next: transitive dependency resolution, lock file integrity checking, `ae update`, and a publishing command (`ae publish`).
 
-### `or` Keyword for Error Defaults
-
-Sugar for defaulting on error: `content = io.read_file("config.txt") or "default"`. The stdlib now uses Go-style tuple returns throughout, so this syntactic sugar can be built on top of the existing `(value, err)` convention.
-
 ## Future
 
 Major features that require significant architectural work.
@@ -162,10 +158,10 @@ All I/O in Aether is currently blocking. `http.get()`, `file.read()`, `tcp.conne
 - **HTTP server thread pool** — Bounded worker pool (8 threads) replaces unbounded thread-per-connection. Poll-based accept with timeout for graceful shutdown.
 - **Platform poller** — `runtime/io/aether_poller.h` provides epoll (Linux), kqueue (macOS/BSD), and poll() (portable) backends behind a unified API.
 
-**Next: actor-integrated HTTP ([PR #71](https://github.com/nicolasmd87/aether/pull/71))**
+**Next: actor-integrated HTTP ([PR #71](https://github.com/aether-lang-org/aether/pull/71))**
 
 Ariel's PR proposes dispatching incoming HTTP connections as file descriptors directly to pre-spawned worker actors via mailbox delivery, replacing the thread pool with actor-based dispatch. Bench-measured throughput improvement vs. the thread-pool baseline was substantial; rerun benchmarks against current main before relying on historical figures. The PR needs:
-- Rebase from v0.23.0 to current (v0.41.0+)
+- Rebase from v0.23.0 to current (0.344.0+)
 - Use the new platform poller abstraction instead of Linux-only epoll
 - Integration with scheduler timeout support (added since the PR was opened)
 

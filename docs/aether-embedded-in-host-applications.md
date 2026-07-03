@@ -468,7 +468,7 @@ config author works within it.
 **`hide`/`seal except` is author-side hygiene, not security.**  It helps
 a config author organize their own code — "this handler shouldn't touch
 the inventory object" — but it's not a sandbox.  A malicious config author
-could simply remove the `hide` line.  The facade is what stops them from
+can remove the `hide` line.  The facade is what stops them from
 calling things the host didn't expose.  `hide`/`seal except` is for
 preventing *accidents* within a team, not for defending against
 *adversaries*.
@@ -544,8 +544,9 @@ through the facade.
 
 ## Part 4: Aether hosting Aether — LD_PRELOAD containment
 
-> **Status:** the LD_PRELOAD sandbox library
-> (`runtime/aether_spawn_sandboxed.c`, `libaether_sandbox.so`) was
+> **Status:** the LD_PRELOAD sandbox library (`libaether_sandbox.so`,
+> built from `runtime/libaether_sandbox_preload.c`; the spawn helper
+> lives in `runtime/sandbox/spawn_sandboxed_{linux,bsd,stub}.c`) was
 > already shipped before this design exploration. With `--emit=lib`
 > now in the toolchain, the two layers compose naturally: a host
 > Aether application can `ae build --emit=lib` a child script and
@@ -578,7 +579,7 @@ The host Aether application:
 1. Compiles the script to a shared library: `ae build rules/pricing.ae --emit=lib -o /tmp/libpricing.so` (✅ this works today)
 2. Creates a POSIX shared-memory object encoding the grant list
 3. Forks a child process
-4. Sets `LD_PRELOAD=libaether_sandbox.so` and `AETHER_SANDBOX_SHM=<shm_name>` in the child's environment. The SHM envvar carries the *name* of the shared-memory object, not the grants themselves — the preload library reads the grants from SHM on startup. (See `runtime/aether_spawn_sandboxed.c` for the current mechanism.)
+4. Sets `LD_PRELOAD=libaether_sandbox.so` and `AETHER_SANDBOX_SHM=<shm_name>` in the child's environment. The SHM envvar carries the *name* of the shared-memory object, not the grants themselves — the preload library reads the grants from SHM on startup. (See `runtime/sandbox/spawn_sandboxed_linux.c` for the spawn side and `runtime/libaether_sandbox_preload.c` for the SHM-reading preload side.)
 5. `exec`s the script (or `dlopen`s the `.so` in the child)
 6. The child runs with libc calls intercepted — any `connect()`, `open()`, `execve()` that isn't in the grant list is denied at the OS level
 
@@ -589,9 +590,11 @@ The host Aether application:
 os_system("ae build rules/pricing.ae --emit=lib -o /tmp/libpricing.so")
 
 // Run it in a sandboxed subprocess. `aether_spawn_sandboxed` is the
-// existing C-level helper; an Aether-level wrapper would expose the
-// same thing with a grant-list builder.
-aether_spawn_sandboxed("/tmp/pricing", input_json, grants)
+// existing C-level helper; its signature is
+// aether_spawn_sandboxed(void* grant_list, const char* program, const char* arg)
+// and it is not yet exposed as an Aether extern. An Aether-level wrapper
+// would expose the same thing with a grant-list builder.
+aether_spawn_sandboxed(grants, "/tmp/pricing", input_json)
 ```
 
 ### Why LD_PRELOAD, not just a facade

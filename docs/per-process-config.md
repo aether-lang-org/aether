@@ -123,7 +123,7 @@ Use a module-level `var` (see [The simple case](#the-simple-case-a-module-level-
 
 **Hot-path reads where actor message overhead is too much**:
 
-Measure first. A same-core actor message under Aether's lock-free SPSC scheduler is ~80 ns on commodity hardware (see [runtime-optimizations.md](runtime-optimizations.md)). For a per-HTTP-request auth-token check this is in the noise compared to the cost of the request itself.
+Measure first. A same-core actor message bypasses the incoming queue and writes directly to the target's mailbox or SPSC queue (see [runtime-optimizations.md](runtime-optimizations.md), "SPSC Queue for Same-Core Messaging"), so the round-trip is cheap. For a per-HTTP-request auth-token check it is in the noise compared to the cost of the request itself.
 
 If you've measured and the round-trip really is too expensive (e.g. an inner loop reading the value 10⁹ times), the alternatives in order of preference:
 
@@ -194,5 +194,5 @@ This is more code than the C version, but it's also testable, thread-safe by con
 ## See also
 
 - [actor-concurrency.md](actor-concurrency.md) — runtime details on the scheduler, mailboxes, and message delivery
-- [runtime-optimizations.md](runtime-optimizations.md) — message-passing performance numbers
+- [runtime-optimizations.md](runtime-optimizations.md) — the scheduler's message-passing optimizations, including same-core SPSC delivery
 - `tests/integration/test_http_client_v2.ae` — uses an actor singleton (`SrvActor`) for an in-process HTTP server's lifecycle

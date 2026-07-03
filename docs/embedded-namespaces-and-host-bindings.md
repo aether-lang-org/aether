@@ -7,10 +7,9 @@ writes JNI, never writes SWIG `.i` files, never registers callback
 function pointers by hand.
 
 > **Status (2026-04-18):** **shipped.** Landed on `feature/embedded-namespaces`
-> (PR #172, 11 commits). Worked example at `examples/embedded-java/trading/`,
+> (PR #172). Worked example at `examples/embedded-java/trading/`,
 > integration tests at `tests/integration/namespace_{python,ruby,java}/` and
-> `tests/integration/embedded_java_trading_e2e/`. See the embedded-namespaces
-> entries in `CHANGELOG.md`.
+> `tests/integration/embedded_java_trading_e2e/`.
 >
 > Out of scope for v1 (each tracked below):
 > - Live host-supplied callbacks (`host_call`) — Shape B
@@ -99,8 +98,8 @@ abi() {
         input("max_order", "int")
         event("OrderPlaced",   "int64")
         event("OrderRejected", "int64")
-        event("UnknownTicker", "int64")
         event("TradeKilled",   "int64")
+        event("UnknownTicker", "int64")
         bindings() {
             java("com.example.trading", "Trading")
         }
@@ -119,15 +118,18 @@ TinyWeb's `path() { end_point(...) }` or `examples/calculator-tui.ae`'s
 ### `aether/placeTrade.ae` (as shipped)
 
 ```aether
-place_trade(order_id: int64, amount: int, ticker_known: int) {
+place_trade(order_id: long, amount: int, ticker_known: int) {
     println("[ae] place_trade order_id=${order_id} amount=${amount}")
     if amount < 0 || amount > 100000 {
-        notify("OrderRejected", order_id); return 0
+        notify("OrderRejected", order_id)
+        return 0
     }
     if ticker_known == 0 {
-        notify("UnknownTicker", order_id); return 0
+        notify("UnknownTicker", order_id)
+        return 0
     }
-    notify("OrderPlaced", order_id); return 1
+    notify("OrderPlaced", order_id)
+    return 1
 }
 ```
 
@@ -224,8 +226,12 @@ abi() {
             // doesn't yet read inputs back at runtime (host_call /
             // ambient input access is Shape B).
             //
-            // Allowed types in v1:
-            //   primitives: int, long, float, bool, string
+            // The type signature is a string parsed by the generator:
+            // "int", "long", "float", "bool", "string", "map", "list",
+            // "fn(string) -> bool", etc. Nothing at runtime restricts it
+            // to primitives — v1's intent is to keep inputs to primitives
+            // and strings (see marshalling costs below), but that is
+            // convention, not an enforced check.
 
         event(<EventName>, <carries_type>)
             // Declares an event the script may emit.
@@ -441,10 +447,10 @@ sequenceDiagram
     participant Host as Java host JVM<br/>(TradingDemo + its FraudService field)
     participant SDK as Trading.class<br/>(generated SDK — in the same JVM)
     participant Lib as libtrading.so<br/>(Aether script)
-    participant HReg as host_call registry<br/>(📋 Shape B — not built)
+    participant HReg as host_call registry<br/>(Shape B — not built)
 
     rect rgba(255, 220, 220, 0.4)
-    Note over Host,HReg: 📋 Entire flow below is Shape B — none of these arrows work today
+    Note over Host,HReg: Entire flow below is Shape B — none of these arrows work today
     Note over Host,HReg: setup
     Host->>SDK: t.exposeHostCall("fraud_score", order -> fraudService.score(order))
     SDK->>HReg: aether_host_call_register("fraud_score", trampoline)

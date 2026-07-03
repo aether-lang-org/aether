@@ -32,6 +32,8 @@ In NUMA systems, memory is physically distributed across multiple nodes, each co
    - Actor arrays allocated on core's NUMA node
    - Pool structures allocated on core's NUMA node
 
+   These allocations route through `aether_numa_alloc(size, node)`. On a UMA system, or any build without libnuma detecting multiple nodes, `aether_numa_node_of_cpu` returns -1 and the call falls back to plain `malloc`. Binding actors to the cores whose node they were allocated on is a separate step, listed under Future Enhancements below.
+
 3. **Platform Support**
    - **Windows**: `VirtualAllocExNuma`, `GetNumaProcessorNodeEx`
    - **Linux**: `numa_alloc_onnode` (requires libnuma)
@@ -92,7 +94,9 @@ numactl --hardware
 
 On macOS, NUMA is not supported (single memory domain).
 
-**Example Output (UMA system):**
+The runtime does not ship a topology-report tool. The following illustrate what the detected topology looks like on each kind of system.
+
+**Illustrative topology (UMA system):**
 ```
 NUMA Topology Detection
 =======================
@@ -105,7 +109,7 @@ Single NUMA node (UMA) or NUMA not available
 NUMA-aware allocation is disabled (fallback to malloc) in the multicore scheduler.
 ```
 
-**Output Example (NUMA system):**
+**Illustrative topology (NUMA system):**
 ```
 NUMA Topology Detection
 =======================
@@ -143,8 +147,10 @@ For full NUMA support on Linux, install libnuma:
 sudo apt-get install libnuma-dev
 
 # Build with NUMA
-make CFLAGS="-DHAVE_LIBNUMA" LDFLAGS="-lnuma"
+make EXTRA_CFLAGS="-DHAVE_LIBNUMA" LDFLAGS="-lm -pthread -lnuma"
 ```
+
+`EXTRA_CFLAGS` is appended to the base compile flags. `LDFLAGS`, however, is a plain assignment in the Makefile, so setting it on the command line replaces the defaults; re-list `-lm -pthread` (plus any platform link libs your build needs) alongside `-lnuma`.
 
 Without libnuma, the system gracefully falls back to malloc.
 
@@ -152,7 +158,7 @@ Without libnuma, the system gracefully falls back to malloc.
 
 ### Windows Implementation
 
-Uses Processor Groups API for systems with >64 cores:
+Maps CPUs to NUMA nodes within processor group 0 (`proc_num.Group = 0`), so it covers up to 64 logical processors. Systems that split cores across multiple processor groups (>64 logical processors) are not yet handled.
 - `GetNumaHighestNodeNumber()` - Get node count
 - `GetNumaProcessorNodeEx()` - Map CPU to node
 - `VirtualAllocExNuma()` - Allocate on specific node
@@ -185,9 +191,9 @@ All tests pass with NUMA support:
 make test
 ```
 
-Multicore benchmark works with NUMA allocation:
+The multicore benchmarks under `make examples` run through the NUMA-aware allocation path (they fall back to `malloc` unless a libnuma multi-node build is used):
 ```bash
-./build/mc_bench.exe
+make examples
 ```
 
 ## Future Enhancements

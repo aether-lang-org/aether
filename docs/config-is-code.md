@@ -101,17 +101,17 @@ type annotations.
 ### Level 4 — Closure-DSL: config IS code, *and reads like config*
 
 ```aether
-import my_server
-import std.os (env)
+import my_server (serve, host, port, superuser_token, repo)
+import std.os (os_getenv)
 
 main() {
-    my_server.serve {
+    serve {
         host("127.0.0.1")
         port(9990)
-        if string.equals(env("STAGE"), "prod") == 1 {
+        if os_getenv("STAGE") == "prod" {
             host("0.0.0.0")
         }
-        superuser_token(env("SUPER_TOKEN"))
+        superuser_token(os_getenv("SUPER_TOKEN"))
         repo("alpha", "/srv/alpha")
         repo("beta",  "/srv/beta")
     }
@@ -137,7 +137,7 @@ When config is just an `.ae`:
 - **Loops over inputs that aren't fixed at deploy time.** Read a list
   of repos from a manifest file, iterate, call `repo(...)` for each.
   No schema work, no JSON-Pointer foreach extension.
-- **Environment-aware branching.** `if env("STAGE") == "prod" { ... }`
+- **Environment-aware branching.** `if os_getenv("STAGE") == "prod" { ... }`
   is just an `if`. No `${env:...}` mini-language.
 - **Pre-flight setup in the same artifact.** Mount checks, key
   fetches, `mkdir -p`, schema migrations all run in the same process,
@@ -145,8 +145,8 @@ When config is just an `.ae`:
 - **One artifact in git.** The deployment IS the config. No drift
   between code and YAML.
 - **Same toolchain.** `ae run`, `aetherc`, the type checker, the LSP,
-  the tests — they all just work on your config. Your YAML linter
-  doesn't.
+  and the test runner all operate on your config directly. Your YAML
+  linter doesn't.
 
 ## When this is right
 

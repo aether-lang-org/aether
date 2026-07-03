@@ -9,8 +9,9 @@ against real seams, not a sketch. All findings verified against the live
 ## The shared call site in the compiler
 
 A dotted call `recv.member(args)` is parsed in the postfix loop of
-`parse_postfix_expression` (`parser/parser.c` ~1576). Today the callee name
-is only synthesised for two receiver shapes (parser.c:1602–1615):
+`parse_postfix_expression` (`parser/parser.c` ~1694, the `TOKEN_LEFT_PAREN`
+handler). The callee name is synthesised for two receiver shapes
+(parser.c:1728–1750):
 
 - `expr` is a bare `AST_IDENTIFIER` → simple call `foo()`.
 - `expr` is `AST_MEMBER_ACCESS` whose **child[0] is an `AST_IDENTIFIER`** →
@@ -23,11 +24,12 @@ That is the first repro in the issue. So **whichever mechanism we pick, the
 parser must be taught to carry the receiver subtree for the general dotted
 call**, not just `identifier.member`.
 
-Call resolution then happens in the typechecker (`analysis/typechecker.c`
-~5160–5240). There is already a precedent for a *fallback* when
-`recv.field(args)` doesn't resolve as a function symbol: #749 dispatches
-through a function-pointer **struct field** (typechecker.c:5189–5218),
-splitting `recv` from `field` on the last `.` and tagging the node
+Call resolution then happens in the typechecker (`typecheck_function_call`,
+`analysis/typechecker.c` from ~5725). There is already a precedent for a
+*fallback* when `recv.field(args)` doesn't resolve as a function symbol:
+#749 dispatches through a function-pointer **struct field**
+(typechecker.c:5915–5945), splitting `recv` from `field` on the last `.`
+and tagging the node
 `fnfield_ptr`/`fnfield_val` for codegen. UFCS slots in as a **sibling
 fallback right next to it**.
 
@@ -43,13 +45,13 @@ Subject bump(Subject s) { return (Subject){.val = (s.val + 1), .neg = s.neg}; }
 Subject b = bump(bump(a));
 ```
 
-By-value structs lower to **plain C by-value** — no heap alloc, no
-refcount, no hidden pointer threading. A chain of N matcher calls on a
-small subject record is N register-width struct copies, which the C backend
-elides under `-O2` (a 2–3 field record passes in registers). **The
-hot-test-loop concern is unfounded; this is cheap.** Both mechanisms below
-lower to exactly this shape — the codegen is *already done*, we only change
-how the call is spelled and resolved.
+By-value structs lower to plain C by-value: no heap alloc, no refcount, no
+hidden pointer threading. A chain of N matcher calls on a small subject
+record is N register-width struct copies, which the C backend elides under
+`-O2` (a 2–3 field record passes in registers). The hot-test-loop concern is
+unfounded; this is cheap. Both mechanisms below lower to exactly this shape.
+The codegen is already done; we only change how the call is spelled and
+resolved.
 
 ---
 

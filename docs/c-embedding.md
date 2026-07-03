@@ -70,10 +70,10 @@ This generates `counter.c` containing:
 typedef struct Counter Counter;
 Counter* spawn_Counter(void);
 
-// Message IDs (from generated code)
-#define MSG_Increment 1
-#define MSG_GetValue 2
-#define MSG_Reset 3
+// Message IDs (from generated code, numbered from 0 in declaration order)
+#define MSG_Increment 0
+#define MSG_GetValue 1
+#define MSG_Reset 2
 
 int main(int argc, char** argv) {
     // Initialize Aether runtime
@@ -369,7 +369,7 @@ The C host and the Aether runtime share a process but have distinct ownership ru
 
 1. **State is message-only.** Actor state is owned by the actor; the host reads and writes it exclusively through messages. Reach-in access bypasses message-ordering guarantees and races with the scheduler.
 2. **Sends are fire-and-forget.** There's no synchronous reply from `aether_send_message()`. When you need a value back, either (a) have the actor send a response message to a host-registered event handler, or (b) have the actor write into shared atomic state the host polls.
-3. **References are manually lifetime-managed.** The host tracks `AetherActorRef` handles; there's no automatic refcount across the FFI boundary. Keep a handle as long as you intend to send to the actor; drop it when you're done.
+3. **References are manually lifetime-managed.** The host holds the raw `ActorBase*` (or the generated `Counter*`) returned by spawn; there's no handle type or automatic refcount across the FFI boundary. Keep the pointer as long as you intend to send to the actor. If you spawned from the pool, return it with `scheduler_release_pooled()` when done.
 4. **One runtime per process.** `aether_runtime_init()` initializes process-global scheduler state. Calling it twice from the same process is not supported; use separate processes if you need isolated runtimes.
 
 ## Header Generation
@@ -377,9 +377,12 @@ The C host and the Aether runtime share a process but have distinct ownership ru
 Pass `--emit-header` to `aetherc` to generate a C header alongside the C output. The header contains message struct definitions, `MSG_*` constants, and actor spawn prototypes — everything needed to send messages to Aether actors from C without copying struct definitions by hand.
 
 ```bash
-aetherc counter.ae counter.c --emit-header
+aetherc --emit-header counter.ae counter.c
 # Produces: counter.c  counter.h
 ```
+
+`--emit-header` must precede the input/output paths. Placed after the positional
+arguments it is ignored and only `counter.c` is written.
 
 Example generated header:
 
@@ -388,15 +391,17 @@ Example generated header:
 #ifndef COUNTER_H
 #define COUNTER_H
 
-#include "aether_runtime.h"
+#include <stdint.h>
+#include "runtime/scheduler/multicore_scheduler.h"
 
-// Message IDs
-#define MSG_Increment 1
-#define MSG_GetValue  2
-#define MSG_Reset     3
+// Message IDs (numbered from 0 in declaration order)
+#define MSG_Increment 0
+#define MSG_GetValue  1
+#define MSG_Reset     2
 
-// Message structs
-typedef struct { int amount; } Increment;
+// Message structs — first field is the message ID; single-int payloads
+// widen to intptr_t to match Message.payload_int.
+typedef struct { int _message_id; intptr_t amount; } Increment;
 
 // Spawn prototype
 Counter* spawn_Counter(void);

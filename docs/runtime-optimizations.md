@@ -120,7 +120,7 @@ scheduler_send_batch_flush();  // Bulk send with one atomic per core
 
 The flush snapshots each message's target core, sorts by core using radix sort, then calls `queue_enqueue_batch` for each core. This reduces atomics from N (one per message) to num_cores (one per core). Target cores are read once per message at flush time to produce a consistent snapshot — this prevents buffer overflows that could occur if an actor migrates between the time a message is buffered and the time the batch is flushed.
 
-**Partial batch enqueue:** `queue_enqueue_batch` enqueues as many messages as fit in the queue and returns the count, rather than failing the entire batch when the queue is near full. When the queue can't absorb the full batch, the flush retries with the remaining messages — spinning with `AETHER_PAUSE` and yielding to the OS after 64 failed spins so the consumer thread gets CPU time. This replaces the previous per-message `scheduler_send_remote` fallback which called `sched_yield()` on every iteration, reducing kernel yield overhead in high-throughput fan-out patterns.
+**Partial batch enqueue:** `queue_enqueue_batch` enqueues as many messages as fit in the queue and returns the count, rather than failing the entire batch when the queue is near full. This lets the common case (queue has room) complete with a single atomic store per core. When the queue can't absorb the full batch, the flush falls back to `scheduler_send_remote` for each remaining message, which handles its own routing and counting. The fallback path is rare in practice because the cross-core queue holds 1024 items.
 
 **Runtime auto-detection:** The batch send path automatically detects when Main Thread Actor Mode is active (single-actor programs) and uses the synchronous zero-copy path instead of batching. This ensures single-actor benchmarks like counting use the optimal path while multi-actor fan-out patterns like fork-join benefit from batch send. No manual configuration is required.
 
@@ -179,7 +179,7 @@ Cache line padding on `head` and `tail` prevents false sharing between producer 
 
 **Implementation:** `runtime/actors/aether_spsc_queue.h`
 
-Each actor has a dedicated SPSC (single-producer, single-consumer) queue for receiving messages from its owning scheduler thread or from other actor threads via `scheduler_send_local`. This separates same-core and cross-core message paths.
+`auto_process` actors get a dedicated SPSC (single-producer, single-consumer) queue for receiving messages. The queue is lazy-allocated by `ensure_spsc_queue` on the first enqueue; `scheduler_spawn_pooled` initializes `actor->spsc_queue` to `NULL`, so regular actors never allocate one and receive through their mailbox instead. This separates the auto-process delivery path from ordinary mailbox delivery.
 
 ### Direct Mailbox Delivery
 
@@ -220,15 +220,15 @@ Migration uses ascending core-id lock ordering to prevent deadlock between concu
 
 The code generator detects messages with exactly one scalar field that fits in `intptr_t` and emits an inline fast path. Instead of heap-allocating the message payload (malloc + memcpy + free), the field value is stored directly in `Message.payload_int`. The receiver reconstructs the struct on the stack. This eliminates all heap allocation for single-field messages.
 
-**Supported field types:** `int`, `long` (int64), `ptr`, `bool`, `actor_ref` — any scalar that fits in 64 bits.
+**Supported field types** (from `is_inlineable_scalar`): `int`, `int64`, `uint64`, `duration`, and `ptr`. Other types, including `bool` and `actor_ref`, are not inlined and take the heap-allocated payload path.
 
 **Impact:** Eliminates malloc/free for single-field messages, which are the most common pattern in tree-spawn and request-response workloads. Run `make benchmark` to measure the effect on your hardware.
 
 ### Computed Goto Dispatch
 
-**Implementation:** `compiler/codegen/codegen.c` (generated code)
+**Implementation:** `compiler/codegen/codegen_actor.c` (generated code)
 
-The code generator emits a dispatch table with GCC computed goto (`goto *dispatch_table[msg_id]`) for message handler selection. This replaces indirect function calls or switch statements with direct label jumps. The message ID is read from `msg.type` rather than dereferencing the payload pointer.
+The code generator emits a `dispatch_table[256]` with GCC computed goto (`goto *dispatch_table[_msg_id]`) for message handler selection. This replaces indirect function calls or switch statements with direct label jumps. The message ID is read from `msg.type` (`int _msg_id = msg.type;`) rather than dereferencing the payload pointer.
 
 ### Progressive Backoff Strategy
 
@@ -347,14 +347,14 @@ Idle detection uses per-core counters instead of a global atomic counter. This e
 ```c
 typedef struct {
     // ...
-    uint64_t messages_sent;      // Messages sent FROM this core
-    uint64_t messages_processed; // Messages processed ON this core
+    _Atomic uint64_t messages_sent;      // Messages sent FROM this core
+    _Atomic uint64_t messages_processed; // Messages processed ON this core
     char counter_padding[48];    // Cache line padding
     // ...
 } Scheduler;
 ```
 
-Each scheduler core increments its local counters without atomic operations. The `wait_for_idle()` Aether builtin lowers to the C function `scheduler_wait()`, which sums across all cores to determine when all in-flight messages have been processed. `scheduler_wait()` is non-destructive -- it only waits for quiescence and does not stop scheduler threads, so it can be called multiple times between phases of message sending.
+Each scheduler core increments only its own counters, so there is no cross-core write contention on the hot path. The counters are declared `_Atomic uint64_t` because they are read cross-thread by the idle check, so the `++` compiles to a relaxed atomic read-modify-write rather than a barrier-heavy sequentially-consistent one; this keeps torn reads off weakly-ordered architectures (e.g. ARM64) without adding contention. The `wait_for_idle()` Aether builtin lowers to the C function `scheduler_wait()`, which sums across all cores to determine when all in-flight messages have been processed. `scheduler_wait()` is non-destructive -- it only waits for quiescence and does not stop scheduler threads, so it can be called multiple times between phases of message sending.
 
 ```c
 // Hot path: no atomic contention

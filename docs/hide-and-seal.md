@@ -25,7 +25,7 @@ but also on the way *out* (via name denial).
 
 ```aether
 {
-    seal except req, res, inventory, response_write, response_status
+    seal except req, res, inventory, response_write, response_write_status
     // Every name from every outer scope is now invisible EXCEPT the five
     // listed here. The block can still create its own local variables
     // freely; it just can't reach out for ambient state.
@@ -124,15 +124,22 @@ closure into the hiding scope.
 hide a namespace, all member access through that namespace is blocked:
 
 ```aether
-import std.string
+import std.http
 {
-    hide string
-    x = string.new("hello")   // E0304: string is hidden
+    hide http
+    r = http.get("http://example.com")   // rejected: http is hidden here
 }
 ```
 
-This prevents a name from being accessed indirectly through dotted
-syntax when you've explicitly denied it.
+The hidden prefix is refused before namespace resolution, so the call
+never resolves. The diagnostic on a hidden dotted call reports the name
+as undefined (`E0301: Undefined function 'http.get'`) rather than the
+`E0304` you get for a hidden bare name — the qualified lookup returns no
+symbol once the prefix is denied. Either way the access is blocked.
+
+(Don't reach for a built-in type keyword like `string` here: `hide
+string` fails earlier with `E0100`, because `string` is a reserved
+keyword and can't be used as an identifier at all.)
 
 ### Works inside actor receive arms
 
@@ -261,7 +268,7 @@ This is consistent with normal lexical shadowing and means
 | `hide x` then a nested block declaring `var x = …` | OK — fresh binding in the child scope. |
 | `hide x` then calling a visible function that reads `x` from its own scope | OK — name resolution at the call site doesn't touch `x`. |
 | `seal except printf, malloc` then trying to call `free` | Compile error — `free` is not in the whitelist. |
-| `hide string` then `string.new("x")` | Compile error — qualified access blocked because the prefix is hidden. |
+| `hide http` then `http.get("x")` | Compile error — qualified access blocked because the prefix is hidden (reported as `E0301` undefined, since the hidden prefix resolves to no symbol). |
 | `hide` or `seal except` inside an actor receive arm | Works — receive arm bodies are block scopes like any other. |
 
 ## Implementation note
@@ -285,9 +292,9 @@ is a pure compile-time hygiene check.
 
 > Up to here is the language reference. The rest of this document is a
 > long-form worked example showing how `hide` / `seal except` enables
-> a dependency-injection story that's smaller, simpler, and **more
-> enforcing** than the Java `DependencyManager` / `ComponentCache`
-> hierarchy that the `contrib/tinyweb/` Aether port deliberately left
+> a dependency-injection story that is smaller, simpler, and
+> compiler-enforced, in contrast to the Java `DependencyManager` /
+> `ComponentCache` hierarchy that the `contrib/tinyweb/` Aether port left
 > behind. Skip if you only wanted the language reference.
 
 ## Q. Do we now have a solid IoC alternative to Java-style DI?
@@ -345,15 +352,14 @@ srv = web_server(8080) {
 
     path("/cart") {
         end_point(POST, "/add") |req, res, ctx| {
-            seal except req, res, ctx, dep, response_write, response_status
+            seal except req, res, ctx, dep, response_write, response_write_status
 
             inventory = dep(ctx, "inventory")   // app-scoped (cached for server lifetime)
             cart      = dep(ctx, "cart")        // session-scoped (cached per session)
 
-            sku = request_get_query(req, "sku")
+            sku = request_get_query_param(req, "sku")
             if map_has(inventory, sku) == 0 {
-                response_status(res, 404)
-                response_write(res, "unknown sku")
+                response_write_status(res, "unknown sku", 404)
                 return 0
             }
             cart_add(cart, sku)
@@ -365,7 +371,7 @@ srv = web_server(8080) {
 
 The `seal except` line is **the entire dependency surface** of that
 handler. A reviewer reads it and knows: this handler can touch `req`,
-`res`, `ctx`, `dep`, `response_write`, `response_status`. Nothing else
+`res`, `ctx`, `dep`, `response_write`, `response_write_status`. Nothing else
 from any outer scope. If someone later edits the handler to grab `db`
 directly, the compiler refuses.
 
@@ -396,9 +402,9 @@ you try to pass it to a function expecting the wrong shape.
 
 ## What you GAIN over Java
 
-1. **The `seal except` line IS the constructor injection list.** No
-   `@Inject final Cart cart;`, no constructor, no field declaration.
-   Five names on one line.
+1. The `seal except` line is the constructor injection list. There is no
+   `@Inject final Cart cart;`, no constructor, no field declaration —
+   just the names on one line.
 
 2. **The handler is a closure, not a class.** No `new
    CartAddHandler(deps...)` boilerplate, no class file per endpoint, no
@@ -427,9 +433,9 @@ you try to pass it to a function expecting the wrong shape.
 5. **Scopes are just maps in a parent chain.** `request_cache →
    session_cache → app_cache → null`. Resolution walks upward. Same
    shape as `SymbolTable`'s parent chain in the compiler's
-   `lookup_symbol()`. Nice symmetry — IoC is name resolution at runtime,
-   exactly as `lookup_symbol` is name resolution at compile time. The
-   same parent-chain pattern carries the same idea.
+   `lookup_symbol()`. IoC here is name resolution at runtime, and
+   `lookup_symbol` is name resolution at compile time; the same
+   parent-chain pattern carries both.
 
 6. **Lifetimes are explicit at the call site.** `app_factory(...)`
    reads as "this lives for the server's life". `session_factory(...)`
@@ -470,8 +476,7 @@ the hooks are there).
 …gets you everything Java's DM gives you, **plus enforcement**,
 **minus the framework**. The `DependencyManager` / `ComponentCache` /
 `UseOnceComponentCache` / `DefaultComponentCache` four-class hierarchy
-in Java collapses into "a map and a function that walks a parent
-chain." That's the Aether way.
+in Java collapses into a map and a function that walks a parent chain.
 
 The Java version was load-bearing because Java needed it. Aether
 doesn't — it has `seal except` in the language, which is the

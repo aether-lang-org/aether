@@ -392,7 +392,7 @@ Aether includes a standard library with the following modules:
 
 See [stdlib-api.md](stdlib-api.md) for the full API reference.
 
-> **Strings just work.** When you read a file or get data from stdlib functions, the result is a
+> When you read a file or get data from stdlib functions, the result is a
 > regular string — you can `print()` it, use it in `"${interpolation}"`, or pass it in messages
 > directly. No conversion needed.
 
@@ -431,7 +431,7 @@ use `defer string.release(s)` for reference counting.
 
 ## Pattern Matching
 
-Aether features Erlang-inspired pattern matching, one of its most powerful features.
+Aether has Erlang-inspired pattern matching.
 
 ### Function Pattern Matching
 
@@ -689,5 +689,4 @@ Stdlib modules that depend on filesystem or networking return errors gracefully 
 - GCC is auto-downloaded on first `ae run` — no MSYS2 or manual setup required
 - The runtime uses Win32 threads natively — no pthreads library required
 - Full thread affinity support via `SetThreadAffinityMask`
-- P-core detection via `GetSystemCpuSetInformation` (Windows 10 1903+)
 - **Building from source:** Use MSYS2 MinGW 64-bit shell with `make ae`

@@ -142,12 +142,33 @@ has_io_uring = select(linux: 1, other: 0)
 ### Printing string results
 
 String values from `select()` store correctly as `const char*`, but type
-inference doesn't yet propagate through the call site into a direct
-`println(os)`. Use string interpolation to bind the type unambiguously:
+inference doesn't yet propagate through the call site. Both a direct
+`println(os)` and string interpolation currently print the pointer as an
+integer, because the result is treated as an `int`:
 
 ```aether
 os = select(linux: "Linux", windows: "Windows", macos: "macOS")
-println("os: ${os}")      // preferred form
+println(os)               // BROKEN: prints a garbage integer, not the string
+println("os: ${os}")      // BROKEN: emits printf(..., %d) for the const char*
+```
+
+Until this is fixed, either inline the `select()` directly in the
+`println()` call, or return it from a `-> string` function and print that
+result:
+
+```aether
+// Works: inline, where the string type is known at the call site
+println(select(linux: "Linux", windows: "Windows", macos: "macOS"))
+
+// Works: a -> string function fixes the type before printing
+os_name() -> string {
+    return select(linux: "Linux", windows: "Windows", macos: "macOS")
+}
+main() {
+    os = os_name()
+    println(os)               // macOS
+    println("os: ${os}")      // os: macOS
+}
 ```
 
 Tracked under "Type inference propagation through `select()`" in

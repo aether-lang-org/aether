@@ -153,9 +153,9 @@ import std.list
 // Permission check
 check_permission(perms: ptr, category: string, resource: string) {
     n = list.size(perms)
-    for (i = 0; i < n; i += 2) {
-        cat = list.get(perms, i)
-        pat = list.get(perms, i + 1)
+    for (i = 0; i < n; i = i + 2) {
+        cat, _ = list.get(perms, i)
+        pat, _ = list.get(perms, i + 1)
         if str_eq(cat, "*") == 1 && str_eq(pat, "*") == 1 { return 1 }
         if str_eq(cat, category) == 1 {
             if str_eq(pat, "*") == 1 { return 1 }
@@ -174,24 +174,25 @@ sandboxed_tcp_connect(perms: ptr, host: string, port: int) {
     return 0  // Denied
 }
 
-// Contained code as a closure
-worker_code = |perms| {
-    if sandboxed_tcp_connect(perms, "db.internal", 5432) == 1 {
-        println("Connected to DB")
-    } else {
-        println("Connection denied")
-    }
-}
-
-// Create and grant permissions
+// Create, grant permissions, and run the contained code
 main() {
     db_worker = list.new()
     list.add(db_worker, "tcp")
     list.add(db_worker, "db.internal")
-    
-    // Run the closure with restricted context
+
+    // Contained code as a closure. Closures bind inside a function body,
+    // and the captured param is typed so the list passes as a ptr.
+    worker_code = |perms: ptr| {
+        if sandboxed_tcp_connect(perms, "db.internal", 5432) == 1 {
+            println("Connected to DB")
+        } else {
+            println("Connection denied")
+        }
+    }
+
+    // Run the closure with the restricted context
     call(worker_code, db_worker)
-    
+
     // worker_code cannot access globals, files, or anything else
     // It can only do what the permissions context allows
 }
@@ -932,7 +933,7 @@ main() {
    (`std.casper`); jail/RCTL and cross-language Capsicum metadata
    still ahead.
 
-This makes Aether a unique proposition: **the only language-level sandbox model backed by OS-level enforcement when available**.
+The result is a language-level sandbox model that can fall back to OS-level enforcement (Capsicum) where the platform provides it.
 
 ---
 

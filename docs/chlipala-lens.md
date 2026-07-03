@@ -8,8 +8,7 @@ document, not a spec — the goal is to place Aether honestly on the two axes th
 essay uses to judge languages, and to name the two research directions that
 would let Aether actually engage the half of the critique it currently ducks.
 
-Like `docs/v-language-inspiration.md` and `docs/moonbit-feature-survey.md`,
-this separates the genuine alignment from the wishful, and it is deliberately
+It separates the genuine alignment from the wishful, and it is deliberately
 unflattering where the language deserves it.
 
 ## What Chlipala is actually arguing
@@ -127,7 +126,7 @@ fiction — and half-does
 
 Chlipala explicitly praises models that "reveal hardware topology" (MPI) even
 while noting they are painful. Aether's `message` / `receive` / `spawn` is a
-*logical* concurrency model — no shared mutable state, message-passing — which
+*logical* concurrency model (no shared mutable state, message-passing) that
 answers the *correctness* worry the sequential fiction creates (data races) but
 says nothing at the **language** level about *placement*: which node runs which
 actor, how far a message travels.
@@ -164,9 +163,9 @@ system the way capabilities are exposed.
 ## The one-line verdict
 
 Aether is a strong answer to the *half* of Chlipala's critique he spends the
-*least* time on — succinct, algebraically-manipulable, machine-checkable
-notation, via the DSL layer and the capability/effect system — and **not an
-answer** to the half he spends the *most* time on: the sequential-execution and
+*least* time on: succinct, algebraically-manipulable, machine-checkable
+notation, via the DSL layer and the capability/effect system. It is **not an
+answer** to the half he spends the *most* time on, the sequential-execution and
 flat-memory performance fictions, because it compiles to C and adopts C's cost
 model verbatim (its NUMA-aware runtime notwithstanding, because that awareness
 is not yet visible to the source).
@@ -186,5 +185,3 @@ engage the performance half of the argument.
   capability / effect surface.
 - `docs/numa-support.md`, `docs/actor-concurrency.md` — the runtime topology
   awareness the language does not yet surface.
-- `docs/v-language-inspiration.md`, `docs/moonbit-feature-survey.md` — sibling
-  "read another design through Aether's lens" writeups.

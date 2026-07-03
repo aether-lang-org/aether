@@ -38,8 +38,8 @@ Two **independent** axes describe every trailing-block usage:
 | **Builder** | `builder func(...)` (optionally `with <factory>` for the config object) | **Block first**, then function | Configuration (a config object filled via setter calls) | The action that uses the filled config |
 
 **The axes multiply.** Any of the three forms on the call side can target either flavour on the
-definition side, giving six legal combinations. Builder is NOT a fourth trailing-block form;
-it's a different function-side contract that any trailing-block form can attach to.
+definition side, giving six legal combinations. Builder is not a fourth trailing-block form.
+It's a function-side contract that any of the three trailing-block forms can attach to.
 
 **Related supporting machinery (covered later):**
 
@@ -312,7 +312,8 @@ import std.list
 each(l: ptr, f: fn) {
     n = list.size(l)
     for (i = 0; i < n; i++) {
-        call(f, list.get(l, i))
+        val, _ = list.get(l, i)    // list.get returns (value, err)
+        call(f, val)
     }
 }
 
@@ -320,7 +321,8 @@ map(l: ptr, f: fn) {
     result = list.new()
     n = list.size(l)
     for (i = 0; i < n; i++) {
-        list.add(result, call(f, list.get(l, i)))
+        val, _ = list.get(l, i)
+        list.add(result, call(f, val))
     }
     return result
 }
@@ -329,7 +331,7 @@ filter(l: ptr, f: fn) {
     result = list.new()
     n = list.size(l)
     for (i = 0; i < n; i++) {
-        val = list.get(l, i)
+        val, _ = list.get(l, i)
         if call(f, val) != 0 { list.add(result, val) }
     }
     return result
@@ -464,7 +466,7 @@ builder compile(src: string) {
     rel = ""
     if _builder != null {
         if map_has(_builder, "release") == 1 {
-            rel = map_get(_builder, "release")
+            rel = map_get_raw(_builder, "release")
         }
     }
     println("compiling ${src} with release=${rel}")
@@ -499,7 +501,7 @@ builder make_greeting(name: string): string {
     prefix = "Hello"
     if _builder != null {
         if map_has(_builder, "prefix") == 1 {
-            prefix = map_get(_builder, "prefix")
+            prefix = map_get_raw(_builder, "prefix")
         }
     }
     return "${prefix}, ${name}!"
@@ -528,7 +530,7 @@ builder run_command(name: string) with list_new { ... }
 // Custom builder — any user-defined factory
 query_builder_new() {
     m = map_new()
-    map_put(m, "_type", "query")
+    map_put_raw(m, "_type", "query")
     return m
 }
 builder execute_query(db: string) with query_builder_new { ... }
@@ -649,8 +651,8 @@ block that fills structure (`describe("x") { ... }`). UFCS adds the
 orthogonal **value-chain** primitive: calling a method on a value and getting
 a value back, so calls read left-to-right like prose
 (`expect(5).to_equal(5).to_be_gt(0)`). This is the shape every fluent
-assertion / query / builder API is built on, and it composes with — but is
-distinct from — the trailing-block forms.
+assertion / query / builder API is built on. It composes with the
+trailing-block forms but is distinct from them.
 
 **The rule.** `x.f(args)` desugars to `f(x, args)` when `f` is a free
 function whose **first parameter type matches `typeof(x)`**. No new

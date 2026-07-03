@@ -124,9 +124,11 @@ sandbox(name: string) {
 // Check if a permission is granted
 check_permission(perms: ptr, category: string, resource: string) {
     n = list.size(perms)
-    for (i = 0; i < n; i += 2) {
-        cat = list.get(perms, i)
-        pat = list.get(perms, i + 1)
+    for (i = 0; i < n; i = i + 2) {
+        // list_get_raw returns the bare ptr; list.get would return a
+        // (value, err) tuple that str_eq can't take.
+        cat = list_get_raw(perms, i)
+        pat = list_get_raw(perms, i + 1)
         // Wildcard "*" matches everything
         if str_eq(cat, "*") == 1 && str_eq(pat, "*") == 1 { return 1 }
         // Category match + pattern match (exact or wildcard)
@@ -748,7 +750,7 @@ functions, but the kernel offers many alternative paths to the same
 operations.** A determined attacker who knows Linux internals can
 use paths we don't intercept. The tables below enumerate the surface
 so you can reason about it explicitly rather than assume coverage.
-See `docs/next-steps.md` → *Sandbox interception expansion* for the
+See `docs/next-steps.md` → *Interception surface expansion* for the
 in-flight work to widen the LD_PRELOAD surface.
 
 #### Filesystem — not intercepted
@@ -815,11 +817,13 @@ Aether sandbox    → intercepts the libc surface normal code uses
 The App Engine lesson applies: **enumerate what you don't intercept,
 don't pretend the list of what you do intercept is complete.**
 
-### The Matrix metaphor
+### What the contained code sees
 
-The contained code lives in a simulation where `/etc/shadow` was
-never created and `AWS_SECRET_KEY` was never set. There is no
-glitch. There is no déjà vu. There is no second cat.
+To the contained code, a denied resource looks like it was never
+there: `open("/etc/shadow")` fails as if the file did not exist, and
+`getenv("AWS_SECRET_KEY")` returns null as if the variable were unset.
+The check is invisible; the contained code can't distinguish a denial
+from an absent resource.
 
 ## Sandboxing bash scripts
 

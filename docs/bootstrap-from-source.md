@@ -156,7 +156,7 @@ looks like:
 ```
 
 A `SKIP` is not a failure — it means the dev library wasn't found and
-that module simply isn't built. `install-contrib` places each built
+that module isn't built. `install-contrib` places each built
 archive at `$(PREFIX)/lib/aether/libaether_<module>.a` and its
 `module.ae` + headers under `$(PREFIX)/share/aether/contrib/<module>/`.
 
@@ -233,8 +233,8 @@ printf 'main() { println("ok") }\n' > /tmp/smoke.ae
 
 Rules of thumb:
 
-- **Do not run the test suite** (`make test`, `make test-ae`, `make ci`,
-  `make check`) to *use* Aether — those validate changes *to* Aether and
+- **Do not run the test suite** (`make test`, `make test-ae`, `make ci`)
+  to *use* Aether — those validate changes *to* Aether and
   are slow. Building + installing is sufficient and touches no test code.
 - **Treat contrib `SKIP` lines as success**, not failure — they mean a
   dev library is absent. Only a non-zero exit from `make contrib` /
@@ -243,18 +243,16 @@ Rules of thumb:
   `-I` / `-L` / `-laether` by hand; the include path and the
   `lib/aether/` archive location vary by install mode and `ae cflags`
   resolves them.
-- **Idempotent / re-runnable.** Re-running `make ae` / `make install` is
-  safe. After a `git pull`, run `make clean && make ae` before
-  reinstalling so the version stamp and any compiler reshape are picked
-  up.
-- **Prefix choice.** Use a writable `PREFIX=…` to avoid `sudo`; ensure
+- Re-running `make ae` / `make install` is safe. After a `git pull`, run
+  `make clean && make ae` before reinstalling so the version stamp and
+  any compiler reshape are picked up.
+- Use a writable `PREFIX=…` to avoid `sudo`, and make sure
   `$(PREFIX)/bin` is on `PATH` (or invoke `ae` by absolute path as
   above). The default `PREFIX` is `/usr/local`.
-- **Failure triage.** A `--emit=lib` link error mentioning
-  `recompile with -fPIC` means a stale pre-0.181 `libaether.a` — rebuild
-  from current `HEAD`. A version mismatch between `ae version` and the
-  CHANGELOG/`VERSION` usually means stale git tags: `git fetch --tags`
-  then `make clean && make ae`.
+- A `--emit=lib` link error mentioning `recompile with -fPIC` means a
+  stale pre-0.181 `libaether.a`; rebuild from current `HEAD`. A version
+  mismatch between `ae version` and the CHANGELOG/`VERSION` usually means
+  stale git tags: `git fetch --tags` then `make clean && make ae`.
 
 ---
 

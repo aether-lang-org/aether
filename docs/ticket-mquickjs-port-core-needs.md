@@ -2,7 +2,7 @@
 
 Status: open
 Filed: 2026-05-22
-Source: the mquickjs C→Aether migration (mquickjs/ in this tree)
+Source: the mquickjs C→Aether migration (interop work landed via PR #490)
 
 Migrating mquickjs's engine to Aether keeps hitting the same
 boundary-ergonomics walls. Each forces a hand-written C shim to
@@ -65,7 +65,7 @@ the struct the C compiler actually lays out — exactly the brittleness
 that broke this session (a wrong guessed size segfaulted). The call
 shape `sizeof(` / `offsetof(` is what triggers the builtins; the names
 stay usable as ordinary identifiers elsewhere. Parser:
-`compiler/parser/parser.c:876` (AST_SIZEOF / AST_OFFSETOF). Regression:
+`compiler/parser/parser.c:985` (AST_SIZEOF / AST_OFFSETOF). Regression:
 `tests/regression/test_sizeof_offsetof.ae` (sizeof of an extern struct,
 offsetof of each field, results used in arithmetic). This retires the C
 `memset(s, 0, sizeof(T))` shim. (The companion `INTPTR_MAX` /

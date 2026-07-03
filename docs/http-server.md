@@ -24,7 +24,7 @@ handle_root(req: ptr, res: ptr, ud: ptr) {
 main() {
     server = http.server_create(8080)
     http.server_get(server, "/", handle_root, 0)
-    http.http_server_start_raw(server)  // blocks
+    http.server_start_raw(server)  // blocks
 }
 ```
 
@@ -226,7 +226,7 @@ HTTP/1.1 path) feed the same chain:
 | `middleware.use_session_auth` | ✓ — `Cookie:` header parsed identically on h2 streams; redirect-on-failure works |
 | `middleware.use_rate_limit`   | ✓ |
 | `middleware.use_vhost`        | ✓ |
-| `middleware.use_static`       | ✓ |
+| `middleware.use_static_files` | ✓ |
 | `middleware.use_rewrite`      | ✓ |
 | `middleware.use_real_ip`      | ✓ — X-Real-IP appended to the request, visible to handlers + downstream middleware on every h2 stream |
 | `middleware.use_gzip` (response transformer) | ✓ — `Content-Encoding: gzip` rides on the h2 HEADERS frame |
@@ -335,11 +335,11 @@ max=M` headers per response.
 // User actor step function — replaces the thread-pool worker path
 @c_callback worker_step(msg_ptr: ptr) {
     msg = unwrap_msg_http_connection(msg_ptr)
-    http.http_server_drain_connection(g_server, msg.client_fd)
+    http.server_drain_connection(g_server, msg.client_fd)
 }
 ```
 
-`http.http_server_drain_connection(server, client_fd)` is the public
+`http.server_drain_connection(server, client_fd)` is the public
 helper that runs the full per-connection lifecycle (TLS handshake,
 keep-alive request loop, route dispatch, response emission, socket
 close). User actor step functions registered via
@@ -351,7 +351,7 @@ to the thread-pool worker path.
 
 ## Middleware
 
-Eight production middleware in `std.http.middleware`. All registered
+Eleven production middleware in `std.http.middleware`. All registered
 via the existing function-pointer chain — hot path stays C function
 pointers, no closure indirection.
 
@@ -568,10 +568,12 @@ aether_http_request_duration_seconds_count{method="GET",path="/api/users"} 4239
 Histogram buckets: 5ms / 25ms / 100ms / 500ms / 2s / 10s / +Inf.
 Counters are atomic; insertion-time mutex only.
 
-Custom hooks: `http.http_server_use_request_hook(server, hook, ud)`
-accepts user code that does its own thing (OpenTelemetry, distributed
-tracing, etc.). Multiple hooks may register; they fire in registration
-order after the response transformer chain.
+Custom hooks: `http_server_use_request_hook(server, hook, ud)` is a
+C-level extension point (declared in `std/net/aether_http_server.c`,
+not exported from `std.http`) used internally by the access-log and
+metrics hooks. Multiple hooks may register; they fire in registration
+order after the response transformer chain. It is not currently
+callable from Aether code.
 
 ---
 
@@ -613,8 +615,7 @@ past the end of a command is a finite process the surrounding harness
 supervisors charge the *foreground* command a non-zero/SIGURG exit for a
 lingering multi-threaded child. Always tear an embedded server down
 explicitly — `http_server_stop` (or `server_shutdown_graceful`), then
-let the process exit — rather than orphaning it
-(`std-http-server-background-sigurg-poisons-harness.md`).
+let the process exit — rather than orphaning it.
 
 ---
 

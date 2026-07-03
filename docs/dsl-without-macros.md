@@ -303,12 +303,11 @@ The standard escalation:
    another `TokenStream`. `syn` exists because this is hard enough that
    nobody should write it from scratch.
 
-The other Claude's summary — "if you find the declarative-macro docs feeling
-thin right when it gets to your real problem, that's not you missing
-something — it's the tool running out of road" — is exactly right. The road
-runs out because `macro_rules!` is a pattern-matching DSL over token trees,
-and arbitrary nesting with good diagnostics requires writing a parser,
-which is what `syn` is.
+The pattern people hit: the declarative-macro docs feel thin exactly at
+the point where the real problem starts. That's not a gap in the docs, it's
+the tool running out of road. `macro_rules!` is a pattern-matching DSL over
+token trees, and arbitrary nesting with good diagnostics requires writing a
+parser, which is what `syn` is.
 
 ## What Aether does instead
 

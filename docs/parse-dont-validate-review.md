@@ -185,10 +185,10 @@ way. Two named states, one parser between them: the operator's block is the *raw
 side, the builder's filled config is the *trusted* side.
 
 This is the same shape as Aether's **sandbox** model, one level up. The danger
-"parse, don't validate" warns against — *shotgun parsing*, checks scattered
+"parse, don't validate" warns against is *shotgun parsing*: checks scattered
 through processing code so a program acts on a valid *prefix* before hitting an
-invalid suffix, leaving state it can't roll back — is exactly what a two-phase
-**parse-then-execute** structure prevents. Aether's `--emit=lib` capability gate
+invalid suffix, leaving state it can't roll back. A two-phase
+**parse-then-execute** structure prevents exactly that. Aether's `--emit=lib` capability gate
 and the LD_PRELOAD grant list are that structure at the program scale:
 *gate-then-run* is *parse-then-execute*. Deciding up front what untrusted `.ae`
 may reach, before it touches anything real, is the same security argument King

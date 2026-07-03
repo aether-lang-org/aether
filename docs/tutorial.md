@@ -195,7 +195,7 @@ Grade: B
 
 ## 5. Pattern Matching
 
-Pattern matching is one of Aether's most powerful features, inspired by Erlang.
+Pattern matching, inspired by Erlang, lets you dispatch on argument values and structure.
 
 ### Function Clauses
 

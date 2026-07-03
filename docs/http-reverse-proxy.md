@@ -176,8 +176,8 @@ LRU list. Cacheability gates per RFC 7234 conservative subset:
 - Body length ≤ `max_body_bytes`.
 
 TTL resolution: response `Cache-Control: max-age` (clamped to 1
-hour for v1 conservatism) → `s-maxage` → `Expires` →
-`default_ttl_sec`.
+hour for v1 conservatism), else `default_ttl_sec`. `s-maxage` and
+`Expires` are not consulted in v1.
 
 ### Key strategies
 
@@ -192,7 +192,7 @@ hour for v1 conservatism) → `s-maxage` → `Expires` →
 Off by default. Opt in with:
 
 ```aether
-proxy.opts_set_retry_policy(opts, max_retries=3, backoff_base_ms=100)
+proxy.opts_set_retry_policy(opts, 3, 100)   // max_retries=3, backoff_base_ms=100
 ```
 
 When a 5xx or transport error comes back from an upstream and the
@@ -219,7 +219,7 @@ no eligible upstream remains, the proxy returns 503 with
 Off by default. Configure once on the pool:
 
 ```aether
-proxy.rate_limit_set(pool, max_rps=200, burst=50)
+proxy.rate_limit_set(pool, 200, 50)   // max_rps=200, burst=50
 ```
 
 Each upstream gets an independent token bucket: tokens refill at
@@ -308,7 +308,7 @@ Surface (HELP + TYPE blocks elided in this table):
 | `aether_proxy_upstream_draining` | gauge | `upstream` | 1 if operator-drained |
 | `aether_proxy_cache_hits_total` | counter | (none — pool-level) | Cache hits |
 | `aether_proxy_cache_misses_total` | counter | (none) | Cache misses |
-| `aether_proxy_cache_revalidations_total` | counter | (none) | Conditional GETs that returned 304 |
+| `aether_proxy_cache_revalidations_total` | counter | (none) | Conditional GETs that returned 304. Reserved for v2 conditional revalidation; always 0 in v1. |
 | `aether_proxy_503_no_upstream_total` | counter | (none) | 503s due to no eligible upstream |
 
 Latency is exposed as `_sum + _count` so a Grafana panel can
@@ -357,17 +357,16 @@ Each carries an `X-Aether-Proxy-Error` header for log aggregators:
 
 ## Limitations (v1)
 
-- **Buffered bodies.** Request and response bodies are buffered in
-  memory up to `opts.max_body_bytes` (default 8 MiB). Streaming
-  pass-through is the next major feature.
-- **No WebSocket / SSE upstreams.** Requests with `Upgrade:`
-  headers are refused with 502. The upstream can serve
-  Server-Sent Events to clients via the existing `std.http`
-  surface; just don't put the proxy in front of those routes.
-- **HTTP/1.1 upstreams only.** The proxy calls upstreams via
-  `std.http.client` which negotiates HTTP/1.1. Inbound HTTP/2
-  works (the inbound side is independent); upstream HTTP/2 is
-  v2 follow-up.
+- Request and response bodies are buffered in memory up to
+  `opts.max_body_bytes` (default 8 MiB). Streaming pass-through is
+  the next major feature.
+- WebSocket and SSE upstreams are unsupported: requests with
+  `Upgrade:` headers are refused with 502. The upstream can still
+  serve Server-Sent Events to clients via the existing `std.http`
+  surface, so long as the proxy is not in front of those routes.
+- Upstreams are called over HTTP/1.1 via `std.http.client`. Inbound
+  HTTP/2 works (the inbound side is independent); upstream HTTP/2 is
+  a v2 follow-up.
 - **In-memory cache only.** No disk-backed cache, no shared
   cache across processes.
 - **Sharded cache lock is a v2 follow-up.** Single mutex around

@@ -36,7 +36,7 @@ when <const-condition> {
   are distinguished by where the `when` appears; you write them the same
   way.
 - The `else` is optional. When the condition is false and there is no
-  `else`, the `when` simply contributes nothing.
+  `else`, the `when` contributes nothing.
 - Arms chain with `else when`:
 
   ```aether
@@ -88,9 +88,14 @@ the condition at compile time, it stops.
 constants describing the build target. They are sourced from the **same C
 preprocessor macros** the runtime's `os.platform()` uses (see
 `os_platform_raw` in `std/os/aether_os.c`), so the canonical names match
-across the toolchain. The target is the host: Aether emits C compiled by
-the host toolchain, and there is no cross-target flag today, exactly as
-`os.platform()` and `select()` already assume.
+across the toolchain. Note the "target" here is the host that built
+`aetherc`: `target_os_string` / `target_arch_string` in
+`compiler/codegen/optimizer.c` return values baked from the C preprocessor
+macros active when the compiler was compiled. `ae build --target wasm` does
+cross-compile the generated C to WebAssembly via `emcc`, but it does not
+change these constants: under `--target wasm` a `when target.os == ...`
+still reports the host, not `"wasm"`, exactly as `os.platform()` and
+`select()` also key off the host.
 
 | Constant | Canonical values |
 |---|---|

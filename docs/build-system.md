@@ -29,8 +29,9 @@ version = "1.0.0"
 description = "What this program does"
 
 [build]
-# Extra C compiler flags applied during `ae build` (release builds only).
-# `ae run` uses -O0 for fast iteration regardless of this setting.
+# Extra C compiler flags appended to the gcc invocation on every build path,
+# including `ae run`. They come after the optimisation level, so a cflag like
+# `-O3` overrides the `-O0` that `ae run` and `ae build --quick` use by default.
 cflags = "-O3 -march=native"
 
 # Platform-specific linker flags (e.g. for third-party C libraries).

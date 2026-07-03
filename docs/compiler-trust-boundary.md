@@ -60,7 +60,7 @@ nothing else:
 | **Filesystem write** | The build output directory and a temp dir for generated `.c` | **No** — output dir only |
 | **Process execution** | The C compiler (`cc`/`gcc`/`clang`) and the linker | **No** — toolchain binaries only |
 | **Network** | Never | **Never** |
-| **Environment** | A short fixed list (`CC`, `PATH`, `AETHER_*`, install-layout vars) | **No** |
+| **Environment** | A short fixed list (`PATH`, `AETHER_*`, install-layout vars) | **No** |
 
 The recommendation: a documented, opt-in `--sandboxed-build` mode (not yet
 implemented) that runs `aetherc` under a grant list matching exactly the
@@ -96,10 +96,10 @@ statement.
 
 ### 3. If remote packages ever exist, fetch is a separate, audited, pinned step
 
-`aeb` (the multi-package build system — see
-[build-system.md](build-system.md) and [install-layout.md](install-layout.md))
+`aeb` (the external multi-package build system, github.com/aether-lang-org/aeb)
 reads `share/aether/MANIFEST` to discover link-suitable runtime/stdlib `.c`
-files. Today it operates entirely on the local install tree.
+files; [install-layout.md](install-layout.md) documents the MANIFEST contract it
+consumes. Today it operates entirely on the local install tree.
 
 Should `aeb` ever grow remote package fetch, the lcamtuf post is the
 cautionary tale for *how not to do it*. The non-negotiable constraints:
@@ -123,8 +123,8 @@ separable from the build.
 
 - **Capability sandboxing** ([containment-sandbox.md](containment-sandbox.md))
   constrains the *program*. This document constrains the *toolchain*. They
-  are the same idea (deny-by-default, enumerate grants, no wildcards where a
-  fixed list will do) applied one layer down.
+  are the same idea, applied one layer down: deny by default, and prefer a
+  fixed grant list to a wildcard.
 - **Effect tags** (proposed — see the per-function capability-axis issue)
   would let `aetherc` reason about whether a given `.ae` *needs* `fs`/`net`
   at runtime. That is orthogonal to whether the *compiler* touched the
@@ -157,7 +157,7 @@ separable from the build.
   mirrors at the toolchain layer
 - [emit-lib.md](emit-lib.md) — `--emit=lib` capability-emptiness, the same
   deny-by-default reflex
-- [build-system.md](build-system.md), [install-layout.md](install-layout.md) —
-  `aeb` and the MANIFEST contract that any remote-fetch design must respect
+- [install-layout.md](install-layout.md) — the MANIFEST contract that `aeb`
+  consumes and that any remote-fetch design must respect
 - [module-system-design.md](module-system-design.md) — import resolution; the
   three (and only three) kinds of import target

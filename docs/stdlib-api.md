@@ -504,28 +504,25 @@ All documented in [stdlib-module-pattern.md](stdlib-module-pattern.md).
 
 Coming from Go's `json.Unmarshal`, Java's Jackson, Python's `json.load` + dataclasses, or C#'s `JsonSerializer`, expect to do more by hand:
 
-- **No struct ↔ JSON mapping.** Aether has no runtime reflection — no `instanceof`, no `T.GetType()`, no `reflect.TypeOf` — so a library function that takes a struct type and a JSON tree and populates the struct fields can't exist as a stdlib API. Callers walk the tree by hand: `json.object_get(v, "name")` then `json.get_string(...)`, repeated per field. For tree-shaped or dynamically-shaped JSON the Aether code looks similar to other languages; for struct-shaped JSON it's more verbose. A future codegen step (a `--derive-json` flag on struct definitions, or a build-step macro) could close this gap without runtime reflection, but isn't shipped today.
-- **No annotations / struct tags.** `@JsonProperty("user_name")`, Go struct tags `json:"user_name,omitempty"`, etc. don't apply — there's nothing for them to attach to without struct-mapping in the first place.
-- **No streaming parse.** The whole document is buffered into the arena before the tree is walkable. For multi-gigabyte JSON, use a different tool. Documents into the tens of MB are fine.
-- **No JSON5 / comments / trailing commas.** Strict RFC 8259 only.
-- **No pretty-print on stringify.** Compact output only. Wrap with a separate prettier if you need one.
-- **No JSON Schema validation.** Validate by hand or build it on top.
-- **No arbitrary-precision numbers.** Numbers are `int` or `double`; the parser auto-falls-through to `strtod` for correctly-rounded IEEE-754 on edge cases (16+ significant digits, huge exponents) but there's no `BigDecimal` / `decimal.Decimal` equivalent for financial precision.
-- **Hard-coded depth limit of 256.** DoS protection against deeply nested JSON bombs; not configurable. Rare to hit in practice.
+- No struct ↔ JSON mapping. Aether has no runtime reflection (no `instanceof`, no `T.GetType()`, no `reflect.TypeOf`), so a library function that takes a struct type and a JSON tree and populates the fields can't exist as a stdlib API. Callers walk the tree by hand: `json.object_get(v, "name")` then `json.get_string(...)`, repeated per field. For tree-shaped or dynamically-shaped JSON the code looks similar to other languages; for struct-shaped JSON it's more verbose. A future codegen step (a `--derive-json` flag on struct definitions, or a build-step macro) could close this gap without runtime reflection, but isn't shipped today.
+- No annotations or struct tags. `@JsonProperty("user_name")`, Go struct tags `json:"user_name,omitempty"`, and the like have nothing to attach to without struct-mapping in the first place.
+- No streaming parse. The whole document is buffered into the arena before the tree is walkable. Documents into the tens of MB are fine; for multi-gigabyte JSON, use a different tool.
+- Strict RFC 8259 only: no JSON5, comments, or trailing commas.
+- Compact output only on stringify; wrap with a separate prettier if you need one.
+- No JSON Schema validation. Validate by hand or build it on top.
+- No arbitrary-precision numbers. Numbers are `int` or `double`; the parser falls through to `strtod` for correctly-rounded IEEE-754 on edge cases (16+ significant digits, huge exponents), but there's no `BigDecimal` / `decimal.Decimal` equivalent for financial precision.
+- Hard-coded depth limit of 256, as DoS protection against deeply nested JSON bombs. Not configurable; rare to hit in practice.
 
 ### Other structured-data formats
 
-Beyond JSON, the stdlib has **no built-in support** for:
+Beyond JSON, XML is the other format with a stdlib module: `std.xml` (issue #627) provides a pull/SAX reader (`xml.parser`, `xml.next`, `xml.name`, `xml.text`, `xml.attr`, driven by the `EVENT_START`/`END`/`TEXT`/`EOF`/`ERROR` constants) and an escaping element builder (`xml.writer`, `xml.start`, `xml.element`, `xml.finish`). Enough for S3 / SOAP-ish / config XML; not in scope are XSD, XPath, namespaces, and DTD validation. There is no DOM tree, so you drive events yourself. The rest have no stdlib parser or codec:
 
-- **YAML** — no parser. The runtime is single-language, so configuration files for Aether projects use TOML (read by the build tool internally — not a user-facing stdlib module) or hand-rolled formats.
-- **XML** — no parser. The Servirtium climate-API replay tests parse XML by hand from the WorldBank API responses (substring-extract `<double>...</double>` values from a known-shape body), not via a real DOM/SAX surface.
-- **TOML** — there's a parser at `tools/apkg/toml_parser.c` used internally by the `ae` CLI to read `aether.toml` project files. It's not exposed as `std.toml`. If a project needs TOML, copying that parser or shelling out to a host-language tool are the options today.
-- **INI** — no parser. Trivial to implement on top of `string.split` if needed.
-- **Java-style `.properties`** — no parser. Same shape as INI without sections; same advice.
-- **CSV** — no parser. `string.split(line, ",")` covers the no-quoting / no-embedded-commas case; anything more needs a real CSV parser, which isn't shipped.
-- **Protocol Buffers / MessagePack / CBOR / Avro / Thrift** — no codecs. Same reflection-gap reasoning as struct ↔ JSON: without struct introspection there's no automatic encode/decode, and a hand-written codec on top of `tcp.write` / `tcp.read` / `aether_string_data` is what you'd build.
+- YAML, INI, and Java-style `.properties` have no parser. INI and `.properties` are trivial to build on `string.split`; for YAML, the runtime is single-language, so Aether projects configure via TOML or hand-rolled formats.
+- TOML has a parser at `tools/apkg/toml_parser.c`, used internally by the `ae` CLI to read `aether.toml` project files. It isn't exposed as `std.toml`. A project needing TOML can copy that parser or shell out to a host-language tool.
+- CSV has no parser. `string.split(line, ",")` covers the no-quoting / no-embedded-commas case; anything more needs a real CSV parser, which isn't shipped.
+- Protocol Buffers, MessagePack, CBOR, Avro, and Thrift have no codecs. Same reflection-gap reasoning as struct ↔ JSON: without struct introspection there's no automatic encode/decode, so a hand-written codec on top of `tcp.write` / `tcp.read` / `aether_string_data` is what you'd build.
 
-This isn't a hidden roadmap — these are absent because no downstream user has driven the need yet. If you're starting a project that needs YAML config, expect to write a parser, ship a contrib module, or shell out. The structured-data thinking in the stdlib is currently JSON-shaped and HTTP-adjacent; broader format coverage is open territory.
+These are absent because no downstream user has driven the need yet. If you're starting a project that needs YAML config, expect to write a parser, ship a contrib module, or shell out. The structured-data thinking in the stdlib is currently JSON-shaped and HTTP-adjacent; broader format coverage is open territory.
 
 ---
 

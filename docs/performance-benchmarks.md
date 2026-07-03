@@ -162,7 +162,7 @@ These Aether runtime optimizations affect benchmark performance:
 | Optimization | Effect | File |
 |-------------|--------|------|
 | Main Thread Actor Mode | Single-actor programs bypass scheduler entirely | `runtime/actors/aether_send_message.c` |
-| Inline message path | Single-field messages (int, int64, ptr, bool, actor_ref) skip heap allocation — value stored in `Message.payload_int` | `compiler/codegen/codegen.c` |
+| Inline message path | Single-field messages (int, int64, uint64, duration, ptr) skip heap allocation — value stored in `Message.payload_int` | `compiler/codegen/codegen.c` |
 | Batch send | Main-thread fan-out groups messages by target core, reducing atomics from N to num_cores | `runtime/scheduler/multicore_scheduler.c` |
 | Partial batch enqueue | `queue_enqueue_batch` returns how many fit instead of all-or-nothing | `runtime/scheduler/lockfree_queue.h` |
 | Work inlining | Same-core sends invoke `actor->step()` immediately, skipping the scheduler drain loop | `runtime/scheduler/multicore_scheduler.c` |

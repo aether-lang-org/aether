@@ -37,6 +37,7 @@ stdlib and keeps its own coverage here — e.g. transparent de-chunking of
 
 ## History
 
-CHANGELOG entries for the VCR work done while it lived here (0.181 embed
-ABI, 0.182 global `-fPIC`, 0.183 chunked de-chunk, 0.187 embed-surface +
-strict-ignore) are retained as project history.
+CHANGELOG entries for the VCR work done while it lived here (the 0.181
+embed ABI and global `-fPIC` runtime archive, 0.183 chunked de-chunk,
+0.187 embed-surface + strict-ignore) are retained as project history in
+[CHANGELOG-archive.md](../CHANGELOG-archive.md).

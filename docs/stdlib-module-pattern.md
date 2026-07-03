@@ -60,11 +60,11 @@ absent key, etc. These get:
 Keep raw externs with **no** `_raw` suffix and **no** wrapper for
 operations that are:
 
-- **Pure total functions.** They can't fail for any well-typed input.
-  Examples: `path_join`, `path_basename`, `math_sqrt`, `math_sin`,
-  `string_length`, `list_size`.
-- **Infallible boolean queries.** Examples: `file_exists`,
-  `path_is_absolute`, `fs_is_symlink`, `json_is_null`, `map_has`.
+- Pure total functions that can't fail for any well-typed input
+  (`path_join`, `path_basename`, `math_sqrt`, `math_sin`,
+  `string_length`, `list_size`), and infallible boolean queries
+  (`file_exists`, `path_is_absolute`, `fs_is_symlink`, `json_is_null`,
+  `map_has`).
 - **Sentinel-returning infallibles** where the sentinel is part of the
   contract, not an error. Example: `file_mtime` returns `0` for missing
   files or stat failure — callers already handle zero as "no mtime", so

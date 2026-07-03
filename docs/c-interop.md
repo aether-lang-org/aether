@@ -1,6 +1,6 @@
 # C Interoperability
 
-Aether provides seamless interoperability with C code, allowing you to leverage the entire C ecosystem including existing libraries like SQLite, libcurl, and OpenSSL.
+Aether interoperates with C code, so you can call existing libraries like SQLite, libcurl, and OpenSSL.
 
 ## Calling C Functions
 
@@ -388,7 +388,7 @@ The generated C is `list_add(items, (void*)(intptr_t)(i))`, which is the well-de
 
 ## Consuming `-> string` Returns From C
 
-An extern declared `-> string` does NOT give the C side a plain `const char*`. It returns an `AetherString*` — a 24-byte, magic-tagged header whose `data` field points at the actual bytes:
+An extern declared `-> string` does NOT give the C side a plain `const char*`. It returns an `AetherString*` — a 32-byte, magic-tagged header whose `data` field points at the actual bytes:
 
 ```c
 struct AetherString {
@@ -437,7 +437,7 @@ main() {
 }
 ```
 
-…the codegen emits `probe_consume(aether_string_data(raw), raw_len)` rather than passing `raw` straight through. `aether_string_data` dispatches on the AetherString magic header: returns `s->data` for wrapped strings, the bare pointer for plain `char*` values (literals, results of `string_concat`). Idempotent and safe on either shape.
+…the codegen emits `probe_consume(aether_string_data(raw), raw_len)` rather than passing `raw` straight through. `aether_string_data` dispatches on the AetherString magic header: returns `s->data` for wrapped strings, the bare pointer for plain `char*` values (string literals). Idempotent and safe on either shape.
 
 This means C shim authors don't have to remember to unwrap on the receiving side; the C function can `memcpy(...)` or `strlen(...)` on the `const char*` parameter and get the payload bytes regardless of what the Aether caller passed. Closes #297.
 
@@ -822,20 +822,21 @@ End-to-end proof: `tests/regression/test_issue747_sds_floor.ae`.
 
 ### Aether-side string-builder return types
 
-Aether-side primitives that build strings split into two camps:
+Every Aether-side primitive that builds a string returns an `AetherString*` — a refcounted, length-aware header that is binary-safe (embedded NULs preserved via the stored length):
 
-| Returns `AetherString*` (length-aware, binary-safe)        | Returns plain `char*` (NUL-terminated, strlen-bounded) |
-|------------------------------------------------------------|--------------------------------------------------------|
-| `string_new`, `string_new_with_length`, `string_empty`     | `string_concat`                                        |
-| `string_from_int`, `string_from_long`, `string_from_float` | `string_substring`, `string_to_upper`, `string_to_lower` |
-| `string_format`                                            | `string_trim`                                          |
-| `string_concat_wrapped`                                    |                                                        |
+| Returns `AetherString*` (length-aware, binary-safe) |
+|-----------------------------------------------------|
+| `string_new`, `string_new_with_length`, `string_empty` |
+| `string_from_int`, `string_from_long`, `string_from_float` |
+| `string_format` |
+| `string_concat`, `string_concat_wrapped` |
+| `string_substring`, `string_to_upper`, `string_to_lower`, `string_trim` |
 
-The split exists because Aether's `string` type is `void*`-shaped at the C level and the runtime helpers (`str_data`, `str_len`) auto-dispatch on the AetherString magic header. Code that calls `string.length(value)` on a *plain `char*`* result falls through to `strlen()` — which silently truncates at the first embedded NUL.
+These all mint their result through `string_adopt_caps_buffer`, which sets the magic header and stores the byte length. Aether's `string` type is `void*`-shaped at the C level, and the runtime helpers (`str_data`, `str_len`) dispatch on the AetherString magic header — so `string.length(value)` on any of these results reads the stored length, not `strlen()`, and does not truncate at an embedded NUL.
 
-For ASCII-text accumulation in print / interpolation contexts, `string_concat` is fine. For inputs that may contain binary bytes (base64-decoded payloads, file content from `fs.read_binary`, message frames with length-prefix bytes, …), use `string_concat_wrapped` instead — the wrapped result honors its stored length even on inputs with embedded NULs.
+`string_concat_wrapped` is retained as an explicit alias for `string_concat`: both return an `AetherString*` with the same contract. The truncation hazard only appears when a value has been reduced to a bare `char*` — for example a string literal, or a `string` argument whose AetherString header was stripped by the #297 auto-unwrap at an extern call boundary (see "Aether-emitted receivers" above). On such a bare pointer, `str_len` falls through to `strlen()` and truncates at the first embedded NUL.
 
-> **Historical bug (#270):** prior to this docs entry, `string_concat` was the only Aether-side string-builder, and downstream callers built `string.length(string.concat(a, b))` patterns that worked for text and silently truncated binary content. The `_wrapped` variant closes the gap; existing call sites that operate on text don't need to change.
+> **Historical note (#270):** `string_concat` originally returned a plain `char*`, so downstream `string.length(string.concat(a, b))` patterns truncated binary content at the first NUL. `string_concat` now returns an `AetherString*` (via `string_adopt_caps_buffer`), and `string_concat_wrapped` is kept as an alias for the same contract. Existing call sites don't need to change.
 
 ### Heap-string ownership across the FFI boundary
 

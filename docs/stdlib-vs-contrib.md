@@ -30,8 +30,8 @@ If any one is "no", it belongs in `contrib/`.
 
 3. **Are the dependencies minimal and well-scoped?** A `std/` module
    adds to the baseline cost of building Aether. `OpenSSL` is
-   already a dependency (we link `-lssl -lcrypto`), so
-   `std.cryptography` is free. `zlib` is similarly ambient on every
+   already a dependency (auto-detected via `pkg-config`, linked
+   through `$(OPENSSL_LDFLAGS)`), so `std.cryptography` is free. `zlib` is similarly ambient on every
    POSIX box. `libnghttp2` is auto-detected via `pkg-config` —
    present on every distro that ships HTTP-aware tools, gracefully
    stubbed out when absent. `SQLite` is a 4 MiB amalgamation —
@@ -80,7 +80,7 @@ and `zlib` uses for libz.
 | Module | Reason for `contrib/` |
 |---|---|
 | `contrib/sqlite/` | DB driver — fails rubric Q1 (not universal) and Q3 (4 MiB amalgamation). |
-| `contrib/cryptography/{rsa,aes,chacha20poly1305,ed25519,ed448,p256,secp256k1,x25519,x448,pem,asn1}/` | Public-key crypto, symmetric ciphers, and encodings — each family is a separate sub-decision with its own large API surface; fails Q2 (one obvious shape) and Q4 (stability). The hash/HMAC/Base64/CSPRNG primitives that *do* clear the rubric live in `std.cryptography`. |
+| `contrib/cryptography/{rsa,aes,des3,sm4,chacha20poly1305,ed25519,ed448,p256,p384,p521,secp256k1,x25519,x448,pem,asn1}/` | Public-key crypto, symmetric ciphers, and encodings — each family is a separate sub-decision with its own large API surface; fails Q2 (one obvious shape) and Q4 (stability). The hash/HMAC/Base64/CSPRNG primitives that *do* clear the rubric live in `std.cryptography`. |
 | `contrib/tinyweb/` | Builder DSL for HTTP services — competes with `std.http.server`'s closure-config approach; opinionated shape that's better off evolving without the stability constraint. |
 | `contrib/templating/{native,liquid}/` | Escape-correct output emission — `native` (Aether-as-template-language) and `liquid` (Shopify Liquid port). Opinionated template surfaces; fail Q2. |
 | `contrib/parsers/xml_expat/` | Expat-backed streaming XML parser — third-party C dependency; fails Q3 (`std.xml` covers the in-tree case). |

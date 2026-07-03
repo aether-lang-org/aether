@@ -45,7 +45,7 @@ The placement is deliberate — Aether picks the pieces of each tradition that c
 
 ### What this means in practice
 
-If you've written Go, you'll recognise the shape immediately — free functions, structs, channels (`!` send, `?` ask), explicit error returns, no classes. If you've written Elixir, the actor model and trailing-block DSLs will feel familiar. If you've written Ruby or Groovy, the "DSL with scope" idiom is borrowed directly from your lineage (Matz's term for it). If you're coming from Java or Python, the absence of method dispatch is the biggest adjustment — `circle_area(c)` instead of `c.area()` — but the rest of the surface is approachable.
+If you've written Go, you'll recognise the shape immediately: free functions, structs, channels (`!` send, `?` ask), explicit error returns, no classes. If you've written Elixir, the actor model and trailing-block DSLs will feel familiar. If you've written Ruby or Groovy, the "DSL with scope" idiom is borrowed directly from your lineage (Matz's term for it). If you're coming from Java or Python, the biggest adjustment is the absence of method dispatch (`circle_area(c)` instead of `c.area()`); the rest of the surface is approachable.
 
 Aether is not, and has no plans to be, a pure FP language (no Hindley-Milner inference, no purity tracking, no monadic effects). It's also not, and has no plans to be, a class-based OO language (no inheritance, no virtual dispatch, no `self`). It picks the cross-paradigm subset that survives compilation to readable C and stays useful for systems work — concurrent servers, language ports, build tooling, embedded scripting.
 
@@ -829,14 +829,16 @@ handler(req, res) {
 
 ### Key semantics
 
-- **Scope-level:** position of the directive within its block doesn't matter.
-- **Blocks reads AND writes.**
-- **Propagates to nested blocks** — no way to un-hide deeper in.
-- **Does NOT reach through call boundaries** — a visible function can still use hidden names via its own lexical chain. This is name resolution denial, not an effect system.
-- **Local bindings always visible** — directives only affect lookups that walk out to parent scopes.
-- **Applies to qualified names** — `hide http` also blocks `http.get(url)`.
-- **Works inside actor receive arms** — receive handler bodies are block scopes.
-- **Cannot redeclare** a hidden name in the same scope (but a nested child scope may).
+A directive is scope-level: its position within the block doesn't matter, and it
+blocks both reads and writes of the affected names. The denial propagates into
+nested blocks, with no way to un-hide deeper in. It does not reach through call
+boundaries, though: a visible function can still use hidden names via its own
+lexical chain, since this is name-resolution denial, not an effect system. Local
+bindings created inside the block stay visible, because directives only affect
+lookups that walk out to parent scopes. Qualified names are covered too, so
+`hide http` also blocks `http.get(url)`. The directives work inside actor receive
+arms (handler bodies are block scopes), and a hidden name cannot be redeclared in
+the same scope, though a nested child scope may.
 
 For the full design rationale, edge cases, and worked examples, see [hide-and-seal.md](hide-and-seal.md).
 
@@ -1808,16 +1810,19 @@ main() {
 }
 ```
 
-### Import with Alias (Planned)
+### Import with Alias
 
-> **Note:** Import aliasing is parsed but not yet fully functional. Use the default namespace for now.
+The `import mod as alias` syntax parses and records the alias, but calls through
+the alias prefix (`str.new(...)`) do not currently resolve — the aliased name is
+not wired into namespace lookup, so the call fails typechecking. Until that lands,
+use the module's own namespace directly:
 
 ```aether
-// Planned syntax:
-// import std.string as str;
-// s = str.new("hello")
+// Aliased-call form parses but does not yet resolve:
+// import std.string as str
+// s = str.new("hello")            // typecheck error: undefined function
 
-// Current workaround: use the module name directly
+// Working form: use the module name directly
 import std.string
 s = string.new("hello")
 len = string.length(s)

@@ -158,7 +158,7 @@ underlying type?
 |---|---|---|---|---|
 | **A. Nim-style postfix** | `Path("/etc/foo")` | `p.string` | familiar from Nim; reads left-to-right | postfix `.string` looks like a field/method access; could surprise readers |
 | **B. Constructor-style both ways** | `Path("/etc/foo")` | `string(p)` | uniform syntax | conflicts with constructor syntax for structs / actors |
-| **C. C-style cast** | `(Path)"/etc/foo"` | `(string)p` | matches the C mental model | Aether elsewhere rejects C-style casts (memory: `[[feedback_aether_no_c_cast]]`) |
+| **C. C-style cast** | `(Path)"/etc/foo"` | `(string)p` | matches the C mental model | Aether elsewhere rejects C-style casts |
 | **D. Mixed (issue's sketch)** | `Path("/etc/foo")` | `p.string` (postfix only) | matches the issue body | only one direction is symmetric |
 
 **Maintainer call.** Once chosen, the parser, type checker, and the
