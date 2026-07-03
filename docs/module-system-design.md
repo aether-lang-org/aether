@@ -193,14 +193,54 @@ sealed-scope isolation (#243) is preserved: user code still cannot call into a
 namespace it never imported. This mirrors how transitive dependencies already
 get synthetic imports during merge.
 
+## Re-exports
+
+A module can re-export a symbol it imports from another module by listing that
+symbol in its own `exports`. A consumer then reaches it through the re-exporting
+module even though that module never defined it:
+
+```aether
+// hub.ae — re-exports DERIVED from an inner module
+import layout_consts (DERIVED)
+exports (DERIVED)
+
+// consumer.ae
+import hub
+x = hub.DERIVED        // resolves to the definition in layout_consts
+```
+
+Re-export is opt-in through the `exports` list, transitive (a hub may
+re-export a symbol another hub re-exports), and cycle-guarded. It is also
+precise: a locally-defined export is never treated as a re-export, so if a
+module both defines a name and imports one, the local definition wins. The
+resolver redirects an unresolved `hub.X` to the origin module that defines it,
+and the merge pass pulls that origin definition into the program under the
+origin's namespace.
+
+## Cross-module method-call syntax (UFCS)
+
+A method-style call `x.f(args)` is rewritten to the free-function call
+`f(x, args)` when no field or method named `f` applies. The target `f` may be
+defined in an imported module, not only in the same file. Same-file functions
+take precedence, and the rewrite is a last resort — it fires only when the call
+does not already resolve as a normal function or a struct field, so it never
+shadows an existing binding. This is what lets a fluent chain such as
+`expect(x).to_equal(y)` span module boundaries.
+
+## Circular-import diagnostics
+
+Imports are resolved through a dependency graph, and a cycle is a hard error.
+The diagnostic names the actual cycle as a path — `a -> b -> a` — rather than
+the entry point, so the report points at the modules that actually form the
+loop. The synthetic `__main__` entry node never appears in the path because
+nothing imports it.
+
 ## Future
 
 Work planned on top of the current module system:
 
 - `import math.geometry as geo` — import aliases. The parser accepts them and the typechecker records the alias via `add_module_alias`, but qualified calls through the alias (`geo.distance()`) do not yet resolve; completing that lookup is the remaining work.
 - Exporting structs and actors from modules.
-- Re-exports (module A re-exporting module B's symbols).
-- Transitive dependency resolution.
 
 ---
 
@@ -424,7 +464,6 @@ After module orchestration, the compiler clones each module's function and const
 **On the module-system roadmap (language-level):**
 - Actors from modules (dispatch tables currently assume main-program scope)
 - Message definitions from modules
-- Re-exports (module A re-exporting module B's functions)
 - Module-level mutable state
 
 ### Roadmap
