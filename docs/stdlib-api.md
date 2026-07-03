@@ -731,7 +731,7 @@ main() {
 - `client.post_json(url, value)` → `(ptr, string)` - Marshal value via `std.json`, set Content-Type + Accept
 - `client.response_body_json(resp)` → `(ptr, string)` - `response_body` + `json.parse` round-trip
 
-See [`docs/notes/http-client-improvement-plan.md`](notes/http-client-improvement-plan.md) for design rationale and `tests/integration/test_http_client_v2.ae` for ten worked examples (header round-trip, status discrimination, binary body, timeout, transport failure, JSON sugar, malformed-JSON parse failure).
+See `tests/integration/test_http_client_v2.ae` for ten worked examples (header round-trip, status discrimination, binary body, timeout, transport failure, JSON sugar, malformed-JSON parse failure); the [Standard Library Reference](stdlib-reference.md) covers the design choices (arbitrary-string method, non-2xx-is-not-an-error, `send_request` naming). Streaming response bodies for large downloads are tracked in #1004.
 
 ### HTTP Reverse Proxy (`std.http.proxy`)
 

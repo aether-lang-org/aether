@@ -1,22 +1,22 @@
 # Aether Programming Language
 
-[![CI](https://github.com/nicolasmd87/aether/actions/workflows/ci.yml/badge.svg)](https://github.com/nicolasmd87/aether/actions/workflows/ci.yml)
-[![Windows](https://github.com/nicolasmd87/aether/actions/workflows/windows.yml/badge.svg)](https://github.com/nicolasmd87/aether/actions/workflows/windows.yml)
+[![CI](https://github.com/aether-lang-org/aether/actions/workflows/ci.yml/badge.svg)](https://github.com/aether-lang-org/aether/actions/workflows/ci.yml)
+[![Windows](https://github.com/aether-lang-org/aether/actions/workflows/windows.yml/badge.svg)](https://github.com/aether-lang-org/aether/actions/workflows/windows.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20WASM%20%7C%20Embedded-lightgrey)]()
 
-A compiled actor-based programming language with type inference, designed for concurrent systems. Aether compiles to C for native performance and seamless C interoperability.
+A compiled, actor-based programming language with type inference, built for concurrent systems. Aether compiles to readable C, so it runs at native speed and links against existing C libraries directly.
 
 ## Overview
 
-Aether is a compiled language that brings actor-based concurrency to systems programming. The compiler generates readable C code, providing portability and interoperability with existing C libraries.
+Aether brings actor-based concurrency to systems programming. The compiler emits C — not bytecode, not a VM — which keeps the runtime dependency-free, portable anywhere a C toolchain reaches, and callable from (and into) existing C code.
 
 **Where it sits on the OO ↔ FP spectrum:** structs are plain data, behaviour is free functions, closures + trailing blocks are first-class — Aether leans **closer to functional than OO**, sitting near Go and Rust in the hybrid middle of the paradigm spectrum. There are no classes, no inheritance, no method dispatch; the one piece of OO machinery present is the actor (stateful, encapsulated behind a message boundary, no polymorphism). See [Language Reference § Paradigm placement](docs/language-reference.md#paradigm-placement).
 
 **Core Features:**
 - **Actor-based concurrency** — automatic multi-core scheduling, lock-free message passing, and adaptive batching/migration. See [Actor Concurrency](docs/actor-concurrency.md).
 - **Type inference** with optional annotations, plus Go-style multi-value returns — `a, err = func()` with `_` discard.
-- **Compiles to readable C** — native performance and seamless C-library interop. See [Architecture](docs/architecture.md).
+- **Compiles to readable C** — native performance and direct C-library interop, no FFI glue. See [Architecture](docs/architecture.md).
 - **Three-layer capability sandbox** — `--emit=lib` gates the stdlib at compile time, `hide`/`seal except` gate lexical scopes, and an `LD_PRELOAD` shim gates libc. See [Containment Sandbox](docs/containment-sandbox.md).
 - **Embeds in (and hosts) other languages** — `--emit=lib` emits a `.so` + typed SDK and a `.rodata` symbol catalog read by `ae lib-info`; the same grant list runs Lua / Python / Perl / Ruby / Tcl / JS in-process. See [Embedding & emit=lib](docs/emit-lib.md).
 - **Per-guest resource caps** — embedders set a process memory ceiling and per-thread wall-clock deadline; the codegen tripwires every loop head under `--emit=lib` (zero overhead on `--emit=exe`).
@@ -119,7 +119,7 @@ Installs to `~/.aether` and adds `ae` to your PATH. Restart your terminal or run
 
 **Windows — download and run:**
 
-1. Download `aether-*-windows-x86_64.zip` from [Releases](https://github.com/nicolasmd87/aether/releases)
+1. Download `aether-*-windows-x86_64.zip` from [Releases](https://github.com/aether-lang-org/aether/releases)
 2. Extract to any folder (e.g. `C:\aether`)
 3. Add `C:\aether\bin` to your PATH
 4. **Restart your terminal** (so PATH takes effect)
@@ -221,7 +221,7 @@ make help                        # Show all targets
 
 The Aether build is GNU-make based. Use one of the two paths below — `nmake` from a Visual Studio Developer Prompt **will not work** (the Makefile uses GNU-only syntax that NMAKE can't parse).
 
-**Just running Aether? Skip this section** and use the [release binary](https://github.com/nicolasmd87/aether/releases) — no MSYS2 setup required.
+**Just running Aether? Skip this section** and use the [release binary](https://github.com/aether-lang-org/aether/releases) — no MSYS2 setup required.
 
 **Building from source — recommended (MSYS2 / MinGW-w64):**
 
@@ -234,14 +234,14 @@ The Aether build is GNU-make based. Use one of the two paths below — `nmake` f
    ```
 3. Clone and build:
    ```bash
-   git clone https://github.com/nicolasmd87/aether.git
+   git clone https://github.com/aether-lang-org/aether.git
    cd aether
    make ci   # full suite: compiler, ae, stdlib, REPL, C tests, .ae tests, examples
    ```
 
 For HTTPS to verify certs, the `mingw-w64-x86_64-ca-certificates` package above provides the bundle at `/mingw64/etc/ssl/certs/ca-bundle.crt`. The runtime auto-detects it; if your install is in a non-standard location, export `SSL_CERT_FILE` to the bundle's Windows path.
 
-**Native MSVC (cl.exe / nmake):** not currently supported as a full build path — tracker [#99](https://github.com/nicolasmd87/aether/issues/99). The MSVC matrix job in CI verifies our public headers parse under `cl.exe` so a future native MSVC port stays feasible, but `make` (the build system itself) requires GNU make. The MSYS2 MinGW build above is the supported source-build path for Windows today.
+**Native MSVC (cl.exe / nmake):** not currently supported as a full build path — tracker [#99](https://github.com/aether-lang-org/aether/issues/99). The MSVC matrix job in CI verifies our public headers parse under `cl.exe` so a future native MSVC port stays feasible, but `make` (the build system itself) requires GNU make. The MSYS2 MinGW build above is the supported source-build path for Windows today.
 
 ## Project Structure
 
@@ -480,22 +480,6 @@ The runtime employs a tiered optimization strategy:
 ### Running Tests
 
 ```bash
-# Runtime C test suite
-make test
-
-# Aether source tests
-make test-ae
-
-# All tests
-make test-all
-
-# Build all examples
-make examples
-```
-
-### Testing
-
-```bash
 # Full CI suite (9 steps, -Werror) — runs on your current platform
 make ci
 
@@ -504,6 +488,9 @@ make test
 
 # Integration + regression .ae tests
 make test-ae
+
+# Everything (unit + .ae)
+make test-all
 
 # Build all example programs
 make examples

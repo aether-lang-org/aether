@@ -1522,7 +1522,7 @@ main() {
 - `client.post_json(url, value)` → `(ptr, string)` - Marshal a JSON value (`std.json`), set `Content-Type` + `Accept` to `application/json`, send
 - `client.response_body_json(resp)` → `(ptr, string)` - Wrap `response_body` + `json.parse`; returns `(value, "")` on success or `(null, parse_error)` on malformed JSON
 
-Design notes (why `method: string`, why non-2xx-is-not-an-error, why `send_request` not `send`) live in [`docs/notes/http-client-improvement-plan.md`](notes/http-client-improvement-plan.md); `tests/integration/test_http_client_v2.ae` is the runnable example file.
+Design choices: `method` is an arbitrary string, not a `{GET,POST,PUT,DELETE}` enum, so WebDAV / DeltaV / PATCH / project-specific verbs ride through without a stdlib release (the wrapper validates the token shape and forwards it to `CURLOPT_CUSTOMREQUEST`). A non-2xx status is not an error: `send_request` returns the response cleanly and the caller drives status interpretation, so 404/403/401 are distinguishable rather than collapsed to `"http error"`. The builder is named `send_request` rather than `send` because `send` is reserved for actor messaging (tracked by #233). `tests/integration/test_http_client_v2.ae` is the runnable example file; streaming response bodies for large downloads are tracked in #1004.
 
 ### HTTP record/replay (VCR) — moved out of the stdlib
 
