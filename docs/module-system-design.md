@@ -460,10 +460,9 @@ After module orchestration, the compiler clones each module's function and const
 - Multiple module imports in the same program
 - Mixing pure modules with stdlib imports
 - Parameter/local variable shadowing of module constants
+- Actors and their message types (#1006): `spawn` an `actor` and send a `message` declared in an imported module. Both enter the program under their bare name (like structs), so `spawn(Worker())` and `w ! Ping { ... }` resolve; the actor's handlers still have their intra-module function/constant references rewritten, and the per-program message registry assigns runtime type ids across the merge.
 
 **On the module-system roadmap (language-level):**
-- Actors from modules (dispatch tables currently assume main-program scope)
-- Message definitions from modules
 - Module-level mutable state
 
 ### Roadmap
