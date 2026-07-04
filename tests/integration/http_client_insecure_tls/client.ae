@@ -1,0 +1,55 @@
+// Regression for aether#1012 (part 1): per-request TLS-verify-skip.
+//
+// Hits an in-process Aether TLS server that presents a SELF-SIGNED cert
+// (started by the .sh driver), twice:
+//   1. default request (verify on)  -> must FAIL with a cert-verify error
+//   2. client.set_insecure(req, 1)   -> must SUCCEED (skip verify for this
+//      connection only) and return the 200 body
+//
+// The two together prove set_insecure is (a) off by default and (b) actually
+// relaxes verification per-connection — without which #1 would also succeed
+// (verification never happened) or #2 would also fail (skip is a no-op).
+
+import std.http.client
+
+extern exit(code: int)
+
+const URL = "https://localhost:18104/"
+
+main() {
+    // 1. Default: self-signed cert must be rejected.
+    r1 = client.request("GET", URL)
+    client.set_timeout(r1, 5s)
+    resp1, err1 = client.send_request(r1)
+    client.request_free(r1)
+    if err1 == "" {
+        // Handshake unexpectedly succeeded with verification ON.
+        client.response_free(resp1)
+        println("FAIL: default request accepted a self-signed cert")
+        exit(1)
+    }
+
+    // 2. Insecure: same host, verification skipped, must succeed.
+    r2 = client.request("GET", URL)
+    client.set_timeout(r2, 5s)
+    ierr = client.set_insecure(r2, 1)
+    if ierr != "" {
+        println("FAIL: set_insecure: ${ierr}")
+        exit(1)
+    }
+    resp2, err2 = client.send_request(r2)
+    client.request_free(r2)
+    if err2 != "" {
+        println("FAIL: insecure request errored: ${err2}")
+        exit(1)
+    }
+    st = client.response_status(resp2)
+    body = client.response_body(resp2)
+    client.response_free(resp2)
+    if st == 200 {
+        println("PASS default-rejected insecure-ok body=${body}")
+        exit(0)
+    }
+    println("FAIL: insecure status=${st} (expected 200)")
+    exit(1)
+}

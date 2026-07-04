@@ -22,6 +22,7 @@ int http_request_set_body_raw(HttpRequest* r, const char* b, int l, const char* 
 int http_request_set_timeout_raw(HttpRequest* r, int s) { (void)r; (void)s; return -1; }
 int http_request_set_timeout_ns_raw(HttpRequest* r, int64_t ns) { (void)r; (void)ns; return -1; }
 int http_request_set_follow_redirects_raw(HttpRequest* r, int n) { (void)r; (void)n; return -1; }
+int http_request_set_insecure_raw(HttpRequest* r, int on) { (void)r; (void)on; return -1; }
 void http_request_free_raw(HttpRequest* r) { (void)r; }
 HttpResponse* http_send_raw(HttpRequest* r) { (void)r; return NULL; }
 const char* http_response_header_raw(HttpResponse* r, const char* n) { (void)r; (void)n; return ""; }
@@ -317,6 +318,9 @@ struct HttpRequest {
                           * DWORD ms) slice this down to whatever
                           * granularity they support. */
     int   max_redirects; /* 0 = don't follow (default); N>0 = follow up to N hops */
+    int   insecure;      /* 0 = verify peer cert + hostname (default); 1 = skip
+                          * both for THIS connection only (curl -k equivalent).
+                          * Relaxed per-SSL, never on the shared SSL_CTX. */
 };
 
 HttpRequest* http_request_raw(const char* method, const char* url) {
@@ -407,6 +411,17 @@ int http_request_set_timeout_ns_raw(HttpRequest* req, int64_t timeout_ns) {
 int http_request_set_follow_redirects_raw(HttpRequest* req, int max_hops) {
     if (!req || max_hops < 0) return -1;
     req->max_redirects = max_hops;
+    return 0;
+}
+
+/* Skip TLS peer + hostname verification for this request only (curl -k /
+ * wget --no-check-certificate). `on` non-zero enables it; 0 (the default)
+ * verifies. The relaxation is applied per-SSL in the TLS path below, never on
+ * the process-wide SSL_CTX singleton — so one insecure request cannot silently
+ * downgrade verification for every other request in the process. */
+int http_request_set_insecure_raw(HttpRequest* req, int on) {
+    if (!req) return -1;
+    req->insecure = on ? 1 : 0;
     return 0;
 }
 
@@ -664,10 +679,18 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         // return the right cert.
         SSL_set_tlsext_host_name(ssl, host);
 
-        // Verify the cert's CN/SAN matches the hostname we connected to.
-        X509_VERIFY_PARAM* vpm = SSL_get0_param(ssl);
-        X509_VERIFY_PARAM_set_hostflags(vpm, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-        X509_VERIFY_PARAM_set1_host(vpm, host, 0);
+        if (req->insecure) {
+            // Per-request opt-out (set_insecure): skip peer verification AND
+            // the hostname pin for THIS connection only. The shared SSL_CTX
+            // (which set SSL_VERIFY_PEER) is untouched, so every other request
+            // still verifies. Mirrors curl -k / wget --no-check-certificate.
+            SSL_set_verify(ssl, SSL_VERIFY_NONE, NULL);
+        } else {
+            // Verify the cert's CN/SAN matches the hostname we connected to.
+            X509_VERIFY_PARAM* vpm = SSL_get0_param(ssl);
+            X509_VERIFY_PARAM_set_hostflags(vpm, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+            X509_VERIFY_PARAM_set1_host(vpm, host, 0);
+        }
 
         SSL_set_fd(ssl, sockfd);
         int connect_result = SSL_connect(ssl);

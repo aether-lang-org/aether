@@ -54,7 +54,7 @@ import std.json
 import std.string
 
 exports (
-    request, set_header, set_body, set_timeout, set_follow_redirects, request_free,
+    request, set_header, set_body, set_timeout, set_follow_redirects, set_insecure, request_free,
     send_request,
     response_status, response_body, response_body_length, response_error, response_redirect_error,
     response_header, response_headers, response_url, response_free,
@@ -74,6 +74,7 @@ extern http_request_set_body_raw(req: ptr, body: string, length: int, content_ty
 extern http_request_set_timeout_raw(req: ptr, seconds: int) -> int
 extern http_request_set_timeout_ns_raw(req: ptr, timeout: Duration) -> int
 extern http_request_set_follow_redirects_raw(req: ptr, max_hops: int) -> int
+extern http_request_set_insecure_raw(req: ptr, on: int) -> int
 extern http_request_free_raw(req: ptr)
 extern http_send_raw(req: ptr) -> ptr
 
@@ -150,6 +151,18 @@ set_timeout(req: ptr, timeout: Duration) -> string {
 set_follow_redirects(req: ptr, max_hops: int) -> string {
     rc = http_request_set_follow_redirects_raw(req, max_hops)
     if rc != 0 { return "set_follow_redirects failed (negative max_hops or null req)" }
+    return ""
+}
+
+// Skip TLS peer + hostname verification for this request (curl -k /
+// wget --no-check-certificate). `on` = 1 to skip, 0 (default) to verify.
+// The relaxation is per-connection: it never touches the shared SSL_CTX, so
+// other requests in the process keep verifying. Use only against hosts you
+// trust out-of-band (self-signed dev/staging/appliance certs) — it removes
+// MITM protection for the request it's set on.
+set_insecure(req: ptr, on: int) -> string {
+    rc = http_request_set_insecure_raw(req, on)
+    if rc != 0 { return "set_insecure failed (null req)" }
     return ""
 }
 

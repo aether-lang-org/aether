@@ -5,11 +5,45 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.350.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.350.0]
+## [current]
+
+### Added
+
+- **`std.http.client`: per-request TLS peer-verification skip** (#1012). A new
+  `client.set_insecure(req, 1)` on the request builder skips TLS peer + hostname
+  verification for that request only (the `curl -k` /
+  `wget --no-check-certificate` equivalent) — for hosts with self-signed or
+  otherwise-untrusted certs (dev/staging/appliances/CI). The relaxation is
+  applied **per connection** via `SSL_set_verify(ssl, SSL_VERIFY_NONE, NULL)`,
+  never on the shared process-wide `SSL_CTX`, so one insecure request cannot
+  downgrade verification for any other request in the process. Default is 0
+  (verify), so existing callers are unchanged. Unblocks zsync-port's
+  self-signed-cert HTTPS scenarios (its `--no-check-certificate` was a parsed
+  no-op). The forward-proxy half of #1012 (`HTTP_PROXY` / `CONNECT` tunnelling)
+  remains open — the issue scoped it as the lower-priority follow-up.
+
+## [0.353.0]
+
+### Fixed
+
+- **Selective import in a consumer no longer breaks a dependency's qualified
+  namespace** (#1009). A consumer that did `import std.os (getenv)` while a
+  dependency whole-imported `std.os` (and called `os.now_monotonic_ns()`
+  qualified) failed to build — `error[E0301]: Undefined function
+  'os.now_monotonic_ns'` — but only when `std.os` was not the dependency's first
+  import. The module merger froze its clone-loop bound at the pre-loop child
+  count, so a synthetic bare-import (#870) re-injected to re-open the qualified
+  surface could land past that bound and never have its wrappers cloned. The
+  merger now scans the synthetic imports too; revisiting also surfaced and fixed
+  two latent const-clone dedup gaps (`redefinition of 'sha2_K256'`). Broke every
+  aeocha consumer that also selectively imported a module aeocha whole-imports
+  (aeocha lists `std.os` 7th of 10).
+
+## [0.352.0]
 
 ### Added
 
@@ -23,6 +57,36 @@ next version number before tagging the release.
   byte. A missing compiler now fails with a clear `C compiler '<name>' (from
   $CC) not found` instead of a downstream link error. Applies to `ae build`,
   `ae run`, and `ae build --emit=lib`.
+
+## [0.351.0]
+
+### Documentation
+
+- **Documentation overhaul (docs only, no code or behavioural change)** (#1001).
+  A corpus-wide accuracy and de-slop pass across the docs, followed by a
+  structural cleanup:
+  - Design-rationale and concurrency-pattern docs are grouped under a new
+    `docs/design/` section (closure lineage, parse-don't-validate, the
+    Chlipala lens, the rules-engine exploration, sharded actor map, snapshot
+    cell, concurrent-cache benchmark).
+  - `docs/cross-references/` is reworked from internal issue-body drafts into
+    professional design-history surveys of Fir, Flint, Zym, and
+    GoogleCloudPlatform/Aether, each with a status header and a public source
+    URL. The Flux comparison was dropped: its source is a proprietary,
+    all-rights-reserved spec that cannot be verified or safely reproduced.
+  - The `docs/notes/` handoff files were retired; their still-open items are
+    tracked as #1002 (release-workflow CHANGELOG guard), #1003 (std.capsicum
+    follow-ups), and #1004 (std.http streaming response bodies).
+  - Em-dashes are removed from all documentation prose in favour of commas.
+  - The root `README.md` is the single documentation index (the `docs/design/`
+    and `docs/cross-references/` subfolder READMEs were removed, and the design
+    docs are listed directly in the README). Every internal doc link and
+    heading anchor was re-audited and resolves clean.
+
+## [0.350.0]
+
+_CHANGELOG reconstruction for the 0.344–0.349 gaps + zsync-port added to LLM.md
+(#999); no compiler, stdlib, or runtime behaviour change._
 
 ## [0.349.0]
 
@@ -118,28 +182,6 @@ stdlib, or runtime behaviour change._
   message Bump { volatile: int }
   ```
 
-### Documentation
-
-- **Documentation overhaul (docs only, no code or behavioural change).** A
-  corpus-wide accuracy and de-slop pass across the docs, followed by a
-  structural cleanup:
-  - Design-rationale and concurrency-pattern docs are grouped under a new
-    `docs/design/` section (closure lineage, parse-don't-validate, the
-    Chlipala lens, the rules-engine exploration, sharded actor map, snapshot
-    cell, concurrent-cache benchmark).
-  - `docs/cross-references/` is reworked from internal issue-body drafts into
-    professional design-history surveys of Fir, Flint, Zym, and
-    GoogleCloudPlatform/Aether, each with a status header and a public source
-    URL. The Flux comparison was dropped: its source is a proprietary,
-    all-rights-reserved spec that cannot be verified or safely reproduced.
-  - The `docs/notes/` handoff files were retired; their still-open items are
-    tracked as #1002 (release-workflow CHANGELOG guard), #1003 (std.capsicum
-    follow-ups), and #1004 (std.http streaming response bodies).
-  - Em-dashes are removed from all documentation prose in favour of commas.
-  - The root `README.md` is the single documentation index (the `docs/design/`
-    and `docs/cross-references/` subfolder READMEs were removed, and the design
-    docs are listed directly in the README). Every internal doc link and
-    heading anchor was re-audited and resolves clean.
 ## [0.344.0]
 
 _CHANGELOG reconstruction (0.340/0.342/0.343 gaps) + zsync-port added to LLM.md
