@@ -1,6 +1,6 @@
 // #260 Tier 0: server-side TLS termination test driver.
 //
-// Spins up an HTTP server on TLS-enabled port 18104 with a route
+// Spins up an HTTP server on TLS-enabled port 18118 with a route
 // that returns "insecure-ok". The shell runner verifies handshake +
 // response with curl --cacert.
 
@@ -12,7 +12,7 @@ extern exit(code: int)
 // wrapper's string return without an unused-result warning.
 extern http_server_start_raw(server: ptr) -> int
 
-const PORT = 18104
+const PORT = 18118
 
 handle_root(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 200)

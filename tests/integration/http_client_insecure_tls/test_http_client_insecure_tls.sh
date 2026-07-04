@@ -30,10 +30,21 @@ fi
 
 TMPDIR="$(mktemp -d)"
 cleanup() {
-    [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null
+    if [ -n "${SRV_PID:-}" ]; then
+        kill "$SRV_PID" 2>/dev/null || true
+        # Suppress the "Terminated: 15" wait notice from the shell.
+        wait "$SRV_PID" 2>/dev/null || true
+    fi
     rm -rf "$TMPDIR"
 }
 trap cleanup EXIT
+
+# NOTE: this test binds a UNIQUE port (18118) that no other integration test
+# uses. `ae run` forks the compiled server as a child, so the trap above can't
+# fully reap it (the fork outlives the wrapper) — every server test in this
+# suite has that limitation. A unique port is what keeps a lingering server
+# from starving the next test (the collision that surfaced this on macOS, where
+# reaping is slower). Keep 18118 distinct if you add a sibling test.
 
 CERT="$TMPDIR/cert.pem"
 KEY="$TMPDIR/key.pem"
