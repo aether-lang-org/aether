@@ -11,6 +11,26 @@ next version number before tagging the release.
 
 ## [0.350.0]
 
+### Fixed
+
+- **Cross-module actors and message types now work** (#1006). An `actor` and
+  its `message` types declared in an imported module can now be `spawn`ed and
+  sent to from the importing module. Previously `spawn(Worker())` failed at the
+  call site with a misleading `Undefined function 'spawn_Worker'` (and
+  `Undefined message type 'Ping'`), even though `Worker` was correctly spelled
+  and imported. The module merge now clones imported-module actor and message
+  declarations into the program under their bare name (like structs); the
+  actor's handlers keep their intra-module function/constant references
+  rewritten, and the per-program message registry assigns runtime type ids
+  across the merge.
+- **Codegen: no `-Wformat` warning when printing or interpolating a
+  single-scalar message field.** Such a field rides the `intptr_t`
+  `Message.payload_int` slot, so a genuine `int` field emitted with `%d`
+  mismatched its `intptr_t` storage. `print` / `println` / `${...}`
+  interpolation now narrow a `TYPE_INT` argument to `(int)`, mirroring the
+  existing `int64` to `long long` cast. Actor-ref and pointer fields are
+  unaffected (they print via `%s`), so no pointer-width value is truncated.
+
 ## [0.349.0]
 
 _Docs only — LLM.md / CONTRIBUTING / README corrections (#997). No compiler,

@@ -1,0 +1,13 @@
+// #1006: spawn an actor and send a message type that are declared in an
+// imported module. Before the fix this failed at the call site with a
+// misleading "Undefined function 'spawn_Worker'" / "Undefined message type
+// 'Ping'"; now the module merge pulls the actor + message into the program.
+import lib.worker
+
+main() {
+    w = spawn(Worker())
+    w ! Ping { n: 42 }
+    w ! Ping { n: 7 }
+    wait_for_idle()
+    println("DONE")
+}

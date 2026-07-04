@@ -1,0 +1,10 @@
+// #1006 fixture: an actor and its message type declared in a library module.
+message Ping { n: int }
+
+actor Worker {
+    receive {
+        // ${n} interpolation of the single-int message field also guards the
+        // %d-vs-intptr_t format warning fix (the field overlays payload_int).
+        Ping(n) -> { println("ping ${n}") }
+    }
+}
