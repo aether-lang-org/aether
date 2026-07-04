@@ -239,6 +239,28 @@ their "unavailable" stubs cleanly.
 
 Docker images: `docker/Dockerfile.wasm` (Emscripten), `docker/Dockerfile.embedded` (ARM Cortex-M4).
 
+### `ae build` with an alternate or cross C compiler (`$CC` / `$AE_CC`)
+
+`ae build`, `ae run`, and `ae build --emit=lib` select their C-backend
+compiler the way the Makefile does: they honor `$AE_CC` first, then `$CC`,
+falling back to `gcc` (the WinLibs-bundled gcc on Windows) when neither is
+set. This affects only the C backend that turns Aether's generated C into the
+final binary; it never changes `aetherc`, the Aether-to-C front end.
+
+The same-OS, cross-arch cell is then a one-liner. On an x86_64 Linux host with
+a cross-gcc installed:
+
+```bash
+CC=aarch64-linux-gnu-gcc ae build --emit=lib core/embed.ae -o libfoo.so
+file libfoo.so          # => ELF 64-bit LSB shared object, ARM aarch64
+qemu-aarch64 ./probe    # load/run the emitted lib under an emulator
+```
+
+That produces an arm64 `.so` on a cheap x86_64 runner with no arm64 hardware
+and no new codegen. Cross-OS targets (Linux to Windows or macOS) still need
+native runners. A compiler that cannot be found fails fast with
+`C compiler '<name>' (from $CC) not found` rather than a later link error.
+
 ## Build Recommendations
 
 | Use Case | Flags | Notes |

@@ -169,6 +169,12 @@ int http_request_set_timeout_ns_raw(HttpRequest* req, int64_t timeout_ns);
 // Negative values are an error.
 int http_request_set_follow_redirects_raw(HttpRequest* req, int max_hops);
 
+// Skip TLS peer + hostname verification for THIS request (curl -k /
+// wget --no-check-certificate). `on` non-zero enables the skip; 0 (default)
+// verifies. Relaxed per-SSL, never on the shared process-wide SSL_CTX, so an
+// insecure request cannot downgrade verification for other requests.
+int http_request_set_insecure_raw(HttpRequest* req, int on);
+
 void http_request_free_raw(HttpRequest* req);
 
 // Fire the configured request. Returns an HttpResponse on success
