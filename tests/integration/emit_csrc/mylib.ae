@@ -1,0 +1,10 @@
+// Source for the --emit=csrc regression (aether#996).
+exports (add, greet)
+
+add(a: int, b: int) -> int {
+    return a + b
+}
+
+greet(name: string) -> string {
+    return name
+}

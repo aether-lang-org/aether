@@ -58,6 +58,32 @@ int main(void) {
 | `--emit=exe` *(default)* | Current behaviour, produces an executable. |
 | `--emit=lib` | No `main()` in the output; every top-level Aether function gets an `aether_<name>()` C-ABI alias; built with `-fPIC -shared`. |
 | `--emit=both` | Produces both an executable AND a shared library from one source. `ae build --emit=both foo.ae -o foo` writes `foo` (the exe) and `foo.dylib` / `foo.so` (the lib) side by side. With no `-o`, defaults are `<base>` (exe) and `lib<base>.<ext>` (lib). Internally dispatches `cmd_build` twice (once per emit mode); the lib pass appends the platform lib extension to the user's `-o` so the second pass doesn't overwrite the first. |
+| `--emit=csrc` | Emits the **portable generated C source** (`foo.c`) plus a **catalog header** (`foo.h`, the `aether_<name>()` prototypes) — and stops. No `gcc`, no native artifact. Same catalog codegen as `--emit=lib`; the difference is you get *source*, not a host `.so`. |
+
+## `--emit=csrc`: distribute source, not N native libs (#996)
+
+A single **native** lib can't be universal across OSes — ELF vs Mach-O vs
+PE/COFF are different loader formats. But the **pre-native** artifact can be:
+the generated C is portable, so `--emit=csrc` moves the "which platform"
+decision from *distribution time* (ship 6 natives) to the consumer's build:
+
+```sh
+ae build --emit=csrc mylib.ae -o mylib
+# writes mylib.c (portable C) + mylib.h (aether_<name> prototypes)
+
+# compile it wherever, against the runtime:
+cc -fPIC -shared mylib.c $(ae cflags) -o libmylib.so   # this host
+# or feed mylib.c to WASM, or static-link it into a compiled host, or
+# publish {mylib.c, mylib.h} as a content-addressable source package.
+```
+
+The `.h` is a normal C header (include guard + `extern "C"`); a consumer
+`#include`s it and calls `aether_add(...)` / `aether_greet(...)` directly. This
+is the enabling primitive for compile-on-install bindings (Python C-extension /
+Ruby-gem style) and a "source registry" story where every binding compiles the
+same hash-pinned source in its own toolchain. Follow-ups noted in #996:
+single-file amalgamation, `catalog.json` emission, and expressing the required
+runtime `.c` set for a fully standalone external compile.
 
 ## Naming
 

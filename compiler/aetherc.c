@@ -46,6 +46,7 @@
 static bool verbose_mode = false;
 static bool dump_ast_mode = false;
 static bool emit_c_mode = false;
+static const char* csrc_header_path = NULL;  // #996 --emit-header=<path>
 static bool check_only_mode = false;
 static bool preempt_mode = false;
 // Issue #348 — suppress runtime emission of `requires` / `ensures`
@@ -1659,12 +1660,27 @@ int compile_source(const char* input_path, const char* output_path) {
     if (no_contracts_mode) codegen->no_contracts = 1;
     codegen->emit_exe = emit_exe ? 1 : 0;
     codegen->emit_lib = emit_lib ? 1 : 0;
+    // #996 --emit=csrc: open the catalog header if requested. Distinct from the
+    // pre-existing --header (header_output) path above.
+    FILE* csrc_header = NULL;
+    if (csrc_header_path) {
+        csrc_header = fopen(csrc_header_path, "w");
+        if (!csrc_header) {
+            fprintf(stderr, "Error: cannot open --emit-header path '%s'\n", csrc_header_path);
+            fclose(output);
+            return 1;
+        }
+        codegen->csrc_header_file = csrc_header;
+    }
     codegen->emit_main_target = emit_main_target;  // NULL when not requested
     // Source path so codegen can expand `__FILE__` literally (#265).
     codegen->source_file = input_path;
     int errors_before_codegen = aether_error_count();
     generate_program(codegen, program);
     fclose(output);
+    if (csrc_header) {
+        fclose(csrc_header);
+    }
     if (header_output) {
         fclose(header_output);
     }
@@ -2020,7 +2036,7 @@ void print_help(const char* program_name) {
     printf("  --verbose                        Show detailed compilation phases and timing\n");
     printf("  --emit-c                         Print generated C code to stdout\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
-    printf("  --emit=<exe|lib|both>            Output artifact (exe default, lib produces .so/.dylib)\n");
+    printf("  --emit=<exe|lib|both|csrc>       Output artifact (exe default; lib → .so/.dylib; csrc → portable .c + catalog .h)\n");
     printf("  --emit=ast|inspect|effects       Analysis to stdout, no codegen: AST JSON / declaration\n");
     printf("                                   summary / derived per-function effect+purity JSON (#889)\n");
     printf("  --emit-main=<func>               With --emit=lib: also emit a thin main(argc,argv) shim\n");
@@ -2083,6 +2099,11 @@ int main(int argc, char *argv[]) {
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-c") == 0) {
             emit_c_mode = true;
+            arg_offset++;
+        } else if (strncmp(argv[arg_offset], "--emit-catalog-header=", 22) == 0) {
+            // #996: with --emit=csrc, also write the catalog's public C
+            // prototypes to this path (the distributable .h).
+            csrc_header_path = argv[arg_offset] + 22;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--dump-ast") == 0) {
             dump_ast_mode = true;
@@ -2147,6 +2168,15 @@ int main(int argc, char *argv[]) {
                 emit_exe = true;
                 emit_lib = false;
             } else if (strcmp(val, "lib") == 0) {
+                emit_exe = false;
+                emit_lib = true;
+            } else if (strcmp(val, "csrc") == 0) {
+                // #996: --emit=csrc — produce the portable generated C + a
+                // catalog header, for distribution as source (compile-on-
+                // install / WASM / static-link) rather than a host .so. Codegen
+                // is identical to --emit=lib (same aether_<name> catalog); the
+                // header is written when --emit-header=<path> is also passed
+                // (the `ae` driver supplies it), and the driver skips gcc.
                 emit_exe = false;
                 emit_lib = true;
             } else if (strcmp(val, "both") == 0) {
