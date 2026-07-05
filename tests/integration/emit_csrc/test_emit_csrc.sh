@@ -58,17 +58,19 @@ if ! $CC -fPIC -shared "$OUT.c" $CFLAGS -o "$TMPDIR/lib.so" >"$TMPDIR/cc.log" 2>
     echo "  [FAIL] emitted .c did not compile against ae cflags:"; cat "$TMPDIR/cc.log" | head -15; exit 1
 fi
 if command -v nm >/dev/null 2>&1; then
-    # Portable symbol dump: `nm -D` is GNU-only (macOS/BSD nm rejects it and
-    # lists dynamic symbols by default). Try the dynamic/exported form, fall
-    # back to plain nm. macOS mangles C symbols with a leading underscore, so
-    # match `aether_add` with an optional one.
-    syms="$(nm -D "$TMPDIR/lib.so" 2>/dev/null)"
-    [ -n "$syms" ] || syms="$(nm -gU "$TMPDIR/lib.so" 2>/dev/null)"
-    [ -n "$syms" ] || syms="$(nm "$TMPDIR/lib.so" 2>/dev/null)"
-    printf '%s\n' "$syms" | grep -Eq '(^|[^A-Za-z0-9_])_?aether_add([^A-Za-z0-9_]|$)' || {
+    # Portable symbol dump. `nm -D` is GNU-only — macOS/BSD nm REJECTS it, and a
+    # failing command substitution under `set -e` aborts the whole script (with
+    # no output), so each `$(...)` must be `|| true`-guarded or it never reaches
+    # the fallback. macOS also lists dynamic symbols with plain nm and mangles C
+    # names with a leading underscore, so match `aether_add` with an optional one.
+    syms="$(nm -D "$TMPDIR/lib.so" 2>/dev/null || true)"
+    [ -n "$syms" ] || syms="$(nm -gU "$TMPDIR/lib.so" 2>/dev/null || true)"
+    [ -n "$syms" ] || syms="$(nm "$TMPDIR/lib.so" 2>/dev/null || true)"
+    if ! printf '%s\n' "$syms" | grep -Eq '(^|[^A-Za-z0-9_])_?aether_add([^A-Za-z0-9_]|$)'; then
         echo "  [FAIL] built .so does not export aether_add"
         printf '%s\n' "$syms" | grep -i aether_ | head
-        exit 1; }
+        exit 1
+    fi
 fi
 
 echo "  [PASS] emit_csrc: .c + catalog .h emitted, compiles+links, exports resolve"
