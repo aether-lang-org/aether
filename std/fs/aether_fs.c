@@ -11,6 +11,7 @@ File* file_open_raw(const char* p, const char* m) { (void)p; (void)m; return NUL
 char* file_read_all_raw(File* f) { (void)f; return NULL; }
 int file_write_raw(File* f, const char* d, int l) { (void)f; (void)d; (void)l; return 0; }
 int file_close(File* f) { (void)f; return 0; }
+int file_fd_raw(File* f) { (void)f; return -1; }
 int file_exists(const char* p) { (void)p; return 0; }
 int fs_path_exists(const char* p) { (void)p; return 0; }
 int file_delete_raw(const char* p) { (void)p; return 0; }
@@ -378,6 +379,21 @@ const char* fs_ftruncate_raw(File* file, long length) {
 
 /* fsync — flush kernel buffers to disk. Required after pwrite for
  * durability guarantees. POSIX fsync(2) / Windows _commit. */
+/* Expose the OS-level descriptor inside an open File (issue #1003).
+ * Exists so capability plumbing — capsicum.rights_limit() /
+ * fcntls_limit() before capsicum.enter() — can narrow a descriptor the
+ * program opened through the stdlib rather than a raw extern. The fd
+ * is owned by the handle: callers must not close() it, and it dies
+ * with file_close() — which also frees the File itself, so this must
+ * never be called on a closed handle (only on null, which returns -1).
+ * fflush first so the fd's view matches the FILE*'s buffered state. */
+int file_fd_raw(File* file) {
+    if (!file || !file->is_open) return -1;
+    FILE* fp = (FILE*)file->handle;
+    fflush(fp);
+    return fileno(fp);
+}
+
 const char* fs_fsync_raw(File* file) {
     if (!file || !file->is_open) return "invalid args";
     FILE* fp = (FILE*)file->handle;

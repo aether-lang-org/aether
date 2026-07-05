@@ -39,6 +39,7 @@ exports (
     fs_pwrite_raw, fs_pread_raw, fs_get_pread, fs_get_pread_length,
     fs_release_pread, fs_ftruncate_raw, fs_fsync_raw,
     pwrite, pread, ftruncate, fsync,
+    file_fd_raw, fd,
     fs_glob_raw, fs_glob_multi_raw,
     fs_walk_raw, fs_watch_open_raw,
     open, read, write, delete, size, mtime, exists,
@@ -251,6 +252,10 @@ extern fs_get_pread_length() -> int
 extern fs_release_pread()
 extern fs_ftruncate_raw(file: ptr, length: long) -> string
 extern fs_fsync_raw(file: ptr) -> string
+
+// Descriptor accessor (#1003). The OS-level fd inside an open handle,
+// or -1 if the handle is closed/invalid.
+extern file_fd_raw(file: ptr) -> int
 
 // Glob: match files by pattern. Raw externs return ptr, NULL on failure.
 extern fs_glob_raw(pattern: string) -> ptr
@@ -825,4 +830,15 @@ ftruncate(file: ptr, length: long) -> string {
 // Returns "" on success.
 fsync(file: ptr) -> string {
     return fs_fsync_raw(file)
+}
+
+// The OS-level file descriptor inside an open handle, or -1 on a
+// null handle (#1003). Exists for capability plumbing: open through
+// the stdlib, then narrow the descriptor with
+// capsicum.rights_limit(fs.fd(handle), ...) before capsicum.enter().
+// The fd is owned by the handle — do not close it directly; it is
+// released by file_close, which also frees the handle itself, so
+// never call fd() on a handle that has been closed.
+fd(file: ptr) -> int {
+    return file_fd_raw(file)
 }

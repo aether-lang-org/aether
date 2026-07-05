@@ -1,0 +1,84 @@
+// FreeBSD-only: capsicum.rights_limit() on a descriptor obtained from a
+// std.file handle via file.fd() (issue #1003). Run by tests/freebsd/run.sh;
+// NOT in the CI regression set (no FreeBSD runner).
+//
+// Proves the fd accessor returns the real kernel descriptor: narrowing it
+// succeeds; after capsicum.enter() the narrowed, already-open handle still
+// reads (READ|SEEK|FSTAT were retained) while a fresh path-open is denied.
+// This is the "open through the stdlib, then narrow rights before entering
+// capability mode" flow the accessor exists for.
+//
+// Exits 0 on success, 1 on any contract violation, 2 if run off FreeBSD
+// (the harness treats 2 as "skipped").
+
+import std.capsicum
+import std.os
+import std.file
+import std.string
+
+main() {
+    if string.equals(os.platform(), "freebsd") != 1 {
+        print("SKIP: not FreeBSD\n")
+        exit(2)
+    }
+    if capsicum.available() != 1 {
+        print("FAIL: available() != 1 on FreeBSD\n")
+        exit(1)
+    }
+
+    // Closed/invalid handles must report -1, not a stale descriptor.
+    if file.fd(null) != -1 {
+        print("FAIL: file.fd(null) != -1\n")
+        exit(1)
+    }
+
+    handle, err = file.open("/etc/passwd", "r")
+    if handle == null {
+        print("FAIL: cannot open /etc/passwd pre-entry (${err})\n")
+        exit(1)
+    }
+    fd = file.fd(handle)
+    if fd < 0 {
+        print("FAIL: file.fd() returned ${fd} for an open handle\n")
+        exit(1)
+    }
+    print("stdlib fd: ${fd}\n")
+
+    // Narrow the stdlib-opened descriptor. CAP_OK proves the int really
+    // is the kernel descriptor behind the handle.
+    r = capsicum.rights_limit(fd, capsicum.R_READ | capsicum.R_SEEK | capsicum.R_FSTAT)
+    if r != capsicum.CAP_OK {
+        print("FAIL: rights_limit(file.fd) returned ${r}, expected CAP_OK\n")
+        exit(1)
+    }
+
+    // Enter capability mode — irreversible from here.
+    r = capsicum.enter()
+    if r != capsicum.CAP_OK {
+        print("FAIL: enter() returned ${r}, expected CAP_OK\n")
+        exit(1)
+    }
+
+    // The narrowed, already-open descriptor must still read.
+    content = file.read_all_raw(handle)
+    if content == 0 {
+        print("FAIL: read via narrowed fd denied after enter()\n")
+        exit(1)
+    }
+    n = string.length(content)
+    if n < 1 {
+        print("FAIL: empty read via narrowed fd after enter()\n")
+        exit(1)
+    }
+    print("ok: read ${n} bytes via narrowed stdlib fd in capability mode\n")
+
+    // A fresh path-open must be denied (ECAPMODE).
+    h2, err2 = file.open("/etc/passwd", "r")
+    if h2 != null {
+        print("FAIL: opened a fresh path AFTER entering capability mode\n")
+        exit(1)
+    }
+    print("ok: fresh path open denied in capability mode (${err2})\n")
+    print("PASS: rights_limit on stdlib fd\n")
+    exit(0)
+}

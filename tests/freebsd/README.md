@@ -19,8 +19,18 @@ platform.
   Casper channel **before** `capsicum.enter()`, then resolve `root → uid 0`
   **after** entry (impossible without Casper, since capability mode blocks
   `/etc/passwd`). Deterministic; no network.
+- **`rights_limit_stdlib_fd.ae`** — issue #1003 gap 1: opens `/etc/passwd`
+  through `std.file`, extracts the kernel descriptor with `file.fd(handle)`,
+  narrows it with `capsicum.rights_limit()`, enters capability mode, and
+  asserts the narrowed handle still reads while a fresh path-open is denied.
+- **`spawn_capsicum_containment.sh`** — issue #1003 gap 2: builds a real
+  parent+child pair and asserts a `spawn_sandboxed`-launched Aether child
+  lands in capability mode (`in_mode() == 1`) **without** its source ever
+  calling `capsicum.enter()` — i.e. the `AETHER_CAPSICUM=1` auto-wiring and
+  the `capsicum_autosandbox.c` startup hook actually compose.
 
-Each `.ae` exits **0 = pass, 1 = fail, 2 = skip (not FreeBSD)**.
+Each `.ae` (and `.sh` test) exits **0 = pass, 1 = fail, 2 = skip (not
+FreeBSD)**; `run.sh` drives both kinds.
 
 ## Running
 

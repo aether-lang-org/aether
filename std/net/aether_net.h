@@ -17,4 +17,10 @@ TcpServer* tcp_listen_raw(int port);
 TcpSocket* tcp_accept_raw(TcpServer* server);
 int tcp_server_close(TcpServer* server);
 
+// OS-level descriptor inside a handle, or -1 if null/closed. For
+// capability plumbing (capsicum.rights_limit before capsicum.enter);
+// owned by the handle — do not close() it. Issue #1003.
+int tcp_fd_raw(TcpSocket* sock);
+int tcp_server_fd_raw(TcpServer* server);
+
 #endif

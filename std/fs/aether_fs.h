@@ -198,6 +198,11 @@ void        fs_release_pread(void);
 const char* fs_ftruncate_raw(File* file, long length);
 const char* fs_fsync_raw(File* file);
 
+// The OS-level descriptor inside an open File, or -1 if closed/invalid.
+// For capability plumbing (capsicum.rights_limit before capsicum.enter);
+// owned by the handle — do not close() it. Issue #1003.
+int         file_fd_raw(File* file);
+
 // Directory listing
 typedef struct {
     char** entries;
