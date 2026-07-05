@@ -23,6 +23,9 @@ int http_request_set_timeout_raw(HttpRequest* r, int s) { (void)r; (void)s; retu
 int http_request_set_timeout_ns_raw(HttpRequest* r, int64_t ns) { (void)r; (void)ns; return -1; }
 int http_request_set_follow_redirects_raw(HttpRequest* r, int n) { (void)r; (void)n; return -1; }
 int http_request_set_insecure_raw(HttpRequest* r, int on) { (void)r; (void)on; return -1; }
+int http_request_use_env_proxy_raw(HttpRequest* r, int on) { (void)r; (void)on; return -1; }
+int http_request_use_http_proxy_raw(HttpRequest* r, const char* u) { (void)r; (void)u; return -1; }
+int http_request_ignore_http_proxy_raw(HttpRequest* r) { (void)r; return -1; }
 void http_request_free_raw(HttpRequest* r) { (void)r; }
 HttpResponse* http_send_raw(HttpRequest* r) { (void)r; return NULL; }
 const char* http_response_header_raw(HttpResponse* r, const char* n) { (void)r; (void)n; return ""; }
@@ -321,7 +324,22 @@ struct HttpRequest {
     int   insecure;      /* 0 = verify peer cert + hostname (default); 1 = skip
                           * both for THIS connection only (curl -k equivalent).
                           * Relaxed per-SSL, never on the shared SSL_CTX. */
+    /* Forward-proxy control. Default is DIRECT (no proxy, env ignored) — the
+     * hardened stance that avoids the httpoxy (CVE-2016-5385) ambient-authority
+     * footgun. Precedence, highest first:
+     *   PROXY_MODE_IGNORE (3)   force direct, ignore everything
+     *   PROXY_MODE_EXPLICIT (2) use proxy_url, env ignored entirely
+     *   PROXY_MODE_ENV (1)      follow HTTP(S)_PROXY/NO_PROXY, guarded
+     *   PROXY_MODE_DIRECT (0)   default: no proxy */
+    int   proxy_mode;
+    char* proxy_url;     /* owned; set only for PROXY_MODE_EXPLICIT */
 };
+
+/* Proxy-mode ladder (see struct HttpRequest.proxy_mode). */
+#define PROXY_MODE_DIRECT   0
+#define PROXY_MODE_ENV      1
+#define PROXY_MODE_EXPLICIT 2
+#define PROXY_MODE_IGNORE   3
 
 HttpRequest* http_request_raw(const char* method, const char* url) {
     if (!method || !*method || !url || !*url) return NULL;
@@ -425,6 +443,56 @@ int http_request_set_insecure_raw(HttpRequest* req, int on) {
     return 0;
 }
 
+/* ---- Forward-proxy control (aether#1012 part 2) ------------------------------
+ *
+ * Default is DIRECT: std.http.client does NOT follow $HTTP_PROXY unless the
+ * program opts in. This is the deliberate inverse of Go/PHP/Python's original
+ * default-follow, which produced the httpoxy vulnerability class
+ * (CVE-2016-5385): a CGI/serverless environment maps an attacker-controlled
+ * `Proxy:` request header to $HTTP_PROXY, silently redirecting outbound
+ * traffic. Hardened-by-default means there is no ambient env-follow path to
+ * exploit; env-following is an explicit verb, not a default anyone falls into.
+ *
+ * Precedence (highest first): ignore > explicit > env > direct. */
+
+/* use_env_proxy: follow $HTTP_PROXY/$HTTPS_PROXY/$NO_PROXY (Go-compatible),
+ * WITH the httpoxy + SSRF guards applied at connect time (see
+ * resolve_proxy_for). `on` non-zero enables; 0 reverts to direct. */
+int http_request_use_env_proxy_raw(HttpRequest* req, int on) {
+    if (!req) return -1;
+    req->proxy_mode = on ? PROXY_MODE_ENV : PROXY_MODE_DIRECT;
+    return 0;
+}
+
+/* use_http_proxy: pin an explicit proxy (`http://host:port`). This OVERRIDES
+ * env entirely — $HTTP_PROXY is never consulted — so a team-controlled proxy
+ * (recorder / toxiproxy) is immune to whatever the shell/CI has set. Passing
+ * an empty/NULL url reverts to direct. */
+int http_request_use_http_proxy_raw(HttpRequest* req, const char* proxy_url) {
+    if (!req) return -1;
+    free(req->proxy_url);
+    req->proxy_url = NULL;
+    if (!proxy_url || !*proxy_url) {
+        req->proxy_mode = PROXY_MODE_DIRECT;
+        return 0;
+    }
+    req->proxy_url = strdup(proxy_url);
+    if (!req->proxy_url) return -1;
+    req->proxy_mode = PROXY_MODE_EXPLICIT;
+    return 0;
+}
+
+/* ignore_http_proxy: force a direct connection regardless of env or any proxy
+ * a higher layer set. The determinism escape hatch (e.g. VCR record mode that
+ * must capture the origin, not a proxy's view). */
+int http_request_ignore_http_proxy_raw(HttpRequest* req) {
+    if (!req) return -1;
+    free(req->proxy_url);
+    req->proxy_url = NULL;
+    req->proxy_mode = PROXY_MODE_IGNORE;
+    return 0;
+}
+
 void http_request_free_raw(HttpRequest* req) {
     if (!req) return;
     free(req->method);
@@ -434,6 +502,7 @@ void http_request_free_raw(HttpRequest* req) {
      * length so cap accounting stays at current-usage. */
     aether_caps_free(req->body, (size_t)req->body_len);
     free(req->content_type);
+    free(req->proxy_url);
     HttpHeader* h = req->headers;
     while (h) {
         HttpHeader* next = h->next;
@@ -452,6 +521,150 @@ static char* http_extract_response_header(const char* hdr_block, const char* nam
  * length). Defined below. */
 static char* http_dechunk(const char* in, size_t in_len, size_t* out_len);
 static int http_value_has_chunked(const char* v);
+
+// -----------------------------------------------------------------
+// Forward-proxy resolution (aether#1012 part 2)
+// -----------------------------------------------------------------
+
+/* Is `env` a case-insensitive key present and non-empty? Returns its value or
+ * NULL. Checks both cases (HTTP_PROXY and http_proxy). */
+static const char* proxy_env(const char* upper, const char* lower) {
+    const char* v = getenv(lower);          /* lowercase preferred (curl-compat) */
+    if (v && *v) return v;
+    v = getenv(upper);
+    return (v && *v) ? v : NULL;
+}
+
+/* httpoxy (CVE-2016-5385) guard: under a CGI/serverless invocation the
+ * `Proxy:` request header is mapped to $HTTP_PROXY, so an attacker can inject
+ * a proxy. Detect that context and refuse the UPPERCASE HTTP_PROXY there (the
+ * lowercase http_proxy is not settable via the CGI header map, so it stays
+ * usable — same split Go's net/http/httpproxy adopted). */
+static int running_under_cgi(void) {
+    return getenv("REQUEST_METHOD") != NULL || getenv("GATEWAY_INTERFACE") != NULL;
+}
+
+/* SSRF hardening: reject a proxy that points at a loopback / link-local /
+ * cloud-metadata address, so a stray or hostile env var can't redirect
+ * outbound traffic to 127.0.0.1, 169.254.169.254 (IMDS), etc. Returns 1 if the
+ * literal IP host is dangerous. Hostnames (not IP literals) pass — resolving
+ * and re-checking every A record is a heavier follow-up; the common exploit
+ * uses a bare IP. */
+static int proxy_host_is_dangerous(const char* host) {
+    if (!host || !*host) return 1;
+    struct in_addr a4;
+    if (inet_pton(AF_INET, host, &a4) == 1) {
+        uint32_t h = ntohl(a4.s_addr);
+        if ((h >> 24) == 127) return 1;                 /* 127.0.0.0/8 loopback */
+        if ((h >> 24) == 0)   return 1;                 /* 0.0.0.0/8 */
+        if ((h & 0xFFFF0000u) == 0xA9FE0000u) return 1; /* 169.254.0.0/16 link-local (IMDS) */
+        return 0;
+    }
+#ifdef AF_INET6
+    struct in6_addr a6;
+    if (inet_pton(AF_INET6, host, &a6) == 1) {
+        static const unsigned char loop[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        if (memcmp(&a6, loop, 16) == 0) return 1;       /* ::1 */
+        if ((a6.s6_addr[0] & 0xFE) == 0xFC) return 1;   /* fc00::/7 ULA */
+        if (a6.s6_addr[0] == 0xFE && (a6.s6_addr[1] & 0xC0) == 0x80) return 1; /* fe80::/10 */
+        return 0;
+    }
+#endif
+    return 0; /* a hostname; allowed */
+}
+
+/* Does `target_host` match any entry of a NO_PROXY list ("host,.dom,10.0.0.1")?
+ * Suffix match on a leading dot; exact otherwise; "*" matches all. */
+static int host_in_no_proxy(const char* target_host, const char* no_proxy) {
+    if (!no_proxy || !*no_proxy || !target_host) return 0;
+    size_t tlen = strlen(target_host);
+    const char* p = no_proxy;
+    while (*p) {
+        while (*p == ',' || *p == ' ' || *p == '\t') p++;
+        const char* start = p;
+        while (*p && *p != ',') p++;
+        const char* end = p;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        size_t elen = (size_t)(end - start);
+        if (elen == 1 && start[0] == '*') return 1;
+        if (elen > 0) {
+            if (start[0] == '.') {              /* ".example.com" → suffix */
+                if (tlen >= elen &&
+                    strncasecmp(target_host + (tlen - elen), start, elen) == 0) return 1;
+            } else if (elen == tlen &&
+                       strncasecmp(target_host, start, elen) == 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Resolve the effective proxy for a request+target, applying the precedence
+ * ladder and all guards. On "use a proxy" writes proxy_host/proxy_port and
+ * returns 1; returns 0 for a direct connection; returns -1 with *err set on a
+ * rejected/malformed proxy (caller surfaces it). */
+static int resolve_proxy_for(HttpRequest* req, const char* target_host, int use_tls,
+                             char* proxy_host, size_t phost_size, int* proxy_port,
+                             const char** err) {
+    *err = NULL;
+    if (req->proxy_mode == PROXY_MODE_IGNORE || req->proxy_mode == PROXY_MODE_DIRECT) {
+        return 0;
+    }
+
+    const char* proxy_url = NULL;
+    if (req->proxy_mode == PROXY_MODE_EXPLICIT) {
+        proxy_url = req->proxy_url;             /* env-immune, no guards beyond parse */
+    } else { /* PROXY_MODE_ENV */
+        const char* no_proxy = proxy_env("NO_PROXY", "no_proxy");
+        if (host_in_no_proxy(target_host, no_proxy)) return 0;
+        if (use_tls) {
+            proxy_url = proxy_env("HTTPS_PROXY", "https_proxy");
+        } else {
+            /* httpoxy: only the UPPERCASE HTTP_PROXY is CGI-injectable; refuse
+             * it under CGI, still honor lowercase http_proxy. */
+            const char* lower = getenv("https_proxy"); (void)lower;
+            const char* lp = getenv("http_proxy");
+            const char* up = getenv("HTTP_PROXY");
+            if (lp && *lp)               proxy_url = lp;
+            else if (up && *up && !running_under_cgi()) proxy_url = up;
+            else                          proxy_url = NULL;
+        }
+        if (!proxy_url) return 0;
+    }
+
+    /* Parse proxy URL: [http://]host[:port]. Default port 3128. */
+    const char* s = proxy_url;
+    if (strncmp(s, "http://", 7) == 0) s += 7;
+    else if (strncmp(s, "https://", 8) == 0) s += 8; /* proxy-over-TLS not supported; treat as host */
+    int pport = 3128;
+    const char* slash = strchr(s, '/');
+    const char* colon = strchr(s, ':');
+    size_t hlen;
+    if (colon && (!slash || colon < slash)) {
+        hlen = (size_t)(colon - s);
+        pport = atoi(colon + 1);
+    } else if (slash) {
+        hlen = (size_t)(slash - s);
+    } else {
+        hlen = strlen(s);
+    }
+    if (hlen == 0 || hlen >= phost_size || pport <= 0 || pport > 65535) {
+        *err = "malformed proxy URL";
+        return -1;
+    }
+    memcpy(proxy_host, s, hlen);
+    proxy_host[hlen] = '\0';
+
+    /* SSRF guard applies to the ENV path (untrusted); an explicit
+     * use_http_proxy is a code-visible grant, so it is trusted as-is. */
+    if (req->proxy_mode == PROXY_MODE_ENV && proxy_host_is_dangerous(proxy_host)) {
+        *err = "proxy from environment points at a loopback/link-local address (blocked)";
+        return -1;
+    }
+    *proxy_port = pport;
+    return 1;
+}
 
 // -----------------------------------------------------------------
 // Core request — operates on an HttpRequest. v1 wrappers build a
@@ -492,6 +705,38 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
 #endif
     }
 
+    /* Forward-proxy resolution (aether#1012). Default is direct. When a proxy
+     * applies, we CONNECT to the proxy's host/port instead of the target's;
+     * the original target host/port stay in `host`/`port` for the Host header,
+     * the CONNECT line (https), and the absolute-form request line (http). */
+    char connect_host[256];
+    int  connect_port;
+    int  via_proxy = 0;
+    {
+        char phost[256];
+        int  pport = 0;
+        const char* perr = NULL;
+        int pr = resolve_proxy_for(req, host, use_tls,
+                                   phost, sizeof(phost), &pport, &perr);
+        if (pr < 0) {
+            response->error = string_new(perr ? perr : "proxy error");
+            return response;
+        }
+        if (pr == 1) {
+            via_proxy = 1;
+            snprintf(connect_host, sizeof(connect_host), "%s", phost);
+            connect_port = pport;
+        } else {
+            snprintf(connect_host, sizeof(connect_host), "%s", host);
+            connect_port = port;
+        }
+    }
+
+    /* From here the socket connects to connect_host:connect_port (the proxy
+     * when via_proxy, else the origin). Rebind the resolve/connect variables. */
+    const char* dial_host = connect_host;
+    int         dial_port = connect_port;
+
     /* Resolve via getaddrinfo, NOT gethostbyname: gethostbyname returns a
      * pointer into a shared, process-static `struct hostent`, so two client
      * calls resolving at once on different threads — e.g. a request handler
@@ -505,22 +750,23 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
     memset(&serv_addr, 0, sizeof(serv_addr));
     {
         char port_str[16];
-        snprintf(port_str, sizeof(port_str), "%d", port);
+        snprintf(port_str, sizeof(port_str), "%d", dial_port);
         struct addrinfo hints;
         memset(&hints, 0, sizeof(hints));
         hints.ai_family   = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
         struct addrinfo* res = NULL;
-        int gai = getaddrinfo(host, port_str, &hints, &res);
+        int gai = getaddrinfo(dial_host, port_str, &hints, &res);
         if (gai != 0 || !res) {
-            response->error = string_new("could not resolve host");
+            response->error = string_new(via_proxy ? "could not resolve proxy host"
+                                                   : "could not resolve host");
             return response;
         }
         memcpy(&serv_addr, res->ai_addr, sizeof(struct sockaddr_in));
         freeaddrinfo(res);
     }
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(port);
+    serv_addr.sin_port = htons(dial_port);
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
@@ -653,6 +899,55 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
 
     Transport t;
     t.sockfd = sockfd;
+
+    /* HTTPS via a forward proxy: establish a CONNECT tunnel over the raw socket
+     * BEFORE the TLS handshake, so TLS runs end-to-end through the proxy (the
+     * proxy is a blind pipe; it does not terminate TLS). HTTP via proxy needs no
+     * tunnel — it uses an absolute-form request line, handled below. */
+    if (via_proxy && use_tls) {
+        char creq[512];
+        int cn = snprintf(creq, sizeof(creq),
+                          "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n"
+                          "Proxy-Connection: keep-alive\r\n\r\n",
+                          host, port, host, port);
+        if (cn <= 0 || cn >= (int)sizeof(creq) ||
+            send(sockfd, creq, (size_t)cn, 0) != cn) {
+            close(sockfd);
+            response->error = string_new("proxy CONNECT: send failed");
+            return response;
+        }
+        /* Read the proxy's response headers up to the terminating CRLFCRLF.
+         * A 2xx means the tunnel is open; anything else is a proxy refusal. */
+        char cbuf[1024];
+        size_t clen = 0;
+        int saw_end = 0;
+        while (clen < sizeof(cbuf) - 1) {
+            ssize_t rn = recv(sockfd, cbuf + clen, sizeof(cbuf) - 1 - clen, 0);
+            if (rn <= 0) break;
+            clen += (size_t)rn;
+            cbuf[clen] = '\0';
+            if (strstr(cbuf, "\r\n\r\n")) { saw_end = 1; break; }
+        }
+        if (!saw_end) {
+            close(sockfd);
+            response->error = string_new("proxy CONNECT: no response from proxy");
+            return response;
+        }
+        /* Parse "HTTP/1.x NNN ..." status. */
+        int pstatus = 0;
+        const char* sp = strchr(cbuf, ' ');
+        if (sp) pstatus = atoi(sp + 1);
+        if (pstatus < 200 || pstatus >= 300) {
+            close(sockfd);
+            char emsg[128];
+            snprintf(emsg, sizeof(emsg),
+                     "proxy CONNECT refused (status %d)", pstatus);
+            response->error = string_new(emsg);
+            return response;
+        }
+        /* Tunnel open. TLS handshake below runs against `host` end-to-end. */
+    }
+
 #ifdef AETHER_HAS_OPENSSL
     t.ssl = NULL;
 
@@ -745,8 +1040,23 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         hdr[hdr_len] = '\0'; \
     } while (0)
 
-    /* Request line. */
-    HDR_APPEND_STR(method); HDR_APPEND_STR(" "); HDR_APPEND_STR(path); HDR_APPEND_STR(" HTTP/1.1\r\n");
+    /* Request line. For plain HTTP through a forward proxy, use the absolute
+     * form (`GET http://host[:port]/path HTTP/1.1`) so the proxy knows the
+     * origin. Direct requests, and HTTPS-through-a-CONNECT-tunnel (which talks
+     * end-to-end to the origin), use the origin form (`GET /path`). */
+    HDR_APPEND_STR(method); HDR_APPEND_STR(" ");
+    if (via_proxy && !use_tls) {
+        char absline[1408];
+        if (port == 80) {
+            snprintf(absline, sizeof(absline), "http://%s%s", host, path);
+        } else {
+            snprintf(absline, sizeof(absline), "http://%s:%d%s", host, port, path);
+        }
+        HDR_APPEND_STR(absline);
+    } else {
+        HDR_APPEND_STR(path);
+    }
+    HDR_APPEND_STR(" HTTP/1.1\r\n");
 
     /* Built-in Host (overridable via set_header). */
     if (!header_already_set(req, "Host")) {
