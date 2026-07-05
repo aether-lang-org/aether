@@ -204,6 +204,7 @@ static char g_with_caps[128] = "";
 // to decide what flags to emit.
 static bool g_emit_exe = true;
 static bool g_emit_lib = false;
+static bool g_emit_csrc = false;  // #996 --emit=csrc: emit .c + catalog .h, no gcc
 
 // Extra link flags accumulated by the binary-import prepass: when a
 // program `import`s a precompiled `--emit=lib` artifact (libfoo.so),
@@ -286,9 +287,26 @@ static bool g_coverage = false;
 // Build an aetherc command string with optional --lib flag
 static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, const char* output) {
     const char* emit_flag = "";
-    if (g_emit_lib && g_emit_exe)      emit_flag = " --emit=both";
+    if (g_emit_csrc)                   emit_flag = " --emit=csrc";
+    else if (g_emit_lib && g_emit_exe) emit_flag = " --emit=both";
     else if (g_emit_lib)               emit_flag = " --emit=lib";
     // exe-only is the default; no flag needed.
+
+    /* #996 --emit=csrc: also emit the catalog header alongside the .c. The
+     * header path is the .c output with .c → .h (or +.h if no .c suffix). */
+    char csrc_hdr_flag[PATH_MAX + 32] = "";
+    if (g_emit_csrc && output) {
+        char hpath[PATH_MAX];
+        snprintf(hpath, sizeof(hpath), "%s", output);
+        size_t hl = strlen(hpath);
+        if (hl > 2 && hpath[hl-2] == '.' && hpath[hl-1] == 'c') {
+            hpath[hl-1] = 'h';
+        } else {
+            snprintf(hpath + hl, sizeof(hpath) - hl, ".h");
+        }
+        snprintf(csrc_hdr_flag, sizeof(csrc_hdr_flag),
+                 " --emit-catalog-header=%s", hpath);
+    }
 
     // --with= is forwarded verbatim to aetherc, which owns parsing and
     // the reject messages. Only attached when non-empty so exe builds
@@ -311,8 +329,8 @@ static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, con
         if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
         lf_off += (size_t)w;
     }
-    snprintf(cmd, cmd_size, "\"%s\"%s%s%s \"%s\" \"%s\"",
-             tc.compiler, emit_flag, with_flag, lib_flags, input, output);
+    snprintf(cmd, cmd_size, "\"%s\"%s%s%s%s \"%s\" \"%s\"",
+             tc.compiler, emit_flag, csrc_hdr_flag, with_flag, lib_flags, input, output);
 }
 
 // --------------------------------------------------------------------------
@@ -2101,7 +2119,19 @@ static void build_gcc_cmd(char* cmd, size_t size,
     // --emit=both (exe + lib from one source) is not supported by this
     // helper — the caller should invoke it twice with different modes,
     // or a future refactor can produce both artifacts in one gcc call.
+    //
+    // #993: on Windows/MinGW also pass -Wl,--export-all-symbols so the
+    // `aether_<name>` / @c_callback catalog exports are visible in the .dll
+    // regardless of GCC's auto-export heuristic — which silently flips OFF the
+    // moment any symbol (e.g. an --extra C shim) carries an explicit
+    // __declspec(dllexport). On ELF/Mach-O the catalog symbols are exported by
+    // default visibility, so the flag is Windows-only.
+#ifdef _WIN32
+    const char* emit_lib_flags = (g_emit_lib && !g_emit_exe)
+        ? "-fPIC -shared -Wl,--export-all-symbols " : "";
+#else
     const char* emit_lib_flags = (g_emit_lib && !g_emit_exe) ? "-fPIC -shared " : "";
+#endif
     // Coverage builds skip -pipe — gcov works fine with it, but it
     // adds nothing when -O0 -g is already forced. Keeping the flag
     // string short helps the cmd-buffer size budget.
@@ -4845,8 +4875,16 @@ static int cmd_build(int argc, char** argv) {
                 free(dup_exe); free(dup_lib);
                 if (rc_exe != 0) return rc_exe;
                 return rc_lib;
+            } else if (strcmp(val, "csrc") == 0) {
+                /* #996: --emit=csrc — emit the portable generated C + a catalog
+                 * header, and STOP (no gcc). Uses --emit=lib codegen (same
+                 * aether_<name> catalog). g_emit_csrc makes the build path skip
+                 * the compile/link step and derive the .c/.h output paths. */
+                g_emit_exe = false;
+                g_emit_lib = true;
+                g_emit_csrc = true;
             } else {
-                fprintf(stderr, "Error: --emit must be one of: exe, lib (got '%s')\n", val);
+                fprintf(stderr, "Error: --emit must be one of: exe, lib, csrc (got '%s')\n", val);
                 return 1;
             }
         } else if (strcmp(argv[i], "--namespace") == 0 && i + 1 < argc) {
@@ -5093,6 +5131,21 @@ static int cmd_build(int argc, char** argv) {
         fprintf(stderr, "[diag] retry returned %d\n", retry_ret);
         fprintf(stderr, "Compilation failed.\n");
         return 1;
+    }
+
+    /* #996 --emit=csrc: aetherc has written the portable `.c` and the catalog
+     * `.h` (via --emit-catalog-header, appended by build_aetherc_cmd). No gcc:
+     * the artifact IS the source. Keep the .c (don't remove it), report both
+     * paths, and stop here. */
+    if (g_emit_csrc) {
+        char h_file[2048];
+        snprintf(h_file, sizeof(h_file), "%s", c_file);
+        size_t hl = strlen(h_file);
+        if (hl > 2 && h_file[hl-2] == '.' && h_file[hl-1] == 'c') h_file[hl-1] = 'h';
+        printf("Emitted C source: %s\n", c_file);
+        printf("Emitted header:   %s\n", h_file);
+        printf("Compile it against the runtime with `ae cflags` (or feed to WASM / static-link).\n");
+        return 0;
     }
 
     // Step 2: .c to executable (or wasm) with runtime.

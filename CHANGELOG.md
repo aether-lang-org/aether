@@ -5,9 +5,40 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.356.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`--emit=csrc`: distribute portable C source instead of a native lib** (#996,
+  minimal). `ae build --emit=csrc foo.ae -o foo` emits `foo.c` (the portable
+  generated C) plus `foo.h` (a catalog header with the `aether_<name>()`
+  prototypes) and stops — no `gcc`, no host `.so`. Same catalog codegen as
+  `--emit=lib`; the artifact is *source*. A consumer compiles it wherever
+  (`cc -fPIC -shared foo.c $(ae cflags)`), feeds it to WASM, or static-links it —
+  the enabling primitive for compile-on-install bindings and a source-registry
+  story. Follow-ups (single-file amalgamation, `catalog.json`, standalone
+  runtime-source bundling) are noted in #996.
+
+### Fixed
+
+- **`--emit=lib` on Windows exports the catalog symbols reliably** (#993). The
+  MinGW `-shared` link now passes `-Wl,--export-all-symbols` under `--emit=lib`,
+  so the `aether_<name>` / `@c_callback` catalog exports are visible in the
+  `.dll` regardless of GCC's auto-export heuristic (which silently flips off the
+  moment any symbol carries an explicit `__declspec(dllexport)`, e.g. an
+  `--extra` C shim). ELF/Mach-O are unaffected (default visibility). Unblocks the
+  servirtium-vcr Windows fat-package.
+
+### Documentation
+
+- Document the `std.http.client` TLS + forward-proxy builder knobs (`set_insecure`,
+  `use_env_proxy`, `use_http_proxy`, `ignore_http_proxy`, plus the previously
+  undocumented `set_follow_redirects`) in `stdlib-reference.md` / `stdlib-api.md`,
+  and `--emit=csrc` in `emit-lib.md`.
 
 ## [0.356.0]
 

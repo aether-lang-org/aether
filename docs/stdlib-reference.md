@@ -1505,8 +1505,18 @@ main() {
 - `client.set_header(req, name, value)` → `string` - Append `Name: value` to outgoing headers
 - `client.set_body(req, body, length, content_type)` → `string` - Set request body (length explicit so binary payloads with embedded NULs survive)
 - `client.set_timeout(req, timeout)` → `string` - `Duration` per-request timeout (`0ns` = block forever)
+- `client.set_follow_redirects(req, max_hops)` → `string` - Follow up to `max_hops` redirects (`0` = don't follow, the default)
 - `client.send_request(req)` → `(ptr, string)` - Fire the request; returns `(resp, "")` on transport success or `(null, err)` on failure
 - `client.request_free(req)` - Free the request handle
+
+**TLS + forward proxy (per request):** the client is hardened by default — TLS
+peer verification is **on** and env proxies are **not** followed unless you opt
+in. These knobs relax that per request; precedence for proxy is
+`ignore > explicit > env > direct`.
+- `client.set_insecure(req, on)` → `string` - `1` skips TLS peer + hostname verification for this request only (`curl -k` / `wget --no-check-certificate`). Relaxed per-connection, never on the shared process-wide `SSL_CTX`, so other requests keep verifying. Default `0`. Use only against hosts trusted out-of-band (self-signed dev/staging/appliance certs) — it removes MITM protection for that request.
+- `client.use_env_proxy(req, on)` → `string` - `1` follows `$HTTP_PROXY`/`$HTTPS_PROXY`/`$NO_PROXY` (Go-compatible). **Off by default** — the deliberate inverse of the default-follow that caused the httpoxy vulnerability class (CVE-2016-5385). It is a code-visible opt-in, never ambient, and carries two guards: the CGI-injectable uppercase `HTTP_PROXY` is refused when `$REQUEST_METHOD`/`$GATEWAY_INTERFACE` is set (lowercase `http_proxy` stays honoured), and a proxy resolving to a loopback/link-local IP literal (127/8, 169.254/16 IMDS, `::1`, `fc00::/7`, `fe80::/10`) is rejected (SSRF).
+- `client.use_http_proxy(req, "http://host:port")` → `string` - Pin an explicit forward proxy; env is ignored entirely (empty url reverts to direct). A team-controlled proxy (recorder / toxiproxy) is thus immune to whatever the shell or CI has set. HTTP goes through the proxy with an absolute-form request line; HTTPS establishes a `CONNECT` tunnel with TLS end-to-end to the origin.
+- `client.ignore_http_proxy(req)` → `string` - Force a direct connection regardless of env or any proxy a higher layer set (the determinism escape hatch — e.g. a VCR that must record the origin, not a proxy's view).
 
 **Response accessors:**
 - `client.response_status(resp)` → `int` - HTTP status code
