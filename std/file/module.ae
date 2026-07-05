@@ -22,7 +22,9 @@ extern file_read_all_raw(file: ptr) -> string
 extern file_write_raw(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
 extern file_delete_raw(path: string) -> int
-extern file_size_raw(path: string) -> int
+// Size in bytes, as `long` (#1021): the old int surface wrapped files
+// >= 2 GiB to a negative value. Returns -1 on stat failure.
+extern file_size_raw(path: string) -> long
 extern file_fd_raw(file: ptr) -> int
 
 // string_concat used to duplicate borrowed strings across free boundaries.
@@ -81,14 +83,19 @@ delete(path: string) -> {
     return ""
 }
 
-// Return the size of the file at `path` in bytes.
+// Return the size of the file at `path` in bytes, as `long` (#1021 —
+// files >= 2 GiB used to wrap negative through the old int surface).
 // Returns (size, "") on success, (0, error) on failure.
+//
+// The success arm returns FIRST: the first `return` statement pins the
+// inferred tuple slot types, so the `long`-typed arm must come before
+// the int-literal error arm or the size slot narrows back to int.
 size(path: string) -> {
     s = file_size_raw(path)
-    if s < 0 {
-        return 0, "cannot stat file"
+    if s >= 0 {
+        return s, ""
     }
-    return s, ""
+    return 0, "cannot stat file"
 }
 
 // The OS-level file descriptor inside an open handle, or -1 on a

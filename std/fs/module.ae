@@ -97,19 +97,21 @@ extern file_exists(path: string) -> int
 // Matches POSIX `test -e`.
 extern fs_path_exists(path: string) -> int
 extern file_delete_raw(path: string) -> int
-extern file_size_raw(path: string) -> int
+// Size in bytes, as `long` (#1021): the old int surface wrapped files
+// >= 2 GiB to a negative value. Returns -1 on stat failure.
+extern file_size_raw(path: string) -> long
 
 // Get file modification time as a Unix timestamp. Infallible — returns
 // 0 for missing files, null paths, or stat failure. Kept as a raw
 // extern with no Go-style wrapper because callers already use the 0
-// sentinel for "no mtime".
-extern file_mtime(path: string) -> int
+// sentinel for "no mtime". `long` since #1021 (Y2038-safe).
+extern file_mtime(path: string) -> long
 // `file_mtime_raw` returns the file's mtime as Unix epoch seconds, or
 // -1 if stat failed. Use this rather than `file_mtime` when you need
 // to distinguish "1970-01-01 epoch file" from "stat failed" — the
 // older `file_mtime` collapses both into 0. The `fs.mtime` wrapper
 // below builds the standard (value, err) tuple on top of it.
-extern file_mtime_raw(path: string) -> int
+extern file_mtime_raw(path: string) -> long
 
 // Directory operations - raw externs
 extern dir_exists(path: string) -> int
@@ -154,8 +156,10 @@ extern fs_rename_raw(from: string, to: string) -> int
 // Pair is thread-local so back-to-back calls on one thread are safe.
 extern fs_try_stat(path: string) -> int
 extern fs_get_stat_kind() -> int
-extern fs_get_stat_size() -> int
-extern fs_get_stat_mtime() -> int
+// size/mtime are `long` (#1021): 64-bit sizes (no >= 2 GiB wrap) and
+// Y2038-safe mtimes.
+extern fs_get_stat_size() -> long
+extern fs_get_stat_mtime() -> long
 
 // Split-accessor binary read: fs_try_read_binary reads the file into
 // a TLS-owned buffer; fs_get_read_binary / fs_get_read_binary_length
@@ -340,14 +344,19 @@ delete(path: string) -> {
     return ""
 }
 
-// Return the size of the file at `path` in bytes.
+// Return the size of the file at `path` in bytes, as `long` (#1021 —
+// files >= 2 GiB used to wrap negative through the old int surface).
 // Returns (size, "") on success, (0, error) on failure.
+//
+// The success arm returns FIRST: the first `return` statement pins the
+// inferred tuple slot types, so the `long`-typed arm must come before
+// the int-literal error arm or the size slot narrows back to int.
 size(path: string) -> {
     s = file_size_raw(path)
-    if s < 0 {
-        return 0, "cannot stat file"
+    if s >= 0 {
+        return s, ""
     }
-    return s, ""
+    return 0, "cannot stat file"
 }
 
 // Return the file's mtime as Unix epoch seconds.
@@ -355,12 +364,13 @@ size(path: string) -> {
 // "stat failed" from "file's mtime is 0" (which the older `file_mtime`
 // extern collapses into a single sentinel). Prefer this wrapper for
 // new code; `file_mtime` stays for back-compat.
+// Success arm first — same tuple-slot-inference constraint as `size`.
 mtime(path: string) -> {
     m = file_mtime_raw(path)
-    if m < 0 {
-        return 0, "cannot stat file"
+    if m >= 0 {
+        return m, ""
     }
-    return m, ""
+    return 0, "cannot stat file"
 }
 
 // Does anything exist at `path`? Returns 1 for any kind of
@@ -593,12 +603,21 @@ rename(from: string, to: string) -> {
 //
 // Cheaper than the existing file_exists + fs_is_symlink + size +
 // file_mtime quartet when callers need more than one field.
+// Two inference constraints keep size/mtime `long` here (#1021):
+// the getters are bound to locals (a call expression directly inside
+// a tuple return types as int; a variable carries the extern's
+// declared long), and the success arm returns first (the first
+// `return` pins the tuple slot types). The getters all return 0 after
+// a failed fs_try_stat, so binding them before the ok-check is safe.
 file_stat(path: string) -> {
     ok = fs_try_stat(path)
-    if ok == 0 {
-        return 0, 0, 0, "cannot stat path"
+    kind = fs_get_stat_kind()
+    size = fs_get_stat_size()
+    mtime = fs_get_stat_mtime()
+    if ok != 0 {
+        return kind, size, mtime, ""
     }
-    return fs_get_stat_kind(), fs_get_stat_size(), fs_get_stat_mtime(), ""
+    return 0, 0, 0, "cannot stat path"
 }
 
 // Binary-safe file read. Preserves embedded NULs and reports the
@@ -787,12 +806,14 @@ rel(base: string, target: string) -> string {
 // This is the "scatter-write" primitive — reconstructing a file from
 // blocks fetched out of order (rsync, zsync, parallel downloads,
 // sparse-file build). For sequential append, `fs.write` is simpler.
+// Success arm first — same tuple-slot-inference constraint as `size`
+// (the count slot is `long`).
 pwrite(file: ptr, data: string, length: int, offset: long) -> {
     n = fs_pwrite_raw(file, data, length, offset)
-    if n < 0 {
-        return -1, "pwrite failed"
+    if n >= 0 {
+        return n, ""
     }
-    return n, ""
+    return -1, "pwrite failed"
 }
 
 // Positional binary-safe read. Reads up to `length` bytes from
