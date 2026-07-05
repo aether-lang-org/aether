@@ -54,7 +54,8 @@ import std.json
 import std.string
 
 exports (
-    request, set_header, set_body, set_timeout, set_follow_redirects, set_insecure, request_free,
+    request, set_header, set_body, set_timeout, set_follow_redirects, set_insecure,
+    use_env_proxy, use_http_proxy, ignore_http_proxy, request_free,
     send_request,
     response_status, response_body, response_body_length, response_error, response_redirect_error,
     response_header, response_headers, response_url, response_free,
@@ -75,6 +76,9 @@ extern http_request_set_timeout_raw(req: ptr, seconds: int) -> int
 extern http_request_set_timeout_ns_raw(req: ptr, timeout: Duration) -> int
 extern http_request_set_follow_redirects_raw(req: ptr, max_hops: int) -> int
 extern http_request_set_insecure_raw(req: ptr, on: int) -> int
+extern http_request_use_env_proxy_raw(req: ptr, on: int) -> int
+extern http_request_use_http_proxy_raw(req: ptr, proxy_url: string) -> int
+extern http_request_ignore_http_proxy_raw(req: ptr) -> int
 extern http_request_free_raw(req: ptr)
 extern http_send_raw(req: ptr) -> ptr
 
@@ -163,6 +167,42 @@ set_follow_redirects(req: ptr, max_hops: int) -> string {
 set_insecure(req: ptr, on: int) -> string {
     rc = http_request_set_insecure_raw(req, on)
     if rc != 0 { return "set_insecure failed (null req)" }
+    return ""
+}
+
+// Forward-proxy control (aether#1012). Default is DIRECT — the client does not
+// follow $HTTP_PROXY unless you opt in, the hardened inverse of the httpoxy
+// (CVE-2016-5385) default-follow footgun. Precedence: ignore > explicit > env.
+
+// Follow $HTTP_PROXY / $HTTPS_PROXY / $NO_PROXY (Go-compatible), with the
+// httpoxy + SSRF guards applied at connect time. `on` = 1 to enable, 0 to
+// revert to direct. Prefer this only in operator-run CLIs; a corporate proxy
+// leaking from the shell will be honoured (that's the point). It is a
+// deliberate, code-visible opt-in — never an ambient default — so a library
+// can only be env-proxied if its own author calls this (auditable). A
+// compile-time reject under `--emit=lib` is tracked as a follow-up.
+use_env_proxy(req: ptr, on: int) -> string {
+    rc = http_request_use_env_proxy_raw(req, on)
+    if rc != 0 { return "use_env_proxy failed (null req)" }
+    return ""
+}
+
+// Pin an explicit forward proxy ("http://host:port"). OVERRIDES the environment
+// entirely — $HTTP_PROXY is never consulted — so a team-controlled proxy
+// (recorder / toxiproxy) is immune to whatever the shell or CI has set. An
+// empty url reverts to direct.
+use_http_proxy(req: ptr, proxy_url: string) -> string {
+    rc = http_request_use_http_proxy_raw(req, proxy_url)
+    if rc != 0 { return "use_http_proxy failed (null req or OOM)" }
+    return ""
+}
+
+// Force a direct connection regardless of env or any proxy a higher layer set.
+// The determinism escape hatch (e.g. VCR record mode must capture the origin,
+// not a proxy's view).
+ignore_http_proxy(req: ptr) -> string {
+    rc = http_request_ignore_http_proxy_raw(req)
+    if rc != 0 { return "ignore_http_proxy failed (null req)" }
     return ""
 }
 

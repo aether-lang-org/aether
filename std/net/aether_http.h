@@ -175,6 +175,22 @@ int http_request_set_follow_redirects_raw(HttpRequest* req, int max_hops);
 // insecure request cannot downgrade verification for other requests.
 int http_request_set_insecure_raw(HttpRequest* req, int on);
 
+// Forward-proxy control (aether#1012). Default is DIRECT — std.http.client does
+// NOT follow $HTTP_PROXY unless the program opts in, the hardened inverse of the
+// httpoxy (CVE-2016-5385) default-follow footgun. Precedence, highest first:
+// ignore > explicit > env > direct.
+//
+//   use_env_proxy(on):    follow $HTTP_PROXY/$HTTPS_PROXY/$NO_PROXY, WITH httpoxy
+//                         (refuse CGI-injected uppercase HTTP_PROXY) + SSRF
+//                         (reject loopback/link-local proxy) guards.
+//   use_http_proxy(url):  pin an explicit proxy; env ignored entirely (empty
+//                         url = revert to direct). No SSRF guard — it's a
+//                         code-visible grant.
+//   ignore_http_proxy():  force direct regardless of env / any set proxy.
+int http_request_use_env_proxy_raw(HttpRequest* req, int on);
+int http_request_use_http_proxy_raw(HttpRequest* req, const char* proxy_url);
+int http_request_ignore_http_proxy_raw(HttpRequest* req);
+
 void http_request_free_raw(HttpRequest* req);
 
 // Fire the configured request. Returns an HttpResponse on success

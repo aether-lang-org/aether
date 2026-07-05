@@ -5,9 +5,41 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.354.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`std.http.client`: hardened forward-proxy control** (#1012, part 2). Three
+  per-request builder verbs, defaulting to **DIRECT** — the client does NOT
+  follow `$HTTP_PROXY` unless the program opts in, the deliberate inverse of the
+  default-follow that produced the httpoxy vulnerability class (CVE-2016-5385).
+  Precedence, highest first: ignore > explicit > env.
+  - `client.use_env_proxy(req, 1)` — follow `$HTTP_PROXY`/`$HTTPS_PROXY`/
+    `$NO_PROXY` (Go-compatible), with guards: the CGI-injectable uppercase
+    `HTTP_PROXY` is refused when `$REQUEST_METHOD`/`$GATEWAY_INTERFACE` is set
+    (the httpoxy vector; lowercase `http_proxy` stays honoured), and a proxy
+    resolving to a loopback/link-local IP literal (127.0.0.0/8, 169.254.0.0/16
+    IMDS, ::1, fc00::/7, fe80::/10) is rejected (SSRF).
+  - `client.use_http_proxy(req, "http://host:port")` — pin an explicit proxy;
+    env is ignored entirely, so a team-controlled proxy (recorder / toxiproxy)
+    is immune to whatever the shell/CI set. No SSRF guard (code-visible grant).
+  - `client.ignore_http_proxy(req)` — force direct regardless of env / any set
+    proxy (the determinism escape hatch, e.g. VCR record mode).
+  Plain HTTP through a proxy uses an absolute-form request line; HTTPS uses a
+  `CONNECT` tunnel with TLS end-to-end to the origin. A compile-time reject of
+  `use_env_proxy` under `--emit=lib` is tracked as a follow-up.
+
+## [0.355.0]
+
+### Added
+
+- **Cross-module actors** (#1006). Actors defined in one module can now be
+  spawned and messaged from another; also fixes a single-scalar
+  message-field format warning.
 
 ## [0.354.0]
 
