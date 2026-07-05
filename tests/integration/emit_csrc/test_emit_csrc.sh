@@ -40,7 +40,12 @@ fi
 # .c and .h must exist; no .so.
 [ -f "$OUT.c" ] || { echo "  [FAIL] no $OUT.c emitted"; exit 1; }
 [ -f "$OUT.h" ] || { echo "  [FAIL] no $OUT.h emitted"; exit 1; }
-[ -f "$OUT.so" ] && { echo "  [FAIL] --emit=csrc unexpectedly produced a .so"; exit 1; }
+# NB: written as `if` not `[ ... ] && { ... }` — under `set -e` a false `[ ]`
+# test at statement level aborts the script (with no output). The `.so`-absent
+# case is the PASSING one, so it must not look like a failed command.
+if [ -f "$OUT.so" ]; then
+    echo "  [FAIL] --emit=csrc unexpectedly produced a .so"; exit 1
+fi
 
 # Header declares the catalog prototypes.
 grep -q 'aether_add' "$OUT.h" || { echo "  [FAIL] out.h missing aether_add prototype"; cat "$OUT.h"; exit 1; }
