@@ -9,6 +9,7 @@
 exports (
     tcp_connect_raw, tcp_send_raw, tcp_receive_raw, tcp_close,
     tcp_listen_raw, tcp_accept_raw, tcp_server_close,
+    tcp_fd_raw, tcp_server_fd_raw,
     http_get_raw, http_post_raw, http_put_raw, http_delete_raw,
     http_response_free, http_response_status_code,
     http_response_body_str, http_response_headers_str,
@@ -43,6 +44,12 @@ extern tcp_close(sock: ptr) -> int
 extern tcp_listen_raw(port: int) -> ptr
 extern tcp_accept_raw(server: ptr) -> ptr
 extern tcp_server_close(server: ptr) -> int
+
+// Descriptor accessors (#1003). The OS-level fd inside a handle, or -1
+// if null/closed. For capability plumbing (capsicum.rights_limit before
+// capsicum.enter). Owned by the handle — never close() one directly.
+extern tcp_fd_raw(sock: ptr) -> int
+extern tcp_server_fd_raw(server: ptr) -> int
 
 // HTTP Client — raw ptr-returning externs (escape hatch).
 // Most callers should use the Go-style wrappers in std.http which provide

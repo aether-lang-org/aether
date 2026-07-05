@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **stdlib descriptor accessors for Capsicum plumbing** (#1003). The opaque
+  stdlib handle types now expose their OS-level file descriptors:
+  `file.fd(handle)` / `fs.fd(handle)` for open files, `tcp.fd(sock)` and
+  `tcp.server_fd(server)` for sockets (raw externs `file_fd_raw`,
+  `tcp_fd_raw`, `tcp_server_fd_raw`). Closes the gap where
+  `capsicum.rights_limit()` / `fcntls_limit()` could only narrow descriptors
+  obtained from raw externs — the common open-through-the-stdlib case can now
+  narrow rights before `capsicum.enter()`. The fd is owned by the handle:
+  never `close()` it directly. New FreeBSD enforcement test
+  `tests/freebsd/rights_limit_stdlib_fd.ae` proves the flow end to end.
+- **Proof that `spawn_sandboxed` auto-contains Aether children on FreeBSD**
+  (#1003). The wiring itself shipped earlier (`AETHER_CAPSICUM=1` +
+  `capsicum_autosandbox.c`), but stale comments in `std.capsicum` still called
+  it "a later phase" and nothing exercised the composed path. Comments now
+  state the contract, and `tests/freebsd/spawn_capsicum_containment.sh`
+  asserts a spawned Aether child reports `capsicum.in_mode() == 1` without
+  ever calling `enter()` itself (`tests/freebsd/run.sh` now drives `.sh`
+  tests alongside the `.ae` ones).
+
 ## [0.357.0]
 
 ### Added

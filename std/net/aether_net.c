@@ -11,6 +11,8 @@ int tcp_close(TcpSocket* s) { (void)s; return 0; }
 TcpServer* tcp_listen_raw(int p) { (void)p; return NULL; }
 TcpSocket* tcp_accept_raw(TcpServer* s) { (void)s; return NULL; }
 int tcp_server_close(TcpServer* s) { (void)s; return 0; }
+int tcp_fd_raw(TcpSocket* s) { (void)s; return -1; }
+int tcp_server_fd_raw(TcpServer* s) { (void)s; return -1; }
 #else
 
 #include <stdlib.h>
@@ -227,6 +229,22 @@ int tcp_server_close(TcpServer* server) {
     close(server->fd);
     free(server);
     return 0;
+}
+
+/* Expose the OS-level descriptors inside the opaque socket handles
+ * (issue #1003). Exists so capability plumbing — capsicum.rights_limit()
+ * / fcntls_limit() before capsicum.enter() — can narrow a socket the
+ * program opened through the stdlib. The fd is owned by the handle:
+ * callers must not close() it; it dies with tcp_close /
+ * tcp_server_close. Returns -1 on a null/closed handle. */
+int tcp_fd_raw(TcpSocket* sock) {
+    if (!sock || !sock->connected) return -1;
+    return sock->fd;
+}
+
+int tcp_server_fd_raw(TcpServer* server) {
+    if (!server) return -1;
+    return server->fd;
 }
 
 #endif // AETHER_HAS_NETWORKING

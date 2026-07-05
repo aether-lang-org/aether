@@ -40,6 +40,23 @@ for t in "$ROOT"/tests/freebsd/*.ae; do
     esac
 done
 
+# Shell-driven tests (same 0/1/2 exit contract). Used where the test
+# must build its own binaries — e.g. spawn_capsicum_containment.sh,
+# which needs a real parent+child pair and the preload .so on disk.
+for t in "$ROOT"/tests/freebsd/*.sh; do
+    name=$(basename "$t" .sh)
+    case "$name" in run|nightly) continue ;; esac
+    printf '  [ .. ] %s\n' "$name"
+    out=$(AE="$AE" sh "$t" 2>&1)
+    rc=$?
+    case "$rc" in
+        0) echo "  [PASS] $name"; pass=$((pass+1)) ;;
+        2) echo "  [SKIP] $name (not FreeBSD)"; skip=$((skip+1)) ;;
+        *) echo "  [FAIL] $name (exit $rc)"; echo "$out" | sed 's/^/        /'
+           fail=$((fail+1)); failed_list="$failed_list $name" ;;
+    esac
+done
+
 echo
 echo "FreeBSD sandbox tests: $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ] || { echo "FAILED:$failed_list"; exit 1; }

@@ -7,7 +7,8 @@
 exports (
     tcp_connect_raw, tcp_send_raw, tcp_receive_raw, tcp_close,
     tcp_listen_raw, tcp_accept_raw, tcp_server_close,
-    connect, write, read, listen, accept
+    tcp_fd_raw, tcp_server_fd_raw,
+    connect, write, read, listen, accept, fd, server_fd
 )
 
 // Raw externs - escape hatch
@@ -18,6 +19,8 @@ extern tcp_close(sock: ptr) -> int
 extern tcp_listen_raw(port: int) -> ptr
 extern tcp_accept_raw(server: ptr) -> ptr
 extern tcp_server_close(server: ptr) -> int
+extern tcp_fd_raw(sock: ptr) -> int
+extern tcp_server_fd_raw(server: ptr) -> int
 
 // string_concat used to duplicate the borrowed receive buffer so the
 // caller's copy outlives the underlying malloc.
@@ -76,4 +79,21 @@ accept(server: ptr) -> {
         return null, "accept failed"
     }
     return sock, ""
+}
+
+// The OS-level descriptor inside a connected socket, or -1 if the
+// handle is null/closed (#1003). Exists for capability plumbing:
+// connect through the stdlib, then narrow the descriptor with
+// capsicum.rights_limit(tcp.fd(sock), ...) before capsicum.enter().
+// The fd is owned by the handle — do not close it directly; it is
+// released by tcp.close.
+fd(sock: ptr) -> int {
+    return tcp_fd_raw(sock)
+}
+
+// The OS-level listening descriptor inside a server handle, or -1 if
+// the handle is null (#1003). Same ownership rule: released by
+// tcp.server_close, never closed directly.
+server_fd(server: ptr) -> int {
+    return tcp_server_fd_raw(server)
 }

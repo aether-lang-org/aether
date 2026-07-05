@@ -11,8 +11,8 @@
 
 exports (
     file_open_raw, file_close, file_read_all_raw, file_write_raw,
-    file_exists, file_delete_raw, file_size_raw,
-    open, read, write, delete, size
+    file_exists, file_delete_raw, file_size_raw, file_fd_raw,
+    open, read, write, delete, size, fd
 )
 
 // Raw ptr/int externs (escape hatch).
@@ -23,6 +23,7 @@ extern file_write_raw(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
 extern file_delete_raw(path: string) -> int
 extern file_size_raw(path: string) -> int
+extern file_fd_raw(file: ptr) -> int
 
 // string_concat used to duplicate borrowed strings across free boundaries.
 extern string_concat(a: string, b: string) -> string
@@ -88,4 +89,15 @@ size(path: string) -> {
         return 0, "cannot stat file"
     }
     return s, ""
+}
+
+// The OS-level file descriptor inside an open handle, or -1 on a
+// null handle (#1003). Exists for capability plumbing: open through
+// the stdlib, then narrow the descriptor with
+// capsicum.rights_limit(file.fd(handle), ...) before capsicum.enter().
+// The fd is owned by the handle — do not close it directly; it is
+// released by file_close, which also frees the handle itself, so
+// never call fd() on a handle that has been closed.
+fd(handle: ptr) -> int {
+    return file_fd_raw(handle)
 }

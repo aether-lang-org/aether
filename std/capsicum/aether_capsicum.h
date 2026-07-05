@@ -12,8 +12,10 @@
 //
 // These wrappers are intentionally minimal — they expose cap_enter,
 // cap_getmode, cap_rights_limit and cap_fcntls_limit so hand-written
-// Aether code can sandbox itself. Wiring Capsicum into spawn_sandboxed
-// transparently is a later phase (see docs/aether_compared_to_capsicum.md).
+// Aether code can sandbox itself. spawn_sandboxed is separately
+// auto-wired on FreeBSD via AETHER_CAPSICUM=1 + the startup hook in
+// runtime/sandbox/capsicum_autosandbox.c (see
+// docs/aether_compared_to_capsicum.md).
 //
 // Off FreeBSD every entry point is a stub returning AETHER_CAP_UNSUPPORTED
 // so portable Aether code can probe capsicum_available() and degrade.
