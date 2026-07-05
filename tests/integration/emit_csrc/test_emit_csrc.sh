@@ -53,8 +53,17 @@ if ! $CC -fPIC -shared "$OUT.c" $CFLAGS -o "$TMPDIR/lib.so" >"$TMPDIR/cc.log" 2>
     echo "  [FAIL] emitted .c did not compile against ae cflags:"; cat "$TMPDIR/cc.log" | head -15; exit 1
 fi
 if command -v nm >/dev/null 2>&1; then
-    nm -D "$TMPDIR/lib.so" 2>/dev/null | grep -q 'aether_add' || {
-        echo "  [FAIL] built .so does not export aether_add"; exit 1; }
+    # Portable symbol dump: `nm -D` is GNU-only (macOS/BSD nm rejects it and
+    # lists dynamic symbols by default). Try the dynamic/exported form, fall
+    # back to plain nm. macOS mangles C symbols with a leading underscore, so
+    # match `aether_add` with an optional one.
+    syms="$(nm -D "$TMPDIR/lib.so" 2>/dev/null)"
+    [ -n "$syms" ] || syms="$(nm -gU "$TMPDIR/lib.so" 2>/dev/null)"
+    [ -n "$syms" ] || syms="$(nm "$TMPDIR/lib.so" 2>/dev/null)"
+    printf '%s\n' "$syms" | grep -Eq '(^|[^A-Za-z0-9_])_?aether_add([^A-Za-z0-9_]|$)' || {
+        echo "  [FAIL] built .so does not export aether_add"
+        printf '%s\n' "$syms" | grep -i aether_ | head
+        exit 1; }
 fi
 
 echo "  [PASS] emit_csrc: .c + catalog .h emitted, compiles+links, exports resolve"
