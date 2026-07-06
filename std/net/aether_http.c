@@ -28,6 +28,9 @@ HttpResponse* http_send_raw(HttpRequest* r) { (void)r; return NULL; }
 const char* http_response_header_raw(HttpResponse* r, const char* n) { (void)r; (void)n; return ""; }
 const char* http_response_effective_url_raw(HttpResponse* r) { (void)r; return ""; }
 const char* http_response_redirect_error_raw(HttpResponse* r) { (void)r; return ""; }
+int http_request_set_stream_raw(HttpRequest* r, int on) { (void)r; (void)on; return -1; }
+int http_response_is_stream_raw(HttpResponse* r) { (void)r; return 0; }
+const char* http_response_read_chunk_raw(HttpResponse* r, int max) { (void)r; (void)max; return ""; }
 #else
 
 #include <stdio.h>
@@ -293,6 +296,202 @@ static void transport_close(Transport* t) {
 }
 
 // -----------------------------------------------------------------
+// Streaming response bodies (#1004)
+//
+// A streaming response keeps its transport open after the header block
+// and delivers the body incrementally, so a multi-megabyte download never
+// materialises whole in memory: peak usage is one read window plus the
+// small `pending` buffer, not O(Content-Length). The HttpStream carries
+// the open transport, the body framing (Content-Length, chunked, or
+// read-until-close), and `pending` — raw socket bytes already read but not
+// yet decoded/delivered (the over-read past the header terminator, and
+// chunk-framing bytes that straddle recv boundaries).
+// -----------------------------------------------------------------
+
+struct HttpStream {
+    Transport t;
+    int  chunked;             /* Transfer-Encoding: chunked */
+    int  read_until_close;    /* no Content-Length and not chunked: body ends at EOF */
+    long long content_remaining; /* Content-Length framing: undelivered body bytes */
+    /* chunked decode state machine: 0=read size line, 1=deliver chunk data,
+     * 2=consume the CRLF that trails a chunk's data. */
+    int  chunk_state;
+    long long chunk_remaining; /* chunked: undelivered payload bytes in current chunk */
+    int  eof;                 /* body fully delivered (nothing more will arrive) */
+    int  err;                 /* transport error mid-body */
+    char* pending;            /* raw bytes read from transport, not yet consumed */
+    int   pending_pos;
+    int   pending_len;
+    int   pending_cap;
+};
+
+static void http_stream_free(struct HttpStream* s) {
+    if (!s) return;
+    transport_close(&s->t);
+    free(s->pending);
+    free(s);
+}
+
+/* Compact the unconsumed region to the front of `pending`, then read one more
+ * window from the transport onto the end. Returns the unconsumed byte count
+ * afterward: >0 = have data, 0 = clean EOF (nothing more will arrive),
+ * -1 = transport error (sets s->err). */
+static int stream_pump(struct HttpStream* s) {
+    int avail = s->pending_len - s->pending_pos;
+    if (s->pending_pos > 0) {
+        if (avail > 0) memmove(s->pending, s->pending + s->pending_pos, (size_t)avail);
+        s->pending_len = avail;
+        s->pending_pos = 0;
+    }
+    if (s->pending_cap - s->pending_len < 8192) {
+        int ncap = s->pending_cap ? s->pending_cap * 2 : 16384;
+        while (ncap - s->pending_len < 8192) ncap *= 2;
+        char* nb = (char*)realloc(s->pending, (size_t)ncap);
+        if (!nb) { s->err = 1; return -1; }
+        s->pending = nb;
+        s->pending_cap = ncap;
+    }
+    int n = transport_recv(&s->t, s->pending + s->pending_len,
+                           s->pending_cap - s->pending_len);
+    if (n < 0) { s->err = 1; return -1; }
+    if (n > 0) s->pending_len += n;
+    return s->pending_len - s->pending_pos;  /* n==0 -> whatever remains buffered */
+}
+
+/* Consume a CRLF (or bare LF, tolerated) at the current read position, pumping
+ * if needed. Returns 1 on success, 0 if a line terminator can't be obtained
+ * (malformed framing at EOF -> sets s->err). */
+static int stream_consume_crlf(struct HttpStream* s) {
+    for (;;) {
+        int avail = s->pending_len - s->pending_pos;
+        if (avail >= 1) {
+            char c = s->pending[s->pending_pos];
+            if (c == '\r') {
+                if (avail >= 2) {
+                    s->pending_pos += (s->pending[s->pending_pos + 1] == '\n') ? 2 : 1;
+                    return 1;
+                }
+                /* need the byte after '\r' */
+            } else if (c == '\n') {
+                s->pending_pos += 1;
+                return 1;
+            } else {
+                /* not a line terminator where one was expected */
+                s->err = 1;
+                return 0;
+            }
+        }
+        int r = stream_pump(s);
+        if (r < 0) return 0;
+        if (r == avail) { s->err = 1; return 0; }  /* EOF, no terminator */
+    }
+}
+
+/* Parse a chunk-size line ("<hex>[;ext]\r\n"), pumping until the CRLF is
+ * available. Sets *out to the parsed size and advances past the line.
+ * Returns 1 on success, 0 on malformed framing / EOF (sets s->err). */
+static int stream_read_chunk_size(struct HttpStream* s, long long* out) {
+    for (;;) {
+        /* find CRLF in the unconsumed region */
+        int start = s->pending_pos, end = s->pending_len, nl = -1;
+        for (int i = start; i < end; i++) {
+            if (s->pending[i] == '\n') { nl = i; break; }
+        }
+        if (nl >= 0) {
+            long long sz = 0; int any = 0;
+            for (int i = start; i < nl; i++) {
+                char c = s->pending[i];
+                int d;
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else break;  /* end of hex digits (CR, ';', or ext) */
+                sz = sz * 16 + d;
+                any = 1;
+            }
+            s->pending_pos = nl + 1;  /* consume through the LF */
+            if (!any) { s->err = 1; return 0; }
+            *out = sz;
+            return 1;
+        }
+        int prev = s->pending_len - s->pending_pos;
+        int r = stream_pump(s);
+        if (r < 0) return 0;
+        if (r == prev) { s->err = 1; return 0; }  /* EOF without a size line */
+    }
+}
+
+/* Deliver up to `max` decoded body bytes into `out`. Returns bytes delivered
+ * (>0), 0 at clean end-of-body, or -1 on transport / framing error. */
+static int stream_read_decoded(struct HttpStream* s, char* out, int max) {
+    if (s->err) return -1;
+    if (s->eof) return 0;
+    if (max <= 0) return 0;
+
+    if (!s->chunked) {
+        int avail = s->pending_len - s->pending_pos;
+        if (avail == 0) {
+            int r = stream_pump(s);
+            if (r < 0) return -1;
+            avail = s->pending_len - s->pending_pos;
+            if (avail == 0) { s->eof = 1; return 0; }  /* EOF (or content-length short) */
+        }
+        int give = avail < max ? avail : max;
+        if (!s->read_until_close && (long long)give > s->content_remaining)
+            give = (int)s->content_remaining;
+        memcpy(out, s->pending + s->pending_pos, (size_t)give);
+        s->pending_pos += give;
+        if (!s->read_until_close) {
+            s->content_remaining -= give;
+            if (s->content_remaining <= 0) s->eof = 1;
+        }
+        return give;
+    }
+
+    /* Chunked: run the state machine until `out` fills or the body ends. */
+    int produced = 0;
+    while (produced < max && !s->eof) {
+        if (s->chunk_state == 1) {  /* deliver chunk payload */
+            if (s->chunk_remaining == 0) { s->chunk_state = 2; continue; }
+            int avail = s->pending_len - s->pending_pos;
+            if (avail == 0) {
+                int r = stream_pump(s);
+                if (r < 0) return produced ? produced : -1;
+                avail = s->pending_len - s->pending_pos;
+                if (avail == 0) { s->err = 1; return produced ? produced : -1; }  /* truncated */
+            }
+            int give = avail;
+            if ((long long)give > s->chunk_remaining) give = (int)s->chunk_remaining;
+            if (give > max - produced) give = max - produced;
+            memcpy(out + produced, s->pending + s->pending_pos, (size_t)give);
+            s->pending_pos += give;
+            s->chunk_remaining -= give;
+            produced += give;
+            if (s->chunk_remaining == 0) s->chunk_state = 2;
+            continue;
+        }
+        if (s->chunk_state == 2) {  /* trailing CRLF after chunk data */
+            if (!stream_consume_crlf(s)) return produced ? produced : -1;
+            s->chunk_state = 0;
+            continue;
+        }
+        /* chunk_state == 0: read the next size line */
+        long long sz = 0;
+        if (!stream_read_chunk_size(s, &sz)) return produced ? produced : -1;
+        if (sz == 0) {
+            /* terminal chunk: consume the CRLF after "0" (trailers, if any,
+             * are ignored) and end the body. */
+            stream_consume_crlf(s);
+            s->eof = 1;
+            break;
+        }
+        s->chunk_remaining = sz;
+        s->chunk_state = 1;
+    }
+    return produced;
+}
+
+// -----------------------------------------------------------------
 // v2 request builder — opaque struct + per-field setters. The v1
 // one-liners (http_get_raw / http_post_raw / etc.) build a request
 // internally and call http_send_raw, so all paths funnel through
@@ -321,6 +520,9 @@ struct HttpRequest {
     int   insecure;      /* 0 = verify peer cert + hostname (default); 1 = skip
                           * both for THIS connection only (curl -k equivalent).
                           * Relaxed per-SSL, never on the shared SSL_CTX. */
+    int   stream;        /* 0 = buffer the whole body (default); 1 = streaming:
+                          * read only the header block and hand the open
+                          * transport to an HttpStream for incremental reads (#1004). */
 };
 
 HttpRequest* http_request_raw(const char* method, const char* url) {
@@ -425,6 +627,16 @@ int http_request_set_insecure_raw(HttpRequest* req, int on) {
     return 0;
 }
 
+/* #1004: enable streaming response bodies for THIS request. When on, the
+ * response returned by http_send_raw carries an open HttpStream instead of a
+ * buffered body; the caller pulls the body via http_response_read_chunk_raw
+ * and must free the response (which closes the transport) when done. */
+int http_request_set_stream_raw(HttpRequest* req, int on) {
+    if (!req) return -1;
+    req->stream = on ? 1 : 0;
+    return 0;
+}
+
 void http_request_free_raw(HttpRequest* req) {
     if (!req) return;
     free(req->method);
@@ -474,6 +686,7 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
     response->error = NULL;
     response->redirect_error = NULL;
     response->effective_url = NULL;
+    response->stream = NULL;
 
     char host[256];
     char path[1024];
@@ -803,6 +1016,100 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
             response->error = string_new("send failed");
             return response;
         }
+    }
+
+    /* Streaming mode (#1004): read only the header block, then hand the
+     * still-open transport to an HttpStream so the caller pulls the body
+     * incrementally (peak memory = one read window, not O(Content-Length)).
+     * The buffered read-until-EOF path below is skipped. */
+    if (req->stream) {
+        char   sbuf[8192];
+        char*  hb = NULL;        /* headers + any over-read body bytes */
+        size_t hlen = 0, hcap = 0;
+        char*  hend = NULL;
+        int    sn, serr = 0;
+        while ((sn = transport_recv(&t, sbuf, sizeof(sbuf))) > 0) {
+            if (hlen + (size_t)sn + 1 > hcap) {
+                size_t nc = hcap ? hcap * 2 : 16384;
+                while (nc < hlen + (size_t)sn + 1) nc *= 2;
+                char* nb = (char*)realloc(hb, nc);
+                if (!nb) {
+                    free(hb);
+                    transport_close(&t);
+                    response->error = string_new("out of memory reading response headers");
+                    return response;
+                }
+                hb = nb; hcap = nc;
+            }
+            memcpy(hb + hlen, sbuf, (size_t)sn);
+            hlen += (size_t)sn;
+            hb[hlen] = '\0';
+            /* The header terminator is NUL-free ASCII and precedes any body
+             * byte, so strstr finds it before any body NUL. */
+            hend = strstr(hb, "\r\n\r\n");
+            if (hend) break;
+        }
+        if (sn < 0) serr = 1;
+        if (!hend) {
+            free(hb);
+            transport_close(&t);
+            response->error = string_new(
+                serr ? "recv timeout or I/O error"
+                     : "connection closed before response headers");
+            return response;
+        }
+
+        size_t header_bytes = (size_t)((hend + 4) - hb);
+        size_t over_len     = hlen - header_bytes;   /* body bytes already read */
+        *hend = '\0';                                 /* isolate the header block */
+
+        char* space1 = strchr(hb, ' ');
+        if (space1) response->status_code = atoi(space1 + 1);
+        response->headers = string_new(hb);
+
+        /* Framing: chunked wins over Content-Length; neither => read-until-close. */
+        int       is_chunked = 0;
+        long long clen = -1;
+        char* te = http_extract_response_header(hb, "Transfer-Encoding");
+        if (te && http_value_has_chunked(te)) is_chunked = 1;
+        free(te);
+        if (!is_chunked) {
+            char* cl = http_extract_response_header(hb, "Content-Length");
+            if (cl) { clen = strtoll(cl, NULL, 10); free(cl); }
+        }
+
+        struct HttpStream* st = (struct HttpStream*)calloc(1, sizeof(struct HttpStream));
+        if (!st) {
+            free(hb);
+            transport_close(&t);
+            response->error = string_new("out of memory");
+            return response;
+        }
+        st->t = t;                 /* transfer ownership of the open transport */
+        st->chunked = is_chunked;
+        if (is_chunked) {
+            st->chunk_state = 0;   /* start by reading a chunk-size line */
+        } else if (clen >= 0) {
+            st->content_remaining = clen;
+            if (clen == 0) st->eof = 1;   /* declared empty body */
+        } else {
+            st->read_until_close = 1;
+        }
+        if (over_len > 0) {
+            st->pending = (char*)malloc(over_len);
+            if (!st->pending) {
+                free(hb);
+                http_stream_free(st);   /* closes the transport it now owns */
+                response->error = string_new("out of memory");
+                return response;
+            }
+            memcpy(st->pending, hend + 4, over_len);
+            st->pending_len = (int)over_len;
+            st->pending_cap = (int)over_len;
+        }
+        free(hb);
+        response->stream = st;
+        return response;           /* transport stays open, owned by the stream */
     }
 
     // Accumulator grows with capacity doubling. The previous
@@ -1339,6 +1646,11 @@ void http_response_free(HttpResponse* response) {
     if (response->error) string_release(response->error);
     if (response->redirect_error) string_release(response->redirect_error);
     if (response->effective_url) string_release(response->effective_url);
+    /* #1004: a streaming response owns its still-open transport; freeing the
+     * response closes the socket/SSL and releases the pending buffer. This
+     * also makes redirect-following safe for streaming requests: the redirect
+     * loop frees each intermediate response before the next hop. */
+    if (response->stream) http_stream_free(response->stream);
     free(response);
 }
 
@@ -1367,6 +1679,39 @@ const char* http_response_body(HttpResponse* response) {
 int http_response_body_length(HttpResponse* response) {
     if (!response || !response->body) return 0;
     return (int)aether_string_length(response->body);
+}
+
+/* #1004: 1 if this response is streaming (body pulled incrementally via
+ * http_response_read_chunk_raw), 0 if the body was buffered. */
+int http_response_is_stream_raw(HttpResponse* response) {
+    return (response && response->stream) ? 1 : 0;
+}
+
+/* #1004: pull the next decoded body window from a streaming response. Returns
+ * a freshly-minted AetherString of up to `max` decoded body bytes (binary-safe
+ * via its length). An EMPTY string means end-of-body OR a mid-stream transport
+ * error; the two are disambiguated by http_response_error (set on error). For a
+ * non-streaming or NULL response, returns an empty string. The caller owns the
+ * returned string (`@heap` on the Aether side releases it at scope exit). */
+const char* http_response_read_chunk_raw(HttpResponse* response, int max) {
+    if (!response || !response->stream) return (const char*)string_empty();
+    if (max <= 0) max = 65536;
+    char* buf = (char*)malloc((size_t)max);
+    if (!buf) {
+        if (!response->error) response->error = string_new("out of memory");
+        return (const char*)string_empty();
+    }
+    int n = stream_read_decoded(response->stream, buf, max);
+    if (n < 0) {
+        /* Mid-stream transport/framing error: surface via response->error so a
+         * caller that sees an empty chunk can tell failure from clean EOF. */
+        if (!response->error) response->error = string_new("stream read error");
+        free(buf);
+        return (const char*)string_empty();
+    }
+    AetherString* s = (n > 0) ? string_new_with_length(buf, (size_t)n) : string_empty();
+    free(buf);
+    return (const char*)s;
 }
 
 const char* http_response_headers(HttpResponse* response) {

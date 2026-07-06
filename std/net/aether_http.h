@@ -4,6 +4,11 @@
 #include "../string/aether_string.h"
 #include <stdint.h>
 
+/* #1004: opaque streaming-body handle (defined in aether_http.c). Non-NULL on
+ * a response returned by a request that opted into streaming; carries the
+ * still-open transport and the incremental body decoder. */
+struct HttpStream;
+
 typedef struct {
     int status_code;
     AetherString* body;
@@ -38,6 +43,11 @@ typedef struct {
      * vs the URL they originally passed to the builder. NULL until the
      * response is populated; readable via http_response_effective_url_raw. */
     AetherString* effective_url;
+    /* #1004: non-NULL when this is a streaming response — the transport is
+     * still open and the body is pulled incrementally via
+     * http_response_read_chunk_raw. NULL for the default buffered path.
+     * http_response_free() tears this down (closing the socket/SSL). */
+    struct HttpStream* stream;
 } HttpResponse;
 
 // ---------------------------------------------------------------------------
@@ -79,6 +89,19 @@ const char* http_response_body(HttpResponse* response);
  * payloads with embedded NULs (gzip, protobuf, image formats).
  * Returns 0 when response or body is NULL. */
 int  http_response_body_length(HttpResponse* response);
+
+// Streaming response bodies (#1004).
+// http_response_is_stream_raw: 1 if the response streams its body (the request
+//   opted in via http_request_set_stream_raw); 0 if the body was buffered.
+// http_response_read_chunk_raw: pull the next decoded body window (up to `max`
+//   bytes; <=0 uses a default). Returns a freshly-minted, OWNED AetherString
+//   (binary-safe via its length; `@heap` on the Aether side releases it). An
+//   EMPTY result means end-of-body OR a mid-stream error — disambiguate with
+//   http_response_error (set only on error). Chunked framing is decoded
+//   transparently; the caller sees payload bytes, never chunk sizes.
+int http_response_is_stream_raw(HttpResponse* response);
+const char* http_response_read_chunk_raw(HttpResponse* response, int max);
+
 const char* http_response_headers(HttpResponse* response);
 const char* http_response_error(HttpResponse* response);
 
@@ -174,6 +197,16 @@ int http_request_set_follow_redirects_raw(HttpRequest* req, int max_hops);
 // verifies. Relaxed per-SSL, never on the shared process-wide SSL_CTX, so an
 // insecure request cannot downgrade verification for other requests.
 int http_request_set_insecure_raw(HttpRequest* req, int on);
+
+// Enable streaming response bodies for THIS request (#1004). When on (non-zero),
+// http_send_raw returns a response whose body is NOT buffered: it carries an
+// open transport, and the caller pulls the decoded body window-by-window via
+// http_response_read_chunk_raw until an empty chunk. Peak memory is one window
+// rather than O(Content-Length) — for multi-megabyte downloads. The caller must
+// http_response_free the response (which closes the transport) when done, even
+// if it stops reading early. Redirects are still followed if enabled; only the
+// final hop's body streams. Default 0 = buffer the whole body.
+int http_request_set_stream_raw(HttpRequest* req, int on);
 
 void http_request_free_raw(HttpRequest* req);
 

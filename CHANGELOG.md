@@ -26,6 +26,25 @@ next version number before tagging the release.
   no-op). The forward-proxy half of #1012 (`HTTP_PROXY` / `CONNECT` tunnelling)
   remains open — the issue scoped it as the lower-priority follow-up.
 
+- **`std.http.client`: streaming response bodies** (#1004). `client.send_stream(req)`
+  (or `client.set_stream(req, 1)` before `send_request`) reads only the response
+  header block, keeps the connection open, and hands back a response whose body
+  is pulled window-by-window with `client.response_read(resp, max)` until an
+  empty chunk. Peak memory is one window instead of O(Content-Length), so a
+  multi-gigabyte download never materialises whole (the buffered `response_body`
+  path is unchanged and still the default). Both `Content-Length` and
+  `Transfer-Encoding: chunked` bodies are decoded transparently, so the caller
+  always sees payload bytes, never chunk framing. Redirects are still followed
+  when enabled; only the final hop streams, and `response_free` closes the
+  connection (freeing an intermediate 3xx response tears its stream down, so
+  redirect-following is safe). An empty `response_read` is end-of-body or a
+  mid-stream error, disambiguated by `response_error`. Implemented in the native
+  client (`std/net/aether_http.c`): a shared connect/send/header-parse phase now
+  feeds either the buffered read or an incremental `HttpStream` decoder; no
+  request logic is duplicated. Tests: `tests/integration/http_client_stream/`
+  (128 KiB Content-Length body, differential byte-for-byte vs the buffered fetch
+  across many windows) and `http_client_stream_chunked/` (raw-TCP chunked server).
+
 ## [0.353.0]
 
 ### Fixed
