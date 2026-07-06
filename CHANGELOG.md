@@ -13,6 +13,23 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **`ae` build cache invalidates on lib-module edits** (#1025). Two gaps let
+  `ae run` / `ae build` serve a stale binary after a module was edited: (A) the
+  default `lib/` directory the compiler searches when no `--lib` /
+  `$AETHER_LIB_DIR` is set was never part of the cache key, so an edit to a
+  module in the canonical `src/main.ae` + `lib/<name>/module.ae` layout was
+  invisible; (B) the explicit-`--lib` walk keyed on mtime(seconds)+size, so a
+  same-second, same-size edit (a one-character constant flip in an editor-save
+  loop) was missed. The cache key now walks the default lib dir too, and
+  content-hashes every lib-module file (`.ae`/`.c`/`.h`, recursively) instead of
+  keying on mtime+size, so any content change invalidates and a bare `touch`
+  does not. The default-lib name is now a shared `AETHER_DEFAULT_LIB_DIR`
+  constant referenced by both the compiler's import resolver and the cache-key
+  builder, so the searched dir and the invalidated dir can't drift apart. The
+  lib-dir walk is POSIX-only (`hash_lib_dir_entries` is `#ifndef _WIN32`, as
+  before this change); wiring it for Windows is a follow-up. New regression:
+  `tests/integration/cache_lib_invalidation/` (skips on Windows).
+
 - **std.fs file sizes and mtimes are 64-bit end-to-end** (#1021). Every size
   surface was a 32-bit C `int`, so files >= 2 GiB reported wrapped-negative
   sizes (a disk-usage tool under-counts exactly the files that dominate disk
