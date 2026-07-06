@@ -58,7 +58,7 @@ int main(void) {
 | `--emit=exe` *(default)* | Current behaviour, produces an executable. |
 | `--emit=lib` | No `main()` in the output; every top-level Aether function gets an `aether_<name>()` C-ABI alias; built with `-fPIC -shared`. |
 | `--emit=both` | Produces both an executable AND a shared library from one source. `ae build --emit=both foo.ae -o foo` writes `foo` (the exe) and `foo.dylib` / `foo.so` (the lib) side by side. With no `-o`, defaults are `<base>` (exe) and `lib<base>.<ext>` (lib). Internally dispatches `cmd_build` twice (once per emit mode); the lib pass appends the platform lib extension to the user's `-o` so the second pass doesn't overwrite the first. |
-| `--emit=csrc` | Emits the **portable generated C source** (`foo.c`) plus a **catalog header** (`foo.h`, the `aether_<name>()` prototypes) — and stops. No `gcc`, no native artifact. Same catalog codegen as `--emit=lib`; the difference is you get *source*, not a host `.so`. |
+| `--emit=csrc` | Emits the **portable generated C source** (`foo.c`), a **catalog header** (`foo.h`, the `aether_<name>()` prototypes), and a **machine-readable catalog** (`foo.catalog.json`), and stops. No `gcc`, no native artifact. Same catalog codegen as `--emit=lib`; the difference is you get *source* plus a describable ABI surface, not a host `.so`. |
 
 ## `--emit=csrc`: distribute source, not N native libs (#996)
 
@@ -70,11 +70,13 @@ decision from *distribution time* (ship 6 natives) to the consumer's build:
 ```sh
 ae build --emit=csrc mylib.ae -o mylib
 # writes mylib.c (portable C) + mylib.h (aether_<name> prototypes)
+#      + mylib.catalog.json (the describable ABI surface)
 
 # compile it wherever, against the runtime:
 cc -fPIC -shared mylib.c $(ae cflags) -o libmylib.so   # this host
 # or feed mylib.c to WASM, or static-link it into a compiled host, or
-# publish {mylib.c, mylib.h} as a content-addressable source package.
+# publish {mylib.c, mylib.h, mylib.catalog.json} as a content-addressable
+# source package.
 ```
 
 The `.h` is a normal C header (include guard + `extern "C"`); a consumer
@@ -82,8 +84,42 @@ The `.h` is a normal C header (include guard + `extern "C"`); a consumer
 is the enabling primitive for compile-on-install bindings (Python C-extension /
 Ruby-gem style) and a "source registry" story where every binding compiles the
 same hash-pinned source in its own toolchain. Follow-ups noted in #996:
-single-file amalgamation, `catalog.json` emission, and expressing the required
-runtime `.c` set for a fully standalone external compile.
+single-file amalgamation and expressing the required runtime `.c` set for a
+fully standalone external compile.
+
+### The JSON catalog (`<name>.catalog.json`)
+
+The same `aether_lib_meta()` symbol catalog the `.c` carries in `.rodata` (see
+the reflection section below) is also written as a JSON document, so a binding
+generator in any language can consume it without dlopening a native artifact.
+It is a faithful serialization of the C struct, driven by the identical codegen
+tables, so the two can never drift; it is deterministic (source order, stable
+version strings) and human-diffable, which makes the source artifact
+content-addressable. Fields:
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | `"1.0"` functions only, `"1.1"` adds closures, `"1.2"` adds constants (the highest feature level present) |
+| `aether_version` | Compiler version stamp |
+| `primary_source` | The `.ae` the artifact was built from (mirrors the path passed to the compiler: pass a relative path for a reproducible, machine-independent value) |
+| `capabilities` | The `--with` grants this artifact was built with (e.g. `["fs","net"]`), empty when capability-empty. Because the emitted C only contains code paths for granted capabilities, this is the syscall surface a consumer can inspect *before* compiling the source |
+| `functions[]` | `aether_name`, `c_symbol` (the `dlsym`/link name), `signature`, `source_file`, `source_line` |
+| `closures[]` | Closure surface reachable from exports: `name`, `role` (`builder` / `param` / `literal`), `enclosing_export`, `signature`, `captures[]` (`name` + `type`), `source_file`, `source_line` |
+| `constants[]` | Exported scalar/string consts: `name`, `type`, `value` |
+
+```json
+{
+  "schema_version": "1.0",
+  "aether_version": "0.0.0-dev",
+  "primary_source": "mylib.ae",
+  "capabilities": [],
+  "functions": [
+    { "aether_name": "add", "c_symbol": "aether_add", "signature": "(int, int) -> int", "source_file": "mylib.ae", "source_line": 4 }
+  ],
+  "closures": [],
+  "constants": []
+}
+```
 
 ## Naming
 

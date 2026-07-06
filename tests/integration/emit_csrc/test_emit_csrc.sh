@@ -1,10 +1,13 @@
 #!/bin/sh
-# Regression: aether#996 — `ae build --emit=csrc` emits portable C source + a
-# catalog header, and NOT a native lib.
+# Regression: aether#996. build --emit=csrc emits portable C source, a
+# catalog header AND a machine-readable JSON catalog, and NOT a native lib.
 #
 # Asserts:
-#   - `ae build --emit=csrc -o out` produces out.c and out.h (no gcc, no .so)
+#   - `ae build --emit=csrc -o out` produces out.c, out.h, out.catalog.json
+#     (no gcc, no .so)
 #   - out.h declares the aether_<name> catalog prototypes
+#   - out.catalog.json is well-formed JSON carrying the same functions/constants
+#     and a capability-provenance array (the binding-generator-friendly surface)
 #   - out.c compiles+links against `ae cflags` into a working .so that EXPORTS
 #     the catalog symbols (proving the emitted source is genuinely usable)
 
@@ -51,6 +54,38 @@ fi
 grep -q 'aether_add' "$OUT.h" || { echo "  [FAIL] out.h missing aether_add prototype"; cat "$OUT.h"; exit 1; }
 grep -q 'aether_greet' "$OUT.h" || { echo "  [FAIL] out.h missing aether_greet prototype"; exit 1; }
 
+# --- JSON catalog (#996): the machine-readable, binding-generator-friendly form
+#     of the same aether_lib_meta() surface, emitted alongside the .c and .h. ---
+JSON="$OUT.catalog.json"
+[ -f "$JSON" ] || { echo "  [FAIL] no $JSON emitted"; exit 1; }
+
+# Strict well-formedness + content when a JSON parser is available; otherwise
+# fall back to structural grep so the test still guards on toolchains without
+# python3. The strict path also proves the escaping is valid JSON.
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$JSON" <<'PYEOF' || { echo "  [FAIL] catalog.json failed strict validation"; cat "$JSON"; exit 1; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k in ("schema_version", "aether_version", "primary_source",
+          "capabilities", "functions", "closures", "constants"):
+    assert k in d, "missing key: " + k
+assert isinstance(d["capabilities"], list), "capabilities not a list"
+csyms = {f["c_symbol"] for f in d["functions"]}
+assert "aether_add" in csyms and "aether_greet" in csyms, "functions missing add/greet: %r" % csyms
+sig = {f["aether_name"]: f["signature"] for f in d["functions"]}
+assert sig.get("add") == "(int, int) -> int", "wrong add signature: %r" % sig.get("add")
+names = {c["name"] for c in d["constants"]}
+assert "VERSION" in names, "constant VERSION missing: %r" % names
+PYEOF
+else
+    # No python3, structural grep fallback.
+    grep -q '"schema_version"' "$JSON" || { echo "  [FAIL] catalog.json missing schema_version"; cat "$JSON"; exit 1; }
+    grep -q '"c_symbol": "aether_add"' "$JSON" || { echo "  [FAIL] catalog.json missing aether_add"; cat "$JSON"; exit 1; }
+    grep -q '"c_symbol": "aether_greet"' "$JSON" || { echo "  [FAIL] catalog.json missing aether_greet"; exit 1; }
+    grep -q '"capabilities"' "$JSON" || { echo "  [FAIL] catalog.json missing capabilities"; exit 1; }
+    grep -q '"VERSION"' "$JSON" || { echo "  [FAIL] catalog.json missing VERSION constant"; exit 1; }
+fi
+
 # The emitted C compiles + links against the runtime into a .so that exports
 # the catalog symbols.
 CFLAGS="$("$AE" cflags 2>/dev/null)"
@@ -73,5 +108,5 @@ if command -v nm >/dev/null 2>&1; then
     fi
 fi
 
-echo "  [PASS] emit_csrc: .c + catalog .h emitted, compiles+links, exports resolve"
+echo "  [PASS] emit_csrc: .c + catalog .h + .catalog.json emitted, JSON valid, compiles+links, exports resolve"
 exit 0

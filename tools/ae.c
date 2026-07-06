@@ -292,9 +292,12 @@ static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, con
     else if (g_emit_lib)               emit_flag = " --emit=lib";
     // exe-only is the default; no flag needed.
 
-    /* #996 --emit=csrc: also emit the catalog header alongside the .c. The
-     * header path is the .c output with .c → .h (or +.h if no .c suffix). */
+    /* #996 --emit=csrc: also emit the catalog header (.h) and the machine-
+     * readable JSON catalog (.catalog.json) alongside the .c. The header path
+     * is the .c output with .c → .h (or +.h if no .c suffix); the JSON path
+     * strips a trailing .c and appends .catalog.json. */
     char csrc_hdr_flag[PATH_MAX + 32] = "";
+    char csrc_json_flag[PATH_MAX + 40] = "";
     if (g_emit_csrc && output) {
         char hpath[PATH_MAX];
         snprintf(hpath, sizeof(hpath), "%s", output);
@@ -306,6 +309,15 @@ static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, con
         }
         snprintf(csrc_hdr_flag, sizeof(csrc_hdr_flag),
                  " --emit-catalog-header=%s", hpath);
+
+        char jpath[PATH_MAX];
+        snprintf(jpath, sizeof(jpath), "%s", output);
+        size_t jl = strlen(jpath);
+        if (jl > 2 && jpath[jl-2] == '.' && jpath[jl-1] == 'c') jpath[jl-2] = '\0';
+        size_t jb = strlen(jpath);
+        snprintf(jpath + jb, sizeof(jpath) - jb, ".catalog.json");
+        snprintf(csrc_json_flag, sizeof(csrc_json_flag),
+                 " --emit-catalog-json=%s", jpath);
     }
 
     // --with= is forwarded verbatim to aetherc, which owns parsing and
@@ -329,8 +341,8 @@ static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, con
         if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
         lf_off += (size_t)w;
     }
-    snprintf(cmd, cmd_size, "\"%s\"%s%s%s%s \"%s\" \"%s\"",
-             tc.compiler, emit_flag, csrc_hdr_flag, with_flag, lib_flags, input, output);
+    snprintf(cmd, cmd_size, "\"%s\"%s%s%s%s%s \"%s\" \"%s\"",
+             tc.compiler, emit_flag, csrc_hdr_flag, csrc_json_flag, with_flag, lib_flags, input, output);
 }
 
 // --------------------------------------------------------------------------
@@ -5154,17 +5166,23 @@ static int cmd_build(int argc, char** argv) {
         return 1;
     }
 
-    /* #996 --emit=csrc: aetherc has written the portable `.c` and the catalog
-     * `.h` (via --emit-catalog-header, appended by build_aetherc_cmd). No gcc:
-     * the artifact IS the source. Keep the .c (don't remove it), report both
-     * paths, and stop here. */
+    /* #996 --emit=csrc: aetherc has written the portable `.c`, the catalog `.h`
+     * and the machine-readable `.catalog.json` (via --emit-catalog-header /
+     * --emit-catalog-json, appended by build_aetherc_cmd). No gcc: the artifact
+     * IS the source. Keep the .c (don't remove it), report the paths, and stop. */
     if (g_emit_csrc) {
-        char h_file[2048];
+        char h_file[2048], j_file[2048];
         snprintf(h_file, sizeof(h_file), "%s", c_file);
         size_t hl = strlen(h_file);
         if (hl > 2 && h_file[hl-2] == '.' && h_file[hl-1] == 'c') h_file[hl-1] = 'h';
+        snprintf(j_file, sizeof(j_file), "%s", c_file);
+        size_t jl = strlen(j_file);
+        if (jl > 2 && j_file[jl-2] == '.' && j_file[jl-1] == 'c') j_file[jl-2] = '\0';
+        size_t jb = strlen(j_file);
+        snprintf(j_file + jb, sizeof(j_file) - jb, ".catalog.json");
         printf("Emitted C source: %s\n", c_file);
         printf("Emitted header:   %s\n", h_file);
+        printf("Emitted catalog:  %s\n", j_file);
         printf("Compile it against the runtime with `ae cflags` (or feed to WASM / static-link).\n");
         return 0;
     }
