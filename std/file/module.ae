@@ -11,8 +11,8 @@
 
 exports (
     file_open_raw, file_close, file_read_all_raw, file_write_raw,
-    file_exists, file_delete_raw, file_size_raw,
-    open, read, write, delete, size
+    file_exists, file_delete_raw, file_size_raw, file_fd_raw,
+    open, read, write, delete, size, fd
 )
 
 // Raw ptr/int externs (escape hatch).
@@ -22,7 +22,10 @@ extern file_read_all_raw(file: ptr) -> string
 extern file_write_raw(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
 extern file_delete_raw(path: string) -> int
-extern file_size_raw(path: string) -> int
+// Size in bytes, as `long` (#1021): the old int surface wrapped files
+// >= 2 GiB to a negative value. Returns -1 on stat failure.
+extern file_size_raw(path: string) -> long
+extern file_fd_raw(file: ptr) -> int
 
 // string_concat used to duplicate borrowed strings across free boundaries.
 extern string_concat(a: string, b: string) -> string
@@ -80,12 +83,28 @@ delete(path: string) -> {
     return ""
 }
 
-// Return the size of the file at `path` in bytes.
+// Return the size of the file at `path` in bytes, as `long` (#1021 —
+// files >= 2 GiB used to wrap negative through the old int surface).
 // Returns (size, "") on success, (0, error) on failure.
+//
+// The success arm returns FIRST: the first `return` statement pins the
+// inferred tuple slot types, so the `long`-typed arm must come before
+// the int-literal error arm or the size slot narrows back to int.
 size(path: string) -> {
     s = file_size_raw(path)
-    if s < 0 {
-        return 0, "cannot stat file"
+    if s >= 0 {
+        return s, ""
     }
-    return s, ""
+    return 0, "cannot stat file"
+}
+
+// The OS-level file descriptor inside an open handle, or -1 on a
+// null handle (#1003). Exists for capability plumbing: open through
+// the stdlib, then narrow the descriptor with
+// capsicum.rights_limit(file.fd(handle), ...) before capsicum.enter().
+// The fd is owned by the handle — do not close it directly; it is
+// released by file_close, which also frees the handle itself, so
+// never call fd() on a handle that has been closed.
+fd(handle: ptr) -> int {
+    return file_fd_raw(handle)
 }

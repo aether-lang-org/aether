@@ -6490,7 +6490,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                     // Generate printf with appropriate format string based on type
                     if (arg_type->kind == TYPE_INT) {
-                        fprintf(gen->output, "printf(\"%%d\", ");
+                        // Narrow to (int) to match %d: a single-scalar message
+                        // field rides the intptr_t payload slot, so a TYPE_INT
+                        // value can be stored wider. Genuine ints only reach
+                        // here (ptr/actor-ref use %s), so nothing is truncated.
+                        fprintf(gen->output, "printf(\"%%d\", (int)");
                         generate_expression(gen, first_arg);
                         fprintf(gen->output, ");\n");
                     } else if (arg_type->kind == TYPE_FLOAT) {
@@ -6624,6 +6628,13 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                 fprintf(gen->output, "_aether_safe_str(");
                                 generate_expression(gen, arg);
                                 fprintf(gen->output, ")");
+                            } else if (atype && atype->kind == TYPE_INT) {
+                                // Narrow to (int) to match the %d chosen above:
+                                // a single-scalar message field rides the
+                                // intptr_t payload slot, so a TYPE_INT value can
+                                // be stored wider. Genuine ints only.
+                                fprintf(gen->output, "(int)");
+                                generate_expression(gen, arg);
                             } else {
                                 generate_expression(gen, arg);
                             }

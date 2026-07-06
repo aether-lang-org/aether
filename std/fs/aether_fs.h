@@ -2,6 +2,7 @@
 #define AETHER_FS_H
 
 #include <stddef.h>
+#include <stdint.h>   // int64_t — 64-bit size/mtime/offset surfaces (#1021)
 
 // ---- Structured-error kinds (pilot — issue #392) ----
 //
@@ -44,8 +45,13 @@ int file_exists(const char* path);
  * existing — matches POSIX `test -e`. */
 int fs_path_exists(const char* path);
 int file_delete_raw(const char* path);
-int file_size_raw(const char* path);
-int file_mtime(const char* path);
+// Size in bytes / mtime in Unix epoch seconds. int64_t end-to-end
+// (#1021): files >= 2 GiB used to wrap negative through the old int
+// surfaces, and 32-bit mtimes hit Y2038. int64_t (not C `long`) so the
+// definition matches the int64_t prototype the compiler emits for an
+// Aether `long` extern even on LLP64 (Windows).
+int64_t file_size_raw(const char* path);
+int64_t file_mtime(const char* path);
 
 // Directory operations
 int dir_exists(const char* path);
@@ -116,7 +122,7 @@ int fs_rename_raw(const char* from, const char* to);
 // Returns 1 on success, 0 on failure (missing path, stat error).
 // On failure all three out-params are zeroed.
 int fs_stat_raw(const char* path, int* out_kind,
-                int* out_size, int* out_mtime);
+                int64_t* out_size, int64_t* out_mtime);
 
 // Split-accessor pair for Aether callers that don't want to pass C
 // out-parameters. fs_try_stat caches the most recent stat result in
@@ -130,9 +136,9 @@ int fs_stat_raw(const char* path, int* out_kind,
 //       mtime = fs_get_stat_mtime()
 //   }
 int fs_try_stat(const char* path);
-int fs_get_stat_kind(void);
-int fs_get_stat_size(void);
-int fs_get_stat_mtime(void);
+int     fs_get_stat_kind(void);
+int64_t fs_get_stat_size(void);
+int64_t fs_get_stat_mtime(void);
 
 // Read the entire file at `path` into a newly malloc'd buffer.
 // Sibling of file_read_all_raw that is length-aware and binary-safe:
@@ -190,13 +196,18 @@ char* path_rel(const char* base, const char* target);
 // file_open_raw with a mode that admits both read and write ("r+",
 // "w+", "a+"). Loops on short transfers; EINTR-safe on POSIX;
 // _chsize_s / _commit on Windows.
-long        fs_pwrite_raw(File* file, const char* data, int length, long offset);
-int         fs_pread_raw(File* file, int length, long offset);
+int64_t     fs_pwrite_raw(File* file, const char* data, int length, int64_t offset);
+int         fs_pread_raw(File* file, int length, int64_t offset);
 const char* fs_get_pread(void);
 int         fs_get_pread_length(void);
 void        fs_release_pread(void);
-const char* fs_ftruncate_raw(File* file, long length);
+const char* fs_ftruncate_raw(File* file, int64_t length);
 const char* fs_fsync_raw(File* file);
+
+// The OS-level descriptor inside an open File, or -1 if closed/invalid.
+// For capability plumbing (capsicum.rights_limit before capsicum.enter);
+// owned by the handle — do not close() it. Issue #1003.
+int         file_fd_raw(File* file);
 
 // Directory listing
 typedef struct {

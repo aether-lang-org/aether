@@ -1,0 +1,59 @@
+// Regression for aether#1012 part 2: forward-proxy control, hardened.
+//
+// Exercises the deterministic paths against a python forward proxy (:18121)
+// that stamps X-Via-Proxy on relayed HTTP, and an Aether origin (:18120):
+//   1. use_http_proxy(explicit)  -> routes through the proxy (X-Via-Proxy set)
+//   2. ignore_http_proxy         -> direct (no X-Via-Proxy)
+//   3. use_env_proxy with $HTTP_PROXY = a loopback IP -> SSRF guard BLOCKS it
+// Prints PASS only if all three hold. Each is what the httpoxy-hardened design
+// promises: explicit overrides env, ignore forces direct, and env-following
+// refuses a loopback proxy (the CVE-2016-5385 vector).
+
+import std.http.client
+
+extern exit(code: int)
+
+const ORIGIN = "http://127.0.0.1:18120/"
+const PROXY  = "http://127.0.0.1:18121"
+
+main() {
+    // 1. Explicit proxy -> via proxy.
+    r1 = client.request("GET", ORIGIN)
+    client.set_timeout(r1, 5s)
+    client.use_http_proxy(r1, PROXY)
+    resp1, e1 = client.send_request(r1)
+    client.request_free(r1)
+    if e1 != "" { println("FAIL: explicit-proxy errored: ${e1}") exit(1) }
+    via1 = client.response_header(resp1, "X-Via-Proxy")
+    body1 = client.response_body(resp1)
+    client.response_free(resp1)
+    if via1 != "yes" { println("FAIL: explicit-proxy did not route via proxy (via='${via1}')") exit(1) }
+    if body1 != "ORIGIN-BODY" { println("FAIL: explicit body='${body1}'") exit(1) }
+
+    // 2. ignore -> direct (no proxy tag).
+    r2 = client.request("GET", ORIGIN)
+    client.set_timeout(r2, 5s)
+    client.ignore_http_proxy(r2)
+    resp2, e2 = client.send_request(r2)
+    client.request_free(r2)
+    if e2 != "" { println("FAIL: ignore-proxy errored: ${e2}") exit(1) }
+    via2 = client.response_header(resp2, "X-Via-Proxy")
+    client.response_free(resp2)
+    if via2 == "yes" { println("FAIL: ignore-proxy still went via proxy") exit(1) }
+
+    // 3. use_env_proxy with a loopback-IP $HTTP_PROXY -> SSRF guard blocks.
+    //    (The driver sets HTTP_PROXY=http://127.0.0.1:18121 for this process.)
+    r3 = client.request("GET", ORIGIN)
+    client.set_timeout(r3, 5s)
+    client.use_env_proxy(r3, 1)
+    resp3, e3 = client.send_request(r3)
+    client.request_free(r3)
+    if e3 == "" {
+        client.response_free(resp3)
+        println("FAIL: env loopback proxy was NOT blocked by the SSRF guard")
+        exit(1)
+    }
+
+    println("PASS explicit-via-proxy ignore-direct env-ssrf-blocked")
+    exit(0)
+}

@@ -1661,6 +1661,38 @@ static int program_has_distinct(ASTNode* program, const char* name) {
     return 0;
 }
 
+/* #1006: an `actor X { ... }` already present in the program (the consumer's
+ * own, or an earlier merge). Used to dedup cross-module actor merges. */
+static int program_has_actor(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (!existing) continue;
+        ASTNode* unwrapped = unwrap_export(existing);
+        if (unwrapped && unwrapped->type == AST_ACTOR_DEFINITION &&
+            unwrapped->value && strcmp(unwrapped->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* #1006: a `message X { ... }` already present in the program. Used to dedup
+ * cross-module message merges. */
+static int program_has_message(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (!existing) continue;
+        ASTNode* unwrapped = unwrap_export(existing);
+        if (unwrapped && unwrapped->type == AST_MESSAGE_DEFINITION &&
+            unwrapped->value && strcmp(unwrapped->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Apply M's own `import X (a, b, c)` selective-import rewrites to a body
 // that's about to be cloned out of M into the consumer's program AST.
 //
@@ -2145,6 +2177,37 @@ void module_merge_into_program(ASTNode* program) {
                 if (program_has_distinct(program, decl->value)) continue;
                 ASTNode* clone = clone_ast_node(decl);
                 clone->is_imported = 1;
+                insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_MESSAGE_DEFINITION && decl->value) {
+                // #1006: `message X { ... }` from an imported module enters the
+                // consumer's program AST under its bare name (like structs), so
+                // `actor ! X { ... }` sends and `receive { X(..) -> }` patterns
+                // resolve, and codegen assigns X a runtime message-type id from
+                // the (per-program) message registry. Bypasses the selective-
+                // import filter on purpose: an imported actor's handlers cannot
+                // type-check without their message types in scope. Dedup by name.
+                if (program_has_message(program, decl->value)) continue;
+                ASTNode* clone = clone_ast_node(decl);
+                clone->is_imported = 1;
+                insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_ACTOR_DEFINITION && decl->value) {
+                // #1006: `actor X { ... }` from an imported module enters the
+                // consumer's program AST under its bare name. `spawn(X())`
+                // lowers to a `spawn_X` call and message sends reference bare
+                // message names, so the consumer needs the actor (and its
+                // messages, handled above) in scope by bare name. Bypasses the
+                // selective-import filter (same reasoning as structs/messages).
+                // Dedup by name.
+                if (program_has_actor(program, decl->value)) continue;
+                ASTNode* clone = clone_ast_node(decl);
+                clone->is_imported = 1;
+                // Unlike structs, an actor has a body: its receive handlers may
+                // call module-local functions or read module constants, which
+                // were cloned above under their `<ns>_` prefixed names. Rewrite
+                // those references so they resolve, exactly as function bodies do.
+                rename_intra_module_refs(clone, ns, func_names, func_count,
+                                         const_names, const_count, NULL, 0);
+                apply_inherited_selective_imports(clone, mod_ast);
                 insert_child_at(program, clone, insert_idx++);
             }
             // Skip AST_MAIN_FUNCTION, AST_IMPORT_STATEMENT, etc.

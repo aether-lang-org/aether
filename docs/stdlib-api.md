@@ -714,8 +714,15 @@ main() {
 - `client.set_header(req, name, value)` → `string` - Append a request header
 - `client.set_body(req, body, length, content_type)` → `string` - Set request body (length explicit for binary safety)
 - `client.set_timeout(req, timeout)` → `string` - `Duration` per-request timeout (`0ns` = block forever)
+- `client.set_follow_redirects(req, max_hops)` → `string` - Follow up to `max_hops` redirects (`0` = don't follow, the default)
 - `client.send_request(req)` → `(ptr, string)` - Fire it; `(resp, "")` on success, `(null, err)` on transport failure
 - `client.request_free(req)` - Free the request handle
+
+**TLS + proxy (per request):**
+- `client.set_insecure(req, on)` → `string` - `1` skips TLS peer + hostname verification for this request only (`curl -k` / `--no-check-certificate`); relaxed per-connection, never on the shared `SSL_CTX`. Default `0` (verify). Use only against hosts you trust out-of-band.
+- `client.use_env_proxy(req, on)` → `string` - `1` follows `$HTTP_PROXY`/`$HTTPS_PROXY`/`$NO_PROXY`. **Off by default** — the client does not honour env proxies unless you opt in (the hardened inverse of the httpoxy/CVE-2016-5385 default-follow). Guarded: the CGI-injectable uppercase `HTTP_PROXY` is refused under `$REQUEST_METHOD`/`$GATEWAY_INTERFACE`, and a proxy at a loopback/link-local IP is rejected (SSRF).
+- `client.use_http_proxy(req, "http://host:port")` → `string` - Pin an explicit forward proxy; env is ignored entirely (empty url = direct). A team-controlled proxy is immune to whatever the shell/CI set.
+- `client.ignore_http_proxy(req)` → `string` - Force a direct connection regardless of env / any set proxy (determinism escape hatch, e.g. VCR record mode). Precedence: ignore > explicit > env > direct.
 
 **Response accessors:**
 - `client.response_status(resp)` → `int`

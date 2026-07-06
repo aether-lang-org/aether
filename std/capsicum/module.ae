@@ -14,8 +14,11 @@
 //
 // This module is the hand-written entry point: code that wants OS-level
 // containment opens the fds it needs, limits each one, then enters
-// capability mode. Wiring Capsicum into spawn_sandboxed automatically is
-// a later phase — see docs/aether_compared_to_capsicum.md.
+// capability mode. spawn_sandboxed is ALSO auto-wired on FreeBSD: it
+// sets AETHER_CAPSICUM=1 in every child's environment, and an Aether
+// child cap_enter()s itself at startup (runtime/sandbox/
+// capsicum_autosandbox.c) — so a spawned Aether child is contained
+// without calling enter() by hand. See docs/aether_compared_to_capsicum.md.
 //
 // Portability: off FreeBSD every call returns CAP_UNSUPPORTED and
 // available() returns 0. Portable code should branch on available()
@@ -39,10 +42,14 @@
 //       // From here the kernel forbids opening any new path or socket.
 //   }
 //
-// rights_limit() takes a raw integer fd. Obtaining an fd from the
-// higher-level std.file / std.net handles is a follow-up once those
-// modules expose their descriptors; until then rights_limit() is most
-// useful with fds from raw externs or inherited descriptors.
+// rights_limit() takes a raw integer fd. The stdlib handle types
+// expose theirs (#1003): file.fd(handle) / fs.fd(handle) for files,
+// tcp.fd(sock) / tcp.server_fd(server) for sockets — so a descriptor
+// opened through the stdlib can be narrowed before enter():
+//
+//   handle, err = file.open("/var/db/app.db", "r")
+//   capsicum.rights_limit(file.fd(handle), capsicum.R_READ | capsicum.R_SEEK)
+//   capsicum.enter()
 
 exports (
     // Return codes

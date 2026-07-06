@@ -4256,6 +4256,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     } else if (tk == TYPE_INT64) { \
                         fprintf(gen->output, "(long long)"); \
                         generate_expression(gen, ch); \
+                    } else if (tk == TYPE_INT) { \
+                        /* Aether int is C `int` and %d expects one, but a \
+                         * TYPE_INT value can be stored wider: a single-scalar \
+                         * message field rides the intptr_t payload slot. Narrow \
+                         * to (int) to match %d, as INT64 casts to (long long). \
+                         * Only genuine TYPE_INT values reach here (actor-ref / \
+                         * ptr fields are TYPE_PTR and print via %s), so no \
+                         * pointer is ever truncated. */ \
+                        fprintf(gen->output, "(int)"); \
+                        generate_expression(gen, ch); \
                     } else if (tk == TYPE_UINT64) { \
                         fprintf(gen->output, "(unsigned long long)"); \
                         generate_expression(gen, ch); \

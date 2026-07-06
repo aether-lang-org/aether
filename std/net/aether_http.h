@@ -202,11 +202,27 @@ int http_request_set_insecure_raw(HttpRequest* req, int on);
 // http_send_raw returns a response whose body is NOT buffered: it carries an
 // open transport, and the caller pulls the decoded body window-by-window via
 // http_response_read_chunk_raw until an empty chunk. Peak memory is one window
-// rather than O(Content-Length) — for multi-megabyte downloads. The caller must
+// rather than O(Content-Length), for multi-megabyte downloads. The caller must
 // http_response_free the response (which closes the transport) when done, even
 // if it stops reading early. Redirects are still followed if enabled; only the
 // final hop's body streams. Default 0 = buffer the whole body.
 int http_request_set_stream_raw(HttpRequest* req, int on);
+
+// Forward-proxy control (aether#1012). Default is DIRECT — std.http.client does
+// NOT follow $HTTP_PROXY unless the program opts in, the hardened inverse of the
+// httpoxy (CVE-2016-5385) default-follow footgun. Precedence, highest first:
+// ignore > explicit > env > direct.
+//
+//   use_env_proxy(on):    follow $HTTP_PROXY/$HTTPS_PROXY/$NO_PROXY, WITH httpoxy
+//                         (refuse CGI-injected uppercase HTTP_PROXY) + SSRF
+//                         (reject loopback/link-local proxy) guards.
+//   use_http_proxy(url):  pin an explicit proxy; env ignored entirely (empty
+//                         url = revert to direct). No SSRF guard — it's a
+//                         code-visible grant.
+//   ignore_http_proxy():  force direct regardless of env / any set proxy.
+int http_request_use_env_proxy_raw(HttpRequest* req, int on);
+int http_request_use_http_proxy_raw(HttpRequest* req, const char* proxy_url);
+int http_request_ignore_http_proxy_raw(HttpRequest* req);
 
 void http_request_free_raw(HttpRequest* req);
 

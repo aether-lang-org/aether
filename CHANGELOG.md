@@ -5,9 +5,118 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.354.0]`. When a PR merges to
+**Workflow**: New changes go under `## [0.357.0]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [0.359.0]
+
+### Fixed
+
+- **std.fs file sizes and mtimes are 64-bit end-to-end** (#1021). Every size
+  surface was a 32-bit C `int`, so files >= 2 GiB reported wrapped-negative
+  sizes (a disk-usage tool under-counts exactly the files that dominate disk
+  usage). Widened in place: `file_size_raw`, `fs_get_stat_size`, and the
+  `fs.size` / `file.size` / `fs.file_stat` wrappers now speak `long`
+  (C `int64_t`); mtimes (`file_mtime`, `file_mtime_raw`, `fs_get_stat_mtime`,
+  `fs.mtime`, `file_stat`'s slot) widened in the same pass (Y2038). On
+  Windows the stat calls moved to `_stati64` — plain `_stat` carries a
+  32-bit `st_size` — and the positional-I/O family (`fs_pwrite_raw` /
+  `fs_pread_raw` / `fs_ftruncate_raw`) now defines its offsets/returns as
+  `int64_t` with `_fseeki64`, matching the `int64_t` prototypes the compiler
+  emits for Aether `long` externs (plain C `long` is 32-bit on LLP64, so the
+  old definitions were an ABI mismatch there). Regression test creates a
+  sparse 2 GiB + 5 file and asserts every surface reports the true value.
+  Wrapper note: the Go-style tuple wrappers keep their `(value, err)` shape,
+  but their success arm now returns first — the first `return` statement
+  pins the inferred tuple slot types, and the int-literal error arm would
+  otherwise narrow the size slot back to 32-bit.
+
+## [0.358.0]
+
+### Added
+
+- **stdlib descriptor accessors for Capsicum plumbing** (#1003). The opaque
+  stdlib handle types now expose their OS-level file descriptors:
+  `file.fd(handle)` / `fs.fd(handle)` for open files, `tcp.fd(sock)` and
+  `tcp.server_fd(server)` for sockets (raw externs `file_fd_raw`,
+  `tcp_fd_raw`, `tcp_server_fd_raw`). Closes the gap where
+  `capsicum.rights_limit()` / `fcntls_limit()` could only narrow descriptors
+  obtained from raw externs — the common open-through-the-stdlib case can now
+  narrow rights before `capsicum.enter()`. The fd is owned by the handle:
+  never `close()` it directly. New FreeBSD enforcement test
+  `tests/freebsd/rights_limit_stdlib_fd.ae` proves the flow end to end.
+- **Proof that `spawn_sandboxed` auto-contains Aether children on FreeBSD**
+  (#1003). The wiring itself shipped earlier (`AETHER_CAPSICUM=1` +
+  `capsicum_autosandbox.c`), but stale comments in `std.capsicum` still called
+  it "a later phase" and nothing exercised the composed path. Comments now
+  state the contract, and `tests/freebsd/spawn_capsicum_containment.sh`
+  asserts a spawned Aether child reports `capsicum.in_mode() == 1` without
+  ever calling `enter()` itself (`tests/freebsd/run.sh` now drives `.sh`
+  tests alongside the `.ae` ones).
+
+## [0.357.0]
+
+### Added
+
+- **`--emit=csrc`: distribute portable C source instead of a native lib** (#996,
+  minimal). `ae build --emit=csrc foo.ae -o foo` emits `foo.c` (the portable
+  generated C) plus `foo.h` (a catalog header with the `aether_<name>()`
+  prototypes) and stops — no `gcc`, no host `.so`. Same catalog codegen as
+  `--emit=lib`; the artifact is *source*. A consumer compiles it wherever
+  (`cc -fPIC -shared foo.c $(ae cflags)`), feeds it to WASM, or static-links it —
+  the enabling primitive for compile-on-install bindings and a source-registry
+  story. Follow-ups (single-file amalgamation, `catalog.json`, standalone
+  runtime-source bundling) are noted in #996.
+
+### Fixed
+
+- **`--emit=lib` on Windows exports the catalog symbols reliably** (#993). The
+  MinGW `-shared` link now passes `-Wl,--export-all-symbols` under `--emit=lib`,
+  so the `aether_<name>` / `@c_callback` catalog exports are visible in the
+  `.dll` regardless of GCC's auto-export heuristic (which silently flips off the
+  moment any symbol carries an explicit `__declspec(dllexport)`, e.g. an
+  `--extra` C shim). ELF/Mach-O are unaffected (default visibility). Unblocks the
+  servirtium-vcr Windows fat-package.
+
+### Documentation
+
+- Document the `std.http.client` TLS + forward-proxy builder knobs (`set_insecure`,
+  `use_env_proxy`, `use_http_proxy`, `ignore_http_proxy`, plus the previously
+  undocumented `set_follow_redirects`) in `stdlib-reference.md` / `stdlib-api.md`,
+  and `--emit=csrc` in `emit-lib.md`.
+
+## [0.356.0]
+
+### Added
+
+- **`std.http.client`: hardened forward-proxy control** (#1012, part 2). Three
+  per-request builder verbs, defaulting to **DIRECT** — the client does NOT
+  follow `$HTTP_PROXY` unless the program opts in, the deliberate inverse of the
+  default-follow that produced the httpoxy vulnerability class (CVE-2016-5385).
+  Precedence, highest first: ignore > explicit > env.
+  - `client.use_env_proxy(req, 1)` — follow `$HTTP_PROXY`/`$HTTPS_PROXY`/
+    `$NO_PROXY` (Go-compatible), with guards: the CGI-injectable uppercase
+    `HTTP_PROXY` is refused when `$REQUEST_METHOD`/`$GATEWAY_INTERFACE` is set
+    (the httpoxy vector; lowercase `http_proxy` stays honoured), and a proxy
+    resolving to a loopback/link-local IP literal (127.0.0.0/8, 169.254.0.0/16
+    IMDS, ::1, fc00::/7, fe80::/10) is rejected (SSRF).
+  - `client.use_http_proxy(req, "http://host:port")` — pin an explicit proxy;
+    env is ignored entirely, so a team-controlled proxy (recorder / toxiproxy)
+    is immune to whatever the shell/CI set. No SSRF guard (code-visible grant).
+  - `client.ignore_http_proxy(req)` — force direct regardless of env / any set
+    proxy (the determinism escape hatch, e.g. VCR record mode).
+  Plain HTTP through a proxy uses an absolute-form request line; HTTPS uses a
+  `CONNECT` tunnel with TLS end-to-end to the origin. A compile-time reject of
+  `use_env_proxy` under `--emit=lib` is tracked as a follow-up.
+
+## [0.355.0]
+
+### Added
+
+- **Cross-module actors** (#1006). Actors defined in one module can now be
+  spawned and messaged from another; also fixes a single-scalar
+  message-field format warning.
 
 ## [0.354.0]
 
@@ -44,6 +153,26 @@ next version number before tagging the release.
   request logic is duplicated. Tests: `tests/integration/http_client_stream/`
   (128 KiB Content-Length body, differential byte-for-byte vs the buffered fetch
   across many windows) and `http_client_stream_chunked/` (raw-TCP chunked server).
+
+### Fixed
+
+- **Cross-module actors and message types now work** (#1006). An `actor` and
+  its `message` types declared in an imported module can now be `spawn`ed and
+  sent to from the importing module. Previously `spawn(Worker())` failed at the
+  call site with a misleading `Undefined function 'spawn_Worker'` (and
+  `Undefined message type 'Ping'`), even though `Worker` was correctly spelled
+  and imported. The module merge now clones imported-module actor and message
+  declarations into the program under their bare name (like structs); the
+  actor's handlers keep their intra-module function/constant references
+  rewritten, and the per-program message registry assigns runtime type ids
+  across the merge.
+- **Codegen: no `-Wformat` warning when printing or interpolating a
+  single-scalar message field.** Such a field rides the `intptr_t`
+  `Message.payload_int` slot, so a genuine `int` field emitted with `%d`
+  mismatched its `intptr_t` storage. `print` / `println` / `${...}`
+  interpolation now narrow a `TYPE_INT` argument to `(int)`, mirroring the
+  existing `int64` to `long long` cast. Actor-ref and pointer fields are
+  unaffected (they print via `%s`), so no pointer-width value is truncated.
 
 ## [0.353.0]
 
