@@ -1,0 +1,90 @@
+// Regression test for #1021: file sizes and mtimes are 64-bit end-to-end.
+//
+// The old surfaces were 32-bit C int all the way through, so a file
+// >= 2 GiB reported a wrapped-negative size from fs.size / file.size /
+// fs.file_stat, and mtimes would hit Y2038. This creates a SPARSE file
+// just past the 2 GiB wrap point (ftruncate extends without writing
+// data blocks on every filesystem we run CI on; NTFS moves EOF without
+// zero-filling) and asserts every size surface reports the true value.
+
+import std.fs
+import std.file
+import std.io
+
+main() {
+    print("=== std.fs 64-bit sizes / mtimes (#1021) ===\n\n")
+
+    // Pick a scratch dir — /tmp on POSIX, TEMP/TMPDIR elsewhere. A bare
+    // "/tmp" resolves to C:\tmp via fopen on Windows and isn't created,
+    // so fs.open(w+) fails there (matches the other std.fs tests' idiom).
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    path = "${tmp}/aether_test_size64.bin"
+    fs.delete(path)
+
+    // 2 GiB + 5 bytes: 2147483653 — wraps to -2147483643 through a
+    // 32-bit int boundary. Any negative or small-positive readback
+    // means a narrowing crept back in somewhere.
+    big = 2147483653
+
+    f, ferr = fs.open(path, "w+")
+    if ferr != "" {
+        print("FAIL open: ${ferr}\n"); exit(1)
+    }
+    terr = fs.ftruncate(f, big)
+    file_close(f)
+    if terr != "" {
+        // A filesystem that refuses a 2 GiB sparse extend (FAT32 tmp
+        // dir, quota'd CI) is an environment limit, not a regression.
+        print("SKIP: cannot create 2GiB sparse file (${terr})\n")
+        fs.delete(path)
+        exit(0)
+    }
+
+    // Surface 1: fs.size (rides file_size_raw)
+    sz, serr = fs.size(path)
+    if serr != "" {
+        print("FAIL fs.size: ${serr}\n"); fs.delete(path); exit(1)
+    }
+    if sz != big {
+        print("FAIL fs.size: expected ${big}, got ${sz}\n"); fs.delete(path); exit(1)
+    }
+    print("PASS fs.size = ${sz}\n")
+
+    // Surface 2: file.size (std.file alias, same raw extern)
+    sz2, serr2 = file.size(path)
+    if serr2 != "" || sz2 != big {
+        print("FAIL file.size: expected ${big}, got ${sz2} (${serr2})\n")
+        fs.delete(path); exit(1)
+    }
+    print("PASS file.size = ${sz2}\n")
+
+    // Surface 3: fs.file_stat's size slot (rides fs_get_stat_size)
+    kind, sz3, mt, sterr = fs.file_stat(path)
+    if sterr != "" || kind != 1 {
+        print("FAIL file_stat: kind=${kind} err=${sterr}\n"); fs.delete(path); exit(1)
+    }
+    if sz3 != big {
+        print("FAIL file_stat size: expected ${big}, got ${sz3}\n"); fs.delete(path); exit(1)
+    }
+    print("PASS file_stat size = ${sz3}\n")
+
+    // mtime sanity on the same stat: a real current timestamp, not
+    // wrapped/zero. (Y2038 proper can't be asserted without setting a
+    // future mtime; the type widening is shared with the size path.)
+    if mt < 1500000000 {
+        print("FAIL file_stat mtime looks wrong: ${mt}\n"); fs.delete(path); exit(1)
+    }
+    print("PASS file_stat mtime = ${mt}\n")
+
+    // Surface 4: fs.mtime (rides file_mtime_raw)
+    mt2, merr = fs.mtime(path)
+    if merr != "" || mt2 < 1500000000 {
+        print("FAIL fs.mtime: got ${mt2} (${merr})\n"); fs.delete(path); exit(1)
+    }
+    print("PASS fs.mtime = ${mt2}\n")
+
+    fs.delete(path)
+    print("\n=== All #1021 64-bit size/mtime tests passed ===\n")
+}

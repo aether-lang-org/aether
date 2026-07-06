@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **std.fs file sizes and mtimes are 64-bit end-to-end** (#1021). Every size
+  surface was a 32-bit C `int`, so files >= 2 GiB reported wrapped-negative
+  sizes (a disk-usage tool under-counts exactly the files that dominate disk
+  usage). Widened in place: `file_size_raw`, `fs_get_stat_size`, and the
+  `fs.size` / `file.size` / `fs.file_stat` wrappers now speak `long`
+  (C `int64_t`); mtimes (`file_mtime`, `file_mtime_raw`, `fs_get_stat_mtime`,
+  `fs.mtime`, `file_stat`'s slot) widened in the same pass (Y2038). On
+  Windows the stat calls moved to `_stati64` — plain `_stat` carries a
+  32-bit `st_size` — and the positional-I/O family (`fs_pwrite_raw` /
+  `fs_pread_raw` / `fs_ftruncate_raw`) now defines its offsets/returns as
+  `int64_t` with `_fseeki64`, matching the `int64_t` prototypes the compiler
+  emits for Aether `long` externs (plain C `long` is 32-bit on LLP64, so the
+  old definitions were an ABI mismatch there). Regression test creates a
+  sparse 2 GiB + 5 file and asserts every surface reports the true value.
+  Wrapper note: the Go-style tuple wrappers keep their `(value, err)` shape,
+  but their success arm now returns first — the first `return` statement
+  pins the inferred tuple slot types, and the int-literal error arm would
+  otherwise narrow the size slot back to 32-bit.
+
 ## [0.358.0]
 
 ### Added

@@ -15,8 +15,8 @@ int file_fd_raw(File* f) { (void)f; return -1; }
 int file_exists(const char* p) { (void)p; return 0; }
 int fs_path_exists(const char* p) { (void)p; return 0; }
 int file_delete_raw(const char* p) { (void)p; return 0; }
-int file_size_raw(const char* p) { (void)p; return -1; }
-int file_mtime(const char* p) { (void)p; return 0; }
+int64_t file_size_raw(const char* p) { (void)p; return -1; }
+int64_t file_mtime(const char* p) { (void)p; return 0; }
 int dir_exists(const char* p) { (void)p; return 0; }
 int dir_create_raw(const char* p) { (void)p; return 0; }
 int dir_delete_raw(const char* p) { (void)p; return 0; }
@@ -32,15 +32,15 @@ int fs_write_atomic_raw(const char* p, const char* d, int l) {
     (void)p; (void)d; (void)l; return 0;
 }
 int fs_rename_raw(const char* f, const char* t) { (void)f; (void)t; return 0; }
-int fs_stat_raw(const char* p, int* k, int* s, int* m) {
+int fs_stat_raw(const char* p, int* k, int64_t* s, int64_t* m) {
     (void)p;
     if (k) *k = 0; if (s) *s = 0; if (m) *m = 0;
     return 0;
 }
 int fs_try_stat(const char* p) { (void)p; return 0; }
-int fs_get_stat_kind(void)  { return 0; }
-int fs_get_stat_size(void)  { return 0; }
-int fs_get_stat_mtime(void) { return 0; }
+int     fs_get_stat_kind(void)  { return 0; }
+int64_t fs_get_stat_size(void)  { return 0; }
+int64_t fs_get_stat_mtime(void) { return 0; }
 char* fs_read_binary_raw(const char* p, int* n) {
     (void)p; if (n) *n = 0; return NULL;
 }
@@ -82,12 +82,12 @@ int path_is_absolute(const char* p) { (void)p; return 0; }
 char* path_clean(const char* p) { (void)p; return NULL; }
 int path_is_within_base(const char* base, const char* target) { (void)base; (void)target; return 0; }
 char* path_rel(const char* base, const char* target) { (void)base; (void)target; return NULL; }
-long fs_pwrite_raw(File* f, const char* d, int l, long o) { (void)f; (void)d; (void)l; (void)o; return -1; }
-int fs_pread_raw(File* f, int l, long o) { (void)f; (void)l; (void)o; return 0; }
+int64_t fs_pwrite_raw(File* f, const char* d, int l, int64_t o) { (void)f; (void)d; (void)l; (void)o; return -1; }
+int fs_pread_raw(File* f, int l, int64_t o) { (void)f; (void)l; (void)o; return 0; }
 const char* fs_get_pread(void) { return ""; }
 int fs_get_pread_length(void) { return 0; }
 void fs_release_pread(void) {}
-const char* fs_ftruncate_raw(File* f, long l) { (void)f; (void)l; return "fs unavailable"; }
+const char* fs_ftruncate_raw(File* f, int64_t l) { (void)f; (void)l; return "fs unavailable"; }
 const char* fs_fsync_raw(File* f) { (void)f; return "fs unavailable"; }
 DirList* dir_list_raw(const char* p) { (void)p; return NULL; }
 int dir_list_count(DirList* l) { (void)l; return 0; }
@@ -260,8 +260,10 @@ int file_close(File* file) {
 #include <errno.h>
 
 /* Returns bytes written on success, -1 on error. Loops on short
- * writes. `offset` is a byte position from start-of-file. */
-long fs_pwrite_raw(File* file, const char* data, int length, long offset) {
+ * writes. `offset` is a byte position from start-of-file.
+ * int64_t (not C `long`) so the definition matches the prototype the
+ * compiler emits for an Aether `long` extern on LLP64 (#1021). */
+int64_t fs_pwrite_raw(File* file, const char* data, int length, int64_t offset) {
     if (!file || !file->is_open || !data || length < 0 || offset < 0) return -1;
     FILE* fp = (FILE*)file->handle;
     fflush(fp);
@@ -273,14 +275,15 @@ long fs_pwrite_raw(File* file, const char* data, int length, long offset) {
         /* Windows has no pwrite — emulate with seek + write. NOT
          * thread-safe across handles (the seek changes the file
          * position for the whole handle); fine for the single-
-         * threaded port-server case the issue addresses. */
-        if (fseek(fp, offset + (long)total, SEEK_SET) != 0) return -1;
+         * threaded port-server case the issue addresses. _fseeki64
+         * because plain fseek takes a 32-bit long on Windows. */
+        if (_fseeki64(fp, offset + (int64_t)total, SEEK_SET) != 0) return -1;
         size_t w = fwrite(data + total, 1, (size_t)length - total, fp);
         if (w == 0) return -1;
         total += w;
 #else
         ssize_t w = pwrite(fd, data + total, (size_t)length - total,
-                           (off_t)(offset + (long)total));
+                           (off_t)(offset + (int64_t)total));
         if (w < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -289,7 +292,7 @@ long fs_pwrite_raw(File* file, const char* data, int length, long offset) {
         total += (size_t)w;
 #endif
     }
-    return (long)total;
+    return (int64_t)total;
 }
 
 /* TLS slot for the pread split-accessor — mirrors fs_get_read_binary.
@@ -321,7 +324,7 @@ int fs_get_pread_length(void) {
 
 /* Returns 1 on success (TLS slot has up-to-length bytes; partial
  * EOF reads are still success), 0 on failure. */
-int fs_pread_raw(File* file, int length, long offset) {
+int fs_pread_raw(File* file, int length, int64_t offset) {
     release_pread_locked();
     if (!file || !file->is_open || length < 0 || offset < 0) return 0;
     FILE* fp = (FILE*)file->handle;
@@ -336,7 +339,7 @@ int fs_pread_raw(File* file, int length, long offset) {
     size_t total = 0;
     while (total < (size_t)length) {
 #ifdef _WIN32
-        if (fseek(fp, offset + (long)total, SEEK_SET) != 0) {
+        if (_fseeki64(fp, offset + (int64_t)total, SEEK_SET) != 0) {
             aether_caps_free(buf, alloc); return 0;
         }
         size_t r = fread(buf + total, 1, (size_t)length - total, fp);
@@ -344,7 +347,7 @@ int fs_pread_raw(File* file, int length, long offset) {
         total += r;
 #else
         ssize_t r = pread(fd, buf + total, (size_t)length - total,
-                          (off_t)(offset + (long)total));
+                          (off_t)(offset + (int64_t)total));
         if (r < 0) {
             if (errno == EINTR) continue;
             aether_caps_free(buf, alloc); return 0;
@@ -363,7 +366,7 @@ int fs_pread_raw(File* file, int length, long offset) {
  * extends with zero bytes when length > current size; SHOULD work
  * the same way on Windows via _chsize_s. Returns "" on success or
  * an error message. */
-const char* fs_ftruncate_raw(File* file, long length) {
+const char* fs_ftruncate_raw(File* file, int64_t length) {
     if (!file || !file->is_open || length < 0) return "invalid args";
     FILE* fp = (FILE*)file->handle;
     fflush(fp);
@@ -447,33 +450,50 @@ int file_delete_raw(const char* path) {
     return remove(path) == 0 ? 1 : 0;
 }
 
-int file_size_raw(const char* path) {
+/* 64-bit stat shim (#1021). The size/mtime surfaces below return
+ * int64_t — the C spelling of an Aether `long` extern (LLP64-safe;
+ * plain C `long` is 32-bit on Windows). On POSIX, stat/lstat already
+ * fill a 64-bit off_t/time_t on every platform we build. On Windows
+ * the CRT's plain _stat carries a 32-bit st_size, so files >= 2 GiB
+ * wrap — _stati64 is the 64-bit-size spelling. (No lstat on the
+ * Windows CRT; fs_stat_raw's symlink branch is POSIX-only anyway.) */
+#ifdef _WIN32
+typedef struct _stati64 aether_stat64_t;
+#define aether_stat64(p, st)  _stati64((p), (st))
+#define aether_lstat64(p, st) _stati64((p), (st))
+#else
+typedef struct stat aether_stat64_t;
+#define aether_stat64(p, st)  stat((p), (st))
+#define aether_lstat64(p, st) lstat((p), (st))
+#endif
+
+int64_t file_size_raw(const char* path) {
     if (!path) return 0;
     if (!aether_sandbox_check("fs_read", path)) return 0;
 
-    struct stat st;
-    if (stat(path, &st) != 0) return -1;
-    return (int)st.st_size;
+    aether_stat64_t st;
+    if (aether_stat64(path, &st) != 0) return -1;
+    return (int64_t)st.st_size;
 }
 
-int file_mtime(const char* path) {
+int64_t file_mtime(const char* path) {
     if (!path) return 0;
 
-    struct stat st;
-    if (stat(path, &st) != 0) return 0;
-    return (int)st.st_mtime;
+    aether_stat64_t st;
+    if (aether_stat64(path, &st) != 0) return 0;
+    return (int64_t)st.st_mtime;
 }
 
 // Like file_mtime but distinguishes "stat failed" (returns -1) from
 // "file's mtime happens to be 0" (returns 0 — the Unix epoch). The
 // older `file_mtime` collapses both into 0, swallowing the error.
 // Aether-side callers should prefer `fs.mtime` (Go-style result tuple).
-int file_mtime_raw(const char* path) {
+int64_t file_mtime_raw(const char* path) {
     if (!path) return -1;
 
-    struct stat st;
-    if (stat(path, &st) != 0) return -1;
-    return (int)st.st_mtime;
+    aether_stat64_t st;
+    if (aether_stat64(path, &st) != 0) return -1;
+    return (int64_t)st.st_mtime;
 }
 
 // Directory operations
@@ -784,7 +804,7 @@ int fs_rename_raw(const char* from, const char* to) {
 #define FS_STAT_KIND_OTHER   4
 
 int fs_stat_raw(const char* path, int* out_kind,
-                int* out_size, int* out_mtime) {
+                int64_t* out_size, int64_t* out_mtime) {
     if (!path) {
         if (out_kind)  *out_kind  = 0;
         if (out_size)  *out_size  = 0;
@@ -798,14 +818,14 @@ int fs_stat_raw(const char* path, int* out_kind,
         return 0;
     }
 
-    struct stat st;
+    aether_stat64_t st;
 #ifndef _WIN32
-    if (lstat(path, &st) != 0) {
+    if (aether_lstat64(path, &st) != 0) {
 #else
-    // Windows CRT has no lstat; stat follows symlinks, but Windows
+    // Windows CRT has no lstat; _stati64 follows symlinks, but Windows
     // symlinks already go through a different code path we stub out
     // (fs_is_symlink returns 0). Good enough for v1.
-    if (stat(path, &st) != 0) {
+    if (aether_stat64(path, &st) != 0) {
 #endif
         if (out_kind)  *out_kind  = 0;
         if (out_size)  *out_size  = 0;
@@ -823,8 +843,8 @@ int fs_stat_raw(const char* path, int* out_kind,
     else                           kind = FS_STAT_KIND_OTHER;
 
     if (out_kind)  *out_kind  = kind;
-    if (out_size)  *out_size  = (int)st.st_size;
-    if (out_mtime) *out_mtime = (int)st.st_mtime;
+    if (out_size)  *out_size  = (int64_t)st.st_size;
+    if (out_mtime) *out_mtime = (int64_t)st.st_mtime;
     return 1;
 }
 
@@ -838,12 +858,13 @@ int fs_stat_raw(const char* path, int* out_kind,
 #else
   #define AETHER_FS_TLS
 #endif
-static AETHER_FS_TLS int s_last_kind  = 0;
-static AETHER_FS_TLS int s_last_size  = 0;
-static AETHER_FS_TLS int s_last_mtime = 0;
+static AETHER_FS_TLS int     s_last_kind  = 0;
+static AETHER_FS_TLS int64_t s_last_size  = 0;
+static AETHER_FS_TLS int64_t s_last_mtime = 0;
 
 int fs_try_stat(const char* path) {
-    int k = 0, sz = 0, mt = 0;
+    int k = 0;
+    int64_t sz = 0, mt = 0;
     int ok = fs_stat_raw(path, &k, &sz, &mt);
     if (!ok) {
         s_last_kind = 0; s_last_size = 0; s_last_mtime = 0;
@@ -853,9 +874,9 @@ int fs_try_stat(const char* path) {
     return 1;
 }
 
-int fs_get_stat_kind(void)  { return s_last_kind;  }
-int fs_get_stat_size(void)  { return s_last_size;  }
-int fs_get_stat_mtime(void) { return s_last_mtime; }
+int     fs_get_stat_kind(void)  { return s_last_kind;  }
+int64_t fs_get_stat_size(void)  { return s_last_size;  }
+int64_t fs_get_stat_mtime(void) { return s_last_mtime; }
 
 char* fs_read_binary_raw(const char* path, int* out_len) {
     if (out_len) *out_len = 0;
