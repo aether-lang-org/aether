@@ -1507,6 +1507,8 @@ main() {
 - `client.set_timeout(req, timeout)` → `string` - `Duration` per-request timeout (`0ns` = block forever)
 - `client.set_follow_redirects(req, max_hops)` → `string` - Follow up to `max_hops` redirects (`0` = don't follow, the default)
 - `client.send_request(req)` → `(ptr, string)` - Fire the request; returns `(resp, "")` on transport success or `(null, err)` on failure
+- `client.set_stream(req, on)` → `string` - Enable streaming of the response body for this request (#1004); `send_stream` is the convenience form
+- `client.send_stream(req)` → `(ptr, string)` - Like `send_request`, but the response body is streamed rather than buffered (see below)
 - `client.request_free(req)` - Free the request handle
 
 **TLS + forward proxy (per request):** the client is hardened by default — TLS
@@ -1520,11 +1522,13 @@ in. These knobs relax that per request; precedence for proxy is
 
 **Response accessors:**
 - `client.response_status(resp)` → `int` - HTTP status code
-- `client.response_body(resp)` → `string` - Response body, binary-safe
+- `client.response_body(resp)` → `string` - Response body, binary-safe (buffered responses)
+- `client.response_is_stream(resp)` → `int` - 1 if the body is streamed (from `send_stream`), 0 if buffered
+- `client.response_read(resp, max)` → `string` - Pull the next decoded body window (up to `max` bytes) from a streaming response; empty result = end-of-body (streaming)
 - `client.response_header(resp, name)` → `string` - Case-insensitive single-header lookup, `""` if absent
 - `client.response_headers(resp)` → `string` - Raw header block
 - `client.response_error(resp)` → `string` - Transport error string
-- `client.response_free(resp)` - Free the response
+- `client.response_free(resp)` - Free the response (closes the connection for a streaming response)
 
 **Sugar wrappers** (pure Aether on top of the builder, no new C externs):
 - `client.get_with_headers(url, header_pairs)` → `(string, int, string)` - GET with auth/whatever headers; returns `(body, status, err)`
@@ -1532,7 +1536,37 @@ in. These knobs relax that per request; precedence for proxy is
 - `client.post_json(url, value)` → `(ptr, string)` - Marshal a JSON value (`std.json`), set `Content-Type` + `Accept` to `application/json`, send
 - `client.response_body_json(resp)` → `(ptr, string)` - Wrap `response_body` + `json.parse`; returns `(value, "")` on success or `(null, parse_error)` on malformed JSON
 
-Design choices: `method` is an arbitrary string, not a `{GET,POST,PUT,DELETE}` enum, so WebDAV / DeltaV / PATCH / project-specific verbs ride through without a stdlib release (the wrapper validates the token shape and forwards it to `CURLOPT_CUSTOMREQUEST`). A non-2xx status is not an error: `send_request` returns the response cleanly and the caller drives status interpretation, so 404/403/401 are distinguishable rather than collapsed to `"http error"`. The builder is named `send_request` rather than `send` because `send` is reserved for actor messaging (tracked by #233). `tests/integration/test_http_client_v2.ae` is the runnable example file; streaming response bodies for large downloads are tracked in #1004.
+**Streaming large response bodies (#1004):** `send_request` materialises the whole body into one `AetherString`, fine for JSON APIs, but for a multi-megabyte download that is O(Content-Length) memory. `send_stream` instead reads only the header block, keeps the connection open, and hands back a response you drain window-by-window with `response_read`, so peak memory is one window regardless of body size. `Content-Length` and `Transfer-Encoding: chunked` bodies are both decoded transparently (you always see payload bytes, never chunk framing). Redirects are still followed if enabled; only the final hop streams. Always `response_free` the response when done (it closes the connection), even if you stop reading early.
+
+```aether
+import std.http
+import std.http.client
+
+main() {
+    req = client.request("GET", "https://example.com/big.iso")
+    client.set_timeout(req, 60s)
+    resp, err = client.send_stream(req)     // reads headers only; body stays on the wire
+    client.request_free(req)
+    if err != "" { println("transport: ${err}"); return }
+
+    // Drive the body in windows; peak memory is one chunk, not the whole file.
+    done = 0
+    while done == 0 {
+        chunk = client.response_read(resp, 65536)   // up to 64 KiB of decoded body
+        if string.length(chunk) == 0 {
+            done = 1                                 // end-of-body (or error, see below)
+        } else {
+            // ... write chunk to disk, hash it, forward it, ...
+        }
+    }
+    // An empty chunk means EOF *or* a mid-stream failure; disambiguate here.
+    serr = client.response_error(resp)
+    client.response_free(resp)                       // closes the connection
+    if serr != "" { println("stream error: ${serr}") }
+}
+```
+
+Design choices: `method` is an arbitrary string, not a `{GET,POST,PUT,DELETE}` enum, so WebDAV / DeltaV / PATCH / project-specific verbs ride through without a stdlib release (the native client sends the method verbatim on the request line). A non-2xx status is not an error: `send_request` returns the response cleanly and the caller drives status interpretation, so 404/403/401 are distinguishable rather than collapsed to `"http error"`. The builder is named `send_request` rather than `send` because `send` is reserved for actor messaging (tracked by #233). `tests/integration/test_http_client_v2.ae` is the runnable example for the buffered API; `tests/integration/http_client_stream/` and `http_client_stream_chunked/` cover streaming.
 
 ### HTTP record/replay (VCR), moved out of the stdlib
 

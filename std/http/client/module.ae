@@ -55,9 +55,10 @@ import std.string
 
 exports (
     request, set_header, set_body, set_timeout, set_follow_redirects, set_insecure,
-    use_env_proxy, use_http_proxy, ignore_http_proxy, request_free,
-    send_request,
+    set_stream, use_env_proxy, use_http_proxy, ignore_http_proxy, request_free,
+    send_request, send_stream,
     response_status, response_body, response_body_length, response_error, response_redirect_error,
+    response_is_stream, response_read,
     response_header, response_headers, response_url, response_free,
     get_with_headers, post_with_status,
     post_json, response_body_json,
@@ -76,6 +77,7 @@ extern http_request_set_timeout_raw(req: ptr, seconds: int) -> int
 extern http_request_set_timeout_ns_raw(req: ptr, timeout: Duration) -> int
 extern http_request_set_follow_redirects_raw(req: ptr, max_hops: int) -> int
 extern http_request_set_insecure_raw(req: ptr, on: int) -> int
+extern http_request_set_stream_raw(req: ptr, on: int) -> int
 extern http_request_use_env_proxy_raw(req: ptr, on: int) -> int
 extern http_request_use_http_proxy_raw(req: ptr, proxy_url: string) -> int
 extern http_request_ignore_http_proxy_raw(req: ptr) -> int
@@ -85,6 +87,8 @@ extern http_send_raw(req: ptr) -> ptr
 extern http_response_status(response: ptr) -> int
 extern http_response_body(response: ptr) -> string @heap
 extern http_response_body_length(response: ptr) -> int
+extern http_response_is_stream_raw(response: ptr) -> int
+extern http_response_read_chunk_raw(response: ptr, max: int) -> string @heap
 extern http_response_headers(response: ptr) -> string
 extern http_response_error(response: ptr) -> string
 extern http_response_redirect_error_raw(response: ptr) -> string
@@ -170,6 +174,18 @@ set_insecure(req: ptr, on: int) -> string {
     return ""
 }
 
+// Enable streaming of the response body for this request (#1004). When on,
+// send_request returns a response whose body is NOT buffered: pull it window-
+// by-window with response_read until an empty chunk. Peak memory is one window
+// instead of O(Content-Length), for multi-megabyte downloads. `send_stream`
+// below is the convenience form. The caller must response_free the response
+// (which closes the connection) when done, even if it stops reading early.
+set_stream(req: ptr, on: int) -> string {
+    rc = http_request_set_stream_raw(req, on)
+    if rc != 0 { return "set_stream failed (null req)" }
+    return ""
+}
+
 // Forward-proxy control (aether#1012). Default is DIRECT — the client does not
 // follow $HTTP_PROXY unless you opt in, the hardened inverse of the httpoxy
 // (CVE-2016-5385) default-follow footgun. Precedence: ignore > explicit > env.
@@ -235,6 +251,18 @@ send_request(req: ptr) -> {
     return resp, ""
 }
 
+// Streaming send (#1004): like send_request, but the response body is streamed
+// rather than buffered. Returns (resp, "") on success — pull the body with
+// response_read(resp, max) in a loop until it returns an empty string, then
+// response_free(resp). Returns (null, error) on transport-level failure.
+// Equivalent to set_stream(req, 1) followed by send_request(req).
+send_stream(req: ptr) -> {
+    e = http_request_set_stream_raw(req, 1)
+    if e != 0 { return null, "send_stream failed (null req)" }
+    resp, err = send_request(req)
+    return resp, err
+}
+
 // Response accessors — re-exported under client.* so callers can
 // stay inside the client namespace once they have a response. Same
 // underlying functions the v1 wrappers use.
@@ -250,6 +278,16 @@ response_body  (resp: ptr) -> string { return http_response_body(resp) }
 response_body_length(resp: ptr) -> int {
     return http_response_body_length(resp)
 }
+
+// Streaming body reads (#1004). response_is_stream is 1 when the response was
+// produced by send_stream (or set_stream). response_read pulls the next decoded
+// body window (up to `max` bytes; pass e.g. 65536); chunked framing is decoded
+// transparently, so you always see payload bytes. An empty return means
+// end-of-body OR a mid-stream error — check response_error to tell them apart.
+// Use string.length() on the returned chunk for its byte count (binary-safe).
+response_is_stream(resp: ptr) -> int { return http_response_is_stream_raw(resp) }
+response_read(resp: ptr, max: int) -> string { return http_response_read_chunk_raw(resp, max) }
+
 response_error (resp: ptr) -> string { return http_response_error(resp) }
 
 // Redirect-class error string. Set when a request opted into automatic

@@ -1,0 +1,111 @@
+// #1004: streaming a Transfer-Encoding: chunked response body. The Aether HTTP
+// server only emits Content-Length, so this stands up a hand-written HTTP/1.1
+// server over raw TCP that answers with a chunked body ("hello world" split
+// across three chunks), then streams it with the client and asserts the
+// decoder reassembles the payload (never exposing chunk framing). Kept in its
+// own process (no concurrent Content-Length server) to avoid contending for
+// scheduler threads with a second blocking accept loop.
+
+import std.http.client
+import std.string
+
+extern exit(code: int)
+extern tcp_listen_raw(port: int) -> ptr
+extern tcp_accept_raw(server: ptr) -> ptr
+extern tcp_receive_raw(sock: ptr, max_bytes: int) -> string
+extern tcp_send_raw(sock: ptr, data: string) -> int
+extern tcp_close(sock: ptr) -> int
+
+const PORT = 18099
+
+message StartRaw { srv: ptr }
+message Noop {}
+
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+// Persistent chunked server: accept a connection, drain the request, answer
+// with a chunked "hello world", close, repeat. Looping lets the client's
+// poll-until-ready probe and the real streamed fetch each get served.
+actor RawChunkedSrv {
+    state s = 0
+    receive {
+        StartRaw(srv) -> {
+            s = srv
+            keep = 1
+            while keep == 1 {
+                conn = tcp_accept_raw(srv)
+                if conn == null {
+                    keep = 0
+                } else {
+                    junk = tcp_receive_raw(conn, 4096)
+                    e1 = tcp_send_raw(conn, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                    e2 = tcp_send_raw(conn, "5\r\nhello\r\n")
+                    e3 = tcp_send_raw(conn, "1\r\n \r\n")
+                    e4 = tcp_send_raw(conn, "5\r\nworld\r\n")
+                    e5 = tcp_send_raw(conn, "0\r\n\r\n")
+                    c = tcp_close(conn)
+                }
+            }
+        }
+    }
+}
+
+main() {
+    lst = tcp_listen_raw(PORT)
+    if lst == null { println("FAIL: chunked listen failed"); exit(1) }
+
+    spawn(SchedHelper())
+    srv = spawn(RawChunkedSrv())
+    srv ! StartRaw { srv: lst }
+
+    // Poll until the server answers (buffered probe; the buffered path
+    // dechunks, so a clean err means the server is serving).
+    ready = 0
+    i = 0
+    while i < 200 {
+        sleep(25)
+        pr = client.request("GET", "http://127.0.0.1:${PORT}/")
+        if pr != null {
+            client.set_timeout(pr, 2s)
+            presp, perr = client.send_request(pr)
+            client.request_free(pr)
+            if perr == "" {
+                client.response_free(presp)
+                ready = 1
+                i = 200
+            }
+        }
+        i = i + 1
+    }
+    if ready == 0 { println("FAIL: chunked server never reached ready state"); exit(1) }
+
+    // Streamed fetch: decode the chunked body window-by-window.
+    rc = client.request("GET", "http://127.0.0.1:${PORT}/")
+    client.set_timeout(rc, 10s)
+    cresp, cerr = client.send_stream(rc)
+    client.request_free(rc)
+    if cerr != "" { println("FAIL chunked transport: ${cerr}"); exit(1) }
+    if client.response_is_stream(cresp) != 1 {
+        println("FAIL: chunked response not reported as stream"); exit(1)
+    }
+
+    acc = ""
+    done = 0
+    while done == 0 {
+        ch = client.response_read(cresp, 4096)
+        n = string.length(ch)
+        if n == 0 { done = 1 } else { acc = string.concat(acc, ch) }
+    }
+    serr = client.response_error(cresp)
+    client.response_free(cresp)
+    if serr != "" { println("FAIL chunked read error: ${serr}"); exit(1) }
+    if !string.equals(acc, "hello world") {
+        println("FAIL chunked body: got '${acc}', want 'hello world'"); exit(1)
+    }
+
+    println("PASS: chunked response streamed + decoded to 'hello world'")
+    exit(0)
+}
