@@ -21,6 +21,14 @@
  * misconfigured shell `AETHER_LIB_DIR` can never crash a build. */
 #define AETHER_LIB_DIRS_MAX 8
 
+/* The default lib-search directory, used when neither a `--lib` flag nor
+ * `$AETHER_LIB_DIR` is set. The compiler's import resolver
+ * (`module_add_lib_dir` in aether_module.c) and the CLI's cache-key builder
+ * (`compute_cache_key` in tools/ae.c) both reference this single definition, so
+ * the value the compiler searches and the value the cache invalidates on can
+ * never drift apart (#1025). */
+#define AETHER_DEFAULT_LIB_DIR "lib"
+
 /* PATH-style separator. `:` on POSIX (matches Java -cp, Python
  * PYTHONPATH, Ruby RUBYLIB), `;` on Windows (where `:` is part of
  * every drive-letter path). */

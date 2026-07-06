@@ -441,13 +441,16 @@ static int hash_lib_dir_entries(const char* dir, const char* rel,
         else if (nlen > 2 && (strcmp(name + nlen - 2, ".c") == 0 ||
                               strcmp(name + nlen - 2, ".h") == 0)) interesting = 1;
         if (!interesting) continue;
-        /* Hash the RELATIVE path (not the bare name) + mtime + size, so a
-         * subdir module is distinct from a same-named top-level file and the
-         * key is stable across runs. mtime+size together catch same-second
-         * edits. */
+        /* Hash the RELATIVE path (distinguishes a subdir module from a
+         * same-named top-level file, and is stable across runs) + the file's
+         * CONTENT. Content-hashing rather than mtime+size is what makes a
+         * same-second, same-size edit invalidate the cache (the #1025 Bug B
+         * miss: flipping a constant `0.5`->`0.7` in an editor-save loop kept
+         * the same length and second); it also avoids a spurious cache miss
+         * when a file is `touch`ed without a content change. The 4096-entry /
+         * depth-8 caps above bound the read cost. */
         *acc ^= fnv64_str(childrel);
-        *acc = (*acc * 1099511628211ULL) ^ (unsigned long long)est.st_mtime;
-        *acc = (*acc * 1099511628211ULL) ^ (unsigned long long)est.st_size;
+        *acc = (*acc * 1099511628211ULL) ^ fnv64_file(full);
         (*count)++;
     }
     closedir(d);
@@ -504,6 +507,24 @@ static unsigned long long compute_cache_key(const char* ae_file,
      * stdlib/vendored-modules count. */
     if (tc.lib_dir_count == 0) {
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=(default)");
+#ifndef _WIN32
+        /* #1025 Bug A: with no --lib flag and no $AETHER_LIB_DIR, the compiler
+         * still searches the default lib dir (module_add_lib_dir(
+         * AETHER_DEFAULT_LIB_DIR) in aether_module.c) — the canonical
+         * src/main.ae + lib/<name>/module.ae package layout. Without this walk
+         * the key ignored that dir entirely, so editing a module under the
+         * default lib/ served a stale binary until `ae cache clear`. Walk it
+         * exactly as an explicit lib dir; no contribution when it's absent. */
+        {
+            unsigned long long entry_hash = 0;
+            int n = 0;
+            hash_lib_dir_entries(AETHER_DEFAULT_LIB_DIR, "", &entry_hash, &n, 0);
+            if (n > 0) {
+                pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
+                                ":dlent=%d:dlh=%016llx", n, entry_hash);
+            }
+        }
+#endif
     }
     for (int i = 0; i < tc.lib_dir_count; i++) {
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,

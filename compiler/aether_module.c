@@ -119,7 +119,7 @@ void module_set_lib_dir(const char* lib_dir) {
      * segments) should fall back to the default so the toolchain
      * still finds stdlib modules. */
     if (global_module_registry->lib_dir_count == 0) {
-        module_add_lib_dir("lib");
+        module_add_lib_dir(AETHER_DEFAULT_LIB_DIR);
     }
 }
 
@@ -139,7 +139,7 @@ void module_registry_init() {
              * Issue #413. */
             module_set_lib_dir(env_lib);
         } else {
-            module_add_lib_dir("lib");
+            module_add_lib_dir(AETHER_DEFAULT_LIB_DIR);
         }
     }
 }
