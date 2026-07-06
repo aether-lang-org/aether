@@ -23,7 +23,7 @@ ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 
 # The lib-dir cache-key walk (hash_lib_dir_entries in tools/ae.c) is POSIX-only
-# (#ifndef _WIN32), so this invalidation path is not wired on Windows — the
+# (#ifndef _WIN32), so this invalidation path is not wired on Windows; the
 # cache there keys on the entry file + --extra content only. Skip rather than
 # assert a POSIX-only behaviour on MSYS2/MinGW.
 case "$(uname -s 2>/dev/null)" in
