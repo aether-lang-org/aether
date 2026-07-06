@@ -22,6 +22,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 
+# The lib-dir cache-key walk (hash_lib_dir_entries in tools/ae.c) is POSIX-only
+# (#ifndef _WIN32), so this invalidation path is not wired on Windows — the
+# cache there keys on the entry file + --extra content only. Skip rather than
+# assert a POSIX-only behaviour on MSYS2/MinGW.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+        echo "  [SKIP] cache_lib_invalidation: lib-dir cache-key walk is POSIX-only (not wired on Windows)"
+        exit 0 ;;
+esac
+
 WORK="$(mktemp -d)"
 HOME_ISO="$(mktemp -d)"
 trap 'rm -rf "$WORK" "$HOME_ISO"' EXIT INT TERM
