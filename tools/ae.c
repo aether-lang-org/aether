@@ -381,6 +381,27 @@ static int cache_publish(const char* tmp_path, const char* final_path) {
 #endif
 }
 
+// macOS clang runs dsymutil for `-O0 -g` single-step builds, dropping a
+// `<exe>.dSYM` BUNDLE (a directory) beside the output. Cache binaries
+// don't need debug bundles; delete the temp's bundle so the publish
+// leaves no debris (the concurrent-publish test asserts zero `.tmp.*`
+// leftovers). No-op where the bundle doesn't exist — every non-macOS
+// platform in practice.
+static void remove_dsym_bundle(const char* exe_path) {
+#ifndef _WIN32
+    char p[1100];
+    snprintf(p, sizeof(p), "%s.dSYM", exe_path);
+    struct stat st;
+    if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) {
+        char rm_cmd[1200];
+        snprintf(rm_cmd, sizeof(rm_cmd), "rm -rf \"%s\"", p);
+        if (system(rm_cmd) != 0) { /* best-effort; GC sweeps later */ }
+    }
+#else
+    (void)exe_path;
+#endif
+}
+
 // Sweep orphaned `*.tmp.<pid>` slots left by crashed/killed writers.
 // Age-gated to an hour so we never reap a temp another process is
 // actively linking. Runs once per process (from init_cache_dir); a
@@ -409,7 +430,16 @@ static void gc_stale_cache_tmp(const char* dir) {
         char p[1024];
         snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
         struct stat st;
-        if (stat(p, &st) == 0 && now - st.st_mtime > 3600) remove(p);
+        if (stat(p, &st) != 0 || now - st.st_mtime <= 3600) continue;
+        if (S_ISDIR(st.st_mode)) {
+            // Directory-shaped debris: a macOS `.tmp.<pid>.dSYM` bundle
+            // from a crashed writer (remove(2) refuses non-empty dirs).
+            char rm_cmd[1200];
+            snprintf(rm_cmd, sizeof(rm_cmd), "rm -rf \"%s\"", p);
+            if (system(rm_cmd) != 0) { /* best-effort */ }
+        } else {
+            remove(p);
+        }
     }
     closedir(d);
 #endif
@@ -3089,11 +3119,16 @@ static int cmd_run(int argc, char** argv) {
         fprintf(stderr, "Build failed.\n");
         remove(c_file);
         remove(exe_file);  // partial link output, if any
+        remove_dsym_bundle(exe_file);
         return 1;
     }
 
     // Clean up temp .c file (exe stays in cache if caching, else clean up too)
     remove(c_file);
+    // macOS: drop the dsymutil bundle the -g link left beside the temp
+    // exe — cache slots don't carry debug bundles, and the rename below
+    // moves only the exe (#1032).
+    remove_dsym_bundle(exe_file);
 
     // Publish the freshly-linked exe into its cache slot (#1032). The
     // rename is atomic, so concurrent invocations see the old complete
