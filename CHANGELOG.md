@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`ae` exe cache: `AETHER_CACHE_DIR` override + crash-proof concurrent
+  publishing** (#1032). The cache location was hard-wired to
+  `$HOME/.aether/cache`, unusable for runners with a read-only `$HOME`
+  (agent sandboxes, hermetic CI) — `AETHER_CACHE_DIR` now redirects it
+  per-process (`AETHER_HOME` deliberately still doesn't: toolchain root
+  and artifact dir are different concepts). Concurrent same-key
+  invocations also raced on shared slots: `ae run` pointed the *linker*
+  at the final slot and the hit path was exists→exec, so a second
+  invocation landing mid-link exec'd a truncated binary; `ae build`
+  populated the slot with a non-atomic copy. Both writers now produce
+  `<slot>.tmp.<pid>` and publish with an atomic rename (`MoveFileEx` on
+  Windows), so readers see a complete file or a miss — never a partial.
+  Orphaned temps from killed writers are swept after an hour. Two new
+  integration tests: the read-only-`$HOME` override scenario, and an
+  8-way parallel cold-cache hammer.
+
 ## [0.363.0]
 
 ### Added

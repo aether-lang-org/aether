@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <time.h>     // gc_stale_cache_tmp age gate (#1032)
 
 
 #ifdef _WIN32
@@ -367,11 +368,69 @@ static const char* get_home_dir(void) {
 #endif
 }
 
+// Atomic cache publish (#1032). Writers produce `<slot>.tmp.<pid>` in
+// the cache directory and rename onto the slot, so a concurrent reader
+// only ever sees a complete file (old, new, or miss — never partial).
+// rename(2) within one directory is atomic on POSIX; Windows rename()
+// refuses to replace an existing destination, so MoveFileEx there.
+static int cache_publish(const char* tmp_path, const char* final_path) {
+#ifdef _WIN32
+    return MoveFileExA(tmp_path, final_path, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+#else
+    return rename(tmp_path, final_path);
+#endif
+}
+
+// Sweep orphaned `*.tmp.<pid>` slots left by crashed/killed writers.
+// Age-gated to an hour so we never reap a temp another process is
+// actively linking. Runs once per process (from init_cache_dir); a
+// directory scan over a few hundred entries is noise next to a compile.
+static void gc_stale_cache_tmp(const char* dir) {
+    time_t now = time(NULL);
+#ifdef _WIN32
+    char pattern[600];
+    snprintf(pattern, sizeof(pattern), "%s\\*.tmp.*", dir);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        char p[1024];
+        snprintf(p, sizeof(p), "%s\\%s", dir, fd.cFileName);
+        struct stat st;
+        if (stat(p, &st) == 0 && now - st.st_mtime > 3600) remove(p);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR* d = opendir(dir);
+    if (!d) return;
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+        if (!strstr(e->d_name, ".tmp.")) continue;
+        char p[1024];
+        snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(p, &st) == 0 && now - st.st_mtime > 3600) remove(p);
+    }
+    closedir(d);
+#endif
+}
+
 static void init_cache_dir(void) {
     if (s_cache_dir[0]) return;
-    const char* home = get_home_dir();
-    snprintf(s_cache_dir, sizeof(s_cache_dir), "%s/.aether/cache", home);
+    // #1032: per-process override for runners whose $HOME is read-only
+    // (agent sandboxes, hermetic CI). AETHER_HOME deliberately does NOT
+    // move the cache: it names the (often read-only) toolchain root,
+    // while this is a writable artifact directory — two variables, two
+    // meanings.
+    const char* override = getenv("AETHER_CACHE_DIR");
+    if (override && override[0]) {
+        snprintf(s_cache_dir, sizeof(s_cache_dir), "%s", override);
+    } else {
+        const char* home = get_home_dir();
+        snprintf(s_cache_dir, sizeof(s_cache_dir), "%s/.aether/cache", home);
+    }
     mkdirs(s_cache_dir);
+    gc_stale_cache_tmp(s_cache_dir);
 }
 
 // FNV-64 hash of a string
@@ -2982,8 +3041,10 @@ static int cmd_run(int argc, char** argv) {
         snprintf(c_file, sizeof(c_file), "%s/_ae_%d.c", get_temp_dir(), pid);
     }
     if (using_cache) {
-        strncpy(exe_file, cached_exe, sizeof(exe_file) - 1);
-        exe_file[sizeof(exe_file) - 1] = '\0';
+        // Link into a private temp beside the slot, publish by rename
+        // after a successful build (#1032) — never let ld write the
+        // final slot in place, or a concurrent hit execs a partial exe.
+        snprintf(exe_file, sizeof(exe_file), "%s.tmp.%d", cached_exe, pid);
     } else if (tc.dev_mode) {
         snprintf(exe_file, sizeof(exe_file), "%s/build/_ae_%d" EXE_EXT, tc.root, pid);
     } else {
@@ -3027,11 +3088,27 @@ static int cmd_run(int argc, char** argv) {
         run_cmd(cmd);
         fprintf(stderr, "Build failed.\n");
         remove(c_file);
+        remove(exe_file);  // partial link output, if any
         return 1;
     }
 
     // Clean up temp .c file (exe stays in cache if caching, else clean up too)
     remove(c_file);
+
+    // Publish the freshly-linked exe into its cache slot (#1032). The
+    // rename is atomic, so concurrent invocations see the old complete
+    // file, the new complete file, or a miss — never a partial slot.
+    if (using_cache) {
+        if (cache_publish(exe_file, cached_exe) == 0) {
+            strncpy(exe_file, cached_exe, sizeof(exe_file) - 1);
+            exe_file[sizeof(exe_file) - 1] = '\0';
+        } else {
+            // Exotic-filesystem rename failure: run the private temp
+            // exe and clean it up like an uncached build.
+            if (tc.verbose) fprintf(stderr, "[cache] publish failed for %016llx\n", cache_key);
+            using_cache = false;
+        }
+    }
 
     // Step 3: Run, forwarding any post-`--` args to the program. Each is
     // wrapped in double quotes so a single arg with spaces stays one
@@ -5241,10 +5318,17 @@ static int cmd_build(int argc, char** argv) {
 #endif
 
     // Populate the build cache so the next identical-input build is a
-    // copy-from-cache instead of an aetherc + gcc round-trip.
+    // copy-from-cache instead of an aetherc + gcc round-trip. Copy to a
+    // private temp beside the slot, publish by atomic rename (#1032) —
+    // a concurrent `ae run` cache hit must never exec a half-copied exe.
     if (cache_eligible && cache_key != 0 && cached_exe[0]) {
-        if (!copy_file(exe_file, cached_exe)) {
+        char cache_tmp[1100];
+        snprintf(cache_tmp, sizeof(cache_tmp), "%s.tmp.%d", cached_exe, (int)getpid());
+        if (!copy_file(exe_file, cache_tmp)) {
             if (tc.verbose) fprintf(stderr, "[cache] write failed for %016llx\n", cache_key);
+        } else if (cache_publish(cache_tmp, cached_exe) != 0) {
+            remove(cache_tmp);
+            if (tc.verbose) fprintf(stderr, "[cache] publish failed for %016llx\n", cache_key);
         } else if (tc.verbose) {
             fprintf(stderr, "[cache] wrote: %016llx\n", cache_key);
         }
