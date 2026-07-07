@@ -47,6 +47,7 @@ static bool verbose_mode = false;
 static bool dump_ast_mode = false;
 static bool emit_c_mode = false;
 static const char* csrc_header_path = NULL;  // #996 --emit-header=<path>
+static const char* csrc_catalog_path = NULL; // #996 --emit-catalog-json=<path>
 static bool check_only_mode = false;
 static bool preempt_mode = false;
 // Issue #348 — suppress runtime emission of `requires` / `ensures`
@@ -1672,6 +1673,27 @@ int compile_source(const char* input_path, const char* output_path) {
         }
         codegen->csrc_header_file = csrc_header;
     }
+    // #996 --emit=csrc: also emit the machine-readable JSON catalog when asked,
+    // recording the granted --with capabilities in it as provenance. cap_buf is
+    // function-scoped so it outlives the generate_program call below.
+    FILE* csrc_catalog = NULL;
+    char csrc_cap_buf[64];
+    if (csrc_catalog_path) {
+        csrc_catalog = fopen(csrc_catalog_path, "w");
+        if (!csrc_catalog) {
+            fprintf(stderr, "Error: cannot open --emit-catalog-json path '%s'\n", csrc_catalog_path);
+            if (csrc_header) fclose(csrc_header);
+            fclose(output);
+            return 1;
+        }
+        codegen->csrc_catalog_file = csrc_catalog;
+        int cp = 0;
+        csrc_cap_buf[0] = '\0';
+        if (with_fs)  cp += snprintf(csrc_cap_buf + cp, sizeof(csrc_cap_buf) - cp, "%sfs",  cp ? "," : "");
+        if (with_net) cp += snprintf(csrc_cap_buf + cp, sizeof(csrc_cap_buf) - cp, "%snet", cp ? "," : "");
+        if (with_os)  cp += snprintf(csrc_cap_buf + cp, sizeof(csrc_cap_buf) - cp, "%sos",  cp ? "," : "");
+        codegen->csrc_capabilities = csrc_cap_buf;
+    }
     codegen->emit_main_target = emit_main_target;  // NULL when not requested
     // Source path so codegen can expand `__FILE__` literally (#265).
     codegen->source_file = input_path;
@@ -1680,6 +1702,9 @@ int compile_source(const char* input_path, const char* output_path) {
     fclose(output);
     if (csrc_header) {
         fclose(csrc_header);
+    }
+    if (csrc_catalog) {
+        fclose(csrc_catalog);
     }
     if (header_output) {
         fclose(header_output);
@@ -2036,7 +2061,7 @@ void print_help(const char* program_name) {
     printf("  --verbose                        Show detailed compilation phases and timing\n");
     printf("  --emit-c                         Print generated C code to stdout\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
-    printf("  --emit=<exe|lib|both|csrc>       Output artifact (exe default; lib → .so/.dylib; csrc → portable .c + catalog .h)\n");
+    printf("  --emit=<exe|lib|both|csrc>       Output artifact (exe default; lib → .so/.dylib; csrc → portable .c + catalog .h + .catalog.json)\n");
     printf("  --emit=ast|inspect|effects       Analysis to stdout, no codegen: AST JSON / declaration\n");
     printf("                                   summary / derived per-function effect+purity JSON (#889)\n");
     printf("  --emit-main=<func>               With --emit=lib: also emit a thin main(argc,argv) shim\n");
@@ -2104,6 +2129,12 @@ int main(int argc, char *argv[]) {
             // #996: with --emit=csrc, also write the catalog's public C
             // prototypes to this path (the distributable .h).
             csrc_header_path = argv[arg_offset] + 22;
+            arg_offset++;
+        } else if (strncmp(argv[arg_offset], "--emit-catalog-json=", 20) == 0) {
+            // #996: with --emit=csrc, also write the aether_lib_meta catalog as
+            // machine-readable JSON to this path (functions/closures/constants +
+            // capability provenance) so binding generators can consume it.
+            csrc_catalog_path = argv[arg_offset] + 20;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--dump-ast") == 0) {
             dump_ast_mode = true;

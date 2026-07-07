@@ -77,6 +77,13 @@ typedef struct {
     int emit_lib;            // Emit aether_<name> alias stubs for top-level functions
     FILE* csrc_header_file;  // #996 --emit=csrc: if set, write each export's C
                              // prototype here (a distributable .h for the catalog)
+    FILE* csrc_catalog_file; // #996 --emit=csrc: if set, write the aether_lib_meta
+                             // catalog (functions/closures/constants) as JSON here
+                             // (a machine-readable, binding-generator-friendly form
+                             // of the same data the C struct carries)
+    const char* csrc_capabilities; // #996 --emit=csrc: comma-joined --with grants
+                             // (e.g. "fs,net"), NULL/"" when capability-empty; emitted
+                             // as capability provenance in the JSON catalog
 
     // --emit-main=<func>: with --emit=lib, also emit a thin main(argc,argv)
     // shim that calls the named Aether function. Closes the exe/lib symmetry

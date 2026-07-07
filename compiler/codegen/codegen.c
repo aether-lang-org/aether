@@ -304,6 +304,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->header_file = NULL;
     gen->header_path = NULL;
     gen->csrc_header_file = NULL;  /* #996 --emit=csrc */
+    gen->csrc_catalog_file = NULL; /* #996 --emit=csrc */
+    gen->csrc_capabilities = NULL; /* #996 --emit=csrc */
     gen->emit_exe = 1;
     gen->emit_lib = 0;
     gen->emit_main_target = NULL;
@@ -2114,36 +2116,72 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
 // `closures` slots are reserved at zero/NULL so v2 can extend
 // (closure-context records — captures + capture types per closure
 // reachable from an export) without an ABI break.
-static void emit_lib_metadata_signature_for(FILE* out, ASTNode* fn) {
-    /* Format: `(type1, type2, ...) -> retType` — same shape that
-     * docs/stdlib-reference.md uses. Skips parameters whose AST
-     * shape we can't render cleanly (closures, structs we haven't
-     * resolved). The signature is descriptive, not parseable —
-     * consumers use it for display and switch on c_symbol for
-     * actual dispatch. */
-    fputc('(', out);
+/* Build a function's descriptive signature `(type1, type2, ...) -> retType`
+ * as a malloc'd string the caller frees. Single source of truth for both the
+ * C-literal catalog and the JSON catalog. Each type_to_string result (a
+ * pointer into a shared static buffer) is copied into `buf` immediately, so a
+ * later type_to_string call can't clobber an earlier field. */
+static char* fn_signature_string(ASTNode* fn) {
+    char buf[1024];
+    int pos = 0;
+    buf[pos++] = '(';
     int first = 1;
-    for (int i = 0; i < fn->child_count; i++) {
+    for (int i = 0; i < fn->child_count && pos < (int)sizeof(buf) - 64; i++) {
         ASTNode* c = fn->children[i];
         if (!c) continue;
         if (c->type != AST_PATTERN_VARIABLE && c->type != AST_VARIABLE_DECLARATION) continue;
-        if (!first) fputs(", ", out);
+        if (!first) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
         first = 0;
         const char* tname = c->node_type ? type_to_string(c->node_type) : "unknown";
-        fputs(tname, out);
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", tname);
     }
-    fputs(") -> ", out);
+    pos += snprintf(buf + pos, sizeof(buf) - pos, ") -> ");
     /* No-return-type and TYPE_UNKNOWN both mean "void" at the
      * source-level surface (Aether's `foo() { ... }` with no
      * `-> T` is a void function). Render as "void" rather than
      * leaking the internal "UNKNOWN" tag through the diagnostic. */
-    if (!fn->node_type ||
-        fn->node_type->kind == TYPE_UNKNOWN ||
-        fn->node_type->kind == TYPE_VOID) {
-        fputs("void", out);
-    } else {
-        fputs(type_to_string(fn->node_type), out);
+    const char* rt = (!fn->node_type ||
+                      fn->node_type->kind == TYPE_UNKNOWN ||
+                      fn->node_type->kind == TYPE_VOID)
+                         ? "void" : type_to_string(fn->node_type);
+    snprintf(buf + pos, sizeof(buf) - pos, "%s", rt);
+    return strdup(buf);
+}
+
+static void emit_lib_metadata_signature_for(FILE* out, ASTNode* fn) {
+    /* Format: `(type1, type2, ...) -> retType`, the same shape that
+     * docs/stdlib-reference.md uses. The signature is descriptive, not
+     * parseable; consumers use it for display and switch on c_symbol for
+     * actual dispatch. */
+    char* s = fn_signature_string(fn);
+    fputs(s, out);
+    free(s);
+}
+
+/* Emit `s` as a JSON string literal (surrounding quotes included) with full
+ * RFC 8259 escaping. NULL renders as an empty string. Unlike the C-literal
+ * escaper this must also escape control characters and is used for fields
+ * that can carry arbitrary bytes (source paths with backslashes on Windows,
+ * const string values). */
+static void emit_json_string(FILE* out, const char* s) {
+    if (!s) { fputs("\"\"", out); return; }
+    fputc('"', out);
+    for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
+        switch (*p) {
+            case '"':  fputs("\\\"", out); break;
+            case '\\': fputs("\\\\", out); break;
+            case '\b': fputs("\\b", out);  break;
+            case '\f': fputs("\\f", out);  break;
+            case '\n': fputs("\\n", out);  break;
+            case '\r': fputs("\\r", out);  break;
+            case '\t': fputs("\\t", out);  break;
+            default:
+                if (*p < 0x20) fprintf(out, "\\u%04x", *p);
+                else fputc(*p, out);
+                break;
+        }
     }
+    fputc('"', out);
 }
 
 static void emit_lib_metadata_c_string_literal(FILE* out, const char* s) {
@@ -2737,6 +2775,119 @@ static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
     else               fprintf(gen->output, "0, NULL, ");
     if (const_count > 0) fprintf(gen->output, "%d, _aether_lib_consts\n};\n\n", const_count);
     else                 fprintf(gen->output, "0, NULL\n};\n\n");
+
+    /* #996 --emit=csrc: serialize the identical catalog as JSON alongside the
+     * C struct. Driven by the same fns[]/closure/const tables emitted above, so
+     * the JSON can never drift from aether_lib_meta(). Deterministic and
+     * human-diffable (2-space indent, source order) so the source artifact is
+     * content-addressable and any language's binding generator can consume it. */
+    if (gen->csrc_catalog_file) {
+        FILE* j = gen->csrc_catalog_file;
+        fputs("{\n", j);
+        fputs("  \"schema_version\": ", j); emit_json_string(j, schema);      fputs(",\n", j);
+        fputs("  \"aether_version\": ", j); emit_json_string(j, "0.0.0-dev"); fputs(",\n", j);
+        fputs("  \"primary_source\": ", j); emit_json_string(j, primary_src); fputs(",\n", j);
+
+        /* capabilities: the --with grants this artifact was built with. The
+         * emitted C only contains code paths for granted capabilities, so this
+         * is the syscall surface a consumer can inspect before compiling it. */
+        fputs("  \"capabilities\": [", j);
+        const char* caps = gen->csrc_capabilities;
+        int cap_first = 1;
+        if (caps && caps[0]) {
+            const char* start = caps;
+            for (const char* p = caps; ; p++) {
+                if (*p == ',' || *p == '\0') {
+                    if (p > start) {
+                        char tmp[64];
+                        int n = (int)(p - start);
+                        if (n > (int)sizeof(tmp) - 1) n = (int)sizeof(tmp) - 1;
+                        memcpy(tmp, start, (size_t)n); tmp[n] = '\0';
+                        if (!cap_first) fputs(", ", j);
+                        cap_first = 0;
+                        emit_json_string(j, tmp);
+                    }
+                    if (*p == '\0') break;
+                    start = p + 1;
+                }
+            }
+        }
+        fputs("],\n", j);
+
+        /* functions */
+        fputs("  \"functions\": [", j);
+        for (int i = 0; i < fn_count; i++) {
+            ASTNode* fn = fns[i];
+            const char* cb_sym = c_callback_symbol(fn);
+            char c_sym[256];
+            if (cb_sym) snprintf(c_sym, sizeof(c_sym), "%s", cb_sym);
+            else        snprintf(c_sym, sizeof(c_sym), "aether_%s", fn->value);
+            char* sig = fn_signature_string(fn);
+            fputs(i == 0 ? "\n" : ",\n", j);
+            fputs("    { \"aether_name\": ", j);  emit_json_string(j, fn->value);
+            fputs(", \"c_symbol\": ", j);         emit_json_string(j, c_sym);
+            fputs(", \"signature\": ", j);        emit_json_string(j, sig);
+            fputs(", \"source_file\": ", j);      emit_json_string(j, fn->source_file ? fn->source_file : "");
+            fprintf(j, ", \"source_line\": %d }", fn->line);
+            free(sig);
+        }
+        fputs(fn_count ? "\n  ],\n" : "],\n", j);
+
+        /* closures (schema 1.1) */
+        fputs("  \"closures\": [", j);
+        for (int r = 0; r < clo_count; r++) {
+            char* built_sig = NULL;
+            const char* sig = rec_sig[r];
+            if (!sig && strcmp(rec_role[r], "builder") == 0) {
+                for (int i = 0; i < cfn_count; i++) {
+                    if (cfns[i]->value && strcmp(cfns[i]->value, rec_encl[r]) == 0) {
+                        built_sig = fn_signature_string(cfns[i]); sig = built_sig; break;
+                    }
+                }
+            }
+            fputs(r == 0 ? "\n" : ",\n", j);
+            fputs("    { \"name\": ", j);             emit_json_string(j, rec_name[r]);
+            fputs(", \"role\": ", j);                 emit_json_string(j, rec_role[r]);
+            fputs(", \"enclosing_export\": ", j);     emit_json_string(j, rec_encl[r]);
+            fputs(", \"signature\": ", j);            emit_json_string(j, sig ? sig : "");
+            fputs(", \"captures\": [", j);
+            if (lit_ci[r] >= 0 && gen->closures[lit_ci[r]].capture_count > 0) {
+                ASTNode* owner = NULL;
+                for (int i = 0; i < cfn_count; i++) {
+                    if (cfns[i]->value && strcmp(cfns[i]->value, rec_encl[r]) == 0) { owner = cfns[i]; break; }
+                }
+                int cap_n = gen->closures[lit_ci[r]].capture_count;
+                for (int k = 0; k < cap_n; k++) {
+                    const char* cap_name = gen->closures[lit_ci[r]].captures[k];
+                    Type* ct = owner ? find_var_type_in_function(owner, cap_name) : NULL;
+                    if (k) fputs(", ", j);
+                    fputs("{ \"name\": ", j);  emit_json_string(j, cap_name ? cap_name : "");
+                    fputs(", \"type\": ", j);  emit_json_string(j, ct ? type_to_string(ct) : "ptr");
+                    fputs(" }", j);
+                }
+            }
+            fputs("]", j);
+            fputs(", \"source_file\": ", j);  emit_json_string(j, rec_src[r] ? rec_src[r] : "");
+            fprintf(j, ", \"source_line\": %d }", rec_line[r]);
+            free(built_sig);
+        }
+        fputs(clo_count ? "\n  ],\n" : "],\n", j);
+
+        /* constants (schema 1.2) */
+        fputs("  \"constants\": [", j);
+        for (int i = 0; i < const_count; i++) {
+            ASTNode* cd = consts[i];
+            ASTNode* lit = cd->child_count > 0 ? cd->children[0] : NULL;
+            const char* val = (lit && lit->type == AST_LITERAL && lit->value) ? lit->value : "";
+            fputs(i == 0 ? "\n" : ",\n", j);
+            fputs("    { \"name\": ", j);   emit_json_string(j, cd->value);
+            fputs(", \"type\": ", j);       emit_json_string(j, const_type[i]);
+            fputs(", \"value\": ", j);      emit_json_string(j, val);
+            fputs(" }", j);
+        }
+        fputs(const_count ? "\n  ]\n" : "]\n", j);
+        fputs("}\n", j);
+    }
 
     for (int r = 0; r < clo_count; r++) free(rec_sig[r]);
     free(cfns);

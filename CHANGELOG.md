@@ -5,6 +5,27 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+**Workflow**: New changes go under `## [current]`. When a PR merges to
+`main`, the release pipeline automatically replaces `[current]` with the
+next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`--emit=csrc` now also emits a machine-readable JSON catalog** (#996). Building
+  `ae build --emit=csrc foo.ae -o foo` writes `foo.catalog.json` alongside `foo.c`
+  and `foo.h`: a faithful JSON serialization of the same `aether_lib_meta()` symbol
+  catalog the `.c` carries in `.rodata` (functions, closures, constants), plus a
+  `capabilities` array recording the `--with` grants the artifact was built with,
+  so a consumer can inspect the syscall surface before compiling the source. The
+  JSON is driven by the identical codegen tables as the C struct (they can't
+  drift), is deterministic and human-diffable (so the source artifact is
+  content-addressable), and lets any language's binding generator consume the ABI
+  without dlopening a native lib. This completes the source-distribution primitive:
+  the remaining #996 follow-ups are single-file amalgamation and standalone
+  runtime-source bundling. New coverage in `tests/integration/emit_csrc/`
+  (well-formedness, functions/constants, capability provenance).
 **Workflow**: New changes go under `## [0.362.0]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
