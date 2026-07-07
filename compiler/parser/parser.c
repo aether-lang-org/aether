@@ -565,7 +565,28 @@ static Type* parse_type_unsuffixed(Parser* parser) {
                 /* Named types: C string aliases, C ABI scalar
                  * aliases, then a plain struct-name fall-through. */
                 TypeKind alias_kind;
-                if (strcmp(token->value, "cstring") == 0) {
+                if (strcmp(token->value, "Isolated") == 0 &&
+                    peek_token(parser) &&
+                    peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
+                    /* #479: Isolated[T], a compile-time-only, move-only
+                     * (linear) wrapper for actor message payloads. The
+                     * identifier was consumed at case entry, so peek is `[`.
+                     * TYPE_ISOLATED carries the wrapped T in element_type and
+                     * lowers to T's C type with zero runtime cost. */
+                    advance_token(parser);  // consume '['
+                    Type* inner = parse_type(parser);
+                    if (!inner) {
+                        parser_error(parser,
+                            "Isolated requires a type parameter, e.g. Isolated[T]");
+                        return NULL;
+                    }
+                    if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) {
+                        free_type(inner);
+                        return NULL;
+                    }
+                    type = create_type(TYPE_ISOLATED);
+                    type->element_type = inner;
+                } else if (strcmp(token->value, "cstring") == 0) {
                     /* `cstring` — a string whose emitted C type is the
                      * mutable `char*` (Aether's plain `string` emits
                      * `const char*`). For a C extern whose header has

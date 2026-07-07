@@ -1790,6 +1790,11 @@ const char* get_c_type(Type* type) {
             snprintf(buffer, 256, "%s", type->struct_name ? type->struct_name : "_sum");
             return buffer;
         }
+        case TYPE_ISOLATED:
+            /* #479: Isolated[T] is a compile-time-only, move-only wrapper. It
+             * lowers to the C type of the wrapped T with zero runtime cost
+             * (mirrors distinct types); isolate()/consume() are no-ops. */
+            return type->element_type ? get_c_type(type->element_type) : "void*";
         case TYPE_ARRAY: {
             static char buffers[4][256];
             static int buf_idx = 0;

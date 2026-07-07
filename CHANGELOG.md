@@ -5,9 +5,30 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.357.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`Isolated[T]`: move-only actor message payloads** (#479). A compile-time
+  -only, zero-cost wrapper (Nim/Pony-inspired) for transferring ownership of a
+  heap-bearing value exactly once. `isolate(x)` wraps a value move-only;
+  `consume(iso)` unwraps it; every other use is rejected by a new forward move
+  checker, so a value used after `send` / `consume`, a heap source reused after
+  `isolate`, or a loop-external Isolated consumed inside a loop is a compile
+  error (`use of moved value`), while single-use, both-`if`-branch consume,
+  fresh-per-iteration, and copyable-scalar sources are accepted. `Isolated[T]`
+  is nominal (never implicitly convertible to or from bare `T`) and lowers to
+  `T`'s C type with no runtime cost, exactly like a `distinct` type;
+  `isolate` / `consume` are the identity at runtime. Works today for scalar,
+  string, and struct payloads and ownership transfer into a function; wiring an
+  isolated `message` constructor through the actor mailbox with auto-unwrap in
+  `receive` is a documented follow-up. Design and scope: `docs/isolated.md`.
+  New coverage: `tests/regression/test_isolated_basic.ae` and
+  `tests/integration/isolated_move_reject/`.
 
 ## [0.359.0]
 
