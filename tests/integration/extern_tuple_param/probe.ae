@@ -1,0 +1,72 @@
+// Regression test for #1033 — extern declarations with tuple-typed
+// PARAMETERS (by-value C struct arguments), the mirror of #271's tuple
+// returns, plus the `f32` element type both directions.
+//
+// Shapes exercised:
+//   1. (f32, f32) x2 params            — raylib Vector2 pairs
+//   2. (byte, byte, byte, byte) param  — raylib Color
+//   3. (f32, f32) param AND return     — f32 round-trip
+//   4. ptr + three (f32, f32) params   — ImageDrawTriangle-like mixed shape
+//
+// Call sites pass parenthesized tuple literals: f((x, y), ...).
+
+extern vec2_dot(a: (f32, f32), b: (f32, f32)) -> float
+extern color_pack(c: (byte, byte, byte, byte)) -> int
+extern vec2_swap(v: (f32, f32)) -> (f32, f32)
+extern tri_area2(tag: ptr, v1: (f32, f32), v2: (f32, f32), v3: (f32, f32)) -> float
+extern exit(code: int)
+
+main() {
+    // Case 1: two f32-pair params. 1*3 + 2*4 = 11.
+    d = vec2_dot((1.0, 2.0), (3.0, 4.0))
+    if d < 10.99 {
+        println("FAIL: vec2_dot=${d}, want 11")
+        exit(1)
+    }
+    if d > 11.01 {
+        println("FAIL: vec2_dot=${d}, want 11")
+        exit(1)
+    }
+
+    // Case 2: byte quad. (16,32,64,127) -> 0x10204080 | ... exact int.
+    p = color_pack((16, 32, 64, 127))
+    want = 16 * 16777216 + 32 * 65536 + 64 * 256 + 127
+    if p != want {
+        println("FAIL: color_pack=${p}, want ${want}")
+        exit(1)
+    }
+
+    // Case 3: f32 tuple in AND out. swap(1.5, 2.5) -> (2.5, 1.5).
+    x, y = vec2_swap((1.5, 2.5))
+    if x < 2.49 {
+        println("FAIL: vec2_swap x=${x}, want 2.5")
+        exit(1)
+    }
+    if x > 2.51 {
+        println("FAIL: vec2_swap x=${x}, want 2.5")
+        exit(1)
+    }
+    if y < 1.49 {
+        println("FAIL: vec2_swap y=${y}, want 1.5")
+        exit(1)
+    }
+    if y > 1.51 {
+        println("FAIL: vec2_swap y=${y}, want 1.5")
+        exit(1)
+    }
+
+    // Case 4: mixed ptr + three vector params; expressions as elements.
+    // Triangle (0,0) (4,0) (0,3): doubled signed area = 12.
+    bx = 4.0
+    area2 = tri_area2(null, (0.0, 0.0), (bx, 0.0), (0.0, bx - 1.0))
+    if area2 < 11.99 {
+        println("FAIL: tri_area2=${area2}, want 12")
+        exit(1)
+    }
+    if area2 > 12.01 {
+        println("FAIL: tri_area2=${area2}, want 12")
+        exit(1)
+    }
+
+    println("OK")
+}

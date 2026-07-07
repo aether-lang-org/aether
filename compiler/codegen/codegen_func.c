@@ -107,6 +107,7 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
     }
     gen->extern_registry[idx].param_count = ext->child_count;
     gen->extern_registry[idx].params = NULL;
+    gen->extern_registry[idx].param_full = NULL;
     gen->extern_registry[idx].params_aether = NULL;
     gen->extern_registry[idx].params_retain = NULL;
 
@@ -133,10 +134,15 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
             gen->extern_registry[idx].params_retain =
                 calloc(ext->child_count, sizeof(int));
         }
+        gen->extern_registry[idx].param_full =
+            calloc(ext->child_count, sizeof(Type*));
         for (int i = 0; i < ext->child_count; i++) {
             ASTNode* param = ext->children[i];
             if (param && param->node_type) {
                 gen->extern_registry[idx].params[i] = param->node_type->kind;
+                if (gen->extern_registry[idx].param_full) {
+                    gen->extern_registry[idx].param_full[i] = param->node_type;
+                }
             } else {
                 gen->extern_registry[idx].params[i] = TYPE_UNKNOWN;
             }
@@ -494,6 +500,18 @@ TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int
     return TYPE_UNKNOWN;
 }
 
+// Full Type* sibling of the above (#1033) — NULL when unregistered or
+// the param carried no node_type. Borrowed from the extern's AST.
+Type* lookup_extern_param_type(CodeGenerator* gen, const char* func_name, int param_idx) {
+    int idx = find_extern_registry_index(gen, func_name);
+    if (idx < 0) return NULL;
+    if (param_idx >= 0 && param_idx < gen->extern_registry[idx].param_count &&
+        gen->extern_registry[idx].param_full) {
+        return gen->extern_registry[idx].param_full[param_idx];
+    }
+    return NULL;
+}
+
 // Returns 1 if the nth parameter of `func_name` was declared with the
 // `@aether` annotation (`name: @aether string`), 0 otherwise. Used by
 // call-site codegen to suppress the aether_string_data() unwrap on
@@ -750,6 +768,14 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
                         break;
                     case TYPE_BOOL:
                         fprintf(gen->output, "int");
+                        break;
+                    case TYPE_TUPLE:
+                        /* `v: (T1, T2, ...)` — by-value C struct parameter
+                         * with the matching `_tuple_T1_T2` shape (#1033),
+                         * the parameter-position mirror of the #271 tuple
+                         * return. The typedef is synthesized in codegen.c's
+                         * pre-scan, so it's already in scope here. */
+                        fprintf(gen->output, "%s", get_c_type(param->node_type));
                         break;
                     default:
                         generate_type(gen, param->node_type);

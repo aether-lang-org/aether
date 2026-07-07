@@ -607,6 +607,13 @@ static Type* parse_type_unsuffixed(Parser* parser) {
                      * get_c_type emits "long double". Values arrive via
                      * externs (strtold), arithmetic promotes to it. */
                     type = create_type(TYPE_LONGDOUBLE);
+                } else if (strcmp(token->value, "f32") == 0) {
+                    /* #1033: `f32` — C `float`, 32-bit. Exists so extern
+                     * tuple params/returns can match C structs with float
+                     * fields (raylib Vector2/Rectangle/Color-adjacent
+                     * shapes). Aether's own float stays double; codegen
+                     * casts at the FFI boundary. */
+                    type = create_type(TYPE_FLOAT32);
                 } else if (strcmp(token->value, "uint8") == 0 ||
                            strcmp(token->value, "uint16") == 0 ||
                            strcmp(token->value, "uint32") == 0) {
@@ -1263,8 +1270,33 @@ ASTNode* parse_primary_expression(Parser* parser) {
         }
             
         case TOKEN_LEFT_PAREN: {
+            int line = token->line;
+            int column = token->column;
             advance_token(parser);
             ASTNode* expr = parse_expression(parser);
+            if (!expr) return NULL;
+            /* #1033: `(a, b, ...)` — a comma after the first expression
+             * upgrades the grouping to a tuple literal. Only meaningful
+             * as an argument to a tuple-typed extern parameter (the
+             * typechecker rejects it everywhere else); a plain
+             * parenthesized expression `(a)` is unaffected. */
+            if (peek_token(parser) && peek_token(parser)->type == TOKEN_COMMA) {
+                ASTNode* tup = create_ast_node(AST_TUPLE_LITERAL, NULL, line, column);
+                add_child(tup, expr);
+                while (match_token(parser, TOKEN_COMMA)) {
+                    ASTNode* elem = parse_expression(parser);
+                    if (!elem) {
+                        free_ast_node(tup);
+                        return NULL;
+                    }
+                    add_child(tup, elem);
+                }
+                if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                    free_ast_node(tup);
+                    return NULL;
+                }
+                return tup;
+            }
             if (!expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
             return expr;
         }

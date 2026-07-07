@@ -229,6 +229,10 @@ int is_extern_func(CodeGenerator* gen, const char* func_name);
 void register_fnptr_local(CodeGenerator* gen, const char* name, Type* sig);
 Type* lookup_fnptr_local(CodeGenerator* gen, const char* name);
 TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int param_idx);
+/* Full Type* for an extern's parameter (borrowed from the extern's AST),
+ * or NULL. The kind alone can't drive tuple-param emission — packing the
+ * by-value `_tuple_*` struct literal needs the element list (#1033). */
+Type* lookup_extern_param_type(CodeGenerator* gen, const char* func_name, int param_idx);
 int is_aether_extern_param(CodeGenerator* gen, const char* func_name, int param_idx);
 /* Returns 1 if extern `func_name`'s parameter at `param_idx` was
    declared `@retain`. Tells the escape walker to mark a heap-string

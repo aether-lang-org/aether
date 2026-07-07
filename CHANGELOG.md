@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **FFI: tuple-typed extern parameters — by-value C struct arguments**
+  (#1033). The parameter-position mirror of #271's tuple returns: an extern
+  param typed `(T1, T2, ...)` lowers to the same synthesized `_tuple_*`
+  typedef, passed by value, and call sites pass parenthesized tuple
+  literals — `img_triangle(dst, (10.0, 10.0), (60.0, 10.0), (35.0, 50.0),
+  (255, 0, 0, 255))`. Codegen packs each literal into a compound literal
+  with per-element casts; no hand-written flat-scalar C shim (or its extra
+  call frame) per bound function. New **`f32`** type (C `float`, 32-bit)
+  legal in both parameter and return tuples — raylib's `Vector2`/`Color`
+  family is now expressible in both directions (Aether's own `float` stays
+  double). Conservative slice: scalar/`byte`/`f32`/`bool`/`ptr` elements,
+  no nesting, no strings; the typechecker enforces element count and
+  rejects tuple literals aimed at non-tuple params. Byte/longdouble tuple
+  elements also stopped producing invalid typedef names (space in
+  identifier). docs/c-interop.md gained "binding struct-returning C
+  functions" (the `LoadImage` zero-glue pattern from the issue) and the
+  tuple-parameter section. Test: `tests/integration/extern_tuple_param/`.
+
+### Fixed
+
+- **std.os argv API: the documented qualified forms resolve** (#1035).
+  `os.aether_args_count()` / `os.aether_args_get(i)` — the exact spellings
+  in language-reference.md — died with E0301 because qualified resolution
+  only joined `<module>_<name>` and the argv externs are exported under
+  their raw unprefixed names. The resolver now falls back to the bare
+  exported name, gated on the module explicitly exporting it (so
+  `anything.foo` can never reach an unrelated global), with the call-site
+  name rewritten so codegen emits the real C symbol. Std modules register
+  under full paths (`std.os`), so the gate matches module names by their
+  leaf component too. Also added ergonomic wrappers `os.args_count()` /
+  `os.args_get(i)` mirroring the existing `args_seal`/`args_sealed`
+  pattern (`args_get` returns an owned copy, "" when out of range). Test:
+  `tests/regression/test_issue1035_qualified_argv.ae`.
+- **`ae` exe cache: `AETHER_CACHE_DIR` override + crash-proof concurrent
+  publishing** (#1032). The cache location was hard-wired to
+  `$HOME/.aether/cache`, unusable for runners with a read-only `$HOME`
+  (agent sandboxes, hermetic CI) — `AETHER_CACHE_DIR` now redirects it
+  per-process (`AETHER_HOME` deliberately still doesn't: toolchain root
+  and artifact dir are different concepts). Concurrent same-key
+  invocations also raced on shared slots: `ae run` pointed the *linker*
+  at the final slot and the hit path was exists→exec, so a second
+  invocation landing mid-link exec'd a truncated binary; `ae build`
+  populated the slot with a non-atomic copy. Both writers now produce
+  `<slot>.tmp.<pid>` and publish with an atomic rename (`MoveFileEx` on
+  Windows), so readers see a complete file or a miss — never a partial.
+  Orphaned temps from killed writers are swept after an hour. Two new
+  integration tests: the read-only-`$HOME` override scenario, and an
+  8-way parallel cold-cache hammer.
+
 ## [0.363.0]
 
 ### Added

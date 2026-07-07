@@ -7,6 +7,7 @@ exports (
     os_getenv, os_which,
     aether_args_count, aether_args_get, aether_argv0, aether_argv_raw,
     aether_args_seal, aether_args_sealed, args_seal, args_sealed,
+    args_count, args_get,
     os_execv, os_now_utc_iso8601_raw, os_getpid_raw, exit,
     os_wall_seconds_raw, os_wall_micros_raw,
     os_now_monotonic_ms_raw, os_now_monotonic_ns_raw,
@@ -183,6 +184,24 @@ args_seal() {
 
 args_sealed() -> int {
     return aether_args_sealed()
+}
+
+// Ergonomic argv accessors (#1035): short qualified spellings
+// (`os.args_count()`, `os.args_get(i)`) alongside the raw
+// `aether_args_*` externs, mirroring args_seal / args_sealed above.
+args_count() -> int {
+    return aether_args_count()
+}
+
+// argv[index], or "" when out of range / argv sealed / not
+// initialised — never null, mirroring argv0()'s convention. The
+// returned string is an owned copy, detached from OS argv storage.
+args_get(index: int) -> {
+    raw = aether_args_get(index)
+    if raw == null {
+        return ""
+    }
+    return string_concat(raw, "")
 }
 
 // Replace the current process image with `prog`. `argv_list` is a

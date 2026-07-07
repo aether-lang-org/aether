@@ -180,6 +180,62 @@ Element types use `string` for `const char*` and `ptr` for `void*`. The typedef 
 
 Tuple returns are the natural shape for any C function that produces a value plus an error message, a value plus a length, or any other small product type. Before this form was available, FFI authors worked around the single-scalar return by either packing values into a delimited string or splitting the operation into 4+ split-accessor externs (`<op>_raw` + `<op>_get` + `<op>_get_length` + `<op>_release` with TLS-backed storage). The tuple form replaces both patterns with a single declaration.
 
+### Binding struct-returning C functions
+
+The mechanism above is, in practice, **by-value struct return** for any C
+struct whose layout matches the synthesized typedef — not just for
+"multiple logical values". raylib's `Image LoadImage(const char*)` —
+layout `{void*, int, int, int, int}` — binds with zero glue:
+
+```aether
+@extern("LoadImage") load_image(path: string) -> (ptr, int, int, int, int)
+
+main() {
+    data, w, h, mips, fmt = load_image("frame.png")
+    // -> Image: 400x420 mips=1 fmt=7
+}
+```
+
+Any struct of scalar/pointer fields works this way; the field ORDER in the
+tuple is the layout contract.
+
+### Tuple parameters — by-value struct arguments (#1033)
+
+The parameter-position mirror: an extern parameter typed as a tuple lowers
+to the same synthesized struct typedef, passed **by value**. This is most
+of any real C API — raylib again:
+
+```c
+void ImageDrawTriangle(Image *dst, Vector2 v1, Vector2 v2, Vector2 v3, Color color);
+```
+
+```aether
+@extern("ImageDrawTriangle")
+img_triangle(dst: ptr, v1: (f32, f32), v2: (f32, f32), v3: (f32, f32),
+             c: (byte, byte, byte, byte))
+
+img_triangle(img, (10.0, 10.0), (60.0, 10.0), (35.0, 50.0), (255, 0, 0, 255))
+```
+
+Call sites pass **parenthesized tuple literals** — `(x, y)`; a comma inside
+parens is what makes it a tuple rather than grouping. The codegen packs
+each literal into the matching `_tuple_*` compound literal with per-element
+casts, so Aether `float` (double) expressions narrow to `float` fields and
+ints to `unsigned char` without warnings, and no hand-written flat-scalar
+C shim (or its extra call frame) is needed.
+
+`f32` is the 32-bit C `float` type, added for exactly these signatures:
+raylib's `Vector2` is `float` ×2 and Aether's own `float` is C `double`,
+so without it the layout was inexpressible. It works in both parameter and
+return position (`extern get_pos() -> (f32, f32)`); Aether-side arithmetic
+on the destructured values still happens in double.
+
+**Conservative slice** (current contract): tuple parameter elements may be
+`int`, `long`, `float`, `f32`, `byte`, `bool`, or `ptr` — no strings, no
+nesting. The typechecker enforces element count and rejects a tuple
+literal aimed at a non-tuple parameter. Exercised end-to-end by
+`tests/integration/extern_tuple_param/`.
+
 ## Renaming a C Symbol, `@extern("c_name")`
 
 Sometimes the C symbol you want to bind has a name that clashes with a wrapper you'd like to expose, or that doesn't fit the module's naming style. Use the `@extern` annotation to bind an Aether-side name to a chosen C symbol:

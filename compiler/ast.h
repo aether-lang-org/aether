@@ -106,6 +106,11 @@ typedef enum {
     AST_IDENTIFIER,
     AST_LITERAL,
     AST_ARRAY_LITERAL,
+    AST_TUPLE_LITERAL,          // (a, b, ...) — parenthesized expression list.
+                                // Only legal as an argument to an extern
+                                // whose parameter is tuple-typed (#1033);
+                                // codegen packs it into the synthesized
+                                // _tuple_* struct by value.
     AST_ARRAY_ACCESS,
     AST_MEMBER_ACCESS,
     AST_STRUCT_LITERAL,
@@ -237,6 +242,10 @@ typedef enum {
     TYPE_FLOAT,
     TYPE_LONGDOUBLE,    // C `long double` — widest numeric (#749). Reached
                         // via the `longdouble` type name; no source literal.
+    TYPE_FLOAT32,       // C `float` — 32-bit (#1033). Spelled `f32`; exists
+                        // for extern tuple params/returns whose C struct
+                        // fields are float (raylib Vector2 et al). Aether
+                        // arithmetic still promotes to double.
     TYPE_BOOL,
     TYPE_BYTE,          // unsigned 8-bit (`unsigned char` in C). Type-precision
                         // for struct fields, function params, returns, locals.
