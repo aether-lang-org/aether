@@ -111,7 +111,9 @@ typedef enum {
     TOKEN_XOR_ASSIGN,       // '^='
     TOKEN_LSHIFT_ASSIGN,    // '<<='
     TOKEN_RSHIFT_ASSIGN,    // '>>='
-    TOKEN_DOTDOT,           // '..' range operator
+    TOKEN_DOTDOT,           // '..' range operator (exclusive, as in `for i in 0..5`)
+    TOKEN_DOTDOT_EQ,        // '..=' inclusive range in match/switch case labels (#1047)
+    TOKEN_DOTDOT_LT,        // '..<' half-open range in match/switch case labels (#1047)
     TOKEN_DOTDOTDOT,        // '...' varargs marker (extern only, v1)
 
     // Delimiters
