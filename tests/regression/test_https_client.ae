@@ -26,6 +26,22 @@ main() {
             println("SKIP https: build has no OpenSSL support (${err})")
             return
         }
+        // Offline / DNS-blocked runner (a CI runner with no network, or a
+        // transient resolver hiccup): a live-endpoint probe must not fail the
+        // build when the host is simply unreachable. Treat resolve / connect /
+        // unreachable errors as a skip, the same posture as the OpenSSL-absent
+        // and AETHER_SKIP_NETWORK guards above.
+        net_down = string.contains(err, "resolv")
+        if net_down == 0 { net_down = string.contains(err, "unreachable") }
+        if net_down == 0 { net_down = string.contains(err, "could not connect") }
+        if net_down == 0 { net_down = string.contains(err, "Could not connect") }
+        if net_down == 0 { net_down = string.contains(err, "connection refused") }
+        if net_down == 0 { net_down = string.contains(err, "Connection refused") }
+        if net_down == 0 { net_down = string.contains(err, "timed out") }
+        if net_down == 1 {
+            println("SKIP https: network unavailable (${err})")
+            return
+        }
         println("FAIL: http.get returned error: ${err}")
         exit(1)
     }
