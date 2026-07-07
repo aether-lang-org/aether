@@ -203,6 +203,12 @@ const char* type_to_string(Type* type) {
         }
         case TYPE_SUM:
             return type->struct_name ? type->struct_name : "sum";
+        case TYPE_ISOLATED: {
+            static char buffer[256];
+            snprintf(buffer, sizeof(buffer), "Isolated[%s]",
+                     type->element_type ? type_to_string(type->element_type) : "?");
+            return buffer;
+        }
         default: return "UNKNOWN";
     }
 }

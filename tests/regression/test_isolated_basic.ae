@@ -1,0 +1,64 @@
+// Regression: #479 Isolated[T], a compile-time-only, move-only (linear)
+// wrapper. This exercises the parts that lower and run today: constructing an
+// Isolated with isolate(), unwrapping with consume(), transferring ownership
+// into a function, across int / string / struct payloads. The wrapper is
+// zero-cost (it lowers to the wrapped type's C type), so a correct roundtrip
+// is the runtime signal. Use-after-move rejection is covered by the compile
+// -fail harness tests/integration/isolated_move_reject/.
+import std.io
+
+struct Payload {
+    n: int,
+    tag: string
+}
+
+// Ownership transfer across a call: the caller isolates a value, hands it over,
+// and the callee consumes it exactly once.
+take_int(iso: Isolated[int]) -> int {
+    return consume(iso)
+}
+
+take_payload(iso: Isolated[Payload]) -> int {
+    let p = consume(iso)
+    return p.n
+}
+
+main() {
+    var fails = 0
+
+    // int payload: isolate then consume in the same scope.
+    let a = isolate(41)
+    let av = consume(a)
+    if av != 41 { println("FAIL: int roundtrip got ${av}"); fails = fails + 1 }
+
+    // int payload: transfer into a function that consumes it.
+    let b = isolate(7)
+    let bv = take_int(b)
+    if bv != 7 { println("FAIL: int transfer got ${bv}"); fails = fails + 1 }
+
+    // string payload (a heap/reference type).
+    let s = isolate("hello")
+    let sv = consume(s)
+    if sv != "hello" { println("FAIL: string roundtrip got ${sv}"); fails = fails + 1 }
+
+    // struct payload transferred into a function.
+    let p = Payload { n: 21, tag: "x" }
+    let pi = isolate(p)
+    let got = take_payload(pi)
+    if got != 21 { println("FAIL: payload transfer got ${got}"); fails = fails + 1 }
+
+    // Rebinding an Isolated local: after consume, the name can be re-bound to a
+    // fresh isolate() and consumed again (each binding is single-use).
+    var it = isolate(1)
+    let first = consume(it)
+    it = isolate(first + 1)
+    let it2 = consume(it)
+    if it2 != 2 { println("FAIL: rebind got ${it2}"); fails = fails + 1 }
+
+    if fails == 0 {
+        println("PASS: isolated_basic")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}
