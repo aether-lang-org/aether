@@ -257,10 +257,17 @@ typedef enum {
                         // Lowers to a per-T tagged struct `ae_opt_<T>`
                         // `{ bool has; T val; }`. Appended at END to keep the
                         // existing kind numbering stable.
-    TYPE_SUM            // #914 sum/variant type. `struct_name` is the sum's
+    TYPE_SUM,           // #914 sum/variant type. `struct_name` is the sum's
                         // name; `tuple_types[0..tuple_count)` are the variant
                         // Types (each TYPE_STRUCT). Lowers to a tagged union
                         // `{ <Name>_tag tag; union { ... } data; }`.
+    TYPE_ISOLATED       // #479 `Isolated[T]`, a compile-time-only, move-only
+                        // (linear) wrapper for actor message payloads.
+                        // element_type is the wrapped T. Nominal (an Isolated
+                        // is never assignable to a bare T or vice versa);
+                        // lowers to T's C type with zero runtime cost. Appended
+                        // at END to keep kind numbering stable (incremental
+                        // builds need `make clean` after this edit).
 } TypeKind;
 
 typedef struct Type {

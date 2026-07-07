@@ -2975,6 +2975,17 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 //     expression falls back to string_release, which is
                 //     literal-safe (no-ops unless the value carries the
                 //     AetherString magic header).
+                else if ((strcmp(func_name, "isolate") == 0 ||
+                          strcmp(func_name, "consume") == 0) &&
+                         expr->child_count == 1) {
+                    /* #479 Isolated[T] is a compile-time-only, move-only
+                     * wrapper. isolate() and consume() are both the identity at
+                     * runtime (TYPE_ISOLATED lowers to the wrapped type's C
+                     * type, see get_c_type), so emit the argument unchanged with
+                     * zero runtime cost. The move-only linearity guarantee is
+                     * enforced entirely in the type checker's move pass. */
+                    generate_expression(gen, expr->children[0]);
+                }
                 else if (strcmp(func_name, "release") == 0 && expr->child_count == 1) {
                     ASTNode* arg = expr->children[0];
                     if (arg->node_type && arg->node_type->kind == TYPE_STRING) {

@@ -873,6 +873,14 @@ int is_type_compatible(Type* from, Type* to) {
                strcmp(from->distinct_name, to->distinct_name) == 0;
     }
 
+    // #479 Isolated[T] is nominal and move-only: it never implicitly converts
+    // to or from a bare T. If either side is Isolated, both must be Isolated
+    // with compatible wrapped types (the bare T is obtained only via consume()).
+    if (from->kind == TYPE_ISOLATED || to->kind == TYPE_ISOLATED) {
+        return from->kind == TYPE_ISOLATED && to->kind == TYPE_ISOLATED &&
+               is_type_compatible(from->element_type, to->element_type);
+    }
+
     // Exact match
     if (types_equal(from, to)) return 1;
 
@@ -1335,6 +1343,27 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
                                   get_token_type_from_string(expr->value));
             
         case AST_FUNCTION_CALL: {
+            /* #479 Isolated[T] builtins, resolved polymorphically here rather
+             * than from a fixed symbol type. isolate(x) : Isolated[typeof x];
+             * consume(iso) : the wrapped T (when iso is Isolated[T]). */
+            if (expr->value && expr->child_count == 1) {
+                if (strcmp(expr->value, "isolate") == 0) {
+                    Type* inner = infer_type(expr->children[0], table);
+                    Type* iso = create_type(TYPE_ISOLATED);
+                    iso->element_type = inner ? inner : create_type(TYPE_UNKNOWN);
+                    return iso;
+                }
+                if (strcmp(expr->value, "consume") == 0) {
+                    Type* arg = infer_type(expr->children[0], table);
+                    if (arg && arg->kind == TYPE_ISOLATED && arg->element_type) {
+                        Type* inner = clone_type(arg->element_type);
+                        free_type(arg);
+                        return inner;
+                    }
+                    if (arg) free_type(arg);
+                    return create_type(TYPE_UNKNOWN);
+                }
+            }
             Symbol* symbol = lookup_qualified_symbol(table, expr->value);
             if (symbol && symbol->is_function && symbol->type
                 && symbol->type->kind != TYPE_VOID
@@ -1971,6 +2000,8 @@ static void check_unreachable_code(ASTNode* body) {
 // #521: reject escapes of `@scoped` bindings (defined below, used in the
 // unused-variable/unreachable third pass).
 static void scoped_check_bindings(ASTNode* node, ASTNode* root);
+// #479: enforce Isolated[T] move-only linearity over a function body.
+static void iso_check_function(ASTNode* fn, ASTNode* body);
 // #481: validate `@pure`/`@no_fs`/`@no_net`/`@no_os` effect tags.
 static void check_effect_tags(ASTNode* program);
 // #522: fold `__pure(fn)` queries to compile-time bool constants.
@@ -2161,6 +2192,13 @@ int typecheck_program(ASTNode* program) {
     // after `body, err = http.get(url)`.
     Type* release_type = create_type(TYPE_VOID);
     add_symbol(global_table, "release", release_type, 0, 1, 0);
+
+    // #479 Isolated[T] builtins. isolate(x) wraps x in a move-only Isolated[T];
+    // consume(iso) unwraps it back to T. Both are polymorphic, so the result
+    // type is resolved in infer_type (AST_FUNCTION_CALL); these placeholders
+    // exist only so call-site validation treats them as known builtins.
+    add_symbol(global_table, "isolate", create_type(TYPE_UNKNOWN), 0, 1, 0);
+    add_symbol(global_table, "consume", create_type(TYPE_UNKNOWN), 0, 1, 0);
 
     // Array/collection builtins
     Type* make_type = create_type(TYPE_PTR);  // returns allocated memory
@@ -2717,12 +2755,14 @@ int typecheck_program(ASTNode* program) {
             check_unused_variables(body, global_var_names, global_var_count);
             check_unreachable_code(body);
             scoped_check_bindings(body, body);  // #521
+            iso_check_function(child, body);    // #479 Isolated[T] move check
         } else if (child->type == AST_MAIN_FUNCTION && child->child_count > 0) {
             // main() has a BLOCK child containing the actual statements
             ASTNode* main_body = child->children[0];
             check_unused_variables(main_body, global_var_names, global_var_count);
             check_unreachable_code(main_body);
             scoped_check_bindings(main_body, main_body);  // #521
+            iso_check_function(child, main_body);  // #479 Isolated[T] move check
         }
     }
 
@@ -3078,6 +3118,195 @@ static void scoped_check_bindings(ASTNode* node, ASTNode* root) {
         node->type == AST_ACTOR_DEFINITION) return;
     for (int i = 0; i < node->child_count; i++)
         scoped_check_bindings(node->children[i], root);
+}
+
+/* ---- #479 Isolated[T] move (linearity) analysis -------------------------
+ *
+ * An Isolated[T] value is move-only: every use consumes it, so using it twice
+ * (or after send/consume) is a compile error. isolate(x) also consumes its
+ * source local x. This is a forward pass over a function body: `moved` is the
+ * set of names consumed on the current path; `iso` is the set of names known
+ * to be Isolated-typed (a bare reference to one is itself a consuming move).
+ * Control flow is handled soundly: if/else analyzes each branch on a copy of
+ * the incoming set and joins by union (skipping a branch that diverges via
+ * return/break/continue); a loop body is analyzed twice so a consume that
+ * would repeat across iterations is caught, while one rebound each iteration
+ * is not. It descends into nested scopes' own analysis, not the parent's. */
+#define ISO_SET_MAX 128
+typedef struct { const char* names[ISO_SET_MAX]; int count; } IsoSet;
+
+static int iso_has(const IsoSet* s, const char* n) {
+    if (!n) return 0;
+    for (int i = 0; i < s->count; i++)
+        if (s->names[i] && strcmp(s->names[i], n) == 0) return 1;
+    return 0;
+}
+static void iso_put(IsoSet* s, const char* n) {
+    if (!n || iso_has(s, n)) return;
+    if (s->count < ISO_SET_MAX) s->names[s->count++] = n;
+}
+static void iso_del(IsoSet* s, const char* n) {
+    if (!n) return;
+    for (int i = 0; i < s->count; i++)
+        if (s->names[i] && strcmp(s->names[i], n) == 0) {
+            s->names[i] = s->names[--s->count];
+            return;
+        }
+}
+static void iso_merge(IsoSet* dst, const IsoSet* src) {
+    for (int i = 0; i < src->count; i++) iso_put(dst, src->names[i]);
+}
+
+/* Is this declaration an Isolated binding (annotated type, or init = isolate())? */
+static int iso_decl_is_isolated(ASTNode* decl) {
+    if (decl->node_type && decl->node_type->kind == TYPE_ISOLATED) return 1;
+    if (decl->child_count > 0 && decl->children[0] &&
+        decl->children[0]->type == AST_FUNCTION_CALL &&
+        decl->children[0]->value &&
+        strcmp(decl->children[0]->value, "isolate") == 0) return 1;
+    return 0;
+}
+
+/* Is a value of this type move-worthy, i.e. does isolate()ing it transfer an
+ * ownership that the source must then relinquish? Heap / reference / aggregate
+ * types are (a *StringSeq, struct, string, ptr, message...). Copyable scalars
+ * (int/float/bool/byte/duration) are not: isolate(counter) must not kill the
+ * counter, so the source-consume is skipped for them. Unknown/NULL types are
+ * treated as not-move-worthy so an un-inferred source is never falsely moved. */
+static int iso_type_is_moveworthy(Type* t) {
+    if (!t) return 0;
+    switch (t->kind) {
+        case TYPE_STRING: case TYPE_PTR: case TYPE_STRUCT: case TYPE_ARRAY:
+        case TYPE_MESSAGE: case TYPE_ACTOR_REF: case TYPE_TUPLE: case TYPE_SUM:
+        case TYPE_OPTIONAL: case TYPE_ISOLATED: case TYPE_FUNCTION:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Does this statement definitely transfer control (no fall-through)? */
+static int iso_diverges(ASTNode* n) {
+    if (!n) return 0;
+    if (n->type == AST_RETURN_STATEMENT || n->type == AST_BREAK_STATEMENT ||
+        n->type == AST_CONTINUE_STATEMENT) return 1;
+    if (n->type == AST_BLOCK && n->child_count > 0)
+        return iso_diverges(n->children[n->child_count - 1]);
+    if (n->type == AST_IF_STATEMENT && n->child_count > 2)
+        return iso_diverges(n->children[1]) && iso_diverges(n->children[2]);
+    return 0;
+}
+
+static void iso_check(ASTNode* node, IsoSet* moved, IsoSet* iso) {
+    if (!node) return;
+    switch (node->type) {
+        /* Nested scopes get their own analysis; don't leak this frame in. */
+        case AST_FUNCTION_DEFINITION:
+        case AST_BUILDER_FUNCTION:
+        case AST_ACTOR_DEFINITION:
+        case AST_CLOSURE:
+            return;
+
+        case AST_IDENTIFIER: {
+            const char* nm = node->value;
+            if (!nm) return;
+            if (iso_has(moved, nm)) {
+                char msg[320];
+                snprintf(msg, sizeof(msg),
+                    "use of moved value '%s': an Isolated[T] value is consumed "
+                    "by its single use (isolate / consume / send) and cannot be "
+                    "used again. Re-create it with isolate(...) to send another.",
+                    nm);
+                type_error(msg, node->line, node->column);
+                return;
+            }
+            if (iso_has(iso, nm)) iso_put(moved, nm); /* this reference consumes it */
+            return;
+        }
+
+        case AST_VARIABLE_DECLARATION: {
+            for (int i = 0; i < node->child_count; i++)
+                iso_check(node->children[i], moved, iso);   /* init (RHS) first */
+            if (node->value) {
+                iso_del(moved, node->value);                 /* fresh binding revives */
+                if (iso_decl_is_isolated(node)) iso_put(iso, node->value);
+                else iso_del(iso, node->value);
+            }
+            return;
+        }
+
+        case AST_ASSIGNMENT: {
+            ASTNode* lhs = node->child_count > 0 ? node->children[0] : NULL;
+            if (node->child_count > 1) iso_check(node->children[1], moved, iso); /* RHS */
+            if (lhs && lhs->type == AST_IDENTIFIER && lhs->value) {
+                iso_del(moved, lhs->value);   /* plain rebind revives the name */
+            } else {
+                iso_check(lhs, moved, iso);   /* member/index lhs: base is a read */
+            }
+            return;
+        }
+
+        case AST_IF_STATEMENT: {
+            if (node->child_count > 0) iso_check(node->children[0], moved, iso); /* cond */
+            IsoSet then_s = *moved;
+            if (node->child_count > 1) iso_check(node->children[1], &then_s, iso);
+            IsoSet else_s = *moved;
+            if (node->child_count > 2) iso_check(node->children[2], &else_s, iso);
+            int then_div = node->child_count > 1 && iso_diverges(node->children[1]);
+            int else_div = node->child_count > 2 && iso_diverges(node->children[2]);
+            if (then_div && else_div) return;   /* code after is unreachable */
+            IsoSet joined; joined.count = 0;
+            if (!then_div) iso_merge(&joined, &then_s);
+            if (!else_div) iso_merge(&joined, &else_s);
+            *moved = joined;
+            return;
+        }
+
+        case AST_WHILE_LOOP:
+        case AST_FOR_LOOP: {
+            int body_idx = node->child_count - 1;
+            for (int i = 0; i < body_idx; i++)          /* init/cond/incr once */
+                iso_check(node->children[i], moved, iso);
+            if (body_idx >= 0) {                          /* body twice */
+                iso_check(node->children[body_idx], moved, iso);
+                iso_check(node->children[body_idx], moved, iso);
+            }
+            return;
+        }
+
+        default:
+            /* isolate(x): check the argument (a read), then consume the source
+             * local so a later use of x is a use-after-move. */
+            if (node->type == AST_FUNCTION_CALL && node->value &&
+                strcmp(node->value, "isolate") == 0 && node->child_count == 1) {
+                iso_check(node->children[0], moved, iso);
+                ASTNode* a = node->children[0];
+                if (a && a->type == AST_IDENTIFIER && a->value &&
+                    iso_type_is_moveworthy(a->node_type))
+                    iso_put(moved, a->value);
+                return;
+            }
+            for (int i = 0; i < node->child_count; i++)
+                iso_check(node->children[i], moved, iso);
+            return;
+    }
+}
+
+/* Entry point: register Isolated-typed parameters, then walk the body. */
+static void iso_check_function(ASTNode* fn, ASTNode* body) {
+    if (!body) return;
+    IsoSet moved; moved.count = 0;
+    IsoSet iso;   iso.count = 0;
+    if (fn) {
+        for (int i = 0; i < fn->child_count; i++) {
+            ASTNode* p = fn->children[i];
+            if (!p || p == body) { if (p == body) break; else continue; }
+            if ((p->type == AST_VARIABLE_DECLARATION || p->type == AST_PATTERN_VARIABLE) &&
+                p->value && p->node_type && p->node_type->kind == TYPE_ISOLATED)
+                iso_put(&iso, p->value);
+        }
+    }
+    iso_check(body, &moved, &iso);
 }
 
 /* #481 effect tags — capability of a call's NAMESPACE (the as-written prefix,
