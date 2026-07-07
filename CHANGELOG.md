@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **First-class `enum` types and enum-backed `bit_set` masks** (#1044, #1046).
+  Aether gains a real `enum` type — `enum Perm { Read, Write, Exec }` — lowering
+  to a C `int` and usable as a first-class value everywhere: variable
+  declarations (`Perm p = .Write`), function params and return types, struct
+  fields, `==` comparison, and `match` arms (`match p { Write -> ... }`), with
+  implicit selector syntax (`.Read`) wherever the enum type is known. On top of
+  it, `type Mask = bit_set[Perm]` gives an integer-backed set: literals use
+  enum members (`{ .Read, .Write }`) and lower to a `uint64_t` mask; `+`/`-`
+  and `+=`/`-=` are union/difference, `in`/`not_in` test membership,
+  `<`/`<=`/`>`/`>=` are strict/non-strict subset checks, and `card(mask)`
+  lowers to a popcount (a user-defined `card` function of your own is
+  unaffected). Zero runtime cost — an enum is an int, a bit_set is a uint64_t.
+  A `bit_set` over an enum with more than 64 members is a compile error (the
+  fixed 64-bit backing can't hold it); duplicate enum members are rejected.
+  V1 uses a fixed 64-bit backing width and implicit `0..N` member values;
+  explicit smaller widths (`bit_set[Perm; u16]`) and explicit member values
+  (`enum E { A = 5 }`) remain follow-ups. The first natural consumer is
+  capability/flag code (`std.capsicum`'s `R_*`/`F_*` masks) that currently
+  hand-rolls `0x0001`-style const blocks.
+
 ## [0.366.0]
 
 ### Added

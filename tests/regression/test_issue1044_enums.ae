@@ -1,0 +1,63 @@
+// Regression for #1044: first-class enum types (the substrate #1046 needs).
+// Covers enums as values across every position the review found broken:
+// variable declarations, function params, return types, struct fields,
+// equality, and match — plus the non-first-index resolution bug (a
+// `return .Green` must emit index 1, not 0).
+
+import std.string
+
+enum Color { Red, Green, Blue }
+
+struct Paint { c: Color, coats: int }
+
+extern exit(code: int)
+
+fail(msg: string) { println(msg); exit(1) }
+
+// Return position — the case that emitted `return 0` for every member
+// before the enum-resolver stamped indices everywhere.
+next(c: Color) -> Color {
+    if c == .Red { return .Green }
+    if c == .Green { return .Blue }
+    return .Red
+}
+
+// Param + match on enum. Uses the assign-then-return idiom: `return
+// match {...}` as a bare expression is a pre-existing codegen bug
+// (garbage even for an int scrutinee), orthogonal to enums.
+name_of(c: Color) -> string {
+    r = match c {
+        Red   -> "red"
+        Green -> "green"
+        Blue  -> "blue"
+    }
+    return r
+}
+
+main() {
+    println("=== test_issue1044_enums ===")
+
+    // Variable declaration with a non-zero-index member.
+    Color a = .Blue
+    Color b = .Green
+    if a == .Blue == false { fail("FAIL: var decl .Blue") }
+    if b == .Green == false { fail("FAIL: var decl .Green") }
+    if a == b { fail("FAIL: distinct members compared equal") }
+
+    // Struct field of enum type.
+    Paint p = Paint{ c: .Green, coats: 2 }
+    if p.c == .Green == false { fail("FAIL: struct field enum") }
+    if p.c == .Red { fail("FAIL: struct field wrong match") }
+
+    // Return position: next(Red)=Green, next(Green)=Blue, next(Blue)=Red.
+    if next(.Red) == .Green == false { fail("FAIL: next(Red) != Green") }
+    if next(.Green) == .Blue == false { fail("FAIL: next(Green) != Blue") }
+    if next(.Blue) == .Red == false { fail("FAIL: next(Blue) != Red") }
+
+    // Match on enum, each arm (proves index 0/1/2 all resolve).
+    if string.equals(name_of(.Red), "red") != 1 { fail("FAIL: match Red") }
+    if string.equals(name_of(.Green), "green") != 1 { fail("FAIL: match Green") }
+    if string.equals(name_of(.Blue), "blue") != 1 { fail("FAIL: match Blue") }
+
+    println("=== test_issue1044_enums passed ===")
+}

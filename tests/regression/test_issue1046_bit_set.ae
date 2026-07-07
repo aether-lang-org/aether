@@ -1,0 +1,43 @@
+// Regression for #1046: enum-backed bit_set masks.
+
+enum Perm { Read, Write, Exec }
+type Mask = bit_set[Perm]
+
+extern exit(code: int)
+
+fail(msg: string) {
+    println(msg)
+    exit(1)
+}
+
+main() {
+    println("=== test_issue1046_bit_set ===")
+
+    Mask m = { .Read, .Write }
+    if .Read not_in m { fail("FAIL: Read missing") }
+    if .Exec in m { fail("FAIL: Exec unexpectedly present") }
+    if card(m) != 2 { fail("FAIL: initial card") }
+
+    m = m + { .Exec }
+    if .Exec not_in m { fail("FAIL: union did not add Exec") }
+    if card(m) != 3 { fail("FAIL: union card") }
+
+    m -= { .Write }
+    if .Write in m { fail("FAIL: -= did not remove Write") }
+    if card(m) != 2 { fail("FAIL: -= card") }
+
+    m += { .Write }
+    m = m - { .Read }
+    if .Read in m { fail("FAIL: difference did not remove Read") }
+    if .Write not_in m { fail("FAIL: += did not add Write") }
+
+    Mask rw = { .Read, .Write }
+    Mask all = { .Read, .Write, .Exec }
+    if rw <= all == false { fail("FAIL: subset <=") }
+    if all >= rw == false { fail("FAIL: superset >=") }
+    if rw < all == false { fail("FAIL: strict subset <") }
+    if all > rw == false { fail("FAIL: strict superset >") }
+    if all < all { fail("FAIL: strict self subset") }
+
+    println("=== test_issue1046_bit_set passed ===")
+}

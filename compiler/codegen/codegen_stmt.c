@@ -5178,9 +5178,25 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 }
 
                 if (is_state_var) {
-                    fprintf(gen->output, "self->%s %s ", stmt->value, op);
+                    if (stmt->node_type && stmt->node_type->kind == TYPE_BITSET &&
+                        strcmp(op, "+=") == 0) {
+                        fprintf(gen->output, "self->%s |= ", stmt->value);
+                    } else if (stmt->node_type && stmt->node_type->kind == TYPE_BITSET &&
+                               strcmp(op, "-=") == 0) {
+                        fprintf(gen->output, "self->%s &= ~", stmt->value);
+                    } else {
+                        fprintf(gen->output, "self->%s %s ", stmt->value, op);
+                    }
                 } else {
-                    fprintf(gen->output, "%s %s ", stmt->value, op);
+                    if (stmt->node_type && stmt->node_type->kind == TYPE_BITSET &&
+                        strcmp(op, "+=") == 0) {
+                        fprintf(gen->output, "%s |= ", stmt->value);
+                    } else if (stmt->node_type && stmt->node_type->kind == TYPE_BITSET &&
+                               strcmp(op, "-=") == 0) {
+                        fprintf(gen->output, "%s &= ~", stmt->value);
+                    } else {
+                        fprintf(gen->output, "%s %s ", stmt->value, op);
+                    }
                 }
                 generate_expression(gen, stmt->children[1]);
                 fprintf(gen->output, ";\n");

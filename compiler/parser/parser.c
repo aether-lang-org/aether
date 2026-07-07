@@ -293,6 +293,21 @@ static Type* parse_type_unsuffixed(Parser* parser) {
 
     Type* type = NULL;
 
+    if (token->type == TOKEN_IDENTIFIER && token->value &&
+        strcmp(token->value, "bit_set") == 0) {
+        advance_token(parser);  // bit_set
+        if (!expect_token(parser, TOKEN_LEFT_BRACKET)) return NULL;
+        Token* enum_name = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!enum_name) return NULL;
+        if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) return NULL;
+        Type* enum_type = create_type(TYPE_ENUM);
+        enum_type->struct_name = strdup(enum_name->value);
+        Type* bitset = create_type(TYPE_BITSET);
+        bitset->element_type = enum_type;
+        bitset->struct_name = strdup(enum_name->value);
+        return bitset;
+    }
+
     /* `const <type>` — a C-qualified type.  Parsed by recursing on the
      * unqualified type, then stamping a const-prefixed C spelling onto
      * `c_alias` so codegen emits the qualifier verbatim.  The `kind`
@@ -920,6 +935,45 @@ ASTNode* parse_closure_expression(Parser* parser) {
     return closure;
 }
 
+static ASTNode* parse_enum_value_expr(Parser* parser) {
+    Token* dot = peek_token(parser);
+    if (!dot || dot->type != TOKEN_DOT) return NULL;
+    advance_token(parser);
+    Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+    if (!name) return NULL;
+    ASTNode* v = create_ast_node(AST_ENUM_VALUE, name->value, dot->line, dot->column);
+    /* -1 = index not yet resolved. The enum resolver (#1044) stamps the
+     * real member index by name; the -1 sentinel lets it distinguish an
+     * unresolved node from one legitimately resolved to index 0. */
+    if (v) v->bit_width = -1;
+    return v;
+}
+
+static ASTNode* parse_bitset_literal(Parser* parser) {
+    Token* open = peek_token(parser);
+    if (!open || open->type != TOKEN_LEFT_BRACE) return NULL;
+    advance_token(parser);
+
+    ASTNode* lit = create_ast_node(AST_BITSET_LITERAL, NULL, open->line, open->column);
+    if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+        do {
+            ASTNode* item = parse_enum_value_expr(parser);
+            if (!item) {
+                parser_error(parser, "bit_set literal entries must be enum members like `.Read`");
+                free_ast_node(lit);
+                return NULL;
+            }
+            add_child(lit, item);
+        } while (match_token(parser, TOKEN_COMMA));
+
+        if (!expect_token(parser, TOKEN_RIGHT_BRACE)) {
+            free_ast_node(lit);
+            return NULL;
+        }
+    }
+    return lit;
+}
+
 ASTNode* parse_primary_expression(Parser* parser) {
     Token* token = peek_token(parser);
     if (!token) return NULL;
@@ -935,6 +989,12 @@ ASTNode* parse_primary_expression(Parser* parser) {
     }
 
     switch (token->type) {
+        case TOKEN_DOT:
+            return parse_enum_value_expr(parser);
+
+        case TOKEN_LEFT_BRACE:
+            return parse_bitset_literal(parser);
+
         case TOKEN_NUMBER:
         case TOKEN_STRING_LITERAL:
         case TOKEN_TRUE:
@@ -2100,7 +2160,10 @@ int get_operator_precedence(AeTokenType type) {
         case TOKEN_CARET: return 4;   // bitwise XOR
         case TOKEN_AMPERSAND: return 5; // bitwise AND
         case TOKEN_EQUALS:
-        case TOKEN_NOT_EQUALS: return 6;
+        case TOKEN_NOT_EQUALS:
+        case TOKEN_IN:
+        case TOKEN_NOT_IN:
+            return 6;
         case TOKEN_LESS:
         case TOKEN_LESS_EQUAL:
         case TOKEN_GREATER:
@@ -5150,6 +5213,30 @@ ASTNode* parse_top_level_decl(Parser* parser) {
 
         ASTNode* node = NULL;
 
+        if (token->type == TOKEN_IDENTIFIER && token->value &&
+            strcmp(token->value, "enum") == 0) {
+            advance_token(parser);
+            Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!name) return NULL;
+            if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
+            ASTNode* edef = create_ast_node(AST_ENUM_DEF, name->value,
+                                            name->line, name->column);
+            if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+                do {
+                    Token* member = expect_token(parser, TOKEN_IDENTIFIER);
+                    if (!member) { free_ast_node(edef); return NULL; }
+                    add_child(edef, create_ast_node(AST_IDENTIFIER, member->value,
+                                                   member->line, member->column));
+                } while (match_token(parser, TOKEN_COMMA));
+                if (!expect_token(parser, TOKEN_RIGHT_BRACE)) {
+                    free_ast_node(edef);
+                    return NULL;
+                }
+            }
+            match_token(parser, TOKEN_SEMICOLON);
+            return edef;
+        }
+
         // #480: `type Name = distinct Base` — a zero-cost nominal type over
         // Base. `type` and `distinct` are contextual identifiers (usable as
         // names elsewhere); only the `type <ident> = distinct ...` shape here
@@ -5178,6 +5265,25 @@ ASTNode* parse_top_level_decl(Parser* parser) {
                     d->node_type = base;
                     match_token(parser, TOKEN_SEMICOLON);
                     return d;
+                }
+                if (dk && dk->type == TOKEN_IDENTIFIER && dk->value &&
+                    strcmp(dk->value, "bit_set") == 0) {
+                    Type* bitset_type = parse_type(parser);
+                    if (!bitset_type || bitset_type->kind != TYPE_BITSET ||
+                        !bitset_type->element_type ||
+                        !bitset_type->element_type->struct_name) {
+                        parser_error(parser, "expected `bit_set[Enum]` after `type Name =`");
+                        if (bitset_type) free_type(bitset_type);
+                        return NULL;
+                    }
+                    ASTNode* b = create_ast_node(AST_BITSET_TYPE_DEF,
+                                                 name->value, name->line, name->column);
+                    b->node_type = bitset_type;
+                    add_child(b, create_ast_node(AST_IDENTIFIER,
+                                                 bitset_type->element_type->struct_name,
+                                                 name->line, name->column));
+                    match_token(parser, TOKEN_SEMICOLON);
+                    return b;
                 }
                 // #914 sum/variant type: `type Name = A | B | C`. The variants
                 // are existing struct type names separated by `|`. At least two
@@ -5209,7 +5315,7 @@ ASTNode* parse_top_level_decl(Parser* parser) {
                     return sum;
                 }
                 parser_error(parser,
-                    "expected `distinct <type>` or a `|`-separated variant list "
+                    "expected `distinct <type>`, `bit_set[Enum]`, or a `|`-separated variant list "
                     "after `type Name =`");
                 return NULL;
             }

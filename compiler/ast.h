@@ -224,6 +224,11 @@ typedef enum {
     // existing struct variants. value = the sum type name; each child is an
     // AST_IDENTIFIER naming a variant struct.
     AST_SUM_TYPE_DEF,
+    // #1046 enum-backed bit sets.
+    AST_ENUM_DEF,           // `enum Name { A, B }`; children are identifiers
+    AST_BITSET_TYPE_DEF,    // `type Mask = bit_set[Enum]`; child[0] enum id
+    AST_ENUM_VALUE,         // `.A` enum member expression; node_type pins enum
+    AST_BITSET_LITERAL,     // `{ .A, .B }`; children are AST_ENUM_VALUE
     // #913 error handler `expr or { … }` / `expr or default`. children[0] =
     // the fallible (value, err) expression; children[1] = the handler (a
     // block that yields a value or exits, or a bare default expression). `err`
@@ -278,13 +283,15 @@ typedef enum {
                         // name; `tuple_types[0..tuple_count)` are the variant
                         // Types (each TYPE_STRUCT). Lowers to a tagged union
                         // `{ <Name>_tag tag; union { ... } data; }`.
-    TYPE_ISOLATED       // #479 `Isolated[T]`, a compile-time-only, move-only
+    TYPE_ISOLATED,      // #479 `Isolated[T]`, a compile-time-only, move-only
                         // (linear) wrapper for actor message payloads.
                         // element_type is the wrapped T. Nominal (an Isolated
                         // is never assignable to a bare T or vice versa);
                         // lowers to T's C type with zero runtime cost. Appended
                         // at END to keep kind numbering stable (incremental
                         // builds need `make clean` after this edit).
+    TYPE_ENUM,          // #1046 enum value, lowers to int
+    TYPE_BITSET         // #1046 bit_set[Enum], lowers to uint64_t
 } TypeKind;
 
 typedef struct Type {

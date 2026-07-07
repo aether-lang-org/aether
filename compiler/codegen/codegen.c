@@ -1799,6 +1799,10 @@ const char* get_c_type(Type* type) {
              * lowers to the C type of the wrapped T with zero runtime cost
              * (mirrors distinct types); isolate()/consume() are no-ops. */
             return type->element_type ? get_c_type(type->element_type) : "void*";
+        case TYPE_ENUM:
+            return "int";
+        case TYPE_BITSET:
+            return "uint64_t";
         case TYPE_ARRAY: {
             static char buffers[4][256];
             static int buf_idx = 0;
@@ -1917,6 +1921,8 @@ static const char* get_abi_type(Type* type) {
         case TYPE_FLOAT32: return "float";
         case TYPE_BOOL:   return "int32_t";
         case TYPE_BYTE:   return "unsigned char";
+        case TYPE_ENUM:   return "int32_t";
+        case TYPE_BITSET: return "uint64_t";
         case TYPE_STRING: return "const char*";
         case TYPE_VOID:   return "void";
         case TYPE_PTR:    return "AetherValue*";
@@ -3496,7 +3502,8 @@ static void mangle_keyword_value_idents(ASTNode* node) {
         default:
             break;
     }
-    if (node->type == AST_SUM_TYPE_DEF) return;  // children are type names
+    if (node->type == AST_SUM_TYPE_DEF || node->type == AST_ENUM_DEF ||
+        node->type == AST_BITSET_TYPE_DEF) return;  // children are type names
     for (int i = 0; i < node->child_count; i++) {
         mangle_keyword_value_idents(node->children[i]);
     }
@@ -4823,6 +4830,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             case AST_SUM_TYPE_DEF:
                 // #914: the tagged-union typedef was emitted in the hoisted
                 // type pass above; nothing to emit for the declaration here.
+                break;
+            case AST_ENUM_DEF:
+            case AST_BITSET_TYPE_DEF:
+                // #1046: enums/bit_set aliases lower to scalar values/types;
+                // no standalone C declaration is needed.
                 break;
             case AST_MAIN_FUNCTION:
                 generate_main_function(gen, child);

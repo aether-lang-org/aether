@@ -45,7 +45,8 @@ typedef enum {
     TOKEN_EXTERN,           // 'extern' keyword for C FFI
     TOKEN_NULL,             // 'null' keyword for null pointer literal
     TOKEN_CONST,            // 'const' keyword for top-level constants
-    TOKEN_IN,               // 'in' keyword for range-based for loops
+    TOKEN_IN,               // 'in' keyword / membership operator
+    TOKEN_NOT_IN,           // 'not_in' membership operator
     TOKEN_AFTER,            // 'after' keyword for receive timeouts
     TOKEN_CALLBACK,         // 'callback' keyword for callback trailing blocks
     TOKEN_HIDE,             // 'hide' scope-level directive: blocks named outer bindings

@@ -2258,9 +2258,77 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "))");
             }
             break;
+
+        case AST_ENUM_VALUE:
+            fprintf(gen->output, "%d", expr->bit_width >= 0 ? expr->bit_width : 0);
+            break;
+
+        case AST_BITSET_LITERAL: {
+            if (expr->child_count == 0) {
+                fprintf(gen->output, "0ULL");
+            } else {
+                fprintf(gen->output, "(");
+                for (int i = 0; i < expr->child_count; i++) {
+                    ASTNode* item = expr->children[i];
+                    if (i > 0) fprintf(gen->output, " | ");
+                    fprintf(gen->output, "(1ULL << %d)",
+                            item ? item->bit_width : 0);
+                }
+                fprintf(gen->output, ")");
+            }
+            break;
+        }
             
         case AST_BINARY_EXPRESSION:
             if (expr->child_count >= 2) {
+                if (expr->value && (strcmp(expr->value, "in") == 0 ||
+                                    strcmp(expr->value, "not_in") == 0)) {
+                    int neg = strcmp(expr->value, "not_in") == 0;
+                    if (neg) fprintf(gen->output, "!(");
+                    fprintf(gen->output, "(((");
+                    generate_expression(gen, expr->children[1]);
+                    fprintf(gen->output, ") >> (");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")) & 1ULL)");
+                    if (neg) fprintf(gen->output, ")");
+                    break;
+                }
+
+                if (expr->value && expr->children[0]->node_type &&
+                    expr->children[0]->node_type->kind == TYPE_BITSET) {
+                    const char* op = NULL;
+                    if (strcmp(expr->value, "+") == 0) op = "|";
+                    else if (strcmp(expr->value, "-") == 0) op = "& ~";
+                    else if (strcmp(expr->value, "<=") == 0) op = "subset_le";
+                    else if (strcmp(expr->value, ">=") == 0) op = "subset_ge";
+                    else if (strcmp(expr->value, "<") == 0) op = "subset_lt";
+                    else if (strcmp(expr->value, ">") == 0) op = "subset_gt";
+                    if (op) {
+                        if (strncmp(op, "subset_", 7) == 0) {
+                            fprintf(gen->output, "({ uint64_t _bs_l = ");
+                            generate_expression(gen, expr->children[0]);
+                            fprintf(gen->output, "; uint64_t _bs_r = ");
+                            generate_expression(gen, expr->children[1]);
+                            fprintf(gen->output, "; ");
+                            if (strcmp(op, "subset_le") == 0)
+                                fprintf(gen->output, "((_bs_l & ~_bs_r) == 0)");
+                            else if (strcmp(op, "subset_ge") == 0)
+                                fprintf(gen->output, "((_bs_r & ~_bs_l) == 0)");
+                            else if (strcmp(op, "subset_lt") == 0)
+                                fprintf(gen->output, "(((_bs_l & ~_bs_r) == 0) && _bs_l != _bs_r)");
+                            else
+                                fprintf(gen->output, "(((_bs_r & ~_bs_l) == 0) && _bs_l != _bs_r)");
+                            fprintf(gen->output, "; })");
+                        } else {
+                            fprintf(gen->output, "(");
+                            generate_expression(gen, expr->children[0]);
+                            fprintf(gen->output, " %s ", op);
+                            generate_expression(gen, expr->children[1]);
+                            fprintf(gen->output, ")");
+                        }
+                        break;
+                    }
+                }
                 // #340: equality against `none` / between optionals. A struct
                 // `==` is invalid C, so compare the `has` flag (and value).
                 if (expr->value && (strcmp(expr->value, "==") == 0 ||
@@ -2534,6 +2602,17 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             break;
             
         case AST_FUNCTION_CALL:
+            /* card(bit_set) → popcount, but only when the arg is actually a
+             * bit_set; a user-defined card() emits as a normal call (#1046). */
+            if (expr->value && strcmp(expr->value, "card") == 0 &&
+                expr->child_count == 1 && expr->children[0] &&
+                expr->children[0]->node_type &&
+                expr->children[0]->node_type->kind == TYPE_BITSET) {
+                fprintf(gen->output, "__builtin_popcountll(");
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, ")");
+                break;
+            }
             /* heap.free(p) — counterpart to heap.new(T) (issue #564, #790).
              * A POD box owns no heap fields, so a plain free(p) reclaims it.
              * A box whose struct has string fields (#790) routes through the

@@ -548,6 +548,8 @@ static const char* type_name(Type* t) {
         case TYPE_MESSAGE:  return "message";
         case TYPE_ARRAY:    return "array";
         case TYPE_STRUCT:   return t->struct_name ? t->struct_name : "struct";
+        case TYPE_ENUM:     return t->struct_name ? t->struct_name : "enum";
+        case TYPE_BITSET:   return t->struct_name ? t->struct_name : "bit_set";
         case TYPE_FUNCTION:  return "closure";
         case TYPE_TUPLE:    return "tuple";
         case TYPE_OPTIONAL: return "optional";   // #340
@@ -572,6 +574,44 @@ static TypeKind wider_integer_kind(TypeKind a, TypeKind b) {
     if (a == TYPE_INT64 || b == TYPE_INT64) return TYPE_INT64;
     /* uint32/16/8 all fit int's value range for arithmetic. */
     return TYPE_INT;
+}
+
+static ASTNode* find_enum_def(SymbolTable* table, const char* enum_name) {
+    if (!enum_name) return NULL;
+    Symbol* sym = lookup_symbol(table, enum_name);
+    if (sym && sym->node && sym->node->type == AST_ENUM_DEF) return sym->node;
+    return NULL;
+}
+
+static ASTNode* find_enum_member(SymbolTable* table, const char* member,
+                                 const char** enum_name, int* index) {
+    if (!member) return NULL;
+    for (SymbolTable* scope = table; scope; scope = scope->parent) {
+        for (Symbol* s = scope->symbols; s; s = s->next) {
+            if (!s->node || s->node->type != AST_ENUM_DEF) continue;
+            for (int i = 0; i < s->node->child_count; i++) {
+                ASTNode* m = s->node->children[i];
+                if (m && m->value && strcmp(m->value, member) == 0) {
+                    if (enum_name) *enum_name = s->node->value;
+                    if (index) *index = i;
+                    return s->node;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+static int enum_has_member(ASTNode* enum_def, const char* member, int* index) {
+    if (!enum_def || !member) return 0;
+    for (int i = 0; i < enum_def->child_count; i++) {
+        ASTNode* m = enum_def->children[i];
+        if (m && m->value && strcmp(m->value, member) == 0) {
+            if (index) *index = i;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* #697: downward integer-width propagation.
@@ -1096,6 +1136,24 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_LITERAL:
             return clone_type(expr->node_type);
 
+        case AST_ENUM_VALUE: {
+            const char* enum_name = NULL;
+            int idx = -1;
+            if (expr->node_type && expr->node_type->kind == TYPE_ENUM) {
+                return clone_type(expr->node_type);
+            }
+            if (find_enum_member(table, expr->value, &enum_name, &idx) && enum_name) {
+                Type* t = create_type(TYPE_ENUM);
+                t->struct_name = strdup(enum_name);
+                return t;
+            }
+            return create_type(TYPE_UNKNOWN);
+        }
+
+        case AST_BITSET_LITERAL:
+            return expr->node_type ? clone_type(expr->node_type)
+                                   : create_type(TYPE_UNKNOWN);
+
         case AST_NONE_LITERAL:
             // `none` — optional with as-yet-unknown inner; context pins the
             // concrete T (assignment / `??` / `==`). If already pinned, use it.
@@ -1381,6 +1439,15 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
              * than from a fixed symbol type. isolate(x) : Isolated[typeof x];
              * consume(iso) : the wrapped T (when iso is Isolated[T]). */
             if (expr->value && expr->child_count == 1) {
+                /* card(bit_set) popcount → int, but only when `card` isn't a
+                 * user function (which would shadow the builtin, #1046). */
+                if (strcmp(expr->value, "card") == 0 &&
+                    !lookup_symbol(table, "card")) {
+                    Type* a = infer_type(expr->children[0], table);
+                    int bs = (a && a->kind == TYPE_BITSET);
+                    if (a) free_type(a);
+                    if (bs) return create_type(TYPE_INT);
+                }
                 if (strcmp(expr->value, "isolate") == 0) {
                     Type* inner = infer_type(expr->children[0], table);
                     Type* iso = create_type(TYPE_ISOLATED);
@@ -1595,6 +1662,8 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
         case TOKEN_LESS_EQUAL:
         case TOKEN_GREATER:
         case TOKEN_GREATER_EQUAL:
+        case TOKEN_IN:
+        case TOKEN_NOT_IN:
         case TOKEN_AND:
         case TOKEN_OR:
             return create_type(TYPE_BOOL);
@@ -1607,6 +1676,12 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
     switch (operator) {
         case TOKEN_PLUS:
         case TOKEN_MINUS:
+            if (left_type->kind == TYPE_BITSET && right_type->kind == TYPE_BITSET &&
+                types_equal(left_type, right_type)) {
+                return clone_type(left_type);
+            }
+            // Fall through for non-bitset arithmetic.
+            /* FALLTHROUGH */
         case TOKEN_MULTIPLY:
         case TOKEN_DIVIDE:
         case TOKEN_MODULO:
@@ -1786,6 +1861,8 @@ AeTokenType get_token_type_from_string(const char* str) {
     if (strcmp(str, ">=") == 0) return TOKEN_GREATER_EQUAL;
     if (strcmp(str, "&&") == 0) return TOKEN_AND;
     if (strcmp(str, "||") == 0) return TOKEN_OR;
+    if (strcmp(str, "in") == 0) return TOKEN_IN;
+    if (strcmp(str, "not_in") == 0) return TOKEN_NOT_IN;
     if (strcmp(str, "=") == 0) return TOKEN_ASSIGN;
     if (strcmp(str, "!") == 0) return TOKEN_NOT;
     if (strcmp(str, "++") == 0) return TOKEN_INCREMENT;
@@ -2046,6 +2123,14 @@ static void resolve_distinct_types(ASTNode* program);
 // #914: resolve `type Name = A | B | C` references into TYPE_SUM.
 static void resolve_sum_types(ASTNode* program);
 static void sum_apply(Type* t, ASTNode* def);   // fill TYPE_SUM variant Types
+// #1046: resolve `type Name = bit_set[Enum]` references into TYPE_BITSET.
+static void resolve_bitset_types(ASTNode* program);
+static int pin_bitset_literal(ASTNode* lit, Type* bitset_type,
+                              SymbolTable* table);
+// #1044: rewrite bare TYPE_STRUCT{Name} use-sites into TYPE_ENUM when Name
+// is a declared enum, so enums work as first-class values (variable
+// declarations, params, struct fields, returns).
+static void resolve_enum_types(ASTNode* program);
 
 // #891: typecheck-time registry of @c_struct overlay names. Codegen has its
 // own field-level registry; the typechecker only needs the NAME set so an
@@ -2138,6 +2223,16 @@ int typecheck_program(ASTNode* program) {
     // TYPE_STRUCT{Name} use-sites into the real TYPE_SUM. Runs after distinct
     // resolution (a name is one or the other) and before any type-checking.
     resolve_sum_types(program);
+
+    // #1046: resolve `type Name = bit_set[Enum]` references.
+    resolve_bitset_types(program);
+
+    // #1044: rewrite bare TYPE_STRUCT{EnumName} annotations to TYPE_ENUM so
+    // enums are usable as first-class values. After bitset resolution (whose
+    // alias element is the enum name as a plain string, unaffected) and
+    // before type-checking, so every slot type agrees with the TYPE_ENUM a
+    // `.Member` value carries.
+    resolve_enum_types(program);
 
     // #891: collect @c_struct overlay names so `expr as *Name` casts and
     // member access typecheck against them (they have no struct symbol —
@@ -2423,6 +2518,46 @@ int typecheck_program(ASTNode* program) {
                 add_symbol(global_table, child->value, sum_type, 0, 0, 0);
                 Symbol* sum_sym = lookup_symbol(global_table, child->value);
                 if (sum_sym) sum_sym->node = child;
+                break;
+            }
+            case AST_ENUM_DEF: {
+                /* #1046: reject duplicate member names — a second `A` gets a
+                 * distinct index that find/has-member can never reach (its bit
+                 * is unsettable), so it's always a mistake. */
+                for (int mi = 0; mi < child->child_count; mi++) {
+                    ASTNode* ma = child->children[mi];
+                    if (!ma || !ma->value) continue;
+                    for (int mj = mi + 1; mj < child->child_count; mj++) {
+                        ASTNode* mb = child->children[mj];
+                        if (mb && mb->value && strcmp(ma->value, mb->value) == 0) {
+                            char msg[256];
+                            snprintf(msg, sizeof(msg),
+                                "duplicate member '%s' in enum '%s'",
+                                mb->value, child->value);
+                            type_error(msg, mb->line, mb->column);
+                        }
+                    }
+                }
+                Type* enum_type = create_type(TYPE_ENUM);
+                enum_type->struct_name = strdup(child->value);
+                add_symbol(global_table, child->value, enum_type, 0, 0, 0);
+                Symbol* enum_sym = lookup_symbol(global_table, child->value);
+                if (enum_sym) enum_sym->node = child;
+                break;
+            }
+            case AST_BITSET_TYPE_DEF: {
+                Type* bitset_type = child->node_type
+                                   ? clone_type(child->node_type)
+                                   : create_type(TYPE_BITSET);
+                if (!bitset_type->struct_name && child->value) {
+                    bitset_type->struct_name = strdup(child->value);
+                }
+                /* #1046 >64-member width guard lives in resolve_bitset_types
+                 * (a dedicated pass, so it's order-independent of where the
+                 * enum is declared relative to the bit_set alias). */
+                add_symbol(global_table, child->value, bitset_type, 0, 0, 0);
+                Symbol* bitset_sym = lookup_symbol(global_table, child->value);
+                if (bitset_sym) bitset_sym->node = child;
                 break;
             }
             case AST_MESSAGE_DEFINITION: {
@@ -2868,6 +3003,21 @@ int typecheck_node(ASTNode* node, SymbolTable* table) {
                         node->value ? node->value : "?", v->value);
                     type_error(msg, v->line, v->column);
                 }
+            }
+            return 1;
+        }
+        case AST_ENUM_DEF:
+            return 1;
+        case AST_BITSET_TYPE_DEF: {
+            if (!node->node_type || node->node_type->kind != TYPE_BITSET ||
+                !node->node_type->element_type ||
+                !find_enum_def(table, node->node_type->element_type->struct_name)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "bit_set type '%s' must name an existing enum",
+                         node->value ? node->value : "?");
+                type_error(msg, node->line, node->column);
+                return 0;
             }
             return 1;
         }
@@ -3804,6 +3954,166 @@ static void resolve_sum_types(ASTNode* program) {
     sum_rewrite_ast(program, defs, ndefs);
 }
 
+// #1046 bit_set aliases. `type Mask = bit_set[Perm]` parses to
+// AST_BITSET_TYPE_DEF and use-sites parse as TYPE_STRUCT{Mask}; rewrite them
+// to TYPE_BITSET whose struct_name is the alias and whose element_type names
+// the enum. V1 always lowers to uint64_t.
+#define AETHER_MAX_BITSETS 256
+typedef struct { const char* name; const char* enum_name; } BitsetDef;
+
+static void bitset_apply(Type* t, BitsetDef* def) {
+    char* alias = strdup(def->name);
+    if (t->struct_name) free(t->struct_name);
+    t->kind = TYPE_BITSET;
+    t->struct_name = alias;
+    if (t->element_type) free_type(t->element_type);
+    t->element_type = create_type(TYPE_ENUM);
+    t->element_type->struct_name = strdup(def->enum_name);
+}
+
+static void bitset_rewrite_type(Type* t, BitsetDef* defs, int ndefs, int depth) {
+    if (!t || depth > 64) return;
+    if (t->kind == TYPE_STRUCT && t->struct_name && !t->distinct_name) {
+        for (int i = 0; i < ndefs; i++) {
+            if (strcmp(t->struct_name, defs[i].name) == 0) {
+                bitset_apply(t, &defs[i]);
+                break;
+            }
+        }
+    }
+    bitset_rewrite_type(t->element_type, defs, ndefs, depth + 1);
+    bitset_rewrite_type(t->return_type, defs, ndefs, depth + 1);
+    for (int i = 0; i < t->tuple_count; i++)
+        if (t->tuple_types) bitset_rewrite_type(t->tuple_types[i], defs, ndefs, depth + 1);
+    for (int i = 0; i < t->param_count; i++)
+        if (t->param_types) bitset_rewrite_type(t->param_types[i], defs, ndefs, depth + 1);
+}
+
+static void bitset_rewrite_ast(ASTNode* n, BitsetDef* defs, int ndefs) {
+    if (!n) return;
+    if (n->node_type) bitset_rewrite_type(n->node_type, defs, ndefs, 0);
+    for (int i = 0; i < n->child_count; i++)
+        bitset_rewrite_ast(n->children[i], defs, ndefs);
+}
+
+static void resolve_bitset_types(ASTNode* program) {
+    if (!program) return;
+    BitsetDef defs[AETHER_MAX_BITSETS];
+    int ndefs = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_BITSET_TYPE_DEF && c->value && c->node_type &&
+            c->node_type->kind == TYPE_BITSET && c->node_type->element_type &&
+            c->node_type->element_type->struct_name && ndefs < AETHER_MAX_BITSETS) {
+            defs[ndefs].name = c->value;
+            defs[ndefs].enum_name = c->node_type->element_type->struct_name;
+            ndefs++;
+
+            /* #1046 width guard: the backing is one uint64_t, so an enum with
+             * >64 members overflows — index 64+ shifts past the type width
+             * (UB + a -Wshift-count-overflow that fails -Werror CI). Reject
+             * here, order-independent of where the enum is declared. Find the
+             * enum def by scanning the program (no symbol table in this
+             * pass). Explicit backing widths are a follow-up. */
+            for (int j = 0; j < program->child_count; j++) {
+                ASTNode* e = program->children[j];
+                if (e && e->type == AST_ENUM_DEF && e->value &&
+                    strcmp(e->value, c->node_type->element_type->struct_name) == 0 &&
+                    e->child_count > 64) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "bit_set enum '%s' has %d members; the 64-bit backing "
+                        "supports at most 64", e->value, e->child_count);
+                    type_error(msg, c->line, c->column);
+                    break;
+                }
+            }
+        }
+    }
+    if (ndefs == 0) return;
+    bitset_rewrite_ast(program, defs, ndefs);
+}
+
+/* #1044: make enums first-class values. The parser lowers every bare
+ * named-type annotation (`c: Color`, `Color c = ...`, `-> Color`, a
+ * `Color` struct field) to TYPE_STRUCT{Color}, since it can't yet know
+ * Color is an enum. This pass — mirroring resolve_bitset_types — collects
+ * the declared enum names and rewrites those TYPE_STRUCT use-sites to
+ * TYPE_ENUM, so the slot type matches the TYPE_ENUM that a `.Member`
+ * value already carries (no more "type mismatch in initialization"), and
+ * codegen emits the enum's C type (int) rather than an undeclared
+ * `Color`. Runs after sum/distinct/bitset resolution (a name is exactly
+ * one of these) and before any type-checking. */
+#define AETHER_MAX_ENUMS 512
+typedef struct { const char* name; ASTNode* def; } EnumDefRef;
+
+static void enum_rewrite_type(Type* t, EnumDefRef* defs, int n, int depth) {
+    if (!t || depth > 16) return;
+    if (t->kind == TYPE_STRUCT && t->struct_name) {
+        for (int i = 0; i < n; i++) {
+            if (strcmp(t->struct_name, defs[i].name) == 0) {
+                t->kind = TYPE_ENUM;   /* struct_name stays = the enum name */
+                break;
+            }
+        }
+    }
+    enum_rewrite_type(t->element_type, defs, n, depth + 1);
+    enum_rewrite_type(t->return_type, defs, n, depth + 1);
+    for (int i = 0; i < t->tuple_count; i++)
+        enum_rewrite_type(t->tuple_types ? t->tuple_types[i] : NULL, defs, n, depth + 1);
+    for (int i = 0; i < t->param_count; i++)
+        enum_rewrite_type(t->param_types ? t->param_types[i] : NULL, defs, n, depth + 1);
+}
+
+/* Member index of `member` in enum `def`, or -1. */
+static int enum_def_member_index(ASTNode* def, const char* member) {
+    if (!def || !member) return -1;
+    for (int i = 0; i < def->child_count; i++) {
+        ASTNode* m = def->children[i];
+        if (m && m->value && strcmp(m->value, member) == 0) return i;
+    }
+    return -1;
+}
+
+static void enum_rewrite_ast(ASTNode* node, EnumDefRef* defs, int n) {
+    if (!node) return;
+    if (node->node_type) enum_rewrite_type(node->node_type, defs, n, 0);
+    /* Stamp every `.Member` value node with its integer index, resolved
+     * from the enum registry by name. Doing it here — not in a later
+     * typecheck pass — guarantees the index is present in EVERY position
+     * (return expressions, nested block bodies, tuple elements), not just
+     * the paths a given typecheck route happens to visit. Codegen reads
+     * `bit_width` for the emitted integer (#1044). A `.Member` whose node
+     * already carries a resolved index (from the bitset-literal path) is
+     * left alone; only an unresolved one (bit_width < 0 or the name maps
+     * to an index under some declared enum) is stamped. When exactly one
+     * enum defines the member, resolution is unambiguous. */
+    if (node->type == AST_ENUM_VALUE && node->value && node->bit_width < 0) {
+        for (int i = 0; i < n; i++) {
+            int idx = enum_def_member_index(defs[i].def, node->value);
+            if (idx >= 0) { node->bit_width = idx; break; }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        enum_rewrite_ast(node->children[i], defs, n);
+}
+
+static void resolve_enum_types(ASTNode* program) {
+    if (!program) return;
+    EnumDefRef defs[AETHER_MAX_ENUMS];
+    int ndefs = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_ENUM_DEF && c->value && ndefs < AETHER_MAX_ENUMS) {
+            defs[ndefs].name = c->value;
+            defs[ndefs].def = c;
+            ndefs++;
+        }
+    }
+    if (ndefs == 0) return;
+    enum_rewrite_ast(program, defs, ndefs);
+}
+
 /* Fold every `__pure(fn)` node in the tree to a `true`/`false` bool literal. */
 static void resolve_purity_queries(ASTNode* node, ASTNode* program,
                                    const char** globals, int nglobals) {
@@ -4015,6 +4325,52 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 }
                 Type* init_type = infer_type(init, table);
 
+                Symbol* existing = stmt->value ? lookup_symbol(table, stmt->value) : NULL;
+                Type* bitset_target =
+                    (stmt->node_type && stmt->node_type->kind == TYPE_BITSET)
+                        ? stmt->node_type
+                        : ((existing && existing->type && existing->type->kind == TYPE_BITSET)
+                            ? existing->type : NULL);
+                if (init->type == AST_BITSET_LITERAL && bitset_target) {
+                    ASTNode* enum_def = bitset_target->element_type
+                                      ? find_enum_def(table, bitset_target->element_type->struct_name)
+                                      : NULL;
+                    int ok = 1;
+                    for (int bi = 0; bi < init->child_count; bi++) {
+                        ASTNode* item = init->children[bi];
+                        int member_idx = -1;
+                        if (!item || item->type != AST_ENUM_VALUE ||
+                            !enum_has_member(enum_def, item->value, &member_idx)) {
+                            ok = 0;
+                            char msg[256];
+                            snprintf(msg, sizeof(msg),
+                                     "bit_set literal member '.%s' is not in enum '%s'",
+                                     item && item->value ? item->value : "?",
+                                     bitset_target->element_type &&
+                                     bitset_target->element_type->struct_name
+                                         ? bitset_target->element_type->struct_name : "?");
+                            type_error(msg, init->line, init->column);
+                            break;
+                        }
+                        if (item->node_type) free_type(item->node_type);
+                        item->node_type = bitset_target->element_type
+                                        ? clone_type(bitset_target->element_type)
+                                        : create_type(TYPE_ENUM);
+                        if (item->annotation) free(item->annotation);
+                        item->annotation = bitset_target->element_type &&
+                                           bitset_target->element_type->struct_name
+                                         ? strdup(bitset_target->element_type->struct_name)
+                                         : NULL;
+                        item->bit_width = member_idx;
+                    }
+                    if (ok) {
+                        if (init->node_type) free_type(init->node_type);
+                        init->node_type = clone_type(bitset_target);
+                        if (init_type) free_type(init_type);
+                        init_type = clone_type(bitset_target);
+                    }
+                }
+
                 /* `const` is substitution-at-each-use: the compiler
                  * inlines the RHS expression at every reference. That
                  * works for literals but is silently wrong for
@@ -4075,7 +4431,6 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                  * binding is byte-typed, run the literal-range check
                  * before stmt->node_type gets overwritten with the int
                  * init type below. */
-                Symbol* existing = stmt->value ? lookup_symbol(table, stmt->value) : NULL;
                 if (existing && existing->type && existing->type->kind == TYPE_BYTE &&
                     byte_assignment_literal_out_of_range(init)) {
                     char msg[256];
@@ -4402,7 +4757,22 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 }
                 ASTNode* rhs = stmt->children[1];
                 typecheck_expression(rhs, table);
-                { Type* _t = infer_type(rhs, table); free_type(_t); }
+                Type* rhs_type = infer_type(rhs, table);
+                if (symbol->type && symbol->type->kind == TYPE_BITSET &&
+                    rhs && rhs->type == AST_BITSET_LITERAL) {
+                    pin_bitset_literal(rhs, symbol->type, table);
+                    if (rhs_type) free_type(rhs_type);
+                    rhs_type = clone_type(symbol->type);
+                }
+                if (symbol->type && symbol->type->kind == TYPE_BITSET &&
+                    (!rhs_type || rhs_type->kind != TYPE_BITSET ||
+                     !types_equal(symbol->type, rhs_type))) {
+                    type_error("bit_set compound assignment requires a matching bit_set RHS",
+                               stmt->line, stmt->column);
+                    if (rhs_type) free_type(rhs_type);
+                    return 0;
+                }
+                if (rhs_type) free_type(rhs_type);
                 if (stmt->node_type && stmt->node_type->kind == TYPE_UNKNOWN && symbol->type) {
                     free_type(stmt->node_type);
                     stmt->node_type = clone_type(symbol->type);
@@ -4753,6 +5123,41 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 element_type = create_type(TYPE_INT);
             }
 
+            /* #1044 match-on-enum: when the scrutinee is an enum, a bare
+             * identifier pattern (`Green ->`) names a member, not a
+             * variable. Rewrite it in place to an AST_ENUM_VALUE carrying
+             * the member index, so the existing enum-value typecheck/codegen
+             * (which emit the integer) apply and no undeclared C identifier
+             * leaks out. An unknown bare name under an enum scrutinee is a
+             * hard error rather than a silent capture. */
+            if (match_expr_type && match_expr_type->kind == TYPE_ENUM &&
+                match_expr_type->struct_name) {
+                ASTNode* enum_def = find_enum_def(table, match_expr_type->struct_name);
+                if (enum_def) {
+                    for (int ai = 1; ai < stmt->child_count; ai++) {
+                        ASTNode* a = stmt->children[ai];
+                        if (!a || a->type != AST_MATCH_ARM || a->child_count < 1) continue;
+                        ASTNode* pat = a->children[0];
+                        if (!pat || pat->type != AST_IDENTIFIER || !pat->value) continue;
+                        if (strcmp(pat->value, "_") == 0) continue;   // wildcard
+                        int midx = -1;
+                        if (enum_has_member(enum_def, pat->value, &midx)) {
+                            pat->type = AST_ENUM_VALUE;
+                            pat->bit_width = midx;
+                            if (pat->node_type) free_type(pat->node_type);
+                            pat->node_type = create_type(TYPE_ENUM);
+                            pat->node_type->struct_name = strdup(match_expr_type->struct_name);
+                        } else {
+                            char msg[256];
+                            snprintf(msg, sizeof(msg),
+                                     "'%s' is not a member of enum '%s'",
+                                     pat->value, match_expr_type->struct_name);
+                            type_error(msg, pat->line, pat->column);
+                        }
+                    }
+                }
+            }
+
             // #914 sum `match` bookkeeping: track variant coverage (for the
             // exhaustiveness check) and the scrutinee variable name (for
             // per-arm narrowing — `match s { Circle -> { s.r } }` narrows `s`
@@ -4948,6 +5353,34 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
     switch (expr->type) {
         case AST_BINARY_EXPRESSION:
             return typecheck_binary_expression(expr, table);
+
+        case AST_ENUM_VALUE: {
+            const char* enum_name = NULL;
+            int idx = -1;
+            if (!find_enum_member(table, expr->value, &enum_name, &idx) || !enum_name) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "unknown enum member '.%s'",
+                         expr->value ? expr->value : "?");
+                type_error(msg, expr->line, expr->column);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            if (expr->node_type) free_type(expr->node_type);
+            expr->node_type = create_type(TYPE_ENUM);
+            expr->node_type->struct_name = strdup(enum_name);
+            if (expr->annotation) free(expr->annotation);
+            expr->annotation = strdup(enum_name);
+            expr->bit_width = idx;
+            return 1;
+        }
+
+        case AST_BITSET_LITERAL: {
+            for (int i = 0; i < expr->child_count; i++) {
+                typecheck_expression(expr->children[i], table);
+            }
+            if (!expr->node_type) expr->node_type = create_type(TYPE_UNKNOWN);
+            return 1;
+        }
             
         case AST_UNARY_EXPRESSION: {
             if (expr->child_count > 0) {
@@ -5143,6 +5576,24 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
         }
 
         case AST_FUNCTION_CALL:
+            /* `card(m)` is the bit_set popcount builtin ONLY when its single
+             * argument is a bit_set. Otherwise `card` is an ordinary name, so
+             * a user-defined `card(x: int)` resolves normally (#1046 review:
+             * the builtin must not hijack the identifier). */
+            if (expr->value && strcmp(expr->value, "card") == 0 &&
+                expr->child_count == 1 &&
+                !lookup_symbol(table, "card")) {
+                typecheck_expression(expr->children[0], table);
+                Type* arg = infer_type(expr->children[0], table);
+                int is_bitset = (arg && arg->kind == TYPE_BITSET);
+                if (arg) free_type(arg);
+                if (is_bitset) {
+                    expr->node_type = create_type(TYPE_INT);
+                    return 1;
+                }
+                /* not a bit_set and no user `card` — fall through to the
+                 * normal path so the undefined-function error is accurate. */
+            }
             return typecheck_function_call(expr, table);
             
         case AST_IDENTIFIER: {
@@ -5702,6 +6153,47 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
     }
 }
 
+static int pin_bitset_literal(ASTNode* lit, Type* bitset_type,
+                              SymbolTable* table) {
+    if (!lit || lit->type != AST_BITSET_LITERAL ||
+        !bitset_type || bitset_type->kind != TYPE_BITSET) return 0;
+    ASTNode* enum_def = bitset_type->element_type
+                      ? find_enum_def(table, bitset_type->element_type->struct_name)
+                      : NULL;
+    int ok = 1;
+    for (int i = 0; i < lit->child_count; i++) {
+        ASTNode* item = lit->children[i];
+        int member_idx = -1;
+        if (!item || item->type != AST_ENUM_VALUE ||
+            !enum_has_member(enum_def, item->value, &member_idx)) {
+            ok = 0;
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "bit_set literal member '.%s' is not in enum '%s'",
+                     item && item->value ? item->value : "?",
+                     bitset_type->element_type &&
+                     bitset_type->element_type->struct_name
+                         ? bitset_type->element_type->struct_name : "?");
+            type_error(msg, lit->line, lit->column);
+            break;
+        }
+        if (item->node_type) free_type(item->node_type);
+        item->node_type = bitset_type->element_type
+                        ? clone_type(bitset_type->element_type)
+                        : create_type(TYPE_ENUM);
+        if (item->annotation) free(item->annotation);
+        item->annotation = bitset_type->element_type &&
+                           bitset_type->element_type->struct_name
+                         ? strdup(bitset_type->element_type->struct_name)
+                         : NULL;
+        item->bit_width = member_idx;
+    }
+    if (!ok) return 0;
+    if (lit->node_type) free_type(lit->node_type);
+    lit->node_type = clone_type(bitset_type);
+    return 1;
+}
+
 int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
     if (!expr || expr->type != AST_BINARY_EXPRESSION || expr->child_count < 2) return 0;
     
@@ -5715,6 +6207,54 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
     Type* right_type = infer_type(right, table);
 
     AeTokenType operator = get_token_type_from_string(expr->value);
+
+    if ((operator == TOKEN_PLUS || operator == TOKEN_MINUS ||
+         operator == TOKEN_LESS || operator == TOKEN_LESS_EQUAL ||
+         operator == TOKEN_GREATER || operator == TOKEN_GREATER_EQUAL) &&
+        left_type && left_type->kind == TYPE_BITSET &&
+        right && right->type == AST_BITSET_LITERAL) {
+        pin_bitset_literal(right, left_type, table);
+        if (right_type) free_type(right_type);
+        right_type = clone_type(left_type);
+    }
+    if ((operator == TOKEN_PLUS || operator == TOKEN_MINUS ||
+         operator == TOKEN_LESS || operator == TOKEN_LESS_EQUAL ||
+         operator == TOKEN_GREATER || operator == TOKEN_GREATER_EQUAL) &&
+        right_type && right_type->kind == TYPE_BITSET &&
+        left && left->type == AST_BITSET_LITERAL) {
+        pin_bitset_literal(left, right_type, table);
+        if (left_type) free_type(left_type);
+        left_type = clone_type(right_type);
+    }
+
+    if ((operator == TOKEN_IN || operator == TOKEN_NOT_IN) &&
+        right_type && right_type->kind == TYPE_BITSET &&
+        left && left->type == AST_ENUM_VALUE) {
+        ASTNode* enum_def = right_type->element_type
+                          ? find_enum_def(table, right_type->element_type->struct_name)
+                          : NULL;
+        int member_idx = -1;
+        if (!enum_has_member(enum_def, left->value, &member_idx)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "enum member '.%s' is not in bit_set enum '%s'",
+                     left->value ? left->value : "?",
+                     right_type->element_type && right_type->element_type->struct_name
+                         ? right_type->element_type->struct_name : "?");
+            type_error(msg, expr->line, expr->column);
+        }
+        if (left->node_type) free_type(left->node_type);
+        left->node_type = right_type->element_type
+                        ? clone_type(right_type->element_type)
+                        : create_type(TYPE_ENUM);
+        if (left->annotation) free(left->annotation);
+        left->annotation = right_type->element_type && right_type->element_type->struct_name
+                         ? strdup(right_type->element_type->struct_name)
+                         : NULL;
+        left->bit_width = member_idx >= 0 ? member_idx : 0;
+        if (left_type) free_type(left_type);
+        left_type = clone_type(left->node_type);
+    }
 
     // #340: equality with `none` / between optionals — `m == none`,
     // `none == m`, `a? == b?` all yield bool. Pin a bare `none` operand to the
@@ -5740,6 +6280,65 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
             expr->node_type = create_type(TYPE_BOOL);
             return 1;
         }
+    }
+
+    if (operator == TOKEN_PLUS || operator == TOKEN_MINUS) {
+        if (left_type && right_type &&
+            (left_type->kind == TYPE_BITSET || right_type->kind == TYPE_BITSET)) {
+            if (!(left_type->kind == TYPE_BITSET && right_type->kind == TYPE_BITSET &&
+                  types_equal(left_type, right_type))) {
+                type_error("bit_set union/difference requires matching bit_set operands",
+                           expr->line, expr->column);
+                if (left_type) free_type(left_type);
+                if (right_type) free_type(right_type);
+                expr->node_type = create_type(TYPE_UNKNOWN);
+                return 0;
+            }
+            expr->node_type = clone_type(left_type);
+            free_type(left_type);
+            free_type(right_type);
+            return 1;
+        }
+    }
+
+    if (operator == TOKEN_IN || operator == TOKEN_NOT_IN) {
+        int ok = left_type && right_type &&
+                 left_type->kind == TYPE_ENUM &&
+                 right_type->kind == TYPE_BITSET &&
+                 right_type->element_type &&
+                 right_type->element_type->kind == TYPE_ENUM &&
+                 types_equal(left_type, right_type->element_type);
+        if (!ok) {
+            type_error("`in`/`not_in` requires `.EnumMember in bit_set[Enum]`",
+                       expr->line, expr->column);
+            if (left_type) free_type(left_type);
+            if (right_type) free_type(right_type);
+            expr->node_type = create_type(TYPE_BOOL);
+            return 0;
+        }
+        expr->node_type = create_type(TYPE_BOOL);
+        free_type(left_type);
+        free_type(right_type);
+        return 1;
+    }
+
+    if ((operator == TOKEN_LESS || operator == TOKEN_LESS_EQUAL ||
+         operator == TOKEN_GREATER || operator == TOKEN_GREATER_EQUAL) &&
+        left_type && right_type &&
+        (left_type->kind == TYPE_BITSET || right_type->kind == TYPE_BITSET)) {
+        if (!(left_type->kind == TYPE_BITSET && right_type->kind == TYPE_BITSET &&
+              types_equal(left_type, right_type))) {
+            type_error("bit_set subset comparisons require matching bit_set operands",
+                       expr->line, expr->column);
+            if (left_type) free_type(left_type);
+            if (right_type) free_type(right_type);
+            expr->node_type = create_type(TYPE_BOOL);
+            return 0;
+        }
+        expr->node_type = create_type(TYPE_BOOL);
+        free_type(left_type);
+        free_type(right_type);
+        return 1;
     }
 
     // Reject `string + string` at typecheck rather than emitting

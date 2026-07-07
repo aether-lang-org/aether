@@ -210,6 +210,15 @@ const char* type_to_string(Type* type) {
                      type->element_type ? type_to_string(type->element_type) : "?");
             return buffer;
         }
+        case TYPE_ENUM:
+            return type->struct_name ? type->struct_name : "enum";
+        case TYPE_BITSET: {
+            static char buffer[256];
+            snprintf(buffer, sizeof(buffer), "bit_set[%s]",
+                     type->element_type && type->element_type->struct_name
+                         ? type->element_type->struct_name : "?");
+            return buffer;
+        }
         default: return "UNKNOWN";
     }
 }
@@ -239,6 +248,16 @@ int types_equal(Type* a, Type* b) {
 
     // #914 sum types are nominal: equal iff they name the same sum.
     if (a->kind == TYPE_SUM) {
+        if (!a->struct_name || !b->struct_name) return 0;
+        return strcmp(a->struct_name, b->struct_name) == 0;
+    }
+
+    if (a->kind == TYPE_ENUM) {
+        if (!a->struct_name || !b->struct_name) return 0;
+        return strcmp(a->struct_name, b->struct_name) == 0;
+    }
+
+    if (a->kind == TYPE_BITSET) {
         if (!a->struct_name || !b->struct_name) return 0;
         return strcmp(a->struct_name, b->struct_name) == 0;
     }
@@ -529,6 +548,10 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_NULL_COALESCE: return "NULL_COALESCE";     // #340
         case AST_OPTIONAL_CHAIN: return "OPTIONAL_CHAIN";   // #340
         case AST_SUM_TYPE_DEF: return "SUM_TYPE_DEF";       // #914
+        case AST_ENUM_DEF: return "ENUM_DEF";
+        case AST_BITSET_TYPE_DEF: return "BITSET_TYPE_DEF";
+        case AST_ENUM_VALUE: return "ENUM_VALUE";
+        case AST_BITSET_LITERAL: return "BITSET_LITERAL";
         default: return "UNKNOWN";
     }
 }
