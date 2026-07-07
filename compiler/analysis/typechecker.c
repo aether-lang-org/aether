@@ -386,6 +386,25 @@ static int is_export_blocked(const char* namespace, const char* symbol) {
     return (mod && mod->export_count > 0 && !module_is_exported(mod, symbol));
 }
 
+/* Find a registered module by exact name, or by the last dot-component
+ * of its name. Std modules register under their full path ("std.os")
+ * while qualified call sites carry the leaf ("os.getenv"), so a plain
+ * module_find(prefix) misses them. First leaf match wins; the caller's
+ * exports gate keeps an ambiguous leaf from resolving anything the
+ * matched module doesn't explicitly export. (#1035) */
+static AetherModule* module_find_by_name_or_leaf(const char* name) {
+    if (!global_module_registry || !name) return NULL;
+    AetherModule* m = module_find(name);
+    if (m) return m;
+    for (int i = 0; i < global_module_registry->module_count; i++) {
+        AetherModule* cand = global_module_registry->modules[i];
+        if (!cand || !cand->name) continue;
+        const char* last_dot = strrchr(cand->name, '.');
+        if (last_dot && strcmp(last_dot + 1, name) == 0) return cand;
+    }
+    return NULL;
+}
+
 int is_imported_namespace(const char* name) {
     for (int i = 0; i < namespace_count; i++) {
         if (strcmp(imported_namespaces[i], name) == 0) return 1;
@@ -452,6 +471,21 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
                     snprintf(c_origin, sizeof(c_origin), "%s_%s",
                              origin->name, suffix);
                     sym = lookup_symbol(table, c_origin);
+                }
+            }
+            /* #1035: exports that don't carry the module-name prefix —
+             * raw externs like std.os's `aether_args_count` — have no
+             * `<prefix>_<suffix>` symbol; their C name IS the bare
+             * export name. If the module explicitly exports `suffix`,
+             * resolve the bare symbol so the documented qualified form
+             * (`os.aether_args_count()`) works. Gated on a positive
+             * exports-list hit, so `anything.foo` can never reach an
+             * unrelated global `foo`. */
+            if (!sym && global_module_registry) {
+                AetherModule* mod = module_find_by_name_or_leaf(prefix);
+                if (mod && mod->export_count > 0 &&
+                    module_is_exported(mod, suffix)) {
+                    sym = lookup_symbol(table, suffix);
                 }
             }
             free(name_copy);
@@ -5250,6 +5284,19 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             }
             return 1;
 
+        case AST_TUPLE_LITERAL: {
+            /* #1033: `(a, b, ...)` — element expressions typecheck here;
+             * the extern-call argument check validates shape (element
+             * count, scalar element kinds) against the tuple-typed
+             * parameter and stamps expr->node_type with the param's
+             * tuple type. Anywhere else the literal is left untyped and
+             * the consuming context reports its own mismatch. */
+            for (int i = 0; i < expr->child_count; i++) {
+                typecheck_expression(expr->children[i], table);
+            }
+            return 1;
+        }
+
         case AST_NAMED_ARG:
             // Named argument: type check the value expression
             if (expr->child_count > 0) {
@@ -6026,6 +6073,24 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         }
     }
 
+    /* #1035: a qualified call resolved to a BARE symbol — a
+     * non-prefixed export like std.os's `aether_args_count` (see the
+     * exports-gated fallback in lookup_qualified_symbol). Codegen
+     * lowers dots to underscores, so `os.aether_args_count` would
+     * otherwise emit the non-existent `os_aether_args_count`; rewrite
+     * call->value to the bare name the symbol actually carries. */
+    if (symbol && call->value && symbol->name) {
+        char* dot = strchr(call->value, '.');
+        if (dot && strcmp(symbol->name, dot + 1) == 0 &&
+            strcmp(symbol->name, call->value) != 0) {
+            char* bare = strdup(symbol->name);
+            if (bare) {
+                free(call->value);
+                call->value = bare;
+            }
+        }
+    }
+
     // Issue #333 DSL receiver fallback: when the call is bare-name
     // (no dot in call->value) and the symbol resolved through the
     // <receiver>_<name> rewrite in lookup_symbol, the symbol's
@@ -6362,6 +6427,80 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
             }
             type_error(error_msg, call->line, call->column);
             return 0;
+        }
+
+        /* #1033: tuple-typed extern parameters (by-value C struct args).
+         * A `(T1, T2, ...)` param accepts exactly a tuple-literal
+         * argument with a matching element count; codegen packs it into
+         * the synthesized `_tuple_*` struct. Conservative slice: scalar
+         * / byte / f32 / bool / ptr elements, no nesting, no strings
+         * (string unwrap semantics inside a by-value struct are a
+         * follow-up). Also rejects a tuple literal aimed at a
+         * non-tuple param — there is nothing sane to emit for it. */
+        {
+            int pi = 0;
+            int arg_base = ctx_first ? -1 : 0;  /* _ctx injected: params lead args by 1 */
+            for (int ci = 0; ci < extern_node->child_count; ci++) {
+                ASTNode* p = extern_node->children[ci];
+                if (!p || p->type != AST_IDENTIFIER) continue;
+                int ai = pi + arg_base;
+                pi++;
+                if (ai < 0 || ai >= call->child_count) continue;
+                ASTNode* arg = call->children[ai];
+                if (!arg) continue;
+                int param_is_tuple = (p->node_type &&
+                                      p->node_type->kind == TYPE_TUPLE);
+                if (!param_is_tuple && arg->type == AST_TUPLE_LITERAL) {
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg),
+                             "tuple literal passed to non-tuple parameter "
+                             "%d of extern '%s'", pi, call->value);
+                    type_error(error_msg, arg->line, arg->column);
+                    return 0;
+                }
+                if (!param_is_tuple) continue;
+                if (arg->type != AST_TUPLE_LITERAL) {
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg),
+                             "parameter %d of extern '%s' is tuple-typed; "
+                             "pass a parenthesized tuple literal, e.g. (x, y)",
+                             pi, call->value);
+                    type_error(error_msg, arg->line, arg->column);
+                    return 0;
+                }
+                if (arg->child_count != p->node_type->tuple_count) {
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg),
+                             "tuple argument for parameter %d of extern '%s' "
+                             "has %d element(s), expected %d",
+                             pi, call->value, arg->child_count,
+                             p->node_type->tuple_count);
+                    type_error(error_msg, arg->line, arg->column);
+                    return 0;
+                }
+                for (int ei = 0; ei < p->node_type->tuple_count; ei++) {
+                    TypeKind ek = p->node_type->tuple_types[ei]
+                                  ? p->node_type->tuple_types[ei]->kind
+                                  : TYPE_UNKNOWN;
+                    if (ek != TYPE_INT && ek != TYPE_INT64 &&
+                        ek != TYPE_FLOAT && ek != TYPE_FLOAT32 &&
+                        ek != TYPE_BYTE && ek != TYPE_BOOL &&
+                        ek != TYPE_PTR) {
+                        char error_msg[256];
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "tuple extern parameters support scalar, "
+                                 "byte, f32, bool, and ptr elements only "
+                                 "(parameter %d of '%s')", pi, call->value);
+                        type_error(error_msg, arg->line, arg->column);
+                        return 0;
+                    }
+                }
+                /* Stamp the literal with the param's tuple type so
+                 * codegen emits the matching `_tuple_*` compound
+                 * literal without re-deriving it. */
+                if (arg->node_type) free_type(arg->node_type);
+                arg->node_type = clone_type(p->node_type);
+            }
         }
     }
 

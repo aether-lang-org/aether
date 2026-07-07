@@ -3963,6 +3963,39 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         }
                         int expected_is_fnptr_form = (expected == TYPE_FUNCTION &&
                             expected_type && expected_type->is_fnptr);
+                        /* #1033: tuple literal → by-value `_tuple_*` struct
+                         * for a tuple-typed extern parameter. The element
+                         * list comes from the registry's full param type,
+                         * falling back to the tuple type the typechecker
+                         * stamped on the literal. Each element gets an
+                         * explicit cast to its field's C type, so Aether
+                         * doubles land in `float` fields and ints in
+                         * `unsigned char` ones without warnings. */
+                        Type* tuple_param = NULL;
+                        if (arg->type == AST_TUPLE_LITERAL) {
+                            if (expected == TYPE_TUPLE) {
+                                tuple_param = lookup_extern_param_type(
+                                    gen, c_func_name, arg_printed);
+                            }
+                            if ((!tuple_param || tuple_param->kind != TYPE_TUPLE) &&
+                                arg->node_type &&
+                                arg->node_type->kind == TYPE_TUPLE) {
+                                tuple_param = arg->node_type;
+                            }
+                        }
+                        if (tuple_param && tuple_param->kind == TYPE_TUPLE) {
+                            fprintf(gen->output, "(%s){", get_c_type(tuple_param));
+                            for (int ti = 0; ti < arg->child_count; ti++) {
+                                if (ti > 0) fprintf(gen->output, ", ");
+                                Type* et = (ti < tuple_param->tuple_count)
+                                           ? tuple_param->tuple_types[ti] : NULL;
+                                fprintf(gen->output, "(%s)(",
+                                        et ? get_c_type(et) : "int");
+                                generate_expression(gen, arg->children[ti]);
+                                fprintf(gen->output, ")");
+                            }
+                            fprintf(gen->output, "}");
+                        } else
                         if (expected_type && expected_type->kind == TYPE_OPTIONAL &&
                             needs_optional_coerce(arg, expected_type)) {
                             /* #340: a bare `T` (or `none`) flowing into a

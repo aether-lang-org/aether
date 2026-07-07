@@ -147,6 +147,7 @@ const char* type_to_string(Type* type) {
         case TYPE_DURATION: return "Duration";
         case TYPE_FLOAT: return "float";
         case TYPE_LONGDOUBLE: return "longdouble";
+        case TYPE_FLOAT32: return "f32";
         case TYPE_BOOL: return "bool";
         case TYPE_BYTE: return "byte";
         case TYPE_STRING: return "string";

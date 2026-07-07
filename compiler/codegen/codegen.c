@@ -219,6 +219,7 @@ const char* const_array_elem_c_type(Type* t) {
         case TYPE_UINT8:   return "uint8_t";
         case TYPE_FLOAT:   return "double";
         case TYPE_LONGDOUBLE: return "long double";
+        case TYPE_FLOAT32: return "float";
         case TYPE_PTR:     return "void*";
         case TYPE_BYTE:    return "unsigned char";
         case TYPE_BOOL:    return "_Bool";
@@ -1711,6 +1712,7 @@ const char* get_c_type(Type* type) {
          * argument. Now consistent everywhere. */
         case TYPE_FLOAT: return "double";
         case TYPE_LONGDOUBLE: return "long double";
+        case TYPE_FLOAT32: return "float";
         case TYPE_BOOL: return "int";
         /* `unsigned char` (not `uint8_t`) so the compiler's strict-aliasing
          * exemption applies: code may legally read or write any other
@@ -1816,9 +1818,13 @@ const char* get_c_type(Type* type) {
             int pos = snprintf(buffer, 256, "_tuple");
             for (int i = 0; i < type->tuple_count && pos < 240; i++) {
                 const char* elem = get_c_type(type->tuple_types[i]);
-                // Sanitize: "const char*" -> "string", "void*" -> "ptr"
+                // Sanitize: "const char*" -> "string", "void*" -> "ptr",
+                // and the space-containing spellings that would otherwise
+                // produce an invalid identifier (#1033: byte tuple fields).
                 if (strcmp(elem, "const char*") == 0) elem = "string";
                 else if (strcmp(elem, "void*") == 0) elem = "ptr";
+                else if (strcmp(elem, "unsigned char") == 0) elem = "byte";
+                else if (strcmp(elem, "long double") == 0) elem = "longdouble";
                 pos += snprintf(buffer + pos, 256 - pos, "_%s", elem);
             }
             return buffer;
@@ -1908,6 +1914,7 @@ static const char* get_abi_type(Type* type) {
          * wrapper symbols emitted with --emit=lib) follows suit. */
         case TYPE_FLOAT:  return "double";
         case TYPE_LONGDOUBLE: return "long double";
+        case TYPE_FLOAT32: return "float";
         case TYPE_BOOL:   return "int32_t";
         case TYPE_BYTE:   return "unsigned char";
         case TYPE_STRING: return "const char*";
@@ -4241,6 +4248,18 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             child->node_type->kind == TYPE_TUPLE) {
             ensure_tuple_typedef(gen, child->node_type);
         }
+        // Externs with tuple-typed PARAMETERS need theirs too (#1033) —
+        // the prototype references the `_tuple_*` name for each by-value
+        // struct param.
+        if (child->type == AST_EXTERN_FUNCTION) {
+            for (int j = 0; j < child->child_count; j++) {
+                ASTNode* p = child->children[j];
+                if (p && p->type == AST_IDENTIFIER && p->node_type &&
+                    p->node_type->kind == TYPE_TUPLE) {
+                    ensure_tuple_typedef(gen, p->node_type);
+                }
+            }
+        }
         // Imported modules' externs with tuple returns — the import
         // pass forward-declares them and would otherwise reference an
         // undeclared `_tuple_T1_T2` typedef (#289).
@@ -4250,10 +4269,18 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             if (mod_ast) {
                 for (int j = 0; j < mod_ast->child_count; j++) {
                     ASTNode* decl = mod_ast->children[j];
-                    if (decl && decl->type == AST_EXTERN_FUNCTION &&
-                        decl->node_type &&
+                    if (!decl || decl->type != AST_EXTERN_FUNCTION) continue;
+                    if (decl->node_type &&
                         decl->node_type->kind == TYPE_TUPLE) {
                         ensure_tuple_typedef(gen, decl->node_type);
+                    }
+                    // ... and their tuple-typed params (#1033).
+                    for (int k = 0; k < decl->child_count; k++) {
+                        ASTNode* p = decl->children[k];
+                        if (p && p->type == AST_IDENTIFIER && p->node_type &&
+                            p->node_type->kind == TYPE_TUPLE) {
+                            ensure_tuple_typedef(gen, p->node_type);
+                        }
                     }
                 }
             }

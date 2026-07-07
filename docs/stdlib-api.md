@@ -339,6 +339,10 @@ main() {
 - `aether_args_get(index)` → `string` Get the i-th argument; returns null if out of range
 - `aether_argv0()` → `string` Path the OS launched the current process with (argv[0]); returns null before `aether_args_init` has run
 - `os.argv0()` → `string` Convenience wrapper around `aether_argv0()` that returns `""` instead of null
+- `os.args_count()` → `int` Ergonomic alias for `aether_args_count()` (#1035)
+- `os.args_get(index)` → `string` Ergonomic wrapper: owned copy of argv[index], `""` when out of range / sealed (never null)
+
+All four raw `aether_args_*` names also resolve qualified (`os.aether_args_count()` — the form the language reference shows) since #1035.
 
 Typical use: a tool that needs to find its own binary (to locate sibling helpers next to itself, re-exec with different flags, or print a self-path in a diagnostic) can call `os.argv0()` and skip the argv-index bookkeeping.
 

@@ -160,6 +160,12 @@ typedef struct {
                              //   Set to a different value when the extern was declared
                              //   via @extern("c_symbol") aether_name(...) — see #234.
         TypeKind* params;    // array of parameter kinds (TYPE_PTR, TYPE_INT, ...)
+        Type** param_full;   // full Type* per param (borrowed from the extern's
+                             //   AST, which outlives the generator). Needed when
+                             //   the kind alone can't drive emission — a
+                             //   TYPE_TUPLE param's element list is required to
+                             //   pack the by-value struct literal (#1033). NULL
+                             //   entries where the param had no node_type.
         int* params_aether;  // 1 per index when the param was declared
                              //   `name: @aether string` — receiver is Aether-emitted
                              //   C and dispatches on AetherString magic via str_len.

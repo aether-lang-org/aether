@@ -1,0 +1,66 @@
+// Regression test for #1035: the documented qualified argv forms resolve.
+//
+// std.os exports the argv externs under their raw names
+// (aether_args_count, ...) — no `os_` prefix — so qualified resolution's
+// `<prefix>_<suffix>` join never found them and the documented
+// `os.aether_args_count()` died with E0301 while the bare spelling leaked
+// through. The resolver now falls back to the bare exported name (gated on
+// the module's exports list), and std.os grew ergonomic wrappers
+// os.args_count() / os.args_get(i) mirroring args_seal / args_sealed.
+
+import std.os
+import std.string
+
+main() {
+    // The documented form (language-reference.md) — was E0301.
+    n1 = os.aether_args_count()
+    // New ergonomic wrapper.
+    n2 = os.args_count()
+    // The unqualified spelling that always worked.
+    n3 = aether_args_count()
+
+    if n1 != n3 {
+        print("FAIL: os.aether_args_count (${n1}) != aether_args_count (${n3})\n")
+        exit(1)
+    }
+    if n2 != n3 {
+        print("FAIL: os.args_count (${n2}) != aether_args_count (${n3})\n")
+        exit(1)
+    }
+    if n1 < 1 {
+        print("FAIL: argv count ${n1} < 1 — argv[0] should always exist\n")
+        exit(1)
+    }
+    print("PASS: all three count spellings agree (${n1})\n")
+
+    // Qualified element access — documented as os.aether_args_get(i).
+    raw0 = os.aether_args_get(0)
+    wrapped0 = os.args_get(0)
+    if string.equals(raw0, wrapped0) != 1 {
+        print("FAIL: os.aether_args_get(0) '${raw0}' != os.args_get(0) '${wrapped0}'\n")
+        exit(1)
+    }
+    if string.length(wrapped0) < 1 {
+        print("FAIL: argv[0] came back empty\n")
+        exit(1)
+    }
+    print("PASS: qualified argv[0] accessors agree ('${wrapped0}')\n")
+
+    // Out-of-range: wrapper contract is "" (never null).
+    oob = os.args_get(9999)
+    if string.length(oob) != 0 {
+        print("FAIL: os.args_get(9999) returned non-empty '${oob}'\n")
+        exit(1)
+    }
+    print("PASS: os.args_get out-of-range returns \"\"\n")
+
+    // argv0 qualified (pre-existing wrapper) still resolves alongside.
+    a0 = os.argv0()
+    if string.length(a0) < 1 {
+        print("FAIL: os.argv0() came back empty\n")
+        exit(1)
+    }
+    print("PASS: os.argv0() = '${a0}'\n")
+
+    print("=== #1035: all documented qualified argv forms compile and agree ===\n")
+}
