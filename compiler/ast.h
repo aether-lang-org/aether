@@ -228,7 +228,14 @@ typedef enum {
     // the fallible (value, err) expression; children[1] = the handler (a
     // block that yields a value or exits, or a bare default expression). `err`
     // is bound inside a block handler.
-    AST_OR_ELSE
+    AST_OR_ELSE,
+    // #1044 first-class enums. Appended at END to keep node numbering stable
+    // (incremental builds need `make clean` after this edit).
+    AST_ENUM_DEFINITION,    // `enum Name { A, B = 5, C }`. `value` = enum name;
+                            // children are AST_ENUM_MEMBER nodes in source order.
+    AST_ENUM_MEMBER         // one member. `value` = member name; children[0] (if
+                            // present) is the explicit value expression, else the
+                            // value is previous + 1 (first defaults to 0).
 } ASTNodeType;
 
 typedef enum {
@@ -270,13 +277,19 @@ typedef enum {
                         // name; `tuple_types[0..tuple_count)` are the variant
                         // Types (each TYPE_STRUCT). Lowers to a tagged union
                         // `{ <Name>_tag tag; union { ... } data; }`.
-    TYPE_ISOLATED       // #479 `Isolated[T]`, a compile-time-only, move-only
+    TYPE_ISOLATED,      // #479 `Isolated[T]`, a compile-time-only, move-only
                         // (linear) wrapper for actor message payloads.
                         // element_type is the wrapped T. Nominal (an Isolated
                         // is never assignable to a bare T or vice versa);
                         // lowers to T's C type with zero runtime cost. Appended
                         // at END to keep kind numbering stable (incremental
                         // builds need `make clean` after this edit).
+    TYPE_ENUM           // #1044 first-class enum. `struct_name` = enum name.
+                        // A named set of integer constants; lowers to a C
+                        // `typedef enum { Name_Member = v, ... } Name;` with
+                        // zero runtime cost. Nominal (compares equal only to the
+                        // same-named enum; interconverts with int only via the
+                        // rules in is_type_compatible). Appended at END.
 } TypeKind;
 
 typedef struct Type {

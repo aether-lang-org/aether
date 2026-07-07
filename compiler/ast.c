@@ -204,6 +204,8 @@ const char* type_to_string(Type* type) {
         }
         case TYPE_SUM:
             return type->struct_name ? type->struct_name : "sum";
+        case TYPE_ENUM:
+            return type->struct_name ? type->struct_name : "enum";
         case TYPE_ISOLATED: {
             static char buffer[256];
             snprintf(buffer, sizeof(buffer), "Isolated[%s]",
@@ -239,6 +241,12 @@ int types_equal(Type* a, Type* b) {
 
     // #914 sum types are nominal: equal iff they name the same sum.
     if (a->kind == TYPE_SUM) {
+        if (!a->struct_name || !b->struct_name) return 0;
+        return strcmp(a->struct_name, b->struct_name) == 0;
+    }
+
+    // #1044 enums are nominal: equal iff they name the same enum.
+    if (a->kind == TYPE_ENUM) {
         if (!a->struct_name || !b->struct_name) return 0;
         return strcmp(a->struct_name, b->struct_name) == 0;
     }

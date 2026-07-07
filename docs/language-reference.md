@@ -1194,6 +1194,51 @@ A value optional lowers to `typedef struct { int has; T val; } ae_opt_<T>` (one 
 
 ---
 
+## Enums
+
+An **enum** is a named set of integer constants, a distinct type over `int` with
+named members. It lowers to a C `typedef enum` with zero runtime cost.
+
+```aether
+enum Direction { North, East, South, West }        // implicit 0, 1, 2, 3
+enum Errno { Ok = 0, NotFound = 2, Perm = 13 }      // explicit values
+```
+
+A member with no `= value` is the previous member's value plus one (the first
+defaults to `0`), matching C. Members are separated by commas and/or newlines.
+
+Members are referenced by their **qualified name**, `EnumName.Member`:
+
+```aether
+d = Direction.East              // d has type Direction
+if d == Direction.East { ... }  // compare (nominal: same enum only)
+```
+
+An enum is used like any other type, on parameters, returns, and locals, and is
+matched with qualified arms:
+
+```aether
+label(d: Direction) -> string {
+    return match d {
+        Direction.North -> "N"
+        Direction.East  -> "E"
+        _               -> "?"
+    }
+}
+```
+
+Because an enum is integer-backed, its members interconvert with integer scalars
+(`x: int = Errno.Perm` gives `13`; `code == Errno.NotFound` compares as ints),
+but two **different** enums are never compatible with each other. A qualified
+match arm compares against the member's constant, so a `match` on an enum needs
+a `_` arm unless every member value is covered.
+
+Deliberately deferred to a follow-up (they need context-type propagation that
+Aether does not yet thread to every use site): the implicit selector `.North`
+(inferring the enum from the expected type), bare-name match arms (`North ->`),
+enum-indexed arrays (`[Direction]string`), and enum-match exhaustiveness
+checking.
+
 ## Sum / Variant Types
 
 A **sum type** is a value that is exactly one of N named struct variants:

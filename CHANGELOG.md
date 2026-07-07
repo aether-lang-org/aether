@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **First-class `enum` types** (#1044). `enum Direction { North, East, South,
+  West }` (implicit `0..`) and `enum Errno { Ok = 0, NotFound = 2, Perm = 13 }`
+  (explicit values; a bare member is the previous value + 1, matching C). Members
+  are referenced by qualified name (`Direction.East`), used like any type on
+  parameters / returns / locals, compared nominally (only the same enum), and
+  matched with qualified arms (`match d { Direction.North -> ... _ -> ... }`).
+  An enum is integer-backed, so its members interconvert with integer scalars
+  (`x: int = Errno.Perm`), but two different enums are never compatible. Lowers
+  to a C `typedef enum` with zero runtime cost. This is the foundation for
+  `bit_set`, enum-indexed arrays, and cleaner C-enum FFI. Deferred to follow-ups
+  (they need context-type propagation): the implicit `.North` selector,
+  bare-name match arms, enum-indexed arrays, and enum-match exhaustiveness.
+  New regression: `tests/regression/test_enum_basic.ae`; docs in
+  `language-reference.md`.
+
 ## [0.364.0]
 
 ### Added

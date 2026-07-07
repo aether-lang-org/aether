@@ -14,6 +14,10 @@ static int warning_count = 0;
 static int is_c_struct_name(const char* name);
 // #891: declared Type of a @c_struct field (dotted for nested). Defined below.
 static Type* c_struct_field_decl_type(const char* sname, const char* field);
+// #1044: enum-name registry queries (defined ~typecheck_program). Used by
+// infer_type's member-access resolution above their definitions.
+static int is_enum_type_name(const char* name);
+static int enum_has_member(const char* ename, const char* member);
 
 // Get the last component of a module path for namespace
 // "mypackage.utils" -> "utils"
@@ -915,6 +919,17 @@ int is_type_compatible(Type* from, Type* to) {
                is_type_compatible(from->element_type, to->element_type);
     }
 
+    // #1044 enums are integer-backed. An enum is compatible only with the SAME
+    // enum (nominal, via types_equal) or with an integer scalar (so `x: int =
+    // Color.Red` and `code == Errno.NotFound` typecheck). Two different enums,
+    // or an enum and a non-integer, are incompatible.
+    if (from->kind == TYPE_ENUM || to->kind == TYPE_ENUM) {
+        if (from->kind == TYPE_ENUM && to->kind == TYPE_ENUM)
+            return types_equal(from, to);
+        TypeKind other = (from->kind == TYPE_ENUM) ? to->kind : from->kind;
+        return is_integer_scalar(other);
+    }
+
     // Exact match
     if (types_equal(from, to)) return 1;
 
@@ -1427,6 +1442,9 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             return expr->node_type ? clone_type(expr->node_type) : create_type(TYPE_UNKNOWN);
 
         case AST_MEMBER_ACCESS: {
+            // (#1044 enum member access `Enum.Member` is rewritten to the bare
+            // constant identifier `Enum_Member` up front by resolve_enum_types,
+            // so it never reaches here as a member access.)
             // Enforce export visibility before resolving. Use the
             // strict per-scope `is_visible_namespace` check (issue #243
             // sealed scopes) so user code that did not import a
@@ -2046,6 +2064,8 @@ static void resolve_distinct_types(ASTNode* program);
 // #914: resolve `type Name = A | B | C` references into TYPE_SUM.
 static void resolve_sum_types(ASTNode* program);
 static void sum_apply(Type* t, ASTNode* def);   // fill TYPE_SUM variant Types
+// #1044: resolve `enum Name { ... }` references (TYPE_STRUCT -> TYPE_ENUM).
+static void resolve_enum_types(ASTNode* program);
 
 // #891: typecheck-time registry of @c_struct overlay names. Codegen has its
 // own field-level registry; the typechecker only needs the NAME set so an
@@ -2065,6 +2085,44 @@ static void collect_c_struct_names(ASTNode* program) {
             g_c_struct_name_count < AETHER_MAX_C_STRUCTS)
             g_c_struct_names[g_c_struct_name_count++] = c->value;
     }
+}
+
+// #1044 first-class enums. Name registry + program handle so `EnumName.Member`
+// member access and `x: EnumName` annotations resolve without a symbol-table
+// round-trip (mirrors the @c_struct registry above).
+#define AETHER_MAX_ENUMS 256
+static const char* g_enum_names[AETHER_MAX_ENUMS];
+static int g_enum_name_count = 0;
+static ASTNode* g_enum_program = NULL;
+
+static int is_enum_type_name(const char* name) {
+    if (!name) return 0;
+    for (int i = 0; i < g_enum_name_count; i++)
+        if (strcmp(g_enum_names[i], name) == 0) return 1;
+    return 0;
+}
+
+// The AST_ENUM_DEFINITION for `name`, or NULL.
+static ASTNode* enum_def_lookup(const char* name) {
+    if (!name || !g_enum_program) return NULL;
+    for (int i = 0; i < g_enum_program->child_count; i++) {
+        ASTNode* c = g_enum_program->children[i];
+        if (c && c->type == AST_ENUM_DEFINITION && c->value &&
+            strcmp(c->value, name) == 0) return c;
+    }
+    return NULL;
+}
+
+// Does enum `ename` declare a member named `member`?
+static int enum_has_member(const char* ename, const char* member) {
+    ASTNode* def = enum_def_lookup(ename);
+    if (!def || !member) return 0;
+    for (int i = 0; i < def->child_count; i++) {
+        ASTNode* m = def->children[i];
+        if (m && m->type == AST_ENUM_MEMBER && m->value &&
+            strcmp(m->value, member) == 0) return 1;
+    }
+    return 0;
 }
 
 static int is_c_struct_name(const char* name) {
@@ -2138,6 +2196,11 @@ int typecheck_program(ASTNode* program) {
     // TYPE_STRUCT{Name} use-sites into the real TYPE_SUM. Runs after distinct
     // resolution (a name is one or the other) and before any type-checking.
     resolve_sum_types(program);
+
+    // #1044: resolve `enum Name { ... }`: rewrite bare TYPE_STRUCT{Name}
+    // annotations into TYPE_ENUM and populate the enum-name registry, before
+    // any type-checking or member-access resolution runs.
+    resolve_enum_types(program);
 
     // #891: collect @c_struct overlay names so `expr as *Name` casts and
     // member access typecheck against them (they have no struct symbol —
@@ -2423,6 +2486,26 @@ int typecheck_program(ASTNode* program) {
                 add_symbol(global_table, child->value, sum_type, 0, 0, 0);
                 Symbol* sum_sym = lookup_symbol(global_table, child->value);
                 if (sum_sym) sum_sym->node = child;
+                break;
+            }
+            case AST_ENUM_DEFINITION: {
+                // #1044: register the enum name (TYPE_ENUM) and each member's C
+                // constant `EnumName_Member` as a global symbol of that enum
+                // type, so a `EnumName.Member` access (rewritten to the bare
+                // identifier by resolve_enum_types) resolves, and `x: EnumName`
+                // annotations look up the type.
+                Type* etype = create_type(TYPE_ENUM);
+                etype->struct_name = strdup(child->value);
+                add_symbol(global_table, child->value, etype, 0, 0, 0);
+                for (int mi = 0; mi < child->child_count; mi++) {
+                    ASTNode* m = child->children[mi];
+                    if (!m || m->type != AST_ENUM_MEMBER || !m->value) continue;
+                    char qname[512];
+                    snprintf(qname, sizeof(qname), "%s_%s", child->value, m->value);
+                    Type* mt = create_type(TYPE_ENUM);
+                    mt->struct_name = strdup(child->value);
+                    add_symbol(global_table, qname, mt, 0, 0, 0);
+                }
                 break;
             }
             case AST_MESSAGE_DEFINITION: {
@@ -3802,6 +3885,82 @@ static void resolve_sum_types(ASTNode* program) {
     }
     if (ndefs == 0) return;
     sum_rewrite_ast(program, defs, ndefs);
+}
+
+// #1044: rewrite bare `TYPE_STRUCT{EnumName}` type annotations into TYPE_ENUM
+// (mirrors the distinct/sum resolvers), and populate the enum-name registry.
+static void enum_rewrite_type(Type* t, const char** names, int n, int depth) {
+    if (!t || depth > 64) return;
+    if (t->kind == TYPE_STRUCT && t->struct_name && !t->distinct_name) {
+        for (int i = 0; i < n; i++)
+            if (strcmp(t->struct_name, names[i]) == 0) { t->kind = TYPE_ENUM; break; }
+    }
+    enum_rewrite_type(t->element_type, names, n, depth + 1);
+    enum_rewrite_type(t->return_type, names, n, depth + 1);
+    for (int i = 0; i < t->tuple_count; i++)
+        if (t->tuple_types) enum_rewrite_type(t->tuple_types[i], names, n, depth + 1);
+    for (int i = 0; i < t->param_count; i++)
+        if (t->param_types) enum_rewrite_type(t->param_types[i], names, n, depth + 1);
+}
+
+static void enum_rewrite_ast(ASTNode* nd, const char** names, int n) {
+    if (!nd) return;
+    if (nd->node_type) enum_rewrite_type(nd->node_type, names, n, 0);
+    for (int i = 0; i < nd->child_count; i++)
+        enum_rewrite_ast(nd->children[i], names, n);
+}
+
+// #1044: rewrite `EnumName.Member` member-access nodes into a plain identifier
+// naming the C enum constant `EnumName_Member`, with the enum's type. Done up
+// front (in the resolve pass) so the identifier is in place before the
+// undefined-variable / member-access checks run. An unknown member is a
+// compile error here.
+static void enum_rewrite_member_access(ASTNode* nd) {
+    if (!nd) return;
+    if (nd->type == AST_MEMBER_ACCESS && nd->child_count > 0 && nd->children[0] &&
+        nd->children[0]->type == AST_IDENTIFIER && nd->children[0]->value &&
+        nd->value && is_enum_type_name(nd->children[0]->value)) {
+        const char* ename = nd->children[0]->value;
+        if (!enum_has_member(ename, nd->value)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "'%s' is not a member of enum '%s'",
+                     nd->value, ename);
+            type_error(msg, nd->line, nd->column);
+        } else {
+            char qualified[512];
+            snprintf(qualified, sizeof(qualified), "%s_%s", ename, nd->value);
+            Type* et = create_type(TYPE_ENUM);
+            et->struct_name = strdup(ename);
+            free(nd->value);
+            nd->value = strdup(qualified);
+            /* Drop the base-identifier child; the node is now a leaf identifier. */
+            free_ast_node(nd->children[0]);
+            free(nd->children);
+            nd->children = NULL;
+            nd->child_count = 0;
+            nd->type = AST_IDENTIFIER;
+            if (nd->node_type) free_type(nd->node_type);
+            nd->node_type = et;
+            return;   /* leaf now; nothing below to rewrite */
+        }
+    }
+    for (int i = 0; i < nd->child_count; i++)
+        enum_rewrite_member_access(nd->children[i]);
+}
+
+static void resolve_enum_types(ASTNode* program) {
+    g_enum_name_count = 0;
+    g_enum_program = program;
+    if (!program) return;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_ENUM_DEFINITION && c->value &&
+            g_enum_name_count < AETHER_MAX_ENUMS)
+            g_enum_names[g_enum_name_count++] = c->value;
+    }
+    if (g_enum_name_count == 0) return;
+    enum_rewrite_ast(program, g_enum_names, g_enum_name_count);        /* type annotations */
+    enum_rewrite_member_access(program);                              /* EnumName.Member */
 }
 
 /* Fold every `__pure(fn)` node in the tree to a `true`/`false` bool literal. */

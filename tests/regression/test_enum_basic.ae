@@ -1,0 +1,61 @@
+// Regression: #1044 first-class enums.
+//   enum Name { A, B = 5, C }  (implicit 0.., explicit values, auto-increment)
+//   Name.Member qualified access; use as a type / param; comparison; match.
+// Enums lower to a C `typedef enum` (zero runtime cost) and interconvert with
+// integers, so member values are asserted against int literals.
+enum Direction { North, East, South, West }        // 0, 1, 2, 3
+enum Errno { Ok = 0, NotFound = 2, Perm = 13, Again }   // Again = 14 (13 + 1)
+
+import std.io
+
+label(d: Direction) -> string {
+    l = match d {
+        Direction.North -> "N"
+        Direction.East  -> "E"
+        Direction.South -> "S"
+        Direction.West  -> "W"
+        _               -> "?"
+    }
+    return l
+}
+
+check_int(got: int, want: int, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: ${got} != ${want}"); return 1 }
+    return 0
+}
+check_str(got: string, want: string, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: got ${got} want ${want}"); return 1 }
+    return 0
+}
+
+main() {
+    var fails = 0
+
+    // implicit values 0..3
+    fails = fails + check_int(Direction.North, 0, "North")
+    fails = fails + check_int(Direction.East, 1, "East")
+    fails = fails + check_int(Direction.West, 3, "West")
+
+    // explicit values + auto-increment after an explicit one
+    fails = fails + check_int(Errno.Ok, 0, "Ok")
+    fails = fails + check_int(Errno.NotFound, 2, "NotFound")
+    fails = fails + check_int(Errno.Perm, 13, "Perm")
+    fails = fails + check_int(Errno.Again, 14, "Again")
+
+    // comparison (nominal enum == enum)
+    d = Direction.East
+    if d == Direction.East { } else { println("FAIL eq"); fails = fails + 1 }
+    if d != Direction.North { } else { println("FAIL neq"); fails = fails + 1 }
+
+    // enum-typed parameter + match on the enum
+    fails = fails + check_str(label(Direction.South), "S", "label South")
+    fails = fails + check_str(label(Direction.West), "W", "label West")
+    fails = fails + check_str(label(Direction.North), "N", "label North")
+
+    if fails == 0 {
+        println("PASS: enum_basic")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}
