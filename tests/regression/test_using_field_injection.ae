@@ -1,0 +1,57 @@
+// Regression: #1048 struct field injection via `using`.
+// `using embed: Sub` promotes Sub's fields into the outer struct, so `f.x`
+// resolves through `f.embed.x` (a compile-time member-access rewrite, no
+// vtables, zero runtime cost). Both reads and writes are promoted; the explicit
+// `f.embed.x` path still works; a genuinely-missing field still errors.
+struct Entity {
+    x: int
+    y: int
+}
+
+struct Frog {
+    using entity: Entity    // promotes x, y into Frog
+    hops: int
+}
+
+import std.io
+
+// promoted fields are readable through a function parameter too
+sum_xy(f: Frog) -> int {
+    return f.x + f.y
+}
+
+check(got: int, want: int, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: ${got} != ${want}"); return 1 }
+    return 0
+}
+
+main() {
+    var fails = 0
+
+    f = Frog { entity: Entity { x: 10, y: 20 }, hops: 3 }
+
+    // read promoted fields
+    fails = fails + check(f.x, 10, "read promoted x")
+    fails = fails + check(f.y, 20, "read promoted y")
+    // direct field still works
+    fails = fails + check(f.hops, 3, "direct hops")
+    // explicit path still works
+    fails = fails + check(f.entity.x, 10, "explicit entity.x")
+    // promoted read through a parameter
+    fails = fails + check(sum_xy(f), 30, "sum via param")
+
+    // write through the promotion, and confirm the embedded struct changed
+    f.x = 99
+    f.hops = f.hops + 1
+    fails = fails + check(f.x, 99, "write promoted x")
+    fails = fails + check(f.entity.x, 99, "write reflected in entity.x")
+    fails = fails + check(f.hops, 4, "write direct hops")
+    fails = fails + check(f.y, 20, "untouched y")
+
+    if fails == 0 {
+        println("PASS: using_field_injection")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}

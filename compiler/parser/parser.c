@@ -5025,6 +5025,24 @@ ASTNode* parse_struct_definition(Parser* parser) {
             return NULL;
         }
 
+        /* #1048 field injection: `using name: Type` embeds a sub-struct and
+         * promotes its fields into the outer namespace (`f.x` resolves through
+         * `f.name.x`). Contextual keyword: only `using <ident>` at a field
+         * position is intercepted; the rest parses as a normal field, and the
+         * field is tagged so member-access resolution can search through it. */
+        int is_using_field = 0;
+        {
+            Token* uw = peek_token(parser);
+            if (uw && uw->type == TOKEN_IDENTIFIER && uw->value &&
+                strcmp(uw->value, "using") == 0) {
+                Token* after = peek_ahead(parser, 1);
+                if (after && after->type == TOKEN_IDENTIFIER) {
+                    advance_token(parser);   // consume 'using'
+                    is_using_field = 1;
+                }
+            }
+        }
+
         /* Two field syntaxes accepted:
          *   Aether-style: `name: type` (or just `name` for inferred)
          *   C-style:      `int name`, `string name`, etc.
@@ -5067,6 +5085,7 @@ ASTNode* parse_struct_definition(Parser* parser) {
         // Create field node
         ASTNode* field = create_ast_node(AST_STRUCT_FIELD, field_name->value,
                                         field_name->line, field_name->column);
+        if (is_using_field) field->annotation = strdup("using");  // #1048
 
         if (c_type) {
             field->node_type = c_type;

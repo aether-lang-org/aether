@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Struct field injection via `using`** (#1048). A struct field declared
+  `using embed: Sub` embeds a sub-struct and promotes its fields into the outer
+  struct's namespace: `f.x`, when `x` is not a direct field, resolves to
+  `f.embed.x` at compile time, for both reads and writes. Composition without
+  vtables or method sets, a pure member-access rewrite with zero runtime cost;
+  the outer struct just holds the embedded struct as an ordinary field, and the
+  explicit `f.embed.x` path still works. A name no direct or `using` field
+  provides is still a "no field" error. Only the field form is adopted (Odin's
+  `using` *statement* form is deliberately omitted as a readability footgun).
+  `using` is a contextual keyword (no lexer change). New regression:
+  `tests/regression/test_using_field_injection.ae`; docs in
+  `language-reference.md`.
+
 ## [0.364.0]
 
 ### Added
