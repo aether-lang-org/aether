@@ -1400,6 +1400,35 @@ struct Config {
 }
 ```
 
+### Field injection with `using` (composition, no vtables)
+
+A field declared `using embed: Sub` embeds a sub-struct and **promotes its
+fields** into the outer struct's namespace. This is composition-over-inheritance
+without method sets or vtables, a pure compile-time member-access rewrite:
+
+```aether
+struct Entity { x: int, y: int }
+
+struct Frog {
+    using entity: Entity    // promotes x, y
+    hops: int
+}
+
+f = Frog { entity: Entity { x: 10, y: 20 }, hops: 3 }
+f.x            // == f.entity.x  (reads through the embed)
+f.x = 99       // writes through the embed too
+f.entity.x     // the explicit path still works
+```
+
+`f.x`, when `x` is not a direct field of `Frog`, resolves to `f.entity.x` at
+compile time (both reads and writes). A name that no direct or `using` field
+provides is still a "no field" error. Zero runtime cost: the outer struct just
+contains the embedded struct as an ordinary field.
+
+Only the **field form** exists. Odin's `using` *statement* (dumping a struct's
+fields into local scope inside a function body) is deliberately not adopted, it
+is a readability footgun.
+
 ### Function-pointer struct fields, a vtable of callbacks
 
 A struct field can be a function pointer (`fn(T1, T2) -> R`), the `dictType`-style vtable. The field emits as the C function-pointer member `R (*name)(T1, T2)`, and a call through it is a real indirect call:

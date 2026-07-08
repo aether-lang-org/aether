@@ -1103,6 +1103,42 @@ static Type* optional_struct_field_type(SymbolTable* table, const char* struct_n
     return NULL;
 }
 
+// #1048 field injection: `expr` is a member access `base.field` on struct
+// `struct_def` that has no DIRECT field `field`. If a `using`-embedded field's
+// struct declares it, rewrite `base.field` into `(base.embed).field` (so both
+// typing and codegen route through the embedded struct) and return the field's
+// type. Returns NULL when no `using` field provides it. Idempotent: once
+// rewritten, the base is the embedded struct and the field resolves directly.
+static Type* try_resolve_using_field(SymbolTable* table, ASTNode* struct_def,
+                                     ASTNode* expr) {
+    if (!table || !struct_def || !expr || !expr->value || expr->child_count < 1) return NULL;
+    for (int fi = 0; fi < struct_def->child_count; fi++) {
+        ASTNode* uf = struct_def->children[fi];
+        if (!uf || uf->type != AST_STRUCT_FIELD || !uf->value ||
+            !uf->annotation || strcmp(uf->annotation, "using") != 0) continue;
+        if (!uf->node_type || uf->node_type->kind != TYPE_STRUCT ||
+            !uf->node_type->struct_name) continue;
+        Symbol* inner_sym = lookup_symbol(table, uf->node_type->struct_name);
+        if (!inner_sym || !inner_sym->node) continue;
+        ASTNode* inner_def = inner_sym->node;
+        for (int ij = 0; ij < inner_def->child_count; ij++) {
+            ASTNode* inf = inner_def->children[ij];
+            if (!inf || !inf->value || strcmp(inf->value, expr->value) != 0) continue;
+            ASTNode* mid = create_ast_node(AST_MEMBER_ACCESS, uf->value,
+                                           expr->line, expr->column);
+            add_child(mid, expr->children[0]);
+            mid->node_type = clone_type(uf->node_type);
+            expr->children[0] = mid;
+            Type* ft = (inf->node_type && inf->node_type->kind != TYPE_UNKNOWN)
+                       ? clone_type(inf->node_type) : create_type(TYPE_UNKNOWN);
+            if (expr->node_type) free_type(expr->node_type);
+            expr->node_type = clone_type(ft);
+            return ft;
+        }
+    }
+    return NULL;
+}
+
 // Type inference functions
 Type* infer_type(ASTNode* expr, SymbolTable* table) {
     if (!expr) return NULL;
@@ -1532,13 +1568,22 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
                     Symbol* struct_sym = lookup_symbol(table, base_type->struct_name);
                     if (struct_sym && struct_sym->node) {
                         ASTNode* struct_def = struct_sym->node;
+                        int direct = 0;
                         for (int fi = 0; fi < struct_def->child_count; fi++) {
                             ASTNode* field = struct_def->children[fi];
                             if (field && field->value && strcmp(field->value, expr->value) == 0) {
+                                direct = 1;
                                 if (field->node_type && field->node_type->kind != TYPE_UNKNOWN)
                                     return clone_type(field->node_type);
                                 break;
                             }
+                        }
+                        // #1048 field injection: no direct field, so try the
+                        // `using`-embedded sub-structs (rewrites base.x ->
+                        // (base.embed).x and returns the field's type).
+                        if (!direct) {
+                            Type* uft = try_resolve_using_field(table, struct_def, expr);
+                            if (uft) { free_type(base_type); return uft; }
                         }
                     }
                 }
@@ -5756,6 +5801,11 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                             found = 1;
                             break;
                         }
+                        // #1048: no direct field, so try a `using`-embedded one.
+                        if (!found) {
+                            Type* uft = try_resolve_using_field(table, children_owner, expr);
+                            if (uft) { free_type(uft); found = 1; }
+                        }
                         if (!found) {
                             char error_msg[256];
                             snprintf(error_msg, sizeof(error_msg),
@@ -5804,6 +5854,11 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                             }
                             found = 1;
                             break;
+                        }
+                        // #1048: no direct field, so try a `using`-embedded one.
+                        if (!found) {
+                            Type* uft = try_resolve_using_field(table, struct_def, expr);
+                            if (uft) { free_type(uft); found = 1; }
                         }
                         if (!found) {
                             char error_msg[256];
