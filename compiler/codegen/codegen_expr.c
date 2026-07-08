@@ -1972,6 +1972,35 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             }
             break;
 
+        case AST_BITSET_LITERAL:
+            // #1046 `bit_set[E]{ E.A, E.B }` → `((1ULL<<E_A) | (1ULL<<E_B))`.
+            // Each member is the enum constant (= its bit position); the empty
+            // set is `0ULL`. Fully constant-foldable by the C compiler.
+            if (expr->child_count == 0) {
+                fprintf(gen->output, "0ULL");
+            } else {
+                fprintf(gen->output, "(");
+                for (int i = 0; i < expr->child_count; i++) {
+                    if (i > 0) fprintf(gen->output, " | ");
+                    fprintf(gen->output, "(1ULL << (");
+                    generate_expression(gen, expr->children[i]);
+                    fprintf(gen->output, "))");
+                }
+                fprintf(gen->output, ")");
+            }
+            break;
+
+        case AST_BITSET_CARD:
+            // #1046 `card(s)` → popcount of the backing word.
+            if (expr->child_count >= 1) {
+                fprintf(gen->output, "((int)__builtin_popcountll((unsigned long long)(");
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, ")))");
+            } else {
+                fprintf(gen->output, "/* malformed card */0");
+            }
+            break;
+
         case AST_VA_START:
             // The variadic function's prologue declared `va_list __ae_va`
             // and called va_start. This expression just yields its
@@ -2261,6 +2290,56 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             
         case AST_BINARY_EXPRESSION:
             if (expr->child_count >= 2) {
+                // #1046 bit_set operators lower to bitwise ops on the backing
+                // `unsigned long long`. Handled before the generic paths since a
+                // bit_set must never fall through to numeric `<=`/`-` semantics.
+                // `==`/`!=` are left to the default integer compare (which is
+                // exactly set equality). Subset/superset bind each operand once
+                // via a statement-expression so a side-effecting operand (e.g. a
+                // call returning a set) is evaluated exactly once.
+                if (expr->value) {
+                    ASTNode* L = expr->children[0];
+                    ASTNode* R = expr->children[1];
+                    int l_bs = L->node_type && L->node_type->kind == TYPE_BITSET;
+                    int r_bs = R->node_type && R->node_type->kind == TYPE_BITSET;
+                    if (strcmp(expr->value, "in") == 0 && r_bs) {
+                        // member in set -> test the member's bit
+                        fprintf(gen->output, "((((");
+                        generate_expression(gen, R);
+                        fprintf(gen->output, ") >> (");
+                        generate_expression(gen, L);
+                        fprintf(gen->output, ")) & 1ULL) != 0)");
+                        break;
+                    }
+                    if (l_bs || r_bs) {
+                        if (strcmp(expr->value, "+") == 0) {          // union
+                            fprintf(gen->output, "(");
+                            generate_expression(gen, L);
+                            fprintf(gen->output, " | ");
+                            generate_expression(gen, R);
+                            fprintf(gen->output, ")");
+                            break;
+                        }
+                        if (strcmp(expr->value, "-") == 0) {          // difference
+                            fprintf(gen->output, "(");
+                            generate_expression(gen, L);
+                            fprintf(gen->output, " & ~(");
+                            generate_expression(gen, R);
+                            fprintf(gen->output, "))");
+                            break;
+                        }
+                        if (strcmp(expr->value, "<=") == 0 ||
+                            strcmp(expr->value, ">=") == 0) {         // subset/superset
+                            int subset = strcmp(expr->value, "<=") == 0;
+                            fprintf(gen->output, "({ unsigned long long _a = (");
+                            generate_expression(gen, L);
+                            fprintf(gen->output, "); unsigned long long _b = (");
+                            generate_expression(gen, R);
+                            fprintf(gen->output, "); (_a & _b) == %s; })", subset ? "_a" : "_b");
+                            break;
+                        }
+                    }
+                }
                 // #340: equality against `none` / between optionals. A struct
                 // `==` is invalid C, so compare the `has` flag (and value).
                 if (expr->value && (strcmp(expr->value, "==") == 0 ||

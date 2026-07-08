@@ -1290,6 +1290,58 @@ Aether does not yet thread to every use site): the implicit selector `.North`
 enum-indexed arrays (`[Direction]string`), and enum-match exhaustiveness
 checking.
 
+## Bit Sets
+
+A **bit set** is a set of members of an enum, `bit_set[E]`. It is backed by a
+single unsigned 64-bit word (one bit per member, at the member's enum value), so
+every set operation is a bitwise operation with zero runtime cost.
+
+```aether
+enum Perm { Read, Write, Exec }
+
+let a = bit_set[Perm]{ Perm.Read, Perm.Write }   // a two-member set
+let b = bit_set[Perm]{ Write, Exec }             // bare member names also work
+let empty = bit_set[Perm]{}                       // the empty set
+```
+
+Inside a `bit_set[E]{ ... }` literal each element is a member of `E`, written
+qualified (`Perm.Read`) or bare (`Read`). The type is written the same way it is
+constructed, so a set is used like any other type, on locals, parameters, return
+types, and struct fields:
+
+```aether
+grant(base: bit_set[Perm]) -> bit_set[Perm] {
+    return base + bit_set[Perm]{ Perm.Exec }
+}
+
+struct File { name: string, perms: bit_set[Perm] }
+```
+
+The operators:
+
+| Operation      | Syntax            | Result       | Lowers to        |
+|----------------|-------------------|--------------|------------------|
+| membership     | `Perm.Read in a`  | `bool`       | `(a >> Read) & 1`|
+| union          | `a + b`           | `bit_set[E]` | `a \| b`         |
+| difference     | `a - b`           | `bit_set[E]` | `a & ~b`         |
+| subset         | `a <= b`          | `bool`       | `(a & b) == a`   |
+| superset       | `a >= b`          | `bool`       | `(a & b) == b`   |
+| equality       | `a == b` / `!=`   | `bool`       | `a == b`         |
+| cardinality    | `card(a)`         | `int`        | `popcount(a)`    |
+
+```aether
+let u = a + b                         // union
+let d = a - b                         // difference (members of a not in b)
+if Perm.Exec in u { ... }             // membership test
+if a <= u { ... }                     // is a a subset of u?
+let n = card(u)                       // how many members are set
+```
+
+A bit set is **nominal** and strictly typed: it never implicitly converts to or
+from an integer, and two bit sets interoperate only when they are over the same
+enum. Members must have values in `0..63` (the width of the backing word). `card`
+is a reserved call form, like `sizeof`, and applies only to a bit set.
+
 ## Sum / Variant Types
 
 A **sum type** is a value that is exactly one of N named struct variants:

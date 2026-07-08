@@ -241,9 +241,19 @@ typedef enum {
     // (incremental builds need `make clean` after this edit).
     AST_ENUM_DEFINITION,    // `enum Name { A, B = 5, C }`. `value` = enum name;
                             // children are AST_ENUM_MEMBER nodes in source order.
-    AST_ENUM_MEMBER         // one member. `value` = member name; children[0] (if
+    AST_ENUM_MEMBER,        // one member. `value` = member name; children[0] (if
                             // present) is the explicit value expression, else the
                             // value is previous + 1 (first defaults to 0).
+    // #1046 bit_set. Appended at END to keep node numbering stable (incremental
+    // builds need `make clean` after this edit).
+    AST_BITSET_LITERAL,     // `bit_set[E]{ E.A, E.B }`. `node_type` is the
+                            // TYPE_BITSET; children are the member expressions
+                            // (each an AST_MEMBER_ACCESS `E.Member`, normalized
+                            // from bare `Member` at parse time). Empty braces
+                            // (`bit_set[E]{}`) yield the empty set (0 children).
+    AST_BITSET_CARD         // `card(s)`, the cardinality (popcount) of a
+                            // bit_set. children[0] is the bit_set expression;
+                            // lowers to `__builtin_popcountll`. Result is int.
 } ASTNodeType;
 
 typedef enum {
@@ -292,12 +302,21 @@ typedef enum {
                         // lowers to T's C type with zero runtime cost. Appended
                         // at END to keep kind numbering stable (incremental
                         // builds need `make clean` after this edit).
-    TYPE_ENUM           // #1044 first-class enum. `struct_name` = enum name.
+    TYPE_ENUM,          // #1044 first-class enum. `struct_name` = enum name.
                         // A named set of integer constants; lowers to a C
                         // `typedef enum { Name_Member = v, ... } Name;` with
                         // zero runtime cost. Nominal (compares equal only to the
                         // same-named enum; interconverts with int only via the
                         // rules in is_type_compatible). Appended at END.
+    TYPE_BITSET         // #1046 `bit_set[E]`, a set of enum members backed by an
+                        // unsigned 64-bit word. element_type is the member enum
+                        // (a TYPE_ENUM). Each member occupies the bit at its enum
+                        // value (members must lie in 0..63). Nominal: a bit_set is
+                        // never an int, and two bit_sets match only when their
+                        // element enums match. Lowers to `unsigned long long` with
+                        // zero runtime cost; set ops become bitwise ops. Appended
+                        // at END to keep kind numbering stable (incremental builds
+                        // need `make clean` after this edit).
 } TypeKind;
 
 typedef struct Type {
@@ -406,6 +425,7 @@ Type* create_optional_type(Type* inner);   // #340 `T?`
 Type* create_actor_ref_type(Type* actor_type);
 Type* create_tuple_type(int count, ...);  // create_tuple_type(2, type_a, type_b)
 Type* create_sum_type(const char* name);  // #914 `type Name = A | B | C`
+Type* create_bitset_type(Type* element_enum);  // #1046 `bit_set[E]`
 Type* create_result_type(Type* inner);    // #913 fallible `T!` -> (T, string)
 Type* create_function_type(int param_count, Type** param_types, Type* return_type);
 void free_type(Type* type);
