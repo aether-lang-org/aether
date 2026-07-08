@@ -444,6 +444,68 @@ static int try_emit_series_collapse(CodeGenerator* gen, ASTNode* while_node) {
     return 1;
 }
 
+/* #1047: emit the boolean condition that a case selector matches `val_var`.
+ * Handles a single value (== , or string_equals for strings), an inclusive
+ * (`lo..=hi`) / half-open (`lo..<hi`) range, and a comma-list of these (OR).
+ * Shared by match arms and the ranged-switch if-chain lowering. */
+static void emit_selector_condition(CodeGenerator* gen, ASTNode* sel,
+                                    const char* val_var, int is_string) {
+    if (!sel) { fprintf(gen->output, "0"); return; }
+    if (sel->type == AST_MATCH_ALT) {
+        fprintf(gen->output, "(");
+        for (int i = 0; i < sel->child_count; i++) {
+            if (i > 0) fprintf(gen->output, " || ");
+            emit_selector_condition(gen, sel->children[i], val_var, is_string);
+        }
+        fprintf(gen->output, ")");
+        return;
+    }
+    if (sel->type == AST_MATCH_RANGE && sel->child_count >= 2) {
+        int inclusive = sel->annotation && strcmp(sel->annotation, "inclusive") == 0;
+        fprintf(gen->output, "(%s >= ", val_var);
+        generate_expression(gen, sel->children[0]);
+        fprintf(gen->output, " && %s %s ", val_var, inclusive ? "<=" : "<");
+        generate_expression(gen, sel->children[1]);
+        fprintf(gen->output, ")");
+        return;
+    }
+    if (is_string) {
+        fprintf(gen->output, "(%s && string_equals(%s, ", val_var, val_var);
+        generate_expression(gen, sel);
+        fprintf(gen->output, "))");
+    } else {
+        fprintf(gen->output, "(%s == ", val_var);
+        generate_expression(gen, sel);
+        fprintf(gen->output, ")");
+    }
+}
+
+/* #1047: does this case selector contain a range (directly, or as an element
+ * of a comma-list)? A C `switch` can't express a range, so a switch with any
+ * ranged case is lowered to an if-else chain instead. */
+static int selector_has_range(ASTNode* sel) {
+    if (!sel) return 0;
+    if (sel->type == AST_MATCH_RANGE) return 1;
+    if (sel->type == AST_MATCH_ALT) {
+        for (int i = 0; i < sel->child_count; i++)
+            if (sel->children[i] && sel->children[i]->type == AST_MATCH_RANGE) return 1;
+    }
+    return 0;
+}
+
+/* #1047: the C type of a switch/match scrutinee, for the temp that a lowered
+ * if-chain compares against. Mirrors the match `_match_val` typing. */
+static const char* scrutinee_c_type(ASTNode* expr) {
+    Type* t = expr ? expr->node_type : NULL;
+    if (!t) return "int";
+    if (t->kind == TYPE_STRING || t->kind == TYPE_PTR) return "const char*";
+    if (t->kind == TYPE_FLOAT)      return "double";
+    if (t->kind == TYPE_LONGDOUBLE) return "long double";
+    if (t->kind == TYPE_INT64)      return "int64_t";
+    if (t->kind == TYPE_BOOL)       return "bool";
+    return "int";
+}
+
 static void generate_list_pattern_condition(CodeGenerator* gen, ASTNode* pattern,
                                             const char* len_name,
                                             int is_seq_match) {
@@ -5556,23 +5618,18 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             print_indent(gen);
                             fprintf(gen->output, "if (");
                         }
-                        // Use _match_val (temp) instead of re-evaluating match_expr
+                        // Use _match_val (temp) instead of re-evaluating
+                        // match_expr. emit_selector_condition (#1047) handles a
+                        // single value, an inclusive/half-open range, or a
+                        // comma-list. For strings it uses string_equals (NULL
+                        // -safe, magic-aware: _match_val may be a magic
+                        // AetherString, so a raw strcmp would compare the struct
+                        // header; the NULL guard makes a NULL scrutinee match no
+                        // pattern).
                         Type* mexpr_type = match_expr->node_type;
-                        if (mexpr_type && mexpr_type->kind == TYPE_STRING) {
-                            // NULL-safe, magic-aware: _match_val may be a magic
-                            // AetherString (string ops / concat now return
-                            // magic), so a raw strcmp would compare the struct
-                            // header. string_equals dispatches on the header
-                            // (binary-safe memcmp); keep the NULL guard so a
-                            // NULL scrutinee matches no pattern.
-                            fprintf(gen->output, "_match_val && string_equals(_match_val, ");
-                            generate_expression(gen, pattern);
-                            fprintf(gen->output, ")) {\n");
-                        } else {
-                            fprintf(gen->output, "_match_val == ");
-                            generate_expression(gen, pattern);
-                            fprintf(gen->output, ") {\n");
-                        }
+                        int mexpr_is_string = mexpr_type && mexpr_type->kind == TYPE_STRING;
+                        emit_selector_condition(gen, pattern, "_match_val", mexpr_is_string);
+                        fprintf(gen->output, ") {\n");
                     }
 
                     indent(gen);
@@ -5611,32 +5668,97 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             }
             break;
 
-        case AST_SWITCH_STATEMENT:
-            fprintf(gen->output, "switch (");
-            if (stmt->child_count > 0) {
-                generate_expression(gen, stmt->children[0]);
-            }
-            fprintf(gen->output, ") {\n");
-            
-            indent(gen);
+        case AST_SWITCH_STATEMENT: {
+            // #1047: a C `switch` can't express a ranged case (`case 1..=5:`).
+            // Aether's switch has no fall-through (each case auto-breaks), so it
+            // is semantically identical to an if-else chain. When any case is
+            // ranged, lower the whole switch to an if-chain (comparing a temp
+            // scrutinee via emit_selector_condition); plain / comma-list-only
+            // switches keep the C `switch` for readable output.
+            int needs_chain = 0;
             for (int i = 1; i < stmt->child_count; i++) {
-                generate_statement(gen, stmt->children[i]);
+                ASTNode* c = stmt->children[i];
+                if (c && c->type == AST_CASE_STATEMENT && c->child_count > 0 &&
+                    !(c->value && strcmp(c->value, "default") == 0) &&
+                    selector_has_range(c->children[0])) { needs_chain = 1; break; }
+            }
+
+            if (!needs_chain) {
+                fprintf(gen->output, "switch (");
+                if (stmt->child_count > 0) generate_expression(gen, stmt->children[0]);
+                fprintf(gen->output, ") {\n");
+                indent(gen);
+                for (int i = 1; i < stmt->child_count; i++)
+                    generate_statement(gen, stmt->children[i]);
+                unindent(gen);
+                print_line(gen, "}");
+                break;
+            }
+
+            // Ranged switch -> if-else chain.
+            ASTNode* sexpr = stmt->child_count > 0 ? stmt->children[0] : NULL;
+            int is_str = sexpr && sexpr->node_type && sexpr->node_type->kind == TYPE_STRING;
+            print_line(gen, "{");
+            indent(gen);
+            print_indent(gen);
+            fprintf(gen->output, "%s _switch_val = ", scrutinee_c_type(sexpr));
+            if (sexpr) generate_expression(gen, sexpr);
+            else fprintf(gen->output, "0");
+            fprintf(gen->output, ";\n");
+
+            ASTNode* default_case = NULL;
+            int emitted = 0;
+            for (int i = 1; i < stmt->child_count; i++) {
+                ASTNode* c = stmt->children[i];
+                if (!c || c->type != AST_CASE_STATEMENT) continue;
+                int is_default = (c->value && strcmp(c->value, "default") == 0);
+                if (is_default) { default_case = c; continue; }
+                print_indent(gen);
+                fprintf(gen->output, emitted ? "else if (" : "if (");
+                emit_selector_condition(gen, c->children[0], "_switch_val", is_str);
+                fprintf(gen->output, ") {\n");
+                indent(gen);
+                for (int j = 1; j < c->child_count; j++) generate_statement(gen, c->children[j]);
+                unindent(gen);
+                print_line(gen, "}");
+                emitted = 1;
+            }
+            if (default_case) {
+                print_indent(gen);
+                fprintf(gen->output, emitted ? "else {\n" : "{\n");
+                indent(gen);
+                for (int j = 0; j < default_case->child_count; j++)
+                    generate_statement(gen, default_case->children[j]);
+                unindent(gen);
+                print_line(gen, "}");
             }
             unindent(gen);
-            
             print_line(gen, "}");
             break;
+        }
             
         case AST_CASE_STATEMENT: {
             int is_default = (stmt->value && strcmp(stmt->value, "default") == 0);
             if (is_default) {
                 print_line(gen, "default:");
             } else {
-                fprintf(gen->output, "case ");
-                if (stmt->child_count > 0) {
-                    generate_expression(gen, stmt->children[0]);
+                // #1047: a comma-list case (`case 7, 8, 9:`) lowers to one C
+                // `case` label per value, sharing the body (no fall-through in
+                // between, Aether auto-breaks after the shared body). A ranged
+                // case never reaches here (AST_SWITCH_STATEMENT diverts a switch
+                // with any range to an if-chain).
+                ASTNode* sel = stmt->child_count > 0 ? stmt->children[0] : NULL;
+                if (sel && sel->type == AST_MATCH_ALT) {
+                    for (int a = 0; a < sel->child_count; a++) {
+                        fprintf(gen->output, "case ");
+                        generate_expression(gen, sel->children[a]);
+                        fprintf(gen->output, ":\n");
+                    }
+                } else {
+                    fprintf(gen->output, "case ");
+                    if (sel) generate_expression(gen, sel);
+                    fprintf(gen->output, ":\n");
                 }
-                fprintf(gen->output, ":\n");
             }
 
             indent(gen);

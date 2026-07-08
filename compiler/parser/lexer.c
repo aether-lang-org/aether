@@ -835,6 +835,16 @@ Token* next_token() {
                     advance();
                     return create_token(TOKEN_DOTDOTDOT, "...", current_line, current_column);
                 }
+                /* #1047: `..=` inclusive and `..<` half-open range operators for
+                 * match/switch case labels. Plain `..` stays exclusive (for). */
+                if (peek() == '=') {
+                    advance();
+                    return create_token(TOKEN_DOTDOT_EQ, "..=", current_line, current_column);
+                }
+                if (peek() == '<') {
+                    advance();
+                    return create_token(TOKEN_DOTDOT_LT, "..<", current_line, current_column);
+                }
                 return create_token(TOKEN_DOTDOT, "..", current_line, current_column);
             }
             return create_token(TOKEN_DOT, ".", current_line, current_column);
@@ -964,6 +974,8 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_CALLBACK: return "CALLBACK";
         case TOKEN_IN: return "IN";
         case TOKEN_DOTDOT: return "DOTDOT";
+        case TOKEN_DOTDOT_EQ: return "DOTDOT_EQ";
+        case TOKEN_DOTDOT_LT: return "DOTDOT_LT";
         case TOKEN_DOTDOTDOT: return "DOTDOTDOT";
         case TOKEN_CONST: return "CONST";
         case TOKEN_TRY: return "TRY";

@@ -26,6 +26,23 @@ next version number before tagging the release.
   `tests/regression/test_using_field_injection.ae`; docs in
   `language-reference.md`.
 
+## [0.366.0]
+
+### Added
+
+- **Ranged and multi-value `match` / `switch` cases** (#1047). A case label can
+  now be an inclusive range `lo..=hi`, a half-open range `lo..<hi` (consistent
+  with the exclusive `for i in 0..5`), or a comma-list of values and ranges in
+  one arm: `match score { 90..=100 -> "A"  80..<90 -> "B"  60, 61, 62 -> "D"  _
+  -> "F" }`. Ranges are over integer ordinals; a ranged arm lowers to a plain
+  `x >= lo && x <= hi` comparison in the branch chain (no runtime, no
+  allocation). In a C-style `switch`, a comma-list lowers to several `case`
+  labels sharing a body, and a switch containing any range is lowered to an
+  equivalent if-else chain (safe because Aether's `switch` has no fall-through).
+  Existing single-literal cases are unaffected. New operators `..=` / `..<`;
+  new regression `tests/regression/test_ranged_match_cases.ae`; docs in
+  `language-reference.md`.
+
 ## [0.364.0]
 
 ### Added

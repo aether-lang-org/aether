@@ -2910,6 +2910,49 @@ ASTNode* parse_switch_statement(Parser* parser) {
     return switch_stmt;
 }
 
+// #1047: parse one match/switch case selector element: a single value, or a
+// range `lo..=hi` (inclusive) / `lo..<hi` (half-open). Returns the bare value
+// expression, or an AST_MATCH_RANGE with children [lo, hi] and annotation
+// "inclusive"/"halfopen".
+static ASTNode* parse_one_selector(Parser* parser) {
+    ASTNode* lo = parse_expression(parser);
+    if (!lo) return NULL;
+    Token* t = peek_token(parser);
+    if (t && (t->type == TOKEN_DOTDOT_EQ || t->type == TOKEN_DOTDOT_LT)) {
+        int inclusive = (t->type == TOKEN_DOTDOT_EQ);
+        advance_token(parser);  // consume ..= / ..<
+        ASTNode* hi = parse_expression(parser);
+        if (!hi) return NULL;
+        ASTNode* range = create_ast_node(AST_MATCH_RANGE, NULL, lo->line, lo->column);
+        range->annotation = strdup(inclusive ? "inclusive" : "halfopen");
+        add_child(range, lo);
+        add_child(range, hi);
+        return range;
+    }
+    return lo;
+}
+
+// #1047: parse a full case selector: one element, or a comma-list of elements
+// (`1, 2, 5..=9`). A single element returns bare (backward compatible); a list
+// returns an AST_MATCH_ALT whose children are the elements. Stops at the arm
+// terminator (`->` / `:`), so the arm-separator comma is untouched.
+static ASTNode* parse_case_selector(Parser* parser) {
+    ASTNode* first = parse_one_selector(parser);
+    if (!first) return NULL;
+    if (!peek_token(parser) || peek_token(parser)->type != TOKEN_COMMA) {
+        return first;  // single value / single range
+    }
+    ASTNode* alt = create_ast_node(AST_MATCH_ALT, NULL, first->line, first->column);
+    add_child(alt, first);
+    while (peek_token(parser) && peek_token(parser)->type == TOKEN_COMMA) {
+        advance_token(parser);  // consume ','
+        ASTNode* nxt = parse_one_selector(parser);
+        if (!nxt) return NULL;
+        add_child(alt, nxt);
+    }
+    return alt;
+}
+
 ASTNode* parse_case_statement(Parser* parser) {
     if (match_token(parser, TOKEN_DEFAULT)) {
         if (!expect_token(parser, TOKEN_COLON)) return NULL;
@@ -2940,7 +2983,7 @@ ASTNode* parse_case_statement(Parser* parser) {
     }
     
     if (match_token(parser, TOKEN_CASE)) {
-        ASTNode* value = parse_expression(parser);
+        ASTNode* value = parse_case_selector(parser);  // #1047: value / range / comma-list
         if (!value) return NULL;
         if (!expect_token(parser, TOKEN_COLON)) return NULL;
         
@@ -3059,7 +3102,9 @@ ASTNode* parse_match_case(Parser* parser) {
     } else {
         // Expression pattern (literal, identifier, etc.) — includes the
         // `none` arm, which parse_expression yields as AST_NONE_LITERAL.
-        pattern = parse_expression(parser);
+        // #1047: also accepts a range (`lo..=hi` / `lo..<hi`) and a comma-list
+        // of values/ranges in one arm.
+        pattern = parse_case_selector(parser);
         if (!pattern) return NULL;
     }
     

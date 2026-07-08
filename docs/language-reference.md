@@ -700,6 +700,41 @@ match (command) {
 }
 ```
 
+### Ranged and multi-value cases
+
+A `match` arm (and a `switch` case) can match a **range** of ordinal values or a
+**comma-separated list** of values and ranges, instead of a single literal:
+
+```aether
+grade = match score {
+    90..=100   -> "A"     // ..= inclusive:  90 through 100
+    80..<90    -> "B"     // ..< half-open:  80 through 89 (excludes 90)
+    70..<80    -> "C"
+    60, 61, 62 -> "D"     // comma-list of values
+    _          -> "F"
+}
+```
+
+- `..=` is an **inclusive** range (both ends match); `..<` is **half-open**
+  (the high end is excluded), consistent with the exclusive `for i in 0..5`.
+- Comma-separated elements in one arm match if **any** of them matches, and each
+  element may itself be a value or a range: `97..=122, 65..=90 -> "letter"`.
+- Ranges are over integer ordinals (`int`, `long`, `byte`). Aether has no
+  character literals, so a character class matches the byte's integer value,
+  e.g. from `string.char_at`:
+
+```aether
+kind = match string.char_at(s, i) {
+    97..=122, 65..=90 -> "letter"   // a-z, A-Z
+    48..=57           -> "digit"    // 0-9
+    _                 -> "other"
+}
+```
+
+A ranged arm lowers to a plain comparison (`x >= lo && x <= hi`) in the branch
+chain, with no runtime support and no allocation. Existing single-literal arms
+are unaffected.
+
 ### List Pattern Matching
 
 Arrays can be matched with list patterns. Requires a corresponding `_len` variable:
@@ -756,11 +791,27 @@ switch (month) {
 }
 ```
 
+Aether's `switch` has **no fall-through**: each case auto-breaks after its body.
+Cases also accept comma-lists and ranges, the same as `match` arms:
+
+```aether
+switch code {
+case 200, 201, 204: kind = "success";
+case 300..<400:     kind = "redirect";   // ranged case (lowered to an if-chain)
+case 400..<500:     kind = "client-error";
+default:            kind = "other";
+}
+```
+
+A comma-list case lowers to several C `case` labels sharing one body; a `switch`
+containing any ranged case is lowered to an equivalent if-else chain (safe
+because there is no fall-through to preserve).
+
 ### Switch vs Match
 
 | Feature | `switch` | `match` |
 |---------|----------|---------|
-| Pattern types | Integer/string literals | Literals, lists, wildcards |
+| Pattern types | Literals, ranges, comma-lists | Literals, ranges, comma-lists, lists, wildcards |
 | Binding | No | Yes (captures variables) |
 | Use case | Simple dispatch | Pattern destructuring |
 
