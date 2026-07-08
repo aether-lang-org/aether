@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`return match x { ... }` miscompiled** (#1054). A `match` in return position
+  is value-producing, but the grammar reaches `match` only as a statement, so
+  the return parsed with no operand and the match became a dead sibling: codegen
+  emitted a void `return;` followed by an orphaned match whose arm bodies were
+  dead expression-statements, and the function returned garbage. The parser now
+  parses a `match` as the return operand, and codegen lowers it via the same
+  result-variable path the working `v = match x { ... }` form uses (declare a
+  temp, arms assign it), then returns the temp through the normal return
+  machinery so contracts, defers, and escape drains all still apply. New
+  regression: `tests/regression/test_return_match.ae`.
 ## [0.369.0]
 
 ### Added

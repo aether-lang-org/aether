@@ -5797,6 +5797,50 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         }
             
         case AST_RETURN_STATEMENT: {
+            // #1054: `return match x { ... }`, a match in return position, is a
+            // value-producing expression, not a statement. Lower it via the same
+            // result-variable mechanism the working `v = match x { ... }` form
+            // uses: declare a temp of the return type, run the match with each
+            // arm assigning the temp, then re-dispatch as `return <temp>` so all
+            // the return machinery (contracts, defers, escape drains) applies
+            // uniformly. Without this, a bare match in return position emitted
+            // `return;` (void) followed by an orphaned match whose arm bodies
+            // were dead expression-statements, so the function returned garbage.
+            if (stmt->child_count == 1 && stmt->children[0] &&
+                stmt->children[0]->type == AST_MATCH_STATEMENT) {
+                ASTNode* m = stmt->children[0];
+                // Return type: the function's declared type, else infer from the
+                // first arm's result (mirrors the `v = match` path above).
+                Type* rt = gen->current_func_return_type;
+                const char* ct = (rt && rt->kind != TYPE_VOID && rt->kind != TYPE_UNKNOWN)
+                                 ? get_c_type(rt) : NULL;
+                if (!ct && m->child_count >= 2) {
+                    ASTNode* first_arm = m->children[1];
+                    if (first_arm && first_arm->child_count >= 2 &&
+                        first_arm->children[1] && first_arm->children[1]->node_type)
+                        ct = get_c_type(first_arm->children[1]->node_type);
+                }
+                if (!ct) ct = "int";
+                static int ret_match_ctr = 0;
+                char tmp[32];
+                snprintf(tmp, sizeof(tmp), "_ret_match%d", ret_match_ctr++);
+                print_indent(gen);
+                fprintf(gen->output, "%s %s;\n", ct, tmp);
+                const char* saved = gen->match_result_var;
+                gen->match_result_var = tmp;
+                generate_statement(gen, m);
+                gen->match_result_var = saved;
+                // Re-dispatch as `return <tmp>` to reuse all return machinery.
+                ASTNode* rid = create_ast_node(AST_IDENTIFIER, tmp, stmt->line, stmt->column);
+                rid->node_type = rt ? clone_type(rt)
+                                    : (m->node_type ? clone_type(m->node_type) : NULL);
+                ASTNode* rstmt = create_ast_node(AST_RETURN_STATEMENT, NULL,
+                                                 stmt->line, stmt->column);
+                add_child(rstmt, rid);
+                generate_statement(gen, rstmt);
+                free_ast_node(rstmt);
+                break;
+            }
             // Issue #348 — postcondition checks. When the enclosing
             // function has any `ensures` clauses AND we're emitting
             // a single-value, non-main return AND --no-contracts is

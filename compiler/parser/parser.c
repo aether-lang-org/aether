@@ -3500,7 +3500,15 @@ ASTNode* parse_return_statement(Parser* parser) {
                                            ret_tok ? ret_tok->column : 0);
 
     if (!match_token(parser, TOKEN_SEMICOLON)) {
-        ASTNode* value = parse_expression(parser);
+        // #1054: `return match x { ... }`. A `match` is statement-only in the
+        // grammar (not reachable from parse_expression), so parse it explicitly
+        // here and attach it as the return value; codegen lowers a match in
+        // return position to a value-producing form. Without this the `match`
+        // was left unconsumed, `return` took no operand, and the match parsed
+        // as a dead sibling statement (void return + garbage result).
+        ASTNode* value = (peek_token(parser) && peek_token(parser)->type == TOKEN_MATCH)
+                         ? parse_match_statement(parser)
+                         : parse_expression(parser);
         if (value) {
             add_child(return_stmt, value);
         }
