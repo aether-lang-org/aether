@@ -457,6 +457,7 @@ void ensure_tuple_typedef(CodeGenerator* gen, Type* type);
 void ensure_optional_typedef(CodeGenerator* gen, Type* type);   // #340
 void collect_optional_typedefs(CodeGenerator* gen, ASTNode* node);   // #340
 void emit_sum_typedef(CodeGenerator* gen, ASTNode* def);   // #914
+void emit_enum_typedef(CodeGenerator* gen, ASTNode* def);  // #1044
 void emit_optional_coerced(CodeGenerator* gen, ASTNode* value, Type* target);   // #340
 int needs_optional_coerce(ASTNode* value, Type* target);   // #340
 void emit_sum_coerced(CodeGenerator* gen, ASTNode* value, Type* target);   // #914

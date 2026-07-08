@@ -5169,6 +5169,47 @@ ASTNode* parse_top_level_decl(Parser* parser) {
 
         ASTNode* node = NULL;
 
+        // #1044: `enum Name { A, B = 5, C }`, a first-class named-integer enum.
+        // `enum` is a contextual identifier (usable as a name elsewhere); only
+        // the `enum <ident> {` shape here is intercepted. Members are separated
+        // by commas and/or newlines; an optional `= <expr>` sets an explicit
+        // value (otherwise it is the previous value + 1, first defaulting to 0).
+        if (token->type == TOKEN_IDENTIFIER && token->value &&
+            strcmp(token->value, "enum") == 0) {
+            Token* n1 = peek_ahead(parser, 1);
+            Token* n2 = peek_ahead(parser, 2);
+            if (n1 && n1->type == TOKEN_IDENTIFIER &&
+                n2 && n2->type == TOKEN_LEFT_BRACE) {
+                advance_token(parser);   // consume 'enum'
+                Token* ename = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!ename) return NULL;
+                if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
+                ASTNode* edef = create_ast_node(AST_ENUM_DEFINITION, ename->value,
+                                                ename->line, ename->column);
+                while (peek_token(parser) &&
+                       peek_token(parser)->type != TOKEN_RIGHT_BRACE) {
+                    Token* m = expect_token(parser, TOKEN_IDENTIFIER);
+                    if (!m) { free_ast_node(edef); return NULL; }
+                    ASTNode* member = create_ast_node(AST_ENUM_MEMBER, m->value,
+                                                      m->line, m->column);
+                    if (peek_token(parser) && peek_token(parser)->type == TOKEN_ASSIGN) {
+                        advance_token(parser);   // consume '='
+                        ASTNode* v = parse_expression(parser);
+                        if (!v) { free_ast_node(edef); return NULL; }
+                        add_child(member, v);
+                    }
+                    add_child(edef, member);
+                    if (peek_token(parser) && peek_token(parser)->type == TOKEN_COMMA) {
+                        advance_token(parser);   // optional comma
+                    }
+                }
+                if (!expect_token(parser, TOKEN_RIGHT_BRACE)) {
+                    free_ast_node(edef); return NULL;
+                }
+                return edef;
+            }
+        }
+
         // #480: `type Name = distinct Base` — a zero-cost nominal type over
         // Base. `type` and `distinct` are contextual identifiers (usable as
         // names elsewhere); only the `type <ident> = distinct ...` shape here

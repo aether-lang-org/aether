@@ -24,6 +24,23 @@ next version number before tagging the release.
   `using` *statement* form is deliberately omitted as a readability footgun).
   `using` is a contextual keyword (no lexer change). New regression:
   `tests/regression/test_using_field_injection.ae`; docs in
+## [0.367.0]
+
+### Added
+
+- **First-class `enum` types** (#1044). `enum Direction { North, East, South,
+  West }` (implicit `0..`) and `enum Errno { Ok = 0, NotFound = 2, Perm = 13 }`
+  (explicit values; a bare member is the previous value + 1, matching C). Members
+  are referenced by qualified name (`Direction.East`), used like any type on
+  parameters / returns / locals, compared nominally (only the same enum), and
+  matched with qualified arms (`match d { Direction.North -> ... _ -> ... }`).
+  An enum is integer-backed, so its members interconvert with integer scalars
+  (`x: int = Errno.Perm`), but two different enums are never compatible. Lowers
+  to a C `typedef enum` with zero runtime cost. This is the foundation for
+  `bit_set`, enum-indexed arrays, and cleaner C-enum FFI. Deferred to follow-ups
+  (they need context-type propagation): the implicit `.North` selector,
+  bare-name match arms, enum-indexed arrays, and enum-match exhaustiveness.
+  New regression: `tests/regression/test_enum_basic.ae`; docs in
   `language-reference.md`.
 
 ## [0.366.0]
