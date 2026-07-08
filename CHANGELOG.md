@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Enum `match` completeness** (follow-up to #1044). A `match` on an enum now
+  accepts bare-name arms (`Red ->`, not only the qualified `Color.Red ->`),
+  resolving the member against the scrutinee's enum, and is exhaustiveness-
+  checked: a match that covers every member needs no `_`, while a non-exhaustive
+  match with no `_` is a compile error naming the missing members (the same
+  guarantee sum types already give). Previously a non-exhaustive enum match fell
+  through and yielded an uninitialized result, and a bare member name failed as
+  an "undeclared identifier" at C-compile time. Both are scoped to enum-scrutinee
+  matches; numeric, string, sum, optional, and ranged matches are untouched. New
+  regression: `tests/regression/test_enum_match_completeness.ae`; docs in
+  `language-reference.md`.
+
 ## [0.370.0]
 
 ### Fixed

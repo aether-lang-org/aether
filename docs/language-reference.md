@@ -1266,29 +1266,34 @@ if d == Direction.East { ... }  // compare (nominal: same enum only)
 ```
 
 An enum is used like any other type, on parameters, returns, and locals, and is
-matched with qualified arms:
+matched with member arms. Inside a `match` on an enum the member may be written
+qualified (`Direction.North`) or bare (`North`), since the scrutinee already
+fixes the enum:
 
 ```aether
 label(d: Direction) -> string {
     return match d {
-        Direction.North -> "N"
-        Direction.East  -> "E"
-        _               -> "?"
+        North -> "N"
+        East  -> "E"
+        South -> "S"
+        West  -> "W"
     }
 }
 ```
 
+An enum `match` is **exhaustive-checked**: if it covers every member, no `_` arm
+is needed (as above); if a member is left uncovered and there is no `_`, it is a
+compile error naming the missing members (the same guarantee sum types give). A
+`_` arm still catches the rest when you want a default.
+
 Because an enum is integer-backed, its members interconvert with integer scalars
 (`x: int = Errno.Perm` gives `13`; `code == Errno.NotFound` compares as ints),
-but two **different** enums are never compatible with each other. A qualified
-match arm compares against the member's constant, so a `match` on an enum needs
-a `_` arm unless every member value is covered.
+but two **different** enums are never compatible with each other.
 
 Deliberately deferred to a follow-up (they need context-type propagation that
 Aether does not yet thread to every use site): the implicit selector `.North`
-(inferring the enum from the expected type), bare-name match arms (`North ->`),
-enum-indexed arrays (`[Direction]string`), and enum-match exhaustiveness
-checking.
+(inferring the enum from the expected type) in expression position, and
+enum-indexed arrays (`[Direction]string`).
 
 ## Bit Sets
 

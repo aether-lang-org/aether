@@ -1,0 +1,71 @@
+// Regression: #1044 enum `match` completeness follow-ups.
+//   - bare-name arms: `Red ->` resolves to the enum member (not only the
+//     qualified `Color.Red ->`).
+//   - exhaustiveness: a match on an enum that covers every member needs no `_`;
+//     a non-exhaustive match with no `_` is a compile error (checked out-of-band
+//     since a regression test can only exercise programs that compile).
+// Both are scoped to enum-scrutinee matches; numeric/string/sum/optional
+// matches are untouched.
+import std.io
+
+enum Color { Red, Green, Blue }
+enum Dir { N, E, S, W }
+
+check_str(got: string, want: string, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: got ${got} want ${want}"); return 1 }
+    return 0
+}
+
+// bare-name arms, exhaustive, NO wildcard needed
+name(c: Color) -> string {
+    g = match c {
+        Red -> "red"
+        Green -> "green"
+        Blue -> "blue"
+    }
+    return g
+}
+
+// mixed qualified + bare + wildcard
+kind(c: Color) -> string {
+    g = match c {
+        Color.Red -> "warm"
+        Green -> "cool"
+        _ -> "other"
+    }
+    return g
+}
+
+// bare-name arms inside a `return match` (combines #1054 + this)
+arrow(d: Dir) -> string {
+    return match d {
+        N -> "^"
+        E -> ">"
+        S -> "v"
+        W -> "<"
+    }
+}
+
+main() {
+    var fails = 0
+
+    fails = fails + check_str(name(Color.Red), "red", "name Red")
+    fails = fails + check_str(name(Color.Green), "green", "name Green")
+    fails = fails + check_str(name(Color.Blue), "blue", "name Blue")
+
+    fails = fails + check_str(kind(Color.Red), "warm", "kind Red")
+    fails = fails + check_str(kind(Color.Green), "cool", "kind Green")
+    fails = fails + check_str(kind(Color.Blue), "other", "kind Blue")
+
+    fails = fails + check_str(arrow(Dir.N), "^", "arrow N")
+    fails = fails + check_str(arrow(Dir.E), ">", "arrow E")
+    fails = fails + check_str(arrow(Dir.S), "v", "arrow S")
+    fails = fails + check_str(arrow(Dir.W), "<", "arrow W")
+
+    if fails == 0 {
+        println("PASS: enum_match_completeness")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}
