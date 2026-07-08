@@ -1794,6 +1794,15 @@ const char* get_c_type(Type* type) {
             snprintf(buffer, 256, "%s", type->struct_name ? type->struct_name : "_sum");
             return buffer;
         }
+        case TYPE_ENUM: {
+            // #1044: an enum lowers to `typedef enum { Name_Member = v, ... }
+            // Name;` (emitted by emit_enum_typedef), so the C type is the name.
+            static char buffers[4][256];
+            static int buf_idx = 0;
+            char* buffer = buffers[buf_idx++ & 3];
+            snprintf(buffer, 256, "%s", type->struct_name ? type->struct_name : "_enum");
+            return buffer;
+        }
         case TYPE_ISOLATED:
             /* #479: Isolated[T] is a compile-time-only, move-only wrapper. It
              * lowers to the C type of the wrapped T with zero runtime cost
@@ -3127,6 +3136,29 @@ void emit_sum_typedef(CodeGenerator* gen, ASTNode* def) {
     fprintf(gen->output, "    } data;\n} %s;\n", name);
 }
 
+// #1044: emit an enum's C lowering, `typedef enum { Name_Member [= v], ... }
+// Name;`. A member with an explicit value emits `= <value>`; the rest rely on
+// C's auto-increment (previous + 1, first defaults to 0), which matches the
+// Aether semantics exactly. Zero runtime cost; the members are the C constants
+// that `Enum.Member` resolves to.
+void emit_enum_typedef(CodeGenerator* gen, ASTNode* def) {
+    if (!def || def->type != AST_ENUM_DEFINITION || !def->value) return;
+    const char* name = def->value;
+    fprintf(gen->output, "typedef enum {");
+    int n = 0;
+    for (int i = 0; i < def->child_count; i++) {
+        ASTNode* m = def->children[i];
+        if (!m || m->type != AST_ENUM_MEMBER || !m->value) continue;
+        fprintf(gen->output, "%s %s_%s", n > 0 ? "," : "", name, m->value);
+        if (m->child_count > 0 && m->children[0]) {
+            fprintf(gen->output, " = ");
+            generate_expression(gen, m->children[0]);
+        }
+        n++;
+    }
+    fprintf(gen->output, " } %s;\n", name);
+}
+
 const char* get_c_operator(const char* aether_op) {
     if (!aether_op) return "";
     
@@ -4226,6 +4258,16 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         ASTNode* sd = program->children[i];
         if (sd && sd->type == AST_SUM_TYPE_DEF) {
             emit_sum_typedef(gen, sd);
+        }
+    }
+
+    // #1044: first-class enum typedefs. Emitted here (with the other type
+    // definitions, before function forward decls) so `Name` and its member
+    // constants are in scope everywhere they are used.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* ed = program->children[i];
+        if (ed && ed->type == AST_ENUM_DEFINITION) {
+            emit_enum_typedef(gen, ed);
         }
     }
 
