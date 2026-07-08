@@ -1808,6 +1808,11 @@ const char* get_c_type(Type* type) {
              * lowers to the C type of the wrapped T with zero runtime cost
              * (mirrors distinct types); isolate()/consume() are no-ops. */
             return type->element_type ? get_c_type(type->element_type) : "void*";
+        case TYPE_BITSET:
+            /* #1046: bit_set[E] is a set of enum members backed by an unsigned
+             * 64-bit word (one bit per member, at the member's enum value).
+             * Set operations lower to bitwise ops; zero runtime cost. */
+            return "unsigned long long";
         case TYPE_ARRAY: {
             static char buffers[4][256];
             static int buf_idx = 0;

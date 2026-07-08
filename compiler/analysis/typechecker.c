@@ -930,6 +930,14 @@ int is_type_compatible(Type* from, Type* to) {
         return is_integer_scalar(other);
     }
 
+    // #1046 bit_set is strictly nominal: never an int, never another enum's
+    // set. If either side is a bit_set, both must be bit_sets over the same
+    // enum (types_equal compares the element enums nominally).
+    if (from->kind == TYPE_BITSET || to->kind == TYPE_BITSET) {
+        return from->kind == TYPE_BITSET && to->kind == TYPE_BITSET &&
+               types_equal(from, to);
+    }
+
     // Exact match
     if (types_equal(from, to)) return 1;
 
@@ -1229,6 +1237,13 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_SIZEOF:
         case AST_OFFSETOF:
             // Compile-time layout builtins; both lower to a C int.
+            return create_type(TYPE_INT);
+
+        case AST_BITSET_LITERAL:   // #1046 `bit_set[E]{...}`; the parser set the
+            return expr->node_type ? clone_type(expr->node_type)  // TYPE_BITSET.
+                                   : create_type(TYPE_UNKNOWN);
+
+        case AST_BITSET_CARD:      // #1046 `card(s)`; cardinality is an int.
             return create_type(TYPE_INT);
 
         case AST_VA_START:
@@ -1637,6 +1652,36 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
     Type* left_type = left ? left->node_type : NULL;
     Type* right_type = right ? right->node_type : NULL;
 
+    // #1046 bit_set operators. A bit_set is nominal (never an int), so any
+    // operator touching one is resolved here before the generic numeric/
+    // comparison rules; a mismatch returns TYPE_UNKNOWN (a clean type error).
+    //   member in set   -> bool   (left enum member, right same-enum bit_set)
+    //   set + set        -> set    (union)
+    //   set - set        -> set    (difference)
+    //   set <= / >= set  -> bool   (subset / superset)
+    //   set == / != set  -> bool   (equality)
+    if (operator == TOKEN_IN) {
+        if (left_type && right_type && right_type->kind == TYPE_BITSET &&
+            left_type->kind == TYPE_ENUM && right_type->element_type &&
+            types_equal(left_type, right_type->element_type)) {
+            return create_type(TYPE_BOOL);
+        }
+        return create_type(TYPE_UNKNOWN);
+    }
+    if ((left_type && left_type->kind == TYPE_BITSET) ||
+        (right_type && right_type->kind == TYPE_BITSET)) {
+        int both_same = left_type && right_type &&
+                        left_type->kind == TYPE_BITSET &&
+                        right_type->kind == TYPE_BITSET &&
+                        types_equal(left_type, right_type);
+        if (operator == TOKEN_PLUS || operator == TOKEN_MINUS)
+            return both_same ? clone_type(left_type) : create_type(TYPE_UNKNOWN);
+        if (operator == TOKEN_LESS_EQUAL || operator == TOKEN_GREATER_EQUAL ||
+            operator == TOKEN_EQUALS || operator == TOKEN_NOT_EQUALS)
+            return both_same ? create_type(TYPE_BOOL) : create_type(TYPE_UNKNOWN);
+        return create_type(TYPE_UNKNOWN);   // any other op on a bit_set is invalid
+    }
+
     // Duration comparisons are only valid against another Duration.
     if (operator == TOKEN_EQUALS || operator == TOKEN_NOT_EQUALS ||
         operator == TOKEN_LESS || operator == TOKEN_LESS_EQUAL ||
@@ -1859,6 +1904,7 @@ AeTokenType get_token_type_from_string(const char* str) {
     if (strcmp(str, "~") == 0) return TOKEN_TILDE;
     if (strcmp(str, "<<") == 0) return TOKEN_LSHIFT;
     if (strcmp(str, ">>") == 0) return TOKEN_RSHIFT;
+    if (strcmp(str, "in") == 0) return TOKEN_IN;  // #1046 bit_set membership
 
     return TOKEN_ERROR;
 }
@@ -5381,6 +5427,52 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             // posture of the `as *Struct` cast.
             expr->node_type = create_type(TYPE_INT);
             return 1;
+
+        case AST_BITSET_LITERAL: {
+            // #1046 `bit_set[E]{ E.A, E.B }`. The element type must resolve to an
+            // enum (resolve_enum_types rewrites TYPE_STRUCT{E} -> TYPE_ENUM), and
+            // every member must belong to that same enum. The members were
+            // normalized to `E.Member` at parse time and rewritten to the enum
+            // constant `E_Member` (node_type TYPE_ENUM{E}) by enum resolution.
+            Type* bs = expr->node_type;
+            Type* elem = bs ? bs->element_type : NULL;
+            if (!elem || elem->kind != TYPE_ENUM) {
+                type_error("bit_set element type must be an enum, e.g. bit_set[Color]",
+                           expr->line, expr->column);
+                return 0;
+            }
+            for (int i = 0; i < expr->child_count; i++) {
+                ASTNode* m = expr->children[i];
+                // Members were resolved to enum constants (node_type TYPE_ENUM)
+                // by resolve_enum_types; just validate they name this enum.
+                if (!m->node_type || m->node_type->kind != TYPE_ENUM ||
+                    !types_equal(m->node_type, elem)) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "bit_set member must be a value of enum '%s'",
+                        elem->struct_name ? elem->struct_name : "?");
+                    type_error(msg, m->line, m->column);
+                    return 0;
+                }
+            }
+            return 1;
+        }
+
+        case AST_BITSET_CARD: {
+            // #1046 `card(s)`: s must be a bit_set; the count is an int.
+            if (expr->child_count < 1) return 0;
+            typecheck_expression(expr->children[0], table);
+            Type* at = infer_type(expr->children[0], table);
+            if (!at || at->kind != TYPE_BITSET) {
+                type_error("card() requires a bit_set argument", expr->line, expr->column);
+                if (at) free_type(at);
+                expr->node_type = create_type(TYPE_INT);
+                return 0;
+            }
+            free_type(at);
+            expr->node_type = create_type(TYPE_INT);
+            return 1;
+        }
 
         case AST_VA_START:
             // No children; opaque va_list cookie (ptr).
