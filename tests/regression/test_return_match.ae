@@ -1,0 +1,97 @@
+// Regression: #1054 return match {...} as a bare expression.
+// A match in return position, `return match x { ... }`, is a value-producing
+// expression. It previously miscompiled to a void `return;` followed by an
+// orphaned match with dead expression-statement arms (garbage result). The fix
+// parses the match as the return operand and lowers it via the same result-
+// variable path the working `v = match x { ... }` form uses, then returns the
+// temp through the normal return machinery (contracts, defers, escape drains).
+import std.io
+
+enum Dir { N, E, S, W }
+
+check_int(got: int, want: int, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: ${got} != ${want}"); return 1 }
+    return 0
+}
+check_str(got: string, want: string, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: got ${got} want ${want}"); return 1 }
+    return 0
+}
+
+// int scrutinee, string result
+classify(n: int) -> string {
+    return match n {
+        0 -> "zero"
+        1 -> "one"
+        _ -> "many"
+    }
+}
+
+// string scrutinee, int result
+score(g: string) -> int {
+    return match g {
+        "A" -> 4
+        "B" -> 3
+        _   -> 0
+    }
+}
+
+// enum scrutinee, string result
+name(d: Dir) -> string {
+    return match d {
+        Dir.N -> "north"
+        Dir.E -> "east"
+        _     -> "other"
+    }
+}
+
+// return match that is not the only statement (early return before it)
+sign(n: int) -> int {
+    if n == 0 {
+        return 0
+    }
+    return match n {
+        _ -> 1
+    }
+}
+
+// a defer alongside a return-match must still compile and return correctly
+// (the match result is routed through the normal return path, which drains
+// defers before returning; defer ordering is exercised elsewhere)
+pick(n: int) -> string {
+    defer println("(cleanup)")
+    return match n {
+        0 -> "z"
+        _ -> "o"
+    }
+}
+
+main() {
+    var fails = 0
+
+    fails = fails + check_str(classify(0), "zero", "classify 0")
+    fails = fails + check_str(classify(1), "one", "classify 1")
+    fails = fails + check_str(classify(9), "many", "classify 9")
+
+    fails = fails + check_int(score("A"), 4, "score A")
+    fails = fails + check_int(score("B"), 3, "score B")
+    fails = fails + check_int(score("Z"), 0, "score Z")
+
+    fails = fails + check_str(name(Dir.N), "north", "name N")
+    fails = fails + check_str(name(Dir.E), "east", "name E")
+    fails = fails + check_str(name(Dir.W), "other", "name W")
+
+    fails = fails + check_int(sign(5), 1, "sign 5")
+    fails = fails + check_int(sign(0), 0, "sign 0")
+
+    // return-match in a function that also has a defer
+    fails = fails + check_str(pick(0), "z", "pick 0")
+    fails = fails + check_str(pick(3), "o", "pick 3")
+
+    if fails == 0 {
+        println("PASS: return_match")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}
