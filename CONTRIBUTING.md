@@ -748,6 +748,15 @@ make ae          # Falls back to VERSION file
 - Code Comments: Explain complex implementations
 - Documentation: Check docs/ folder for language details
 
-## License
+## Complex PRs and malware protection
 
-By contributing to Aether, you agree that your contributions will be licensed under the MIT License.
+To protect our project from trojan horse compromises, we may reverse your PR back to an intention and do the same change 
+from scratch without using your source. We will still credit you as much as we can. That may cause you some rebase pain 
+when you get the change back again - sorry. This also allows us to worry less about whether your employer allows you to 
+donate open source to projects.
+
+## License and Provenance
+
+By contributing to Aether, you agree that your contributions will be licensed under the MIT License. We're not requiring
+a grant of copyright to a legal entity, but are requiring you to say you are free to work on open source and not under
+contract of exclusivity to some company/org, nor handing us source that cannot be MIT licensed for copyright reasons.
