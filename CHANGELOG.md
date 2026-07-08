@@ -23,6 +23,32 @@ next version number before tagging the release.
   temp, arms assign it), then returns the temp through the normal return
   machinery so contracts, defers, and escape drains all still apply. New
   regression: `tests/regression/test_return_match.ae`.
+## [0.369.0]
+
+### Added
+
+- **Bit sets, `bit_set[E]`** (#1046). A set of members of an enum, backed by a
+  single unsigned 64-bit word (one bit per member, at the member's enum value),
+  so every operation is a bitwise op with zero runtime cost. Construct with a set
+  literal, `bit_set[Perm]{ Perm.Read, Perm.Write }` (bare member names and the
+  empty set `bit_set[Perm]{}` also work); operate with `in` (membership), `+`
+  (union), `-` (difference), `<=` / `>=` (subset / superset), `==` / `!=`
+  (equality), and `card(s)` (cardinality, a `popcount`). A bit set is nominal and
+  strictly typed: it never implicitly converts to or from an integer, and two
+  bit sets interoperate only when they are over the same enum; members must lie
+  in `0..63`. Usable as a local, parameter, return type, and struct field. `in`
+  is now also an expression operator (the range-`for` header still consumes its
+  own `in` first, so loops are unaffected). New regression:
+  `tests/regression/test_bit_set.ae`; docs in `language-reference.md`.
+
+### Fixed
+
+- A parametric type used as a **function return type**, `-> Name[T] { ... }`
+  (e.g. `bit_set[E]`, `Isolated[T]`), was mis-parsed: the return-type
+  disambiguator only recognized a bare or dotted name before the body brace, so a
+  `[...]` group hid the block body and the signature fell through to the arrow-
+  expression path, producing a spurious top-level parse error. The disambiguator
+  now scans the balanced bracket group, fixing bracketed return types generally.
 
 ## [0.368.0]
 

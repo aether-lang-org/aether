@@ -50,6 +50,15 @@ Type* create_actor_ref_type(Type* actor_type) {
     return type;
 }
 
+// #1046 `bit_set[E]`, a set of members of enum `element_enum`, backed by an
+// unsigned 64-bit word. `element_enum` is adopted (not cloned). Nominal;
+// clone_type/free_type handle element_type generically.
+Type* create_bitset_type(Type* element_enum) {
+    Type* type = create_type(TYPE_BITSET);
+    type->element_type = element_enum;
+    return type;
+}
+
 Type* create_tuple_type(int count, ...) {
     Type* type = create_type(TYPE_TUPLE);
     type->tuple_count = count;
@@ -209,6 +218,12 @@ const char* type_to_string(Type* type) {
         case TYPE_ISOLATED: {
             static char buffer[256];
             snprintf(buffer, sizeof(buffer), "Isolated[%s]",
+                     type->element_type ? type_to_string(type->element_type) : "?");
+            return buffer;
+        }
+        case TYPE_BITSET: {
+            static char buffer[256];
+            snprintf(buffer, sizeof(buffer), "bit_set[%s]",
                      type->element_type ? type_to_string(type->element_type) : "?");
             return buffer;
         }

@@ -1,0 +1,91 @@
+// Regression: #1046 bit_set — a set of enum members backed by an unsigned
+// 64-bit word (one bit per member, at the member's enum value).
+//   bit_set[E]                 the type (parametric over an enum E)
+//   bit_set[E]{ E.A, E.B }     a set literal (also bare `{ A, B }`, empty `{}`)
+//   member in set              membership          -> bool
+//   set + set                  union               -> set
+//   set - set                  difference          -> set
+//   set <= set / set >= set    subset / superset   -> bool
+//   set == set / set != set    equality            -> bool
+//   card(set)                  cardinality         -> int
+// All operations lower to bitwise ops on the backing word (zero runtime cost).
+enum Perm { Read, Write, Exec }                 // 0, 1, 2
+enum Flag { Lo = 1, Mid = 8, Hi = 40 }          // explicit, sparse values
+
+import std.io
+
+check_int(got: int, want: int, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: ${got} != ${want}"); return 1 }
+    return 0
+}
+check_bool(got: bool, want: bool, lbl: string) -> int {
+    if got == want { return 0 }
+    println("FAIL ${lbl}")
+    return 1
+}
+
+// bit_set as a parameter and as a return type
+with_exec(s: bit_set[Perm]) -> bit_set[Perm] {
+    return s + bit_set[Perm]{ Perm.Exec }
+}
+
+struct Caps {
+    name: string
+    perms: bit_set[Perm]
+}
+
+main() {
+    var fails = 0
+
+    let a = bit_set[Perm]{ Perm.Read, Perm.Write }
+    let b = bit_set[Perm]{ Perm.Write, Perm.Exec }
+
+    // cardinality of literals + the empty set
+    fails = fails + check_int(card(a), 2, "card a")
+    fails = fails + check_int(card(bit_set[Perm]{}), 0, "card empty")
+    fails = fails + check_int(card(bit_set[Perm]{ Read, Write, Exec }), 3, "card bare full")
+
+    // membership
+    fails = fails + check_bool(Perm.Read in a, true, "Read in a")
+    fails = fails + check_bool(Perm.Exec in a, false, "Exec not in a")
+
+    // union / difference
+    let u = a + b
+    fails = fails + check_int(card(u), 3, "card union")
+    let d = a - b
+    fails = fails + check_int(card(d), 1, "card diff")
+    fails = fails + check_bool(Perm.Read in d, true, "Read in diff")
+    fails = fails + check_bool(Perm.Write in d, false, "Write not in diff")
+
+    // subset / superset
+    fails = fails + check_bool(a <= u, true, "a subset u")
+    fails = fails + check_bool(u <= a, false, "u not subset a")
+    fails = fails + check_bool(u >= a, true, "u superset a")
+
+    // equality (order-independent) / inequality
+    let a2 = bit_set[Perm]{ Perm.Write, Perm.Read }
+    fails = fails + check_bool(a == a2, true, "a equals a2")
+    fails = fails + check_bool(a == b, false, "a not equal b")
+
+    // explicit, sparse enum values place bits at the value (Hi = bit 40)
+    let f = bit_set[Flag]{ Flag.Lo, Flag.Hi }
+    fails = fails + check_int(card(f), 2, "card flags")
+    fails = fails + check_bool(Flag.Hi in f, true, "Hi in f")
+    fails = fails + check_bool(Flag.Mid in f, false, "Mid not in f")
+
+    // bit_set as a parameter and return type
+    fails = fails + check_int(card(with_exec(a)), 3, "card with_exec")
+    fails = fails + check_bool(Perm.Exec in with_exec(a), true, "Exec added")
+
+    // bit_set as a struct field
+    let c = Caps { name: "root", perms: bit_set[Perm]{ Perm.Read, Perm.Exec } }
+    fails = fails + check_int(card(c.perms), 2, "card caps")
+    fails = fails + check_bool(Perm.Exec in c.perms, true, "Exec in caps")
+
+    if fails == 0 {
+        println("PASS: bit_set")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}

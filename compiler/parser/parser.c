@@ -586,6 +586,26 @@ static Type* parse_type_unsuffixed(Parser* parser) {
                     }
                     type = create_type(TYPE_ISOLATED);
                     type->element_type = inner;
+                } else if (strcmp(token->value, "bit_set") == 0 &&
+                           peek_token(parser) &&
+                           peek_token(parser)->type == TOKEN_LEFT_BRACKET) {
+                    /* #1046: bit_set[E], a set of members of enum E backed by an
+                     * unsigned 64-bit word. The identifier was consumed at case
+                     * entry, so peek is `[`. The element type resolves to a
+                     * TYPE_ENUM (via resolve_enum_types); it lowers to
+                     * `unsigned long long` with zero runtime cost. */
+                    advance_token(parser);  // consume '['
+                    Type* elem = parse_type(parser);
+                    if (!elem) {
+                        parser_error(parser,
+                            "bit_set requires an enum type parameter, e.g. bit_set[Color]");
+                        return NULL;
+                    }
+                    if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) {
+                        free_type(elem);
+                        return NULL;
+                    }
+                    type = create_bitset_type(elem);
                 } else if (strcmp(token->value, "cstring") == 0) {
                     /* `cstring` — a string whose emitted C type is the
                      * mutable `char*` (Aether's plain `string` emits
@@ -1109,6 +1129,82 @@ ASTNode* parse_primary_expression(Parser* parser) {
                     ASTNode* node = create_ast_node(AST_VA_END, NULL, line, column);
                     node->node_type = create_type(TYPE_VOID);
                     add_child(node, cookie);
+                    return node;
+                }
+            }
+            // #1046 bit_set set literal: `bit_set[E]{ E.A, E.B }` (also the
+            // bare-member form `{ A, B }`, and the empty set `bit_set[E]{}`).
+            // Intercepted on the `bit_set[` shape only, so user code may still
+            // name things `bit_set` elsewhere (same non-reserving treatment as
+            // sizeof). Each element is normalized to an AST_MEMBER_ACCESS
+            // `E.Member` so the enum-resolution pass lowers it to `E_Member`.
+            {
+                Token* after = peek_ahead(parser, 1);
+                if (after && after->type == TOKEN_LEFT_BRACKET && token->value &&
+                    strcmp(token->value, "bit_set") == 0) {
+                    int line = token->line, column = token->column;
+                    advance_token(parser);                       // consume 'bit_set'
+                    advance_token(parser);                       // consume '['
+                    Type* elem = parse_type(parser);
+                    if (!elem) {
+                        parser_error(parser,
+                            "bit_set requires an enum type parameter, e.g. bit_set[Color]{ Color.Red }");
+                        return NULL;
+                    }
+                    if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) { free_type(elem); return NULL; }
+                    if (!expect_token(parser, TOKEN_LEFT_BRACE)) { free_type(elem); return NULL; }
+                    const char* enum_name = elem->struct_name;  // element enum's name
+                    ASTNode* lit = create_ast_node(AST_BITSET_LITERAL, NULL, line, column);
+                    lit->node_type = create_bitset_type(elem);
+                    if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+                        do {
+                            Token* first = expect_token(parser, TOKEN_IDENTIFIER);
+                            if (!first) { free_ast_node(lit); return NULL; }
+                            const char* base_name;   // enum name for this element
+                            const char* member_name; // member name
+                            if (peek_token(parser) && peek_token(parser)->type == TOKEN_DOT) {
+                                advance_token(parser);            // consume '.'
+                                Token* mem = expect_token(parser, TOKEN_IDENTIFIER);
+                                if (!mem) { free_ast_node(lit); return NULL; }
+                                base_name = first->value;         // qualified: E.Member
+                                member_name = mem->value;
+                            } else {
+                                if (!enum_name) {
+                                    parser_error(parser,
+                                        "bare set member needs an enum element type, e.g. bit_set[Color]{ Red }");
+                                    free_ast_node(lit);
+                                    return NULL;
+                                }
+                                base_name = enum_name;            // bare: Member
+                                member_name = first->value;
+                            }
+                            ASTNode* ma = create_ast_node(AST_MEMBER_ACCESS, member_name,
+                                                          first->line, first->column);
+                            ASTNode* base = create_ast_node(AST_IDENTIFIER, base_name,
+                                                            first->line, first->column);
+                            add_child(ma, base);
+                            add_child(lit, ma);
+                        } while (match_token(parser, TOKEN_COMMA));
+                        if (!expect_token(parser, TOKEN_RIGHT_BRACE)) { free_ast_node(lit); return NULL; }
+                    }
+                    return lit;
+                }
+            }
+            // #1046 card(s), cardinality (popcount) of a bit_set. Intercepted on
+            // the `card(` call shape only (same non-reserving treatment as sizeof).
+            {
+                Token* after = peek_ahead(parser, 1);
+                if (after && after->type == TOKEN_LEFT_PAREN && token->value &&
+                    strcmp(token->value, "card") == 0) {
+                    int line = token->line, column = token->column;
+                    advance_token(parser);                       // consume 'card'
+                    if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
+                    ASTNode* arg = parse_expression(parser);
+                    if (!arg) return NULL;
+                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) { free_ast_node(arg); return NULL; }
+                    ASTNode* node = create_ast_node(AST_BITSET_CARD, NULL, line, column);
+                    node->node_type = create_type(TYPE_INT);
+                    add_child(node, arg);
                     return node;
                 }
             }
@@ -2104,7 +2200,11 @@ int get_operator_precedence(AeTokenType type) {
         case TOKEN_LESS:
         case TOKEN_LESS_EQUAL:
         case TOKEN_GREATER:
-        case TOKEN_GREATER_EQUAL: return 7;
+        case TOKEN_GREATER_EQUAL:
+        case TOKEN_IN: return 7;  // #1046 `member in bit_set` membership test.
+                                  // A leading `IDENT in` in a for-header is
+                                  // consumed by parse_for_loop before reaching
+                                  // here, so range loops are unaffected.
         case TOKEN_LSHIFT:
         case TOKEN_RSHIFT: return 8;  // shift operators
         case TOKEN_PLUS:
@@ -4606,6 +4706,41 @@ ASTNode* parse_function_definition(Parser* parser) {
                         (c_abi_alias_kind(peek->value, &alias_k) ||
                          strcmp(peek->value, "longdouble") == 0)) {
                         is_typed_return = 1;
+                        break;
+                    }
+                    // A parametric return type `-> Name[T] { ... }` (e.g.
+                    // `bit_set[Color]`, `Isolated[T]`). The bare-name branch
+                    // below only looks one token ahead for `{`, so a `[...]`
+                    // group between the name and `{` hid the block body and the
+                    // signature fell through to the `-> expr` path (which then
+                    // mis-parsed the function body). Scan the balanced bracket
+                    // group; a `{` after the closing `]` (that isn't a struct-
+                    // literal head) marks a typed return with a block body. An
+                    // arrow-expr body like `-> arr[i]` has no trailing `{`, so
+                    // it stays an expression. (Fixes bracketed return types
+                    // generally, not just bit_set.)
+                    if (peek_ahead(parser, 1) &&
+                        peek_ahead(parser, 1)->type == TOKEN_LEFT_BRACKET) {
+                        int off = 1, depth = 0, guard = 0;
+                        while (peek_ahead(parser, off) && guard++ < 256) {
+                            AeTokenType tt = peek_ahead(parser, off)->type;
+                            if (tt == TOKEN_LEFT_BRACKET) depth++;
+                            else if (tt == TOKEN_RIGHT_BRACKET) {
+                                depth--;
+                                if (depth == 0) { off++; break; }
+                            }
+                            off++;
+                        }
+                        // `off` now points just past the closing `]`.
+                        Token* after_br = peek_ahead(parser, off);
+                        if (after_br && after_br->type == TOKEN_LEFT_BRACE) {
+                            Token* ab = peek_ahead(parser, off + 1);
+                            Token* af = peek_ahead(parser, off + 2);
+                            int looks_like_struct_literal =
+                                ab && ab->type == TOKEN_IDENTIFIER &&
+                                af && af->type == TOKEN_COLON;
+                            if (!looks_like_struct_literal) is_typed_return = 1;
+                        }
                         break;
                     }
                     // #946: a qualified return type `-> mod.Name { ... }`
