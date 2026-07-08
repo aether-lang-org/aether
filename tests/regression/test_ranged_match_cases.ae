@@ -1,0 +1,92 @@
+// Regression: #1047 ranged and multi-value match/switch cases.
+//   ..=  inclusive range      ..<  half-open range
+//   comma-listed values/ranges in one arm
+// Aether has no char literals, so ranges are over integer ordinals (an int
+// from string.char_at, a byte, etc.). Boundaries are checked explicitly:
+// inclusive includes the high end, half-open excludes it.
+import std.io
+
+// match as an expression (assigned), inclusive + half-open + multi-value.
+grade(s: int) -> string {
+    g = match s {
+        90..=100   -> "A"
+        80..<90    -> "B"
+        70..<80    -> "C"
+        60, 61, 62 -> "D"
+        _          -> "F"
+    }
+    return g
+}
+
+// match on a byte value (int code), comma-listed ranges in one arm.
+classify(ch: int) -> string {
+    c = match ch {
+        97..=122, 65..=90 -> "letter"
+        48..=57           -> "digit"
+        _                 -> "other"
+    }
+    return c
+}
+
+// C-style switch: multi-value labels + ranged cases (lowered to an if-chain).
+bucket(n: int) -> string {
+    r = "other"
+    switch n {
+    case 1, 2, 3:
+        r = "low"
+    case 10..=20:
+        r = "mid"
+    case 30..<40:
+        r = "high"
+    default:
+        r = "other"
+    }
+    return r
+}
+
+check(got: string, want: string, label: string) -> int {
+    if got != want {
+        println("FAIL ${label}: got ${got} want ${want}")
+        return 1
+    }
+    return 0
+}
+
+main() {
+    var fails = 0
+
+    // inclusive boundaries: 90 and 100 are A; 89 is B; 101 is F.
+    fails = fails + check(grade(90), "A", "grade 90 lo-incl")
+    fails = fails + check(grade(100), "A", "grade 100 hi-incl")
+    fails = fails + check(grade(101), "F", "grade 101 over")
+    // half-open: 80..<90 includes 80 and 89 but NOT 90 (that is A).
+    fails = fails + check(grade(89), "B", "grade 89 hi-halfopen")
+    fails = fails + check(grade(80), "B", "grade 80 lo")
+    fails = fails + check(grade(72), "C", "grade 72")
+    // comma-list
+    fails = fails + check(grade(61), "D", "grade 61 multi")
+    fails = fails + check(grade(63), "F", "grade 63 gap")
+    fails = fails + check(grade(40), "F", "grade 40 wild")
+
+    // char-class via int codes, comma-listed ranges
+    fails = fails + check(classify(109), "letter", "classify m")   // 'm'
+    fails = fails + check(classify(66), "letter", "classify B")    // 'B'
+    fails = fails + check(classify(52), "digit", "classify 4")     // '4'
+    fails = fails + check(classify(36), "other", "classify $")     // '$'
+
+    // switch
+    fails = fails + check(bucket(2), "low", "bucket multi")
+    fails = fails + check(bucket(10), "mid", "bucket incl-lo")
+    fails = fails + check(bucket(20), "mid", "bucket incl-hi")
+    fails = fails + check(bucket(30), "high", "bucket halfopen-lo")
+    fails = fails + check(bucket(39), "high", "bucket halfopen-hi")
+    fails = fails + check(bucket(40), "other", "bucket halfopen-excl")
+    fails = fails + check(bucket(99), "other", "bucket default")
+
+    if fails == 0 {
+        println("PASS: ranged_match_cases")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}

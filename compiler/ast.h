@@ -229,6 +229,14 @@ typedef enum {
     // block that yields a value or exits, or a bare default expression). `err`
     // is bound inside a block handler.
     AST_OR_ELSE,
+    // #1047 match/switch case-label selectors. Appended at END to keep node
+    // numbering stable (incremental builds need `make clean` after this edit).
+    AST_MATCH_RANGE,        // `lo..=hi` / `lo..<hi` in a case label. children[0]
+                            // = lo, children[1] = hi. `annotation` is
+                            // "inclusive" (..=) or "halfopen" (..<).
+    AST_MATCH_ALT,          // comma-listed alternatives in one case label
+                            // (`1, 2, 5..=9`). Each child is a selector: a
+                            // literal expression or an AST_MATCH_RANGE.
     // #1044 first-class enums. Appended at END to keep node numbering stable
     // (incremental builds need `make clean` after this edit).
     AST_ENUM_DEFINITION,    // `enum Name { A, B = 5, C }`. `value` = enum name;
