@@ -5018,6 +5018,17 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             for (int z = 0; z < 64; z++) sum_covered[z] = 0;
             int sum_wildcard = 0;
 
+            // #1044 enum `match` bookkeeping (mirrors the sum path): resolve
+            // bare-name arms (`Red ->`) to the enum constant and track member
+            // coverage for the exhaustiveness check. Only engages when the
+            // scrutinee is a TYPE_ENUM, so every other match shape is untouched.
+            int enum_match = (match_expr_type && match_expr_type->kind == TYPE_ENUM);
+            const char* enum_name = enum_match ? match_expr_type->struct_name : NULL;
+            ASTNode* enum_def = enum_name ? enum_def_lookup(enum_name) : NULL;
+            int enum_covered[64];
+            for (int z = 0; z < 64; z++) enum_covered[z] = 0;
+            int enum_wildcard = 0;
+
             // Type check each match arm
             for (int i = 1; i < stmt->child_count; i++) {
                 ASTNode* arm = stmt->children[i];
@@ -5123,6 +5134,59 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     }
                 }
 
+                // #1044 enum `match`: an arm pattern is an enum member, written
+                // qualified (`Color.Red`, already lowered to the constant
+                // `Color_Red` by resolve_enum_types) or bare (`Red`). Resolve a
+                // bare member to the constant here (so codegen emits
+                // `_match_val == Color_Red`), reject non-members with a clear
+                // error, and record coverage for the exhaustiveness check. `_`
+                // is the catch-all.
+                if (enum_match && enum_def && pattern) {
+                    int is_wild = (pattern->node_type &&
+                                   pattern->node_type->kind == TYPE_WILDCARD) ||
+                                  (pattern->value && strcmp(pattern->value, "_") == 0);
+                    if (is_wild) {
+                        enum_wildcard = 1;
+                    } else if ((pattern->type == AST_IDENTIFIER ||
+                                pattern->type == AST_PATTERN_VARIABLE) && pattern->value) {
+                        size_t elen = strlen(enum_name);
+                        const char* mem = NULL;
+                        int bare = 0;
+                        if (enum_has_member(enum_name, pattern->value)) {
+                            mem = pattern->value;                 // bare `Member`
+                            bare = 1;
+                        } else if (strncmp(pattern->value, enum_name, elen) == 0 &&
+                                   pattern->value[elen] == '_' &&
+                                   enum_has_member(enum_name, pattern->value + elen + 1)) {
+                            mem = pattern->value + elen + 1;      // lowered `Enum_Member`
+                        }
+                        if (!mem) {
+                            char msg[256];
+                            snprintf(msg, sizeof(msg),
+                                "'%s' is not a member of enum '%s'",
+                                pattern->value, enum_name ? enum_name : "?");
+                            type_error(msg, pattern->line, pattern->column);
+                        } else {
+                            for (int mi = 0; mi < enum_def->child_count && mi < 64; mi++) {
+                                ASTNode* mn = enum_def->children[mi];
+                                if (mn && mn->type == AST_ENUM_MEMBER && mn->value &&
+                                    strcmp(mn->value, mem) == 0) { enum_covered[mi] = 1; break; }
+                            }
+                            if (bare) {
+                                // Lower the bare member to the enum constant so
+                                // codegen compares against `Enum_Member`.
+                                char qualified[512];
+                                snprintf(qualified, sizeof(qualified), "%s_%s",
+                                         enum_name, mem);
+                                free(pattern->value);
+                                pattern->value = strdup(qualified);
+                                if (pattern->node_type) free_type(pattern->node_type);
+                                pattern->node_type = clone_type(match_expr_type);
+                            }
+                        }
+                    }
+                }
+
                 // Type check the arm body in the new scope. A match-as-
                 // expression arm has an EXPRESSION body (an identifier,
                 // literal, call, interpolation, ...); typecheck_statement only
@@ -5176,6 +5240,33 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                         "non-exhaustive match on sum type '%s': missing variant%s "
                         "%s. Add an arm for each, or a `_` wildcard.",
                         match_expr_type->struct_name ? match_expr_type->struct_name : "?",
+                        nmiss > 1 ? "s" : "", missing);
+                    type_error(msg, stmt->line, stmt->column);
+                }
+            }
+
+            // #1044 enum exhaustiveness: every member must be handled unless a
+            // `_` catches the rest (mirrors the sum-type check). This turns a
+            // non-exhaustive enum match, which otherwise falls through and
+            // yields an uninitialized result, into a compile error.
+            if (enum_match && enum_def && !enum_wildcard) {
+                char missing[256]; int mp = 0, nmiss = 0;
+                for (int mi = 0; mi < enum_def->child_count && mi < 64; mi++) {
+                    ASTNode* mn = enum_def->children[mi];
+                    if (!mn || mn->type != AST_ENUM_MEMBER || !mn->value) continue;
+                    if (enum_covered[mi]) continue;
+                    if (nmiss > 0 && mp < (int)sizeof(missing))
+                        mp += snprintf(missing + mp, sizeof(missing) - mp, ", ");
+                    if (mp < (int)sizeof(missing))
+                        mp += snprintf(missing + mp, sizeof(missing) - mp, "%s", mn->value);
+                    nmiss++;
+                }
+                if (nmiss > 0) {
+                    char msg[360];
+                    snprintf(msg, sizeof(msg),
+                        "non-exhaustive match on enum '%s': missing member%s "
+                        "%s. Add an arm for each, or a `_` wildcard.",
+                        enum_name ? enum_name : "?",
                         nmiss > 1 ? "s" : "", missing);
                     type_error(msg, stmt->line, stmt->column);
                 }
