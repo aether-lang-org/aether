@@ -804,14 +804,16 @@ It is no longer part of the Aether stdlib. See [`docs/http-vcr.md`](http-vcr.md)
 > the `send_raw`/`receive_raw` naming.
 
 - `tcp.connect(host, port)` → `(ptr, string)` - Connect, return `(socket, err)`
-- `tcp.write(sock, data)` → `(int, string)` - Write, return `(bytes, err)`
-- `tcp.read(sock, max_bytes)` → `(string, string)` - Read, return `(data, err)`
+- `tcp.write(sock, data)` → `(int, string)` - Text-shaped write, return `(bytes, err)`
+- `tcp.write_n(sock, data, length)` → `(int, string)` - Length-aware write for binary payloads
+- `tcp.read(sock, max_bytes)` → `(string, string)` - Text-shaped read, return `(data, err)`
+- `tcp.read_n(sock, max_bytes)` → `(string, int, string)` - Binary-safe read, return `(bytes, length, err)`
 - `tcp.listen(port)` → `(ptr, string)` - Create listening socket
 - `tcp.accept(server)` → `(ptr, string)` - Accept connection
 - `tcp.close(sock)` - Close socket (infallible)
 - `tcp.server_close(server)` - Close server socket
 
-Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_receive_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
+Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_send_n_raw`, `tcp_receive_raw`, `tcp_receive_n_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
 
 ### Reactor-Pattern Async I/O (`await_io`)
 

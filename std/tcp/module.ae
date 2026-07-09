@@ -5,16 +5,19 @@
 // The implementations are in std/net/aether_net.c.
 
 exports (
-    tcp_connect_raw, tcp_send_raw, tcp_receive_raw, tcp_close,
+    tcp_connect_raw, tcp_send_raw, tcp_send_n_raw,
+    tcp_receive_raw, tcp_receive_n_raw, tcp_close,
     tcp_listen_raw, tcp_accept_raw, tcp_server_close,
     tcp_fd_raw, tcp_server_fd_raw,
-    connect, write, read, listen, accept, fd, server_fd
+    connect, write, write_n, read, read_n, listen, accept, fd, server_fd
 )
 
 // Raw externs - escape hatch
 extern tcp_connect_raw(host: string, port: int) -> ptr
 extern tcp_send_raw(sock: ptr, data: string) -> int
+extern tcp_send_n_raw(sock: ptr, data: string, length: int) -> int
 extern tcp_receive_raw(sock: ptr, max_bytes: int) -> string
+extern tcp_receive_n_raw(sock: ptr, max_bytes: int) -> (string @heap, int, string)
 extern tcp_close(sock: ptr) -> int
 extern tcp_listen_raw(port: int) -> ptr
 extern tcp_accept_raw(server: ptr) -> ptr
@@ -50,8 +53,22 @@ write(sock: ptr, data: string) -> {
     return n, ""
 }
 
+// Length-aware socket write. Writes exactly the caller-supplied byte
+// prefix, so embedded NUL bytes in `data` do not truncate the send.
+// Returns the OS send(2) byte count; callers that require full-buffer
+// delivery should loop until `length` bytes have been accepted.
+write_n(sock: ptr, data: string, length: int) -> {
+    n = tcp_send_n_raw(sock, data, length)
+    if n < 0 {
+        return 0, "send failed"
+    }
+    return n, ""
+}
+
 // Read up to max_bytes from a socket. Returns (data, "") on success,
-// ("", error) on transport failure or connection close.
+// ("", error) on transport failure or connection close. This text
+// wrapper copies with string_concat and is strlen-shaped; use read_n
+// when the payload may contain embedded NUL bytes.
 read(sock: ptr, max_bytes: int) -> {
     data = tcp_receive_raw(sock, max_bytes)
     if data == null {
@@ -59,6 +76,14 @@ read(sock: ptr, max_bytes: int) -> {
     }
     data_copy = string_concat(data, "")
     return data_copy, ""
+}
+
+// Binary-safe read. Returns (bytes, length, "") on success, with the
+// byte buffer stored in a length-aware AetherString. The returned
+// length is authoritative; callers should pass it to length-aware
+// consumers rather than re-derive length with strlen-shaped APIs.
+read_n(sock: ptr, max_bytes: int) -> {
+    return tcp_receive_n_raw(sock, max_bytes)
 }
 
 // Listen on a port. Returns (server, "") on success, (null, error) on

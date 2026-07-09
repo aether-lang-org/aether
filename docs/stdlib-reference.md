@@ -1613,14 +1613,16 @@ main() {
 
 **Functions (Go-style):**
 - `tcp.connect(host, port)` → `(ptr, string)` - Connect, return `(socket, err)`
-- `tcp.write(sock, data)` → `(int, string)` - Write bytes, return `(bytes_sent, err)`
-- `tcp.read(sock, max)` → `(string, string)` - Read bytes, return `(data, err)`
+- `tcp.write(sock, data)` → `(int, string)` - Write text-shaped data, return `(bytes_sent, err)`. Uses the legacy strlen-shaped raw send; use `tcp.write_n` for binary payloads.
+- `tcp.write_n(sock, data, length)` → `(int, string)` - Length-aware write, return `(bytes_sent, err)`. Sends exactly the caller-supplied byte prefix, preserving embedded NUL bytes.
+- `tcp.read(sock, max)` → `(string, string)` - Read text-shaped data, return `(data, err)`. Use `tcp.read_n` for binary payloads.
+- `tcp.read_n(sock, max)` → `(string, int, string)` - Binary-safe read, return `(bytes, length, err)`. The returned length is authoritative for payloads with embedded NUL bytes.
 - `tcp.listen(port)` → `(ptr, string)` - Create server socket
 - `tcp.accept(server)` → `(ptr, string)` - Accept connection
 - `tcp.close(sock)` - Close socket (infallible)
 - `tcp.server_close(server)` - Close server socket
 
-Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_receive_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
+Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_send_n_raw`, `tcp_receive_raw`, `tcp_receive_n_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
 
 ### Reactor-pattern async I/O (`await_io`)
 

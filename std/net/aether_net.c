@@ -2,11 +2,18 @@
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/aether_sandbox.h"
 #include "../../runtime/aether_resource_caps.h"
+#include "../string/aether_string.h"
 
 #if !AETHER_HAS_NETWORKING
 TcpSocket* tcp_connect_raw(const char* h, int p) { (void)h; (void)p; return NULL; }
 int tcp_send_raw(TcpSocket* s, const char* d) { (void)s; (void)d; return -1; }
+int tcp_send_n_raw(TcpSocket* s, const char* d, int n) { (void)s; (void)d; (void)n; return -1; }
 char* tcp_receive_raw(TcpSocket* s, int m) { (void)s; (void)m; return NULL; }
+TcpReceiveResult tcp_receive_n_raw(TcpSocket* s, int m) {
+    (void)s; (void)m;
+    TcpReceiveResult out = { NULL, 0, "net unavailable" };
+    return out;
+}
 int tcp_close(TcpSocket* s) { (void)s; return 0; }
 TcpServer* tcp_listen_raw(int p) { (void)p; return NULL; }
 TcpSocket* tcp_accept_raw(TcpServer* s) { (void)s; return NULL; }
@@ -128,6 +135,14 @@ int tcp_send_raw(TcpSocket* sock, const char* data) {
     return sent;
 }
 
+int tcp_send_n_raw(TcpSocket* sock, const char* data, int length) {
+    if (!sock || !sock->connected || !data || length < 0) return -1;
+    if (length == 0) return 0;
+
+    int sent = send(sock->fd, data, (size_t)length, 0);
+    return sent;
+}
+
 char* tcp_receive_raw(TcpSocket* sock, int max_bytes) {
     if (!sock || !sock->connected || max_bytes <= 0) return NULL;
 
@@ -147,6 +162,42 @@ char* tcp_receive_raw(TcpSocket* sock, int max_bytes) {
 
     buffer[received] = '\0';
     return buffer;
+}
+
+TcpReceiveResult tcp_receive_n_raw(TcpSocket* sock, int max_bytes) {
+    TcpReceiveResult out;
+    out._0 = NULL;
+    out._1 = 0;
+    out._2 = "connection closed or receive failed";
+
+    if (!sock || !sock->connected || max_bytes <= 0) {
+        return out;
+    }
+
+    char* buffer = (char*)aether_caps_malloc((size_t)max_bytes);
+    if (!buffer) {
+        out._2 = "allocation failed";
+        return out;
+    }
+
+    int received = recv(sock->fd, buffer, max_bytes, 0);
+    if (received <= 0) {
+        aether_caps_free(buffer, (size_t)max_bytes);
+        sock->connected = 0;
+        return out;
+    }
+
+    AetherString* wrapped = string_new_with_length(buffer, (size_t)received);
+    aether_caps_free(buffer, (size_t)max_bytes);
+    if (!wrapped) {
+        out._2 = "allocation failed";
+        return out;
+    }
+
+    out._0 = (void*)wrapped;
+    out._1 = received;
+    out._2 = "";
+    return out;
 }
 
 int tcp_close(TcpSocket* sock) {

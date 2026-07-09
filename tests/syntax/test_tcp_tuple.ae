@@ -13,5 +13,19 @@ main() {
     if sock != null {
         tcp.close(sock)
     }
+    _, werr = tcp.write_n(null, "A", 1)
+    if werr == "" {
+        println("FAIL: write_n(null) should error")
+        exit(1)
+    }
+    _, n, rerr = tcp.read_n(null, 16)
+    if rerr == "" {
+        println("FAIL: read_n(null) should error")
+        exit(1)
+    }
+    if n != 0 {
+        println("FAIL: read_n(null) length should be 0")
+        exit(1)
+    }
     println("tcp tuple wrappers ok")
 }

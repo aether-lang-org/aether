@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Length-aware TCP I/O** (#1078). `std.tcp` now exposes
+  `tcp.write_n(sock, data, length)` and `tcp.read_n(sock, max)` on top of
+  `tcp_send_n_raw` / `tcp_receive_n_raw`, so TCP relays can send and
+  receive byte buffers with embedded NULs without strlen truncation. The
+  read side returns `(bytes, length, err)` using a length-bearing
+  AetherString, matching the binary-safe stdlib pattern used by
+  `fs.read_binary`.
+
 ## [0.373.0]
 
 ### Added
