@@ -51,9 +51,10 @@ RuntimeValue* aether_convert_type(RuntimeValue* val, const char* target_type) {
     if (!val) return NULL;
     
     RuntimeValue* result = (RuntimeValue*)malloc(sizeof(RuntimeValue));
+    if (!result) return NULL;   // caller already handles a NULL result (see `!val` above)
     RuntimeTypeCode target_code = string_to_type_code(target_type);
     result->type = target_code;
-    
+
     // Convert from int
     if (val->type == RUNTIME_TYPE_INT) {
         if (target_code == RUNTIME_TYPE_FLOAT) {

@@ -90,9 +90,13 @@ void aether_shared_map_put(AetherSharedMap* map, const char* key, const char* va
         }
     }
 
-    // Add new entry
+    // Add new entry. A NULL key (allocation failure) would crash the strcmp in
+    // every later get/put, so on failure leave the map unchanged. A NULL value
+    // is fine (get legitimately returns NULL for a present key with no value).
     if (map->count >= MAX_ENTRIES) return;
-    map->entries[map->count].key = strdup(key);
+    char* kdup = strdup(key);
+    if (!kdup) return;
+    map->entries[map->count].key = kdup;
     map->entries[map->count].value = value ? strdup(value) : NULL;
     map->count++;
 }
