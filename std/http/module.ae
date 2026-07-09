@@ -49,6 +49,7 @@ exports (
     http_response_set_header, http_response_add_header,
     http_response_clear_headers,
     http_response_set_body, http_response_set_body_n,
+    http_response_accept_tunnel, response_accept_tunnel,
     http_response_json, http_server_response_free,
     http_server_set_actor_handler,
     http_request_method, http_request_path, http_request_body,
@@ -609,8 +610,19 @@ extern http_response_set_body(res: ptr, body: string)
 // binary). Plain http_response_set_body uses strlen() and
 // truncates at the first NUL.
 extern http_response_set_body_n(res: ptr, body: string, length: int)
+// Send the current HTTP response immediately and take ownership of
+// the underlying cleartext HTTP/1.1 connection as a std.tcp socket.
+// Returns null if the response is not attached to a live connection,
+// the connection is TLS-wrapped, or the HTTP parser has buffered
+// bytes that a raw socket could not replay. The returned socket is
+// caller-owned and must be closed with tcp.close.
+extern http_response_accept_tunnel(res: ptr) -> ptr
 extern http_response_json(res: ptr, json: string)
 extern http_server_response_free(res: ptr)
+
+response_accept_tunnel(res: ptr) -> ptr {
+    return http_response_accept_tunnel(res)
+}
 
 // HTTP Server - actor dispatch mode
 extern http_server_set_actor_handler(server: ptr, step_fn: ptr, send_fn: ptr, spawn_fn: ptr, release_fn: ptr)

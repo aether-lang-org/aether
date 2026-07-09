@@ -1,0 +1,77 @@
+// Aether-side driver for the #1086 CONNECT tunnel regression.
+
+import std.tcp
+import std.string
+
+extern exit(code: int)
+
+const PORT = 18286
+
+fail(msg: string) {
+    println("  [FAIL] ${msg}")
+    exit(1)
+}
+
+expect_byte(buf: string, length: int, index: int, expected: int) {
+    got = string.char_at_n(buf, length, index)
+    if got != expected {
+        fail("byte ${index} mismatch: got ${got}, expected ${expected}")
+    }
+}
+
+make_payload() -> string {
+    nul = string.from_char(0)
+    a = string.concat_wrapped("pre", nul)
+    b = string.concat_wrapped(a, "mid")
+    c = string.concat_wrapped(b, nul)
+    return string.concat_wrapped(c, "post")
+}
+
+main() {
+    denied, derr = tcp.connect("127.0.0.1", PORT)
+    if derr != "" { fail("connect denied case: ${derr}") }
+    _, dwerr = tcp.write(denied,
+        "CONNECT denied.example:443 HTTP/1.1\r\nHost: denied.example:443\r\n\r\n")
+    if dwerr != "" { fail("write denied CONNECT: ${dwerr}") }
+    dhead, drerr = tcp.read(denied, 512)
+    tcp.close(denied)
+    if drerr != "" { fail("read denied CONNECT response: ${drerr}") }
+    if string.contains(dhead, "HTTP/1.1 403") == 0 {
+        fail("denied CONNECT did not return 403: ${dhead}")
+    }
+
+    accepted, aerr = tcp.connect("127.0.0.1", PORT)
+    if aerr != "" { fail("connect accepted case: ${aerr}") }
+    _, awerr = tcp.write(accepted,
+        "CONNECT allowed.example:443 HTTP/1.1\r\nHost: allowed.example:443\r\n\r\n")
+    if awerr != "" { fail("write accepted CONNECT: ${awerr}") }
+    ahead, arerr = tcp.read(accepted, 512)
+    if arerr != "" { fail("read accepted CONNECT response: ${arerr}") }
+    if string.contains(ahead, "HTTP/1.1 200") == 0 {
+        fail("accepted CONNECT did not return 200: ${ahead}")
+    }
+
+    payload = make_payload()
+    _, pwerr = tcp.write_n(accepted, payload, 12)
+    if pwerr != "" { fail("write tunnel payload: ${pwerr}") }
+
+    echoed, n, rerr = tcp.read_n(accepted, 32)
+    tcp.close(accepted)
+    if rerr != "" { fail("read tunnel echo: ${rerr}") }
+    if n != 12 { fail("echo length ${n}, expected 12") }
+
+    expect_byte(echoed, n, 0, 112) // p
+    expect_byte(echoed, n, 1, 114) // r
+    expect_byte(echoed, n, 2, 101) // e
+    expect_byte(echoed, n, 3, 0)
+    expect_byte(echoed, n, 4, 109) // m
+    expect_byte(echoed, n, 5, 105) // i
+    expect_byte(echoed, n, 6, 100) // d
+    expect_byte(echoed, n, 7, 0)
+    expect_byte(echoed, n, 8, 112) // p
+    expect_byte(echoed, n, 9, 111) // o
+    expect_byte(echoed, n, 10, 115) // s
+    expect_byte(echoed, n, 11, 116) // t
+
+    println("  [PASS] http_server_connect_tunnel: CONNECT rejection + Aether binary tunnel echo")
+}

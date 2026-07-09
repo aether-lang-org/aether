@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **HTTP server CONNECT tunnel takeover** (#1086). A handler can now call
+  `http.response_accept_tunnel(res)` after setting an accepting response
+  (typically `200 Connection Established`) to send the response head
+  immediately and take ownership of the underlying cleartext HTTP/1.1
+  connection as a `std.tcp` socket. The normal HTTP response lifecycle then
+  stops for that connection, so the handler can relay length-aware binary data
+  with `tcp.read_n` / `tcp.write_n` and close the stream deterministically.
+  Rejected CONNECT requests still use the ordinary response path. New
+  integration: `tests/integration/http_server_connect_tunnel/`.
+
 ## [0.376.0]
 
 ### Fixed
@@ -23,6 +37,17 @@ next version number before tagging the release.
   body would crash the request or error path); `aether_shared_map_put` (a NULL
   key crashes the next `strcmp`); and `aether_convert_type` (a NULL result was
   dereferenced immediately). The normal (non-OOM) path is unchanged.
+
+## [0.375.0]
+
+### Fixed
+
+- **Release builds use parallel LTO**. The `release` target, and therefore
+  `make install`, now chooses a parallel link-time-optimization mode when the
+  compiler supports one: `-flto=thin` for clang, `-flto=auto` for GCC 10+, and
+  plain `-flto` as the compatibility fallback. This avoids the previous
+  single-core LTO link that could make optimized installs look stalled, and the
+  release-build status line now calls out the LTO mode and expected delay.
 
 ## [0.374.0]
 

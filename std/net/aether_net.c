@@ -20,6 +20,7 @@ TcpSocket* tcp_accept_raw(TcpServer* s) { (void)s; return NULL; }
 int tcp_server_close(TcpServer* s) { (void)s; return 0; }
 int tcp_fd_raw(TcpSocket* s) { (void)s; return -1; }
 int tcp_server_fd_raw(TcpServer* s) { (void)s; return -1; }
+TcpSocket* tcp_socket_from_fd_owned(int fd) { (void)fd; return NULL; }
 #else
 
 #include <stdlib.h>
@@ -296,6 +297,21 @@ int tcp_fd_raw(TcpSocket* sock) {
 int tcp_server_fd_raw(TcpServer* server) {
     if (!server) return -1;
     return server->fd;
+}
+
+TcpSocket* tcp_socket_from_fd_owned(int fd) {
+    if (fd < 0) return NULL;
+    net_init();
+    net_set_socket_timeouts(fd, 30);
+
+    TcpSocket* sock = (TcpSocket*)malloc(sizeof(TcpSocket));
+    if (!sock) {
+        close(fd);
+        return NULL;
+    }
+    sock->fd = fd;
+    sock->connected = 1;
+    return sock;
 }
 
 #endif // AETHER_HAS_NETWORKING
