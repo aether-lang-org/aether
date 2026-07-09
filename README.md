@@ -583,12 +583,44 @@ If Aether is useful to you, consider [sponsoring the project on GitHub](https://
 
 ## Acknowledgments
 
-Aether draws inspiration from:
-- **Erlang/OTP**, Actor model, message passing semantics
-- **Go**, Pragmatic tooling, simple concurrency primitives
-- **Rust**, Systems programming practices, zero-cost abstractions
-- **Pony**, Actor-based type safety concepts and object-capability model
-- **Smalltalk / Ruby / Groovy**, Block / closure ergonomics: trailing-block builders, `do |x| … end` syntax, and DSL-shaped APIs where the closure is the configuration
+Aether's main lineage is:
+
+- **Erlang/OTP**, actor model, message passing, receive-pattern syntax, and
+  "let it be isolated behind a mailbox" concurrency.
+- **Go**, pragmatic tooling, simple syntax, explicit `(value, err)` returns,
+  and stdlib surfaces that favor direct operational code over framework magic.
+- **Rust**, systems-programming discipline, explicit capability boundaries,
+  zero-cost lowering goals, and careful ownership/lifetime thinking without
+  adopting a borrow checker.
+- **Pony**, actor-oriented type-safety ideas and the object-capability framing
+  behind sandboxed imports, lexical `hide` / `seal`, and explicit grants.
+- **Smalltalk / Ruby / Groovy**, block and closure ergonomics: trailing-block
+  builders, `do |x| ... end`-style readability, and DSL-shaped APIs where the
+  closure is the configuration.
+
+Smaller facets are deliberately borrowed or adapted from elsewhere:
+
+- **Elixir / Erlang lists**, for `*StringSeq`: O(1) head/tail/cons/length,
+  structural sharing, and pattern matching with `[h | t]`.
+- **Odin**, for struct field injection via `using embed: Sub` while omitting
+  Odin's broader `using` statement form.
+- **Nim / Pony**, for nominal wrapper and move-only-style ideas in features
+  such as distinct types and isolated actor-message payloads.
+- **V**, for compact systems-language ergonomics and some C-adjacent syntax
+  choices in declarations, modules, and direct standard-library APIs.
+- **Ruby**, for heredoc dedent rules in the `<<MARKER ... MARKER` syntax.
+- **Go's standard library**, for concrete API semantics such as
+  `filepath.Clean` / `filepath.Rel`-style path helpers and proxy environment
+  handling compatible with `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
+- **Java, gVisor, WASI, Deno, and FreeBSD Capsicum**, as comparison points and
+  partial prior art for sandboxing, syscall boundaries, and capability-style
+  containment.
+- **HCL, Helm, Pulumi, CDK, and YAML ecosystems**, as the configuration systems
+  Aether's trailing-block "config is code" style is intentionally designed to
+  replace for programmable server-shaped libraries.
+- **Rust macros, jOOQ, and RSpec**, as reference points for what Aether's
+  trailing-block DSLs can express directly without a macro or code-generation
+  layer.
 
 ## License
 
