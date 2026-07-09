@@ -13,6 +13,7 @@ Type* create_type(TypeKind kind) {
     type->struct_name = NULL;
     type->c_alias = NULL;
     type->distinct_name = NULL;
+    type->index_enum_name = NULL;   // #1044 enum-indexed array marker
     type->tuple_types = NULL;
     type->tuple_count = 0;
     type->tuple_heap_flags = NULL;
@@ -121,6 +122,9 @@ void free_type(Type* type) {
         if (type->distinct_name) {
             free(type->distinct_name);
         }
+        if (type->index_enum_name) {
+            free(type->index_enum_name);
+        }
         if (type->tuple_types) {
             for (int i = 0; i < type->tuple_count; i++) {
                 free_type(type->tuple_types[i]);
@@ -171,9 +175,16 @@ const char* type_to_string(Type* type) {
         }
         case TYPE_ARRAY: {
             static char buffer[256];
-            snprintf(buffer, sizeof(buffer), "%s[%d]", 
-                    type_to_string(type->element_type), 
-                    type->array_size);
+            if (type->index_enum_name) {
+                // #1044 enum-indexed array `[E]T`
+                snprintf(buffer, sizeof(buffer), "[%s]%s",
+                        type->index_enum_name,
+                        type->element_type ? type_to_string(type->element_type) : "?");
+            } else {
+                snprintf(buffer, sizeof(buffer), "%s[%d]",
+                        type_to_string(type->element_type),
+                        type->array_size);
+            }
             return buffer;
         }
         case TYPE_ACTOR_REF: {
@@ -275,6 +286,13 @@ int types_equal(Type* a, Type* b) {
         return types_equal(a->return_type, b->return_type);
     }
 
+    // #1044 enum-indexed arrays are distinguished by their index enum: a
+    // `[Dir]string` is neither a plain `string[]` nor a `[Color]string`.
+    if (a->index_enum_name || b->index_enum_name) {
+        if (!a->index_enum_name || !b->index_enum_name) return 0;
+        if (strcmp(a->index_enum_name, b->index_enum_name) != 0) return 0;
+    }
+
     return types_equal(a->element_type, b->element_type);
 }
 
@@ -296,6 +314,9 @@ Type* clone_type(Type* type) {
     }
     if (type->distinct_name) {
         new_type->distinct_name = strdup(type->distinct_name);
+    }
+    if (type->index_enum_name) {
+        new_type->index_enum_name = strdup(type->index_enum_name);
     }
 
     if (type->tuple_types && type->tuple_count > 0) {

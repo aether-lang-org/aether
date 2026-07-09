@@ -1308,7 +1308,27 @@ A real binding always wins: if a variable named `North` is in scope, `North`
 refers to it, not the member. A bare name that is not a member of the expected
 enum stays an ordinary "undefined variable" error.
 
-Deliberately deferred to a follow-up: enum-indexed arrays (`[Direction]string`).
+### Enum-indexed arrays
+
+`[E]T` is a fixed array with exactly one slot per member of enum `E`, indexed by
+an `E` value rather than a raw integer. It is sized at compile time to the enum's
+member range and lowers to a plain C array (zero runtime cost):
+
+```aether
+enum Dir { N, E, S, W }
+const LABELS: [Dir]string = ["north", "east", "south", "west"]  // one per member
+
+LABELS[Dir.E]        // "east", indexed by the enum member
+var t: [Dir]string = ["n", "e", "s", "w"]
+t[Dir.N] = "NORTH"   // element assignment
+```
+
+A positional literal supplies one value per member in declaration order; the
+count must match. The index must be a value of `E` (a raw `int` is rejected), so
+the type keeps the table and its keys in lockstep. With explicit member values
+the array spans `0 ..= max value`, so a sparse enum reserves the intervening
+slots. Array-typed function parameters and empty `[]` initialisers share the
+current fixed-size-array limitations and are a separate follow-up.
 
 ## Bit Sets
 

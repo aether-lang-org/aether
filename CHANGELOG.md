@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Enum-indexed arrays, `[E]T`** (follow-up to #1044). A fixed array with one
+  slot per member of enum `E`, indexed by an `E` value instead of a raw integer:
+  `const LABELS: [Dir]string = ["north","east","south","west"]; LABELS[Dir.E]`.
+  Sized at compile time to the enum's member range (`0 ..= max value`) and
+  lowered to a plain C array, so there is zero runtime cost and no bounds check
+  is needed (the index is a sealed enum value). A positional literal supplies one
+  value per member in declaration order and the count must match; indexing with a
+  raw `int`, a mismatched value count, or a non-enum index type are compile
+  errors. Supported for local variables and top-level `const`; array-typed
+  parameters and empty `[]` initialisers share the pre-existing fixed-size-array
+  limitations and are a separate follow-up. New regression:
+  `tests/regression/test_enum_indexed_array.ae`; docs in `language-reference.md`.
+
 ## [0.372.0]
 
 ### Added
