@@ -502,6 +502,9 @@ static HttpRequest* request_from_stream(AetherH2Stream* str) {
     HttpRequest* req = calloc(1, sizeof(HttpRequest));
     if (!req) return NULL;
     req->method        = dup_str(str->method ? str->method : "GET");
+    /* method is dereferenced by route dispatch (strcmp); a NULL here would be a
+     * delayed crash far from this alloc, so fail the request build now. */
+    if (!req->method) { free(req); return NULL; }
     /* Per RFC 7540, the :path pseudo-header is the request-target
      * which embeds the query string. The HTTP/1.1 parser splits at
      * '?' to populate path + query_string separately, and downstream
@@ -562,6 +565,10 @@ static HttpRequest* request_from_stream(AetherH2Stream* str) {
                 req->header_keys[i]   = malloc(klen + 1);
                 req->header_values[i] = malloc(vlen + 1);
                 if (!req->header_keys[i] || !req->header_values[i]) {
+                    /* One of the pair failed: free the other so it doesn't leak
+                     * (header_count won't cover this un-incremented slot). */
+                    free(req->header_keys[i]);   req->header_keys[i] = NULL;
+                    free(req->header_values[i]); req->header_values[i] = NULL;
                     p = eol + 2; continue;
                 }
                 memcpy(req->header_keys[i], p, klen);

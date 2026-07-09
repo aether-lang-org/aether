@@ -188,9 +188,15 @@ static inline void AETHER_HOT aether_send_message_sync(ActorBase* actor, void* m
     // The just-sent message will be processed later by scheduler_wait(),
     // by which time the caller's stack frame may be gone.
     void* heap_copy = malloc(message_size);
-    if (heap_copy) {
-        memcpy(heap_copy, message_data, message_size);
+    if (!heap_copy) {
+        // Delivering a NULL payload would crash the handler (or, for a
+        // single-int message, silently run it on zeroed data). Match the
+        // threaded path below and fail loudly rather than corrupt state.
+        fprintf(stderr, "aether: malloc(%zu) failed for msg type %d to actor %d\n",
+                message_size, *(int*)message_data, actor->id);
+        abort();
     }
+    memcpy(heap_copy, message_data, message_size);
     msg.payload_ptr = heap_copy;
 #endif
 

@@ -159,6 +159,12 @@ aether_numa_topology_t aether_numa_init(void) {
             for (int cpu = 0; cpu < topo.num_cpus; cpu++) {
                 topo.cpu_to_node[cpu] = numa_node_of_cpu(cpu);
             }
+        } else {
+            // Couldn't build the CPU->node map: disable NUMA rather than report
+            // it available with a NULL map that aether_numa_node_of_cpu would
+            // dereference. Falls back to single-node (plain malloc) allocation.
+            topo.available = false;
+            topo.num_nodes = 1;
         }
     } else {
         topo.num_nodes = 1;

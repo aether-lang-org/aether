@@ -569,9 +569,17 @@ _aether_ctx_pop();                                  // 3. pop
 
 ## Ref Cells, Shared Mutable State for Closures
 
-Aether closures capture variables by value. This means a closure that does
-`count = count + 1` modifies its own copy, not the original. For callbacks
-that need shared mutable state (like UI event handlers), use **ref cells**:
+Aether heap-promotes a captured variable that a closure **assigns to**: the
+enclosing binding and every closure capturing it then share one heap cell, so
+`count = count + 1` inside a closure is visible to the outer scope and to
+sibling closures (the Ruby/Groovy model). A simple named local needs no ref
+cell to share mutable state this way. A capture the closure only reads stays a
+cheap aliased copy.
+
+**Ref cells** are for shared mutable state that isn't a plain captured local:
+a value passed explicitly as a `ptr` argument to callbacks (UI event
+handlers), threaded through a struct field, or handed across an actor
+boundary:
 
 ```aether
 count = ref(0)           // heap-allocated mutable cell

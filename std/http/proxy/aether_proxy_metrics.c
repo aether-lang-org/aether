@@ -114,6 +114,12 @@ char* aether_proxy_pool_metrics_text(AetherProxyPool* pool) {
     }
     pthread_mutex_unlock(&pool->lock);
 
+    /* Single escape scratch pointer at function scope. The per-loop
+     * declarations left a live `esc` leaked whenever an EMIT hit OOM and
+     * jumped to `oom:` before its free; a hoisted pointer (NULLed after each
+     * free) lets the oom path reclaim it. */
+    char* esc = NULL;
+
     /* requests_total — broken down by status class so a Grafana
      * dashboard can sum {class="5xx"} for an error-rate panel
      * without re-aggregating. */
@@ -121,40 +127,40 @@ char* aether_proxy_pool_metrics_text(AetherProxyPool* pool) {
     EMIT("# TYPE aether_proxy_upstream_requests_total counter\n");
     for (int i = 0; i < n; i++) {
         AetherUpstream* u = snap[i];
-        char* esc = prom_label_escape(u->base_url);
+        esc = prom_label_escape(u->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_requests_total{upstream=\"%s\",class=\"2xx\"} %ld\n", esc, atomic_load(&u->metric_requests_2xx));
         EMIT("aether_proxy_upstream_requests_total{upstream=\"%s\",class=\"3xx\"} %ld\n", esc, atomic_load(&u->metric_requests_3xx));
         EMIT("aether_proxy_upstream_requests_total{upstream=\"%s\",class=\"4xx\"} %ld\n", esc, atomic_load(&u->metric_requests_4xx));
         EMIT("aether_proxy_upstream_requests_total{upstream=\"%s\",class=\"5xx\"} %ld\n", esc, atomic_load(&u->metric_requests_5xx));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     EMIT("# HELP aether_proxy_upstream_transport_errors_total Transport-class failures (DNS, connect, TLS).\n");
     EMIT("# TYPE aether_proxy_upstream_transport_errors_total counter\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_transport_errors_total{upstream=\"%s\"} %ld\n", esc, atomic_load(&snap[i]->metric_transport_errors));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     EMIT("# HELP aether_proxy_upstream_timeouts_total Upstream calls that exceeded the request timeout.\n");
     EMIT("# TYPE aether_proxy_upstream_timeouts_total counter\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_timeouts_total{upstream=\"%s\"} %ld\n", esc, atomic_load(&snap[i]->metric_timeouts));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     EMIT("# HELP aether_proxy_upstream_retries_total Idempotent retries fired against this upstream.\n");
     EMIT("# TYPE aether_proxy_upstream_retries_total counter\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_retries_total{upstream=\"%s\"} %ld\n", esc, atomic_load(&snap[i]->metric_retries));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     /* Latency: emit sum + count so dashboards can compute average
@@ -163,55 +169,55 @@ char* aether_proxy_pool_metrics_text(AetherProxyPool* pool) {
     EMIT("# HELP aether_proxy_upstream_latency_ms_sum Sum of upstream call durations in ms.\n");
     EMIT("# TYPE aether_proxy_upstream_latency_ms_sum counter\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_latency_ms_sum{upstream=\"%s\"} %ld\n", esc, atomic_load(&snap[i]->metric_latency_sum_ms));
-        free(esc);
+        free(esc); esc = NULL;
     }
     EMIT("# HELP aether_proxy_upstream_latency_ms_count Count of upstream calls observed.\n");
     EMIT("# TYPE aether_proxy_upstream_latency_ms_count counter\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_latency_ms_count{upstream=\"%s\"} %ld\n", esc, atomic_load(&snap[i]->metric_latency_count));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     /* Gauges. */
     EMIT("# HELP aether_proxy_upstream_inflight Concurrent in-flight requests on this upstream.\n");
     EMIT("# TYPE aether_proxy_upstream_inflight gauge\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_inflight{upstream=\"%s\"} %d\n", esc, atomic_load(&snap[i]->inflight));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     EMIT("# HELP aether_proxy_upstream_healthy 1 if the active health check considers the upstream up.\n");
     EMIT("# TYPE aether_proxy_upstream_healthy gauge\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_healthy{upstream=\"%s\"} %d\n", esc, atomic_load(&snap[i]->healthy));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     EMIT("# HELP aether_proxy_upstream_breaker_state 0=closed, 1=open, 2=half_open.\n");
     EMIT("# TYPE aether_proxy_upstream_breaker_state gauge\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_breaker_state{upstream=\"%s\"} %d\n", esc, atomic_load(&snap[i]->cb_state));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     EMIT("# HELP aether_proxy_upstream_draining 1 if the upstream is in active drain mode.\n");
     EMIT("# TYPE aether_proxy_upstream_draining gauge\n");
     for (int i = 0; i < n; i++) {
-        char* esc = prom_label_escape(snap[i]->base_url);
+        esc = prom_label_escape(snap[i]->base_url);
         if (!esc) goto oom;
         EMIT("aether_proxy_upstream_draining{upstream=\"%s\"} %d\n", esc, atomic_load(&snap[i]->draining));
-        free(esc);
+        free(esc); esc = NULL;
     }
 
     /* Pool-level counters. */
@@ -236,6 +242,7 @@ char* aether_proxy_pool_metrics_text(AetherProxyPool* pool) {
     return buf.data;
 
 oom:
+    free(esc);
     free(snap);
     free(buf.data);
     return NULL;

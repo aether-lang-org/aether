@@ -30,7 +30,7 @@ Functions are called using **namespace-style syntax**: `namespace.function()`
 | `import std.json` | `json` | `json.parse(str)`, `json.create_object()` |
 | `import std.cryptography` | `cryptography` | `cryptography.sha256_hex(data, n)`, `cryptography.base64_encode(data, n)` |
 | `import std.http` | `http` | `http.get(url)`, `http.server_create(port)` |
-| `import std.tcp` | `tcp` | `tcp.connect(host, port)`, `tcp.send(sock, data)` |
+| `import std.tcp` | `tcp` | `tcp.connect(host, port)`, `tcp.write(sock, data)` |
 | `import std.list` | `list` | `list.new()`, `list.add(l, item)` |
 | `import std.map` | `map` | `map.new()`, `map.put(m, key, val)` |
 | `import std.math` | `math` | `math.sqrt(x)`, `math.sin(x)` |

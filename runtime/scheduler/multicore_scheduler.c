@@ -1002,7 +1002,10 @@ void scheduler_init(int cores) {
             fprintf(stderr, "WARNING: I/O poller init failed for core %d\n", i);
         }
         schedulers[i].io_map = calloc(AETHER_IO_MAX_FDS, sizeof(AetherIoEntry));
-        schedulers[i].io_map_capacity = AETHER_IO_MAX_FDS;
+        // On failure leave the capacity at 0 so scheduler_io_register grows the
+        // map lazily (realloc from NULL) on first use, instead of writing through
+        // a NULL map that a non-zero capacity would let it index directly.
+        schedulers[i].io_map_capacity = schedulers[i].io_map ? AETHER_IO_MAX_FDS : 0;
         schedulers[i].io_registered_count = 0;
     }
 }
@@ -1374,7 +1377,9 @@ void scheduler_deregister_actor(ActorBase* actor) {
 
 // Grow io_map to accommodate fd. Returns 0 on success, -1 on failure.
 static int scheduler_io_map_grow(Scheduler* sched, int fd) {
-    int new_cap = sched->io_map_capacity;
+    // Start from at least 1 so a zero capacity (initial map allocation failed)
+    // grows normally instead of looping forever on new_cap *= 2.
+    int new_cap = sched->io_map_capacity > 0 ? sched->io_map_capacity : 1;
     while (new_cap <= fd) new_cap *= 2;
 
     AetherIoEntry* new_map = realloc(sched->io_map, (size_t)new_cap * sizeof(AetherIoEntry));
@@ -1699,6 +1704,7 @@ static AETHER_TLS BatchSendBuffer* g_batch_buffer = NULL;
 void scheduler_send_batch_start(void) {
     if (!g_batch_buffer) {
         g_batch_buffer = calloc(1, sizeof(BatchSendBuffer));
+        if (!g_batch_buffer) return;  // OOM: batching stays off, callers fall back
     }
     g_batch_buffer->count = 0;
     memset(g_batch_buffer->by_core, 0, sizeof(g_batch_buffer->by_core));
@@ -1717,6 +1723,12 @@ void scheduler_send_batch_add(ActorBase* actor, Message msg) {
     // BATCH PATH: Multi-actor fan-out optimization
     if (!g_batch_buffer) {
         scheduler_send_batch_start();
+        if (!g_batch_buffer) {
+            // Batch buffer couldn't be allocated: deliver directly so the
+            // message is never dropped. Batching is only a throughput optimization.
+            mailbox_send(&actor->mailbox, msg);
+            return;
+        }
     }
 
     // If buffer is full, flush first
@@ -1890,6 +1902,16 @@ void scheduler_release_pooled(ActorBase* actor) {
 
     // Track actor count for inline mode auto-detection
     aether_on_actor_terminate();
+
+    // Reclaim the lazily-allocated same-core SPSC queue (owned solely by this
+    // actor, calloc'd by ensure_spsc_queue / send_buffer_flush). Neither
+    // teardown path below frees it, so without this every actor that ever
+    // flushed a same-core batch leaks its multi-KB queue. A pooled slot that is
+    // reused re-allocates lazily, since both allocators re-check for NULL.
+    if (actor->spsc_queue) {
+        free(actor->spsc_queue);
+        actor->spsc_queue = NULL;
+    }
 
     int core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
     if (core >= 0 && core < num_cores && schedulers[core].actor_pool) {

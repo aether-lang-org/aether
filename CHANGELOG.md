@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Two memory leaks on the normal (non-OOM) path.** `http_route_matches`
+  allocated fresh `param_keys`/`param_values` arrays on every call and only the
+  last call's pair was ever freed, so a server with more than one route leaked
+  the two arrays (plus their strings) for every candidate route tried before the
+  match, and for every route on a 404, on ordinary traffic. It now frees the
+  previous call's params first (which also clears stale params an earlier failed
+  pattern left behind). `scheduler_release_pooled` never freed an actor's
+  lazily-allocated same-core `spsc_queue`, leaking a multi-KB buffer for every
+  actor that had flushed a same-core batch; it is now reclaimed on teardown (a
+  reused pooled slot re-allocates lazily).
+
+- **Allocation-failure hardening across the runtime and standard library.** A
+  sweep for the "store a failed allocation, report success, crash later" class
+  (a delayed fault far from the failed alloc, worse than a clean out-of-memory
+  failure) plus self-overwriting `realloc`s that leak the original and then
+  dereference NULL. Fixes span: the cooperative and multicore schedulers (actor
+  table, per-core I/O map, send-batch buffer with a direct-send fallback), NUMA
+  init (falls back to single-node instead of a NULL cpu-to-node map), the
+  cooperative message send (fails loudly like the threaded path rather than
+  dispatching a NULL payload), actor tracing; the HTTP/1.1 server (request
+  header arrays, response create, `set_header`/`add_header`, route params and
+  bound, route and middleware registration, accept-thread context), the HTTP
+  client redirect follower, the HTTP/2 request builder, the middleware factories
+  (session-auth, rate-limit bucket, static-file opts, request-header add), the
+  proxy Prometheus exporter (an OOM-path escape-buffer leak), and runtime type
+  conversion. The normal path is unchanged; every fix degrades gracefully or
+  fails cleanly under memory pressure.
+
+### Documentation
+
+- **Closure capture semantics corrected.** `closures-and-builder-dsl.md` and
+  `closures-and-lifetimes.md` claimed closures capture by value and that a
+  mutation like `count = count + 1` is not visible to the enclosing scope. The
+  compiler actually heap-promotes a captured variable a closure assigns to, so
+  the outer binding and the closure share one cell and writes are visible both
+  ways (the Ruby/Groovy model, asserted by
+  `tests/syntax/test_closure_mutable_capture_probe.ae`). The docs now describe
+  this and scope ref cells to state that isn't a plain captured local.
+
+- **Corrected several doc claims contradicted by the compiler/stdlib** (each
+  reproduced against a freshly built compiler): the `as` primitive cast is
+  documented as not parsing, but the #480 value cast means `n as int` and other
+  numeric casts compile and run (non-numeric casts like `buf as string` parse
+  and are rejected at type-check with `E0200`), `language-reference.md`;
+  `io.stderr_write` / `io.stdout_write` take one argument, not two (length is
+  computed internally), `stdlib-reference.md`; and the `std.tcp` write function
+  is `tcp.write`, not `tcp.send` (`send` is a reserved keyword),
+  `stdlib-api.md`.
+
 ## [0.377.0]
 
 ### Added
