@@ -1212,6 +1212,35 @@ let label: string = match maybe {
 }
 ```
 
+### Narrowing
+
+A none-check on an optional variable **narrows** it in the guarded branch: inside
+`if x != none { ... }` (and the `else` of `if x == none { ... } else { ... }`),
+`x` is its inner type `T` and is used directly, without the `!` force-unwrap.
+Presence is proven by the guard, so the runtime none-check is elided, this is a
+compile-time analysis with zero runtime cost:
+
+```aether
+find(id: int) -> User?
+
+let u: User? = find(42)
+if u != none {
+    println(u.name)        // no `!`, `u` is a User here
+    greet(u)              // passed by value as User
+}
+```
+
+Narrowing is refused (soundly, the branch is unchanged) when the guarded branch
+reassigns the variable, or uses it with an optional-only operator (`== none`,
+`!= none`, `!`, `??`, or `?.`), since those need the optional form. A nested
+guard on the same variable still narrows its own innermost block.
+
+The narrowed value flows through expressions, field access, and function
+arguments. Assigning the narrowed variable *directly* to a pre-existing variable
+(`existing = x`) is one spot the inner type does not yet propagate (the outer
+variable keeps its optional type); use an expression (`existing = x + 0`) or a
+fresh `let` binding there.
+
 ### Functions
 
 Optionals flow through parameters and return types. A bare `T` (or `none`) is implicitly wrapped at the call site and in `return`:

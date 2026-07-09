@@ -2034,6 +2034,14 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
 
         case AST_IDENTIFIER:
             if (!expr->value) { fprintf(gen->output, "/* NULL identifier */0"); break; }
+            // #1068 flow-narrowed optional: inside `if x != none { ... }` the
+            // typechecker marked this read of `x` as narrowed, so emit the inner
+            // value `x.val` of the `ae_opt` struct. Presence is proven by the
+            // guard, so there is NO runtime none-check (zero cost).
+            if (expr->annotation && strcmp(expr->annotation, "__opt_narrowed") == 0) {
+                fprintf(gen->output, "%s.val", expr->value);
+                break;
+            }
             // Source-location intrinsics (#265) — `__LINE__` / `__FILE__` /
             // `__func__` substitute literal AST-node line, source-file path,
             // and C-side function name (which mirrors the Aether function
