@@ -4245,6 +4245,99 @@ static int tc_loop_label_in_scope(const char* label) {
     return 0;
 }
 
+// #1068 flow-sensitive optional narrowing.
+//
+// If a condition is a none-check on an optional variable, the guarded branch can
+// treat that variable as its inner type `T` (used without the `!` force-unwrap)
+// and the runtime none-check is elided (presence is proven by the guard). This
+// is a pure compile-time analysis with zero runtime cost.
+//
+// `optional_narrow_target` recognizes `x != none` / `none != x` (narrow the THEN
+// branch) and `x == none` / `none == x` (narrow the ELSE branch). It returns the
+// optional variable's identifier node (borrowed) and sets *narrow_then; else
+// NULL. The condition is already typechecked, so the identifier carries its
+// TYPE_OPTIONAL node_type.
+static ASTNode* optional_narrow_target(ASTNode* cond, int* narrow_then) {
+    if (!cond || cond->type != AST_BINARY_EXPRESSION || !cond->value ||
+        cond->child_count < 2) return NULL;
+    int is_ne = strcmp(cond->value, "!=") == 0;
+    int is_eq = strcmp(cond->value, "==") == 0;
+    if (!is_ne && !is_eq) return NULL;
+    ASTNode* a = cond->children[0];
+    ASTNode* b = cond->children[1];
+    ASTNode* var = NULL;
+    if (a && a->type == AST_IDENTIFIER && b && b->type == AST_NONE_LITERAL) var = a;
+    else if (b && b->type == AST_IDENTIFIER && a && a->type == AST_NONE_LITERAL) var = b;
+    if (!var || !var->value) return NULL;
+    if (!var->node_type || var->node_type->kind != TYPE_OPTIONAL ||
+        !var->node_type->element_type ||
+        var->node_type->element_type->kind == TYPE_UNKNOWN) return NULL;
+    *narrow_then = is_ne ? 1 : 0;   // `!= none` -> then present; `== none` -> else
+    return var;
+}
+
+// Would narrowing `name` to its inner type be UNSAFE anywhere in subtree `n`?
+// Narrowing changes `name` from `T?` to `T` inside the branch, so it must be
+// refused (branch typechecked unchanged) when the branch:
+//   - rebinds `name` (assignment / re-declaration), it could become `none`;
+//   - uses `name` in a none-comparison (`name == none` / `name != none`);
+//   - uses `name` as the operand of an optional-only operator: `!` (unwrap),
+//     `??` (null-coalesce), or `?.` (optional chain).
+// Each of those needs the optional form of `name`, which narrowing removes.
+// Conservative but sound (and the innermost none-check still narrows its own
+// block via recursion). Does not descend into nested function/actor bodies.
+static int narrow_unsafe(ASTNode* n, const char* name) {
+    if (!n || !name) return 0;
+    if (n->type == AST_FUNCTION_DEFINITION || n->type == AST_ACTOR_DEFINITION) return 0;
+    // Rebind.
+    if ((n->type == AST_ASSIGNMENT || n->type == AST_VARIABLE_DECLARATION) &&
+        n->value && strcmp(n->value, name) == 0) return 1;
+    // `name` as the operand of an optional-only operator (`!` / `??` / `?.`).
+    if ((n->type == AST_TUPLE_UNWRAP || n->type == AST_NULL_COALESCE ||
+         n->type == AST_OPTIONAL_CHAIN) && n->child_count >= 1) {
+        ASTNode* c = n->children[0];
+        if (c && c->type == AST_IDENTIFIER && c->value && strcmp(c->value, name) == 0)
+            return 1;
+    }
+    // `name == none` / `name != none` (either operand order).
+    if (n->type == AST_BINARY_EXPRESSION && n->value &&
+        (strcmp(n->value, "==") == 0 || strcmp(n->value, "!=") == 0) &&
+        n->child_count >= 2) {
+        ASTNode* a = n->children[0], *b = n->children[1];
+        int a_var = a && a->type == AST_IDENTIFIER && a->value && strcmp(a->value, name) == 0;
+        int b_var = b && b->type == AST_IDENTIFIER && b->value && strcmp(b->value, name) == 0;
+        int a_none = a && a->type == AST_NONE_LITERAL;
+        int b_none = b && b->type == AST_NONE_LITERAL;
+        if ((a_var && b_none) || (b_var && a_none)) return 1;
+    }
+    for (int i = 0; i < n->child_count; i++)
+        if (narrow_unsafe(n->children[i], name)) return 1;
+    return 0;
+}
+
+// Mark every read of `name` in `n` as a narrowed-optional access, so codegen
+// emits `name.val` (the present inner value) rather than the `ae_opt` struct.
+// Only reached when `name` is not rebound in the branch, so every occurrence is
+// a read of the proven-present optional. Does not cross a nested function/actor
+// boundary.
+static void mark_optional_narrowed(ASTNode* n, const char* name, Type* inner) {
+    if (!n || !name) return;
+    if (n->type == AST_FUNCTION_DEFINITION || n->type == AST_ACTOR_DEFINITION) return;
+    if (n->type == AST_IDENTIFIER && n->value && strcmp(n->value, name) == 0) {
+        if (n->annotation) free(n->annotation);
+        n->annotation = strdup("__opt_narrowed");
+        // Pin the node's type to the inner T so any pass that reads node_type
+        // (e.g. the var-declaration type-join for `y = x`) sees the narrowed
+        // type, not the optional. Codegen uses the annotation to emit `x.val`.
+        if (inner) {
+            if (n->node_type) free_type(n->node_type);
+            n->node_type = clone_type(inner);
+        }
+    }
+    for (int i = 0; i < n->child_count; i++)
+        mark_optional_narrowed(n->children[i], name, inner);
+}
+
 int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
     if (!stmt) return 0;
 
@@ -4769,6 +4862,8 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
         }
 
         case AST_IF_STATEMENT: {
+            ASTNode* narrow_var = NULL;
+            int narrow_then = 1;
             if (stmt->child_count >= 1) {
                 ASTNode* condition = stmt->children[0];
                 typecheck_expression(condition, table);
@@ -4780,11 +4875,30 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     return 0;
                 }
                 free_type(cond_type);
+                // #1068 detect an optional none-check to narrow one branch.
+                narrow_var = optional_narrow_target(condition, &narrow_then);
             }
-            
-            // Type check then and else branches
+
+            // Type check then (child 1) and else (child 2) branches. The branch
+            // that the guard proves present narrows the optional variable to its
+            // inner type `T` in a child scope (so `x.field` / `foo(x)` typecheck
+            // without `!`), unless the variable is rebound in that branch.
             for (int i = 1; i < stmt->child_count; i++) {
-                typecheck_statement(stmt->children[i], table);
+                ASTNode* branch = stmt->children[i];
+                int is_then = (i == 1);
+                int narrow_this = narrow_var && branch &&
+                                  ((is_then && narrow_then) || (!is_then && !narrow_then)) &&
+                                  !narrow_unsafe(branch, narrow_var->value);
+                if (narrow_this) {
+                    Type* inner = narrow_var->node_type->element_type;
+                    SymbolTable* nt = create_symbol_table(table);
+                    add_symbol(nt, narrow_var->value, clone_type(inner), 0, 0, 0);
+                    mark_optional_narrowed(branch, narrow_var->value, inner);
+                    typecheck_statement(branch, nt);
+                    free_symbol_table(nt);
+                } else {
+                    typecheck_statement(branch, table);
+                }
             }
             return 1;
         }

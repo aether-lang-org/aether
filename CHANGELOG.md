@@ -13,6 +13,19 @@ next version number before tagging the release.
 
 ### Added
 
+- **Flow-sensitive optional narrowing** (#1068). A none-check on an optional
+  variable narrows it in the guarded branch: inside `if x != none { ... }` (and
+  the `else` of `if x == none { ... } else { ... }`), `x` is its inner type `T`
+  and is used directly, without the `!` force-unwrap, and the runtime none-check
+  is elided (presence is proven by the guard). It is a pure compile-time analysis
+  with zero runtime cost, turning a class of `!`-unwrap panics into
+  statically-guaranteed-safe accesses. The narrowed value flows through
+  expressions, field access, and function arguments; nested guards narrow their
+  own innermost block. Narrowing is refused, soundly, when the branch rebinds the
+  variable or uses it with an optional-only operator (`== none`, `!= none`, `!`,
+  `??`, `?.`). New regression: `tests/regression/test_optional_narrowing.ae`;
+  docs in `language-reference.md`.
+
 - **Length-aware TCP I/O** (#1078). `std.tcp` now exposes
   `tcp.write_n(sock, data, length)` and `tcp.read_n(sock, max)` on top of
   `tcp_send_n_raw` / `tcp_receive_n_raw`, so TCP relays can send and

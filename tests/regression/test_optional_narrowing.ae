@@ -1,0 +1,83 @@
+// Regression: #1068 flow-sensitive optional narrowing. Inside `if x != none {}`
+// (and the `else` of `if x == none {} else {}`) the optional `x: T?` is usable
+// as its inner `T` without the `!` force-unwrap, and the none-check is elided
+// (presence is proven by the guard), so it is zero runtime cost. Narrowing is
+// refused, soundly, when the branch rebinds `x` or uses it with an optional-only
+// operator (`== none`, `!=`, `!`, `??`, `?.`); the innermost guard still narrows.
+import std.io
+
+struct P { x: int, y: int }
+dist(p: P) -> int { return p.x + p.y }
+
+check_int(got: int, want: int, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: ${got} != ${want}"); return 1 }
+    return 0
+}
+
+main() {
+    var fails = 0
+
+    // then-branch narrowing: `a` used as int in an expression, no `!`
+    let a: int? = 5
+    var av = -1
+    if a != none {
+        av = a + 10          // a narrowed to int
+    }
+    fails = fails + check_int(av, 15, "then-branch value")
+
+    // else-branch narrowing on `== none`
+    let b: int? = 7
+    var bv = -1
+    if b == none {
+        bv = 0
+    } else {
+        bv = b * 2           // b narrowed in the else
+    }
+    fails = fails + check_int(bv, 14, "else-branch value")
+
+    // the guard genuinely gates the block
+    let c: int? = none
+    var entered = 0
+    if c != none {
+        entered = 1          // not reached
+    }
+    fails = fails + check_int(entered, 0, "none gates block")
+
+    // struct optional: field access and pass-by-value, both narrowed
+    let op: P? = P { x: 3, y: 4 }
+    var sum = -1
+    var viafn = -1
+    if op != none {
+        sum = op.x + op.y    // op.x -> op.val.x
+        viafn = dist(op)     // op -> op.val (by value)
+    }
+    fails = fails + check_int(sum, 7, "struct field narrowed")
+    fails = fails + check_int(viafn, 7, "struct arg narrowed")
+
+    // nested guard on the same variable (outer defers, inner narrows)
+    let d: int? = 9
+    var dv = -1
+    if d != none {
+        if d != none {
+            dv = d + 0       // narrowed int
+        }
+    }
+    fails = fails + check_int(dv, 9, "nested guard")
+
+    // narrowed value drives a nested condition without `!`
+    let e: int? = 3
+    var ev = 0
+    if e != none {
+        if e > 2 {           // e narrowed to int for the comparison
+            ev = 1
+        }
+    }
+    fails = fails + check_int(ev, 1, "narrowed in nested condition")
+
+    if fails == 0 {
+        println("PASS: optional_narrowing")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}
