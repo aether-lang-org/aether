@@ -1224,13 +1224,29 @@ self-test: compiler
 	@echo "Self-test complete"
 	@echo "==================================="
 
+# Parallel link-time optimization for the release build. GCC's plain `-flto`
+# runs the LTRANS partitions SERIALLY (`lto-wrapper: using serial compilation of
+# N LTRANS jobs`), so the single monolithic release link pins one core and looks
+# frozen while the other cores idle. Use parallel LTO where the toolchain
+# supports it, falling back to plain `-flto` on older GCC so this never
+# regresses a build that worked before:
+#   clang     -> ThinLTO (`-flto=thin`, inherently parallel)
+#   GCC >= 10 -> `-flto=auto` (fans LTRANS across all CPUs)
+#   older GCC -> `-flto` (unchanged, serial but correct)
+# Deferred (`=`) so the probe runs only when the release/install target actually
+# builds (never for `make test` etc.) and sees the final $(CC) (incl. CC=).
+LTO_FLAG = $(shell \
+	if $(CC) --version 2>/dev/null | grep -qi clang; then echo -flto=thin; \
+	elif [ "$$($(CC) -dumpversion 2>/dev/null | cut -d. -f1)" -ge 10 ] 2>/dev/null; then echo -flto=auto; \
+	else echo -flto; fi)
+
 # Release build with optimizations and warnings as errors
 release: clean
 	@echo "==================================="
 	@echo "Building Optimized Release"
 	@echo "==================================="
 	@$(MKDIR) build
-	@echo "Compiling with -O3 -DNDEBUG -flto -Werror..."
+	@echo "Compiling with -O3 -DNDEBUG $(LTO_FLAG) -Werror (parallel LTO; this can take a minute)..."
 	@# -DAETHER_VERSION baked in from the same $(VERSION) the rest of
 	@# the build uses (highest git tag → VERSION file fallback). Without
 	@# this, compiler/aetherc.c falls back to the `v0.0.0-dev` sentinel,
@@ -1239,7 +1255,7 @@ release: clean
 	@# wrong version. The dev-build aetherc (compiled via the standard
 	@# $(CFLAGS) pattern rule on line 133) has the flag and is correct;
 	@# only the release-target hand-rolled gcc invocation was missing it.
-	@$(CC) -O3 -DNDEBUG -flto -Werror -Icompiler -Iruntime -Istd -Istd/collections \
+	@$(CC) -O3 -DNDEBUG $(LTO_FLAG) -Werror -Icompiler -Iruntime -Istd -Istd/collections \
 		-DAETHER_VERSION=\"$(VERSION)\" \
 		$(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) runtime/aether_resource_caps.c \
 		-o build/aetherc-release$(EXE_EXT) $(LDFLAGS)
@@ -1634,7 +1650,7 @@ help:
 	@echo "  make compiler       - Build compiler (incremental)"
 	@echo "  make compiler-fast  - Build compiler (monolithic, faster for clean)"
 	@echo "  make -j8            - Parallel build with 8 jobs (faster on multi-core hosts)"
-	@echo "  make release        - Optimized release build (-O3 -flto)"
+	@echo "  make release        - Optimized release build (-O3, parallel LTO)"
 	@echo "  make stdlib         - Build precompiled stdlib archive"
 	@echo ""
 	@echo "Run Targets:"
