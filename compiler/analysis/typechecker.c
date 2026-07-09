@@ -2186,6 +2186,12 @@ static const char* g_enum_names[AETHER_MAX_ENUMS];
 static int g_enum_name_count = 0;
 static ASTNode* g_enum_program = NULL;
 
+// #1044 implicit enum selector: the return type of the function currently being
+// typechecked, so `return Blue` can resolve the bare member against it. Set and
+// restored around each function body (save/restore handles nesting). Borrowed
+// pointer, never freed here.
+static Type* g_tc_return_type = NULL;
+
 static int is_enum_type_name(const char* name) {
     if (!name) return 0;
     for (int i = 0; i < g_enum_name_count; i++)
@@ -2214,6 +2220,33 @@ static int enum_has_member(const char* ename, const char* member) {
             strcmp(m->value, member) == 0) return 1;
     }
     return 0;
+}
+
+// #1044 implicit enum selector. When a bare identifier `Blue` appears where an
+// enum type `Color` is expected (a function argument, a typed initializer, a
+// return value, or the other side of an enum comparison) and `Blue` is a member
+// of that enum, lower it in place to the enum constant `Color_Blue` with a
+// TYPE_ENUM node_type, matching exactly the node resolve_enum_types produces for
+// the qualified `Color.Blue`. That constant is a registered global symbol, so
+// ordinary resolution then succeeds. Returns 1 if the node was rewritten.
+// Guards keep it non-breaking: only a bare AST_IDENTIFIER that is not already an
+// enum value and whose name does NOT resolve to a real binding is coerced, so an
+// actual variable of that name always wins.
+static int coerce_bare_enum_member(ASTNode* expr, Type* expected, SymbolTable* table) {
+    if (!expr || expr->type != AST_IDENTIFIER || !expr->value) return 0;
+    if (!expected || expected->kind != TYPE_ENUM || !expected->struct_name) return 0;
+    if (expr->node_type && expr->node_type->kind == TYPE_ENUM) return 0;
+    if (!enum_has_member(expected->struct_name, expr->value)) return 0;
+    if (table && lookup_symbol(table, expr->value)) return 0;  // a real binding wins
+    char qualified[512];
+    snprintf(qualified, sizeof(qualified), "%s_%s", expected->struct_name, expr->value);
+    free(expr->value);
+    expr->value = strdup(qualified);
+    if (expr->node_type) free_type(expr->node_type);
+    Type* et = create_type(TYPE_ENUM);
+    et->struct_name = strdup(expected->struct_name);
+    expr->node_type = et;
+    return 1;
 }
 
 static int is_c_struct_name(const char* name) {
@@ -4100,9 +4133,13 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
         add_symbol(func_table, "_builder", create_type(TYPE_PTR), 0, 0, 0);
     }
 
-    // Type check function body
+    // Type check function body. Track the return type so `return Blue` can
+    // resolve a bare enum member (save/restore keeps nested functions correct).
     ASTNode* body = func->children[func->child_count - 1];
+    Type* saved_ret = g_tc_return_type;
+    g_tc_return_type = func->node_type;
     typecheck_statement(body, func_table);
+    g_tc_return_type = saved_ret;
 
     free_symbol_table(func_table);
     return 1;
@@ -4257,6 +4294,20 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             if (stmt->child_count > 0) {
                 // Has initializer
                 ASTNode* init = stmt->children[0];
+                // #1044 implicit enum selector: resolve a bare enum member on
+                // the RHS. For a typed declaration `c: Color = Blue` the expected
+                // type is the annotation (stmt->node_type); for a bare-local
+                // reassignment `d = Blue` (also an AST_VARIABLE_DECLARATION with
+                // no annotation) it is the existing variable's type.
+                {
+                    Type* expected_enum = stmt->node_type;
+                    if (!(expected_enum && expected_enum->kind == TYPE_ENUM) && stmt->value) {
+                        Symbol* ex = lookup_symbol(table, stmt->value);
+                        if (ex && ex->type && ex->type->kind == TYPE_ENUM)
+                            expected_enum = ex->type;
+                    }
+                    coerce_bare_enum_member(init, expected_enum, table);
+                }
                 // Match-as-expression: typecheck as statement, then use its type
                 if (init->type == AST_MATCH_STATEMENT) {
                     typecheck_statement(init, table);
@@ -4585,6 +4636,10 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     type_error(error_msg, left->line, left->column);
                     return 0;
                 }
+
+                // #1044 implicit enum selector: `d = Blue` where `d` has an enum
+                // type resolves the bare member against that enum.
+                coerce_bare_enum_member(right, symbol->type, table);
 
                 Type* right_type = infer_type(right, table);
                 if (!is_assignable(right_type, symbol->type)) {
@@ -5273,6 +5328,16 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             }
             return 1;
         }
+
+        case AST_RETURN_STATEMENT:
+            // #1044 implicit enum selector: `return Blue` in a function whose
+            // return type is an enum resolves the bare member against it. Then
+            // typecheck children exactly as the default case does.
+            for (int i = 0; i < stmt->child_count; i++) {
+                coerce_bare_enum_member(stmt->children[i], g_tc_return_type, table);
+                typecheck_node(stmt->children[i], table);
+            }
+            return 1;
 
         default:
             // Type check all children
@@ -6104,10 +6169,34 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
     
     ASTNode* left = expr->children[0];
     ASTNode* right = expr->children[1];
-    
+
+    // #1044 implicit enum selector across an enum operator (`c == Blue`,
+    // `Blue == c`, `c = Blue`). When one side is a bare identifier that resolves
+    // to no symbol and the other side is an enum value, coerce the bare side to
+    // that enum's member constant before either side is typechecked, so the bare
+    // member is not first reported as an undefined variable. The already-checked
+    // side is re-checked below (idempotent).
+    {
+        int l_bare = (left->type == AST_IDENTIFIER && left->value &&
+                      !lookup_symbol(table, left->value));
+        int r_bare = (right->type == AST_IDENTIFIER && right->value &&
+                      !lookup_symbol(table, right->value));
+        if (l_bare && !r_bare) {
+            typecheck_expression(right, table);
+            Type* rt = infer_type(right, table);
+            coerce_bare_enum_member(left, rt, table);
+            if (rt) free_type(rt);
+        } else if (r_bare && !l_bare) {
+            typecheck_expression(left, table);
+            Type* lt = infer_type(left, table);
+            coerce_bare_enum_member(right, lt, table);
+            if (lt) free_type(lt);
+        }
+    }
+
     typecheck_expression(left, table);
     typecheck_expression(right, table);
-    
+
     Type* left_type = infer_type(left, table);
     Type* right_type = infer_type(right, table);
 
@@ -6981,6 +7070,36 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                     }
                 }
             }
+        }
+    }
+
+    // #1044 implicit enum selector for arguments: `f(Blue)` where the parameter
+    // is an enum type resolves the bare member to the enum constant BEFORE the
+    // argument is typechecked (otherwise a bare member fails as an undefined
+    // variable). Reuses the same param<->arg alignment (ctx injection, extern
+    // vs user body slot) as the argument checks further below.
+    if (symbol && symbol->node &&
+        (symbol->node->type == AST_FUNCTION_DEFINITION ||
+         symbol->node->type == AST_BUILDER_FUNCTION ||
+         symbol->node->type == AST_EXTERN_FUNCTION)) {
+        int c_has_ctx = has_ctx_first_param(symbol->node);
+        int c_expected = count_function_params(symbol->node);
+        int c_arg_offset = (c_has_ctx && call->child_count == c_expected - 1) ? -1 : 0;
+        int c_scan_limit = (symbol->node->type == AST_EXTERN_FUNCTION)
+                           ? symbol->node->child_count
+                           : symbol->node->child_count - 1;
+        int c_pidx = 0;
+        for (int i = 0; i < c_scan_limit; i++) {
+            ASTNode* p = symbol->node->children[i];
+            if (!p || p->type == AST_GUARD_CLAUSE) continue;
+            if (p->type != AST_VARIABLE_DECLARATION &&
+                p->type != AST_PATTERN_VARIABLE &&
+                p->type != AST_IDENTIFIER) continue;
+            int aslot = c_pidx + c_arg_offset;
+            c_pidx++;
+            if (aslot < 0 || aslot >= call->child_count) continue;
+            if (p->node_type && p->node_type->kind == TYPE_ENUM)
+                coerce_bare_enum_member(call->children[aslot], p->node_type, table);
         }
     }
 
