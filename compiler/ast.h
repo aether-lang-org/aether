@@ -338,6 +338,12 @@ typedef struct Type {
     // or a distinct type vs its base, are NOT compatible without an explicit
     // `as` cast, even when `kind` matches. NULL for every non-distinct type.
     char* distinct_name;
+    // #1044 enum-indexed array `[E]T`: when non-NULL on a TYPE_ARRAY, the array
+    // has one slot per member of enum `index_enum_name` and is indexed by an
+    // `E` value (`labels[Dir.North]`), not a raw int. `element_type` is the
+    // element T; `array_size` is the slot count (max member value + 1). NULL for
+    // an ordinary integer-indexed array. Zero runtime cost (a plain C array).
+    char* index_enum_name;
     // Tuple support (multiple return values)
     struct Type** tuple_types;  // Array of element types (NULL if not tuple)
     int tuple_count;            // Number of tuple elements (0 if not tuple)

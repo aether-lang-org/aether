@@ -293,6 +293,34 @@ static Type* parse_type_unsuffixed(Parser* parser) {
 
     Type* type = NULL;
 
+    // #1044 enum-indexed array `[E]T`: a leading `[` introduces the index enum,
+    // then the element type. The array has one slot per member of enum E and is
+    // indexed by an E value (`labels[Dir.North]`). Ordinary arrays keep the
+    // postfix `T[N]` / `T[]` form handled after the switch below. The size is
+    // filled in from E by resolve_enum_types once the enum definition is known.
+    if (token->type == TOKEN_LEFT_BRACKET) {
+        advance_token(parser);  // consume '['
+        Type* index_enum = parse_type(parser);
+        if (!index_enum) {
+            parser_error(parser,
+                "expected an enum name inside `[...]` for an enum-indexed array");
+            return NULL;
+        }
+        if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) { free_type(index_enum); return NULL; }
+        Type* elem = parse_type(parser);
+        if (!elem) {
+            parser_error(parser,
+                "expected an element type after `[E]` for an enum-indexed array, e.g. [Dir]string");
+            free_type(index_enum);
+            return NULL;
+        }
+        Type* arr = create_array_type(elem, -1);  // size resolved at typecheck
+        if (index_enum->struct_name)
+            arr->index_enum_name = strdup(index_enum->struct_name);
+        free_type(index_enum);
+        return arr;
+    }
+
     /* `const <type>` — a C-qualified type.  Parsed by recursing on the
      * unqualified type, then stamping a const-prefixed C spelling onto
      * `c_alias` so codegen emits the qualifier verbatim.  The `kind`

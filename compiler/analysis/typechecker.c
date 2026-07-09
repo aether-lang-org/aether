@@ -2249,6 +2249,27 @@ static int coerce_bare_enum_member(ASTNode* expr, Type* expected, SymbolTable* t
     return 1;
 }
 
+// #1044 enum-indexed arrays: the C array slot count for `[E]T`, i.e. the max
+// member value + 1 (values follow the same implicit `previous + 1` / explicit
+// integer-literal rule as codegen's emit_enum_typedef). Returns 0 if the enum
+// is unknown. A non-literal explicit value (`A = 1 << 2`) is not evaluated here;
+// enum-indexed arrays require integer-literal member values, so those size to
+// their literal text via the same path C uses.
+static int enum_slot_count(const char* ename) {
+    ASTNode* def = enum_def_lookup(ename);
+    if (!def) return 0;
+    int cur = 0, maxv = -1;
+    for (int i = 0; i < def->child_count; i++) {
+        ASTNode* m = def->children[i];
+        if (!m || m->type != AST_ENUM_MEMBER) continue;
+        if (m->child_count > 0 && m->children[0] && m->children[0]->value)
+            cur = atoi(m->children[0]->value);
+        if (cur > maxv) maxv = cur;
+        cur++;
+    }
+    return maxv + 1;
+}
+
 static int is_c_struct_name(const char* name) {
     if (!name) return 0;
     for (int i = 0; i < g_c_struct_name_count; i++)
@@ -4019,6 +4040,10 @@ static void enum_rewrite_type(Type* t, const char** names, int n, int depth) {
         for (int i = 0; i < n; i++)
             if (strcmp(t->struct_name, names[i]) == 0) { t->kind = TYPE_ENUM; break; }
     }
+    // #1044 enum-indexed array `[E]T`: now that the enum is known, size the
+    // array to its member range (the parser left array_size = -1).
+    if (t->kind == TYPE_ARRAY && t->index_enum_name && t->array_size < 0)
+        t->array_size = enum_slot_count(t->index_enum_name);
     enum_rewrite_type(t->element_type, names, n, depth + 1);
     enum_rewrite_type(t->return_type, names, n, depth + 1);
     for (int i = 0; i < t->tuple_count; i++)
@@ -4524,6 +4549,33 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     free_type(init_type);
                     type_error("Type mismatch in variable initialization", stmt->line, stmt->column);
                     return 0;
+                }
+                // #1044 enum-indexed array `[E]T`: the index type must be a real
+                // enum, and a literal initializer supplies one value per member,
+                // in declaration order (an empty `[]` zero-initialises every
+                // slot).
+                if (stmt->node_type && stmt->node_type->kind == TYPE_ARRAY &&
+                    stmt->node_type->index_enum_name) {
+                    const char* en = stmt->node_type->index_enum_name;
+                    if (!is_enum_type_name(en)) {
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                            "enum-indexed array `[%s]...` requires `%s` to be an enum",
+                            en, en);
+                        type_error(msg, stmt->line, stmt->column);
+                        return 0;
+                    }
+                    if (init && init->type == AST_ARRAY_LITERAL &&
+                        init->child_count > 0 &&
+                        init->child_count != stmt->node_type->array_size) {
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                            "enum-indexed array `[%s]...` needs %d values (one per "
+                            "member, in order), got %d",
+                            en, stmt->node_type->array_size, init->child_count);
+                        type_error(msg, stmt->line, stmt->column);
+                        return 0;
+                    }
                 }
                 /* #340: re-binding an already-declared optional local
                  * (`z = 5` / `z = none` after `let z: int? = ...`) adopts the
@@ -5844,9 +5896,25 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             if (expr->child_count >= 2) {
                 typecheck_expression(expr->children[0], table);
                 typecheck_expression(expr->children[1], table);
+                Type* arr_type = expr->children[0]->node_type;
                 Type* idx_type = infer_type(expr->children[1], table);
-                if (idx_type && idx_type->kind != TYPE_INT && idx_type->kind != TYPE_INT64
-                    && idx_type->kind != TYPE_UNKNOWN) {
+                if (arr_type && arr_type->kind == TYPE_ARRAY && arr_type->index_enum_name) {
+                    // Index must be a value of the array's index enum, not a raw int.
+                    if (idx_type && idx_type->kind != TYPE_UNKNOWN &&
+                        !(idx_type->kind == TYPE_ENUM && idx_type->struct_name &&
+                          strcmp(idx_type->struct_name, arr_type->index_enum_name) == 0)) {
+                        char error_msg[256];
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "index into `[%s]...` must be a %s value, got %s",
+                                 arr_type->index_enum_name, arr_type->index_enum_name,
+                                 type_name(idx_type));
+                        type_error(error_msg, expr->line, expr->column);
+                    }
+                } else if (idx_type && idx_type->kind != TYPE_INT &&
+                           idx_type->kind != TYPE_INT64 &&
+                           idx_type->kind != TYPE_UNKNOWN &&
+                           idx_type->kind != TYPE_ENUM) {
+                    // Ordinary array: an integer index (an enum is int-backed).
                     char error_msg[256];
                     snprintf(error_msg, sizeof(error_msg),
                              "Array index must be an integer, got %s",
@@ -5856,7 +5924,6 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 if (idx_type) free_type(idx_type);
 
                 // Propagate element type from the array expression.
-                Type* arr_type = expr->children[0]->node_type;
                 if (arr_type && arr_type->kind == TYPE_ARRAY && arr_type->element_type &&
                     (!expr->node_type || expr->node_type->kind == TYPE_UNKNOWN)) {
                     if (expr->node_type) free_type(expr->node_type);
