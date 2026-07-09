@@ -557,7 +557,12 @@ int aether_vhost_register_host(AetherVhostMap* m, const char* host) {
         m->hosts = nh;
         m->cap = new_cap;
     }
-    m->hosts[m->count++] = strdup(host);
+    // Don't store a NULL on allocation failure and then report success: a NULL
+    // entry would crash the strcmp in aether_middleware_vhost on the next
+    // request. Leave the map unchanged and signal failure instead.
+    char* dup = strdup(host);
+    if (!dup) return -1;
+    m->hosts[m->count++] = dup;
     return 0;
 }
 
@@ -847,8 +852,13 @@ int aether_rewrite_add_rule(AetherRewriteOpts* o,
         o->rules = nr;
         o->cap = new_cap;
     }
-    o->rules[o->count].from_prefix = strdup(from_prefix);
-    o->rules[o->count].to_prefix = strdup(to_prefix);
+    // Allocate both strings up front; on failure store neither (a half-added
+    // rule with a NULL prefix would crash the rewrite path) and report failure.
+    char* fp = strdup(from_prefix);
+    char* tp = strdup(to_prefix);
+    if (!fp || !tp) { free(fp); free(tp); return -1; }
+    o->rules[o->count].from_prefix = fp;
+    o->rules[o->count].to_prefix = tp;
     o->rules[o->count].from_len = strlen(from_prefix);
     o->count++;
     return 0;
@@ -918,10 +928,16 @@ int aether_error_pages_register(AetherErrorPagesOpts* o,
         o->pages = np;
         o->cap = new_cap;
     }
+    // Allocate both strings up front; on failure store neither (a NULL body or
+    // content_type would crash when serving the custom error page) and report
+    // failure rather than leaving a corrupt page entry.
+    char* body_dup = strdup(body);
+    char* ct_dup = (content_type && *content_type)
+                       ? strdup(content_type) : strdup("text/html; charset=utf-8");
+    if (!body_dup || !ct_dup) { free(body_dup); free(ct_dup); return -1; }
     o->pages[o->count].status = status_code;
-    o->pages[o->count].body = strdup(body);
-    o->pages[o->count].content_type = content_type && *content_type
-        ? strdup(content_type) : strdup("text/html; charset=utf-8");
+    o->pages[o->count].body = body_dup;
+    o->pages[o->count].content_type = ct_dup;
     o->count++;
     return 0;
 }

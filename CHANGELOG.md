@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Allocation-failure handling in a few registration helpers.** Several
+  functions stored a `strdup`/`malloc` result and reported success without
+  checking it, so under memory pressure they left a NULL in a live structure and
+  crashed later (a delayed fault, worse than a clean out-of-memory failure). Now
+  they allocate up front, store nothing on failure, and signal it:
+  `aether_vhost_register_host`, `aether_middleware_rewrite_add`, and
+  `aether_middleware_error_page_add` (a NULL host / rewrite prefix / error-page
+  body would crash the request or error path); `aether_shared_map_put` (a NULL
+  key crashes the next `strcmp`); and `aether_convert_type` (a NULL result was
+  dereferenced immediately). The normal (non-OOM) path is unchanged.
+
 ## [0.374.0]
 
 ### Added
