@@ -1,4 +1,5 @@
 #include "aether_http_server.h"
+#include "aether_net.h"
 #if !defined(_WIN32)
 #include <signal.h>    /* pthread_sigmask / sigset_t for the embedded-server signal mask */
 #include <pthread.h>
@@ -98,6 +99,7 @@ void http_response_clear_headers(HttpServerResponse* r) { (void)r; }
 void http_response_set_body(HttpServerResponse* r, const char* b) { (void)r; (void)b; }
 void http_response_set_body_n(HttpServerResponse* r, const char* b, int n) { (void)r; (void)b; (void)n; }
 void http_response_json(HttpServerResponse* r, const char* j) { (void)r; (void)j; }
+void* http_response_accept_tunnel(HttpServerResponse* r) { (void)r; return NULL; }
 char* http_response_serialize(HttpServerResponse* r) { (void)r; return NULL; }
 void http_server_response_free(HttpServerResponse* r) { (void)r; }
 int http_route_matches(const char* p, const char* u, HttpRequest* r) { (void)p; (void)u; (void)r; return 0; }
@@ -1579,6 +1581,8 @@ HttpServerResponse* http_response_create() {
     /* No sendfile path staged by default. */
     res->sendfile_fd = -1;
     res->sendfile_size = 0;
+    res->takeover_conn = NULL;
+    res->takeover_taken = 0;
 
     // Add default headers
     http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");
@@ -1740,6 +1744,47 @@ void http_response_set_body_n(HttpServerResponse* res, const char* body, int len
 void http_response_json(HttpServerResponse* res, const char* json) {
     http_response_set_header(res, "Content-Type", "application/json");
     http_response_set_body(res, json);
+}
+
+void* http_response_accept_tunnel(HttpServerResponse* res) {
+    if (!res || res->takeover_taken || !res->takeover_conn) return NULL;
+
+    HttpConn* conn = (HttpConn*)res->takeover_conn;
+    if (!conn || conn->fd < 0) return NULL;
+
+#ifdef AETHER_HAS_OPENSSL
+    /* std.tcp operates on raw sockets; a TLS-wrapped HTTP connection
+     * needs a different stream handle that preserves SSL_read/write. */
+    if (conn->ssl) return NULL;
+#endif
+
+    /* A raw TcpSocket cannot replay bytes the HTTP parser has already
+     * read into HttpConn's keep-alive buffer. Refuse rather than drop
+     * early tunnel bytes. Normal CONNECT clients wait for the 200
+     * response before sending tunnel payload, so this is not hit in
+     * the intended flow. */
+    if (conn->write_pos > conn->read_pos) return NULL;
+
+    size_t resp_len = 0;
+    char* response_str = http_response_serialize_len(res, &resp_len);
+    if (!response_str) return NULL;
+    int sent = conn_send(conn, response_str, (int)resp_len);
+    free(response_str);
+    if (sent != (int)resp_len) return NULL;
+
+    int fd = conn->fd;
+    conn->fd = -1;
+    res->takeover_taken = 1;
+    res->takeover_conn = NULL;
+
+    void* sock = tcp_socket_from_fd_owned(fd);
+    if (!sock) {
+        /* The fd has been closed by the adoption helper on failure;
+         * suppress the normal response path because we already sent
+         * the accepting response head. */
+        return NULL;
+    }
+    return sock;
 }
 
 // Length-aware serializer. The body may be binary (gzip-compressed,
@@ -2667,6 +2712,7 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
 
     // Create response
     HttpServerResponse* res = http_response_create();
+    res->takeover_conn = conn;
 
     // Execute middleware chain
     HttpMiddlewareNode* middleware = server->middleware_chain;
@@ -2679,6 +2725,11 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
 
     // If middleware blocked, send response and close.
     if (!should_continue) {
+        if (res->takeover_taken) {
+            http_request_free(req);
+            http_server_response_free(res);
+            return 0;
+        }
         /* Goes through the same zero-copy helper as the route-handler
          * path (#383). When a middleware (e.g. static_files) staged
          * a sendfile FD on the response, this is where we still
@@ -2881,6 +2932,12 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
     } else {
         http_response_set_status(res, 404);
         http_response_set_body(res, "404 Not Found");
+    }
+
+    if (res->takeover_taken) {
+        http_request_free(req);
+        http_server_response_free(res);
+        return 0;
     }
 
     /* Run response-transformer chain (#260 Tier 1). Each transformer

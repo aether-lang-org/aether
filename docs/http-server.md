@@ -464,6 +464,51 @@ circuit breaker), see [Reverse Proxy](http-reverse-proxy.md).
 
 ---
 
+## CONNECT Tunnels
+
+Handlers for `CONNECT` can accept the request and take over the
+underlying cleartext HTTP/1.1 connection as a `std.tcp` socket. This
+is the primitive for forward-proxy tunnels and other protocols where
+HTTP is only the setup handshake.
+
+```aether
+import std.http
+import std.tcp
+
+handle_connect(req: ptr, res: ptr, ud: ptr) {
+    authority = http.request_path(req)  // e.g. "example.com:443"
+    if allowed(authority) == 0 {
+        http.response_set_status(res, 403)
+        http.response_set_body(res, "forbidden")
+        return
+    }
+
+    http.response_set_status(res, 200)
+    tunnel = http.response_accept_tunnel(res)
+    if tunnel == null { return }
+
+    // The HTTP server has stopped managing this connection.
+    // Relay with tcp.read_n / tcp.write_n, then close it.
+    tcp.close(tunnel)
+}
+
+http.server_add_route(server, "CONNECT", "*", handle_connect, 0)
+```
+
+`response_accept_tunnel` sends the current response head immediately,
+then transfers socket ownership to the handler. The normal HTTP
+serializer, response transformers, keep-alive handling, and server
+socket close are skipped for that connection. Rejected requests still
+use the ordinary response path.
+
+The returned handle is a normal `std.tcp` socket, so use
+`tcp.read_n` / `tcp.write_n` when the tunnel may carry binary bytes
+or embedded NULs. It returns `null` when called outside a live
+HTTP/1.1 request, on a TLS-wrapped server connection, or if the HTTP
+parser has already buffered bytes that a raw socket could not replay.
+
+---
+
 ## WebSocket (RFC 6455)
 
 ```aether

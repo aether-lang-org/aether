@@ -94,6 +94,15 @@ typedef struct {
      * sendfile_fd == -1 means no zero-copy path is staged. */
     int       sendfile_fd;
     long long sendfile_size;
+    /* CONNECT / protocol-upgrade takeover (#1086). The HTTP/1.1
+     * dispatcher sets takeover_conn to its opaque HttpConn while the
+     * route handler runs. http_response_accept_tunnel sends the
+     * current response head, wraps the accepted fd as a std.tcp socket,
+     * sets takeover_taken, and clears the dispatcher's fd so the
+     * normal HTTP lifecycle will not serialize another response or
+     * close a socket now owned by the handler. */
+    void* takeover_conn;
+    int   takeover_taken;
 } HttpServerResponse;
 
 // Route handler callback
@@ -431,6 +440,7 @@ void http_response_set_body(HttpServerResponse* res, const char* body);
  * first NUL. */
 void http_response_set_body_n(HttpServerResponse* res, const char* body, int length);
 void http_response_json(HttpServerResponse* res, const char* json);
+void* http_response_accept_tunnel(HttpServerResponse* res);
 char* http_response_serialize(HttpServerResponse* res);  // caller must free()
 // Length-aware variant — use this when the response body might contain
 // binary (e.g. gzip-compressed). The returned buffer is NOT NUL-

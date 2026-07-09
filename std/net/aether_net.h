@@ -30,4 +30,8 @@ int tcp_server_close(TcpServer* server);
 int tcp_fd_raw(TcpSocket* sock);
 int tcp_server_fd_raw(TcpServer* server);
 
+// Adopt an already-connected OS fd into a std.tcp socket handle.
+// Ownership transfers to the returned TcpSocket; tcp_close closes it.
+TcpSocket* tcp_socket_from_fd_owned(int fd);
+
 #endif

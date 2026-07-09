@@ -1,0 +1,69 @@
+// Regression for #1086: a std.http.server handler can accept CONNECT
+// and take ownership of the connection as a std.tcp socket.
+
+import std.http
+import std.tcp
+
+extern exit(code: int)
+extern http_server_start_raw(server: ptr) -> int
+
+const PORT = 18286
+
+handle_connect(req: ptr, res: ptr, ud: ptr) {
+    authority = http.request_path(req)
+    if authority != "allowed.example:443" {
+        http.response_set_status(res, 403)
+        http.response_set_header(res, "Content-Type", "text/plain")
+        http.response_set_body(res, "forbidden")
+        return
+    }
+
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Connection", "close")
+    tunnel = http.response_accept_tunnel(res)
+    if tunnel == 0 {
+        return
+    }
+
+    bytes, n, err = tcp.read_n(tunnel, 128)
+    if err == "" {
+        sent, werr = tcp.write_n(tunnel, bytes, n)
+        if werr != "" {
+            tcp.close(tunnel)
+            return
+        }
+    }
+    tcp.close(tunnel)
+}
+
+message StartSrv { raw: ptr }
+message Noop {}
+
+actor SrvActor {
+    state s = 0
+    receive { StartSrv(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+main() {
+    raw = http.server_create(PORT)
+    http.server_set_host(raw, "127.0.0.1")
+    if raw == 0 {
+        println("FAIL: server_create returned null")
+        exit(1)
+    }
+
+    http.server_add_route(raw, "CONNECT", "*", handle_connect, 0)
+    println("READY")
+
+    spawn(SchedHelper())
+    a = spawn(SrvActor())
+    a ! StartSrv { raw: raw }
+
+    sleep(60000)
+    exit(0)
+}
