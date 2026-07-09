@@ -7,7 +7,8 @@
 // - http_server_* : HTTP server operations
 
 exports (
-    tcp_connect_raw, tcp_send_raw, tcp_receive_raw, tcp_close,
+    tcp_connect_raw, tcp_send_raw, tcp_send_n_raw,
+    tcp_receive_raw, tcp_receive_n_raw, tcp_close,
     tcp_listen_raw, tcp_accept_raw, tcp_server_close,
     tcp_fd_raw, tcp_server_fd_raw,
     http_get_raw, http_post_raw, http_put_raw, http_delete_raw,
@@ -37,7 +38,9 @@ exports (
 // TCP Client - raw externs (escape hatch)
 extern tcp_connect_raw(host: string, port: int) -> ptr
 extern tcp_send_raw(sock: ptr, data: string) -> int
+extern tcp_send_n_raw(sock: ptr, data: string, length: int) -> int
 extern tcp_receive_raw(sock: ptr, max_bytes: int) -> string
+extern tcp_receive_n_raw(sock: ptr, max_bytes: int) -> (string @heap, int, string)
 extern tcp_close(sock: ptr) -> int
 
 // TCP Server - raw externs
