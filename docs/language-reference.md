@@ -1290,10 +1290,25 @@ Because an enum is integer-backed, its members interconvert with integer scalars
 (`x: int = Errno.Perm` gives `13`; `code == Errno.NotFound` compares as ints),
 but two **different** enums are never compatible with each other.
 
-Deliberately deferred to a follow-up (they need context-type propagation that
-Aether does not yet thread to every use site): the implicit selector `.North`
-(inferring the enum from the expected type) in expression position, and
-enum-indexed arrays (`[Direction]string`).
+Where the expected type is already a known enum, a member may be written **bare**,
+without the enum prefix. This applies to a function argument, a typed
+initializer, an assignment, a return, and either side of an enum comparison:
+
+```aether
+paint(c: Color) -> string { ... }
+
+paint(North)                 // function argument
+let c: Direction = North     // typed initializer
+c = South                    // assignment
+if c == North { ... }        // comparison (either order)
+heading() -> Direction { return West }   // return
+```
+
+A real binding always wins: if a variable named `North` is in scope, `North`
+refers to it, not the member. A bare name that is not a member of the expected
+enum stays an ordinary "undefined variable" error.
+
+Deliberately deferred to a follow-up: enum-indexed arrays (`[Direction]string`).
 
 ## Bit Sets
 

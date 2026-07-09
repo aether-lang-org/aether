@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Implicit enum member selector** (follow-up to #1044). Where the expected
+  type at a site is already a known enum, a member may be written bare, without
+  the enum prefix: a function argument (`paint(North)`), a typed initializer
+  (`c: Direction = North`), an assignment (`c = South`), a return (`return
+  West`), and either side of an enum comparison (`c == North`, `North == c`).
+  The bare member is lowered to the enum constant, matching the qualified
+  `Direction.North`. Non-breaking: a real binding named like a member always
+  wins, and a bare name that is not a member of the expected enum stays an
+  ordinary "undefined variable" error. Implemented as a localized coercion at
+  each site where the expected enum is in hand (no expected-type threading added
+  to the general inference path). New regression:
+  `tests/regression/test_enum_implicit_selector.ae`; docs in
+  `language-reference.md`.
+
 ## [0.371.0]
 
 ### Added

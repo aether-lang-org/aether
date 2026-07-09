@@ -1,0 +1,72 @@
+// Regression: #1044 implicit enum member selector. A bare enum member (`Blue`)
+// resolves to the qualified constant when the expected type at the site is that
+// enum. Covered sites: function argument, typed initializer, bare-local
+// reassignment, enum comparison (both operand orders), and return value. A real
+// binding with the member's name always wins (non-breaking); a bare name that
+// is not a member of the expected enum stays an "undefined variable" error.
+import std.io
+
+enum Color { Red, Green, Blue }
+
+check_str(got: string, want: string, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: got ${got} want ${want}"); return 1 }
+    return 0
+}
+check_int(got: int, want: int, lbl: string) -> int {
+    if got != want { println("FAIL ${lbl}: ${got} != ${want}"); return 1 }
+    return 0
+}
+
+name(c: Color) -> string {
+    return match c { Red -> "red"  Green -> "green"  Blue -> "blue" }
+}
+
+// return position
+pick(b: bool) -> Color {
+    if b { return Blue }
+    return Red
+}
+
+// a real local named like a member must win over the implicit selector: here
+// `Green` is an int local, so `takes_int(Green)` passes 42, not Color.Green.
+takes_int(n: int) -> int { return n }
+binding_wins() -> int {
+    let Green = 42
+    return takes_int(Green)
+}
+
+main() {
+    var fails = 0
+
+    // function argument
+    fails = fails + check_str(name(Blue), "blue", "arg Blue")
+    fails = fails + check_str(name(Red), "red", "arg Red")
+
+    // typed initializer
+    let c: Color = Green
+    fails = fails + check_str(name(c), "green", "init Green")
+
+    // comparison, both operand orders
+    if c == Green { } else { fails = fails + 1; println("FAIL cmp c==Green") }
+    if Green == c { } else { fails = fails + 1; println("FAIL cmp Green==c") }
+    if c == Red { fails = fails + 1; println("FAIL cmp c==Red") }
+
+    // bare-local reassignment
+    var d: Color = Red
+    d = Blue
+    fails = fails + check_str(name(d), "blue", "reassign Blue")
+
+    // return position
+    fails = fails + check_str(name(pick(true)), "blue", "return Blue")
+    fails = fails + check_str(name(pick(false)), "red", "return Red")
+
+    // a real binding named like a member wins (passes the int, not Color.Green)
+    fails = fails + check_int(binding_wins(), 42, "binding wins")
+
+    if fails == 0 {
+        println("PASS: enum_implicit_selector")
+    } else {
+        println("FAILED: ${fails}")
+        exit(1)
+    }
+}
