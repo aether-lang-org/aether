@@ -1,0 +1,14 @@
+// Top-level unit selectively imports std.tcp naming ONLY connect — it
+// never names poll2/read_n/write_n, which are used only via relaylib.
+// Before #1097's fix this failed with "Undefined function 'tcp_poll2'";
+// the selective import wrongly shadowed the transitive full-merge that a
+// no-import build already did correctly.
+import std.tcp (connect)
+import relaylib (splicey)
+
+main() {
+    // null args make splice() error-return immediately; we only care that
+    // the program COMPILES — the omitted wrappers must be instantiated.
+    _ = splicey(null, null, 16)
+    println("ok")
+}

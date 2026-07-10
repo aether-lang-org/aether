@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Selective import of a stdlib module no longer suppresses instantiation of
+  wrappers used transitively by an imported library** (#1097). When the
+  top-level unit did `import std.tcp (connect)` — a *selective* import that
+  omitted a tuple wrapper (`poll2` / `read_n` / `write_n`) — and an imported
+  library used that wrapper internally, the omitted wrapper was never
+  code-generated: its call site degraded to an undefined `tcp_poll2` and the
+  build failed at the *library's* source location. The cross-module merge's
+  transitive-dependency pass skipped any module that was also a direct import,
+  on the assumption the main loop had fully merged it; but a *selective* direct
+  import merges only its named subset. The transitive pass now recognises a
+  module that is both a direct import and a transitive dependency, and merges
+  the remaining exports the library needs (dedup guards keep the already-merged
+  subset a no-op). This makes a partial `std.tcp` import behave like the
+  no-import case, which already merged the full surface transitively. The
+  bare-name selective restriction on user code is unchanged.
+
 ## [0.379.0]
 
 ### Added

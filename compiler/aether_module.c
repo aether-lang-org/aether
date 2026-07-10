@@ -2326,6 +2326,14 @@ void module_merge_into_program(ASTNode* program) {
     {
         // Collect direct imports as the BFS frontier.
         const char* visited[256];
+        // #1097: was this module reached as a *transitive dependency* of some
+        // other module (as opposed to only being a direct top-level import)?
+        // A direct import merged only its selected subset in the main loop, so
+        // a module that is ALSO transitively needed must have its remaining
+        // exports merged here — otherwise a wrapper the top-level import
+        // omitted (`poll2`) but a library uses stays un-instantiated and its
+        // call site degrades to an undefined `<ns>_<name>`.
+        int reached_transitively[256];
         int visited_count = 0;
         const char* queue[256];
         int q_head = 0, q_tail = 0;
@@ -2334,12 +2342,15 @@ void module_merge_into_program(ASTNode* program) {
             ASTNode* child = program->children[i];
             if (!child || child->type != AST_IMPORT_STATEMENT || !child->value) continue;
             if (visited_count >= 256) break;
+            reached_transitively[visited_count] = 0;
             visited[visited_count++] = child->value;
             if (q_tail < 256) queue[q_tail++] = child->value;
         }
 
         // BFS: for each enqueued module, look at its `imports` list and
-        // enqueue any not yet visited.
+        // enqueue any not yet visited. A dep discovered here is marked
+        // reached-transitively even if it was already seeded as a direct
+        // import (#1097) — that's the union signal the merge below needs.
         while (q_head < q_tail) {
             const char* mod_path = queue[q_head++];
             AetherModule* mod = module_find(mod_path);
@@ -2350,22 +2361,37 @@ void module_merge_into_program(ASTNode* program) {
                 if (!dep) continue;
                 int seen = 0;
                 for (int v = 0; v < visited_count; v++) {
-                    if (strcmp(visited[v], dep) == 0) { seen = 1; break; }
+                    if (strcmp(visited[v], dep) == 0) {
+                        // Already visited — but now we know it's also a
+                        // transitive dep, so record that (a direct selective
+                        // import seeded it with the flag clear). #1097.
+                        reached_transitively[v] = 1;
+                        seen = 1;
+                        break;
+                    }
                 }
                 if (seen) continue;
                 if (visited_count >= 256) break;
+                reached_transitively[visited_count] = 1;
                 visited[visited_count++] = dep;
                 if (q_tail < 256) queue[q_tail++] = dep;
             }
         }
 
-        // For each transitively-reachable module that wasn't a direct
-        // user import, merge its exported functions and constants the
-        // same way the main loop merged direct imports.
+        // For each transitively-reachable module, merge its exported functions
+        // and constants the same way the main loop merged direct imports.
         for (int v = 0; v < visited_count; v++) {
             const char* dep_path = visited[v];
 
-            // Skip direct imports — they were merged above.
+            // Skip modules that are *only* a direct user import — the main
+            // loop already merged them (its selective filter is the intended
+            // user-facing scope). But a direct import that is ALSO a
+            // transitive dependency of another merged module must fall
+            // through: the main loop merged only its selected subset, and the
+            // library needs the rest. The clone dedup guards below
+            // (program_has_function / _const / _struct) make re-merging the
+            // already-cloned subset a no-op, so this only adds the missing
+            // transitively-used exports. #1097.
             int is_direct = 0;
             for (int i = 0; i < orig_count; i++) {
                 ASTNode* child = program->children[i];
@@ -2375,7 +2401,7 @@ void module_merge_into_program(ASTNode* program) {
                     break;
                 }
             }
-            if (is_direct) continue;
+            if (is_direct && !reached_transitively[v]) continue;
 
             AetherModule* dep_mod = module_find(dep_path);
             if (!dep_mod || !dep_mod->ast) continue;
@@ -2408,10 +2434,26 @@ void module_merge_into_program(ASTNode* program) {
             // qualified calls) BUT skip the user-explicit registry
             // (so user code can't accidentally call into the
             // transitively-pulled-in namespace it never imported).
-            ASTNode* synth_import = create_ast_node(AST_IMPORT_STATEMENT,
-                                                   dep_path, 0, 0);
-            synth_import->annotation = strdup("synthetic");
-            insert_child_at(program, synth_import, insert_idx++);
+            // #1097: a direct-but-also-transitive dep already carries a
+            // user-written import for this path, so the namespace is already
+            // registered — don't add a redundant synthetic node for it. Only
+            // inject the synthetic import when the program has no import of
+            // this path yet (the pure-transitive case #243 targeted).
+            int has_import_of_dep = 0;
+            for (int p = 0; p < program->child_count; p++) {
+                ASTNode* pc = program->children[p];
+                if (pc && pc->type == AST_IMPORT_STATEMENT && pc->value &&
+                    strcmp(pc->value, dep_path) == 0) {
+                    has_import_of_dep = 1;
+                    break;
+                }
+            }
+            if (!has_import_of_dep) {
+                ASTNode* synth_import = create_ast_node(AST_IMPORT_STATEMENT,
+                                                       dep_path, 0, 0);
+                synth_import->annotation = strdup("synthetic");
+                insert_child_at(program, synth_import, insert_idx++);
+            }
 
             for (int j = 0; j < mod_ast->child_count; j++) {
                 ASTNode* decl = unwrap_export(mod_ast->children[j]);
