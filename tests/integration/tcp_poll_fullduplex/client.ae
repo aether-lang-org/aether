@@ -1,0 +1,95 @@
+// Client side of the #1092 full-duplex readiness regression.
+//
+// Exercises the two fixes:
+//   1. tcp.poll — wait for the server-speaks-first greeting via a
+//      readiness primitive instead of a blind blocking read.
+//   2. poll-then-timeout is non-fatal — a poll that times out must leave
+//      the socket connected so a later read on the SAME socket succeeds.
+//   3. tcp.poll2 — with one busy and one idle socket, poll2 reports only
+//      the busy side ready.
+
+import std.tcp
+import std.string
+
+extern exit(code: int)
+
+const PORT = 18292
+
+fail(msg: string) {
+    println("  [FAIL] ${msg}")
+    exit(1)
+}
+
+make_payload() -> string {
+    // "a\0b" — embedded NUL, must survive the length-aware round-trip.
+    nul = string.from_char(0)
+    a = string.concat_wrapped("a", nul)
+    return string.concat_wrapped(a, "b")
+}
+
+// Retry connect until the server's listen socket is up. The server's
+// READY line is block-buffered to a pipe and may never flush, so the
+// client self-synchronizes rather than waiting on a log grep.
+connect_retry() -> ptr {
+    tries = 0
+    while tries < 100 {
+        sock, cerr = tcp.connect("127.0.0.1", PORT)
+        if cerr == "" {
+            return sock
+        }
+        sleep(100)
+        tries = tries + 1
+    }
+    fail("connect: server never came up after 100 tries")
+    return null
+}
+
+main() {
+    // Connect both sockets up front: the server accepts the busy one, then
+    // blocks on a second accept for the idle one before it speaks. `sock`
+    // is the busy connection (first accepted), `idle` the quiet one.
+    sock = connect_retry()
+    idle, ierr = tcp.connect("127.0.0.1", PORT)
+    if ierr != "" { fail("connect idle: ${ierr}") }
+
+    // --- Fix 1 & 2: poll returns ready for the greeting; a preceding
+    // idle poll window must not have killed the socket. Poll with a
+    // generous timeout; the server greets after both accepts complete.
+    ready, perr = tcp.poll(sock, 3000)
+    if perr != "" { fail("poll greeting: ${perr}") }
+    if ready == false { fail("poll timed out waiting for greeting") }
+
+    greeting, grerr = tcp.read(sock, 64)
+    if grerr != "" { fail("read greeting (socket died across poll?): ${grerr}") }
+    if string.contains(greeting, "GREETING") == 0 {
+        fail("greeting mismatch: ${greeting}")
+    }
+
+    // --- Fix 3: poll2(busy, idle) must report the busy side only. Send a
+    // frame on `sock` so the server echoes it and it becomes readable;
+    // the idle peer is accepted but silent, so it must stay not-ready.
+    payload = make_payload()
+    _, werr = tcp.write_n(sock, payload, 3)
+    if werr != "" { fail("write payload: ${werr}") }
+
+    a_ready, b_ready, p2err = tcp.poll2(sock, idle, 2000)
+    if p2err != "" { fail("poll2: ${p2err}") }
+    if a_ready == false { fail("poll2: busy side not reported ready") }
+    if b_ready == true { fail("poll2: idle side wrongly reported ready") }
+
+    // The echoed frame must round-trip byte-exact including the NUL.
+    echo, n, rerr = tcp.read_n(sock, 128)
+    if rerr != "" { fail("read echo: ${rerr}") }
+    if n != 3 { fail("echo length: got ${n}, expected 3") }
+    b0 = string.char_at_n(echo, n, 0)
+    b1 = string.char_at_n(echo, n, 1)
+    b2 = string.char_at_n(echo, n, 2)
+    if b0 != 97 { fail("echo[0]: got ${b0}, expected 97") }
+    if b1 != 0  { fail("echo[1]: got ${b1}, expected 0 (NUL)") }
+    if b2 != 98 { fail("echo[2]: got ${b2}, expected 98") }
+
+    tcp.close(idle)
+    tcp.close(sock)
+    println("  [OK] tcp full-duplex readiness (#1092)")
+    exit(0)
+}

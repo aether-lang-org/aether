@@ -8,8 +8,9 @@ exports (
     tcp_connect_raw, tcp_send_raw, tcp_send_n_raw,
     tcp_receive_raw, tcp_receive_n_raw, tcp_close,
     tcp_listen_raw, tcp_accept_raw, tcp_server_close,
-    tcp_fd_raw, tcp_server_fd_raw,
-    connect, write, write_n, read, read_n, listen, accept, fd, server_fd
+    tcp_fd_raw, tcp_server_fd_raw, tcp_poll_raw, tcp_poll2_raw,
+    connect, write, write_n, read, read_n, listen, accept, fd, server_fd,
+    poll, poll2
 )
 
 // Raw externs - escape hatch
@@ -24,6 +25,8 @@ extern tcp_accept_raw(server: ptr) -> ptr
 extern tcp_server_close(server: ptr) -> int
 extern tcp_fd_raw(sock: ptr) -> int
 extern tcp_server_fd_raw(server: ptr) -> int
+extern tcp_poll_raw(sock: ptr, timeout_ms: int) -> int
+extern tcp_poll2_raw(a: ptr, b: ptr, timeout_ms: int) -> int
 
 // string_concat used to duplicate the borrowed receive buffer so the
 // caller's copy outlives the underlying malloc.
@@ -82,8 +85,47 @@ read(sock: ptr, max_bytes: int) -> {
 // byte buffer stored in a length-aware AetherString. The returned
 // length is authoritative; callers should pass it to length-aware
 // consumers rather than re-derive length with strlen-shaped APIs.
+//
+// Error discipline (#1092): a quiet-but-alive peer (recv-timeout /
+// would-block) returns ("", 0, "timeout") and leaves the socket
+// connected — retry or poll, do NOT treat it as a close. Only an
+// orderly FIN or a hard error returns "connection closed or receive
+// failed"; that is the terminal state. A full-duplex relay must branch
+// on the "timeout" sentinel rather than collapsing all non-empty errors
+// into "closed."
 read_n(sock: ptr, max_bytes: int) -> {
     return tcp_receive_n_raw(sock, max_bytes)
+}
+
+// Wait until `sock` is readable, up to timeout_ms (-1 blocks, 0 polls,
+// >0 waits that many ms). Returns (true, "") when a subsequent read_n
+// will not block, (false, "") on timeout, (false, error) if the handle
+// is closed or poll failed. Neither reads nor closes the socket — pair
+// it with read_n to build a nonblocking loop over a single direction.
+poll(sock: ptr, timeout_ms: int) -> {
+    rc = tcp_poll_raw(sock, timeout_ms)
+    if rc < 0 {
+        return false, "poll failed"
+    }
+    if rc == 0 {
+        return false, ""
+    }
+    return true, ""
+}
+
+// Wait on two sockets at once — the full-duplex relay primitive. Returns
+// (a_ready, b_ready, "") where each flag is true when that side is
+// readable (both may be true); (false, false, "") on timeout;
+// (false, false, error) if both handles are closed or poll failed.
+// Service whichever side is ready with read_n, then re-poll.
+poll2(a: ptr, b: ptr, timeout_ms: int) -> {
+    rc = tcp_poll2_raw(a, b, timeout_ms)
+    if rc < 0 {
+        return false, false, "poll failed"
+    }
+    a_ready = (rc & 1) != 0
+    b_ready = (rc & 2) != 0
+    return a_ready, b_ready, ""
 }
 
 // Listen on a port. Returns (server, "") on success, (null, error) on
