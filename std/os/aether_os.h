@@ -53,7 +53,7 @@ char* os_getcwd_raw(void);
 char* os_which(const char* name);
 
 // Run a child process directly via fork+execvp+waitpid (POSIX) or
-// CreateProcessW (Windows — TODO). NO SHELL is interpreted: argv items
+// CreateProcessW (Windows). NO SHELL is interpreted: argv items
 // are passed verbatim, so paths-with-spaces, $vars, |, ;, *, etc. in
 // arguments are not metachars. Returns the child's exit code, or -1
 // on failure to spawn (program not found, etc.).

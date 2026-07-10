@@ -1084,8 +1084,8 @@ int validate_closure_state_mutations(CodeGenerator* gen, ASTNode* program) {
             char msg[512];
             const char* actor_name = actor->value ? actor->value : "actor";
             snprintf(msg, sizeof(msg),
-                "closure inside actor '%s' handler writes state field '%s' — "
-                "not yet supported (closures can't mutate actor state; the "
+                "closure inside actor '%s' handler writes state field '%s': "
+                "not supported (closures can't mutate actor state; the "
                 "closure has no access to self)",
                 actor_name, state_names[n]);
             char suggestion[256];
