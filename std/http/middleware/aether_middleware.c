@@ -308,6 +308,9 @@ AetherSessionAuthOpts* aether_session_auth_opts_new(const char* cookie_name,
     AetherSessionAuthOpts* o = (AetherSessionAuthOpts*)calloc(1, sizeof(AetherSessionAuthOpts));
     if (!o) return NULL;
     o->cookie_name = strdup(cookie_name);
+    // cookie_name is compared on every request; a NULL would crash that lookup.
+    // (redirect_url is optional, so a NULL there is a valid "no redirect".)
+    if (!o->cookie_name) { free(o); return NULL; }
     o->redirect_url = (redirect_url && *redirect_url) ? strdup(redirect_url) : NULL;
     o->verify = verify;
     o->verifier_user_data = verifier_user_data;
@@ -488,6 +491,13 @@ int aether_middleware_rate_limit(HttpRequest* req, HttpServerResponse* res, void
             return 1;  /* fail open on OOM */
         }
         bucket->key = strdup(keybuf);
+        if (!bucket->key) {
+            // A NULL key would crash the strcmp bucket lookup on the next
+            // request; drop the bucket and fail open like the calloc path above.
+            free(bucket);
+            pthread_mutex_unlock(&o->lock);
+            return 1;  /* fail open on OOM */
+        }
         bucket->tokens = (double)o->max_requests;
         bucket->last_refill = now;
         if (prev) prev->next = bucket;
@@ -756,6 +766,14 @@ AetherStaticOpts* aether_static_opts_new(const char* url_prefix, const char* roo
     if (!o) return NULL;
     o->url_prefix = strdup(url_prefix ? url_prefix : "");
     o->root = strdup(root);
+    // A NULL url_prefix would crash the strlen just below; a NULL root would
+    // crash path resolution when serving. Bail cleanly instead.
+    if (!o->url_prefix || !o->root) {
+        free(o->url_prefix);
+        free(o->root);
+        free(o);
+        return NULL;
+    }
     o->prefix_len = strlen(o->url_prefix);
     return o;
 }
@@ -992,9 +1010,13 @@ static int request_append_header(HttpRequest* req,
     char** nv = (char**)realloc(req->header_values, (size_t)(n + 1) * sizeof(char*));
     if (!nv) return -1;
     req->header_values = nv;
-    req->header_keys[n]   = strdup(name);
-    req->header_values[n] = strdup(value);
-    if (!req->header_keys[n] || !req->header_values[n]) return -1;
+    char* kd = strdup(name);
+    char* vd = strdup(value);
+    // Store only if both copies succeed; returning with just one stored (the
+    // old code) leaked it, since header_count wasn't advanced to cover index n.
+    if (!kd || !vd) { free(kd); free(vd); return -1; }
+    req->header_keys[n]   = kd;
+    req->header_values[n] = vd;
     req->header_count = n + 1;
     return 0;
 }

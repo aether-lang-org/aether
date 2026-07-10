@@ -1764,6 +1764,10 @@ HttpResponse* http_send_raw(HttpRequest* req) {
     /* If redirects aren't enabled, return the first response as-is. */
     if (req->max_redirects <= 0) return resp;
 
+    /* No URL to resolve redirects against (strdup(NULL) below would be UB),
+     * so there is nothing to follow: return the first response as-is. */
+    if (!req->url) return resp;
+
     /* Track visited URLs for loop detection. Bounded by max_redirects
      * + 1 (the original URL). Static array is fine — max_redirects is
      * expected to be small (typically 5-10). */
@@ -1775,6 +1779,13 @@ HttpResponse* http_send_raw(HttpRequest* req) {
 
     int hops_remaining = req->max_redirects;
     char* current_url = strdup(req->url);
+    if (!current_url || !visited[0]) {
+        // Can't follow redirects without a copy of the starting URL; return the
+        // first response as-is rather than dereferencing a NULL current_url below.
+        free(current_url);
+        free(visited[0]);
+        return resp;
+    }
 
     while (hops_remaining > 0 && resp && resp->status_code >= 300 && resp->status_code < 400) {
         const char* hdrs = resp->headers ? string_to_cstr(resp->headers) : "";

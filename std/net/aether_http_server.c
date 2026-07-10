@@ -1359,7 +1359,14 @@ HttpRequest* http_parse_request_n(const char* buf, size_t len) {
     req->header_keys = (char**)malloc(sizeof(char*) * 50);
     req->header_values = (char**)malloc(sizeof(char*) * 50);
     req->header_count = 0;
-    
+    // If either array failed to allocate, drop both and skip storing headers
+    // (the loop below still runs to advance past them to the body) rather than
+    // writing strdup results through a NULL array pointer.
+    if (!req->header_keys || !req->header_values) {
+        free(req->header_keys);   req->header_keys = NULL;
+        free(req->header_values); req->header_values = NULL;
+    }
+
     const char* header_start = line_end + 2;
     while (1) {
         line_end = strstr(header_start, "\r\n");
@@ -1377,7 +1384,7 @@ HttpRequest* http_parse_request_n(const char* buf, size_t len) {
         header_line[line_len] = '\0';
         
         char* colon = strchr(header_line, ':');
-        if (colon && req->header_count < 50) {
+        if (colon && req->header_count < 50 && req->header_keys && req->header_values) {
             *colon = '\0';
             char* key = header_line;
             char* value = colon + 1;
@@ -1385,9 +1392,18 @@ HttpRequest* http_parse_request_n(const char* buf, size_t len) {
             // Trim whitespace from value
             while (*value == ' ') value++;
 
-            req->header_keys[req->header_count] = strdup(key);
-            req->header_values[req->header_count] = strdup(value);
-            req->header_count++;
+            // Store only if both copies succeed; a NULL key/value would later
+            // crash header lookup (strcasecmp) or serialization (strlen).
+            char* kd = strdup(key);
+            char* vd = strdup(value);
+            if (kd && vd) {
+                req->header_keys[req->header_count] = kd;
+                req->header_values[req->header_count] = vd;
+                req->header_count++;
+            } else {
+                free(kd);
+                free(vd);
+            }
         }
         
         header_start = line_end + 2;
@@ -1571,6 +1587,7 @@ void http_request_free(HttpRequest* req) {
 // Response building
 HttpServerResponse* http_response_create() {
     HttpServerResponse* res = (HttpServerResponse*)calloc(1, sizeof(HttpServerResponse));
+    if (!res) return NULL;
     res->status_code = 200;
     res->status_text = strdup("OK");
     res->header_keys = (char**)malloc(sizeof(char*) * 50);
@@ -1616,16 +1633,23 @@ void http_response_set_header(HttpServerResponse* res, const char* key, const ch
     // Check if header exists, update it
     for (int i = 0; i < res->header_count; i++) {
         if (strcasecmp(res->header_keys[i], key) == 0) {
+            char* vd = strdup(value);
+            if (!vd) return;  // keep the existing value rather than free-to-NULL
             free(res->header_values[i]);
-            res->header_values[i] = strdup(value);
+            res->header_values[i] = vd;
             return;
         }
     }
 
-    // Add new header (max 50)
+    // Add new header (max 50). Store only if both copies succeed; a NULL key
+    // would crash the strcasecmp above on the next call, a NULL value the
+    // serializer's strlen.
     if (res->header_count >= 50) return;
-    res->header_keys[res->header_count] = strdup(key);
-    res->header_values[res->header_count] = strdup(value);
+    char* kd = strdup(key);
+    char* vd = strdup(value);
+    if (!kd || !vd) { free(kd); free(vd); return; }
+    res->header_keys[res->header_count] = kd;
+    res->header_values[res->header_count] = vd;
     res->header_count++;
 }
 
@@ -1669,8 +1693,11 @@ void http_response_add_header(HttpServerResponse* res, const char* key, const ch
         if (!res->header_keys || !res->header_values) return;
     }
     if (res->header_count >= 50) return;
-    res->header_keys[res->header_count] = strdup(key);
-    res->header_values[res->header_count] = strdup(value);
+    char* kd = strdup(key);
+    char* vd = strdup(value);
+    if (!kd || !vd) { free(kd); free(vd); return; }
+    res->header_keys[res->header_count] = kd;
+    res->header_values[res->header_count] = vd;
     res->header_count++;
 }
 
@@ -1873,8 +1900,17 @@ const char* http_status_text(int code) {
 // Routing
 void http_server_add_route(HttpServer* server, const char* method, const char* path, HttpHandler handler, void* user_data) {
     HttpRoute* route = (HttpRoute*)malloc(sizeof(HttpRoute));
+    if (!route) return;
     route->method = strdup(method);
     route->path_pattern = strdup(path);
+    // A NULL method/path_pattern would crash route matching's strcmp; drop the
+    // half-built route rather than register it.
+    if (!route->method || !route->path_pattern) {
+        free(route->method);
+        free(route->path_pattern);
+        free(route);
+        return;
+    }
     route->handler = handler;
     route->user_data = user_data;
     route->next = server->routes;
@@ -1899,6 +1935,7 @@ void http_server_delete(HttpServer* server, const char* path, HttpHandler handle
 
 void http_server_use_middleware(HttpServer* server, HttpMiddleware middleware, void* user_data) {
     HttpMiddlewareNode* node = (HttpMiddlewareNode*)malloc(sizeof(HttpMiddlewareNode));
+    if (!node) return;
     node->middleware = middleware;
     node->user_data = user_data;
     node->next = NULL;
@@ -2397,47 +2434,76 @@ void http_server_use_response_transformer(HttpServer* server,
 
 // Route matching with parameter extraction
 int http_route_matches(const char* pattern, const char* path, HttpRequest* req) {
+    // Free any params captured by a previous candidate-route check on this
+    // request. A route table tries each pattern in turn until one matches, so
+    // without this every non-matching (and every partially-matching) route
+    // leaks the two arrays plus their strings, since http_request_free only
+    // reclaims the final call's set. Doing it before the exact-match return
+    // also clears stale params a failed earlier pattern left behind.
+    if (req->param_keys) {
+        for (int i = 0; i < req->param_count; i++) free(req->param_keys[i]);
+        free(req->param_keys);
+        req->param_keys = NULL;
+    }
+    if (req->param_values) {
+        for (int i = 0; i < req->param_count; i++) free(req->param_values[i]);
+        free(req->param_values);
+        req->param_values = NULL;
+    }
+    req->param_count = 0;
+
     // Exact match
     if (strcmp(pattern, path) == 0) {
         return 1;
     }
-    
+
     // Pattern matching with parameters
     const char* p = pattern;
     const char* u = path;
-    
+
     // Allocate space for params
     req->param_keys = (char**)malloc(sizeof(char*) * 10);
     req->param_values = (char**)malloc(sizeof(char*) * 10);
     req->param_count = 0;
-    
+    if (!req->param_keys || !req->param_values) {
+        free(req->param_keys);   req->param_keys = NULL;
+        free(req->param_values); req->param_values = NULL;
+        return 0;
+    }
+
     while (*p && *u) {
         if (*p == ':') {
             // Parameter segment
             p++; // Skip ':'
-            
+
             // Extract parameter name
             const char* param_start = p;
             while (*p && *p != '/') p++;
-            
+
             int param_name_len = p - param_start;
-            char* param_name = (char*)malloc(param_name_len + 1);
-            strncpy(param_name, param_start, param_name_len);
-            param_name[param_name_len] = '\0';
-            
+
             // Extract parameter value from URL
             const char* value_start = u;
             while (*u && *u != '/') u++;
-            
+
             int value_len = u - value_start;
+
+            // The arrays hold at most 10 params; a pattern with more would
+            // overflow them. Treat that as a non-match rather than corrupt heap.
+            if (req->param_count >= 10) return 0;
+
+            char* param_name = (char*)malloc(param_name_len + 1);
             char* value = (char*)malloc(value_len + 1);
+            if (!param_name || !value) { free(param_name); free(value); return 0; }
+            strncpy(param_name, param_start, param_name_len);
+            param_name[param_name_len] = '\0';
             strncpy(value, value_start, value_len);
             value[value_len] = '\0';
-            
+
             req->param_keys[req->param_count] = param_name;
             req->param_values[req->param_count] = value;
             req->param_count++;
-            
+
         } else if (*p == '*') {
             // Wildcard - matches anything remaining
             return 1;
@@ -3629,6 +3695,13 @@ int http_server_start_raw(HttpServer* server) {
 
         for (int i = 1; i < n_threads; i++) {
             AcceptThreadCtx* ctx = malloc(sizeof(AcceptThreadCtx));
+            if (!ctx) {
+                // The join loop below assumes exactly n_threads accept threads;
+                // continuing with a NULL ctx would write through NULL here and
+                // leave a never-created thread to join. Fail loudly instead.
+                fprintf(stderr, "aether: failed to allocate accept-thread context\n");
+                abort();
+            }
             ctx->server = server;
             ctx->listen_fd = server->accept_listen_fds[i];
             ctx->poller = &server->accept_pollers[i];

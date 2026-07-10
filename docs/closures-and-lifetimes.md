@@ -55,10 +55,14 @@ and writes through `_env->name` directly. Scope analysis distinguishes
 captures from fresh body-locals while honouring Python-style `x = expr`
 shadowing: if the RHS does not read `x`, treat `x` as a fresh local.
 
-**Semantics preserved:** closures capture by value (as documented in
-`docs/closures-and-builder-dsl.md`). Mutations inside a closure mutate the
-env's copy, which persists across calls, but are not visible to the
-enclosing scope. Shared mutable state still requires ref cells.
+**Resulting semantics:** a read-only capture stays an aliased copy (zero
+cost). A capture the closure *assigns to* is heap-promoted, so the enclosing
+binding and the closure env share one heap cell and writes are visible in both
+directions (the Ruby/Groovy model, verified by
+`tests/syntax/test_closure_mutable_capture_probe.ae`). A simple named local
+therefore needs no ref cell to share mutable state; ref cells remain useful for
+state that isn't a plain captured local (an explicit `ptr` argument, a struct
+field, or an actor boundary). See `docs/closures-and-builder-dsl.md`.
 
 ### 3. Escaping-closure use-after-free
 

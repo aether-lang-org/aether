@@ -244,7 +244,7 @@ Aether has **no general-purpose cast operator**. The `as` keyword is reserved fo
 - `expr as fn(T1, T2, ...) -> R` function-pointer cast (call a stored pointer with type checking; see [§ Function-pointer parameters](#function-pointer-parameters-fnt1-t2---r) below)
 - `expr as T[]` typed-array view cast (reinterpret a raw pointer as a `T[]`)
 
-`buf as string`, `n as int`, `p as ptr` and similar primitive casts **do not parse**, after `as`, the parser accepts only `*StructName`, `fn(...) -> R`, or `T[]`. Convert between primitives this way instead:
+After `as` the parser also accepts a primitive **value cast** (#480): `n as int` and other numeric casts compile and run, and a cast between a distinct type and its base type is allowed too. Casts the type system can't justify (for example `buf as string` or `p as ptr`) still parse, but are rejected at type-check with `E0200`, use a named helper for those. The `*StructName`, `fn(...) -> R`, and `T[]` forms remain available. Other primitive conversions:
 
 | From → To | How |
 |---|---|
@@ -1604,7 +1604,7 @@ main() {
 
 The cast is a view, not an allocation, the operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). Reach for this only when the storage is C-allocated and Aether wants to manipulate fields. For Aether-owned data, use the normal struct-literal form (`Point { x: 1, y: 2 }`) so refcounting and lifetime tracking apply.
 
-**`as` accepts `*StructName`, `fn(...) -> R`, or `T[]` there is no general-purpose primitive cast.** After `as` the parser accepts a struct overlay (`*` then a struct name), a function-pointer cast (`fn(T1, T2, ...) -> R`), or a typed-array view (`T[]`). Forms like `buf as string`, `n as int`, `raw as ptr` do not parse. For converting between primitive types, see the [Casting between types](#casting-between-types) table above, most conversions are either implicit (Aether's type system inserts the necessary cast in the generated C) or use a named helper (`string.from_int`, `string.from_long`, …).
+**`as` accepts a primitive value cast (#480), a struct overlay (`*StructName`), a function-pointer cast (`fn(...) -> R`), or a typed-array view (`T[]`).** A value cast like `n as int` (numeric to numeric, or between a distinct type and its base) compiles and runs. Non-numeric casts such as `buf as string` or `raw as ptr` parse but are rejected at type-check with `E0200`. For converting between primitive types, see the [Casting between types](#casting-between-types) table above, most conversions are either implicit (Aether's type system inserts the necessary cast in the generated C) or use a named helper (`string.from_int`, `string.from_long`, …).
 
 The `as` keyword is the same token used for `import x as y` aliasing; the two parses don't collide because import-aliasing is recognised only inside `import` statements. Full semantics (operand type rules, error cases, the shared-token interaction) are in [c-interop.md § Struct overlay on raw pointers](c-interop.md#struct-overlay-on-raw-pointers-structname-and-expr-as-structname).
 

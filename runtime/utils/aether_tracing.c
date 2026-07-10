@@ -65,11 +65,15 @@ void tracing_add_actor(int actor_id) {
         }
     }
     
-    // Add actor
-    global_tracing.traced_actor_ids = (int*)realloc(
+    // Add actor. Grow through a temp so a failed realloc keeps the existing
+    // array (and doesn't leak it) instead of overwriting it with NULL and then
+    // dereferencing that NULL on the store below.
+    int* grown = (int*)realloc(
         global_tracing.traced_actor_ids,
         (global_tracing.traced_actor_count + 1) * sizeof(int)
     );
+    if (!grown) return;
+    global_tracing.traced_actor_ids = grown;
     global_tracing.traced_actor_ids[global_tracing.traced_actor_count++] = actor_id;
 }
 

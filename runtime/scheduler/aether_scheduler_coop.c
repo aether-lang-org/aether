@@ -47,6 +47,13 @@ void scheduler_init(int cores) {
     memset(&schedulers[0], 0, sizeof(Scheduler));
     schedulers[0].core_id = 0;
     schedulers[0].actors = calloc(MAX_ACTORS_PER_CORE, sizeof(ActorBase*));
+    if (!schedulers[0].actors) {
+        // The scheduler cannot run any actor without this table; leaving it NULL
+        // with a non-zero capacity would crash scheduler_register_actor on the
+        // first spawn. Fail loudly at init instead of a delayed NULL deref.
+        fprintf(stderr, "aether: failed to allocate cooperative scheduler actor table\n");
+        abort();
+    }
     schedulers[0].actor_count = 0;
     schedulers[0].capacity = MAX_ACTORS_PER_CORE;
 

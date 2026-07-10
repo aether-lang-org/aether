@@ -1913,8 +1913,8 @@ main() {
 - `io.print_float(value)` - Print float
 
 **Unbuffered fd writes (crash-trace use case):**
-- `io.stderr_write(data, length)` → `int` - Write `length` bytes to fd 2 directly, bypassing stdio buffering. Returns the byte count actually written, or -1 on error. Loops on partial writes; retries `EINTR` on POSIX. `data` may contain NULs (binary-safe). Reach for this when output must reach the terminal / pipe before the process aborts, `println` and `io.print` are line-buffered on tty and block-buffered when piped, so the last few lines reliably get lost during a crash.
-- `io.stdout_write(data, length)` → `int` - Same shape as `stderr_write` but writes to fd 1. Useful for shell-pipe-friendly tools that need each record flushed before the next stage reads.
+- `io.stderr_write(data)` → `int` - Write `data` to fd 2 directly (length computed internally with `string.length`), bypassing stdio buffering. Returns the byte count actually written, or -1 on error. Loops on partial writes; retries `EINTR` on POSIX. Reach for this when output must reach the terminal / pipe before the process aborts, `println` and `io.print` are line-buffered on tty and block-buffered when piped, so the last few lines reliably get lost during a crash.
+- `io.stdout_write(data)` → `int` - Same shape as `stderr_write` but writes to fd 1. Useful for shell-pipe-friendly tools that need each record flushed before the next stage reads.
 
 **File-descriptor lifecycle and bulk fd I/O:**
 - `io.fd_open_read(path)` → `(int, string)` - Open `path` for reading (POSIX `O_RDONLY` / Win `_O_RDONLY | _O_BINARY`). Returns `(fd, "")` on success, `(-1, error)` on failure.

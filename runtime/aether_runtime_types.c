@@ -64,6 +64,7 @@ RuntimeValue* aether_convert_type(RuntimeValue* val, const char* target_type) {
             char buffer[32];
             snprintf(buffer, sizeof(buffer), "%lld", (long long)val->value.int_val);
             result->value.string_val = strdup(buffer);
+            if (!result->value.string_val) { free(result); return NULL; }
             return result;
         } else if (target_code == RUNTIME_TYPE_BOOL) {
             result->value.bool_val = val->value.int_val != 0;
@@ -80,6 +81,7 @@ RuntimeValue* aether_convert_type(RuntimeValue* val, const char* target_type) {
             char buffer[32];
             snprintf(buffer, sizeof(buffer), "%f", val->value.float_val);
             result->value.string_val = strdup(buffer);
+            if (!result->value.string_val) { free(result); return NULL; }
             return result;
         } else if (target_code == RUNTIME_TYPE_BOOL) {
             result->value.bool_val = val->value.float_val != 0.0;
@@ -112,13 +114,14 @@ RuntimeValue* aether_convert_type(RuntimeValue* val, const char* target_type) {
             return result;
         } else if (target_code == RUNTIME_TYPE_STRING) {
             result->value.string_val = strdup(val->value.bool_val ? "true" : "false");
+            if (!result->value.string_val) { free(result); return NULL; }
             return result;
         }
     }
     
-    // No conversion possible - return copy
-    free(result);
-    result = (RuntimeValue*)malloc(sizeof(RuntimeValue));
+    // No conversion possible - return a copy of the input unchanged. Reuse the
+    // already-allocated (and NULL-checked) result rather than free+malloc again,
+    // which would reintroduce an unchecked allocation dereferenced right below.
     *result = *val;
     return result;
 }
