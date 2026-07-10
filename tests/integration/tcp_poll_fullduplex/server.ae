@@ -1,0 +1,81 @@
+// Server side of the #1092 full-duplex readiness regression.
+//
+// It accepts TWO connections:
+//   - the "busy" one: it SPEAKS FIRST (greeting before any read), then
+//     echoes one length-aware frame. A half-duplex "client speaks, then
+//     server replies" relay stalls on the speaks-first shape; a
+//     poll-driven client does not.
+//   - the "idle" one: accepted and held open, but never written to, so
+//     the client has a genuinely quiet-but-alive peer to prove poll2
+//     reports it NOT ready.
+//
+// listen happens in main() so the client's connect-retry has a socket to
+// hit; the blocking accept/serve runs in an actor off the main thread.
+
+import std.tcp
+import std.string
+
+extern exit(code: int)
+
+const PORT = 18292
+
+message Serve { server: ptr }
+
+actor SrvActor {
+    state s = 0
+    receive {
+        Serve(server) -> {
+            s = server
+
+            // First accept = the busy connection.
+            busy, aerr = tcp.accept(server)
+            if aerr != "" {
+                println("FAIL: accept busy: ${aerr}")
+                exit(1)
+            }
+
+            // Second accept = the idle connection. Held open, never
+            // written to, so it stays quiet with a live peer.
+            idle, ierr = tcp.accept(server)
+            if ierr != "" {
+                println("FAIL: accept idle: ${ierr}")
+                exit(1)
+            }
+
+            // Speak first on the busy socket — no read before this write.
+            _, gwerr = tcp.write(busy, "GREETING")
+            if gwerr != "" {
+                println("FAIL: write greeting: ${gwerr}")
+                exit(1)
+            }
+
+            // Then echo one frame back, length-aware (survives NULs).
+            bytes, n, rerr = tcp.read_n(busy, 128)
+            if rerr == "" {
+                tcp.write_n(busy, bytes, n)
+            }
+
+            // Keep the idle peer alive until the client has finished its
+            // poll2 assertion, then tear everything down.
+            sleep(3000)
+            tcp.close(idle)
+            tcp.close(busy)
+            tcp.server_close(server)
+        }
+    }
+}
+
+main() {
+    server, lerr = tcp.listen(PORT)
+    if lerr != "" {
+        println("FAIL: listen: ${lerr}")
+        exit(1)
+    }
+    println("READY")
+
+    a = spawn(SrvActor())
+    a ! Serve { server: server }
+
+    sleep(60000)
+    exit(0)
+}

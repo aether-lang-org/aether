@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.tcp` readiness primitives — `tcp.poll` / `tcp.poll2`** (#1092). Thin
+  `poll(2)` wrappers that wait for a socket (or two sockets at once) to become
+  readable with a caller-supplied timeout, without reading and without touching
+  the socket's connected flag. `poll2` is the primitive a full-duplex relay (a
+  CONNECT tunnel / TCP splice) needs to service whichever direction speaks
+  next; blocking `read_n` from one thread of control cannot express that.
+
+### Fixed
+
+- **`std.tcp` read-timeout no longer masquerades as a connection close**
+  (#1092). `tcp_receive_raw`/`tcp_receive_n_raw` collapsed every `recv <= 0`
+  into a single "closed or failed" branch that also marked the socket
+  permanently dead — so a quiet-but-alive direction (a peer idle for the 30 s
+  `SO_RCVTIMEO` window, normal on a long-lived tunnel) tore the connection down
+  mid-stream. Would-block / timeout (`EAGAIN`/`EWOULDBLOCK`/`WSAETIMEDOUT`) is
+  now distinguished: `read_n` returns a distinct `"timeout"` sentinel and
+  leaves the socket connected for a retry; only an orderly FIN or a hard error
+  is treated as a terminal close.
+
 ## [0.378.0]
 
 ### Fixed

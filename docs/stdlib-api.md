@@ -808,12 +808,22 @@ It is no longer part of the Aether stdlib. See [`docs/http-vcr.md`](http-vcr.md)
 - `tcp.write_n(sock, data, length)` → `(int, string)` - Length-aware write for binary payloads
 - `tcp.read(sock, max_bytes)` → `(string, string)` - Text-shaped read, return `(data, err)`
 - `tcp.read_n(sock, max_bytes)` → `(string, int, string)` - Binary-safe read, return `(bytes, length, err)`
+- `tcp.poll(sock, timeout_ms)` → `(bool, string)` - Wait for readability. `(true, "")` = a following `read_n` won't block, `(false, "")` = timeout, `(false, err)` = closed/failed. `timeout_ms`: `-1` blocks, `0` polls, `>0` waits that many ms.
+- `tcp.poll2(a, b, timeout_ms)` → `(bool, bool, string)` - Wait on two sockets at once (the full-duplex relay primitive); each flag is true when that side is readable, both may be true.
 - `tcp.listen(port)` → `(ptr, string)` - Create listening socket
 - `tcp.accept(server)` → `(ptr, string)` - Accept connection
 - `tcp.close(sock)` - Close socket (infallible)
 - `tcp.server_close(server)` - Close server socket
 
-Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_send_n_raw`, `tcp_receive_raw`, `tcp_receive_n_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
+> **Timeout vs. close (#1092).** A quiet-but-alive peer (recv-timeout /
+> would-block) is *not* a close: `tcp.read_n` returns the distinct
+> `"timeout"` error and leaves the socket connected so you can retry or
+> `tcp.poll` it. Only an orderly FIN or a hard error returns `"connection
+> closed or receive failed"`. A full-duplex relay must branch on the
+> `"timeout"` sentinel rather than collapsing all non-empty errors into
+> "closed."
+
+Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_send_n_raw`, `tcp_receive_raw`, `tcp_receive_n_raw`, `tcp_listen_raw`, `tcp_accept_raw`, `tcp_poll_raw`, `tcp_poll2_raw`.
 
 ### Reactor-Pattern Async I/O (`await_io`)
 

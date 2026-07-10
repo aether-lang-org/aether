@@ -21,11 +21,14 @@ int tcp_server_close(TcpServer* s) { (void)s; return 0; }
 int tcp_fd_raw(TcpSocket* s) { (void)s; return -1; }
 int tcp_server_fd_raw(TcpServer* s) { (void)s; return -1; }
 TcpSocket* tcp_socket_from_fd_owned(int fd) { (void)fd; return NULL; }
+int tcp_poll_raw(TcpSocket* s, int t) { (void)s; (void)t; return -1; }
+int tcp_poll2_raw(TcpSocket* a, TcpSocket* b, int t) { (void)a; (void)b; (void)t; return -1; }
 #else
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>   /* snprintf (getaddrinfo port string) */
+#include <errno.h>   /* EAGAIN/EWOULDBLOCK: idle-peer vs. closed-peer recv */
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -41,7 +44,23 @@ TcpSocket* tcp_socket_from_fd_owned(int fd) { (void)fd; return NULL; }
     #include <netdb.h>
     #include <unistd.h>
     #include <arpa/inet.h>
+    #include <poll.h>
 #endif
+
+/* recv returned <= 0: distinguish "peer idle, socket still alive"
+ * (SO_RCVTIMEO fired, or a nonblocking socket with nothing buffered) from
+ * "peer closed / hard error". A 30 s quiet window on a long-lived tunnel is
+ * normal and must NOT tear the connection down — see issue #1092. Returns 1
+ * for would-block/timeout/interrupt, 0 for a genuine close-or-error. Only
+ * meaningful when `received < 0`; an orderly FIN is received == 0. */
+static int net_recv_wouldblock(void) {
+#ifdef _WIN32
+    int err = WSAGetLastError();
+    return err == WSAEWOULDBLOCK || err == WSAETIMEDOUT;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+#endif
+}
 
 struct TcpSocket {
     int fd;
@@ -157,7 +176,15 @@ char* tcp_receive_raw(TcpSocket* sock, int max_bytes) {
 
     if (received <= 0) {
         aether_caps_free(buffer, (size_t)max_bytes + 1);
-        sock->connected = 0;
+        /* Idle peer (recv-timeout / would-block) is not a close: leave the
+         * socket connected so the caller can retry (#1092). Only a genuine
+         * FIN (received == 0) or hard error marks it dead. This text path
+         * still collapses both to NULL — callers needing to tell idle from
+         * closed must use tcp_receive_n_raw, whose "timeout" sentinel is
+         * distinct. */
+        if (!(received < 0 && net_recv_wouldblock())) {
+            sock->connected = 0;
+        }
         return NULL;
     }
 
@@ -184,7 +211,17 @@ TcpReceiveResult tcp_receive_n_raw(TcpSocket* sock, int max_bytes) {
     int received = recv(sock->fd, buffer, max_bytes, 0);
     if (received <= 0) {
         aether_caps_free(buffer, (size_t)max_bytes);
-        sock->connected = 0;
+        /* Split the failure branch (#1092): a would-block / recv-timeout means
+         * "peer idle, try again" — return the distinct "timeout" sentinel and
+         * KEEP the socket connected. Only an orderly FIN (received == 0) or a
+         * hard error is a real close that marks the socket dead. Collapsing
+         * these (the old behaviour) tore down full-duplex tunnels the first
+         * time either direction went quiet for 30 s. */
+        if (received < 0 && net_recv_wouldblock()) {
+            out._2 = "timeout";
+        } else {
+            sock->connected = 0;
+        }
         return out;
     }
 
@@ -312,6 +349,76 @@ TcpSocket* tcp_socket_from_fd_owned(int fd) {
     sock->fd = fd;
     sock->connected = 1;
     return sock;
+}
+
+/* Readiness primitives (#1092). A full-duplex relay must wait on both
+ * directions at once and service whichever becomes readable; blocking
+ * read_n from one thread of control cannot express that. These wrap
+ * poll(2) directly — the smallest surface that unblocks a CONNECT-tunnel
+ * byte pump without entangling std.tcp with the scheduler's actor poller.
+ *
+ * timeout_ms: -1 blocks indefinitely, 0 polls, >0 waits that many ms.
+ * On Windows, WSAPoll has the same shape for connected TCP sockets. */
+#ifdef _WIN32
+    #define AE_POLLFD  WSAPOLLFD
+    #define ae_poll    WSAPoll
+    #define ae_nfds_t  ULONG
+#else
+    #define AE_POLLFD  struct pollfd
+    #define ae_poll    poll
+    #define ae_nfds_t  nfds_t
+#endif
+
+/* Wait until a single socket is readable. Returns 1 if readable (data or
+ * EOF pending — a following recv distinguishes them), 0 on timeout, -1 on
+ * a null/closed handle or poll error. Does NOT read and does NOT alter the
+ * socket's connected flag. */
+int tcp_poll_raw(TcpSocket* sock, int timeout_ms) {
+    if (!sock || !sock->connected) return -1;
+    AE_POLLFD pfd;
+    pfd.fd = sock->fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    int rc = ae_poll(&pfd, (ae_nfds_t)1, timeout_ms);
+    if (rc < 0) {
+        if (net_recv_wouldblock()) return 0;   /* EINTR: treat as no-event */
+        return -1;
+    }
+    if (rc == 0) return 0;                      /* timeout */
+    return (pfd.revents & (POLLIN | POLLHUP | POLLERR)) ? 1 : 0;
+}
+
+/* Wait until either of two sockets is readable — the relay primitive.
+ * Returns a bitmask: bit 0 (1) = `a` readable, bit 1 (2) = `b` readable
+ * (both bits may be set). 0 on timeout. -1 if both handles are
+ * null/closed or on a poll error. A null/closed handle on one side is
+ * simply not watched, so a half-open relay still waits on the live side. */
+int tcp_poll2_raw(TcpSocket* a, TcpSocket* b, int timeout_ms) {
+    AE_POLLFD pfds[2];
+    int idx_a = -1, idx_b = -1;
+    ae_nfds_t n = 0;
+    if (a && a->connected) {
+        pfds[n].fd = a->fd; pfds[n].events = POLLIN; pfds[n].revents = 0;
+        idx_a = (int)n; n++;
+    }
+    if (b && b->connected) {
+        pfds[n].fd = b->fd; pfds[n].events = POLLIN; pfds[n].revents = 0;
+        idx_b = (int)n; n++;
+    }
+    if (n == 0) return -1;
+
+    int rc = ae_poll(pfds, n, timeout_ms);
+    if (rc < 0) {
+        if (net_recv_wouldblock()) return 0;   /* EINTR: caller re-polls */
+        return -1;
+    }
+    if (rc == 0) return 0;                      /* timeout */
+
+    int ready = 0;
+    const short mask = POLLIN | POLLHUP | POLLERR;
+    if (idx_a >= 0 && (pfds[idx_a].revents & mask)) ready |= 1;
+    if (idx_b >= 0 && (pfds[idx_b].revents & mask)) ready |= 2;
+    return ready;
 }
 
 #endif // AETHER_HAS_NETWORKING

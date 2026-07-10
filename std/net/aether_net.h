@@ -34,4 +34,16 @@ int tcp_server_fd_raw(TcpServer* server);
 // Ownership transfers to the returned TcpSocket; tcp_close closes it.
 TcpSocket* tcp_socket_from_fd_owned(int fd);
 
+// Readiness primitives for full-duplex relaying (#1092). Wrap poll(2);
+// neither reads nor mutates the socket's connected flag.
+//
+// tcp_poll_raw:  1 = readable (data or EOF pending), 0 = timeout,
+//                -1 = null/closed handle or poll error. timeout_ms:
+//                -1 blocks, 0 polls, >0 waits that many milliseconds.
+// tcp_poll2_raw: wait on two sockets at once; returns a bitmask
+//                (1 = a readable, 2 = b readable, 3 = both), 0 on
+//                timeout, -1 if both are null/closed or on poll error.
+int tcp_poll_raw(TcpSocket* sock, int timeout_ms);
+int tcp_poll2_raw(TcpSocket* a, TcpSocket* b, int timeout_ms);
+
 #endif

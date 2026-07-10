@@ -10,7 +10,7 @@ exports (
     tcp_connect_raw, tcp_send_raw, tcp_send_n_raw,
     tcp_receive_raw, tcp_receive_n_raw, tcp_close,
     tcp_listen_raw, tcp_accept_raw, tcp_server_close,
-    tcp_fd_raw, tcp_server_fd_raw,
+    tcp_fd_raw, tcp_server_fd_raw, tcp_poll_raw, tcp_poll2_raw,
     http_get_raw, http_post_raw, http_put_raw, http_delete_raw,
     http_response_free, http_response_status_code,
     http_response_body_str, http_response_headers_str,
@@ -53,6 +53,12 @@ extern tcp_server_close(server: ptr) -> int
 // capsicum.enter). Owned by the handle — never close() one directly.
 extern tcp_fd_raw(sock: ptr) -> int
 extern tcp_server_fd_raw(server: ptr) -> int
+
+// Readiness primitives for full-duplex relaying (#1092). poll2 waits on
+// two sockets at once and returns a bitmask (1 = a, 2 = b, 3 = both),
+// 0 on timeout, -1 on error. Neither reads nor closes the sockets.
+extern tcp_poll_raw(sock: ptr, timeout_ms: int) -> int
+extern tcp_poll2_raw(a: ptr, b: ptr, timeout_ms: int) -> int
 
 // HTTP Client — raw ptr-returning externs (escape hatch).
 // Most callers should use the Go-style wrappers in std.http which provide
