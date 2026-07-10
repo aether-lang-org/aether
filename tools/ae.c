@@ -8,7 +8,7 @@
 //   ae test [file|dir]      Run tests
 //   ae add <package>        Add a dependency
 //   ae repl                 Start interactive REPL
-//   ae fmt [file]           Format source code
+//   ae fmt [file]           Format source code (planned; not available yet)
 //   ae version              Show version
 //   ae help                 Show help
 
@@ -7636,8 +7636,13 @@ int main(int argc, char** argv) {
         return cmd_init(sub_argc, sub_argv);
     }
     if (strcmp(cmd, "fmt") == 0) {
-        printf("Formatter not yet implemented.\n");
-        return 0;
+        // The source formatter is deliberately deferred until the syntax
+        // stabilizes (tracked in docs/next-steps.md). Report that honestly and
+        // fail, rather than printing a message and exiting 0 as if it ran.
+        fprintf(stderr,
+            "ae fmt: the source formatter is not available yet; it is deferred "
+            "until the syntax stabilizes (see docs/next-steps.md).\n");
+        return 1;
     }
     // All other commands need the toolchain
     discover_toolchain();

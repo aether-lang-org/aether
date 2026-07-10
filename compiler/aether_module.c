@@ -2619,9 +2619,9 @@ void module_merge_into_program(ASTNode* program) {
 //      program AST and walk it the same way. Repeat until fixed point.
 //   4. Sweep: drop any AST_FUNCTION_DEFINITION / AST_BUILDER_FUNCTION
 //      whose `is_imported` flag is set and whose name is NOT in the
-//      reachable set. Constants stay (they're cheap, and pruning them
+//      reachable set. Constants stay: they're cheap, and pruning them
 //      would need an additional reachability pass keyed on identifier
-//      references — TODO follow-up if measurement shows it matters).
+//      references, which isn't worth it for the size of a constant.
 //
 // Qualified call sites carry dotted names (`os.argv0`); codegen rewrites
 // dot-to-underscore at emission. We normalise the same way when adding

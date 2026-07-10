@@ -2401,10 +2401,10 @@ int typecheck_program(ASTNode* program) {
 
     // Source-location intrinsics (#265). At codegen time these expand
     // to the AST node's line, source-file path, and enclosing C
-    // function name — useful for assertions, panic messages, and log
-    // formatters. Caller-site capture via default arguments is not
-    // yet wired up (deferred to a follow-up); for now callers pass
-    // them explicitly: `my_log(msg, __LINE__, __FILE__, __func__)`.
+    // function name, useful for assertions, panic messages, and log
+    // formatters. They capture the location where they are written, so
+    // callers that want the call site pass them explicitly:
+    // `my_log(msg, __LINE__, __FILE__, __func__)`.
     add_symbol(global_table, "__LINE__", create_type(TYPE_INT),    0, 1, 0);
     add_symbol(global_table, "__FILE__", create_type(TYPE_STRING), 0, 1, 0);
     add_symbol(global_table, "__func__", create_type(TYPE_STRING), 0, 1, 0);
@@ -5134,21 +5134,22 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
         }
         
         case AST_SEND_STATEMENT: {
-            if (stmt->child_count >= 2) {
-                ASTNode* actor_ref = stmt->children[0];
-                ASTNode* message = stmt->children[1];
-
-                Type* actor_type = infer_type(actor_ref, table);
-                if (actor_type && actor_type->kind != TYPE_ACTOR_REF) {
-                    free_type(actor_type);
-                    type_error("First argument to send must be an actor reference", actor_ref->line, actor_ref->column);
-                    return 0;
-                }
-                free_type(actor_type);
-
-                typecheck_expression(message, table);
+            // Generic `send(actor, message)` was an early actor-messaging form
+            // whose codegen path was never completed; the fire-and-forget
+            // operator `actor ! Message { ... }` supersedes it. Reject it here
+            // with a pointer to the supported syntax instead of letting it fall
+            // through to a broken C emission. (The `send` keyword stays reserved
+            // so it still cannot be used as an ordinary identifier.) The move
+            // checker's third pass still runs, so an Isolated[T] used twice via
+            // send is reported with its own diagnostic as well.
+            int line = stmt->line, col = stmt->column;
+            if (stmt->child_count > 0 && stmt->children[0]) {
+                line = stmt->children[0]->line;
+                col = stmt->children[0]->column;
             }
-            return 1;
+            type_error("`send(actor, message)` is not supported; use `actor ! Message { ... }`",
+                       line, col);
+            return 0;
         }
 
         case AST_SEND_FIRE_FORGET: {
@@ -5190,10 +5191,17 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
         }
 
         case AST_SPAWN_ACTOR_STATEMENT: {
-            if (stmt->child_count > 0) {
-                typecheck_expression(stmt->children[0], table);
+            // `spawn_actor(Type)` was an early form whose codegen was never
+            // completed; `spawn(ActorType())` supersedes it. Reject with a
+            // pointer to the supported syntax.
+            int line = stmt->line, col = stmt->column;
+            if (stmt->child_count > 0 && stmt->children[0]) {
+                line = stmt->children[0]->line;
+                col = stmt->children[0]->column;
             }
-            return 1;
+            type_error("`spawn_actor(Type)` is not supported; use `spawn(ActorType())`",
+                       line, col);
+            return 0;
         }
         
         case AST_MATCH_STATEMENT: {

@@ -840,8 +840,9 @@ char* os_which(const char* name) {
 // to platforms without a POSIX shell.
 //
 // Implementation: POSIX uses fork + execvp + waitpid, with execve when
-// an explicit env is provided. The Windows backend is a TODO — for now
-// it just returns -1 / NULL on _WIN32 builds.
+// an explicit env is provided. Windows uses CreateProcessW (see win_launch
+// below), building an argv-quoted command line and capturing stdout through
+// an inheritable pipe, so the same argv-based contract holds on both.
 
 #ifndef _WIN32
 

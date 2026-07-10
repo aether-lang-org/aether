@@ -5031,8 +5031,10 @@ ASTNode* parse_pattern(Parser* parser) {
             // pattern, with annotation="has_default" so consumers
             // (typechecker, codegen) can distinguish it from
             // pattern-children used by struct/list patterns elsewhere.
-            // Default expressions that reference other parameters are
-            // not yet supported; document with a v1 restriction.
+            // A default expression is evaluated in the enclosing scope, with
+            // the other parameters NOT in scope, so a default that names
+            // another parameter resolves as an undefined variable (a clear
+            // E0300 at type-check) rather than that parameter's value.
             if (match_token(parser, TOKEN_ASSIGN)) {
                 ASTNode* default_expr = parse_expression(parser);
                 if (default_expr) {
