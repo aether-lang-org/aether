@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`ae fmt`, a source formatter.** Rewrites Aether source into a canonical
+  layout: 4-space structural indentation, normalized spacing around operators
+  and punctuation, at most one blank line between constructs, no trailing
+  whitespace, and a single final newline. `ae fmt` reads stdin and writes
+  stdout; `ae fmt <path>...` formats files (recursing directories) in place;
+  `ae fmt --check` writes nothing and exits non-zero if anything is unformatted
+  (for CI). It is whitespace-only and comment-preserving: the significant-token
+  sequence is never reordered, dropped, or fused, and string literals, `${...}`
+  interpolation, heredocs (whose body indentation is significant), backtick raw
+  identifiers, and comments are copied verbatim, so it cannot change program
+  behavior. User line breaks are preserved (no expression reflow yet). Verified
+  semantics-preserving (byte-identical generated C, modulo `#line`) and
+  idempotent across every program in `examples/` and `tests/`. See
+  [docs/formatter.md](docs/formatter.md).
+
 ## [0.379.0]
 
 ### Added

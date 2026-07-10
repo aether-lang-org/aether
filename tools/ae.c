@@ -65,6 +65,7 @@ extern char** environ;
 
 #include "apkg/toml_parser.h"
 #include "ae_help.h"
+#include "ae_fmt.h"
 
 // Version is set by Makefile from VERSION file
 #ifndef AETHER_VERSION
@@ -7313,6 +7314,7 @@ static void print_usage(void) {
     printf("  build [file.ae]      Compile to executable\n");
     printf("  build --target wasm  Compile to WebAssembly (.js + .wasm)\n");
     printf("  check [file.ae]      Type-check without compiling\n");
+    printf("  fmt [--check] [path] Format source (stdin->stdout, or files/dirs in place)\n");
     printf("  inspect [file.ae]    Show what a script declares (imports, capabilities, exports, decls)\n");
     printf("  test [file|dir]      Discover and run tests\n");
     printf("  add <package>        Add a dependency\n");
@@ -7565,6 +7567,158 @@ static int cmd_lib_info(int argc, char** argv) {
 #endif
 }
 
+// ------------------------------------------------------------- ae fmt -------
+// Read an entire file into a malloc'd NUL-terminated buffer (NULL on error).
+static char* fmt_read_all(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return NULL; }
+    rewind(f);
+    char* buf = (char*)malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[rd] = '\0';
+    return buf;
+}
+
+// Write `content` to `path` atomically via a temp file + rename.
+static int fmt_write_all(const char* path, const char* content) {
+    size_t plen = strlen(path);
+    char* tmp = (char*)malloc(plen + 16);
+    if (!tmp) return -1;
+    snprintf(tmp, plen + 16, "%s.aefmt.tmp", path);
+    FILE* f = fopen(tmp, "wb");
+    if (!f) { free(tmp); return -1; }
+    size_t clen = strlen(content);
+    int ok = (fwrite(content, 1, clen, f) == clen);
+    if (fclose(f) != 0) ok = 0;
+    if (!ok) { remove(tmp); free(tmp); return -1; }
+    remove(path);   // Windows rename won't replace an existing file; no-op risk on POSIX is fine
+    if (rename(tmp, path) != 0) { remove(tmp); free(tmp); return -1; }
+    free(tmp);
+    return 0;
+}
+
+// Format one file. check_mode: detect only, don't write. Returns 1 if changed
+// (or would change), 0 if already formatted, -1 on error.
+static int fmt_one_file(const char* path, int check_mode) {
+    char* src = fmt_read_all(path);
+    if (!src) { fprintf(stderr, "ae fmt: cannot read %s\n", path); return -1; }
+    int changed = 0; const char* err = NULL;
+    char* out = ae_format_source_changed(src, &changed, &err);
+    if (!out) {
+        fprintf(stderr, "ae fmt: %s: %s\n", path, err ? err : "format error");
+        free(src);
+        return -1;
+    }
+    int rc = 0;
+    if (changed) {
+        if (check_mode) { printf("%s\n", path); rc = 1; }
+        else if (fmt_write_all(path, out) != 0) { fprintf(stderr, "ae fmt: cannot write %s\n", path); rc = -1; }
+        else { printf("%s\n", path); rc = 1; }
+    }
+    free(src); free(out);
+    return rc;
+}
+
+static int fmt_has_ae_ext(const char* name) {
+    size_t n = strlen(name);
+    return n > 3 && strcmp(name + n - 3, ".ae") == 0;
+}
+
+// Recurse into a file or directory, formatting every .ae file found. Hidden
+// directories (`.git`, `.aether`, ...) are skipped.
+static void fmt_walk(const char* path, int check_mode, int* n_changed, int* n_err) {
+    struct stat st;
+    if (stat(path, &st) != 0) { fprintf(stderr, "ae fmt: no such path: %s\n", path); (*n_err)++; return; }
+    if (S_ISDIR(st.st_mode)) {
+        DIR* d = opendir(path);
+        if (!d) { fprintf(stderr, "ae fmt: cannot open dir: %s\n", path); (*n_err)++; return; }
+        struct dirent* e;
+        while ((e = readdir(d)) != NULL) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            size_t need = strlen(path) + 1 + strlen(e->d_name) + 1;
+            char* child = (char*)malloc(need);
+            if (!child) continue;
+            snprintf(child, need, "%s/%s", path, e->d_name);
+            struct stat cst;
+            if (stat(child, &cst) == 0) {
+                if (S_ISDIR(cst.st_mode)) {
+                    if (e->d_name[0] != '.') fmt_walk(child, check_mode, n_changed, n_err);
+                } else if (fmt_has_ae_ext(e->d_name)) {
+                    int r = fmt_one_file(child, check_mode);
+                    if (r == 1) (*n_changed)++; else if (r < 0) (*n_err)++;
+                }
+            }
+            free(child);
+        }
+        closedir(d);
+    } else {
+        int r = fmt_one_file(path, check_mode);
+        if (r == 1) (*n_changed)++; else if (r < 0) (*n_err)++;
+    }
+}
+
+static char* fmt_read_stdin(void) {
+    size_t cap = 8192, len = 0;
+    char* buf = (char*)malloc(cap);
+    if (!buf) return NULL;
+    char tmp[8192];
+    size_t n;
+    while ((n = fread(tmp, 1, sizeof(tmp), stdin)) > 0) {
+        if (len + n + 1 > cap) { while (len + n + 1 > cap) cap *= 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return NULL; } buf = nb; }
+        memcpy(buf + len, tmp, n); len += n;
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
+// `ae fmt [--check] [path...]`
+//   No path: read stdin, write formatted source to stdout.
+//   Paths:   format each .ae file (recursing directories) in place.
+//   --check: do not write; list files that would change, exit 1 if any do.
+static int cmd_fmt(int argc, char** argv) {
+    int check_mode = 0;
+    const char** paths = (const char**)malloc(sizeof(char*) * (size_t)(argc > 0 ? argc : 1));
+    if (!paths) { fprintf(stderr, "ae fmt: out of memory\n"); return 2; }
+    int npaths = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--check") == 0 || strcmp(argv[i], "-c") == 0) {
+            check_mode = 1;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("Usage: ae fmt [--check] [path...]\n"
+                   "  Format Aether source. With no path, reads stdin and writes stdout.\n"
+                   "  With paths, formats each .ae file (recursing into directories) in place.\n"
+                   "  --check  Do not write; list files that would change, exit 1 if any do.\n");
+            free(paths);
+            return 0;
+        } else {
+            paths[npaths++] = argv[i];
+        }
+    }
+
+    if (npaths == 0) {
+        char* src = fmt_read_stdin();
+        if (!src) { fprintf(stderr, "ae fmt: cannot read stdin\n"); free(paths); return 2; }
+        const char* err = NULL;
+        char* out = ae_format_source(src, &err);
+        if (!out) { fprintf(stderr, "ae fmt: %s\n", err ? err : "format error"); free(src); free(paths); return 2; }
+        int changed = strcmp(src, out) != 0;
+        if (!check_mode) fputs(out, stdout);
+        free(src); free(out); free(paths);
+        return (check_mode && changed) ? 1 : 0;
+    }
+
+    int n_changed = 0, n_err = 0;
+    for (int i = 0; i < npaths; i++) fmt_walk(paths[i], check_mode, &n_changed, &n_err);
+    free(paths);
+    if (n_err > 0) return 2;
+    return (check_mode && n_changed > 0) ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
 #ifdef _WIN32
     // Set UTF-8 console codepage so Aether programs can print Unicode correctly
@@ -7636,8 +7790,7 @@ int main(int argc, char** argv) {
         return cmd_init(sub_argc, sub_argv);
     }
     if (strcmp(cmd, "fmt") == 0) {
-        printf("Formatter not yet implemented.\n");
-        return 0;
+        return cmd_fmt(sub_argc, sub_argv);
     }
     // All other commands need the toolchain
     discover_toolchain();
