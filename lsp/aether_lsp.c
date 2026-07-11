@@ -13,7 +13,7 @@ static char* json_extract_string(const char* json, const char* key) {
     if (!json || !key) return NULL;
     char search[128];
     snprintf(search, sizeof(search), "\"%s\":", key);
-    char* start = strstr(json, search);
+    const char* start = strstr(json, search);
     if (!start) return NULL;
     start += strlen(search);
     while (*start == ' ' || *start == '\t') start++;

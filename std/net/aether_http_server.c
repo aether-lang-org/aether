@@ -1292,7 +1292,7 @@ HttpRequest* http_parse_request_n(const char* buf, size_t len) {
     HttpRequest* req = (HttpRequest*)calloc(1, sizeof(HttpRequest));
 
     // Parse request line: METHOD /path HTTP/1.1
-    char* line_end = strstr(raw_request, "\r\n");
+    const char* line_end = strstr(raw_request, "\r\n");
     if (!line_end) {
         free(req);
         return NULL;
