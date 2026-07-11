@@ -1,6 +1,6 @@
 // #1107: TLS server for the set_cafile (custom-CA pin) regression.
 //
-// Serves HTTPS on 18119 with a self-signed cert whose SAN includes
+// Serves HTTPS on 18119 with a CA-signed leaf cert whose SAN includes
 // IP:127.0.0.1 (so a pinning client can pass hostname verification when
 // connecting by IP). The shell runner generates the cert + a DIFFERENT
 // "wrong" CA and drives the client.

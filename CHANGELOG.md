@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`std.http.client.set_cafile` now actually pins the CA as the trust anchor**
+  (#1110, follow-up to #1107). The CA loaded fine (`set_cafile` returned `""`)
+  but `send_request` with verification on could still fail
+  `certificate verify failed` against a server whose chain the couriered CA
+  verifies cleanly via `openssl -CAfile` — because the pin was wired with a
+  per-`SSL` `SSL_set1_verify_cert_store`, which is not reliably the *trust*
+  store consulted during verification on every TLS library (it worked on
+  OpenSSL 3.x but not universally). Reworked to build a **dedicated per-request
+  `SSL_CTX`** whose trust store is loaded via `SSL_CTX_load_verify_locations` —
+  the portable, version-agnostic idiom that mirrors `openssl s_client -CAfile`
+  and behaves identically across OpenSSL 1.1/3.x and LibreSSL. Also fixed
+  hostname verification for IP-literal hosts (e.g. `https://192.168.0.204:8006`)
+  to use `X509_VERIFY_PARAM_set1_ip_asc` rather than `set1_host`, so the IP SAN
+  is checked correctly on older OpenSSL that didn't auto-detect IP literals.
+  A pinned CA that doesn't cover the presented cert still fails the handshake
+  (fails closed). The regression test now uses a real CA-signs-a-separate-leaf
+  chain (the Proxmox-VE topology) rather than a self-signed cert, so it actually
+  exercises the trust-anchor path.
+
 ## [0.383.0]
 
 ### Added

@@ -1,13 +1,15 @@
 // #1107: client-side assertions for set_cafile (custom-CA pin).
 //
-// The server presents a self-signed cert (its own CA) with SAN IP:127.0.0.1.
-// We connect by IP to https://127.0.0.1:18119/ three ways:
+// The server presents a leaf cert SIGNED BY a private root CA, with SAN
+// IP:127.0.0.1 (the Proxmox-VE topology). We connect by IP to
+// https://127.0.0.1:18119/ three ways:
 //
-//   1. pin the CORRECT CA  -> verifies -> status 200, no error   (the point)
-//   2. pin a WRONG CA      -> fails closed -> transport error    (pin enforced)
-//   3. no cafile (default) -> system store rejects self-signed   (unchanged)
+//   1. pin the correct ROOT CA -> verifies -> status 200, no error  (the point)
+//   2. pin a WRONG CA          -> fails closed -> transport error   (pin enforced)
+//   3. no cafile (default)     -> system store rejects the chain    (unchanged)
 //
-// Env: GOOD_CA = the server's own cert PEM, BAD_CA = an unrelated self-signed.
+// Env: GOOD_CA = the root CA PEM (NOT the leaf — the pin must be the trust
+// anchor, #1110), BAD_CA = an unrelated root CA.
 
 import std.http.client
 import std.os
@@ -57,9 +59,9 @@ main() {
     s2, e2 = do_get(bad_ca)
     if e2 == "" { fail("pinned BAD_CA should FAIL verification, but connected (status ${s2}) — pin not enforced") }
 
-    // 3. No cafile -> system store rejects the self-signed cert.
+    // 3. No cafile -> system store rejects the private (untrusted) chain.
     s3, e3 = do_get("")
-    if e3 == "" { fail("no cafile: self-signed cert should be rejected by system store, but connected (status ${s3})") }
+    if e3 == "" { fail("no cafile: private CA chain should be rejected by system store, but connected (status ${s3})") }
 
     println("PASS set_cafile: correct CA verifies, wrong CA fails closed, default rejects")
     exit(0)

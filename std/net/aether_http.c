@@ -268,6 +268,12 @@ typedef struct {
     int sockfd;
 #ifdef AETHER_HAS_OPENSSL
     SSL* ssl;
+    /* A per-request SSL_CTX, owned by this transport, or NULL when the
+     * shared process-wide CTX was used. Non-NULL only for the set_cafile
+     * pin path (#1107/#1110), which needs its own CTX whose trust store is
+     * loaded from the couriered CA. Freed in transport_close AFTER the SSL
+     * that references it. */
+    SSL_CTX* owned_ctx;
 #endif
 } Transport;
 
@@ -291,6 +297,11 @@ static void transport_close(Transport* t) {
         SSL_shutdown(t->ssl);
         SSL_free(t->ssl);
         t->ssl = NULL;
+    }
+    /* Free the per-request CTX (set_cafile pin) AFTER the SSL that used it. */
+    if (t->owned_ctx) {
+        SSL_CTX_free(t->owned_ctx);
+        t->owned_ctx = NULL;
     }
 #endif
     if (t->sockfd >= 0) {
@@ -1187,9 +1198,40 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
 
 #ifdef AETHER_HAS_OPENSSL
     t.ssl = NULL;
+    t.owned_ctx = NULL;
 
     if (use_tls) {
-        SSL_CTX* ctx = get_ssl_ctx();
+        /* Custom-CA pin (set_cafile): build a DEDICATED SSL_CTX whose trust
+         * store is loaded from the couriered CA, instead of the shared
+         * system-store CTX. Loading the CA onto the CTX's own verify store via
+         * SSL_CTX_load_verify_locations is the portable, version-agnostic trust
+         * idiom — it's exactly what `openssl s_client -CAfile` does, and it
+         * verifies identically across OpenSSL 1.1/3.x and LibreSSL. (The prior
+         * per-SSL SSL_set1_verify_cert_store approach verified on OpenSSL 3.x
+         * but did not reliably become the *trust* store on every TLS library,
+         * so a couriered CA that `openssl -CAfile` accepted still failed
+         * `certificate verify failed` on some builds — #1110.) The per-request
+         * CTX is owned by the transport and freed in transport_close after the
+         * SSL. When no cafile is set we keep the shared process-wide CTX. */
+        SSL_CTX* ctx;
+        if (req->cafile) {
+            ctx = SSL_CTX_new(TLS_client_method());
+            if (ctx) {
+                SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+                SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+                if (SSL_CTX_load_verify_locations(ctx, req->cafile, NULL) != 1) {
+                    SSL_CTX_free(ctx);
+                    close(sockfd);
+                    char* msg = ssl_err_string("custom CA (set_cafile) load failed");
+                    response->error = string_new(msg ? msg : "custom CA load failed");
+                    free(msg);
+                    return response;
+                }
+            }
+            t.owned_ctx = ctx;   /* transport frees it (NULL is a no-op) */
+        } else {
+            ctx = get_ssl_ctx();
+        }
         if (!ctx) {
             close(sockfd);
             char* msg = ssl_err_string("TLS context init failed");
@@ -1200,6 +1242,7 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
 
         SSL* ssl = SSL_new(ctx);
         if (!ssl) {
+            if (t.owned_ctx) { SSL_CTX_free(t.owned_ctx); t.owned_ctx = NULL; }
             close(sockfd);
             char* msg = ssl_err_string("SSL_new failed");
             response->error = string_new(msg ? msg : "SSL_new failed");
@@ -1218,35 +1261,26 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
             // still verifies. Mirrors curl -k / wget --no-check-certificate.
             SSL_set_verify(ssl, SSL_VERIFY_NONE, NULL);
         } else {
-            // Verify the cert's CN/SAN matches the hostname we connected to.
+            // Verify the cert's CN/SAN matches the host we connected to. For an
+            // IP literal (e.g. a Proxmox API at https://192.168.0.204:8006),
+            // set1_ip_asc pins the IP SAN; for a DNS name, set1_host pins the
+            // DNS SAN/CN. Using the IP-specific call for IP literals is correct
+            // across OpenSSL versions (older set1_host did not auto-detect IPs).
+            // The trust anchor for THIS connection is either the shared system
+            // store or, when set_cafile was called, the couriered CA loaded onto
+            // the per-request CTX above (#1107/#1110) — peer + hostname
+            // verification stay ON either way, so a pinned request is strictly
+            // stronger than set_insecure and fails closed if the CA doesn't
+            // cover the presented cert.
             X509_VERIFY_PARAM* vpm = SSL_get0_param(ssl);
             X509_VERIFY_PARAM_set_hostflags(vpm, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-            X509_VERIFY_PARAM_set1_host(vpm, host, 0);
-
-            // Per-request custom CA pin (set_cafile): verify the peer against
-            // THIS PEM bundle instead of the system store, for THIS connection
-            // only. Peer + hostname verification (set just above) stay ON — this
-            // is strictly stronger than set_insecure. A per-SSL X509_STORE keeps
-            // the shared SSL_CTX (and every other request) on the system store.
-            // On any failure we leave the connection on the default store rather
-            // than silently proceeding unverified, and surface it as a handshake
-            // error below (the couriered CA won't match, so SSL_connect fails
-            // closed — never open). (#1107)
-            if (req->cafile) {
-                X509_STORE* store = X509_STORE_new();
-                if (!store ||
-                    X509_STORE_load_locations(store, req->cafile, NULL) != 1 ||
-                    SSL_set1_verify_cert_store(ssl, store) != 1) {
-                    if (store) X509_STORE_free(store);
-                    SSL_free(ssl);
-                    close(sockfd);
-                    char* msg = ssl_err_string("custom CA (set_cafile) load failed");
-                    response->error = string_new(msg ? msg : "custom CA load failed");
-                    free(msg);
-                    return response;
-                }
-                // SSL_set1_verify_cert_store took its own reference; drop ours.
-                X509_STORE_free(store);
+            struct in_addr in4;
+            struct in6_addr in6;
+            if (inet_pton(AF_INET, host, &in4) == 1 ||
+                inet_pton(AF_INET6, host, &in6) == 1) {
+                X509_VERIFY_PARAM_set1_ip_asc(vpm, host);
+            } else {
+                X509_VERIFY_PARAM_set1_host(vpm, host, 0);
             }
         }
 
@@ -1256,6 +1290,7 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
             int ssl_err = SSL_get_error(ssl, connect_result);
             (void)ssl_err;
             SSL_free(ssl);
+            if (t.owned_ctx) { SSL_CTX_free(t.owned_ctx); t.owned_ctx = NULL; }
             close(sockfd);
             char* msg = ssl_err_string("TLS handshake failed");
             response->error = string_new(msg ? msg : "TLS handshake failed");
