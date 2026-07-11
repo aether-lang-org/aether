@@ -44,4 +44,11 @@ long long aether_bits_urem64(long long a, long long b);
 /* Unsigned compare of two 64-bit values. Returns -1 / 0 / 1. */
 int aether_bits_ucmp64(long long a, long long b);
 
+/* Wrapping (defined modulo-2^64) add / multiply. Carry the low 64 bits
+ * like C's `uint64_t`, computed in `unsigned long long` so the overflow
+ * is defined rather than the undefined behaviour a native signed `long`
+ * multiply would invoke. */
+long long aether_bits_wrapping_add64(long long a, long long b);
+long long aether_bits_wrapping_mul64(long long a, long long b);
+
 #endif

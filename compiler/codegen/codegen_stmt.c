@@ -6820,19 +6820,17 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             break;
 
         case AST_SEND_STATEMENT:
-            // Note: Generic send() syntax not yet implemented
-            // Use type-specific send_ActorName() functions generated for each actor
-            fprintf(stderr, "Error: Generic send() not supported. Use send_ActorName() functions.\n");
-            fprintf(gen->output, "/* ERROR: Generic send() not supported - use type-specific send functions */\n");
-            break;
-            
         case AST_SPAWN_ACTOR_STATEMENT:
-            // Note: Generic spawn_actor() syntax not yet implemented  
-            // Use type-specific spawn_ActorName() functions generated for each actor
-            fprintf(stderr, "Error: Generic spawn_actor() not supported. Use spawn_ActorName() functions.\n");
-            fprintf(gen->output, "/* ERROR: Generic spawn_actor() not supported - use type-specific spawn functions */\n");
+            // Unreachable in a program that type-checks: generic send() /
+            // spawn_actor() are rejected during type checking with a diagnostic
+            // pointing at `actor ! Message { ... }` and `spawn(ActorType())`.
+            // Kept as a defensive marker so a future path that reaches codegen
+            // with one of these nodes fails the C compile loudly rather than
+            // silently emitting nothing.
+            fprintf(gen->output,
+                    "#error internal: generic send()/spawn_actor() reached codegen\n");
             break;
-            
+
         case AST_BLOCK: {
             // Save declared_var_count before the block. Variables declared
             // inside the block live in its C `{ ... }` scope and must not

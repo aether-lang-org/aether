@@ -133,3 +133,21 @@ int aether_bits_ucmp64(long long a, long long b) {
     if (ua > ub) return 1;
     return 0;
 }
+
+/* ---- Wrapping (defined modulo-2^64) arithmetic ----
+ * Add / multiply that carry the low 64 bits, matching C's `uint64_t`
+ * semantics. Aether's `long` is signed `long long`, and signed overflow
+ * is undefined behaviour in C (a `-fsanitize=undefined` build traps on
+ * it), so a native `a * b` that overflows is UB even though 2's-complement
+ * wrap "happens to work" at -O2. Computing in `unsigned long long` makes
+ * the wrap defined and optimiser-proof. Used by ports of C tools that
+ * rely on defined unsigned overflow as part of an on-disk format (e.g.
+ * F3's LCG `random_number * 4294967311ULL + 17`). */
+
+long long aether_bits_wrapping_add64(long long a, long long b) {
+    return (long long)((unsigned long long)a + (unsigned long long)b);
+}
+
+long long aether_bits_wrapping_mul64(long long a, long long b) {
+    return (long long)((unsigned long long)a * (unsigned long long)b);
+}

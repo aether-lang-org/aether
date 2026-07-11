@@ -28,6 +28,39 @@ next version number before tagging the release.
   idempotent across every program in `examples/` and `tests/`. See
   [docs/formatter.md](docs/formatter.md).
 
+## [0.381.0]
+
+### Added
+
+- **`std.bits.wrapping_add64` / `wrapping_mul64`** — defined modulo-2^64 add and
+  multiply. Aether's `long` is signed `int64_t` and native `a * b` overflow is
+  undefined behaviour (a `-fsanitize=undefined` build traps on it) even though
+  2's-complement wrap "happens to work" at `-O2`; these compute in the unsigned
+  domain so the wrap is defined and optimiser-proof. They join the existing
+  unsigned 64-bit helpers (`udiv64` / `urem64` / `ucmp64`). Motivated by ports
+  of C tools whose on-disk / wire format depends on defined unsigned overflow —
+  e.g. F3's fill/verify LCG `x = x * 4294967311 + 17`.
+
+## [0.380.0]
+
+### Fixed
+
+- **Selective import of a stdlib module no longer suppresses instantiation of
+  wrappers used transitively by an imported library** (#1097). When the
+  top-level unit did `import std.tcp (connect)` — a *selective* import that
+  omitted a tuple wrapper (`poll2` / `read_n` / `write_n`) — and an imported
+  library used that wrapper internally, the omitted wrapper was never
+  code-generated: its call site degraded to an undefined `tcp_poll2` and the
+  build failed at the *library's* source location. The cross-module merge's
+  transitive-dependency pass skipped any module that was also a direct import,
+  on the assumption the main loop had fully merged it; but a *selective* direct
+  import merges only its named subset. The transitive pass now recognises a
+  module that is both a direct import and a transitive dependency, and merges
+  the remaining exports the library needs (dedup guards keep the already-merged
+  subset a no-op). This makes a partial `std.tcp` import behave like the
+  no-import case, which already merged the full surface transitively. The
+  bare-name selective restriction on user code is unchanged.
+
 ## [0.379.0]
 
 ### Added

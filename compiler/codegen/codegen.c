@@ -403,7 +403,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
     gen->reply_type_capacity = 0;
-    // Typed fn-pointer locals (issue: TODO #5)
+    // Typed fn-pointer locals
     gen->fnptr_locals = NULL;
     gen->fnptr_local_count = 0;
     gen->fnptr_local_capacity = 0;
