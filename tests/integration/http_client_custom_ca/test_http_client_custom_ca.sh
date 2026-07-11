@@ -1,11 +1,11 @@
 #!/bin/sh
-# Regression: #1107 — std.http.client per-request custom CA pin (set_cafile).
-#
-# Starts an Aether TLS server with a self-signed cert (SAN IP:127.0.0.1), then
-# runs an Aether client that hits it three ways: pin the correct CA (must
-# verify -> 200), pin a WRONG CA (must fail closed), and no cafile (system store
-# must reject the self-signed). This is the "verify, but against THIS cert"
-# path — strictly stronger than set_insecure. See client.ae.
+# Regression: #1107 (set_cafile) + #1110 (the pinned CA must be the TRUST
+# anchor, not merely loaded). Starts an Aether TLS server whose leaf cert is
+# signed by a private root CA (SAN IP:127.0.0.1) — the Proxmox-VE topology —
+# then runs an Aether client that hits it three ways: pin the correct ROOT CA
+# (must verify -> 200), pin a WRONG CA (must fail closed), and no cafile (system
+# store must reject the private chain). This is the "verify, but against THIS
+# cert" path — strictly stronger than set_insecure. See client.ae.
 #
 # Skips cleanly when openssl is missing or the build has no OpenSSL.
 
@@ -41,29 +41,42 @@ trap cleanup EXIT
 # server child, so the trap can't fully reap it; a distinct port keeps a
 # lingering server from starving the next test.
 
-CERT="$TMPDIR/cert.pem"      # server's own cert == the CA we pin (GOOD_CA)
-KEY="$TMPDIR/key.pem"
-BADCA="$TMPDIR/badca.pem"    # an unrelated self-signed cert (WRONG CA)
+# Real CA-signs-a-separate-leaf topology, mirroring a Proxmox VE endpoint
+# (private root CA `pve-root-ca.pem` that signs a distinct server cert). This
+# is the case that exposed #1110: the server presents LEAF, the client pins the
+# ROOT CA — so verification must build LEAF -> CA and trust CA. A self-signed
+# cert (which is its own anchor) would NOT have caught the bug; a real chain
+# does, because the pinned CA has to be the trust anchor, not just present.
+CA="$TMPDIR/ca.pem"          # root CA — this is what the client pins (GOOD_CA)
+CAKEY="$TMPDIR/ca.key"
+CERT="$TMPDIR/leaf.pem"      # server's leaf cert, SIGNED BY the CA
+KEY="$TMPDIR/leaf.key"
+BADCA="$TMPDIR/badca.pem"    # an unrelated CA (WRONG CA the client also tries)
 
-# Server cert with SAN IP:127.0.0.1, so the pinning client passes hostname
-# verification connecting by IP (peer + hostname verification stay ON with
-# set_cafile — that's the whole point vs set_insecure).
-if ! openssl req -x509 -newkey rsa:2048 \
-        -keyout "$KEY" -out "$CERT" -days 1 -nodes \
-        -subj "/CN=127.0.0.1" \
-        -addext "subjectAltName=IP:127.0.0.1" 2>"$TMPDIR/openssl.err"; then
-    echo "  [SKIP] openssl req (server cert) failed:"
-    head -5 "$TMPDIR/openssl.err"
-    exit 0
+# 1. root CA
+if ! openssl req -x509 -newkey rsa:2048 -keyout "$CAKEY" -out "$CA" -days 1 \
+        -nodes -subj "/CN=Aether Test Root CA" 2>"$TMPDIR/o1.err"; then
+    echo "  [SKIP] openssl (root CA) failed:"; head -5 "$TMPDIR/o1.err"; exit 0
+fi
+# 2. leaf key + CSR, then sign with the CA, SAN IP:127.0.0.1 (server binds IP).
+if ! openssl req -newkey rsa:2048 -keyout "$KEY" -out "$TMPDIR/leaf.csr" \
+        -nodes -subj "/CN=127.0.0.1" 2>"$TMPDIR/o2.err" \
+   || ! printf 'subjectAltName=IP:127.0.0.1\n' > "$TMPDIR/ext.cnf" \
+   || ! openssl x509 -req -in "$TMPDIR/leaf.csr" -CA "$CA" -CAkey "$CAKEY" \
+        -CAcreateserial -out "$CERT" -days 1 -extfile "$TMPDIR/ext.cnf" \
+        2>"$TMPDIR/o3.err"; then
+    echo "  [SKIP] openssl (sign leaf) failed:"; head -5 "$TMPDIR/o3.err"; exit 0
+fi
+# 3. an unrelated root CA — the "wrong CA" the client pins to prove fail-closed.
+if ! openssl req -x509 -newkey rsa:2048 -keyout "$TMPDIR/badkey.pem" \
+        -out "$BADCA" -days 1 -nodes -subj "/CN=Wrong CA" 2>"$TMPDIR/o4.err"; then
+    echo "  [SKIP] openssl (bad CA) failed:"; head -5 "$TMPDIR/o4.err"; exit 0
 fi
 
-# A DIFFERENT self-signed cert — the "wrong CA" the client pins to prove the
-# pin is enforced (this CA does not sign the server's cert).
-if ! openssl req -x509 -newkey rsa:2048 \
-        -keyout "$TMPDIR/badkey.pem" -out "$BADCA" -days 1 -nodes \
-        -subj "/CN=wrong-ca" 2>"$TMPDIR/openssl2.err"; then
-    echo "  [SKIP] openssl req (bad CA) failed:"
-    head -5 "$TMPDIR/openssl2.err"
+# Sanity: the couriered CA verifies the leaf via the openssl CLI (ground truth,
+# exactly what the #1110 report checked). If this fails, skip — env problem.
+if ! openssl verify -CAfile "$CA" "$CERT" >/dev/null 2>&1; then
+    echo "  [SKIP] openssl verify -CAfile did not accept the leaf (env issue)"
     exit 0
 fi
 
@@ -98,7 +111,10 @@ fi
 sleep 0.3
 
 OUT="$TMPDIR/client.out"
-if ! AETHER_HOME="$ROOT" GOOD_CA="$CERT" BAD_CA="$BADCA" \
+# GOOD_CA is the ROOT CA (not the leaf): the client pins the CA and the server
+# presents the leaf, so verification must build the chain and trust the CA —
+# the #1110 case.
+if ! AETHER_HOME="$ROOT" GOOD_CA="$CA" BAD_CA="$BADCA" \
         "$AE" run "$SCRIPT_DIR/client.ae" >"$OUT" 2>&1; then
     echo "  [FAIL] client exited non-zero:"
     head -10 "$OUT"
