@@ -390,8 +390,8 @@ surface area is visible, not because any one is scheduled.
 
 ## Tooling
 
-### Planned
+### Shipped
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `ae fmt` | Not started | Source code formatter (deferred until syntax stabilizes) |
+| `ae fmt` | Shipped | Whitespace-only, comment-preserving source formatter. Idempotent and verified semantics-preserving across the example and test corpus. See [formatter.md](formatter.md). |
