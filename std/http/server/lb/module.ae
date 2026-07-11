@@ -1,0 +1,251 @@
+// std.http.server.lb — a configurable HTTP load balancer, one call.
+//
+// A thin, reusable front-door over std.http.proxy (the nginx-class reverse proxy
+// engine): build an upstream pool from a config, wire optional active health
+// checks, a circuit breaker, a response cache, and a drain/undrain admin endpoint,
+// then serve. This is the generic "stand up a load balancer" surface — any Aether
+// program gets one without an orchestrator.
+//
+// (Promoted from aeo's bin/aeo-lb.ae, which is now a thin env-reading shim over
+// this lib. The orchestration — image bake, network wiring, grammar->config — stays
+// in aeo's driver_loadbalancer; this lib is pure LB, no environment coupling.)
+//
+// Quick start:
+//
+//     import std.http.server.lb
+//     main() {
+//         // "url|weight;url|weight;…"  (';'-separated so a value can contain ',')
+//         lb.serve("0.0.0.0", 9000, "weighted_rr",
+//                  "http://app-1:8080|3;http://app-2:8080|1",
+//                  lb.health("/healthz", 200, 500, 1000, 2, 3),   // or lb.no_health()
+//                  lb.breaker(5, 30000, 1),                       // or lb.no_breaker()
+//                  lb.cache(1000, 65536, 60, "method_url_vary"))  // or lb.no_cache()
+//     }
+//
+// serve() BLOCKS (it runs the HTTP server); background it if you need to keep going.
+//
+// ADMIN (zero-downtime rollout): POST a backend URL as the body to
+//   /_aeo/drain   — stop sending NEW traffic to that upstream (in-flight finishes)
+//   /_aeo/undrain — return it to rotation
+// (Kept as /_aeo/* for compatibility with aeo's driver; override with serve_at.)
+
+import std.http (http_server_create, http_server_set_host, http_server_start_raw,
+                 http_server_use_middleware, request_path, request_body,
+                 http_response_set_status, http_response_set_body)
+import std.http.proxy (upstream_pool_new, upstream_add, health_checks_enable,
+                       breaker_configure, cache_new, opts_new, opts_bind_cache, mount,
+                       upstream_drain, upstream_undrain)
+import std.string (string_length, string_get_int, string_index_of, string_substring)
+
+exports (
+    serve, serve_at,
+    health, no_health, breaker, no_breaker, cache, no_cache,
+    parse_backends,
+    // health/breaker/cache config accessors (opaque tuples — callers use the
+    // constructors above; these let a caller inspect/override if needed).
+    ADMIN_PREFIX
+)
+
+// The admin path prefix (drain/undrain live under it). Kept for aeo compatibility.
+const ADMIN_PREFIX = "/_aeo"
+
+// ---- config constructors -------------------------------------------------------
+// Health-check config: probe `path`, expect `status`, every `interval_ms` (timeout
+// `timeout_ms`), readmit after `healthy` OK in a row, eject after `unhealthy` fails.
+health(path: string, status: int, interval_ms: int, timeout_ms: int, healthy: int, unhealthy: int) -> ptr {
+    c = _cfg6("h", path, status, interval_ms, timeout_ms, healthy, unhealthy)
+    return c
+}
+no_health() -> ptr { return _cfg_none() }
+
+// Circuit breaker: open after `failures` consecutive fails, stay open `open_ms`,
+// admit `half_open` trial requests when half-open.
+breaker(failures: int, open_ms: int, half_open: int) -> ptr {
+    return _cfg3("b", failures, open_ms, half_open)
+}
+no_breaker() -> ptr { return _cfg_none() }
+
+// Response cache: up to `entries` entries, bodies up to `max_body` bytes, `ttl_sec`
+// TTL, keyed by `key_strategy` (e.g. "method_url_vary").
+cache(entries: int, max_body: int, ttl_sec: int, key_strategy: string) -> ptr {
+    return _cfg_cache(entries, max_body, ttl_sec, key_strategy)
+}
+no_cache() -> ptr { return _cfg_none() }
+
+// ---- serve ---------------------------------------------------------------------
+// Build the pool, apply health/breaker/cache, register the admin middleware, mount
+// the reverse proxy at "/", and run the server. BLOCKS. Returns "" on a clean
+// (server-ended) exit, else an error string.
+serve(host: string, port: int, algo: string, backends: string, hc: ptr, br: ptr, ca: ptr) -> string {
+    return serve_at(host, port, algo, backends, "/", hc, br, ca)
+}
+
+// serve_at — like serve but mounts the proxy at `prefix` (default "/").
+serve_at(host: string, port: int, algo: string, backends: string, prefix: string, hc: ptr, br: ptr, ca: ptr) -> string {
+    if string_length(backends) == 0 {
+        return "lb: no backends"
+    }
+    // request_timeout 30s, dial_timeout reserved (0), no per-upstream inflight cap.
+    pool = upstream_pool_new(algo, 30, 0, 0)
+    if pool == 0 {
+        return "lb: pool_new failed (bad algorithm '${algo}'?)"
+    }
+    n = _add_backends(pool, backends)
+    if n == 0 {
+        return "lb: no valid backends parsed from '${backends}'"
+    }
+
+    if _cfg_kind(hc) == "h" {
+        herr = health_checks_enable(pool,
+            _cfg_s(hc, 0), _cfg_i(hc, 1), _cfg_i(hc, 2), _cfg_i(hc, 3), _cfg_i(hc, 4), _cfg_i(hc, 5))
+        if string_length(herr) > 0 {
+            return "lb: health_checks_enable: ${herr}"
+        }
+    }
+    if _cfg_kind(br) == "b" {
+        berr = breaker_configure(pool, _cfg_i(br, 0), _cfg_i(br, 1), _cfg_i(br, 2))
+        if string_length(berr) > 0 {
+            return "lb: breaker_configure: ${berr}"
+        }
+    }
+
+    server = http_server_create(port)
+    if server == 0 {
+        return "lb: server_create failed on ${port}"
+    }
+    http_server_set_host(server, host)
+    opts = opts_new()
+
+    if _cfg_kind(ca) == "c" {
+        cobj = cache_new(_cfg_i(ca, 0), _cfg_i(ca, 1), _cfg_i(ca, 2), _cfg_s(ca, 3))
+        if cobj == 0 {
+            return "lb: cache_new failed (bad key strategy '${_cfg_s(ca, 3)}'?)"
+        }
+        _ = opts_bind_cache(opts, cobj)
+    }
+
+    // Admin middleware FIRST — it must run before the reverse-proxy middleware
+    // (registered by mount) so /_aeo/* is handled here, not proxied. The proxy's
+    // prefix match runs before the route table, so a route would be shadowed.
+    http_server_use_middleware(server, mw_admin, pool)
+
+    merr = mount(server, prefix, pool, opts)
+    if string_length(merr) > 0 {
+        return "lb: mount: ${merr}"
+    }
+    rc = http_server_start_raw(server)      // blocks
+    if rc < 0 {
+        return "lb: server start failed"
+    }
+    return ""
+}
+
+// ---- admin drain/undrain middleware --------------------------------------------
+// POST /_aeo/drain or /_aeo/undrain with a backend URL as the body. Returns 1 to
+// continue the middleware chain (not an admin path), 0 to short-circuit (handled).
+// The pool ptr arrives as user_data.
+@c_callback mw_admin(req: ptr, res: ptr, ud: ptr) -> int {
+    path = request_path(req)
+    if path == "/_aeo/drain" {
+        _admin_op(req, res, ud, 1)
+        return 0
+    }
+    if path == "/_aeo/undrain" {
+        _admin_op(req, res, ud, 0)
+        return 0
+    }
+    return 1
+}
+_admin_op(req: ptr, res: ptr, pool: ptr, is_drain: int) {
+    url = request_body(req)
+    if string_length(url) == 0 {
+        http_response_set_status(res, 400)
+        http_response_set_body(res, "empty backend url")
+        return
+    }
+    e = ""
+    if is_drain == 1 {
+        e = upstream_drain(pool, url)
+    } else {
+        e = upstream_undrain(pool, url)
+    }
+    if string_length(e) > 0 {
+        http_response_set_status(res, 500)
+        http_response_set_body(res, e)
+        return
+    }
+    http_response_set_status(res, 200)
+    http_response_set_body(res, "ok ${url}")
+}
+
+// ---- backend list parsing ------------------------------------------------------
+// parse_backends(pool, "url|weight;url|weight;…") — upstream_add each; returns count.
+// Exported so callers can add backends to a pool they built themselves.
+parse_backends(pool: ptr, csv: string) -> int {
+    return _add_backends(pool, csv)
+}
+_add_backends(pool: ptr, csv: string) -> int {
+    added = 0
+    rest = csv
+    more = 1
+    while more == 1 {
+        idx = string_index_of(rest, ";")
+        entry = rest
+        if idx >= 0 {
+            entry = string_substring(rest, 0, idx)
+            rest = string_substring(rest, idx + 1, string_length(rest))
+        } else {
+            more = 0
+        }
+        if string_length(entry) > 0 {
+            bar = string_index_of(entry, "|")
+            url = entry
+            weight = 1
+            if bar > 0 {
+                url = string_substring(entry, 0, bar)
+                ws = string_substring(entry, bar + 1, string_length(entry))
+                w = string_get_int(ws)
+                if w > 0 { weight = w }
+            }
+            if string_length(url) > 0 {
+                _ = upstream_add(pool, url, weight)
+                added = added + 1
+            }
+        }
+    }
+    return added
+}
+
+// ---- tiny config-tuple helpers -------------------------------------------------
+// A config is a small string list: [kind, field0, field1, …]. kind = "h"/"b"/"c"/
+// "" (none). Ints are stored as strings and read back with string_get_int. This
+// keeps the public constructors typed without a struct type in the signature.
+_cfg_none() -> ptr { return _mk("") }
+_cfg3(kind: string, a: int, b: int, c: int) -> ptr {
+    l = _mk(kind)
+    _ = _push_i(l, a); _ = _push_i(l, b); _ = _push_i(l, c)
+    return l
+}
+_cfg6(kind: string, s0: string, a: int, b: int, c: int, d: int, e: int) -> ptr {
+    l = _mk(kind)
+    _ = _push_s(l, s0); _ = _push_i(l, a); _ = _push_i(l, b); _ = _push_i(l, c); _ = _push_i(l, d); _ = _push_i(l, e)
+    return l
+}
+_cfg_cache(entries: int, max_body: int, ttl: int, key: string) -> ptr {
+    l = _mk("c")
+    _ = _push_i(l, entries); _ = _push_i(l, max_body); _ = _push_i(l, ttl); _ = _push_s(l, key)
+    return l
+}
+_cfg_kind(l: ptr) -> string { return _lget(l, 0) }
+_cfg_s(l: ptr, i: int) -> string { return _lget(l, i + 1) }
+_cfg_i(l: ptr, i: int) -> int { return string_get_int(_lget(l, i + 1)) }
+
+// list backing (std.list under the hood; kept local so the config type is opaque)
+import std.list
+_mk(kind: string) -> ptr { l = list_new(); list_add(l, kind); return l }
+_push_s(l: ptr, s: string) -> int { list_add(l, s); return 0 }
+_push_i(l: ptr, i: int) -> int { list_add(l, "${i}"); return 0 }
+_lget(l: ptr, i: int) -> string {
+    if i >= list_size(l) { return "" }
+    return list_get_raw(l, i)
+}
