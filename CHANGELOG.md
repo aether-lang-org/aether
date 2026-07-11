@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.bits.wrapping_add64` / `wrapping_mul64`** — defined modulo-2^64 add and
+  multiply. Aether's `long` is signed `int64_t` and native `a * b` overflow is
+  undefined behaviour (a `-fsanitize=undefined` build traps on it) even though
+  2's-complement wrap "happens to work" at `-O2`; these compute in the unsigned
+  domain so the wrap is defined and optimiser-proof. They join the existing
+  unsigned 64-bit helpers (`udiv64` / `urem64` / `ucmp64`). Motivated by ports
+  of C tools whose on-disk / wire format depends on defined unsigned overflow —
+  e.g. F3's fill/verify LCG `x = x * 4294967311 + 17`.
+
 ## [0.380.0]
 
 ### Fixed
