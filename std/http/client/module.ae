@@ -55,7 +55,7 @@ import std.string
 
 exports (
     request, set_header, set_body, set_timeout, set_follow_redirects, set_insecure,
-    set_stream, use_env_proxy, use_http_proxy, ignore_http_proxy, request_free,
+    set_cafile, set_stream, use_env_proxy, use_http_proxy, ignore_http_proxy, request_free,
     send_request, send_stream,
     response_status, response_body, response_body_length, response_error, response_redirect_error,
     response_is_stream, response_read,
@@ -77,6 +77,7 @@ extern http_request_set_timeout_raw(req: ptr, seconds: int) -> int
 extern http_request_set_timeout_ns_raw(req: ptr, timeout: Duration) -> int
 extern http_request_set_follow_redirects_raw(req: ptr, max_hops: int) -> int
 extern http_request_set_insecure_raw(req: ptr, on: int) -> int
+extern http_request_set_cafile_raw(req: ptr, path: string) -> int
 extern http_request_set_stream_raw(req: ptr, on: int) -> int
 extern http_request_use_env_proxy_raw(req: ptr, on: int) -> int
 extern http_request_use_http_proxy_raw(req: ptr, proxy_url: string) -> int
@@ -171,6 +172,21 @@ set_follow_redirects(req: ptr, max_hops: int) -> string {
 set_insecure(req: ptr, on: int) -> string {
     rc = http_request_set_insecure_raw(req, on)
     if rc != 0 { return "set_insecure failed (null req)" }
+    return ""
+}
+
+// Pin a custom CA for this request (#1107): verify the peer certificate against
+// the PEM bundle at `path` instead of the system trust store, while KEEPING peer
+// and hostname verification on. This is the "verify, but against THIS cert" knob
+// — strictly stronger than set_insecure. Use it for machine-to-machine calls to
+// a host with a private/self-signed CA you've couriered out-of-band (e.g. a
+// Proxmox VE API's pve-root-ca.pem): courier the CA once, then pin it instead of
+// blind-trusting with set_insecure. Per-connection (never touches the shared
+// SSL_CTX). Passing "" clears the pin (revert to the system store). A cert the
+// couriered CA doesn't cover fails the handshake — it fails closed, never open.
+set_cafile(req: ptr, path: string) -> string {
+    rc = http_request_set_cafile_raw(req, path)
+    if rc != 0 { return "set_cafile failed (null req)" }
     return ""
 }
 

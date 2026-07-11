@@ -1,0 +1,66 @@
+// #1107: client-side assertions for set_cafile (custom-CA pin).
+//
+// The server presents a self-signed cert (its own CA) with SAN IP:127.0.0.1.
+// We connect by IP to https://127.0.0.1:18119/ three ways:
+//
+//   1. pin the CORRECT CA  -> verifies -> status 200, no error   (the point)
+//   2. pin a WRONG CA      -> fails closed -> transport error    (pin enforced)
+//   3. no cafile (default) -> system store rejects self-signed   (unchanged)
+//
+// Env: GOOD_CA = the server's own cert PEM, BAD_CA = an unrelated self-signed.
+
+import std.http.client
+import std.os
+
+extern exit(code: int)
+
+const URL = "https://127.0.0.1:18119/"
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+// GET URL with an optional cafile pin (empty = none). insecure stays 0.
+// Returns (status, err).
+do_get(cafile: string) -> {
+    req = client.request("GET", URL)
+    if req == null { fail("request() null") }
+    client.set_timeout(req, 10s)
+    if cafile != "" {
+        cerr = client.set_cafile(req, cafile)
+        if cerr != "" { fail("set_cafile: ${cerr}") }
+    }
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if err != "" {
+        return 0, err
+    }
+    status = client.response_status(resp)
+    client.response_free(resp)
+    return status, ""
+}
+
+main() {
+    good_ca = os_getenv("GOOD_CA")
+    bad_ca  = os_getenv("BAD_CA")
+    if good_ca == 0 || bad_ca == 0 {
+        fail("GOOD_CA / BAD_CA must be set")
+    }
+
+    // 1. Correct CA pinned -> verifies -> 200.
+    s1, e1 = do_get(good_ca)
+    if e1 != "" { fail("pinned GOOD_CA should verify, got transport error: ${e1}") }
+    if s1 != 200 { fail("pinned GOOD_CA: expected 200, got ${s1}") }
+
+    // 2. Wrong CA pinned -> handshake fails closed -> transport error, no 200.
+    s2, e2 = do_get(bad_ca)
+    if e2 == "" { fail("pinned BAD_CA should FAIL verification, but connected (status ${s2}) — pin not enforced") }
+
+    // 3. No cafile -> system store rejects the self-signed cert.
+    s3, e3 = do_get("")
+    if e3 == "" { fail("no cafile: self-signed cert should be rejected by system store, but connected (status ${s3})") }
+
+    println("PASS set_cafile: correct CA verifies, wrong CA fails closed, default rejects")
+    exit(0)
+}

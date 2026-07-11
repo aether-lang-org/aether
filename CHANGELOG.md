@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.http.client.set_cafile(req, path)` — per-request custom CA pin** (#1107).
+  Verify the peer certificate against a specific PEM CA/cert bundle instead of the
+  system trust store, while **keeping peer and hostname verification on** — the
+  "verify, but against THIS cert" knob for machine-to-machine calls to a host with
+  a private or self-signed CA (e.g. a Proxmox VE API's `pve-root-ca.pem`). It is
+  strictly stronger than `set_insecure`: courier the CA out-of-band once, then pin
+  it instead of blind-trusting. Applied per-connection via a per-`SSL`
+  `X509_STORE`, never on the shared `SSL_CTX`, so other requests are unaffected; a
+  certificate the pinned CA doesn't cover fails the handshake (fails closed, never
+  open). Passing `""` clears the pin.
+
 ## [0.382.0]
 
 ### Added
