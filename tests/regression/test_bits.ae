@@ -75,6 +75,36 @@ main() {
     if bits.ucmp64(1, 0xFFFFFFFFFFFFFFFF) != -1 { print("FAIL ucmp64 small<huge\n"); fails = fails + 1 }
     if bits.ucmp64(42, 42) != 0 { print("FAIL ucmp64 eq\n"); fails = fails + 1 }
 
+    // ---- wrapping (defined modulo-2^64) add / multiply ----
+    // Non-overflowing base cases.
+    if bits.wrapping_add64(2, 3) != 5 { print("FAIL wrap_add small\n"); fails = fails + 1 }
+    if bits.wrapping_mul64(6, 7) != 42 { print("FAIL wrap_mul small\n"); fails = fails + 1 }
+    // Add that wraps past 2^64: 0xFFFF...FF + 1 == 0.
+    if bits.wrapping_add64(0xFFFFFFFFFFFFFFFF, 1) != 0 { print("FAIL wrap_add wrap-to-0\n"); fails = fails + 1 }
+    // 0xFFFF...FF is unsigned (2^64 - 1); + 2 wraps to 1.
+    if bits.wrapping_add64(0xFFFFFFFFFFFFFFFF, 2) != 1 { print("FAIL wrap_add wrap-to-1\n"); fails = fails + 1 }
+    // Multiply that wraps: (2^63) * 2 == 2^64 == 0 (mod 2^64).
+    if bits.wrapping_mul64(0x8000000000000000, 2) != 0 { print("FAIL wrap_mul msb*2\n"); fails = fails + 1 }
+    // (2^64 - 1) * (2^64 - 1) == 1 (mod 2^64), the (-1)*(-1) identity.
+    if bits.wrapping_mul64(0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF) != 1 { print("FAIL wrap_mul (-1)^2\n"); fails = fails + 1 }
+    // Multiply by a large constant that forces overflow on the 2nd step.
+    if bits.wrapping_mul64(0x0000000100000000, 0x0000000100000000) != 0 { print("FAIL wrap_mul 2^32*2^32\n"); fails = fails + 1 }
+
+    // ---- F3 LCG golden value ----
+    // F3's on-disk fill/verify is `x = x * 4294967311 + 17`, seeded at the
+    // sector offset. Iterating 20 times from seed 512 must land on the exact
+    // uint64 modulo-2^64 result C produces (10439638683286069920, which is
+    // -8007105390423481696 read as signed int64). Proves the wrapping helpers
+    // give bit-exact interop, not just internal consistency.
+    long r = 512
+    long mult = 4294967311
+    li = 0
+    while li < 20 {
+        r = bits.wrapping_add64(bits.wrapping_mul64(r, mult), 17)
+        li = li + 1
+    }
+    if r != -8007105390423481696 { print("FAIL F3 LCG golden: got ${r}\n"); fails = fails + 1 }
+
     if fails == 0 {
         print("PASS: std.bits\n")
     } else {

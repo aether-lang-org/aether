@@ -24,6 +24,7 @@ exports (
     clz32, clz64,
     udiv32, urem32, udiv64, urem64,
     ucmp64,
+    wrapping_add64, wrapping_mul64,
     aether_bits_lsr32, aether_bits_lsr64,
     aether_bits_rotr32, aether_bits_rotl32,
     aether_bits_rotr64, aether_bits_rotl64,
@@ -31,7 +32,8 @@ exports (
     aether_bits_clz32, aether_bits_clz64,
     aether_bits_udiv32, aether_bits_urem32,
     aether_bits_udiv64, aether_bits_urem64,
-    aether_bits_ucmp64
+    aether_bits_ucmp64,
+    aether_bits_wrapping_add64, aether_bits_wrapping_mul64
 )
 
 // ---- Raw externs ----
@@ -50,6 +52,8 @@ extern aether_bits_urem32(a: int, b: int) -> int
 extern aether_bits_udiv64(a: long, b: long) -> long
 extern aether_bits_urem64(a: long, b: long) -> long
 extern aether_bits_ucmp64(a: long, b: long) -> int
+extern aether_bits_wrapping_add64(a: long, b: long) -> long
+extern aether_bits_wrapping_mul64(a: long, b: long) -> long
 
 // ---- Friendly wrappers ----
 
@@ -110,4 +114,17 @@ urem64(a: long, b: long) -> long {
 // Unsigned compare of two 64-bit values. Returns -1 / 0 / 1.
 ucmp64(a: long, b: long) -> int {
     return aether_bits_ucmp64(a, b)
+}
+
+// Wrapping (defined modulo-2^64) add / multiply. Carry the low 64 bits
+// like C's `uint64` — computed in the unsigned domain so the overflow is
+// *defined*, unlike a native `a * b` on `long`, which is signed-overflow
+// UB (a `-fsanitize=undefined` build traps on it). Reach for these when
+// an on-disk / wire format depends on defined unsigned overflow, e.g. an
+// LCG like `x = x * 4294967311 + 17`.
+wrapping_add64(a: long, b: long) -> long {
+    return aether_bits_wrapping_add64(a, b)
+}
+wrapping_mul64(a: long, b: long) -> long {
+    return aether_bits_wrapping_mul64(a, b)
 }
