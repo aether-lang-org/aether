@@ -23,6 +23,7 @@ int http_request_set_timeout_raw(HttpRequest* r, int s) { (void)r; (void)s; retu
 int http_request_set_timeout_ns_raw(HttpRequest* r, int64_t ns) { (void)r; (void)ns; return -1; }
 int http_request_set_follow_redirects_raw(HttpRequest* r, int n) { (void)r; (void)n; return -1; }
 int http_request_set_insecure_raw(HttpRequest* r, int on) { (void)r; (void)on; return -1; }
+int http_request_set_cafile_raw(HttpRequest* r, const char* p) { (void)r; (void)p; return -1; }
 int http_request_use_env_proxy_raw(HttpRequest* r, int on) { (void)r; (void)on; return -1; }
 int http_request_use_http_proxy_raw(HttpRequest* r, const char* u) { (void)r; (void)u; return -1; }
 int http_request_ignore_http_proxy_raw(HttpRequest* r) { (void)r; return -1; }
@@ -523,6 +524,13 @@ struct HttpRequest {
     int   insecure;      /* 0 = verify peer cert + hostname (default); 1 = skip
                           * both for THIS connection only (curl -k equivalent).
                           * Relaxed per-SSL, never on the shared SSL_CTX. */
+    char* cafile;        /* owned, NUL-terminated PEM path, or NULL. When set
+                          * (and !insecure), verify the peer against THIS CA
+                          * bundle instead of the system store — pin a private/
+                          * self-signed CA while KEEPING peer + hostname
+                          * verification on. Applied per-connection via a
+                          * per-SSL X509_STORE, never on the shared SSL_CTX
+                          * (#1107). */
     int   stream;        /* 0 = buffer the whole body (default); 1 = streaming:
                           * read only the header block and hand the open
                           * transport to an HttpStream for incremental reads (#1004). */
@@ -645,6 +653,21 @@ int http_request_set_insecure_raw(HttpRequest* req, int on) {
     return 0;
 }
 
+/* Pin a custom CA for THIS request: verify the peer certificate against the PEM
+ * bundle at `path` instead of the system trust store, while keeping peer and
+ * hostname verification ON (#1107). This is the "verify, but against THIS cert"
+ * knob — strictly stronger than set_insecure, for machine-to-machine calls to a
+ * host with a private/self-signed CA (e.g. a Proxmox VE API). Applied
+ * per-connection in the TLS path via a per-SSL X509_STORE, never on the shared
+ * SSL_CTX. Passing NULL/empty clears the pin (revert to the system store).
+ * `path` is copied. Returns 0, or -1 on a null request. */
+int http_request_set_cafile_raw(HttpRequest* req, const char* path) {
+    if (!req) return -1;
+    free(req->cafile);
+    req->cafile = (path && *path) ? strdup(path) : NULL;
+    return 0;
+}
+
 /* #1004: enable streaming response bodies for THIS request. When on, the
  * response returned by http_send_raw carries an open HttpStream instead of a
  * buffered body; the caller pulls the body via http_response_read_chunk_raw
@@ -715,6 +738,7 @@ void http_request_free_raw(HttpRequest* req) {
     aether_caps_free(req->body, (size_t)req->body_len);
     free(req->content_type);
     free(req->proxy_url);
+    free(req->cafile);
     HttpHeader* h = req->headers;
     while (h) {
         HttpHeader* next = h->next;
@@ -1198,6 +1222,32 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
             X509_VERIFY_PARAM* vpm = SSL_get0_param(ssl);
             X509_VERIFY_PARAM_set_hostflags(vpm, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
             X509_VERIFY_PARAM_set1_host(vpm, host, 0);
+
+            // Per-request custom CA pin (set_cafile): verify the peer against
+            // THIS PEM bundle instead of the system store, for THIS connection
+            // only. Peer + hostname verification (set just above) stay ON — this
+            // is strictly stronger than set_insecure. A per-SSL X509_STORE keeps
+            // the shared SSL_CTX (and every other request) on the system store.
+            // On any failure we leave the connection on the default store rather
+            // than silently proceeding unverified, and surface it as a handshake
+            // error below (the couriered CA won't match, so SSL_connect fails
+            // closed — never open). (#1107)
+            if (req->cafile) {
+                X509_STORE* store = X509_STORE_new();
+                if (!store ||
+                    X509_STORE_load_locations(store, req->cafile, NULL) != 1 ||
+                    SSL_set1_verify_cert_store(ssl, store) != 1) {
+                    if (store) X509_STORE_free(store);
+                    SSL_free(ssl);
+                    close(sockfd);
+                    char* msg = ssl_err_string("custom CA (set_cafile) load failed");
+                    response->error = string_new(msg ? msg : "custom CA load failed");
+                    free(msg);
+                    return response;
+                }
+                // SSL_set1_verify_cert_store took its own reference; drop ours.
+                X509_STORE_free(store);
+            }
         }
 
         SSL_set_fd(ssl, sockfd);

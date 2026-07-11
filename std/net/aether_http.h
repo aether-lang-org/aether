@@ -198,6 +198,12 @@ int http_request_set_follow_redirects_raw(HttpRequest* req, int max_hops);
 // insecure request cannot downgrade verification for other requests.
 int http_request_set_insecure_raw(HttpRequest* req, int on);
 
+// Pin a custom CA for THIS request (#1107): verify the peer against the PEM
+// bundle at `path` instead of the system store, keeping peer + hostname
+// verification ON. Strictly stronger than set_insecure. Per-connection (never
+// touches the shared SSL_CTX); NULL/empty clears the pin. `path` is copied.
+int http_request_set_cafile_raw(HttpRequest* req, const char* path);
+
 // Enable streaming response bodies for THIS request (#1004). When on (non-zero),
 // http_send_raw returns a response whose body is NOT buffered: it carries an
 // open transport, and the caller pulls the decoded body window-by-window via
