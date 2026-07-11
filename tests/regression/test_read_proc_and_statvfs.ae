@@ -1,0 +1,60 @@
+// Regression: #1116 (io.read_file / fs.read no longer silently return "" for
+// /proc seq-files) and #1117 (fs.statvfs exact byte counts).
+//
+// Linux-only: /proc and statvfs. Skips cleanly elsewhere (macOS lacks /proc;
+// Windows has neither) so it stays green across the POSIX matrix.
+
+import std.io
+import std.fs
+import std.os
+import std.string
+
+extern exit(code: int)
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    // /proc is Linux-specific; if it isn't there, there's nothing to regress.
+    if fs.exists("/proc/self/status") == 0 {
+        println("SKIP: no /proc (non-Linux) — read-to-EOF path not exercised here")
+        return
+    }
+
+    // --- #1116: io.read_file on a seq-file whose ftell() reports size 0.
+    // Before the fix this returned "" with no error (silent truncation).
+    status, err = io.read_file("/proc/self/status")
+    if err != "" { fail("io.read_file /proc/self/status errored: ${err}") }
+    if string.length(status) == 0 { fail("io.read_file /proc/self/status returned empty (#1116 regressed)") }
+    // Every /proc/<pid>/status has a "Name:" line — prove we got real content.
+    if string.contains(status, "Name:") == 0 { fail("io.read_file content missing 'Name:' — got a partial read?") }
+
+    // --- #1116 via the fs.read (open → file_read_all → close) path too.
+    fstatus, ferr = fs.read("/proc/self/status")
+    if ferr != "" { fail("fs.read /proc/self/status errored: ${ferr}") }
+    if string.length(fstatus) == 0 { fail("fs.read /proc/self/status returned empty (#1116 regressed)") }
+
+    // Regular files must still work via the fast size-based path.
+    reg, rerr = io.read_file("tests/regression/test_read_proc_and_statvfs.ae")
+    if rerr != "" { fail("io.read_file on a regular file errored: ${rerr}") }
+    if string.length(reg) == 0 { fail("io.read_file on a regular file returned empty") }
+
+    // --- #1117: fs.statvfs on the root filesystem — sane byte counts.
+    long total = 0
+    long free = 0
+    long avail = 0
+    total, free, avail, verr = fs.statvfs("/")
+    if verr != "" { fail("fs.statvfs / errored: ${verr}") }
+    if total <= 0 { fail("statvfs total should be > 0, got ${total}") }
+    if avail < 0 { fail("statvfs avail should be >= 0, got ${avail}") }
+    if avail > total { fail("statvfs avail (${avail}) should be <= total (${total})") }
+    if free > total { fail("statvfs free (${free}) should be <= total (${total})") }
+
+    // A bad path should surface an error, not silent zeros passed off as success.
+    _, _, _, berr = fs.statvfs("/no/such/path/definitely/not/here")
+    if berr == "" { fail("fs.statvfs on a missing path should error") }
+
+    println("PASS read-proc-eof + statvfs (#1116, #1117)")
+}

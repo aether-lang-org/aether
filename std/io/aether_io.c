@@ -110,28 +110,60 @@ void io_print_float(double value) {
 }
 
 // File I/O
+/* Grow-and-read an open stream to EOF into a caller-owned, NUL-terminated
+ * buffer. Fallback for when the size-based path can't work: `/proc` and `/sys`
+ * seq-files report size 0 from ftell, pipes/sockets aren't seekable — the
+ * size-based path would silently return an empty string (#1116). Returns NULL
+ * on OOM or a read error. Cap-aware; caller frees with plain libc free. */
+static char* io_read_stream_to_eof(FILE* fp) {
+    size_t cap = 65536;
+    size_t len = 0;
+    char* buffer = (char*)aether_caps_malloc(cap);
+    if (!buffer) return NULL;
+    for (;;) {
+        if (len + 4096 > cap) {
+            size_t new_cap = cap * 2;
+            char* grown = (char*)aether_caps_realloc(buffer, cap, new_cap);
+            if (!grown) { aether_caps_free(buffer, cap); return NULL; }
+            buffer = grown;
+            cap = new_cap;
+        }
+        size_t n = fread(buffer + len, 1, cap - len - 1, fp);
+        len += n;
+        if (n == 0) break;
+    }
+    if (ferror(fp)) { aether_caps_free(buffer, cap); return NULL; }
+    buffer[len] = '\0';
+    return buffer;
+}
+
 char* io_read_file_raw(const char* path) {
     if (!path) return NULL;
 
     FILE* file = fopen(path, "rb");
     if (!file) return NULL;
 
-    // Get file size
-    fseek(file, 0, SEEK_END);
-    long size = ftell(file);
-    if (size < 0) { fclose(file); return NULL; }
-    fseek(file, 0, SEEK_SET);
-
-    // Read file. Cap-aware (#343): file size is OS-supplied and
-    // unbounded; gate the allocation. The caller frees with plain
-    // libc `free()` per the caller-owned-return contract — the
-    // counter drifts up on the cold path, same as string_concat.
-    char* buffer = (char*)aether_caps_malloc((size_t)size + 1);
-    if (!buffer) { fclose(file); return NULL; }
-    size_t read = fread(buffer, 1, size, file);
-    buffer[read] = '\0';
+    /* Fast path for regular, seekable files: size the buffer and read once.
+     * Fall through to the EOF loop when the file isn't seekable (pipe/socket)
+     * or reports size 0 (any /proc or /sys seq-file) — the old code returned
+     * an empty string with no error there (#1116, the /proc silent-truncation
+     * bug). Cap-aware (#343): OS-supplied size is gated; caller frees with
+     * plain libc free() per the caller-owned-return contract. */
+    char* buffer = NULL;
+    if (fseek(file, 0, SEEK_END) == 0) {
+        long size = ftell(file);
+        if (size > 0 && fseek(file, 0, SEEK_SET) == 0) {
+            buffer = (char*)aether_caps_malloc((size_t)size + 1);
+            if (!buffer) { fclose(file); return NULL; }
+            size_t read = fread(buffer, 1, (size_t)size, file);
+            buffer[read] = '\0';
+            fclose(file);
+            return buffer;
+        }
+        fseek(file, 0, SEEK_SET);   /* best-effort rewind before streaming */
+    }
+    buffer = io_read_stream_to_eof(file);
     fclose(file);
-
     return buffer;
 }
 

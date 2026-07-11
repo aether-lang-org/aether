@@ -41,6 +41,10 @@ int fs_try_stat(const char* p) { (void)p; return 0; }
 int     fs_get_stat_kind(void)  { return 0; }
 int64_t fs_get_stat_size(void)  { return 0; }
 int64_t fs_get_stat_mtime(void) { return 0; }
+int fs_try_statvfs(const char* p) { (void)p; return 0; }
+int64_t fs_get_statvfs_total(void) { return 0; }
+int64_t fs_get_statvfs_free(void)  { return 0; }
+int64_t fs_get_statvfs_avail(void) { return 0; }
 char* fs_read_binary_raw(const char* p, int* n) {
     (void)p; if (n) *n = 0; return NULL;
 }
@@ -111,6 +115,7 @@ void fs_watch_close(void* w) { (void)w; }
 #include <sys/types.h>
 #ifndef _WIN32
 #include <unistd.h>
+#include <sys/statvfs.h>     // statvfs() for fs_try_statvfs (#1117)
 #endif
 
 #ifdef _WIN32
@@ -197,25 +202,62 @@ File* file_open_raw(const char* path, const char* mode) {
     return file;
 }
 
+/* Grow-and-read an open stream to EOF into a caller-owned, NUL-terminated
+ * buffer. Used as the fallback when the fast size-based path can't work:
+ * `/proc` and `/sys` seq-files report size 0 from ftell, and pipes/sockets
+ * aren't seekable at all — the size-based path would silently return an empty
+ * string. Returns NULL on OOM. Cap-aware via aether_caps_realloc; the caller
+ * frees the result with plain libc free per the caller-owned-return contract
+ * (#1116). */
+static char* read_stream_to_eof(FILE* fp) {
+    size_t cap = 65536;   /* one page-ish chunk; grows as needed */
+    size_t len = 0;
+    char* buffer = (char*)aether_caps_malloc(cap);
+    if (!buffer) return NULL;
+    for (;;) {
+        if (len + 4096 > cap) {
+            size_t new_cap = cap * 2;
+            char* grown = (char*)aether_caps_realloc(buffer, cap, new_cap);
+            if (!grown) { aether_caps_free(buffer, cap); return NULL; }
+            buffer = grown;
+            cap = new_cap;
+        }
+        size_t n = fread(buffer + len, 1, cap - len - 1, fp);
+        len += n;
+        if (n == 0) break;   /* EOF or error; ferror check below */
+    }
+    if (ferror(fp)) { aether_caps_free(buffer, cap); return NULL; }
+    buffer[len] = '\0';
+    return buffer;
+}
+
 char* file_read_all_raw(File* file) {
     if (!file || !file->is_open) return NULL;
 
     FILE* fp = (FILE*)file->handle;
-    fseek(fp, 0, SEEK_END);
-    long size = ftell(fp);
-    if (size < 0) return NULL;
-    fseek(fp, 0, SEEK_SET);
 
-    /* Cap-aware (#343): file size is OS-supplied and unbounded.
-     * Caller frees with plain libc free per the caller-owned-return
-     * contract — counter drifts up on this path, same as
-     * string_concat. */
-    char* buffer = (char*)aether_caps_malloc((size_t)size + 1);
-    if (!buffer) return NULL;
-    size_t read = fread(buffer, 1, (size_t)size, fp);
-    buffer[read] = '\0';
-
-    return buffer;
+    /* Fast path for regular, seekable files: size the buffer from the file
+     * length and read once. Fall through to the EOF loop when the file isn't
+     * seekable (pipe/socket) or reports size 0 (any /proc or /sys seq-file) —
+     * the old code returned an empty string with no error in those cases
+     * (#1116, the /proc/self/mountinfo silent-truncation bug). */
+    if (fseek(fp, 0, SEEK_END) == 0) {
+        long size = ftell(fp);
+        if (size > 0 && fseek(fp, 0, SEEK_SET) == 0) {
+            /* Cap-aware (#343): file size is OS-supplied and unbounded.
+             * Caller frees with plain libc free per the caller-owned-return
+             * contract — counter drifts up on this path, same as
+             * string_concat. */
+            char* buffer = (char*)aether_caps_malloc((size_t)size + 1);
+            if (!buffer) return NULL;
+            size_t read = fread(buffer, 1, (size_t)size, fp);
+            buffer[read] = '\0';
+            return buffer;
+        }
+        /* size <= 0 or re-seek failed: rewind (best-effort) and stream. */
+        fseek(fp, 0, SEEK_SET);
+    }
+    return read_stream_to_eof(fp);
 }
 
 int file_write_raw(File* file, const char* data, int length) {
@@ -877,6 +919,39 @@ int fs_try_stat(const char* path) {
 int     fs_get_stat_kind(void)  { return s_last_kind;  }
 int64_t fs_get_stat_size(void)  { return s_last_size;  }
 int64_t fs_get_stat_mtime(void) { return s_last_mtime; }
+
+/* statvfs (#1117): exact filesystem byte counts for the filesystem containing
+ * `path`. Split try/get pair, same TLS pattern as fs_try_stat, so the Aether
+ * wrapper reads three int64 fields without C out-params. total/free/avail are
+ * bytes; `avail` is the space usable by an unprivileged process (f_bavail),
+ * which is the one callers usually want for "how much can I actually write".
+ * Not available on Windows (no statvfs) — stubbed there to return 0/failure. */
+static AETHER_FS_TLS int64_t s_vfs_total = 0;
+static AETHER_FS_TLS int64_t s_vfs_free  = 0;
+static AETHER_FS_TLS int64_t s_vfs_avail = 0;
+
+int fs_try_statvfs(const char* path) {
+    s_vfs_total = 0; s_vfs_free = 0; s_vfs_avail = 0;
+    if (!path) return 0;
+#ifdef _WIN32
+    (void)path;
+    return 0;   /* no statvfs on Windows; caller gets the error branch */
+#else
+    struct statvfs st;
+    if (statvfs(path, &st) != 0) return 0;
+    /* f_frsize is the fundamental block size for the byte math; fall back to
+     * f_bsize if a platform reports frsize as 0. */
+    uint64_t unit = st.f_frsize ? (uint64_t)st.f_frsize : (uint64_t)st.f_bsize;
+    s_vfs_total = (int64_t)((uint64_t)st.f_blocks * unit);
+    s_vfs_free  = (int64_t)((uint64_t)st.f_bfree  * unit);
+    s_vfs_avail = (int64_t)((uint64_t)st.f_bavail * unit);
+    return 1;
+#endif
+}
+
+int64_t fs_get_statvfs_total(void) { return s_vfs_total; }
+int64_t fs_get_statvfs_free(void)  { return s_vfs_free;  }
+int64_t fs_get_statvfs_avail(void) { return s_vfs_avail; }
 
 char* fs_read_binary_raw(const char* path, int* out_len) {
     if (out_len) *out_len = 0;

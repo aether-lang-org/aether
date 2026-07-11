@@ -140,6 +140,16 @@ int     fs_get_stat_kind(void);
 int64_t fs_get_stat_size(void);
 int64_t fs_get_stat_mtime(void);
 
+// statvfs (#1117): exact filesystem byte counts for the fs containing `path`.
+// Same split try/get shape as fs_try_stat. total/free/avail are bytes; avail
+// is space usable by an unprivileged process (f_bavail). fs_try_statvfs
+// returns 0 on failure (incl. Windows, which has no statvfs) with all getters
+// reading 0.
+int fs_try_statvfs(const char* path);
+int64_t fs_get_statvfs_total(void);
+int64_t fs_get_statvfs_free(void);
+int64_t fs_get_statvfs_avail(void);
+
 // Read the entire file at `path` into a newly malloc'd buffer.
 // Sibling of file_read_all_raw that is length-aware and binary-safe:
 // the returned buffer contains exactly the file's bytes (including
