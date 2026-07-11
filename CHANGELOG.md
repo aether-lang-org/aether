@@ -5,9 +5,23 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.363.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **Release build (`make install`) on GCC 16 / glibc 2.43.** glibc 2.43's
+  const-preserving `strstr()` returns `const char*` for a `const char*` argument,
+  so assigning the result to a plain `char*` trips `-Werror=discarded-qualifiers`
+  on GCC 16 (in `lsp/aether_lsp.c` and `std/net/aether_http_server.c`). Both
+  results are read-only (pointer arithmetic and comparisons, never written
+  through), so they're now `const char*`. Backward-compatible: assigning the
+  plain-`char*` return of older glibc's `strstr` to a `const char*` is warning-
+  free on every compiler (verified on GCC 12.2 / glibc 2.36, Clang, and
+  mingw-w64).
 
 ## [0.384.0]
 
@@ -453,9 +467,6 @@ next version number before tagging the release.
   the remaining #996 follow-ups are single-file amalgamation and standalone
   runtime-source bundling. New coverage in `tests/integration/emit_csrc/`
   (well-formedness, functions/constants, capability provenance).
-**Workflow**: New changes go under `## [0.362.0]`. When a PR merges to
-`main`, the release pipeline automatically replaces `[current]` with the
-next version number before tagging the release.
 
 ## [0.362.0]
 
