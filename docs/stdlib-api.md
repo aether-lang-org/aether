@@ -206,11 +206,12 @@ main() {
 
 ### File Operations (Go-style)
 
-- `file.read(path)` → `(string, string)` - Read entire file (opens, reads, closes)
+- `file.read(path)` → `(string, string)` - Read entire file (opens, reads, closes). Handles `/proc`/`/sys` seq-files and unseekable fds via a read-to-EOF fallback (a size-0 `ftell` no longer silently returns `""`).
 - `file.write(path, content)` → `string` - Write content, return error string
 - `file.open(path, mode)` → `(ptr, string)` - Low-level open (caller must `file.close`)
 - `file.close(handle)` - Close a file handle
 - `file.size(path)` → `(int, string)` - Get file size in bytes
+- `fs.statvfs(path)` → `(total, free, avail, err)` - Filesystem byte counts (POSIX `statvfs`) for the fs containing `path`. `avail` is space usable by a non-root process (`f_bavail`) — use it for "how much can I actually write" (`end = avail / file_size`). Portable Linux/macOS/BSD; Windows returns the error branch.
 - `file.delete(path)` → `string` - Delete a file, return error string
 - `file.exists(path)` → `int` - 1 if exists, 0 otherwise (infallible predicate)
 

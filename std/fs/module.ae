@@ -30,6 +30,8 @@ exports (
     fs_symlink_raw, fs_readlink_raw, fs_is_symlink, fs_unlink_raw,
     fs_write_binary_raw, fs_write_atomic_raw, fs_rename_raw,
     fs_try_stat, fs_get_stat_kind, fs_get_stat_size, fs_get_stat_mtime,
+    fs_try_statvfs, fs_get_statvfs_total, fs_get_statvfs_free, fs_get_statvfs_avail,
+    statvfs,
     fs_try_read_binary, fs_get_read_binary, fs_get_read_binary_length,
     fs_release_read_binary, fs_read_binary_tuple,
     dir_list_count, dir_list_get, dir_list_kind, dir_list_free,
@@ -160,6 +162,14 @@ extern fs_get_stat_kind() -> int
 // Y2038-safe mtimes.
 extern fs_get_stat_size() -> long
 extern fs_get_stat_mtime() -> long
+
+// Split-accessor statvfs (#1117): fs_try_statvfs first, then read the
+// three byte-count getters. All `long` (exact bytes, 64-bit). Thread-local
+// like the stat pair. fs_try_statvfs returns 0 on failure (incl. Windows).
+extern fs_try_statvfs(path: string) -> int
+extern fs_get_statvfs_total() -> long
+extern fs_get_statvfs_free() -> long
+extern fs_get_statvfs_avail() -> long
 
 // Split-accessor binary read: fs_try_read_binary reads the file into
 // a TLS-owned buffer; fs_get_read_binary / fs_get_read_binary_length
@@ -618,6 +628,28 @@ file_stat(path: string) -> {
         return kind, size, mtime, ""
     }
     return 0, 0, 0, "cannot stat path"
+}
+
+// Exact filesystem byte counts for the filesystem containing `path` (#1117).
+// Returns (total, free, avail, "") on success, (0, 0, 0, error) on failure.
+// `avail` (POSIX f_bavail) is the space usable by an unprivileged process —
+// the one you want for "how much can I actually write here" (e.g. auto-filling
+// a write range: `end = avail / file_size`). POSIX statvfs(2); portable across
+// Linux/macOS/BSD. Not available on Windows (returns the error branch there).
+//
+// Same `long`-inference discipline as file_stat (#1021): bind the getters to
+// locals so they keep their `long` type, and return the success arm first so
+// the first `return` pins the tuple slots to long. The getters all read 0
+// after a failed fs_try_statvfs, so binding them before the ok-check is safe.
+statvfs(path: string) -> {
+    ok    = fs_try_statvfs(path)
+    total = fs_get_statvfs_total()
+    free  = fs_get_statvfs_free()
+    avail = fs_get_statvfs_avail()
+    if ok != 0 {
+        return total, free, avail, ""
+    }
+    return 0, 0, 0, "cannot statvfs path"
 }
 
 // Binary-safe file read. Preserves embedded NULs and reports the

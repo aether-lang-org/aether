@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`io.read_file` / `fs.read` no longer silently return `""` for `/proc`,
+  `/sys`, pipes, and sockets** (#1116). Both sized their buffer from
+  `fseek(SEEK_END)` / `ftell`, which reports `0` for any `/proc` or `/sys`
+  seq-file (and is meaningless for unseekable fds), so they returned an empty
+  string with **no error** — silent data loss on a common operation (reading a
+  pseudo-file). They now keep the fast size-based path for regular seekable
+  files and fall back to a grow-and-read-to-EOF loop when the size is 0 or the
+  fd isn't seekable. A genuine read error surfaces as an error/NULL, not `""`.
+
+### Added
+
+- **`fs.statvfs(path) -> (total, free, avail, err)`** (#1117). Exact filesystem
+  byte counts for the filesystem containing `path`, via POSIX `statvfs(2)`
+  (portable across Linux/macOS/BSD). `avail` is `f_bavail` — the space usable by
+  an unprivileged process, the value you want for "how much can I actually write
+  here" (e.g. auto-filling a write range: `end = avail / file_size`). Replaces
+  shelling out to `df` and parsing columns; sits alongside `fs.size` /
+  `fs.file_stat`. Windows (no `statvfs`) returns the error branch.
+
 ## [0.385.0]
 
 ### Fixed
