@@ -3780,6 +3780,27 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "        free((void*)s);");
     print_line(gen, "    }");
     print_line(gen, "}");
+    /* Closure-env string capture: a closure env must OWN its captured
+     * strings — the enclosing scope releases its own reference on
+     * reassignment (loop-carried heap slots) and at scope exit, so a
+     * borrowed pointer dangles by the time a STORED closure fires
+     * (asks/closure-captured-heap-string-dangles.md). string_retain
+     * no-ops on anything without the AetherString magic header
+     * (literals, plain char*), so applying it to every read-only
+     * string capture is safe. Forward-declared with the same
+     * `const char*` signature the extern-registry pass uses (see
+     * string_release above). Promoted (assigned-to) captures share a
+     * heap cell instead and never come through here. The env's
+     * reference is intentionally never released (closure envs have no
+     * member-aware free today): a bounded leak per closure creation,
+     * replacing a use-after-free. Residual: a PLAIN-malloc heap string
+     * (magic-less, e.g. from an @heap extern) still can't be retained
+     * — rare in capture position; noted in the ask. */
+    print_line(gen, "extern void string_retain(const char*);");
+    print_line(gen, "static inline const char* aether_str_capture(const char* s) {");
+    print_line(gen, "    if (s) string_retain(s);");
+    print_line(gen, "    return s;");
+    print_line(gen, "}");
     /* Prototypes for the magic-aware string builtins the codegen emits
      * directly (char_at -> string_char_at, str_eq / match-on-string ->
      * string_equals). These are not routed through the normal extern-call

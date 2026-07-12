@@ -1498,6 +1498,26 @@ static const char* resolve_closure_return_type(CodeGenerator* gen, int ci) {
     return ret_type;
 }
 
+// True when a captured variable is a READ-ONLY string capture — the case
+// whose env store must go through aether_str_capture() so the env owns a
+// reference (asks/closure-captured-heap-string-dangles.md: the enclosing
+// scope releases its own reference on loop-carried reassignment and at
+// scope exit, so a borrowed pointer dangles by the time a stored closure
+// fires). Promoted (assigned-to) captures share a heap cell — the env
+// field is `ctype*` and must NOT be routed through the retain.
+static int capture_is_retained_string(CodeGenerator* gen, const char* name,
+                                      const char* parent_func) {
+    char** promoted = NULL;
+    int promoted_count = 0;
+    get_promoted_names_for_func(gen, parent_func, &promoted, &promoted_count);
+    for (int p = 0; p < promoted_count; p++) {
+        if (promoted[p] && strcmp(promoted[p], name) == 0) return 0;
+    }
+    const char* ctype = lookup_var_c_type(gen, name, parent_func);
+    return ctype && (strcmp(ctype, "const char*") == 0 ||
+                     strcmp(ctype, "char*") == 0);
+}
+
 // Emit just the signature (no trailing `;` or `{`) of a closure function.
 // Caller appends `;\n` for forward decls or ` {\n` for bodies.
 static void emit_closure_signature(CodeGenerator* gen, int ci, const char* ret_type) {
@@ -1813,7 +1833,14 @@ void emit_closure_definitions(CodeGenerator* gen) {
             fprintf(gen->output, ") {\n");
             fprintf(gen->output, "    _closure_env_%d* _e = malloc(sizeof(_closure_env_%d));\n", id, id);
             for (int i = 0; i < cap_count; i++) {
-                fprintf(gen->output, "    _e->%s = %s;\n", captures[i], captures[i]);
+                if (capture_is_retained_string(gen, captures[i], parent_func)) {
+                    /* env owns a reference — see aether_str_capture preamble */
+                    const char* ctype = lookup_var_c_type(gen, captures[i], parent_func);
+                    fprintf(gen->output, "    _e->%s = (%s)aether_str_capture(%s);\n",
+                            captures[i], ctype, captures[i]);
+                } else {
+                    fprintf(gen->output, "    _e->%s = %s;\n", captures[i], captures[i]);
+                }
             }
             fprintf(gen->output, "    _AeClosure _c = { (void(*)(void))_closure_fn_%d, _e };\n", id);
             fprintf(gen->output, "    return _c;\n");
@@ -5105,11 +5132,13 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             int id = expr->value ? atoi(expr->value) : 0;
             int cap_count = 0;
             char** captures = NULL;
+            const char* cl_parent_func = NULL;
             // Find this closure's info
             for (int ci = 0; ci < gen->closure_count; ci++) {
                 if (gen->closures[ci].id == id) {
                     cap_count = gen->closures[ci].capture_count;
                     captures = gen->closures[ci].captures;
+                    cl_parent_func = gen->closures[ci].parent_func;
                     break;
                 }
             }
@@ -5122,7 +5151,14 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
                 fprintf(gen->output, "({ _closure_env_%d* _e = malloc(sizeof(_closure_env_%d)); ", id, id);
                 for (int i = 0; i < cap_count; i++) {
-                    fprintf(gen->output, "_e->%s = %s; ", captures[i], captures[i]);
+                    if (capture_is_retained_string(gen, captures[i], cl_parent_func)) {
+                        /* env owns a reference — see aether_str_capture preamble */
+                        const char* ctype = lookup_var_c_type(gen, captures[i], cl_parent_func);
+                        fprintf(gen->output, "_e->%s = (%s)aether_str_capture(%s); ",
+                                captures[i], ctype, captures[i]);
+                    } else {
+                        fprintf(gen->output, "_e->%s = %s; ", captures[i], captures[i]);
+                    }
                 }
                 fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = _e }; })", id);
                 fprintf(gen->output, "\n#else\n");
