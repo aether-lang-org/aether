@@ -1,0 +1,143 @@
+// Regression: a closure created lexically inside ANOTHER closure's body must
+// capture that enclosing closure's params and locals.
+//
+// Before the fix, closure discovery treated only *functions* as scope
+// boundaries, so an inner closure's captures were looked up in the enclosing
+// FUNCTION — where the outer closure's locals do not exist. Nothing was
+// captured, and the emitted C referenced undeclared names ("'mid' undeclared"
+// inside _closure_fn_N). A hoisted closure is now its own scope, and a capture
+// chains one env hop per nesting level.
+//
+// Also covers a capture whose declaration is inside a loop body: its C type was
+// resolved by a top-level-statements-only scan that missed it and defaulted to
+// int, so a string was captured as an int — a -Wint-conversion warning and a
+// segfault, not a compile error.
+//
+// See asks/nested-closure-capture-bug.md.
+
+import std.string
+import std.list
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+struct Item { name: string }
+
+take(cb: fn) -> ptr { return box_closure(cb) }
+fire(p: ptr) { c = unbox_closure(p); call(c) }
+invoke2(cb: fn, item: ptr, i: int) { cb(item, i) }
+mk(n: string) -> ptr { p = malloc(16) as *Item; p.name = n; return p as ptr }
+
+main() {
+    // (1) An inner closure capturing an outer FUNCTION's local — the case that
+    //     already worked, and must keep working now that the inner closure's
+    //     parent scope is the outer CLOSURE: the capture has to chain through
+    //     the outer closure's env to reach main's frame.
+    top = "TOP"
+    seen_top = ""
+    a = take() callback {
+        inner = take() callback { seen_top = top }
+        fire(inner)
+    }
+    fire(a)
+    if string.compare(seen_top, "TOP") != 0 {
+        println("FAIL: outer-function local not captured through a closure")
+        exit(1)
+    }
+
+    // (2) An inner closure capturing the ENCLOSING CLOSURE's local.
+    seen_mid = ""
+    b = take() callback {
+        mid = "MID"
+        inner = take() callback { seen_mid = mid }
+        fire(inner)
+    }
+    fire(b)
+    if string.compare(seen_mid, "MID") != 0 {
+        println("FAIL: enclosing-closure local not captured")
+        exit(1)
+    }
+
+    // (3) An inner closure capturing the enclosing closure's PARAMS and locals.
+    //     This is the load-bearing shape for a list/repeater UI: the per-item
+    //     render closure attaches a handler that closes over that item.
+    rows = ""
+    render = take() callback |item: ptr, idx: int| {
+        e = item as *Item
+        nm = e.name
+        row = take() callback {
+            rows = string.concat(rows, string.concat(nm, string.concat("@", string.from_int(idx))))
+            rows = string.concat(rows, ";")
+        }
+        fire(row)
+    }
+    items = list.new()
+    list.add(items, mk("alpha"))
+    list.add(items, mk("beta"))
+    r = unbox_closure(render)
+    n = list.size(items)
+    i = 0
+    while i < n {
+        it, _ = list.get(items, i)
+        invoke2(r, it, i)
+        i = i + 1
+    }
+    if string.compare(rows, "alpha@0;beta@1;") != 0 {
+        println("FAIL: closure params/locals not captured by nested closure")
+        println(rows)
+        exit(1)
+    }
+
+    // (4) Three levels deep: each level's local reaches the innermost body.
+    deep = ""
+    l1 = take() callback {
+        x = "A"
+        l2 = take() callback {
+            y = "B"
+            l3 = take() callback {
+                deep = string.concat(x, y)
+            }
+            fire(l3)
+        }
+        fire(l2)
+    }
+    fire(l1)
+    if string.compare(deep, "AB") != 0 {
+        println("FAIL: capture does not chain through three closure levels")
+        exit(1)
+    }
+
+    // (5) An inner closure MUTATING the enclosing closure's local: both must
+    //     see the same heap cell, so the write is visible after the inner
+    //     closure returns.
+    bumped = 0
+    m = take() callback {
+        k = 10
+        bump = take() callback { k = k + 5 }
+        fire(bump)
+        bumped = k
+    }
+    fire(m)
+    if bumped != 15 {
+        println("FAIL: inner closure's write to an enclosing-closure local was lost")
+        exit(1)
+    }
+
+    // (6) A capture whose declaration is inside a LOOP body. `nm` is a string
+    //     declared in the while body; capturing it used to type it as int.
+    joined = ""
+    j = 0
+    while j < 2 {
+        nm = string.concat("item", string.from_int(j))
+        h = take() callback { joined = string.concat(joined, string.concat(nm, ";")) }
+        fire(h)
+        j = j + 1
+    }
+    if string.compare(joined, "item0;item1;") != 0 {
+        println("FAIL: string declared in a loop body captured with the wrong type")
+        println(joined)
+        exit(1)
+    }
+
+    println("ok")
+}
