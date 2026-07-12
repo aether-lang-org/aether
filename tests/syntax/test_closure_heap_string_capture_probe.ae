@@ -1,0 +1,78 @@
+// Regression test for asks/closure-captured-heap-string-dangles.md (FIXED:
+// closure envs now RETAIN captured heap strings via aether_str_capture).
+//
+// A closure capturing a HEAP string (anything computed: string.concat,
+// string.from_int, …) stores a borrowed `const char*` in its env. The enclosing
+// scope frees that string — on the next loop iteration, and again at scope exit
+// — while the closure still holds it. Firing the closure later reads freed
+// memory and prints garbage. No compile error, no warning: a silent
+// use-after-free.
+//
+// String LITERALS are fine (.rodata). INTS are fine. Only heap strings dangle,
+// which is every computed label — the load-bearing shape for list/repeater UI
+// (build a handler per item now, fire it on click later).
+//
+// Expected output once fixed:
+//   literal: [static]
+//   literal: [static]
+//   int: [0]
+//   int: [100]
+//   heap: [item 0]
+//   heap: [item 1]
+//   heap: [item 2]
+
+import std.string
+import std.list
+
+take(cb: fn) -> ptr { return box_closure(cb) }
+fire(p: ptr) { c = unbox_closure(p); call(c) }
+
+build_literals(saved: ptr) {
+    i = 0
+    while i < 2 {
+        nm = "static"
+        h = take() callback { println("literal: [${nm}]") }
+        list.add(saved, h)
+        i = i + 1
+    }
+}
+
+build_ints(saved: ptr) {
+    i = 0
+    while i < 2 {
+        k = i * 100
+        h = take() callback { println("int: [${k}]") }
+        list.add(saved, h)
+        i = i + 1
+    }
+}
+
+// The failing case: heap strings, fired after this function has returned.
+build_heap(saved: ptr) {
+    i = 0
+    while i < 3 {
+        nm = string.concat("item ", string.from_int(i))
+        h = take() callback { println("heap: [${nm}]") }
+        list.add(saved, h)
+        i = i + 1
+    }
+}
+
+fire_all(saved: ptr) {
+    n = list.size(saved)
+    j = 0
+    while j < n {
+        p, _ = list.get(saved, j)
+        fire(p)
+        j = j + 1
+    }
+}
+
+main() {
+    saved = list.new()
+    build_literals(saved)
+    build_ints(saved)
+    build_heap(saved)
+    // Every closure is fired AFTER its defining function returned.
+    fire_all(saved)
+}
