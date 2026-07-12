@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **A closure created inside another closure's body now captures.** A
+  closure/callback written lexically inside another closure's body failed to
+  capture that enclosing closure's locals *and parameters*. `aetherc` accepted
+  the program and the emitted C then failed to compile (`'x' undeclared` inside
+  the inner closure's hoisted function). Closure discovery treated only
+  *functions* as scope boundaries, so an inner closure's captures were resolved
+  against the enclosing **function** — where the outer closure's locals do not
+  exist. A hoisted closure is now its own lexical scope: captures resolve
+  against it, chain outward one env hop per nesting level, and a name a nested
+  closure needs is carried out to every enclosing closure whose C frame the
+  inner env is built from. Writes work too — an inner closure mutating an
+  enclosing closure's local shares one heap cell, promoted at every level from
+  the writer up to the declaring scope. This is the load-bearing shape for
+  list/repeater UI (`ng-repeat`/`ForEach`): the per-item render closure can now
+  attach a handler closing over that item.
+
+- **A string first declared inside a loop body is no longer captured as an
+  `int`.** The capture's C type was resolved by a scan of the enclosing scope's
+  *top-level* statements only, so a name declared one block deeper (`while … {
+  nm = string.concat(…) }`) fell through to the `int` default. Capturing it
+  produced a `-Wint-conversion` warning and a segfault at run time — a silent
+  miscompile, not a compile error. The type lookup now recurses into nested
+  blocks, in lockstep with the analysis that decides the name is a capture.
+
 ## [0.386.0]
 
 ### Fixed

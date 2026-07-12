@@ -354,6 +354,85 @@ static ASTNode* find_receive_arm_by_name(ASTNode* node, const char* func_name) {
     return NULL;
 }
 
+// A hoisted closure is its own lexical scope: its params and body locals
+// become real C params/locals of `_closure_fn_<id>`, and a closure created
+// inside its body captures from THAT C frame, not from the enclosing
+// function's. Give each such closure a synthetic scope name — same scheme as
+// the receive-arm names above — so `parent_func` can name a closure and the
+// declaration lookups below resolve captures against it. Without this, an
+// inner closure's captures were looked up in the enclosing *function* (where
+// the outer closure's locals do not exist), so nothing was captured and the
+// emitted C referenced undeclared names.
+static void closure_scope_name(ASTNode* closure, char* buf, size_t n) {
+    snprintf(buf, n, "__closure_%p", (void*)closure);
+}
+
+// Find the AST_CLOSURE whose synthetic scope name matches `func_name`.
+static ASTNode* find_closure_by_name(ASTNode* node, const char* func_name) {
+    if (!node || !func_name) return NULL;
+    if (node->type == AST_CLOSURE) {
+        char nm[64];
+        closure_scope_name(node, nm, sizeof(nm));
+        if (strcmp(nm, func_name) == 0) return node;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        ASTNode* found = find_closure_by_name(node->children[i], func_name);
+        if (found) return found;
+    }
+    return NULL;
+}
+
+// The body of a closure/receive-arm is its last AST_BLOCK child.
+static ASTNode* last_block_child(ASTNode* node) {
+    if (!node) return NULL;
+    for (int i = node->child_count - 1; i >= 0; i--) {
+        if (node->children[i] && node->children[i]->type == AST_BLOCK) {
+            return node->children[i];
+        }
+    }
+    return NULL;
+}
+
+// Is `node` a real (hoisted) closure, as opposed to a trailing block? Trailing
+// blocks inline at their call site and so are NOT a scope boundary.
+static int is_hoisted_closure(ASTNode* node) {
+    return node && node->type == AST_CLOSURE &&
+           !(node->value && strcmp(node->value, "trailing") == 0);
+}
+
+// Walk down from `node` (carrying the scope name in force there) to find
+// `target`, and write target's ENCLOSING scope name into `out`. Returns 1 on
+// success. The scope name uses the same vocabulary as `parent_func`
+// everywhere else: a function name, "main", `__recv_arm_<ptr>`, or
+// `__closure_<ptr>`.
+static int find_enclosing_scope_name(ASTNode* node, const char* scope,
+                                     ASTNode* target, char* out, size_t n) {
+    if (!node) return 0;
+    char here[64];
+    const char* child_scope = scope;
+    if (node->type == AST_FUNCTION_DEFINITION || node->type == AST_BUILDER_FUNCTION) {
+        child_scope = node->value ? node->value : scope;
+    } else if (node->type == AST_MAIN_FUNCTION) {
+        child_scope = "main";
+    } else if (node->type == AST_RECEIVE_ARM) {
+        snprintf(here, sizeof(here), "__recv_arm_%p", (void*)node);
+        child_scope = here;
+    } else if (is_hoisted_closure(node)) {
+        closure_scope_name(node, here, sizeof(here));
+        child_scope = here;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        ASTNode* c = node->children[i];
+        if (c == target) {
+            if (!child_scope) return 0;
+            snprintf(out, n, "%s", child_scope);
+            return 1;
+        }
+        if (find_enclosing_scope_name(c, child_scope, target, out, n)) return 1;
+    }
+    return 0;
+}
+
 // Forward declaration — subtree_declares is defined below but used here
 // to recurse through trailing-block closures while stopping at real
 // closures.
@@ -420,6 +499,22 @@ static int scope_declares_at_top_level(ASTNode* block, const char* var_name) {
 // capture targets.
 static int is_top_level_decl_in_function(ASTNode* program, const char* func_name, const char* var_name) {
     if (!program || !func_name || !var_name) return 0;
+    // Hoisted closures are scopes too: `__closure_<ptr>`. Their params and
+    // top-level body decls are the enclosing scope of any closure nested
+    // inside them. A name the outer closure itself captures is also live in
+    // its C frame (the `T name = _env->name;` prologue alias), so chain up to
+    // the outer closure's own scope for anything not found locally.
+    if (strncmp(func_name, "__closure_", 10) == 0) {
+        ASTNode* c = find_closure_by_name(program, func_name);
+        if (!c) return 0;
+        if (is_closure_param(c, var_name)) return 1;
+        if (scope_declares_at_top_level(last_block_child(c), var_name)) return 1;
+        char outer[64];
+        if (find_enclosing_scope_name(program, NULL, c, outer, sizeof(outer))) {
+            return is_top_level_decl_in_function(program, outer, var_name);
+        }
+        return 0;
+    }
     // Actor receive arms use synthetic function names `__recv_arm_<ptr>`.
     if (strncmp(func_name, "__recv_arm_", 11) == 0) {
         ASTNode* arm = find_receive_arm_by_name(program, func_name);
@@ -504,6 +599,22 @@ static int subtree_declares(ASTNode* node, const char* var_name) {
 // if/else bodies) but does not descend into inner closures.
 static int is_declared_in_function(ASTNode* program, const char* func_name, const char* var_name) {
     if (!program || !func_name || !var_name) return 0;
+    if (strncmp(func_name, "__closure_", 10) == 0) {
+        ASTNode* c = find_closure_by_name(program, func_name);
+        if (!c) return 0;
+        if (is_closure_param(c, var_name)) return 1;
+        if (subtree_declares(last_block_child(c), var_name)) return 1;
+        // Not local to the outer closure — but a name the OUTER closure
+        // captures is live in its C frame (prologue alias `T name = _env->
+        // name;`), so an inner closure can and must re-capture it. Chain up
+        // to the outer closure's own scope: this is what makes a capture
+        // transit an arbitrarily deep closure nest, one env hop per level.
+        char outer[64];
+        if (find_enclosing_scope_name(program, NULL, c, outer, sizeof(outer))) {
+            return is_declared_in_function(program, outer, var_name);
+        }
+        return 0;
+    }
     if (strncmp(func_name, "__recv_arm_", 11) == 0) {
         ASTNode* arm = find_receive_arm_by_name(program, func_name);
         if (!arm || arm->child_count < 2) return 0;
@@ -769,8 +880,20 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
     // Recurse into children first. An AST_VARIABLE_DECLARATION whose RHS is
     // an AST_CLOSURE needs the closure to be discovered (and its value set to
     // the id string) before we can seed closure_var_map below.
+    //
+    // A hoisted closure is a scope boundary: everything below it captures from
+    // the closure's own C frame, so descendants get its synthetic scope name.
+    // (Note this runs AFTER the capture analysis above, which correctly used
+    // the closure's own enclosing scope.) Trailing blocks are not a boundary —
+    // they inline at the call site — and are handled by the early return above.
+    char child_scope[64];
+    const char* inner_scope = enclosing_func;
+    if (is_hoisted_closure(node)) {
+        closure_scope_name(node, child_scope, sizeof(child_scope));
+        inner_scope = child_scope;
+    }
     for (int i = 0; i < node->child_count; i++) {
-        discover_closures_scoped(gen, node->children[i], enclosing_func);
+        discover_closures_scoped(gen, node->children[i], inner_scope);
     }
 
     // Seed closure_var_map so call() emission inside other closure bodies
@@ -946,24 +1069,40 @@ static void add_promoted_name(CodeGenerator* gen, const char* func_name, const c
 // captures that are assigned to; those names must be heap-promoted in the
 // parent function (so outer reads/writes, and sibling closures, all share
 // the same cell).
+//
+// When the parent scope is itself a closure, the promotion has to be recorded
+// at EVERY scope from the writer up to the one that actually declares the name.
+// The declaring scope mints the heap cell; each closure in between holds a `T*`
+// env slot and forwards the pointer. Stopping at the immediate parent would
+// give the intermediate closure a `T*` slot fed from a plain `T` local — a
+// pointer-from-integer miscompile.
+static void promote_up_from(CodeGenerator* gen, const char* start_scope, const char* cap) {
+    char scope[64];
+    snprintf(scope, sizeof(scope), "%s", start_scope);
+    for (;;) {
+        add_promoted_name(gen, scope, cap);
+        if (strncmp(scope, "__closure_", 10) != 0) return;  // reached a real function
+        ASTNode* c = find_closure_by_name(gen->program, scope);
+        if (!c) return;
+        // The scope that declares the name owns the cell — stop there.
+        if (is_closure_param(c, cap)) return;
+        if (subtree_declares(last_block_child(c), cap)) return;
+        // Otherwise the name is this closure's own capture: keep climbing.
+        if (!find_enclosing_scope_name(gen->program, NULL, c, scope, sizeof(scope))) return;
+    }
+}
+
 static void compute_promoted_captures(CodeGenerator* gen) {
     for (int ci = 0; ci < gen->closure_count; ci++) {
         const char* parent_func = gen->closures[ci].parent_func;
         if (!parent_func) continue;
-        ASTNode* cnode = gen->closures[ci].closure_node;
-        ASTNode* body = NULL;
-        for (int k = cnode->child_count - 1; k >= 0; k--) {
-            if (cnode->children[k] && cnode->children[k]->type == AST_BLOCK) {
-                body = cnode->children[k];
-                break;
-            }
-        }
+        ASTNode* body = last_block_child(gen->closures[ci].closure_node);
         if (!body) continue;
         for (int j = 0; j < gen->closures[ci].capture_count; j++) {
             const char* cap = gen->closures[ci].captures[j];
             if (!cap) continue;
             if (is_assigned_to(body, cap)) {
-                add_promoted_name(gen, parent_func, cap);
+                promote_up_from(gen, parent_func, cap);
             }
         }
     }
@@ -997,13 +1136,73 @@ int is_promoted_capture(CodeGenerator* gen, const char* name) {
     return 0;
 }
 
+// Add `name` to closure ci's capture list if not already present.
+static void add_capture(CodeGenerator* gen, int ci, const char* name) {
+    for (int i = 0; i < gen->closures[ci].capture_count; i++) {
+        if (strcmp(gen->closures[ci].captures[i], name) == 0) return;
+    }
+    int n = gen->closures[ci].capture_count;
+    gen->closures[ci].captures = realloc(gen->closures[ci].captures,
+                                         (n + 1) * sizeof(char*));
+    gen->closures[ci].captures[n] = strdup(name);
+    gen->closures[ci].capture_count = n + 1;
+}
+
+// Transitive capture: a closure must also capture everything its NESTED
+// closures capture from scopes further out.
+//
+// The inner closure's construction site is emitted inside the outer closure's C
+// function and reads each captured name raw (`_e->nm = nm;`), so every name the
+// inner env needs must be live in the outer frame — as the outer's own local,
+// its param, or its own capture (the `T nm = _env->nm;` prologue alias). The
+// per-closure analysis can't see this: it stops at nested closures, by design,
+// because their locals are a different scope.
+//
+// So propagate outward to a fixpoint: for each closure whose parent scope is
+// another closure, any capture that is not local to that parent closure must be
+// captured by the parent too. Iterating to a fixpoint (rather than one pass)
+// carries a name up through an arbitrarily deep nest, one level per round.
+static void propagate_nested_captures(CodeGenerator* gen) {
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        for (int ci = 0; ci < gen->closure_count; ci++) {
+            const char* parent = gen->closures[ci].parent_func;
+            if (!parent || strncmp(parent, "__closure_", 10) != 0) continue;
+            // Find the enclosing closure's own entry.
+            int pi = -1;
+            for (int k = 0; k < gen->closure_count; k++) {
+                char nm[64];
+                closure_scope_name(gen->closures[k].closure_node, nm, sizeof(nm));
+                if (strcmp(nm, parent) == 0) { pi = k; break; }
+            }
+            if (pi < 0) continue;
+            ASTNode* pnode = gen->closures[pi].closure_node;
+            ASTNode* pbody = last_block_child(pnode);
+            for (int j = 0; j < gen->closures[ci].capture_count; j++) {
+                const char* cap = gen->closures[ci].captures[j];
+                // Already live in the parent closure's own frame — as a param
+                // or a local it declares anywhere in its body. The chain ends.
+                if (is_closure_param(pnode, cap)) continue;
+                if (subtree_declares(pbody, cap)) continue;
+                int before = gen->closures[pi].capture_count;
+                add_capture(gen, pi, cap);
+                if (gen->closures[pi].capture_count != before) changed = 1;
+            }
+        }
+    }
+}
+
 // Public entry point — starts at program root with no enclosing function.
 void discover_closures(CodeGenerator* gen, ASTNode* node) {
     discover_closures_scoped(gen, node, NULL);
     // Second pass: now that closure_var_map is fully populated, propagate
     // return types back onto call() expressions the typechecker left as int.
     propagate_call_return_types(gen, node);
-    // Third pass: compute which captures need heap promotion per function.
+    // Third pass: carry captures of nested closures out to their enclosing
+    // closure, whose C frame the inner env is built from.
+    propagate_nested_captures(gen);
+    // Fourth pass: compute which captures need heap promotion per function.
     compute_promoted_captures(gen);
 }
 
@@ -1103,6 +1302,40 @@ int validate_closure_state_mutations(CodeGenerator* gen, ASTNode* program) {
     return ok;
 }
 
+// Find the C type of a declaration of `var_name` anywhere in `node`'s subtree,
+// including inside nested if/for/while blocks, but not inside a hoisted
+// closure (whose locals are a different scope). Returns NULL if not found.
+//
+// The recursion into nested blocks is load-bearing and must stay in lockstep
+// with `subtree_declares`, which is what decides a name IS a capture: a name
+// declared inside a loop body (`while … { nm = string.concat(…) }`) is captured
+// by a closure in that loop, so its type has to be resolvable from the same
+// scope. A top-level-statements-only scan fell through to the "int" default and
+// silently captured a string as an int — a -Wint-conversion warning and a
+// segfault at run time, not a compile error.
+static const char* decl_c_type_in_scope(ASTNode* node, const char* var_name) {
+    if (!node) return NULL;
+    if (is_hoisted_closure(node)) return NULL;
+    if ((node->type == AST_VARIABLE_DECLARATION || node->type == AST_CONST_DECLARATION) &&
+        node->value && strcmp(node->value, var_name) == 0) {
+        if (node->node_type && node->node_type->kind != TYPE_UNKNOWN) {
+            return get_c_type(node->node_type);
+        }
+        if (node->child_count > 0 && node->children[0] &&
+            node->children[0]->node_type &&
+            node->children[0]->node_type->kind != TYPE_UNKNOWN) {
+            return get_c_type(node->children[0]->node_type);
+        }
+        // Declaration found but untyped — keep looking; a later re-declaration
+        // or assignment of the same name may carry the resolved type.
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        const char* t = decl_c_type_in_scope(node->children[i], var_name);
+        if (t) return t;
+    }
+    return NULL;
+}
+
 // Search a single function node for `var_name` as either a parameter
 // (AST_PATTERN_VARIABLE directly under the function) or a local variable
 // declaration inside the function body. Returns the C type or NULL.
@@ -1121,25 +1354,12 @@ static const char* lookup_in_function(ASTNode* func, const char* var_name) {
             }
         }
     }
-    // Locals: walk the body block(s).
+    // Locals: walk the body block(s), nested blocks included.
     for (int j = 0; j < func->child_count; j++) {
         ASTNode* body = func->children[j];
         if (!body || body->type != AST_BLOCK) continue;
-        for (int k = 0; k < body->child_count; k++) {
-            ASTNode* stmt = body->children[k];
-            if (stmt && (stmt->type == AST_VARIABLE_DECLARATION ||
-                         stmt->type == AST_CONST_DECLARATION) &&
-                stmt->value && strcmp(stmt->value, var_name) == 0) {
-                if (stmt->node_type && stmt->node_type->kind != TYPE_UNKNOWN) {
-                    return get_c_type(stmt->node_type);
-                }
-                if (stmt->child_count > 0 && stmt->children[0] &&
-                    stmt->children[0]->node_type &&
-                    stmt->children[0]->node_type->kind != TYPE_UNKNOWN) {
-                    return get_c_type(stmt->children[0]->node_type);
-                }
-            }
-        }
+        const char* t = decl_c_type_in_scope(body, var_name);
+        if (t) return t;
     }
     return NULL;
 }
@@ -1151,6 +1371,30 @@ static const char* lookup_in_function(ASTNode* func, const char* var_name) {
 // yet pass a parent.
 static const char* lookup_var_c_type(CodeGenerator* gen, const char* var_name, const char* parent_func) {
     if (!gen->program || !var_name) return "int";
+    // The parent scope may be another closure (`__closure_<ptr>`) — resolve
+    // against its params/body, then chain up to ITS parent for names it in
+    // turn captures. Falls through to the program-wide search below only if
+    // the whole chain comes up empty.
+    if (parent_func && strncmp(parent_func, "__closure_", 10) == 0) {
+        ASTNode* c = find_closure_by_name(gen->program, parent_func);
+        if (c) {
+            for (int i = 0; i < c->child_count; i++) {
+                ASTNode* p = c->children[i];
+                if (p && p->type == AST_CLOSURE_PARAM && p->value &&
+                    strcmp(p->value, var_name) == 0 &&
+                    p->node_type && p->node_type->kind != TYPE_UNKNOWN) {
+                    return get_c_type(p->node_type);
+                }
+            }
+            const char* t = decl_c_type_in_scope(last_block_child(c), var_name);
+            if (t) return t;
+            char outer[64];
+            if (find_enclosing_scope_name(gen->program, NULL, c, outer, sizeof(outer))) {
+                return lookup_var_c_type(gen, var_name, outer);
+            }
+        }
+        return "int";
+    }
     // Parent-function-first lookup
     if (parent_func) {
         for (int i = 0; i < gen->program->child_count; i++) {
@@ -1350,6 +1594,11 @@ void emit_closure_definitions(CodeGenerator* gen) {
         int parent_promoted_count = 0;
         get_promoted_names_for_func(gen, parent_func, &parent_promoted, &parent_promoted_count);
 
+        // This closure's own scope name — a closure nested inside it records
+        // promotions of ITS locals here.
+        char own_scope[64];
+        closure_scope_name(closure, own_scope, sizeof(own_scope));
+
         const char* ret_type = resolve_closure_return_type(gen, ci);
         emit_closure_signature(gen, ci, ret_type);
         fprintf(gen->output, " {\n");
@@ -1465,14 +1714,37 @@ void emit_closure_definitions(CodeGenerator* gen) {
             // emitted above. EXCLUDE names that are closure parameters of
             // this closure — those are regular-typed values (int, string,
             // etc.), not pointers, and dereferencing them would be wrong.
+            //
+            // Two sources, and they behave differently:
+            //  - the PARENT scope's promoted names: they arrive as `T*` env
+            //    slots with a `T* name = _env->name;` prologue alias, and are
+            //    pre-marked declared below;
+            //  - this closure's OWN promoted names (recorded against its
+            //    `__closure_<ptr>` scope because a closure nested inside it
+            //    writes one of its locals): these are its own locals, so the
+            //    ordinary declaration path must mint the heap cell. They go
+            //    into the promoted set — reads/writes dereference — but are
+            //    NOT pre-marked declared and get no prologue alias.
+            char** own_promoted = NULL;
+            int own_promoted_count = 0;
+            get_promoted_names_for_func(gen, own_scope, &own_promoted, &own_promoted_count);
             char** body_promoted = NULL;
             int body_promoted_count = 0;
-            if (parent_promoted_count > 0) {
-                body_promoted = malloc(parent_promoted_count * sizeof(char*));
+            if (parent_promoted_count + own_promoted_count > 0) {
+                body_promoted = malloc((parent_promoted_count + own_promoted_count) * sizeof(char*));
                 for (int p = 0; p < parent_promoted_count; p++) {
                     if (!parent_promoted[p]) continue;
                     if (is_closure_param(closure, parent_promoted[p])) continue;
                     body_promoted[body_promoted_count++] = parent_promoted[p];
+                }
+                for (int p = 0; p < own_promoted_count; p++) {
+                    if (!own_promoted[p]) continue;
+                    if (is_closure_param(closure, own_promoted[p])) continue;
+                    int dup = 0;
+                    for (int q = 0; q < body_promoted_count; q++) {
+                        if (strcmp(body_promoted[q], own_promoted[p]) == 0) { dup = 1; break; }
+                    }
+                    if (!dup) body_promoted[body_promoted_count++] = own_promoted[p];
                 }
             }
             char** prev_promoted = gen->current_promoted_captures;
