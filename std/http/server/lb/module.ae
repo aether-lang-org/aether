@@ -28,6 +28,47 @@
 //   /_aeo/drain   — stop sending NEW traffic to that upstream (in-flight finishes)
 //   /_aeo/undrain — return it to rotation
 // (Kept as /_aeo/* for compatibility with aeo's driver; override with serve_at.)
+//
+// ---- PERFORMANCE (measured, honest) --------------------------------------------
+//
+// Design posture: CORRECTNESS + declarative grammar over raw throughput. This is
+// not (yet) a hand-tuned event-loop LB; it is the .ae convenience surface over
+// std.http.proxy, and it prioritizes being right and portable.
+//
+// Measured 2026-07-12 on an Intel N100 (4 cores), load gen + LB + backends co-
+// located, cores pinned (gen 0-1, LB+backends 2-3), oha at 150k target rps, 20s,
+// two nginx static backends. Head-to-head, same backends:
+//
+//     nginx (reverse-proxy)   ~65,100 rps   100% success   p50 0.56ms  p99 1.12ms
+//     haproxy                 ~60,900 rps   100% success   p50 0.59ms  p99 1.18ms
+//     std.http.server.lb      ~24,400 rps    80% success   p50 0.84ms  p99 1.66ms
+//
+// So ~2.5-2.7x behind best-in-class on throughput, AND dropping ~1 in 5 requests
+// at that load where nginx/haproxy held 100%. (Co-located client caps absolute
+// numbers; the RELATIVE ratio is the meaningful figure.)
+//
+// SUSPECTED FINDABLE BUG (not confirmed): the 80% success rate under load is a red
+// flag that smells like a CONNECTION-HANDLING limit, NOT pure CPU saturation —
+// most likely NO UPSTREAM KEEPALIVE (a fresh backend dial per request, vs. nginx's
+// `keepalive 128` / haproxy's persistent server conns), and/or a listen-backlog /
+// fd ceiling. If so, the true ceiling is higher than 24k and the drop is fixable.
+// Verify before treating 24k as the real number: check whether std.http.proxy
+// reuses upstream connections; add a keepalive pool if not.
+//
+// DEVELOPMENT DIRECTIONS (in rough order of value):
+//   1. Fix the request drops — upstream keepalive/connection reuse; confirm the
+//      real saturation ceiling once requests aren't lost.
+//   2. Reduce per-request overhead on the hot path (the picker mutates shared
+//      state under a lock/atomics; profile it under load).
+//   3. For throughput-critical deployments, aeo can ORCHESTRATE haproxy instead of
+//      this LB (same load_balancer(){} grammar, haproxy.cfg rendered by the driver)
+//      — keep this lib as the zero-dependency, works-anywhere default; use haproxy
+//      when raw rps matters. (haproxy is a standalone daemon, not an embeddable
+//      library, so it is RUN, not linked.)
+//
+// Harness: aeo repo, examples/checks or a scratch lb.serve() binary + oha + the
+// nginx/haproxy configs used above. Re-run on a dedicated (non-co-located) box for
+// absolute numbers.
 
 import std.http (http_server_create, http_server_set_host, http_server_start_raw,
                  http_server_use_middleware, request_path, request_body,
