@@ -1,0 +1,54 @@
+// Regression test for #1062: a tuple-typed VALUE (a variable, or the result
+// of a tuple-returning extern) is accepted at a tuple-typed extern parameter,
+// not only a parenthesized tuple literal. This is the follow-up to #1033/#1040:
+// the value already IS the synthesized `_tuple_*` struct in the generated C, so
+// passing it through is a type-check relaxation, letting FFI pass-through chains
+// like `save(load(...))` skip the destructure/re-parenthesize boilerplate.
+//
+// Shapes exercised:
+//   1. round-trip a (int, int) through a variable
+//   2. direct chain: pt_sum(make_pt()) with no intermediate variable
+//   3. (byte, byte, byte, byte) round-trip through a variable
+//   4. the parenthesized-literal form still works (unchanged path)
+
+extern make_pt() -> (int, int)
+extern pt_sum(p: (int, int)) -> int
+extern make_color() -> (byte, byte, byte, byte)
+extern color_pack(c: (byte, byte, byte, byte)) -> int
+extern exit(code: int)
+
+main() {
+    // 1. Round-trip through a variable: make_pt() -> (10, 20), sum = 30.
+    p = make_pt()
+    s = pt_sum(p)
+    if s != 30 {
+        println("FAIL: pt_sum(var)=${s}, want 30")
+        exit(1)
+    }
+
+    // 2. Direct chain: a tuple-returning extern straight into a matching
+    //    tuple parameter, no intermediate variable.
+    s2 = pt_sum(make_pt())
+    if s2 != 30 {
+        println("FAIL: pt_sum(chain)=${s2}, want 30")
+        exit(1)
+    }
+
+    // 3. byte-quad round-trip through a variable.
+    c = make_color()
+    packed = color_pack(c)
+    want = 16 * 16777216 + 32 * 65536 + 64 * 256 + 127
+    if packed != want {
+        println("FAIL: color_pack(var)=${packed}, want ${want}")
+        exit(1)
+    }
+
+    // 4. The parenthesized tuple literal still works.
+    s3 = pt_sum((7, 8))
+    if s3 != 15 {
+        println("FAIL: pt_sum(literal)=${s3}, want 15")
+        exit(1)
+    }
+
+    println("OK")
+}

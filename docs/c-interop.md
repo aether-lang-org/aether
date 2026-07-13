@@ -57,6 +57,8 @@ extern void_function(param: type)  // No return type = void
 
 > **`byte` mapping note.** `byte` lowers to `unsigned char`, not `uint8_t`. The two are typedef-compatible on every platform Aether targets, but C's strict-aliasing rules give `unsigned char *` an exemption (it can legally alias any type's bytes for read/write); `uint8_t *` does not. Since `byte` is exactly the type used in C extern signatures that scrape bytes from other types' storage (packed binary protocol parsers, NaN-boxing tag readers, on-disk file headers), `unsigned char` is the right choice.
 
+> **Binding a C `bool` return: use `byte`, not `bool`.** Aether's `bool` maps to C `int` (above), so declaring a C function that returns C's one-byte `_Bool` as `-> bool` reads a full `int` and picks up three bytes of stack garbage past the result, a success can read back as something like `-255`. Bind a `bool`-returning C function with `-> byte` instead: it reads exactly the one byte the ABI wrote, and `0` vs non-zero tests the same way.
+
 ### Example: Custom C Functions
 
 **my_math.c:**
@@ -224,6 +226,22 @@ casts, so Aether `float` (double) expressions narrow to `float` fields and
 ints to `unsigned char` without warnings, and no hand-written flat-scalar
 C shim (or its extra call frame) is needed.
 
+A call site may also pass a **tuple-typed value** whose type matches the
+parameter, not only a literal (#1062): a variable holding a tuple, or the
+result of a tuple-returning extern passed straight through. The value already
+*is* the matching `_tuple_*` struct, so it crosses by value with no
+destructure, which is what makes pass-through FFI chains compose:
+
+```aether
+img = gen_image(64, 48, (30, 20, 16, 255))   // img : (ptr, int, int, int, int)
+export_image(img, "out.png")                  // hand the same struct back
+save(load(path))                              // and chains compose directly
+```
+
+A value whose tuple shape does not match the parameter (wrong element count or
+element kinds), or a non-tuple value, is rejected at type-check with the same
+`tuple-typed` diagnostic.
+
 `f32` is the 32-bit C `float` type, added for exactly these signatures:
 raylib's `Vector2` is `float` ×2 and Aether's own `float` is C `double`,
 so without it the layout was inexpressible. It works in both parameter and
@@ -232,9 +250,10 @@ on the destructured values still happens in double.
 
 **Conservative slice** (current contract): tuple parameter elements may be
 `int`, `long`, `float`, `f32`, `byte`, `bool`, or `ptr` — no strings, no
-nesting. The typechecker enforces element count and rejects a tuple
+nesting. The typechecker enforces element count and kinds, and rejects a tuple
 literal aimed at a non-tuple parameter. Exercised end-to-end by
-`tests/integration/extern_tuple_param/`.
+`tests/integration/extern_tuple_param/` (literals) and
+`tests/integration/extern_tuple_var_passthrough/` (values and call chains).
 
 ## Renaming a C Symbol, `@extern("c_name")`
 

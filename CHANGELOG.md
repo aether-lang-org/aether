@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **FFI: a tuple-typed value is now accepted at a tuple-typed extern
+  parameter** (#1062), not only a parenthesized tuple literal. A variable
+  holding a tuple, or the result of a tuple-returning extern passed straight
+  through, crosses the boundary by value because it already is the synthesized
+  `_tuple_*` struct in the generated C. This lets FFI pass-through chains like
+  `export_image(load_image(path))` skip the destructure-and-re-parenthesize
+  boilerplate that scaled with the struct's field count at every call site. A
+  value whose tuple shape does not match the parameter, or a non-tuple value,
+  is still rejected at type-check. Exercised by
+  `tests/integration/extern_tuple_var_passthrough/`.
+
+### Documentation
+
+- **c-interop.md: bind a C `bool` return with `-> byte`, not `-> bool`.**
+  Aether's `bool` maps to C `int`, so declaring a C function that returns C's
+  one-byte `_Bool` as `-> bool` reads a full `int` and picks up three bytes of
+  stack garbage past the result (a success can read back as `-255`). `-> byte`
+  reads exactly the one byte the ABI wrote.
+
 ## [0.389.0]
 
 ### Fixed
