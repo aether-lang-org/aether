@@ -7134,25 +7134,10 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                     return 0;
                 }
                 if (!param_is_tuple) continue;
-                if (arg->type != AST_TUPLE_LITERAL) {
-                    char error_msg[256];
-                    snprintf(error_msg, sizeof(error_msg),
-                             "parameter %d of extern '%s' is tuple-typed; "
-                             "pass a parenthesized tuple literal, e.g. (x, y)",
-                             pi, call->value);
-                    type_error(error_msg, arg->line, arg->column);
-                    return 0;
-                }
-                if (arg->child_count != p->node_type->tuple_count) {
-                    char error_msg[256];
-                    snprintf(error_msg, sizeof(error_msg),
-                             "tuple argument for parameter %d of extern '%s' "
-                             "has %d element(s), expected %d",
-                             pi, call->value, arg->child_count,
-                             p->node_type->tuple_count);
-                    type_error(error_msg, arg->line, arg->column);
-                    return 0;
-                }
+
+                /* The param's element kinds must be in the supported by-value
+                 * slice (scalar / byte / f32 / bool / ptr). Shared by both the
+                 * tuple-literal and tuple-value argument forms below. */
                 for (int ei = 0; ei < p->node_type->tuple_count; ei++) {
                     TypeKind ek = p->node_type->tuple_types[ei]
                                   ? p->node_type->tuple_types[ei]->kind
@@ -7170,11 +7155,57 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                         return 0;
                     }
                 }
-                /* Stamp the literal with the param's tuple type so
-                 * codegen emits the matching `_tuple_*` compound
-                 * literal without re-deriving it. */
-                if (arg->node_type) free_type(arg->node_type);
-                arg->node_type = clone_type(p->node_type);
+
+                if (arg->type == AST_TUPLE_LITERAL) {
+                    if (arg->child_count != p->node_type->tuple_count) {
+                        char error_msg[256];
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "tuple argument for parameter %d of extern '%s' "
+                                 "has %d element(s), expected %d",
+                                 pi, call->value, arg->child_count,
+                                 p->node_type->tuple_count);
+                        type_error(error_msg, arg->line, arg->column);
+                        return 0;
+                    }
+                    /* Stamp the literal with the param's tuple type so codegen
+                     * emits the matching `_tuple_*` compound literal without
+                     * re-deriving it. */
+                    if (arg->node_type) free_type(arg->node_type);
+                    arg->node_type = clone_type(p->node_type);
+                } else {
+                    /* #1062: also accept a tuple-typed value (a variable, or the
+                     * result of a tuple-returning extern) whose type matches the
+                     * parameter's tuple type. The value already is the
+                     * synthesized `_tuple_*` struct in the generated C, so this
+                     * is a pass-through of the same typedef, not new codegen,
+                     * which lets pass-through FFI chains like
+                     * `save(load(...))` skip the destructure/re-parenthesize
+                     * boilerplate. */
+                    Type* at = infer_type(arg, table);
+                    int matches = at && at->kind == TYPE_TUPLE &&
+                                  at->tuple_count == p->node_type->tuple_count;
+                    for (int ei = 0; matches && ei < p->node_type->tuple_count; ei++) {
+                        TypeKind pk = p->node_type->tuple_types[ei]
+                                      ? p->node_type->tuple_types[ei]->kind : TYPE_UNKNOWN;
+                        TypeKind ak = (at->tuple_types && at->tuple_types[ei])
+                                      ? at->tuple_types[ei]->kind : TYPE_UNKNOWN;
+                        /* Element kinds must produce the same `_tuple_*` C
+                         * typedef. Allow an UNKNOWN arg element (an inference
+                         * gap) to defer to the C compiler rather than
+                         * over-reject a legitimate round-trip. */
+                        if (ak != pk && ak != TYPE_UNKNOWN) matches = 0;
+                    }
+                    if (at) free_type(at);
+                    if (!matches) {
+                        char error_msg[256];
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "parameter %d of extern '%s' is tuple-typed; "
+                                 "pass a matching tuple value or a parenthesized "
+                                 "tuple literal, e.g. (x, y)", pi, call->value);
+                        type_error(error_msg, arg->line, arg->column);
+                        return 0;
+                    }
+                }
             }
         }
     }
