@@ -1,0 +1,7 @@
+// `defer try` in a function with no error channel always runs — it is just a
+// plain `defer`, so saying `try` is misleading.
+plain() -> int {
+    defer try println("always runs anyway")
+    return 1
+}
+main() { println("${plain()}") }

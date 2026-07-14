@@ -3556,17 +3556,49 @@ ASTNode* parse_return_statement(Parser* parser) {
     return return_stmt;
 }
 
+/* #1140 — `defer`, `defer try` and `defer catch`.
+ *
+ *   defer       cleanup()    // always, on every exit (the pre-existing form)
+ *   defer try   commit()     // only when the function returns SUCCESSFULLY
+ *   defer catch rollback()   // only when the function returns an ERROR
+ *
+ * The qualifier is recorded in `value` ("try" / "catch"; NULL = unconditional),
+ * which codegen reads when it drains the defer stack at each exit.
+ *
+ * This is the transaction shape: acquire, register the rollback, register the
+ * commit, then let any error path bail without the acquire leaking and without
+ * the half-built result being published.
+ *
+ * `try` / `catch` here are the ordinary existing keywords — no new tokens. The
+ * qualifier is only meaningful in a function that can actually fail (one
+ * returning `(value, err)` or `T!`); in any other function a `defer try` is just
+ * an unconditional defer and a `defer catch` never fires, which the typechecker
+ * warns about rather than silently accepting. */
 ASTNode* parse_defer_statement(Parser* parser) {
     Token* defer_token = peek_token(parser);
     advance_token(parser);
-    
+
+    const char* mode = NULL;
+    Token* q = peek_token(parser);
+    if (q && q->type == TOKEN_TRY) {
+        advance_token(parser);
+        mode = "try";
+    } else if (q && q->type == TOKEN_CATCH) {
+        advance_token(parser);
+        mode = "catch";
+    }
+
     ASTNode* deferred_stmt = parse_statement(parser);
     if (!deferred_stmt) {
-        parser_error(parser, "Expected statement after 'defer'");
+        parser_error(parser, mode
+            ? "Expected statement after `defer try` / `defer catch`"
+            : "Expected statement after 'defer'");
         return NULL;
     }
-    
-    ASTNode* defer_node = create_ast_node(AST_DEFER_STATEMENT, NULL, defer_token->line, defer_token->column);
+
+    ASTNode* defer_node = create_ast_node(AST_DEFER_STATEMENT, NULL,
+                                          defer_token->line, defer_token->column);
+    if (mode) defer_node->value = strdup(mode);
     add_child(defer_node, deferred_stmt);
 
     return defer_node;

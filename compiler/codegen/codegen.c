@@ -422,6 +422,11 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->scope_depth = 0;
     memset(gen->defer_stack, 0, sizeof(gen->defer_stack));
     memset(gen->scope_defer_start, 0, sizeof(gen->scope_defer_start));
+    /* #1140: every defer is unconditional until a `defer try` / `defer catch`
+     * says otherwise, and a bare scope exit is not a function outcome. */
+    memset(gen->defer_mode, 0, sizeof(gen->defer_mode));   /* DEFER_ALWAYS */
+    gen->defer_exit = DEFER_EXIT_PLAIN;
+    gen->defer_err_slot = NULL;
     // Issue #501: try/catch frame-pop tracking
     gen->try_frame_depth = 0;
     gen->loop_nest_depth = 0;
@@ -993,9 +998,18 @@ void print_indent(CodeGenerator* gen) {
 // Defer Implementation - Real LIFO execution at scope exit
 // ============================================================================
 
-// Push a deferred statement onto the stack
+// Push a deferred statement onto the stack (unconditional — fires at every exit).
 void push_defer(CodeGenerator* gen, ASTNode* stmt) {
+    push_defer_mode(gen, stmt, DEFER_ALWAYS);
+}
+
+/* #1140 — push a deferred statement with an explicit firing mode. Every
+ * pre-existing caller (including all the compiler-synthesised cleanup carriers)
+ * goes through push_defer above and so is DEFER_ALWAYS; only a user's
+ * `defer try` / `defer catch` reaches here with anything else. */
+void push_defer_mode(CodeGenerator* gen, ASTNode* stmt, DeferMode mode) {
     if (gen->defer_count < MAX_DEFER_STACK) {
+        gen->defer_mode[gen->defer_count] = mode;
         gen->defer_stack[gen->defer_count++] = stmt;
     } else {
         AetherError w = {NULL, NULL, 0, 0, "defer stack overflow — too many nested defers",
@@ -1100,6 +1114,67 @@ static int try_emit_struct_destroy(CodeGenerator* gen, ASTNode* deferred) {
     return 1;
 }
 
+/* #1140 — should the defer at stack slot `i` fire at the exit currently being
+ * emitted?
+ *
+ *   DEFER_ALWAYS  fires everywhere (this is every pre-existing defer, and every
+ *                 compiler-synthesised cleanup carrier).
+ *   DEFER_TRY     fires only on a successful return.
+ *   DEFER_CATCH   fires only on an error return.
+ *
+ * A `break` / `continue` / plain scope exit is not a function outcome, so
+ * neither conditional kind fires there. When the outcome is only known at run
+ * time (the usual `return v, err` case), both kinds are emitted but each is
+ * wrapped in a runtime test on the error slot — see emit_deferred_one. */
+static int defer_fires_at_exit(CodeGenerator* gen, int i) {
+    switch (gen->defer_mode[i]) {
+        case DEFER_ALWAYS: return 1;
+        case DEFER_TRY:
+            return gen->defer_exit == DEFER_EXIT_SUCCESS ||
+                   gen->defer_exit == DEFER_EXIT_RUNTIME;
+        case DEFER_CATCH:
+            return gen->defer_exit == DEFER_EXIT_ERROR ||
+                   gen->defer_exit == DEFER_EXIT_RUNTIME;
+    }
+    return 1;
+}
+
+/* #1140 — emit one deferred statement, wrapping it in a runtime guard when the
+ * exit's success/error outcome is not statically known. The guard uses exactly
+ * the convention the rest of the compiler uses for "this result carries an
+ * error": a non-NULL, non-empty error slot (`e && e[0]`). */
+static void emit_deferred_one(CodeGenerator* gen, int i) {
+    ASTNode* deferred = gen->defer_stack[i];
+    if (!deferred) return;
+
+    DeferMode mode = gen->defer_mode[i];
+    int guarded = (mode != DEFER_ALWAYS &&
+                   gen->defer_exit == DEFER_EXIT_RUNTIME &&
+                   gen->defer_err_slot != NULL);
+    if (guarded) {
+        print_indent(gen);
+        fprintf(gen->output, "if (%s(%s && %s[0])) {\n",
+                mode == DEFER_CATCH ? "" : "!",
+                gen->defer_err_slot, gen->defer_err_slot);
+        gen->indent_level++;
+    }
+
+    if (!try_emit_heap_string_exit_free(gen, deferred) &&
+        !try_emit_seq_exit_free(gen, deferred) &&
+        !try_emit_struct_destroy(gen, deferred)) {
+        print_indent(gen);
+        fprintf(gen->output, "/* deferred%s */ ",
+                mode == DEFER_TRY ? " (try)" : mode == DEFER_CATCH ? " (catch)" : "");
+        generate_statement(gen, deferred);
+    }
+
+    if (guarded) {
+        gen->indent_level--;
+        print_indent(gen);
+        fprintf(gen->output, "}\n");
+    }
+}
+
 // Emit deferred statements for current scope only (in reverse order)
 void emit_defers_for_scope(CodeGenerator* gen) {
     if (gen->scope_depth <= 0) return;
@@ -1108,15 +1183,9 @@ void emit_defers_for_scope(CodeGenerator* gen) {
 
     // Emit defers in LIFO order (reverse)
     for (int i = gen->defer_count - 1; i >= scope_start; i--) {
-        ASTNode* deferred = gen->defer_stack[i];
-        if (deferred) {
-            if (try_emit_heap_string_exit_free(gen, deferred)) continue;
-            if (try_emit_seq_exit_free(gen, deferred)) continue;
-            if (try_emit_struct_destroy(gen, deferred)) continue;
-            print_indent(gen);
-            fprintf(gen->output, "/* deferred */ ");
-            generate_statement(gen, deferred);
-        }
+        if (!gen->defer_stack[i]) continue;
+        if (!defer_fires_at_exit(gen, i)) continue;
+        emit_deferred_one(gen, i);
     }
 }
 
@@ -1134,15 +1203,9 @@ void emit_defers_through_scope(CodeGenerator* gen, int floor_depth) {
 
     int scope_start = gen->scope_defer_start[floor_depth];
     for (int i = gen->defer_count - 1; i >= scope_start; i--) {
-        ASTNode* deferred = gen->defer_stack[i];
-        if (deferred) {
-            if (try_emit_heap_string_exit_free(gen, deferred)) continue;
-            if (try_emit_seq_exit_free(gen, deferred)) continue;
-            if (try_emit_struct_destroy(gen, deferred)) continue;
-            print_indent(gen);
-            fprintf(gen->output, "/* deferred */ ");
-            generate_statement(gen, deferred);
-        }
+        if (!gen->defer_stack[i]) continue;
+        if (!defer_fires_at_exit(gen, i)) continue;
+        emit_deferred_one(gen, i);
     }
 }
 
@@ -1203,6 +1266,8 @@ void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int p
     for (int i = gen->defer_count - 1; i >= 0; i--) {
         ASTNode* deferred = gen->defer_stack[i];
         if (!deferred) continue;
+        /* #1140: skip the conditional defers that don't apply to this exit. */
+        if (!defer_fires_at_exit(gen, i)) continue;
         int skip = 0;
         for (int p = 0; p < protected_count; p++) {
             if (!protected_names[p]) continue;
@@ -1217,12 +1282,7 @@ void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int p
             fprintf(gen->output, "/* deferred (suppressed: escapes via return) */\n");
             continue;
         }
-        if (try_emit_heap_string_exit_free(gen, deferred)) continue;
-        if (try_emit_seq_exit_free(gen, deferred)) continue;
-        if (try_emit_struct_destroy(gen, deferred)) continue;
-        print_indent(gen);
-        fprintf(gen->output, "/* deferred */ ");
-        generate_statement(gen, deferred);
+        emit_deferred_one(gen, i);
     }
 }
 

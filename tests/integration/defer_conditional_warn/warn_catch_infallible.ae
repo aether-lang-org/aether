@@ -1,0 +1,6 @@
+// `defer catch` in a function with no error channel can never fire.
+plain() -> int {
+    defer catch println("never runs")
+    return 1
+}
+main() { println("${plain()}") }

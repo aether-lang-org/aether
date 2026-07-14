@@ -6008,7 +6008,27 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     // protection logic the single-value path runs is
                     // unnecessary here — drain the defers and emit the
                     // return.
-                    emit_all_defers(gen);
+                    /* #1140: this is a `(value, err)` return, so `defer try` /
+                     * `defer catch` fire here — conditionally on the error slot.
+                     * `_builder_ret` is already constructed above, so the guard
+                     * can test it directly, using the same "non-NULL and
+                     * non-empty" convention the rest of the compiler uses for
+                     * "this result carries an error". A literal `""` in the
+                     * error position would let us decide statically, but the
+                     * runtime test costs a predictable compare on the return
+                     * path and keeps this to one code path. */
+                    {
+                        char errslot[32];
+                        snprintf(errslot, sizeof(errslot), "_builder_ret._%d",
+                                 stmt->child_count - 1);
+                        DeferExit prev_exit = gen->defer_exit;
+                        const char* prev_slot = gen->defer_err_slot;
+                        gen->defer_exit = DEFER_EXIT_RUNTIME;
+                        gen->defer_err_slot = errslot;
+                        emit_all_defers(gen);
+                        gen->defer_exit = prev_exit;
+                        gen->defer_err_slot = prev_slot;
+                    }
                     /* Issue #501: drain try frames. */
                     emit_try_pops_for_nonlocal_exit(gen);
                     print_line(gen, "return _builder_ret;");
@@ -6113,7 +6133,17 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                      * its exit-time destroy (heap-string fields now owned
                      * by the caller). */
                     mark_returned_struct_escaped(gen, stmt->children[0]);
-                    emit_all_defers_protected(gen, protected_names, protected_count);
+                    /* #1140: a single-value `return v` is a SUCCESS exit — in a
+                     * `T!` function it is wrapped as `{._0 = v, ._1 = ""}`, and
+                     * in an ordinary function there is no error channel at all.
+                     * Either way `defer try` fires and `defer catch` does not,
+                     * and it is known statically, so no runtime guard. */
+                    {
+                        DeferExit prev_exit = gen->defer_exit;
+                        gen->defer_exit = DEFER_EXIT_SUCCESS;
+                        emit_all_defers_protected(gen, protected_names, protected_count);
+                        gen->defer_exit = prev_exit;
+                    }
                     for (int p = 0; p < protected_count; p++) free(protected_names[p]);
                     free(protected_names);
                     /* Issue #501: drain try frames. */
@@ -6278,9 +6308,17 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         }
 
         case AST_DEFER_STATEMENT:
-            // Push deferred statement to stack - will be executed at scope exit
+            // Push deferred statement to stack - will be executed at scope exit.
+            // #1140: `value` carries the qualifier ("try" / "catch"; NULL for a
+            // plain `defer`), set by the parser. The stack holds the deferred
+            // STATEMENT, so the mode travels alongside in gen->defer_mode[].
             if (stmt->child_count > 0) {
-                push_defer(gen, stmt->children[0]);
+                DeferMode mode = DEFER_ALWAYS;
+                if (stmt->value) {
+                    if (strcmp(stmt->value, "try") == 0)        mode = DEFER_TRY;
+                    else if (strcmp(stmt->value, "catch") == 0) mode = DEFER_CATCH;
+                }
+                push_defer_mode(gen, stmt->children[0], mode);
             }
             break;
 
