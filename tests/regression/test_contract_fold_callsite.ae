@@ -1,0 +1,83 @@
+// Contract folding, the SILENCE suite (docs/contract-folding.md §8.2).
+//
+// Call-site folding errors when a predicate is decidably false for a call's
+// constant arguments (tests/integration/contract_fold_reject/ covers those).
+// This file pins the other side, which is the one that can fail badly: every
+// case here is code the fold must NOT touch — it must compile, run, and
+// compute the same answers as before the feature existed. A false positive
+// here means the compiler rejects correct programs, which is the single
+// worst failure mode this feature has.
+
+extern exit(code: int)
+
+enum Lvl { Off, Low, High }
+
+const CAP = 64
+
+divide(a: int, b: int where b != 0) -> int { return a / b }
+
+clamp(lo: int, hi: int) -> int requires lo <= hi { return lo }
+
+// Predicate over a const — decidably TRUE, so the runtime check is elided
+// (guarded by test_contract_const_fold.ae); the call must be untouched.
+capped(n: int) -> int requires CAP > 0 { return n }
+
+// The int64-precision edge, satisfied side: 9007199254740993 is 2^53 + 1.
+// A double-based evaluator could mis-fold this comparison; the int64
+// evaluator must decide it TRUE and stay silent.
+exact(x: long) -> long requires x == 9007199254740993 { return x }
+
+lvl_gate(n: int) -> int requires n >= 0 { return n }
+
+check(got: int, want: int, lbl: string) -> int {
+    if got != want {
+        println("FAIL ${lbl}: ${got} != ${want}")
+        return 1
+    }
+    return 0
+}
+
+main() {
+    fails = 0
+
+    // Constant arguments that SATISFY the predicate: fold decides TRUE,
+    // nothing happens, call runs.
+    fails = fails + check(divide(10, 2), 5, "satisfied constant arg")
+    fails = fails + check(clamp(3, 9), 3, "satisfied multi-param")
+
+    // Runtime arguments: UNKNOWN to the fold, runtime check stays, call runs.
+    n = 5
+    fails = fails + check(divide(10, n), 2, "runtime arg")
+
+    // Partial environment: one constant, one runtime — the two-param
+    // predicate cannot be decided, so nothing may fire even though the
+    // constant side alone might look alarming.
+    m = 1
+    fails = fails + check(clamp(9, m + 10), 9, "partial env")
+
+    // Const-resolved predicate (elided check) — call behaves identically.
+    fails = fails + check(capped(7), 7, "const-elided predicate")
+
+    // int64 exactness, satisfied side.
+    big = exact(9007199254740993)
+    if big != 9007199254740993 { println("FAIL int64 exact"); fails = fails + 1 }
+
+    // Enum member that SATISFIES the predicate.
+    fails = fails + check(lvl_gate(Lvl.High), 2, "satisfying enum member")
+
+    // The ordering guard: `when` arms are pruned BEFORE typecheck
+    // (optimizer.c), so a provably-violating call inside a dead-platform arm
+    // must never reach the fold. No platform in CI (or anywhere) is "plan9",
+    // so this arm is always pruned — if the fold ever ran before pruning,
+    // this file would stop compiling everywhere at once.
+    when target.os == "plan9" {
+        dead = divide(10, 0)
+        println("${dead}")
+    }
+
+    if fails != 0 {
+        println("contract-fold silence: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_contract_fold_callsite")
+}

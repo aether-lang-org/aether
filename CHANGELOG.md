@@ -9,6 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Contracts now fold at compile time — a provably-violated contract is a
+  build error, not a deferred panic** (design: `docs/contract-folding.md`).
+
+  ```aether
+  divide(a: int, b: int where b != 0) -> int { return a / b }
+
+  divide(10, 0)     // NEW: compile error — "precondition violation at compile
+                    // time: b != 0 in divide — this call's constant arguments
+                    // can never satisfy it"
+  divide(10, n)     // n is runtime → runtime check, exactly as before
+  ```
+
+  Two tiers. At a **definition**, a `requires`/`where`/`ensures` predicate that
+  is decidably false with no arguments substituted (`requires false`, or
+  `requires MIN <= MAX` after a const refactor staled it) can never be
+  satisfied, so it errors at the clause. At a **call site**, the constant
+  arguments are substituted for the parameters and a decidably-false predicate
+  errors at the call — trait-bound/concepts-like checking from the contract
+  syntax you already wrote, with no macro system.
+
+  The evaluator is deliberately narrow and conservative: literals, top-level
+  `const` names, enum members, arithmetic (**exact in int64** — a double-based
+  fold would mis-judge `x == 9007199254740993`-class comparisons), comparisons
+  and `&& || !`. It **never evaluates calls** — the const layer is
+  whitelist-only precisely so compile-time evaluation can't synthesize
+  fs/net calls past the `--emit=lib` capability gate — and anything it cannot
+  decide keeps today's runtime check with no diagnostic. `when` arms are
+  pruned before the typechecker runs, so platform-dead calls cannot
+  false-positive.
+
+  Check **elision** got smarter as a side effect: the constant-true fold now
+  resolves `const` names and enum members (`requires cap > MIN_CAP` elides),
+  where it previously handled only literals. Short-circuit folding is
+  asymmetric on purpose: `true || x` elides (the runtime would skip `x` too),
+  but `x || true` with unknown `x` keeps the runtime check, since evaluating
+  `x` may carry a side effect — the documented pre-existing guarantee, now
+  load-bearing in the evaluator.
+
+### Upgrade notes
+
+Code that compiled and panicked at runtime — or never executed — now fails to
+build if a contract violation is provable from constant arguments:
+
+```aether
+if never_true() { r = divide(x, 0) }   // compiled before; rejected now
+```
+
+The tree contains ~32 contract clauses total, so the practical blast radius is
+approximately zero — this window is exactly why the change ships now rather
+than after contracts proliferate. If a provably-violating call is genuinely
+intended to be unreachable, route the constant through a runtime variable
+(`z = 0; divide(x, z)`); only constant arguments participate in folding.
+
+Exactly one in-tree caller needed that treatment: the `where_clause`
+integration probe, which deliberately calls `divide(10, 0)` to assert the
+runtime panic message. It now routes the zero through a runtime variable (with
+a comment saying why) — a worked example of both the break and the fix.
+
+Compile-time contract errors fire even under `--no-contracts`: that flag
+removes runtime *checks*; it does not suppress compile-time correctness
+findings.
+
 ## [0.396.0]
 
 ### Added

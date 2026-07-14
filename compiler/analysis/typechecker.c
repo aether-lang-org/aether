@@ -7,6 +7,7 @@
 #include "../parser/parser.h"
 #include "../aether_error.h"
 #include "../aether_module.h"
+#include "contract_eval.h"
 
 // #1062: the canonical C-type-name renderer (codegen.c). The tuple-extern
 // argument check keys on the same C spelling codegen names `_tuple_*` typedefs
@@ -2329,6 +2330,45 @@ static ASTNode* bitstruct_field_lookup(ASTNode* program, const char* bname,
     return NULL;
 }
 
+/* Contract folding, definition-site tier (docs/contract-folding.md): a
+ * `requires` / `where` / `ensures` predicate that is decidably FALSE with no
+ * arguments substituted can never be satisfied by ANY call — the realistic
+ * way to write one is a refactor that stales a constant (`requires cap >
+ * MIN_CAP` after a `const MIN_CAP` edit makes it unsatisfiable). Erroring at
+ * the definition beats panicking at the first runtime call.
+ *
+ * This deliberately reverses codegen's earlier "constant-false falls through
+ * to a runtime panic" stance, which was right when folding's only job was
+ * check ELISION (a perf feature shouldn't change what compiles) and is wrong
+ * for a diagnostic. UNKNOWN — anything touching a parameter, a call, or a
+ * non-const name — stays a runtime check and says nothing. */
+static void contract_check_clauses_at_definition(ASTNode* func) {
+    if (!func) return;
+    ContractEnv env = {{0}, {0}, 0, g_enum_program};
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* cl = func->children[i];
+        if (!cl || cl->child_count == 0) continue;
+        int is_req = (cl->type == AST_REQUIRES_CLAUSE);
+        int is_ens = (cl->type == AST_ENSURES_CLAUSE);
+        if (!is_req && !is_ens) continue;
+        if (contract_eval_predicate(cl->children[0], &env) != CONTRACT_FALSE)
+            continue;
+        char ptxt[512];
+        ContractStr ps = { ptxt, sizeof(ptxt), 0 };
+        contract_sprint_expr(&ps, cl->children[0]);
+        contract_str_terminate(&ps);
+        char emsg[768];
+        snprintf(emsg, sizeof(emsg),
+                 is_req
+                     ? "`requires` predicate is always false — no call to '%s' "
+                       "can ever satisfy it: %s"
+                     : "`ensures` predicate is always false — '%s' can never "
+                       "return legally: %s",
+                 func->value ? func->value : "<fn>", ptxt);
+        type_error(emsg, cl->line, cl->column);
+    }
+}
+
 // The AST_ENUM_DEFINITION for `name`, or NULL.
 static ASTNode* enum_def_lookup(const char* name) {
     if (!name || !g_enum_program) return NULL;
@@ -4364,6 +4404,10 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
      * the author has written something that does not do what it says, so say so
      * rather than silently compiling it. */
     warn_conditional_defers_in_infallible(func, func->node_type);
+
+    /* Contract folding, definition-site tier: reject clauses that are
+     * decidably false with no arguments substituted. */
+    contract_check_clauses_at_definition(func);
 
     free_symbol_table(func_table);
     return 1;
@@ -7594,6 +7638,11 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
          * arg_offset at -1 (param[1] aligns to arg[0]). */
         if (has_ctx && got == expected - 1) arg_offset = -1;
         int param_idx = 0;
+        /* Contract folding, call-site tier (docs/contract-folding.md):
+         * collect the parameter-name -> argument-expression bindings while
+         * the loop below walks them anyway; the callee's `requires`/`where`
+         * clauses are evaluated under this environment after the loop. */
+        ContractEnv cf_env = {{0}, {0}, 0, g_enum_program};
         /* User-defined / builder functions store the body as the final
          * child; extern declarations do not. Cap the loop accordingly
          * so we don't try to treat the body as a parameter. */
@@ -7617,6 +7666,12 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
             int arg_slot = param_idx + arg_offset;
             param_idx++;
             if (arg_slot < 0 || arg_slot >= call->child_count) continue;
+
+            if (cf_env.count < CONTRACT_ENV_MAX_PARAMS && param->value) {
+                cf_env.names[cf_env.count] = param->value;
+                cf_env.args[cf_env.count] = call->children[arg_slot];
+                cf_env.count++;
+            }
 
             Type* param_type = param->node_type;
             /* #480: a distinct-typed parameter (or a distinct argument to a
@@ -7688,6 +7743,45 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                 type_error(error_msg, arg->line, arg->column);
             }
             free_type(arg_type);
+        }
+
+        /* Contract folding, call-site tier: with the parameter -> argument
+         * environment built above, a `requires` / `where` predicate that is
+         * decidably FALSE for THIS call's constant arguments is a compile
+         * error — the call could never execute legally, so the runtime panic
+         * is promoted to a build failure. `divide(10, 0)` against `b: int
+         * where b != 0` fails here instead of at run time.
+         *
+         * UNKNOWN — any runtime operand, a call, member access, a partial
+         * environment — keeps today's runtime check and says nothing; the
+         * only way this can fire is when every value the predicate needs is
+         * a compile-time constant. Platform-conditional code cannot
+         * false-positive: `when` arms are pruned BEFORE typecheck
+         * (optimizer.c), so a dead-platform call never reaches this walk.
+         * These errors deliberately fire even under --no-contracts: that
+         * flag removes runtime CHECKS, and suppressing free compile-time
+         * correctness findings with it would conflate the two.
+         *
+         * Escape hatch for intentionally-unreachable calls: route the value
+         * through a runtime variable — only constant arguments bind. */
+        for (int ci = 0; ci < symbol->node->child_count; ci++) {
+            ASTNode* cl = symbol->node->children[ci];
+            if (!cl || cl->type != AST_REQUIRES_CLAUSE || cl->child_count == 0)
+                continue;
+            if (contract_eval_predicate(cl->children[0], &cf_env) != CONTRACT_FALSE)
+                continue;
+            char ptxt[512];
+            ContractStr ps = { ptxt, sizeof(ptxt), 0 };
+            contract_sprint_expr(&ps, cl->children[0]);
+            contract_str_terminate(&ps);
+            char emsg[768];
+            snprintf(emsg, sizeof(emsg),
+                     "precondition violation at compile time: %s in %s — this "
+                     "call's constant arguments can never satisfy it (the same "
+                     "check would panic at run time)",
+                     ptxt, call->value ? call->value : "?");
+            type_error(emsg, call->line, call->column);
+            break;   /* one violation per call site is enough */
         }
     }
 

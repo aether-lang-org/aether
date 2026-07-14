@@ -1,6 +1,7 @@
 #include "codegen_internal.h"
 #include "optimizer.h"
 #include "../aether_module.h"
+#include "../analysis/contract_eval.h"
 
 // Is `name` the variable name of a known closure? If yes, also returns the
 // closure id via *out_id. Used by return-site Bug B protection.
@@ -2994,134 +2995,6 @@ static int has_identifier_ref(ASTNode* node, const char* name) {
 // falls through to the literal string `"<expr>"`, which is still
 // disambiguated by the surrounding "<predicate-text> in <fn-name>"
 // line+column info from the panic stack trace (issue #347).
-
-/* Tiny in-memory string-builder used to round-trip predicate text
- * for the contract-check diagnostic. Earlier this used `fmemopen`,
- * which is POSIX-only — MinGW64 has no equivalent. Plain
- * `char[] + size_t off` works everywhere and produces the same
- * bytes. Truncation is silent: a predicate longer than the
- * caller's buffer ends with the last char that fit, no
- * terminator overflow. */
-typedef struct { char* buf; size_t cap; size_t off; } _ContractStr;
-
-static void _cstr_putc(_ContractStr* s, char c) {
-    /* Reserve one byte for the trailing NUL. */
-    if (s->off + 1 < s->cap) s->buf[s->off++] = c;
-}
-static void _cstr_puts(_ContractStr* s, const char* str) {
-    while (*str) _cstr_putc(s, *str++);
-}
-static void _cstr_terminate(_ContractStr* s) {
-    if (s->cap == 0) return;
-    if (s->off >= s->cap) s->buf[s->cap - 1] = '\0';
-    else s->buf[s->off] = '\0';
-}
-
-/* Round-trip a predicate-expression AST back to source-like text so
- * the diagnostic names the specific failed check. Best-effort —
- * covers the operator subset most contracts use. */
-static void sprint_expr_text(_ContractStr* s, ASTNode* e) {
-    if (!e) { _cstr_puts(s, "?"); return; }
-    switch (e->type) {
-        case AST_IDENTIFIER:
-        case AST_LITERAL:
-            if (e->value) _cstr_puts(s, e->value);
-            else _cstr_puts(s, "?");
-            return;
-        case AST_NULL_LITERAL:
-            _cstr_puts(s, "null");
-            return;
-        case AST_BINARY_EXPRESSION:
-            if (e->child_count == 2) {
-                sprint_expr_text(s, e->children[0]);
-                _cstr_putc(s, ' ');
-                if (e->value) _cstr_puts(s, e->value);
-                _cstr_putc(s, ' ');
-                sprint_expr_text(s, e->children[1]);
-                return;
-            }
-            break;
-        case AST_UNARY_EXPRESSION:
-            if (e->child_count == 1) {
-                if (e->value) _cstr_puts(s, e->value);
-                sprint_expr_text(s, e->children[0]);
-                return;
-            }
-            break;
-        case AST_MEMBER_ACCESS:
-            if (e->child_count == 1) {
-                sprint_expr_text(s, e->children[0]);
-                _cstr_putc(s, '.');
-                if (e->value) _cstr_puts(s, e->value);
-                return;
-            }
-            break;
-        case AST_FUNCTION_CALL:
-            if (e->value) _cstr_puts(s, e->value);
-            _cstr_putc(s, '(');
-            for (int i = 0; i < e->child_count; i++) {
-                if (i) _cstr_puts(s, ", ");
-                sprint_expr_text(s, e->children[i]);
-            }
-            _cstr_putc(s, ')');
-            return;
-        default:
-            break;
-    }
-    _cstr_puts(s, "<expr>");
-}
-
-// Recursively evaluate a predicate AST as a compile-time constant.
-// Returns 1 if the expression is provably constant; *truthy_out
-// holds the boolean value. Conservatively returns 0 for any
-// expression touching identifiers, function calls, or operators
-// outside the supported subset — runtime check stays in place.
-//
-// Supported: integer/float/bool literals; comparison ops
-// (`<`, `<=`, `>`, `>=`, `==`, `!=`); arithmetic ops
-// (`+`, `-`, `*`, `/`, `%`); logical ops (`&&`, `||`); unary
-// negation and `!`. Enough for the common "vacuous predicate"
-// cases (`requires true`, `ensures 1 > 0`, `requires N > 0` where
-// N has been constant-folded by the optimizer pre-pass).
-static int try_fold_predicate(ASTNode* e, double* val_out) {
-    if (!e) return 0;
-    if (e->type == AST_LITERAL && e->value) {
-        if (strcmp(e->value, "true") == 0)  { *val_out = 1.0; return 1; }
-        if (strcmp(e->value, "false") == 0) { *val_out = 0.0; return 1; }
-        if (e->node_type && e->node_type->kind == TYPE_STRING) return 0;
-        *val_out = atof(e->value);
-        return 1;
-    }
-    if (e->type == AST_UNARY_EXPRESSION && e->child_count == 1 && e->value) {
-        double v = 0.0;
-        if (!try_fold_predicate(e->children[0], &v)) return 0;
-        if (strcmp(e->value, "!") == 0) { *val_out = (v == 0.0) ? 1.0 : 0.0; return 1; }
-        if (strcmp(e->value, "-") == 0) { *val_out = -v; return 1; }
-        if (strcmp(e->value, "+") == 0) { *val_out =  v; return 1; }
-        return 0;
-    }
-    if (e->type == AST_BINARY_EXPRESSION && e->child_count == 2 && e->value) {
-        double l = 0.0, r = 0.0;
-        if (!try_fold_predicate(e->children[0], &l)) return 0;
-        if (!try_fold_predicate(e->children[1], &r)) return 0;
-        const char* op = e->value;
-        if (strcmp(op, "<")  == 0) { *val_out = (l <  r) ? 1.0 : 0.0; return 1; }
-        if (strcmp(op, "<=") == 0) { *val_out = (l <= r) ? 1.0 : 0.0; return 1; }
-        if (strcmp(op, ">")  == 0) { *val_out = (l >  r) ? 1.0 : 0.0; return 1; }
-        if (strcmp(op, ">=") == 0) { *val_out = (l >= r) ? 1.0 : 0.0; return 1; }
-        if (strcmp(op, "==") == 0) { *val_out = (l == r) ? 1.0 : 0.0; return 1; }
-        if (strcmp(op, "!=") == 0) { *val_out = (l != r) ? 1.0 : 0.0; return 1; }
-        if (strcmp(op, "&&") == 0) { *val_out = ((l != 0.0) && (r != 0.0)) ? 1.0 : 0.0; return 1; }
-        if (strcmp(op, "||") == 0) { *val_out = ((l != 0.0) || (r != 0.0)) ? 1.0 : 0.0; return 1; }
-        if (strcmp(op, "+")  == 0) { *val_out = l + r; return 1; }
-        if (strcmp(op, "-")  == 0) { *val_out = l - r; return 1; }
-        if (strcmp(op, "*")  == 0) { *val_out = l * r; return 1; }
-        if (strcmp(op, "/")  == 0) { if (r == 0.0) return 0; *val_out = l / r; return 1; }
-        return 0;
-    }
-    return 0;
-}
-
 // Emit one `if (!(<predicate>)) aether_panic("<role> violation: <text>
 // in <fn>");` block for a single clause. If the predicate is
 // provably constant-true at compile time, skip emission entirely
@@ -3136,8 +3009,18 @@ static void emit_contract_check(CodeGenerator* gen,
                                 const char* fn_name) {
     if (!clause || clause->child_count == 0) return;
     ASTNode* predicate = clause->children[0];
-    double folded = 0.0;
-    if (try_fold_predicate(predicate, &folded) && folded != 0.0) {
+    /* Const-fold through the shared evaluator (contract folding — see
+     * docs/contract-folding.md). Definition-site env: no parameter bindings,
+     * but the program handle so `const` names and enum members resolve —
+     * `requires cap > MIN_CAP` now elides when both sides are constants,
+     * which the older literal-only folder here could not do.
+     *
+     * Only TRUE elides. A decidably-FALSE predicate was already rejected by
+     * the typechecker before codegen ran; if one ever reaches here anyway
+     * (UNKNOWN to the typechecker but false at run time), the runtime check
+     * below still fires, so the belt keeps its braces. */
+    ContractEnv cenv = {{0}, {0}, 0, gen->program};
+    if (contract_eval_predicate(predicate, &cenv) == CONTRACT_TRUE) {
         /* Trivially-true predicate. Drop the runtime check — the
          * generated C should be byte-for-byte identical to a
          * function written without the clause. Emit a comment for
@@ -3145,9 +3028,9 @@ static void emit_contract_check(CodeGenerator* gen,
         print_indent(gen);
         fprintf(gen->output, "/* %s elided (always-true): ", role);
         char buf[1024];
-        _ContractStr s = { buf, sizeof(buf), 0 };
-        sprint_expr_text(&s, predicate);
-        _cstr_terminate(&s);
+        ContractStr s = { buf, sizeof(buf), 0 };
+        contract_sprint_expr(&s, predicate);
+        contract_str_terminate(&s);
         for (const char* p = buf; *p; p++) {
             /* Defensively split any star-slash sequence so the
              * predicate text can't accidentally terminate the
@@ -3167,9 +3050,9 @@ static void emit_contract_check(CodeGenerator* gen,
      * through (Aether-source-level printable ASCII is safe in C
      * literals). */
     char buf[1024];
-    _ContractStr s = { buf, sizeof(buf), 0 };
-    sprint_expr_text(&s, predicate);
-    _cstr_terminate(&s);
+    ContractStr s = { buf, sizeof(buf), 0 };
+    contract_sprint_expr(&s, predicate);
+    contract_str_terminate(&s);
     for (const char* p = buf; *p; p++) {
         if (*p == '\\' || *p == '"') fputc('\\', gen->output);
         fputc(*p, gen->output);

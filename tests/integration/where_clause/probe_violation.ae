@@ -1,3 +1,13 @@
 import std.string
 divide(a: int, b: int where b != 0) -> int { return a / b }
-main() { println(string.from_int(divide(10, 0))) }
+main() {
+    // This probe exists to prove the RUNTIME check fires with the right panic
+    // message. The zero is routed through a runtime variable deliberately: a
+    // literal `divide(10, 0)` no longer builds — contract folding rejects a
+    // provably-violated precondition at compile time (docs/contract-folding.md;
+    // that path is covered by tests/integration/contract_fold_reject/). Only
+    // constant arguments participate in folding, so a runtime-typed variable
+    // is the documented way to reach the runtime check.
+    z = 0
+    println(string.from_int(divide(10, z)))
+}

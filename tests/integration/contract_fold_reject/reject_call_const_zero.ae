@@ -1,0 +1,7 @@
+// The headline case: a constant argument that provably violates a `where`
+// precondition is a compile error, not a runtime panic.
+divide(a: int, b: int where b != 0) -> int { return a / b }
+main() {
+    x = divide(10, 0)
+    println("${x}")
+}
