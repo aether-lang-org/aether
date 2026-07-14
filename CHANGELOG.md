@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`contrib/host/tcl` now builds against Tcl 9.0** (Homebrew's `tcl-tk` on macOS; Linux distros still ship 8.6, which is why this only broke locally). Tcl 9.0 removed `Tcl_Eval` as an exported function and left behind a function-like macro over `Tcl_EvalEx`, so the bridge's `g_tcl.Tcl_Eval(...)` dlsym-table calls expanded into references to a non-existent `g_tcl.Tcl_EvalEx` member (`error: no member named 'Tcl_EvalEx' in 'struct (unnamed…)'`). Same shape as the `Tcl_GetStringResult` / `Tcl_GetString` breakage already handled in that file, so it takes the same fix: `#undef` the macro, resolve the lowest-common-denominator export that exists in **both** 8.6 and 9.0 (`Tcl_EvalEx`), and recompose `Tcl_Eval` from it in a local helper. An `#undef`-only fix would have compiled but failed at *runtime* on 9.0, where the `Tcl_Eval` symbol genuinely no longer exists to dlsym. Also widened the dlsym prototypes for `Tcl_EvalEx` / `Tcl_NewStringObj` / `Tcl_WrongNumArgs` from `int` to `Tcl_Size`, matching the 8.7+/9.0 headers (a latent call-ABI mismatch: `ptrdiff_t` params were being passed 32-bit `int` args), with an `int` fallback typedef for 8.6, which has no `Tcl_Size`.
+
 ## [0.392.0]
 
 ### Added
