@@ -5863,6 +5863,59 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 SymbolTable* h = create_symbol_table(table);
                 add_symbol(h, "err", create_type(TYPE_STRING), 0, 0, 0);
                 typecheck_statement(handler, h);
+                /* The whole `or` expression yields a value, so a block handler
+                 * must either produce one or never fall through. Its LAST
+                 * statement must therefore be a value expression (assignable to
+                 * the success type — codegen assigns it to the result slot) or
+                 * an exit (return / panic / break / continue). Anything else —
+                 * an empty block, a trailing println, a trailing if — would
+                 * fall through with the result UNINITIALIZED, which is exactly
+                 * the miscompile this check closes. Conservative on purpose:
+                 * an if/else whose branches both return is rejected too; end
+                 * the block with the return or the value instead. */
+                ASTNode* lastst = handler->child_count > 0
+                                      ? handler->children[handler->child_count - 1]
+                                      : NULL;
+                int ends_ok = 0;
+                if (lastst) {
+                    switch (lastst->type) {
+                        case AST_RETURN_STATEMENT:
+                        case AST_PANIC_STATEMENT:
+                        case AST_BREAK_STATEMENT:
+                        case AST_CONTINUE_STATEMENT:
+                            ends_ok = 1;
+                            break;
+                        case AST_EXPRESSION_STATEMENT:
+                            if (lastst->child_count > 0 && lastst->children[0]) {
+                                Type* vt = infer_type(lastst->children[0], h);
+                                if (vt && vt->kind != TYPE_UNKNOWN &&
+                                    op->tuple_types[0] &&
+                                    !is_type_compatible(vt, op->tuple_types[0])) {
+                                    char emsg[256];
+                                    snprintf(emsg, sizeof(emsg),
+                                        "`or { }` handler yields %s where the "
+                                        "expression's value type is %s",
+                                        type_name(vt), type_name(op->tuple_types[0]));
+                                    type_error(emsg, lastst->line, lastst->column);
+                                }
+                                if (vt) free_type(vt);
+                                ends_ok = 1;
+                            }
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                if (!ends_ok) {
+                    /* Block nodes often carry no position; fall back to the
+                     * `or` expression's own so the error points at real code. */
+                    int el = handler->line ? handler->line : expr->line;
+                    int ec = handler->line ? handler->column : expr->column;
+                    type_error("`or { }` handler must end with a value for the "
+                               "expression to yield, or exit via return / panic / "
+                               "break / continue — otherwise the result would be "
+                               "uninitialized on the error path", el, ec);
+                }
                 free_symbol_table(h);
             } else if (handler) {
                 typecheck_expression(handler, table);

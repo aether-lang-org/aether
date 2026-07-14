@@ -1,0 +1,9 @@
+// A block that neither yields a value nor exits would leave the result
+// uninitialized on the error path — the miscompile this check closes.
+f(x: bool) -> int! { if x { return 0, "e" } return 7 }
+main() {
+    b = f(true) or {
+        if true { println("no value") }
+    }
+    println("b=${b}")
+}

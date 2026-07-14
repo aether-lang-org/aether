@@ -2102,11 +2102,34 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     val_c, id, id, err_idx, id, err_idx);
             if (handler->type == AST_BLOCK) {
                 /* Block statements emit their own `#line` directives, which
-                 * must begin a line — hence the newlines bracketing them. */
+                 * must begin a line — hence the newlines bracketing them.
+                 *
+                 * The block's LAST statement is the handler's value: a bare
+                 * trailing expression (wrapped by the parser in an
+                 * AST_EXPRESSION_STATEMENT) is assigned to `_oer` so
+                 * `x = f() or { log(err) -1 }` yields -1 on the error path.
+                 * Before this, the trailing expression was emitted as a
+                 * discarded statement and `_oer` was read UNINITIALIZED — a
+                 * silent miscompile whenever the block didn't exit. A block
+                 * ending in an exit statement (return / panic / break /
+                 * continue) never falls through, so no assignment is needed
+                 * there; the typechecker rejects every other ending, so by
+                 * the time we get here the last child is one or the other. */
                 fprintf(gen->output, "const char* err = _oe%d._%d; (void)err;\n",
                         id, err_idx);
-                for (int j = 0; j < handler->child_count; j++) {
+                int last = handler->child_count - 1;
+                for (int j = 0; j < last; j++) {
                     generate_statement(gen, handler->children[j]);
+                }
+                if (last >= 0 && handler->children[last] &&
+                    handler->children[last]->type == AST_EXPRESSION_STATEMENT &&
+                    handler->children[last]->child_count > 0) {
+                    print_indent(gen);
+                    fprintf(gen->output, "_oer%d = ", id);
+                    generate_expression(gen, handler->children[last]->children[0]);
+                    fprintf(gen->output, ";\n");
+                } else if (last >= 0 && handler->children[last]) {
+                    generate_statement(gen, handler->children[last]);
                 }
                 fprintf(gen->output, "\n");
             } else {

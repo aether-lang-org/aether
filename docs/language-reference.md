@@ -1086,16 +1086,25 @@ q = safe_divide(10, 0) or -1      // q == -1
 ```
 
 **`expr or { ... }` run a block on error, with `err` bound to the message.**
-The block is expected to exit (like a `match` arm's block body): `return`,
-`break`, `continue`, or `panic`. For a computed fallback *value*, use the
-`or <expr>` form instead.
+The block's **last statement is its value** — so a handler can log, compute,
+and still yield a fallback — or the block exits (`return`, `break`,
+`continue`, `panic`) and never falls through:
 
 ```aether
 q = safe_divide(x, y) or {
     println("math failed: ${err}")   // `err` is the error string
     return
 }
+
+r = safe_divide(x, y) or {
+    println("using fallback: ${err}")
+    -1                                // the block's value on the error path
+}
 ```
+
+A block that neither yields a value of the right type nor exits is a compile
+error (`` `or { }` handler must end with a value … or exit ``) — previously
+that shape compiled and read an **uninitialized** result on the error path.
 
 **`expr!` propagate the error.** Inside a function that itself returns `T!`,
 `!` returns `(zero, err)` to the caller when the error slot is non-empty, so an
