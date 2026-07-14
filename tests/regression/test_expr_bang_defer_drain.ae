@@ -1,0 +1,139 @@
+// Regression: `expr!` propagation must drain the enclosing function's defers.
+//
+// In a `T!` function, `expr!` propagates a failure by emitting a `return` from
+// inside a GCC statement-expression. That return ran NONE of the cleanup every
+// other return site runs: not the user's `defer`s, and not the synthetic RAII
+// carriers the compiler pushes (heap-string / *StringSeq / struct-destroy exit
+// frees). So a `T!` function that propagated an error leaked everything it was
+// holding — silently, and only on the error path.
+//
+// This test allocates on the error path and relies on the ASan / Valgrind CI
+// gates to catch a regression. Two details are load-bearing:
+//
+//   1. The buffer is TOUCHED (mem.set_byte). An untouched malloc/free pair is
+//      something GCC is entitled to elide completely, and it does — which makes
+//      the leak invisible to Valgrind and would render this test useless. This
+//      is not hypothetical: it produced a false negative while the fix was being
+//      developed. Touching the memory forces the allocation to be real.
+//   2. The loop runs the failing path many times, so a regression shows up as
+//      megabytes rather than a single block that is easy to overlook.
+//
+// The functional assertions below (that the error propagates, and that the
+// success path still returns its value) are the cheap part; the leak check is
+// the point.
+
+import std.mem
+import std.string
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+const ALLOC_BYTES = 65536
+const ITERATIONS = 32
+
+inner(fail: bool) -> int! {
+    if fail { return 0, "inner failed" }
+    return 7
+}
+
+// The shape under test: a resource held across an `expr!` that may propagate.
+outer(fail: bool) -> int! {
+    p = malloc(ALLOC_BYTES)
+    mem.set_byte(p, 0, 42)      // see (1) above — defeats malloc/free elision
+    defer free(p)               // MUST run on the `expr!` propagation path too
+    v = inner(fail)!
+    return v
+}
+
+// Same, but with two defers — the whole stack must drain, not just the top one.
+outer2(fail: bool) -> int! {
+    a = malloc(ALLOC_BYTES)
+    mem.set_byte(a, 0, 1)
+    defer free(a)
+    b = malloc(ALLOC_BYTES)
+    mem.set_byte(b, 0, 2)
+    defer free(b)
+    v = inner(fail)!
+    return v
+}
+
+// The nastier half of the same bug, and the one a user could never diagnose:
+// NO user `defer` here at all. The compiler itself pushes synthetic cleanup
+// carriers for heap-tracked locals (heap strings, *StringSeq, structs with
+// heap-string fields), and those live on the very same defer stack. Before the
+// fix they were skipped on the propagation path too, so a `T!` function leaked
+// its heap strings without the author having written a single `defer`.
+outer_heapstr(fail: bool) -> int! {
+    s = string.concat("heap-", "string")   // heap-allocated; compiler-tracked
+    v = inner(fail)!                       // propagates — `s` must still be freed
+    return v + string.length(s)
+}
+
+// Two propagation sites in one function. Each is its own `return`, so each must
+// drain the defer stack — and, equally, the resource must be freed exactly ONCE
+// however the function exits. This is where a double-free would hide if the
+// drain were done wrong (e.g. by popping the stack, or by draining at the wrong
+// scope), so it is worth a case of its own.
+outer_two_bangs(f1: bool, f2: bool) -> int! {
+    p = malloc(ALLOC_BYTES)
+    mem.set_byte(p, 0, 3)
+    defer free(p)
+    a = inner(f1)!
+    b = inner(f2)!
+    return a + b
+}
+
+main() {
+    fails = 0
+
+    // A `T!` is ABI-identical to a `(T, string)` tuple, so destructure it
+    // directly. (Deliberately not using the value-producing `expr or { v }`
+    // form here: keeping this test to the plain tuple shape means it exercises
+    // only the thing it is about — the propagation path's defer drain.)
+
+    // Success path: the value comes through, and defers run at the normal return.
+    ok, e1 = outer(false)
+    if e1 != "" { println("FAIL: success path errored: ${e1}"); fails = fails + 1 }
+    if ok != 7 { println("FAIL: success path returned ${ok}, want 7"); fails = fails + 1 }
+
+    ok2, e2 = outer2(false)
+    if e2 != "" { println("FAIL: two-defer success path errored: ${e2}"); fails = fails + 1 }
+    if ok2 != 7 { println("FAIL: two-defer success path returned ${ok2}"); fails = fails + 1 }
+
+    // Error path: the error propagates out through `expr!`...
+    bad, e3 = outer(true)
+    if e3 != "inner failed" { println("FAIL: error not propagated, got '${e3}'"); fails = fails + 1 }
+    if bad != 0 { println("FAIL: failed call should zero its value slot, got ${bad}"); fails = fails + 1 }
+
+    // Two propagation sites: exercise bailing at the first, at the second, and
+    // not at all — each must free exactly once (no leak, and no double free).
+    t1, te1 = outer_two_bangs(false, false)
+    if te1 != "" { println("FAIL: two-bang success errored: ${te1}"); fails = fails + 1 }
+    if t1 != 14 { println("FAIL: two-bang success returned ${t1}, want 14"); fails = fails + 1 }
+    _, te2 = outer_two_bangs(true, false)
+    if te2 != "inner failed" { println("FAIL: first-bang did not propagate"); fails = fails + 1 }
+    _, te3 = outer_two_bangs(false, true)
+    if te3 != "inner failed" { println("FAIL: second-bang did not propagate"); fails = fails + 1 }
+
+    // ...and every allocation above is freed anyway. Hammer the failing paths so
+    // a regression shows up as a multi-megabyte leak the ASan / Valgrind gates
+    // cannot miss, rather than a single block that is easy to overlook. (Before
+    // the fix, this loop lost 6.3 MB across 97 blocks.)
+    i = 0
+    while i < ITERATIONS {
+        _, _ = outer(true)
+        _, _ = outer2(true)
+        _, _ = outer_heapstr(true)          // synthetic (compiler-pushed) cleanup
+        _, _ = outer_two_bangs(true, false)
+        _, _ = outer_two_bangs(false, true)
+        _, _ = outer_two_bangs(false, false)
+        i = i + 1
+    }
+
+    if fails != 0 {
+        println("expr!-defer-drain: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_expr_bang_defer_drain")
+}

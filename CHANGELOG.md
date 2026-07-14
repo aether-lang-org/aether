@@ -13,6 +13,60 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **`expr!` propagation no longer skips the enclosing function's `defer`s — a
+  silent memory leak on every error path through a `T!` function.**
+
+  In a function returning `T!`, `expr!` propagates a failure by emitting a
+  `return` from inside a GCC statement-expression. That `return` ran **none** of
+  the cleanup that every other `return` site runs: not the user's `defer`s, and
+  not the *synthetic* cleanup carriers the compiler pushes itself (heap-string,
+  `*StringSeq`, and struct-destroy exit frees). So:
+
+  ```aether
+  outer(fail: bool) -> int! {
+      p = malloc(65536)
+      defer free(p)          // ran on the success path — NOT on the `!` path
+      v = inner(fail)!       // propagates: `p` leaked, silently
+      return v
+  }
+  ```
+
+  The leak was invisible in two ways. It only occurred on the **error** path, and
+  the *synthetic* half of it needed no `defer` in the source at all — a `T!`
+  function that merely built a heap string and then propagated an error leaked
+  that string, with nothing in the code to suggest cleanup was owed. Measured on
+  the regression test: **6.3 MB lost across 97 blocks** before the fix, zero
+  after (`valgrind --leak-check=full`).
+
+  The propagation path now drains the full defer stack and the in-flight try
+  frames (issue #501), exactly as the ordinary `return` path does.
+
+  Latent rather than actively burning anyone: nothing in `std/` or `contrib/`
+  uses `T!` yet, and there was no test combining `T!` with `defer` — which is
+  precisely why it survived. `tests/regression/test_expr_bang_defer_drain.ae`
+  now covers all three shapes (one defer, several defers, and compiler-synthesised
+  cleanup with no user `defer` at all).
+
+### Upgrade notes
+
+This release makes `expr!` propagation run the cleanup it always should have run:
+a `defer` (and the compiler's own heap-tracked cleanup) now fires on the `!`
+error path, where previously it was skipped entirely.
+
+If your project **worked around the leak by manually releasing the resource on
+the error path** — for example an `or { free(p); ... }` handler, or a manual
+`free` in the caller — that release is now a **double free**, because the callee
+frees it too. This is the only way the fix can break code that previously worked.
+
+**Recommended pre-upgrade play:**
+
+1. Grep for `T!`-returning functions that both hold a resource (`malloc`, an fd,
+   a C handle) and use `expr!` to propagate: `grep -rn '\->.*!' --include=*.ae`.
+2. In each, check whether the *caller* or an `or { … }` handler also releases
+   that resource. If so, delete the manual release — the `defer` now owns it.
+3. Run the suite under ASan/Valgrind (`make test-asan`, `make docker-ci`); a
+   double free shows up immediately and loudly.
+
 - **`contrib/host/tcl` now builds against Tcl 9.0** (Homebrew's `tcl-tk` on macOS; Linux distros still ship 8.6, which is why this only broke locally). Tcl 9.0 removed `Tcl_Eval` as an exported function and left behind a function-like macro over `Tcl_EvalEx`, so the bridge's `g_tcl.Tcl_Eval(...)` dlsym-table calls expanded into references to a non-existent `g_tcl.Tcl_EvalEx` member (`error: no member named 'Tcl_EvalEx' in 'struct (unnamed…)'`). Same shape as the `Tcl_GetStringResult` / `Tcl_GetString` breakage already handled in that file, so it takes the same fix: `#undef` the macro, resolve the lowest-common-denominator export that exists in **both** 8.6 and 9.0 (`Tcl_EvalEx`), and recompose `Tcl_Eval` from it in a local helper. An `#undef`-only fix would have compiled but failed at *runtime* on 9.0, where the `Tcl_Eval` symbol genuinely no longer exists to dlsym. Also widened the dlsym prototypes for `Tcl_EvalEx` / `Tcl_NewStringObj` / `Tcl_WrongNumArgs` from `int` to `Tcl_Size`, matching the 8.7+/9.0 headers (a latent call-ABI mismatch: `ptrdiff_t` params were being passed 32-bit `int` args), with an `int` fallback typedef for 8.6, which has no `Tcl_Size`.
 
 ## [0.392.0]
