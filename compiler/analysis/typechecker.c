@@ -8,6 +8,12 @@
 #include "../aether_error.h"
 #include "../aether_module.h"
 
+// #1062: the canonical C-type-name renderer (codegen.c). The tuple-extern
+// argument check keys on the same C spelling codegen names `_tuple_*` typedefs
+// by, so an aliased scalar (int vs int8_t) or a differing pointer pointee is
+// rejected at type-check instead of deferring to an opaque C compile error.
+extern const char* get_c_type(Type* type);
+
 static int error_count = 0;
 static int warning_count = 0;
 // #891: query the @c_struct overlay name set (defined ~typecheck_program).
@@ -7185,15 +7191,22 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                     int matches = at && at->kind == TYPE_TUPLE &&
                                   at->tuple_count == p->node_type->tuple_count;
                     for (int ei = 0; matches && ei < p->node_type->tuple_count; ei++) {
-                        TypeKind pk = p->node_type->tuple_types[ei]
-                                      ? p->node_type->tuple_types[ei]->kind : TYPE_UNKNOWN;
-                        TypeKind ak = (at->tuple_types && at->tuple_types[ei])
-                                      ? at->tuple_types[ei]->kind : TYPE_UNKNOWN;
-                        /* Element kinds must produce the same `_tuple_*` C
-                         * typedef. Allow an UNKNOWN arg element (an inference
-                         * gap) to defer to the C compiler rather than
-                         * over-reject a legitimate round-trip. */
-                        if (ak != pk && ak != TYPE_UNKNOWN) matches = 0;
+                        Type* pe = p->node_type->tuple_types[ei];
+                        Type* ae = at->tuple_types ? at->tuple_types[ei] : NULL;
+                        /* Match on the element's emitted C type name, which is
+                         * what codegen keys the `_tuple_*` typedef on, not just
+                         * its TypeKind: `int` and the aliased `int8_t`/`size_t`
+                         * share a kind but produce different C structs, and a
+                         * `ptr` differs from a typed `*Struct` by pointee. An
+                         * arg element with no inferred type (an inference gap)
+                         * is left to the C compiler rather than over-rejected,
+                         * preserving the earlier leniency. */
+                        if (!ae) continue;
+                        const char* pc = pe ? get_c_type(pe) : NULL;
+                        char* pcs = pc ? strdup(pc) : NULL;  /* get_c_type reuses a rotating static buffer */
+                        const char* ac = get_c_type(ae);
+                        if (!pcs || !ac || strcmp(pcs, ac) != 0) matches = 0;
+                        free(pcs);
                     }
                     if (at) free_type(at);
                     if (!matches) {

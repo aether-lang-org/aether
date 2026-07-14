@@ -1839,7 +1839,18 @@ const char* get_c_type(Type* type) {
                 else if (strcmp(elem, "void*") == 0) elem = "ptr";
                 else if (strcmp(elem, "unsigned char") == 0) elem = "byte";
                 else if (strcmp(elem, "long double") == 0) elem = "longdouble";
-                pos += snprintf(buffer + pos, 256 - pos, "_%s", elem);
+                // Any remaining non-identifier character (the `*` in a
+                // struct-pointer element like `Node*`, or an embedded space)
+                // would make an invalid C typedef name; map it to '_', the
+                // same sanitization the optional-type namer below applies.
+                if (pos < 255) buffer[pos++] = '_';
+                for (const char* e = elem; *e && pos < 255; e++) {
+                    char c = *e;
+                    int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                             (c >= '0' && c <= '9') || c == '_';
+                    buffer[pos++] = ok ? c : '_';
+                }
+                buffer[pos] = '\0';
             }
             return buffer;
         }

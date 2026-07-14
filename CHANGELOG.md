@@ -32,6 +32,23 @@ next version number before tagging the release.
   stack garbage past the result (a success can read back as `-255`). `-> byte`
   reads exactly the one byte the ABI wrote.
 
+### Fixed
+
+- **FFI tuple-parameter type matching is now exact, and struct-pointer tuple
+  elements name a valid C type.** Two follow-ups to the #1062 tuple-value
+  parameter support, both surfaced by an adversarial review of that change:
+  - The value-form match compared only `TypeKind`, so a tuple value whose
+    element was an aliased scalar of the same kind (for example `(int, int)`
+    into an `(int8_t, int8_t)` parameter) type-checked and then failed with an
+    opaque C compile error. It now matches on the element's emitted C type name,
+    the same key codegen uses to name the `_tuple_*` struct, so the mismatch is
+    reported cleanly at type-check; matching aliases still pass.
+  - A tuple containing a struct-pointer element (`(*Node, int)`) generated the
+    invalid C identifier `_tuple_Node*_int`, so any use of such a tuple (extern
+    parameter, extern return, or a tuple literal) produced uncompilable output.
+    The tuple-typedef namer now sanitizes non-identifier characters the same way
+    the optional-type namer already does, yielding `_tuple_Node__int`.
+
 ## [0.389.0]
 
 ### Fixed
