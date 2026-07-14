@@ -14,11 +14,11 @@
 //
 // Tcl's C API is MOSTLY non-macro — most `Tcl_*` symbols are real
 // exported functions, so the bridge is largely a plain dlsym table.
-// The exception (since Tcl 9.0): `Tcl_GetStringResult` and
-// `Tcl_GetString` became function-like macros over
-// `Tcl_GetStringFromObj` and are no longer exported. We dlsym the
-// stable LCD exports (`Tcl_GetStringFromObj`, `Tcl_GetObjResult`) and
-// recompose those two accessors — see the #undef + helpers below.
+// The exceptions (since Tcl 9.0): `Tcl_GetStringResult`, `Tcl_GetString`
+// and `Tcl_Eval` became function-like macros over `Tcl_GetStringFromObj`
+// and `Tcl_EvalEx`, and are no longer exported. We dlsym the stable LCD
+// exports (`Tcl_GetStringFromObj`, `Tcl_GetObjResult`, `Tcl_EvalEx`) and
+// recompose those three accessors — see the #undef + helpers below.
 
 #include "aether_host_tcl.h"
 #include "../../../runtime/aether_sandbox.h"
@@ -31,16 +31,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Tcl 9.0 turned the result/string accessors into macros that route
- * through Tcl_GetStringFromObj:
+/* Tcl 9.0 turned the result/string accessors AND Tcl_Eval into macros:
  *   #define Tcl_GetStringResult(i) Tcl_GetString(Tcl_GetObjResult(i))
  *   #define Tcl_GetString(o)       Tcl_GetStringFromObj(o, (Tcl_Size*)NULL)
+ *   #define Tcl_Eval(i, s)         Tcl_EvalEx(i, s, TCL_INDEX_NONE, 0)
  * Left in place these rewrite our struct-field calls into references to
  * non-existent g_tcl members (the macOS/Homebrew Tcl 9.0 break). Tcl 8.6
- * exported Tcl_GetStringResult / Tcl_GetString as real functions; Tcl 9.0
- * does not. The lowest common denominator — a real export in BOTH 8.6 and
- * 9.0 — is Tcl_GetStringFromObj + Tcl_GetObjResult, so we dlsym those and
- * build the two accessors ourselves below. Undo the macros so our plain
+ * exported all three as real functions; Tcl 9.0 exports none of them. The
+ * lowest common denominator — real exports in BOTH 8.6 and 9.0 — is
+ * Tcl_GetStringFromObj + Tcl_GetObjResult + Tcl_EvalEx, so we dlsym those
+ * and build the accessors ourselves below. Undo the macros so our plain
  * function-pointer fields keep their names. (Harmless no-op on 8.6, which
  * lacks the macros.) */
 #ifdef Tcl_GetStringResult
@@ -48,6 +48,19 @@
 #endif
 #ifdef Tcl_GetString
 #undef Tcl_GetString
+#endif
+#ifdef Tcl_Eval
+#undef Tcl_Eval
+#endif
+
+/* Tcl 8.7 / 9.0 widened the count/length params (Tcl_EvalEx's numBytes,
+ * Tcl_NewStringObj's length, Tcl_WrongNumArgs's objc) from int to Tcl_Size
+ * (ptrdiff_t under the 9.0 API). Because we declare our own prototypes for
+ * the dlsym'd symbols, those prototypes must use the header's own width or
+ * the call ABI is wrong. Tcl 8.6 has no Tcl_Size at all; TCL_SIZE_MAX is the
+ * marker for a header that does. */
+#ifndef TCL_SIZE_MAX
+typedef int Tcl_Size;
 #endif
 
 // --- libtcl dlopen table ----------------------------------------------------
@@ -63,17 +76,19 @@ static struct {
     void         (*Tcl_Finalize)(void);
     // Eval + result extraction. We resolve the LCD real exports
     // (present in both 8.6 and 9.0) rather than the now-macro
-    // Tcl_GetStringResult / Tcl_GetString, then compose them in the
-    // tcl_string_result() / tcl_obj_string() helpers below. The last
-    // arg of Tcl_GetStringFromObj is int* on 8.6 and Tcl_Size* on 9.0;
-    // we only ever pass NULL, so type it void* to stay width-agnostic.
-    int          (*Tcl_Eval)(Tcl_Interp* interp, const char* script);
+    // Tcl_Eval / Tcl_GetStringResult / Tcl_GetString, then compose them
+    // in the tcl_eval() / tcl_string_result() / tcl_obj_string() helpers
+    // below. The last arg of Tcl_GetStringFromObj is int* on 8.6 and
+    // Tcl_Size* on 9.0; we only ever pass NULL, so type it void* to stay
+    // width-agnostic.
+    int          (*Tcl_EvalEx)(Tcl_Interp* interp, const char* script,
+                               Tcl_Size numBytes, int flags);
     Tcl_Obj*     (*Tcl_GetObjResult)(Tcl_Interp* interp);
     const char*  (*Tcl_GetStringFromObj)(Tcl_Obj* objPtr, void* lengthPtr);
     // Object/string helpers (for the shared-map command callbacks).
-    Tcl_Obj*     (*Tcl_NewStringObj)(const char* bytes, int length);
+    Tcl_Obj*     (*Tcl_NewStringObj)(const char* bytes, Tcl_Size length);
     void         (*Tcl_SetObjResult)(Tcl_Interp* interp, Tcl_Obj* resultObjPtr);
-    void         (*Tcl_WrongNumArgs)(Tcl_Interp* interp, int objc,
+    void         (*Tcl_WrongNumArgs)(Tcl_Interp* interp, Tcl_Size objc,
                                      Tcl_Obj* const objv[], const char* message);
     Tcl_Command  (*Tcl_CreateObjCommand)(Tcl_Interp* interp, const char* cmdName,
                                          Tcl_ObjCmdProc* proc, ClientData clientData,
@@ -95,7 +110,7 @@ static int resolve_tcl_symbols(void* h) {
     RESOLVE(Tcl_Init,              "Tcl_Init");
     RESOLVE(Tcl_DeleteInterp,      "Tcl_DeleteInterp");
     RESOLVE(Tcl_Finalize,          "Tcl_Finalize");
-    RESOLVE(Tcl_Eval,              "Tcl_Eval");
+    RESOLVE(Tcl_EvalEx,            "Tcl_EvalEx");
     RESOLVE(Tcl_GetObjResult,      "Tcl_GetObjResult");
     RESOLVE(Tcl_GetStringFromObj,  "Tcl_GetStringFromObj");
     RESOLVE(Tcl_NewStringObj,      "Tcl_NewStringObj");
@@ -104,6 +119,13 @@ static int resolve_tcl_symbols(void* h) {
     RESOLVE(Tcl_CreateObjCommand,  "Tcl_CreateObjCommand");
     return 0;
 #undef RESOLVE
+}
+
+/* Replacement for the Tcl_Eval macro. A -1 length means "script is
+ * NUL-terminated, measure it" on both 8.6 and 9.0 (9.0 spells the same
+ * value TCL_INDEX_NONE); 0 flags matches what Tcl_Eval always passed. */
+static int tcl_eval(Tcl_Interp* interp, const char* script) {
+    return g_tcl.Tcl_EvalEx(interp, script, (Tcl_Size)-1, 0);
 }
 
 /* Replacements for the Tcl_GetStringResult / Tcl_GetString macros,
@@ -232,7 +254,7 @@ void tcl_finalize(void) {
 int tcl_run(const char* code) {
     if (!code) return -1;
     if (tcl_init() != 0) return -1;
-    if (g_tcl.Tcl_Eval(T, code) != TCL_OK) {
+    if (tcl_eval(T, code) != TCL_OK) {
         fprintf(stderr, "[tcl] %s\n", tcl_string_result(T));
         return -1;
     }
@@ -249,7 +271,7 @@ int tcl_run_sandboxed(void* perms, const char* code) {
     _aether_sandbox_checker = host_tcl_checker;
 
     int result = 0;
-    if (g_tcl.Tcl_Eval(T, code) != TCL_OK) {
+    if (tcl_eval(T, code) != TCL_OK) {
         fprintf(stderr, "[tcl] %s\n", tcl_string_result(T));
         result = -1;
     }
@@ -317,7 +339,7 @@ int tcl_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token
     _aether_sandbox_checker = host_tcl_checker;
 
     int result = 0;
-    if (g_tcl.Tcl_Eval(T, code) != TCL_OK) {
+    if (tcl_eval(T, code) != TCL_OK) {
         fprintf(stderr, "[tcl] %s\n", tcl_string_result(T));
         result = -1;
     }
