@@ -2174,9 +2174,34 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
              * enclosing function, which is exactly the propagation we want. */
             if (gen->current_func_return_type &&
                 gen->current_func_return_type->is_result) {
+                /* The propagation `return` is a genuine function exit, so it
+                 * must run the same cleanup every other `return` site runs.
+                 * Before this it ran NONE of it: a `T!` function that
+                 * propagated an error skipped its user `defer`s AND the
+                 * synthetic RAII carriers the compiler pushes (heap-string /
+                 * *StringSeq / struct-destroy exit frees), leaking everything
+                 * the function was holding — silently, on the error path only.
+                 *
+                 * The defers are emitted INSIDE the statement-expression's
+                 * `if`, immediately before the return, which needs no
+                 * restructuring of the expression — they are ordinary
+                 * statements. The trailing newline before them is load-bearing:
+                 * a defer body carries `#line` directives, and a `#` is only a
+                 * preprocessor directive at the START of a line. Emitted
+                 * mid-line (right after `if (...) {`) it is a stray `#` and the
+                 * C compiler rejects the file. */
                 fprintf(gen->output,
-                        "if (_unw%d._%d && _unw%d._%d[0]) return (%s){ ._1 = _unw%d._%d }; ",
-                        uid, err_idx, uid, err_idx,
+                        "if (_unw%d._%d && _unw%d._%d[0]) {\n",
+                        uid, err_idx, uid, err_idx);
+                emit_all_defers(gen);
+                /* Issue #501: drain in-flight try frames, exactly as the
+                 * ordinary return path does — a propagation is just as
+                 * non-local an exit as a `return`. */
+                emit_try_pops_for_nonlocal_exit(gen);
+                /* Leading newline for the same reason: a defer body can end
+                 * mid-line, and the next thing must not be glued onto it. */
+                fprintf(gen->output,
+                        "\nreturn (%s){ ._1 = _unw%d._%d }; } ",
                         get_c_type(gen->current_func_return_type), uid, err_idx);
             } else {
                 fprintf(gen->output,
