@@ -9,6 +9,32 @@
 #define MAX_DEFER_STACK 256
 #define MAX_SCOPE_DEPTH 64
 
+/* #1140 — which exits a deferred statement fires on.
+ *
+ *   DEFER_ALWAYS  `defer x`        every exit (the pre-existing behaviour, and
+ *                                  what every compiler-synthesised cleanup
+ *                                  carrier uses)
+ *   DEFER_TRY     `defer try x`    only a SUCCESSFUL return
+ *   DEFER_CATCH   `defer catch x`  only an ERROR return
+ *
+ * "Error" means the function returned a non-empty error slot — Aether's
+ * `(value, err)` convention, and `T!`, which is the same shape. */
+typedef enum {
+    DEFER_ALWAYS = 0,
+    DEFER_TRY,
+    DEFER_CATCH
+} DeferMode;
+
+/* #1140 — how a given exit site should filter the defer stack. A plain scope
+ * exit / break / continue is not a function outcome at all, so only the
+ * unconditional defers run there. */
+typedef enum {
+    DEFER_EXIT_PLAIN = 0,   /* break / continue / falling off a scope */
+    DEFER_EXIT_SUCCESS,     /* a return whose error slot is known empty */
+    DEFER_EXIT_ERROR,       /* a return whose error slot is known non-empty */
+    DEFER_EXIT_RUNTIME      /* a return whose outcome is only known at run time */
+} DeferExit;
+
 typedef struct {
     FILE* output;
     int indent_level;
@@ -97,6 +123,24 @@ typedef struct {
 
     // Defer stack: tracks deferred statements for LIFO execution at scope exit
     ASTNode* defer_stack[MAX_DEFER_STACK];
+    // #1140: parallel to defer_stack — which exits this defer fires on.
+    // Kept as a separate array rather than stashed on the AST node because
+    // push_defer receives the deferred STATEMENT (the AST_DEFER_STATEMENT
+    // parent, which carries the qualifier, is dropped at the push site), and
+    // because the node's `annotation` slot is already spoken for by the
+    // synthetic cleanup carriers (`heap_string_exit_free:` and friends).
+    DeferMode defer_mode[MAX_DEFER_STACK];
+    /* #1140: the kind of exit currently being emitted, so the defer-drain loops
+     * know which conditional defers to fire. Set by a return site immediately
+     * before it drains, and reset afterwards. Threading it through the
+     * generator rather than through every emit_*_defers signature keeps the
+     * dozen existing call sites unchanged — they all mean DEFER_EXIT_PLAIN. */
+    DeferExit defer_exit;
+    /* #1140: the C expression naming the error slot of the result being
+     * returned, e.g. "_builder_ret._1". Only set when defer_exit is
+     * DEFER_EXIT_RUNTIME — the conditional defers are then emitted under a
+     * runtime test on it. NULL otherwise. Borrowed; not owned. */
+    const char* defer_err_slot;
     int defer_count;
     int scope_defer_start[MAX_SCOPE_DEPTH];  // defer_count at scope entry
     int scope_depth;
@@ -474,6 +518,7 @@ const char* get_c_operator(const char* aether_op);
 
 // Defer management
 void push_defer(CodeGenerator* gen, ASTNode* stmt);
+void push_defer_mode(CodeGenerator* gen, ASTNode* stmt, DeferMode mode);  /* #1140 */
 void emit_defers_for_scope(CodeGenerator* gen);
 void emit_all_defers(CodeGenerator* gen);
 void enter_scope(CodeGenerator* gen);

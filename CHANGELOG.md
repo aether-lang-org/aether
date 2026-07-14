@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`defer try` / `defer catch` — cleanup that runs on one outcome only** (#1140).
+
+  ```aether
+  defer       cleanup()    // always — every exit (the pre-existing form)
+  defer try   commit()     // only when the function returns SUCCESSFULLY
+  defer catch rollback()   // only when the function returns an ERROR
+  ```
+
+  "Error" means a non-empty error slot — Aether's `(value, err)` convention, and
+  `T!`, which is the same shape. Together they give the transactional shape in
+  three lines: acquire, register the rollback, register the commit, and let any
+  error path bail without the acquire leaking and without a half-built result
+  being published:
+
+  ```aether
+  acquire(path: string) -> (ptr, string) {
+      p = malloc(SIZE)
+      defer catch free(p)               // bailed — release it
+      cfg, err = parse(path)
+      if err != "" { return null, err }  // ...and `p` is freed on the way out
+      return p, ""                       // succeeded — the caller owns it
+  }
+  ```
+
+  The alternative is an `if err != "" { free(p); return }` at every early return,
+  and a leak at the one you forget.
+
+  LIFO ordering is unchanged, and the conditional defers **interleave with the
+  unconditional ones by registration order** rather than being hoisted into
+  separate groups. Cost is one predictable compare on the return path — and zero
+  where the outcome is statically known, since an `expr!` propagation is always an
+  error exit and a bare `return v` is always a success exit, so in a `T!` function
+  no guard is emitted at all. There is still no runtime defer stack: bodies are
+  emitted inline at each exit, exactly as a plain `defer` already was.
+
+  Using either form in a function that **cannot** fail is a warning rather than
+  silence — a `defer catch` there would never fire, and a `defer try` is just a
+  plain `defer`, so in both cases the code does not do what it says.
+
 ## [0.394.0]
 
 ### Fixed

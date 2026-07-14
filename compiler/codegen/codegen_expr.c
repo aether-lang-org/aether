@@ -2193,7 +2193,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output,
                         "if (_unw%d._%d && _unw%d._%d[0]) {\n",
                         uid, err_idx, uid, err_idx);
-                emit_all_defers(gen);
+                /* #1140: propagation is unambiguously an ERROR exit — we are
+                 * inside the `if` that tested the error slot. So `defer catch`
+                 * fires and `defer try` does not, and it is known statically,
+                 * with no runtime guard needed. */
+                {
+                    DeferExit prev_exit = gen->defer_exit;
+                    gen->defer_exit = DEFER_EXIT_ERROR;
+                    emit_all_defers(gen);
+                    gen->defer_exit = prev_exit;
+                }
                 /* Issue #501: drain in-flight try frames, exactly as the
                  * ordinary return path does — a propagation is just as
                  * non-local an exit as a `return`. */

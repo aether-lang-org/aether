@@ -529,6 +529,52 @@ void type_error(const char* message, int line, int column) {
     error_count++;
 }
 
+void type_warning(const char* message, int line, int column);
+
+/* #1140 — can this function signal failure to its caller? True for Aether's
+ * Go-style `(value, err)` convention (a tuple whose last element is the error
+ * string) and hence for `T!`, which is represented as exactly that tuple with
+ * `is_result` set. Everything else has no error channel, so a `defer catch`
+ * there can never fire. */
+static int function_can_fail(Type* ret) {
+    if (!ret) return 0;
+    if (ret->kind != TYPE_TUPLE || ret->tuple_count < 2) return 0;
+    Type* last = ret->tuple_types ? ret->tuple_types[ret->tuple_count - 1] : NULL;
+    return last && last->kind == TYPE_STRING;
+}
+
+/* Walk a function body for `defer try` / `defer catch`, without descending into
+ * nested closures or function definitions (which have their own return type and
+ * are checked separately). */
+static void warn_conditional_defers_walk(ASTNode* node, int can_fail) {
+    if (!node) return;
+    if (node->type == AST_CLOSURE || node->type == AST_FUNCTION_DEFINITION) return;
+    if (node->type == AST_DEFER_STATEMENT && node->value && !can_fail) {
+        char msg[220];
+        if (strcmp(node->value, "catch") == 0) {
+            snprintf(msg, sizeof(msg),
+                     "`defer catch` in a function that cannot fail: it will never run. "
+                     "Give the function an error result (`-> (T, string)` or `-> T!`), "
+                     "or use a plain `defer`.");
+            type_warning(msg, node->line, node->column);
+        } else if (strcmp(node->value, "try") == 0) {
+            snprintf(msg, sizeof(msg),
+                     "`defer try` in a function that cannot fail: it always runs, so it "
+                     "is the same as a plain `defer`. Drop the `try`, or give the "
+                     "function an error result (`-> (T, string)` or `-> T!`).");
+            type_warning(msg, node->line, node->column);
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        warn_conditional_defers_walk(node->children[i], can_fail);
+}
+
+static void warn_conditional_defers_in_infallible(ASTNode* func, Type* ret) {
+    if (!func || function_can_fail(ret)) return;
+    for (int i = 0; i < func->child_count; i++)
+        warn_conditional_defers_walk(func->children[i], 0);
+}
+
 void type_warning(const char* message, int line, int column) {
     AetherError w = {
         .filename = NULL, .source_code = NULL,
@@ -4311,6 +4357,13 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
     g_tc_return_type = func->node_type;
     typecheck_statement(body, func_table);
     g_tc_return_type = saved_ret;
+
+    /* #1140: `defer try` / `defer catch` only mean something in a function that
+     * can actually fail. In a function with no error channel a `defer catch`
+     * would never fire and a `defer try` is just a plain `defer` — either way
+     * the author has written something that does not do what it says, so say so
+     * rather than silently compiling it. */
+    warn_conditional_defers_in_infallible(func, func->node_type);
 
     free_symbol_table(func_table);
     return 1;

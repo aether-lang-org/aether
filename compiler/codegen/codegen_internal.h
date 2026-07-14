@@ -127,6 +127,7 @@ const char* codegen_normalise_callee(const char* raw, char* out, size_t out_size
 
 /* Defer management (codegen.c) */
 void push_defer(CodeGenerator* gen, ASTNode* stmt);
+void push_defer_mode(CodeGenerator* gen, ASTNode* stmt, DeferMode mode);  /* #1140 */
 void push_auto_defer(CodeGenerator* gen, const char* free_fn, const char* var_name);
 void emit_defers_for_scope(CodeGenerator* gen);
 void emit_defers_through_scope(CodeGenerator* gen, int floor_depth);

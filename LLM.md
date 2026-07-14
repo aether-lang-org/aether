@@ -162,6 +162,18 @@ plays that role), no interfaces.
   with its release at the same site (`defer ref_free(x)`,
   `defer list.free(g)`) so every return path cleans up. Multiple defers
   in a scope fire last-registered-first.
+- **`defer try` / `defer catch` run on ONE outcome only.** `defer catch f()`
+  fires only when the function returns an error (a non-empty error slot — the
+  `(value, err)` convention, and `T!`); `defer try f()` fires only on success; a
+  plain `defer` still fires on both. That gives you the transaction shape
+  (`p = malloc(...)`, `defer catch free(p)`, then bail freely — every early
+  return releases `p`, and on success the caller owns it) instead of repeating
+  `if err != "" { free(p); return }` at every exit and leaking at the one you
+  forget. LIFO ordering is unchanged and the conditional ones interleave with the
+  unconditional ones by registration order. Cost is one compare on the return
+  path — zero where the outcome is static (an `expr!` propagation is always an
+  error exit; a bare `return v` is always a success exit). Using either in a
+  function that *can't* fail is a warning, not silence.
 - **Closures are `|x: int| -> expr` or `|x| { … }`, invoked with
   `call(fn, args)`.** They capture enclosing variables by value and lower
   to plain C functions (no VM). Distinct from the **trailing-block /

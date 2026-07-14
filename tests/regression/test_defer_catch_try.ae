@@ -1,0 +1,148 @@
+// Regression: #1140 `defer try` / `defer catch` — cleanup that runs only on the
+// success path, or only on the error path.
+//
+//   defer       cleanup()    // always, on every exit (the pre-existing form)
+//   defer try   commit()     // only when the function returns SUCCESSFULLY
+//   defer catch rollback()   // only when the function returns an ERROR
+//
+// "Error" means a non-empty error slot — Aether's `(value, err)` convention, and
+// `T!`, which is the same shape. This buys the transactional shape in three
+// lines: acquire, register the rollback, register the commit, then let any error
+// path bail without the acquire leaking and without a half-built result being
+// published.
+//
+// Cost: one predictable compare on the return path, and not even that where the
+// outcome is statically known — an `expr!` propagation is always an error exit,
+// and a bare `return v` is always a success exit, so both are resolved at
+// compile time with no guard emitted at all.
+
+import std.mem
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+const ALLOC_BYTES = 65536
+const ITERATIONS = 32
+
+// A tiny observable log: each defer writes a marker byte into a buffer, so the
+// test can assert on exactly WHICH defers ran and in WHAT order. (Aether has no
+// mutable module globals, so a byte buffer threaded through as a `ptr` is the
+// simplest way to observe side effects across a function boundary.)
+mark(buf: ptr, slot: int, ch: int) {
+    n = mem.get_byte(buf, 0)         // byte 0 = how many marks so far
+    mem.set_byte(buf, n + 1, ch)     // bytes 1.. = the marks, in order
+    mem.set_byte(buf, 0, n + 1)
+}
+
+marks(buf: ptr) -> int { return mem.get_byte(buf, 0) }
+mark_at(buf: ptr, i: int) -> int { return mem.get_byte(buf, i + 1) }
+
+// ---- selection + LIFO ordering on a (value, err) function -------------------
+//
+// Registration order is A, C, T; LIFO means they fire T, C, A. The conditional
+// ones must interleave with the unconditional one by registration order — they
+// must not be hoisted into separate groups.
+traced(buf: ptr, fail: bool) -> (int, string) {
+    defer       mark(buf, 0, 65)   // 'A' — always
+    defer catch mark(buf, 0, 67)   // 'C' — catch
+    defer try   mark(buf, 0, 84)   // 'T' — try
+    if fail { return 0, "boom" }
+    return 1, ""
+}
+
+// ---- the same, through a T! and an `expr!` propagation ----------------------
+// Both exits here are STATICALLY known, so no runtime guard is emitted.
+inner(fail: bool) -> int! {
+    if fail { return 0, "inner failed" }
+    return 7
+}
+
+traced_bang(buf: ptr, fail: bool) -> int! {
+    defer       mark(buf, 0, 65)   // 'A'
+    defer catch mark(buf, 0, 67)   // 'C'
+    defer try   mark(buf, 0, 84)   // 'T'
+    v = inner(fail)!               // propagates: a statically-known ERROR exit
+    return v                       // a statically-known SUCCESS exit
+}
+
+// ---- the transaction shape, which is the point of the feature ---------------
+// Acquire a resource; release it if we bail; hand it to the caller if we don't.
+// The failing path must not leak, and the success path must not double-free.
+acquire(fail: bool) -> (ptr, string) {
+    p = malloc(ALLOC_BYTES)
+    mem.set_byte(p, 0, 7)          // touch it: an untouched malloc/free pair is
+                                   // something GCC may elide entirely, which
+                                   // would hide a leak from the sanitiser gates
+    defer catch free(p)            // bail => release it here
+    if fail { return null, "nope" }
+    return p, ""                   // success => the caller owns it
+}
+
+check(got: int, want: int, lbl: string) -> int {
+    if got != want {
+        println("FAIL ${lbl}: ${got} != ${want}")
+        return 1
+    }
+    return 0
+}
+
+main() {
+    fails = 0
+    buf = malloc(64)
+
+    // --- (value, err), success: T then A. C must NOT run.
+    mem.set_byte(buf, 0, 0)
+    v, e = traced(buf, false)
+    fails = fails + check(v, 1, "success value")
+    if e != "" { println("FAIL: success errored: ${e}"); fails = fails + 1 }
+    fails = fails + check(marks(buf), 2, "success: two defers ran")
+    fails = fails + check(mark_at(buf, 0), 84, "success: `try` ran first (LIFO)")
+    fails = fails + check(mark_at(buf, 1), 65, "success: `always` ran second")
+
+    // --- (value, err), failure: C then A. T must NOT run.
+    mem.set_byte(buf, 0, 0)
+    v2, e2 = traced(buf, true)
+    fails = fails + check(v2, 0, "failure value")
+    if e2 != "boom" { println("FAIL: failure did not error: '${e2}'"); fails = fails + 1 }
+    fails = fails + check(marks(buf), 2, "failure: two defers ran")
+    fails = fails + check(mark_at(buf, 0), 67, "failure: `catch` ran first (LIFO)")
+    fails = fails + check(mark_at(buf, 1), 65, "failure: `always` ran second")
+
+    // --- T!, success (statically known: no runtime guard emitted)
+    mem.set_byte(buf, 0, 0)
+    b1, be1 = traced_bang(buf, false)
+    fails = fails + check(b1, 7, "T! success value")
+    if be1 != "" { println("FAIL: T! success errored"); fails = fails + 1 }
+    fails = fails + check(marks(buf), 2, "T! success: two defers ran")
+    fails = fails + check(mark_at(buf, 0), 84, "T! success: `try` first")
+    fails = fails + check(mark_at(buf, 1), 65, "T! success: `always` second")
+
+    // --- T!, error propagated through `expr!` (statically known)
+    mem.set_byte(buf, 0, 0)
+    _, be2 = traced_bang(buf, true)
+    if be2 != "inner failed" { println("FAIL: T! error not propagated: '${be2}'"); fails = fails + 1 }
+    fails = fails + check(marks(buf), 2, "T! propagate: two defers ran")
+    fails = fails + check(mark_at(buf, 0), 67, "T! propagate: `catch` first")
+    fails = fails + check(mark_at(buf, 1), 65, "T! propagate: `always` second")
+
+    // --- the transaction: no leak on the failing path, no double free on the
+    //     success path. Hammered so a regression is a multi-megabyte leak the
+    //     ASan / Valgrind CI gates cannot miss.
+    i = 0
+    while i < ITERATIONS {
+        _, fe = acquire(true)                     // bails: `defer catch` frees it
+        if fe == "" { println("FAIL: acquire(true) should fail"); fails = fails + 1 }
+        p, se = acquire(false)                    // succeeds: we own it
+        if se != "" { println("FAIL: acquire(false) should succeed"); fails = fails + 1 }
+        free(p)                                   // ...so we free it exactly once
+        i = i + 1
+    }
+
+    free(buf)
+    if fails != 0 {
+        println("defer try/catch: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_defer_catch_try")
+}

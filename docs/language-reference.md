@@ -845,12 +845,72 @@ example() {
 // Output: Third, Second, First
 ```
 
+### `defer try` and `defer catch` — cleanup for one outcome only
+
+A plain `defer` runs on **every** exit. Two qualified forms run on only one:
+
+```aether
+defer       cleanup()    // always — on every exit
+defer try   commit()     // only when the function returns SUCCESSFULLY
+defer catch rollback()   // only when the function returns an ERROR
+```
+
+"Error" means the function returned a **non-empty error slot** — Aether's
+`(value, err)` convention, and `T!`, which is the same shape.
+
+Together they give you the transactional shape in three lines: acquire, register
+the rollback, register the commit, and then let any error path bail out without
+the acquire leaking and without a half-built result being published.
+
+```aether
+acquire(path: string) -> (ptr, string) {
+    p = malloc(SIZE)
+    defer catch free(p)              // we bailed — release it
+    cfg, err = parse(path)
+    if err != "" { return null, err } // ...and `p` is freed on the way out
+    init(p, cfg)
+    return p, ""                     // succeeded — the caller owns `p` now
+}
+```
+
+Without them, every early return needs its own `if err != "" { free(p); return }`,
+and the one you forget is the leak.
+
+Ordering is unchanged: **all** defers still run in LIFO order, and the
+conditional ones interleave with the unconditional ones by registration order —
+they are not hoisted into separate groups. In
+
+```aether
+defer       log("A")
+defer catch log("C")
+defer try   log("T")
+```
+
+a successful return logs `T`, `A`; an error return logs `C`, `A`.
+
+**Cost.** One predictable compare on the return path — and not even that where
+the outcome is known at compile time. An `expr!` propagation is *always* an error
+exit and a bare `return v` is *always* a success exit, so in a `T!` function both
+are resolved statically and no guard is emitted at all. There is no runtime defer
+stack; as with a plain `defer`, the bodies are emitted inline at each exit.
+
+**They only mean something in a function that can fail.** In a function with no
+error channel, a `defer catch` could never fire and a `defer try` is just a plain
+`defer`, so the compiler warns rather than silently accepting code that does not
+do what it says:
+
+```
+warning: `defer catch` in a function that cannot fail: it will never run.
+Give the function an error result (`-> (T, string)` or `-> T!`), or use a plain `defer`.
+```
+
 ### Use Cases
 
 - Resource cleanup (files, connections)
 - Unlocking mutexes
 - Logging function exit
 - Guaranteed cleanup regardless of return path
+- **Rollback on failure / commit on success** (`defer catch` / `defer try`)
 
 ---
 
