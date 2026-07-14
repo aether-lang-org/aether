@@ -1,0 +1,3 @@
+// The backing type is mandatory: its width and signedness are the whole point.
+bitstruct B { a: bool 0 }
+main() { println("unreachable") }

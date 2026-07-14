@@ -2475,6 +2475,35 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         break;
                     }
                 }
+                /* #1132 bitstruct field read: `b.f` -> `((b >> lo) & mask)`.
+                 *
+                 * The mask is applied AFTER the shift and the backing word is
+                 * unsigned, so the result can never be sign-extended — which is
+                 * exactly the bug a C bitfield has (gcc gives `int x : 3` a
+                 * SIGNED representation, so a stored 0b111 reads back as -1).
+                 * A bool field compares against 0 so the result is a clean 0/1. */
+                if (expr->value) {
+                    const char* bname = aether_bitstruct_base_name(expr);
+                    if (bname) {
+                        int lo = 0, hi = 0, is_bool = 0;
+                        const char* backing = NULL;
+                        if (aether_bitstruct_resolve(bname, expr->value, &lo, &hi,
+                                                     &is_bool, &backing)) {
+                            unsigned long long mask = aether_bitstruct_mask(lo, hi);
+                            /* Fully parenthesised: this can be embedded in any
+                             * larger expression without precedence surprises. */
+                            fprintf(gen->output, "(((");
+                            generate_expression(gen, child);
+                            if (lo > 0) fprintf(gen->output, " >> %d", lo);
+                            fprintf(gen->output, ") & 0x%llxULL)%s)", mask,
+                                    is_bool ? " != 0" : "");
+                            break;
+                        }
+                        fprintf(gen->output, "/* bitstruct: unknown field %s.%s */0",
+                                bname, expr->value);
+                        break;
+                    }
+                }
                 if (child->node_type && child->node_type->kind == TYPE_DURATION && expr->value) {
                     long long scale = duration_accessor_scale(expr->value);
                     if (scale == 1) {
@@ -2799,6 +2828,41 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     } else {
                         fprintf(gen->output, "/* @c_struct: unknown field %s.%s */0",
                                 sname, cpath);
+                    }
+                    if (!skip_parens) fprintf(gen->output, ")");
+                } else if (is_assignment && expr->children[0] &&
+                           expr->children[0]->type == AST_MEMBER_ACCESS &&
+                           expr->children[0]->value &&
+                           aether_bitstruct_base_name(expr->children[0])) {
+                    /* #1132 bitstruct field write as an EXPRESSION. The parser
+                     * lands a member-access store as a binary-`=`, so this is the
+                     * path an ordinary `b.f = v` statement actually takes (the
+                     * AST_ASSIGNMENT site in codegen_stmt.c catches the other
+                     * shape). Read-modify-write on the backing word:
+                     *   (b = (b & ~(mask << lo)) | ((v & mask) << lo))
+                     * The RHS is masked BEFORE shifting so an over-wide value
+                     * truncates to its own field instead of corrupting the
+                     * neighbours. */
+                    ASTNode* macc = expr->children[0];
+                    ASTNode* base = macc->children[0];
+                    const char* bname = aether_bitstruct_base_name(macc);
+                    int lo = 0, hi = 0, is_bool = 0;
+                    const char* backing = NULL;
+                    if (!skip_parens) fprintf(gen->output, "(");
+                    if (aether_bitstruct_resolve(bname, macc->value, &lo, &hi,
+                                                 &is_bool, &backing)) {
+                        unsigned long long mask = aether_bitstruct_mask(lo, hi);
+                        generate_expression(gen, base);
+                        fprintf(gen->output, " = (%s)((",
+                                backing ? backing : "unsigned char");
+                        generate_expression(gen, base);
+                        fprintf(gen->output, " & ~(0x%llxULL << %d)) | ((((unsigned long long)(",
+                                mask, lo);
+                        generate_expression(gen, expr->children[1]);
+                        fprintf(gen->output, ")) & 0x%llxULL) << %d))", mask, lo);
+                    } else {
+                        fprintf(gen->output, "/* bitstruct: unknown field %s.%s */0",
+                                bname, macc->value);
                     }
                     if (!skip_parens) fprintf(gen->output, ")");
                 } else {

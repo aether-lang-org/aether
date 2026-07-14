@@ -11,6 +11,45 @@ next version number before tagging the release.
 
 ## [current]
 
+### Added
+
+- **`bitstruct` — a layout-exact, endianness-independent replacement for C
+  bitfields** (#1132).
+
+  ```aether
+  bitstruct DnsFlags : uint16_t {
+      qr:     bool 15          // one bit
+      opcode: int  11..=14     // inclusive range
+      rcode:  int  0..<4       // exclusive range — same bits as 0..=3
+  }
+  ```
+
+  A bitstruct is a named bit layout over one unsigned integer. It **never lowers
+  to a C bitfield**; it lowers to shift-and-mask on the backing word. That is the
+  point: a C bitfield's signedness, allocation order, and straddling are all
+  implementation-defined, and gcc in particular gives `int x : 3` a *signed*
+  representation — so a stored `0b111` reads back as `-1`. Aether's extern-struct
+  bitfields (`name: type : N`) have exactly that flaw today and require every
+  unsigned read to be hand-masked. A bitstruct field cannot have it: the backing
+  word is unsigned and the mask is applied after the shift, so there is nothing
+  to sign-extend from.
+
+  The rules, each of which keeps the layout exact: the backing type is
+  **mandatory** and must be `uint8_t`/`uint16_t`/`uint32_t`/`uint64_t` (naming the
+  storage is what fixes its width and signedness); bit positions are explicit;
+  ranges may be spelled inclusively (`1..=3`) or exclusively (`1..<4`) using the
+  same tokens as match-range labels, so the source says which it means rather than
+  the reader having to remember a convention; overlapping fields are an error
+  unless the bitstruct is annotated `@overlap`; a range that overruns the backing
+  integer is an error; writing a field never disturbs its neighbours; and a
+  bitstruct is strictly nominal — crossing to or from the backing integer is an
+  explicit `as`.
+
+  Bit layout and byte order stay **separate concerns**: a bitstruct says which
+  bits, and `std.mem`'s endian-explicit accessors (`mem.get_u16_be`, …) say which
+  byte order. There is deliberately no `@bigendian` annotation and no hidden
+  byte-swapping — the swap is always visible in the source.
+
 ### Changed
 
 - **FFI: a tuple-typed value is now accepted at a tuple-typed extern

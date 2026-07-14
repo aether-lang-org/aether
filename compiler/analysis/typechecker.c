@@ -17,6 +17,12 @@ static Type* c_struct_field_decl_type(const char* sname, const char* field);
 // #1044: enum-name registry queries (defined ~typecheck_program). Used by
 // infer_type's member-access resolution above their definitions.
 static int is_enum_type_name(const char* name);
+// #1132: bitstruct definition/field lookup (defined ~typecheck_program). Used by
+// infer_type's member-access resolution above their definitions, same as the
+// enum queries above.
+static ASTNode* g_bitstruct_program;
+static ASTNode* bitstruct_field_lookup(ASTNode* program, const char* bname,
+                                       const char* field);
 static int enum_has_member(const char* ename, const char* member);
 
 // Get the last component of a module path for namespace
@@ -555,6 +561,11 @@ static const char* type_name(Type* t) {
         case TYPE_FUNCTION:  return "closure";
         case TYPE_TUPLE:    return "tuple";
         case TYPE_OPTIONAL: return "optional";   // #340
+        /* Named nominal types report their own name — "expected uint8_t, got B"
+         * is actionable where "got unknown" is not. */
+        case TYPE_ENUM:     return t->struct_name ? t->struct_name : "enum";
+        case TYPE_BITSTRUCT: return t->struct_name ? t->struct_name : "bitstruct";
+        case TYPE_BITSET:   return "bit_set";
         case TYPE_UNKNOWN:  return "unknown";
         default:            return "unknown";
     }
@@ -935,6 +946,17 @@ int is_type_compatible(Type* from, Type* to) {
     // enum (types_equal compares the element enums nominally).
     if (from->kind == TYPE_BITSET || to->kind == TYPE_BITSET) {
         return from->kind == TYPE_BITSET && to->kind == TYPE_BITSET &&
+               types_equal(from, to);
+    }
+
+    // #1132 bitstruct is strictly nominal, like bit_set and unlike enum: it never
+    // implicitly converts to or from its backing integer, and two bitstructs over
+    // the same backing type are still different types. Crossing the boundary is an
+    // explicit `as` (`f as uint8_t` to get the raw word, `w as Flags` to wrap one).
+    // Implicit conversion would defeat the purpose — the value is a packed layout,
+    // not a number you can do arithmetic on.
+    if (from->kind == TYPE_BITSTRUCT || to->kind == TYPE_BITSTRUCT) {
+        return from->kind == TYPE_BITSTRUCT && to->kind == TYPE_BITSTRUCT &&
                types_equal(from, to);
     }
 
@@ -1514,6 +1536,30 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             // If node_type already set, use it
             if (expr->node_type && expr->node_type->kind != TYPE_UNKNOWN)
                 return clone_type(expr->node_type);
+            // #1132 bitstruct field read `b.flag` — the field's declared type.
+            // An unknown field name is a hard error here; a bitstruct's fields
+            // are a closed, declared set, so a typo should not silently become
+            // an UNKNOWN that leaks downstream.
+            if (expr->child_count > 0 && expr->children[0] && expr->value) {
+                Type* bt = infer_type(expr->children[0], table);
+                if (bt && bt->kind == TYPE_BITSTRUCT && bt->struct_name) {
+                    ASTNode* f = bitstruct_field_lookup(g_bitstruct_program,
+                                                        bt->struct_name, expr->value);
+                    if (!f) {
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                                 "'%s' is not a field of bitstruct '%s'",
+                                 expr->value, bt->struct_name);
+                        type_error(msg, expr->line, expr->column);
+                        free_type(bt);
+                        return create_type(TYPE_UNKNOWN);
+                    }
+                    free_type(bt);
+                    return f->node_type ? clone_type(f->node_type)
+                                        : create_type(TYPE_UNKNOWN);
+                }
+                if (bt) free_type(bt);
+            }
             // Namespace-qualified constant access: mymath.PI_APPROX -> mymath_PI_APPROX
             if (expr->child_count > 0 && expr->children[0] &&
                 expr->children[0]->type == AST_IDENTIFIER && expr->children[0]->value &&
@@ -2157,6 +2203,7 @@ static void resolve_sum_types(ASTNode* program);
 static void sum_apply(Type* t, ASTNode* def);   // fill TYPE_SUM variant Types
 // #1044: resolve `enum Name { ... }` references (TYPE_STRUCT -> TYPE_ENUM).
 static void resolve_enum_types(ASTNode* program);
+static void resolve_bitstruct_types(ASTNode* program);
 
 // #891: typecheck-time registry of @c_struct overlay names. Codegen has its
 // own field-level registry; the typechecker only needs the NAME set so an
@@ -2197,6 +2244,37 @@ static int is_enum_type_name(const char* name) {
     for (int i = 0; i < g_enum_name_count; i++)
         if (strcmp(g_enum_names[i], name) == 0) return 1;
     return 0;
+}
+
+// #1132 bitstruct: program handle so a bitstruct name in type position, and a
+// field access on a bitstruct value, both resolve without a symbol-table
+// round-trip (same shape as the enum registry above).
+static ASTNode* g_bitstruct_program;   /* forward-declared at the top of the file */
+
+// The AST_BITSTRUCT_DEFINITION named `name`, or NULL.
+static ASTNode* bitstruct_def_lookup(ASTNode* program, const char* name) {
+    if (!program || !name) return NULL;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_BITSTRUCT_DEFINITION && c->value &&
+            strcmp(c->value, name) == 0)
+            return c;
+    }
+    return NULL;
+}
+
+// The AST_BITSTRUCT_FIELD named `field` on bitstruct `bname`, or NULL.
+static ASTNode* bitstruct_field_lookup(ASTNode* program, const char* bname,
+                                       const char* field) {
+    ASTNode* def = bitstruct_def_lookup(program, bname);
+    if (!def || !field) return NULL;
+    for (int i = 0; i < def->child_count; i++) {
+        ASTNode* f = def->children[i];
+        if (f && f->type == AST_BITSTRUCT_FIELD && f->value &&
+            strcmp(f->value, field) == 0)
+            return f;
+    }
+    return NULL;
 }
 
 // The AST_ENUM_DEFINITION for `name`, or NULL.
@@ -2346,6 +2424,11 @@ int typecheck_program(ASTNode* program) {
     // annotations into TYPE_ENUM and populate the enum-name registry, before
     // any type-checking or member-access resolution runs.
     resolve_enum_types(program);
+
+    // #1132: resolve `bitstruct Name : uint8_t { ... }`: rewrite bare
+    // TYPE_STRUCT{Name} annotations into TYPE_BITSTRUCT carrying the backing
+    // integer. After the enum pass, since a bitstruct field may be enum-typed.
+    resolve_bitstruct_types(program);
 
     // #891: collect @c_struct overlay names so `expr as *Name` casts and
     // member access typecheck against them (they have no struct symbol —
@@ -2651,6 +2734,18 @@ int typecheck_program(ASTNode* program) {
                     mt->struct_name = strdup(child->value);
                     add_symbol(global_table, qname, mt, 0, 0, 0);
                 }
+                break;
+            }
+            case AST_BITSTRUCT_DEFINITION: {
+                // #1132: register the bitstruct name so `x: Flags` annotations
+                // resolve. The definition node is stashed on the symbol (as the
+                // sum-type case does above) so field lookups can find the bit
+                // ranges without re-scanning the program.
+                Type* bt = create_bitstruct_type(child->value,
+                                                 clone_type(child->node_type));
+                add_symbol(global_table, child->value, bt, 0, 0, 0);
+                Symbol* bs = lookup_symbol(global_table, child->value);
+                if (bs) bs->node = child;
                 break;
             }
             case AST_MESSAGE_DEFINITION: {
@@ -4110,6 +4205,51 @@ static void resolve_enum_types(ASTNode* program) {
     if (g_enum_name_count == 0) return;
     enum_rewrite_ast(program, g_enum_names, g_enum_name_count);        /* type annotations */
     enum_rewrite_member_access(program);                              /* EnumName.Member */
+}
+
+/* #1132 — rewrite `TYPE_STRUCT{B}` into `TYPE_BITSTRUCT{B}` for every declared
+ * bitstruct B, carrying the backing integer along as element_type so codegen can
+ * emit the storage without another lookup. Mirrors enum_rewrite_type: the parser
+ * cannot tell a bitstruct name from a struct name (an unknown identifier in type
+ * position always becomes TYPE_STRUCT), so the fix-up happens here. */
+static void bitstruct_rewrite_type(Type* t, ASTNode* program, int depth) {
+    if (!t || depth > 64) return;
+    if (t->kind == TYPE_STRUCT && t->struct_name && !t->distinct_name) {
+        ASTNode* def = bitstruct_def_lookup(program, t->struct_name);
+        if (def) {
+            t->kind = TYPE_BITSTRUCT;
+            if (!t->element_type && def->node_type)
+                t->element_type = clone_type(def->node_type);
+        }
+    }
+    bitstruct_rewrite_type(t->element_type, program, depth + 1);
+    bitstruct_rewrite_type(t->return_type, program, depth + 1);
+    for (int i = 0; i < t->tuple_count; i++)
+        if (t->tuple_types) bitstruct_rewrite_type(t->tuple_types[i], program, depth + 1);
+    for (int i = 0; i < t->param_count; i++)
+        if (t->param_types) bitstruct_rewrite_type(t->param_types[i], program, depth + 1);
+}
+
+static void bitstruct_rewrite_ast(ASTNode* nd, ASTNode* program) {
+    if (!nd) return;
+    /* Don't rewrite the definition's own backing-type annotation — it is the
+     * uint8_t/uint16_t/... storage type, not a reference to the bitstruct. */
+    if (nd->type != AST_BITSTRUCT_DEFINITION && nd->node_type)
+        bitstruct_rewrite_type(nd->node_type, program, 0);
+    for (int i = 0; i < nd->child_count; i++)
+        bitstruct_rewrite_ast(nd->children[i], program);
+}
+
+static void resolve_bitstruct_types(ASTNode* program) {
+    if (!program) return;
+    g_bitstruct_program = program;
+    int any = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (c && c->type == AST_BITSTRUCT_DEFINITION) { any = 1; break; }
+    }
+    if (!any) return;
+    bitstruct_rewrite_ast(program, program);
 }
 
 /* Fold every `__pure(fn)` node in the tree to a `true`/`false` bool literal. */
@@ -5878,7 +6018,19 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 int same = (operand->kind == expr->node_type->kind);
                 int numeric = is_numeric_scalar(operand->kind) &&
                               is_numeric_scalar(expr->node_type->kind);
-                if (!same && !numeric) {
+                /* #1132: a bitstruct never converts IMPLICITLY (is_type_compatible
+                 * keeps it strictly nominal), but `as` is exactly how you cross the
+                 * boundary on purpose: `w as Flags` to wrap a raw word, `f as
+                 * uint8_t` to get it back. Both directions are zero-cost — the
+                 * bitstruct IS the integer at the C level. Two different bitstructs
+                 * do NOT convert into each other, even over the same backing type;
+                 * that would silently reinterpret one layout as another. */
+                int bs_cast = 0;
+                if (operand->kind == TYPE_BITSTRUCT && expr->node_type->kind != TYPE_BITSTRUCT)
+                    bs_cast = is_integer_scalar(expr->node_type->kind);
+                else if (expr->node_type->kind == TYPE_BITSTRUCT && operand->kind != TYPE_BITSTRUCT)
+                    bs_cast = is_integer_scalar(operand->kind);
+                if (!same && !numeric && !bs_cast) {
                     char msg[220];
                     snprintf(msg, sizeof(msg),
                         "cannot cast %s to %s with `as`: a value cast converts "
@@ -6066,6 +6218,24 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             return 1;
             
         case AST_MEMBER_ACCESS: {
+            /* #1132: a bitstruct's fields are a closed, declared set, so a name
+             * that isn't one of them is a typo, not an open question. Reject it
+             * here (this walk always runs) rather than letting codegen fall back
+             * to emitting a literal 0 with an "unknown field" comment. */
+            if (expr->child_count > 0 && expr->children[0] && expr->value) {
+                Type* bt = infer_type(expr->children[0], table);
+                if (bt && bt->kind == TYPE_BITSTRUCT && bt->struct_name &&
+                    !bitstruct_field_lookup(g_bitstruct_program, bt->struct_name,
+                                            expr->value)) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "'%s' is not a field of bitstruct '%s'",
+                             expr->value, bt->struct_name);
+                    type_error(msg, expr->line, expr->column);
+                    free_type(bt);
+                    return 0;
+                }
+                if (bt) free_type(bt);
+            }
             // Namespace-qualified constant access: mymath.PI_APPROX -> mymath_PI_APPROX
             // Rewrite AST to AST_IDENTIFIER so codegen emits the C variable name directly.
             // Issue #243: gate on the strict per-scope visibility check
@@ -7387,22 +7557,32 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
              * non-distinct parameter) requires an explicit `as` cast at the
              * call boundary — the capability-token use case (`GrantedFD =
              * distinct int` cannot receive a raw int). Scoped to distinct
-             * types; Aether's argument checking is otherwise lenient. */
+             * types; Aether's argument checking is otherwise lenient.
+             *
+             * #1132 extends the same rule to bitstructs, for the same reason: a
+             * bitstruct is a packed layout, not a number, so letting one slide
+             * into a plain integer parameter (or vice versa) would silently
+             * reinterpret it. Crossing the boundary is an explicit `as`. */
             if (param_type) {
                 ASTNode* darg = call->children[arg_slot];
                 if (darg) {
                     Type* da = infer_type(darg, table);
-                    if (da && da->kind != TYPE_UNKNOWN &&
-                        (param_type->distinct_name || da->distinct_name) &&
+                    int nominal = param_type->distinct_name || (da && da->distinct_name) ||
+                                  param_type->kind == TYPE_BITSTRUCT ||
+                                  (da && da->kind == TYPE_BITSTRUCT);
+                    if (da && da->kind != TYPE_UNKNOWN && nominal &&
                         !is_type_compatible(da, param_type)) {
+                        int bs = (param_type->kind == TYPE_BITSTRUCT ||
+                                  da->kind == TYPE_BITSTRUCT);
                         char emsg[340];
                         snprintf(emsg, sizeof(emsg),
                             "Argument %d '%s' of '%s': expected %s, got %s — a "
-                            "distinct type needs an explicit `as` cast at the "
+                            "%s type needs an explicit `as` cast at the "
                             "boundary", arg_slot + 1,
                             param->value ? param->value : "?",
                             call->value ? call->value : "?",
-                            type_name(param_type), type_name(da));
+                            type_name(param_type), type_name(da),
+                            bs ? "bitstruct" : "distinct");
                         type_error(emsg, darg->line, darg->column);
                     }
                     if (da) free_type(da);

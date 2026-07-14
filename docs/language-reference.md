@@ -1411,6 +1411,81 @@ from an integer, and two bit sets interoperate only when they are over the same
 enum. Members must have values in `0..63` (the width of the backing word). `card`
 is a reserved call form, like `sizeof`, and applies only to a bit set.
 
+## Bitstructs
+
+A **bitstruct** is a named bit layout over a single unsigned integer. It is the
+tool for packed headers, hardware registers, and wire formats.
+
+```aether
+bitstruct DnsFlags : uint16_t {
+    qr:     bool 15          // a single bit
+    opcode: int  11..=14     // an inclusive range: bits 11,12,13,14
+    aa:     bool 10
+    rcode:  int  0..<4       // an exclusive range: bits 0,1,2,3
+}
+
+f = 0 as DnsFlags
+f.opcode = 2
+f.qr = true
+w = f as uint16_t            // 0x9000 | ...
+```
+
+**A bitstruct never lowers to a C bitfield.** It lowers to shift-and-mask
+arithmetic on the backing integer. This is the whole point of the feature: C's
+`:n` bitfields have implementation-defined signedness, allocation order, and
+straddling behaviour, which makes them unusable for anything that has to match a
+byte-exact layout. In particular gcc gives `int x : 3` a **signed**
+representation, so a stored `0b111` reads back as `-1`. A bitstruct field cannot
+do that — the backing word is unsigned and the mask is applied after the shift,
+so there is nothing to sign-extend from.
+
+The rules, each of which exists to keep the layout exact:
+
+- **The backing type is mandatory** and must be one of `uint8_t`, `uint16_t`,
+  `uint32_t`, `uint64_t`. Naming the storage explicitly is what fixes its width
+  and its signedness. Omitting it is a compile error, not a default.
+- **Bit positions are explicit.** A bare index (`0`) is a one-bit field. A range
+  may be written inclusively (`1..=3`) or exclusively (`1..<4`) — both denote the
+  same three bits. Aether does not pick one for you (C3, which this borrows from,
+  hardcodes inclusive ranges and leaves you to remember); the source says which
+  it means, using the same `..=` / `..<` spellings as match-range labels.
+- **Overlapping fields are an error** unless the bitstruct is annotated
+  `@overlap`, which permits union-like views of the same bits.
+- **A range that runs off the end of the backing integer is an error.**
+- **Fields are `bool`, an integer type, or an enum.** A `bool` field is exactly
+  one bit.
+- **Writing a field never disturbs its neighbours.** An over-wide value truncates
+  to its own field rather than bleeding into the next one.
+- **A bitstruct is nominal.** It never implicitly converts to or from its backing
+  integer, and two bitstructs over the same backing type are still different
+  types. Crossing the boundary is an explicit `as` in either direction — a
+  bitstruct is a packed layout, not a number you do arithmetic on.
+
+### Bit layout and byte order are separate concerns
+
+A bitstruct says **which bits**. It deliberately says nothing about **which byte
+order** — there is no `@bigendian` annotation, and no hidden byte-swapping on
+field access. Byte order is a property of *serialisation*, not of the layout, and
+Aether already has endian-explicit accessors for it in [`std.mem`](../std/mem/):
+
+```aether
+import std.mem
+
+// Read a big-endian word off the wire, then interpret its bits.
+w    = mem.get_u16_be(buf, 0)
+hdr  = w as DnsFlags
+kind = hdr.opcode
+
+// ...and back out again.
+mem.set_u16_be(buf, 0, hdr as uint16_t)
+```
+
+Keeping the two apart means there is exactly one place where a byte swap can
+happen, and it is visible in the source. Folding endianness into the type would
+make the swap implicit and raise the question "does it happen on every field
+read, or only at the byte boundary?" — the sort of ambiguity that makes C
+bitfields untrustworthy in the first place.
+
 ## Sum / Variant Types
 
 A **sum type** is a value that is exactly one of N named struct variants:

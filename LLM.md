@@ -331,6 +331,18 @@ workaround, they cover cases a porter often hand-rolls.
   (`9.99 as USD` to wrap, `usd as float` to unwrap). A `Fd` param rejects a raw
   `int`; `EUR` is rejected where `USD` is wanted. The compiler-checked way to
   give capability tokens / units / handles their own type.
+- **`bitstruct Name : uint8_t { f: bool 0, g: int 1..=3 }` for packed layouts.**
+  A named bit layout over one unsigned integer, for wire formats / headers /
+  hardware registers. Reach for it instead of the older extern-struct bitfield
+  (`name: type : N`), which emits a **raw C bitfield** and is therefore always
+  *signed* (a stored `0b111` in a 3-bit field reads back as `-1`) — the reason
+  every unsigned read of one has to be hand-masked with `& ((1<<N)-1)`. A
+  bitstruct lowers to shift/mask on an unsigned word instead, so it cannot
+  sign-extend. Backing type is mandatory (`uint8_t`/`uint16_t`/`uint32_t`/
+  `uint64_t`); bit ranges are explicit and spelled `1..=3` (inclusive) or `1..<4`
+  (exclusive); overlaps need `@overlap`; it's strictly nominal (cross to the raw
+  word with `as`). Byte order is NOT part of it — compose with `std.mem`'s
+  `get_u16_be` / `set_u32_le` etc., so the swap stays visible.
 - **Gradual `where` contracts on params.** `divide(a: int, b: int where b != 0)`
   a runtime-checked precondition that lowers to an entry guard; a violation is
   a hard panic (`precondition violation: b != 0 in divide`), a programmer-error
