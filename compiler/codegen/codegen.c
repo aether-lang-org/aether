@@ -177,6 +177,111 @@ int aether_c_struct_resolve(const char* sname, const char* field,
     return 0;
 }
 
+/* ---------------------------------------------------------------------------
+ * #1132 bitstruct registry.
+ *
+ * A bitstruct is a named layout over one unsigned integer. There is no C struct
+ * and no C bitfield: `b.field` lowers to a shift/mask against the backing word,
+ * and `b.field = v` to a read-modify-write. That is the whole reason the feature
+ * exists — a C bitfield's signedness and allocation order are implementation-
+ * defined (gcc makes `int x : 3` SIGNED, so 0b111 reads back as -1), which makes
+ * C bitfields unusable for wire formats and is the bug this replaces.
+ *
+ * Fields are stored with their INCLUSIVE bit range; the parser has already
+ * normalised `..<` to `..=` so nothing downstream cares which was written.
+ * ------------------------------------------------------------------------- */
+typedef struct { char* name; int lo; int hi; int is_bool; } BitStructField;
+typedef struct {
+    char* name;
+    char* backing;        /* the C type of the storage word */
+    BitStructField* fields;
+    int nfields, cap;
+} BitStructDef;
+static BitStructDef* g_bitstructs = NULL;
+static int g_bitstruct_count = 0, g_bitstruct_cap = 0;
+
+static BitStructDef* bitstruct_find(const char* name) {
+    if (!name) return NULL;
+    for (int i = 0; i < g_bitstruct_count; i++)
+        if (strcmp(g_bitstructs[i].name, name) == 0) return &g_bitstructs[i];
+    return NULL;
+}
+
+int aether_is_bitstruct(const char* name) {
+    return bitstruct_find(name) != NULL;
+}
+
+void aether_register_bitstruct(const char* name, const char* backing) {
+    if (!name || bitstruct_find(name)) return;
+    if (g_bitstruct_count >= g_bitstruct_cap) {
+        int nc = g_bitstruct_cap ? g_bitstruct_cap * 2 : 8;
+        BitStructDef* nb = realloc(g_bitstructs, (size_t)nc * sizeof(BitStructDef));
+        if (!nb) return;
+        g_bitstructs = nb;
+        g_bitstruct_cap = nc;
+    }
+    BitStructDef* d = &g_bitstructs[g_bitstruct_count++];
+    d->name = strdup(name);
+    d->backing = strdup(backing ? backing : "unsigned char");
+    d->fields = NULL;
+    d->nfields = 0;
+    d->cap = 0;
+}
+
+void aether_bitstruct_add_field(const char* sname, const char* fname,
+                                int lo, int hi, int is_bool) {
+    BitStructDef* d = bitstruct_find(sname);
+    if (!d || !fname) return;
+    if (d->nfields >= d->cap) {
+        int nc = d->cap ? d->cap * 2 : 8;
+        BitStructField* nf = realloc(d->fields, (size_t)nc * sizeof(BitStructField));
+        if (!nf) return;
+        d->fields = nf;
+        d->cap = nc;
+    }
+    BitStructField* f = &d->fields[d->nfields++];
+    f->name = strdup(fname);
+    f->lo = lo;
+    f->hi = hi;
+    f->is_bool = is_bool;
+}
+
+/* Resolve `bitstruct.field` to its inclusive bit range. Returns 1 on success. */
+int aether_bitstruct_resolve(const char* sname, const char* field,
+                            int* out_lo, int* out_hi, int* out_is_bool,
+                            const char** out_backing) {
+    BitStructDef* d = bitstruct_find(sname);
+    if (!d || !field) return 0;
+    for (int i = 0; i < d->nfields; i++) {
+        if (strcmp(d->fields[i].name, field) == 0) {
+            if (out_lo)      *out_lo = d->fields[i].lo;
+            if (out_hi)      *out_hi = d->fields[i].hi;
+            if (out_is_bool) *out_is_bool = d->fields[i].is_bool;
+            if (out_backing) *out_backing = d->backing;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The bitstruct name a member-access node reads from, or NULL if the base is not
+ * a bitstruct-typed expression. Deliberately shallow: a bitstruct field is a
+ * scalar, so there is no `a.b.c` chain to walk (unlike a @c_struct overlay). */
+const char* aether_bitstruct_base_name(ASTNode* macc) {
+    if (!macc || macc->type != AST_MEMBER_ACCESS || macc->child_count == 0) return NULL;
+    ASTNode* base = macc->children[0];
+    if (!base || !base->node_type) return NULL;
+    if (base->node_type->kind != TYPE_BITSTRUCT) return NULL;
+    return base->node_type->struct_name;
+}
+
+/* The all-ones mask for an inclusive [lo,hi] range, as an unsigned long long. */
+unsigned long long aether_bitstruct_mask(int lo, int hi) {
+    int width = hi - lo + 1;
+    if (width >= 64) return ~0ULL;
+    return ((1ULL << width) - 1ULL);
+}
+
 /* #891: map a @c_struct field type to the mem_get_* / set_* width token, the
  * compiler choosing the accessor (killing the hand-picked-width footgun). If
  * the field's type names another @c_struct, set *nested to that name and
@@ -1813,6 +1918,13 @@ const char* get_c_type(Type* type) {
              * 64-bit word (one bit per member, at the member's enum value).
              * Set operations lower to bitwise ops; zero runtime cost. */
             return "unsigned long long";
+        case TYPE_BITSTRUCT:
+            /* #1132: a bitstruct IS its backing integer — there is no C struct
+             * and, deliberately, no C bitfield (whose signedness and layout are
+             * implementation-defined). Field access lowers to shift/mask against
+             * this word, so the layout is exact and portable. */
+            return type->element_type ? get_c_type(type->element_type)
+                                      : "unsigned char";
         case TYPE_ARRAY: {
             static char buffers[4][256];
             static int buf_idx = 0;
@@ -4296,6 +4408,25 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             emit_enum_typedef(gen, ed);
         }
     }
+
+    // #1132: bitstructs. Register the layout (so field access can lower to
+    // shift/mask) and emit `typedef <backing> Name;`. There is deliberately no C
+    // struct and no C bitfield here — the backing integer IS the value.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* bd = program->children[i];
+        if (!bd || bd->type != AST_BITSTRUCT_DEFINITION || !bd->value) continue;
+        const char* backing = get_c_type(bd->node_type);
+        aether_register_bitstruct(bd->value, backing);
+        for (int f = 0; f < bd->child_count; f++) {
+            ASTNode* fld = bd->children[f];
+            if (!fld || fld->type != AST_BITSTRUCT_FIELD || !fld->value) continue;
+            int is_bool = (fld->node_type && fld->node_type->kind == TYPE_BOOL);
+            aether_bitstruct_add_field(bd->value, fld->value,
+                                       fld->bit_lo, fld->bit_hi, is_bool);
+        }
+        fprintf(gen->output, "typedef %s %s;  /* bitstruct */\n", backing, bd->value);
+    }
+    if (g_bitstruct_count > 0) fprintf(gen->output, "\n");
 
     // Now that every user struct's full body is visible, emit the
     // synthesised tuple typedefs (deferred from the merge pre-scan

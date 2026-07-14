@@ -515,6 +515,22 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                         node->node_type = create_type(TYPE_VOID); // void* represented as void
                     }
                 }
+                // #1132 bitstruct field access: the field's declared type comes
+                // straight off its AST_BITSTRUCT_FIELD node. The definition is
+                // stashed on the bitstruct's global symbol at registration.
+                else if (base_type && base_type->kind == TYPE_BITSTRUCT && ctx->symbols) {
+                    Symbol* bs = lookup_symbol(ctx->symbols, base_type->struct_name);
+                    if (bs && bs->node) {
+                        for (int i = 0; i < bs->node->child_count; i++) {
+                            ASTNode* f = bs->node->children[i];
+                            if (f && f->type == AST_BITSTRUCT_FIELD && f->value &&
+                                strcmp(f->value, node->value) == 0) {
+                                node->node_type = clone_type(f->node_type);
+                                break;
+                            }
+                        }
+                    }
+                }
                 // Handle struct type member access
                 else if (base_type && base_type->kind == TYPE_STRUCT && ctx->symbols) {
                     // Look up the struct definition

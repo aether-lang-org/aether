@@ -1,0 +1,143 @@
+// Regression: #1132 bitstruct — a layout-exact, endianness-independent
+// replacement for C bitfields.
+//
+//   bitstruct Name : uint8_t { flag: bool 0, kind: int 1..=3 }
+//
+// The backing type is mandatory and unsigned; field bits are given explicitly,
+// either inclusively (`1..=3`) or exclusively (`1..<4`) — both denote the same
+// three bits, and the parser normalises them to one representation.
+//
+// A bitstruct NEVER lowers to a C bitfield. It lowers to shift/mask on the
+// backing integer. That is the whole point: gcc gives `int x : 3` a SIGNED
+// representation, so a stored 0b111 reads back as -1 — which is the bug this
+// feature exists to kill (Aether's extern-struct bitfields have it today, and
+// every unsigned read has to be hand-masked). The full-width-field cases below
+// are the regression guard for exactly that.
+
+import std.mem
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+bitstruct Flags : uint8_t {
+    text: bool 0
+    kind: int  1..=3      // inclusive spelling
+    top:  int  5..<8      // exclusive spelling — the SAME three bits (5,6,7)
+}
+
+// 16-bit, DNS-header-shaped: the load-bearing wire-format case.
+bitstruct DnsFlags : uint16_t {
+    qr:     bool 15
+    opcode: int  11..=14
+    aa:     bool 10
+    rcode:  int  0..=3
+}
+
+// Overlapping views of the same bits are allowed only with @overlap.
+bitstruct Overlapped : uint8_t @overlap {
+    whole: int 0..=7
+    lo:    int 0..=3
+    hi:    int 4..=7
+}
+
+// A bitstruct nested as an ordinary struct field: it is just its backing
+// integer, so it stores like any other scalar.
+struct Packet {
+    flags: Flags
+    seq:   int
+}
+
+check(got: int, want: int, lbl: string) -> int {
+    if got != want {
+        println("FAIL ${lbl}: ${got} != ${want}")
+        return 1
+    }
+    return 0
+}
+
+main() {
+    fails = 0
+
+    // ---- basic round-trip of every field -----------------------------------
+    f = 0 as Flags
+    f.text = true
+    f.kind = 5
+    f.top = 7
+
+    if f.text != true { println("FAIL: text"); fails = fails + 1 }
+    fails = fails + check(f.kind, 5, "kind")
+    fails = fails + check(f.top, 7, "top")
+
+    // ---- THE SIGNEDNESS GUARD ----------------------------------------------
+    // A field whose top bit is set must read back UNSIGNED. With a C bitfield
+    // (`int kind : 3`) this reads -1 on gcc. With shift/mask on an unsigned
+    // backing word it cannot: there is nothing to sign-extend from.
+    f.kind = 7
+    fails = fails + check(f.kind, 7, "kind all-ones must not sign-extend")
+    f.top = 7
+    fails = fails + check(f.top, 7, "top all-ones must not sign-extend")
+
+    // ---- exact layout ------------------------------------------------------
+    // text(bit 0)=1, kind(bits 1..3)=7, top(bits 5..7)=7, bit 4 unclaimed.
+    //   1 + (7 << 1) + (7 << 5) = 1 + 14 + 224 = 239
+    raw = f as uint8_t
+    fails = fails + check(raw, 239, "packed word")
+
+    // Writing one field must not disturb its neighbours.
+    f.kind = 0
+    if f.text != true { println("FAIL: text survives a neighbour write"); fails = fails + 1 }
+    fails = fails + check(f.top, 7, "top survives a neighbour write")
+    fails = fails + check(f as uint8_t, 225, "word after clearing kind")   // 1 + 224
+
+    // An over-wide value truncates to its own field, it does not bleed.
+    f.kind = 0xFF
+    fails = fails + check(f.kind, 7, "over-wide value truncates to the field")
+    fails = fails + check(f.top, 7, "over-wide value does not bleed into the neighbour")
+
+    // ---- both range spellings agree ----------------------------------------
+    a = 0 as Flags
+    a.top = 5            // declared 5..<8
+    fails = fails + check(a as uint8_t, 160, "exclusive range lands at bit 5")   // 5 << 5
+
+    // ---- 16-bit wire format, composed with byte order ----------------------
+    // The bitstruct owns WHICH BITS; std.mem owns WHICH BYTE ORDER. Keeping the
+    // two separate is deliberate — see docs. No hidden byte-swapping here.
+    d = 0 as DnsFlags
+    d.qr = true
+    d.opcode = 2
+    d.aa = true
+    d.rcode = 3
+    w = d as uint16_t
+    fails = fails + check(w, 0x9403, "dns flags word")   // 0x8000|0x1000|0x400|0x3
+
+    p = malloc(4)
+    mem.set_u16_be(p, 0, w)
+    // Big-endian on the wire: the high byte comes first on every host.
+    fails = fails + check(mem.get_byte(p, 0), 0x94, "wire high byte")
+    fails = fails + check(mem.get_byte(p, 1), 0x03, "wire low byte")
+
+    back = mem.get_u16_be(p, 0) as DnsFlags
+    if back.qr != true { println("FAIL: round-trip qr"); fails = fails + 1 }
+    fails = fails + check(back.opcode, 2, "round-trip opcode")
+    fails = fails + check(back.rcode, 3, "round-trip rcode")
+    free(p)
+
+    // ---- @overlap ----------------------------------------------------------
+    o = 0 as Overlapped
+    o.whole = 0xAB
+    fails = fails + check(o.lo, 0xB, "overlap low nibble")
+    fails = fails + check(o.hi, 0xA, "overlap high nibble")
+
+    // ---- a bitstruct as a struct field -------------------------------------
+    pk = Packet { flags: 0 as Flags, seq: 42 }
+    pk.flags.kind = 6
+    fails = fails + check(pk.flags.kind, 6, "bitstruct field inside a struct")
+    fails = fails + check(pk.seq, 42, "sibling struct field untouched")
+
+    if fails != 0 {
+        println("bitstruct: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_bitstruct")
+}

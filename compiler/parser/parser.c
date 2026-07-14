@@ -5329,6 +5329,177 @@ ASTNode* parse_struct_definition(Parser* parser) {
     return struct_def;
 }
 
+/* #1132 — the width in bits of a bitstruct's backing integer, or 0 if `t` is not
+ * a legal backing type. Only the unsigned fixed-width C ABI aliases qualify: the
+ * storage must have an exact width AND be unsigned, since the entire point is to
+ * escape C bitfields, whose signedness is implementation-defined (a plain `int
+ * x : 3` field is signed on gcc, so a 3-bit value of 0b111 reads back as -1).
+ * That is the bug this feature exists to kill; permitting a signed backing type
+ * would reintroduce it. */
+static int bitstruct_backing_bits(const Type* t) {
+    if (!t) return 0;
+    switch (t->kind) {
+        case TYPE_UINT8:  return 8;
+        case TYPE_UINT16: return 16;
+        case TYPE_UINT32: return 32;
+        case TYPE_UINT64: return 64;
+        default: return 0;
+    }
+}
+
+/* #1132 — `bitstruct Name : uint8_t { flag: bool 0, kind: int 1..=3 }`.
+ * Called with `bitstruct` already consumed.
+ *
+ * Each field is `name: type <bits>`, where `<bits>` is either a single index
+ * (`0`) or a range. The range may be written inclusively (`1..=3`) or exclusively
+ * (`1..<4`) — both denote the same three bits. C3, which this borrows from, hard-
+ * codes inclusive ranges and leaves the reader to remember; Aether already has
+ * `..=` / `..<` (used by match labels, #1047), so we make the source say which it
+ * means and normalise to an inclusive [bit_lo, bit_hi] pair here. Codegen never
+ * has to care which spelling was used.
+ *
+ * Overlapping fields are rejected unless the bitstruct carries `@overlap`, and a
+ * range that runs off the end of the backing integer is always an error. */
+static ASTNode* parse_bitstruct_definition(Parser* parser) {
+    Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+    if (!name) return NULL;
+    if (!expect_token(parser, TOKEN_COLON)) return NULL;
+
+    Type* backing = parse_type(parser);
+    int total_bits = bitstruct_backing_bits(backing);
+    if (!total_bits) {
+        parser_error(parser,
+            "bitstruct backing type must be uint8_t, uint16_t, uint32_t or uint64_t "
+            "(an exact-width unsigned integer)");
+        if (backing) free_type(backing);
+        return NULL;
+    }
+
+    ASTNode* def = create_ast_node(AST_BITSTRUCT_DEFINITION, name->value,
+                                   name->line, name->column);
+    def->node_type = backing;
+
+    /* Optional `@overlap` — permits fields to share bits (a union-like view). */
+    int allow_overlap = 0;
+    Token* at = peek_token(parser);
+    if (at && at->type == TOKEN_AT) {
+        Token* a1 = peek_ahead(parser, 1);
+        if (a1 && a1->type == TOKEN_IDENTIFIER && a1->value &&
+            strcmp(a1->value, "overlap") == 0) {
+            advance_token(parser);   // '@'
+            advance_token(parser);   // 'overlap'
+            allow_overlap = 1;
+            def->annotation = strdup("overlap");
+        }
+    }
+
+    if (!expect_token(parser, TOKEN_LEFT_BRACE)) { free_ast_node(def); return NULL; }
+
+    /* Bit i of the backing integer is claimed by an already-parsed field. Used
+     * for the overlap check; 64 bits is the widest backing type. */
+    unsigned long long claimed = 0ULL;
+
+    while (peek_token(parser) && peek_token(parser)->type != TOKEN_RIGHT_BRACE) {
+        Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!fname) { free_ast_node(def); return NULL; }
+        if (!expect_token(parser, TOKEN_COLON)) { free_ast_node(def); return NULL; }
+
+        Type* ftype = parse_type(parser);
+        if (!ftype) {
+            parser_error(parser, "expected a field type in bitstruct");
+            free_ast_node(def);
+            return NULL;
+        }
+        /* Members are integers or bools only — a float or string has no meaning
+         * as a bit range, and a struct field would need a layout of its own. */
+        if (!(ftype->kind == TYPE_BOOL || ftype->kind == TYPE_INT ||
+              ftype->kind == TYPE_INT64 || ftype->kind == TYPE_UINT8 ||
+              ftype->kind == TYPE_UINT16 || ftype->kind == TYPE_UINT32 ||
+              ftype->kind == TYPE_UINT64 || ftype->kind == TYPE_ENUM)) {
+            parser_error(parser,
+                "bitstruct fields must be bool, an integer type, or an enum");
+            free_type(ftype);
+            free_ast_node(def);
+            return NULL;
+        }
+
+        Token* lo_tok = expect_token(parser, TOKEN_NUMBER);
+        if (!lo_tok || !lo_tok->value) {
+            parser_error(parser,
+                "expected a bit position or range after the field type "
+                "(e.g. `f: bool 0` or `g: int 1..=3`)");
+            free_type(ftype); free_ast_node(def);
+            return NULL;
+        }
+        int lo = atoi(lo_tok->value);
+        int hi = lo;   /* a bare index is a one-bit field */
+
+        Token* r = peek_token(parser);
+        if (r && (r->type == TOKEN_DOTDOT_EQ || r->type == TOKEN_DOTDOT_LT)) {
+            int inclusive = (r->type == TOKEN_DOTDOT_EQ);
+            advance_token(parser);
+            Token* hi_tok = expect_token(parser, TOKEN_NUMBER);
+            if (!hi_tok || !hi_tok->value) {
+                parser_error(parser, "expected the high bit of the range");
+                free_type(ftype); free_ast_node(def);
+                return NULL;
+            }
+            hi = atoi(hi_tok->value);
+            /* Normalise the half-open spelling to the inclusive pair we store. */
+            if (!inclusive) hi -= 1;
+        }
+
+        if (hi < lo) {
+            parser_error(parser, "bitstruct field range is empty or inverted "
+                                 "(high bit is below the low bit)");
+            free_type(ftype); free_ast_node(def);
+            return NULL;
+        }
+        if (lo < 0 || hi >= total_bits) {
+            char msg[192];
+            snprintf(msg, sizeof(msg),
+                     "bitstruct field bits %d..=%d do not fit in the %d-bit backing type",
+                     lo, hi, total_bits);
+            parser_error(parser, msg);
+            free_type(ftype); free_ast_node(def);
+            return NULL;
+        }
+        /* A bool occupies exactly one bit; anything wider is a mistake the
+         * programmer wants to hear about, not a silent truncation. */
+        if (ftype->kind == TYPE_BOOL && hi != lo) {
+            parser_error(parser, "a bool bitstruct field must be exactly one bit wide");
+            free_type(ftype); free_ast_node(def);
+            return NULL;
+        }
+
+        unsigned long long span = (hi - lo + 1 >= 64)
+            ? ~0ULL
+            : (((1ULL << (hi - lo + 1)) - 1ULL) << lo);
+        if (!allow_overlap && (claimed & span)) {
+            parser_error(parser,
+                "bitstruct fields overlap; annotate the bitstruct with `@overlap` "
+                "if that is intended");
+            free_type(ftype); free_ast_node(def);
+            return NULL;
+        }
+        claimed |= span;
+
+        ASTNode* field = create_ast_node(AST_BITSTRUCT_FIELD, fname->value,
+                                         fname->line, fname->column);
+        field->node_type = ftype;
+        field->bit_lo = lo;
+        field->bit_hi = hi;
+        add_child(def, field);
+
+        if (peek_token(parser) && peek_token(parser)->type == TOKEN_COMMA) {
+            advance_token(parser);   // optional comma
+        }
+    }
+
+    if (!expect_token(parser, TOKEN_RIGHT_BRACE)) { free_ast_node(def); return NULL; }
+    return def;
+}
+
 // Parse a single top-level declaration (module / import / func / struct /
 // extern / const / etc.). Returns the parsed node, or NULL when the item
 // was consumed by error recovery (the parser has advanced past it). Factored
@@ -5341,6 +5512,32 @@ ASTNode* parse_top_level_decl(Parser* parser) {
         if (!token) return NULL;
 
         ASTNode* node = NULL;
+
+        // #1132: `bitstruct Name : uint8_t { flag: bool 0, kind: int 1..=3 }`.
+        // A layout-exact, endianness-independent replacement for C bitfields.
+        // `bitstruct` is a contextual identifier (still usable as a name
+        // elsewhere); only the `bitstruct <ident> :` shape here is intercepted.
+        if (token->type == TOKEN_IDENTIFIER && token->value &&
+            strcmp(token->value, "bitstruct") == 0) {
+            Token* n1 = peek_ahead(parser, 1);
+            Token* n2 = peek_ahead(parser, 2);
+            if (n1 && n1->type == TOKEN_IDENTIFIER && n2 && n2->type == TOKEN_COLON) {
+                advance_token(parser);   // consume 'bitstruct'
+                return parse_bitstruct_definition(parser);
+            }
+            /* `bitstruct Name {` — the backing type is not optional. Diagnose it
+             * here rather than letting it fall through to be parsed as something
+             * else and produce a baffling error. The whole point of the feature is
+             * that the storage is named explicitly, so its width and signedness
+             * are never implementation-defined (as a C bitfield's are). */
+            if (n1 && n1->type == TOKEN_IDENTIFIER &&
+                n2 && n2->type == TOKEN_LEFT_BRACE) {
+                parser_error(parser,
+                    "bitstruct requires an explicit backing type: "
+                    "`bitstruct Name : uint8_t { ... }` (uint8_t/uint16_t/uint32_t/uint64_t)");
+                return NULL;
+            }
+        }
 
         // #1044: `enum Name { A, B = 5, C }`, a first-class named-integer enum.
         // `enum` is a contextual identifier (usable as a name elsewhere); only

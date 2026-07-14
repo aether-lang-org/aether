@@ -5034,6 +5034,34 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     }
                 }
 
+                /* #1132 bitstruct field write: `b.f = v` lowers to a
+                 * read-modify-write on the backing word —
+                 *   b = (b & ~(mask << lo)) | ((v & mask) << lo);
+                 * The RHS is masked before shifting, so an out-of-range value
+                 * truncates to the field rather than corrupting its neighbours.
+                 * No C bitfield is involved, so the layout is exact. */
+                if (lhs && lhs->type == AST_MEMBER_ACCESS && lhs->value) {
+                    const char* bname = aether_bitstruct_base_name(lhs);
+                    if (bname) {
+                        int lo = 0, hi = 0, is_bool = 0;
+                        const char* backing = NULL;
+                        if (aether_bitstruct_resolve(bname, lhs->value, &lo, &hi,
+                                                     &is_bool, &backing)) {
+                            unsigned long long mask = aether_bitstruct_mask(lo, hi);
+                            ASTNode* base = lhs->children[0];
+                            print_indent(gen);
+                            generate_expression(gen, base);
+                            fprintf(gen->output, " = (%s)((", backing ? backing : "unsigned char");
+                            generate_expression(gen, base);
+                            fprintf(gen->output, " & ~(0x%llxULL << %d)) | ((((unsigned long long)(",
+                                    mask, lo);
+                            generate_expression(gen, rhs);
+                            fprintf(gen->output, ")) & 0x%llxULL) << %d));\n", mask, lo);
+                            break;
+                        }
+                    }
+                }
+
                 // Generate the assignment itself
                 gen->generating_lvalue = 1;
                 generate_expression(gen, lhs);

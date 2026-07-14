@@ -60,6 +60,17 @@ Type* create_bitset_type(Type* element_enum) {
     return type;
 }
 
+// #1132 `bitstruct Name : uint8_t { ... }`. `struct_name` is the bitstruct's
+// name; `element_type` is the backing integer type (adopted, not cloned).
+// Nominal — see types_equal below. clone_type/free_type already handle both
+// slots generically.
+Type* create_bitstruct_type(const char* name, Type* backing) {
+    Type* type = create_type(TYPE_BITSTRUCT);
+    type->struct_name = name ? strdup(name) : NULL;
+    type->element_type = backing;
+    return type;
+}
+
 Type* create_tuple_type(int count, ...) {
     Type* type = create_type(TYPE_TUPLE);
     type->tuple_count = count;
@@ -226,6 +237,8 @@ const char* type_to_string(Type* type) {
             return type->struct_name ? type->struct_name : "sum";
         case TYPE_ENUM:
             return type->struct_name ? type->struct_name : "enum";
+        case TYPE_BITSTRUCT:
+            return type->struct_name ? type->struct_name : "bitstruct";
         case TYPE_ISOLATED: {
             static char buffer[256];
             snprintf(buffer, sizeof(buffer), "Isolated[%s]",
@@ -273,6 +286,13 @@ int types_equal(Type* a, Type* b) {
 
     // #1044 enums are nominal: equal iff they name the same enum.
     if (a->kind == TYPE_ENUM) {
+        if (!a->struct_name || !b->struct_name) return 0;
+        return strcmp(a->struct_name, b->struct_name) == 0;
+    }
+
+    // #1132 bitstructs are nominal too: equal iff they name the same bitstruct.
+    // Two bitstructs over the same backing integer are still different types.
+    if (a->kind == TYPE_BITSTRUCT) {
         if (!a->struct_name || !b->struct_name) return 0;
         return strcmp(a->struct_name, b->struct_name) == 0;
     }
@@ -381,6 +401,8 @@ ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int colu
     node->annotation = NULL;
     node->is_imported = 0;
     node->bit_width = 0;
+    node->bit_lo = 0;
+    node->bit_hi = 0;
     node->source_file = NULL;
     node->type_inferred = 0;
     return node;
@@ -407,6 +429,8 @@ ASTNode* clone_ast_node(ASTNode* node) {
     clone->annotation = node->annotation ? strdup(node->annotation) : NULL;
     clone->is_imported = node->is_imported;
     clone->bit_width = node->bit_width;
+    clone->bit_lo = node->bit_lo;
+    clone->bit_hi = node->bit_hi;
     clone->source_file = node->source_file ? strdup(node->source_file) : NULL;
     clone->type_inferred = node->type_inferred;
 

@@ -315,6 +315,23 @@ ASTNode* aether_c_struct_chain(ASTNode* macc, char* out, size_t outsz);
 /* Predicate form of the above: is this member-access an overlay access? */
 int aether_c_struct_overlay_lhs(ASTNode* macc);
 
+/* #1132 bitstruct registry: a named bit layout over one unsigned integer.
+ * Field access lowers to shift/mask on the backing word — never to a C bitfield,
+ * whose signedness and layout are implementation-defined. */
+void aether_register_bitstruct(const char* name, const char* backing);
+int  aether_is_bitstruct(const char* name);
+void aether_bitstruct_add_field(const char* sname, const char* fname,
+                                int lo, int hi, int is_bool);
+/* Resolve bitstruct.field -> its INCLUSIVE bit range (+ backing C type).
+ * Returns 1 on success, 0 if unknown. */
+int  aether_bitstruct_resolve(const char* sname, const char* field,
+                              int* out_lo, int* out_hi, int* out_is_bool,
+                              const char** out_backing);
+/* The bitstruct name a member-access reads from, or NULL if its base isn't one. */
+const char* aether_bitstruct_base_name(ASTNode* macc);
+/* All-ones mask for an inclusive [lo,hi] bit range. */
+unsigned long long aether_bitstruct_mask(int lo, int hi);
+
 void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext);
 void generate_function_definition(CodeGenerator* gen, ASTNode* func);
 void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def);

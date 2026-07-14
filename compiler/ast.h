@@ -251,9 +251,27 @@ typedef enum {
                             // (each an AST_MEMBER_ACCESS `E.Member`, normalized
                             // from bare `Member` at parse time). Empty braces
                             // (`bit_set[E]{}`) yield the empty set (0 children).
-    AST_BITSET_CARD         // `card(s)`, the cardinality (popcount) of a
+    AST_BITSET_CARD,        // `card(s)`, the cardinality (popcount) of a
                             // bit_set. children[0] is the bit_set expression;
                             // lowers to `__builtin_popcountll`. Result is int.
+    // #1132 bitstruct. Appended at END to keep node numbering stable (incremental
+    // builds need `make clean` after this edit).
+    AST_BITSTRUCT_DEFINITION, // `bitstruct Name : uint8_t { f: bool 0, g: int 1..=3 }`
+                            // `value` = the bitstruct name; `node_type` is the
+                            // backing integer Type (an unsigned C ABI alias).
+                            // Children are AST_BITSTRUCT_FIELD nodes in source
+                            // order. Unlike an extern-struct bitfield, this never
+                            // emits a C bitfield: it lowers to shift/mask on the
+                            // backing integer, so the layout is exact and
+                            // endianness-independent.
+    AST_BITSTRUCT_FIELD     // one field. `value` = field name; `node_type` = the
+                            // field's declared type (bool, or an integer type).
+                            // `bit_lo` / `bit_hi` are the INCLUSIVE bit range
+                            // (a single-bit field has bit_lo == bit_hi). NB the
+                            // shared `bit_width` slot is deliberately NOT reused
+                            // here — it already means two different things
+                            // (extern-struct bit width, and @c_struct byte
+                            // offset), and a third meaning would be a trap.
 } ASTNodeType;
 
 typedef enum {
@@ -308,7 +326,7 @@ typedef enum {
                         // zero runtime cost. Nominal (compares equal only to the
                         // same-named enum; interconverts with int only via the
                         // rules in is_type_compatible). Appended at END.
-    TYPE_BITSET         // #1046 `bit_set[E]`, a set of enum members backed by an
+    TYPE_BITSET,        // #1046 `bit_set[E]`, a set of enum members backed by an
                         // unsigned 64-bit word. element_type is the member enum
                         // (a TYPE_ENUM). Each member occupies the bit at its enum
                         // value (members must lie in 0..63). Nominal: a bit_set is
@@ -317,6 +335,16 @@ typedef enum {
                         // zero runtime cost; set ops become bitwise ops. Appended
                         // at END to keep kind numbering stable (incremental builds
                         // need `make clean` after this edit).
+    TYPE_BITSTRUCT      // #1132 `bitstruct Name : uint8_t { ... }`. `struct_name` =
+                        // the bitstruct name; `element_type` = the backing integer
+                        // type (always an unsigned fixed-width alias). Nominal: a
+                        // bitstruct is never implicitly an int, and two bitstructs
+                        // match only when their names match — crossing the boundary
+                        // needs an explicit `as`. Lowers to the backing integer with
+                        // zero runtime cost; field reads/writes become shift/mask,
+                        // never a C bitfield (whose signedness and layout are
+                        // implementation-defined). Appended at END to keep kind
+                        // numbering stable (incremental builds need `make clean`).
 } TypeKind;
 
 typedef struct Type {
@@ -408,6 +436,19 @@ typedef struct ASTNode {
                                // are only meaningful on extern structs
                                // (AST_STRUCT_DEFINITION with extern flag
                                // — see annotation slot below).
+                               // ALSO overloaded as the byte offset on the
+                               // AST_STRUCT_FIELD children of an AST_C_STRUCT_DEF
+                               // (#891). Do NOT give it a third meaning; #1132's
+                               // bitstruct fields use bit_lo/bit_hi below.
+    int bit_lo;                // AST_BITSTRUCT_FIELD (#1132): the INCLUSIVE low and
+    int bit_hi;                // high bit indices of the field within its
+                               // bitstruct's backing integer. A single-bit field
+                               // (`f: bool 3`) has bit_lo == bit_hi == 3. The
+                               // source may spell the range either inclusively
+                               // (`1..=3`) or exclusively (`1..<4`); the parser
+                               // normalises both to the inclusive pair here, so
+                               // codegen never has to know which was written.
+                               // Width is (bit_hi - bit_lo + 1).
     char* source_file;         // Originating .ae path (set by ast_stamp_source_file
                                // after parse). Codegen uses this to emit `#line N
                                // "path"` directives so gcc/gdb/gcov see .ae line
@@ -432,6 +473,7 @@ Type* create_actor_ref_type(Type* actor_type);
 Type* create_tuple_type(int count, ...);  // create_tuple_type(2, type_a, type_b)
 Type* create_sum_type(const char* name);  // #914 `type Name = A | B | C`
 Type* create_bitset_type(Type* element_enum);  // #1046 `bit_set[E]`
+Type* create_bitstruct_type(const char* name, Type* backing);  // #1132 `bitstruct`
 Type* create_result_type(Type* inner);    // #913 fallible `T!` -> (T, string)
 Type* create_function_type(int param_count, Type** param_types, Type* return_type);
 void free_type(Type* type);
