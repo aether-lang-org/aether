@@ -57,5 +57,49 @@ if "$AE" check "$tmpdir/badkind.ae" >"$tmpdir/badkind.log" 2>&1; then
     exit 1
 fi
 
-echo "  [PASS] extern_tuple_var_passthrough: tuple values (vars + call chains) cross the FFI by value; mismatches rejected"
+# Guard 3 (#1062 follow-up): an aliased-scalar tuple value whose element C type
+# differs from the parameter's is a TYPECHECK error, not a deferred C compile
+# error. `int` and `int8_t` are both TYPE_INT but produce different `_tuple_*`
+# structs, so the check must key on the emitted C type name, not just the kind.
+cat > "$tmpdir/badalias.ae" <<'AE'
+extern make_ii() -> (int, int)
+extern take_bytes(v: (int8_t, int8_t)) -> int
+main() { a = make_ii(); r = take_bytes(a); println("${r}") }
+AE
+if "$AE" check "$tmpdir/badalias.ae" >"$tmpdir/badalias.log" 2>&1; then
+    echo "  [FAIL] extern_tuple_var_passthrough: (int,int) value into (int8_t,int8_t) param passed typecheck"
+    exit 1
+fi
+if ! grep -q "tuple-typed" "$tmpdir/badalias.log"; then
+    echo "  [FAIL] extern_tuple_var_passthrough: alias-mismatch error lacks the tuple diagnostic"
+    exit 1
+fi
+
+# And the matching-alias case still type-checks (no over-rejection).
+cat > "$tmpdir/goodalias.ae" <<'AE'
+extern make_bb() -> (int8_t, int8_t)
+extern take_bytes(v: (int8_t, int8_t)) -> int
+main() { a = make_bb(); r = take_bytes(a); println("${r}") }
+AE
+if ! "$AE" check "$tmpdir/goodalias.ae" >"$tmpdir/goodalias.log" 2>&1; then
+    echo "  [FAIL] extern_tuple_var_passthrough: matching (int8_t,int8_t) value wrongly rejected"
+    sed 's/^/    /' "$tmpdir/goodalias.log" | head -5
+    exit 1
+fi
+
+# Guard 4 (#1062 follow-up): a tuple with a struct-pointer element produces a
+# valid C typedef identifier (the namer sanitizes `Node*` -> `Node_`), so the
+# generated C compiles rather than emitting an invalid `_tuple_Node*_int` name.
+cat > "$tmpdir/structptr.ae" <<'AE'
+struct Node { x: int }
+extern take_np(v: (*Node, int)) -> int
+main() { }
+AE
+if ! "$AE" build "$tmpdir/structptr.ae" -o "$tmpdir/structptr" >"$tmpdir/structptr.log" 2>&1; then
+    echo "  [FAIL] extern_tuple_var_passthrough: (*Node,int) tuple produced invalid C (namer not sanitized):"
+    sed 's/^/    /' "$tmpdir/structptr.log" | head -5
+    exit 1
+fi
+
+echo "  [PASS] extern_tuple_var_passthrough: tuple values cross by value; alias/shape mismatches rejected at type-check; struct-pointer tuples name a valid C typedef"
 exit 0
