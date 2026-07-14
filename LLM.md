@@ -360,6 +360,18 @@ workaround, they cover cases a porter often hand-rolls.
   a hard panic (`precondition violation: b != 0 in divide`), a programmer-error
   signal, **not** a `(value, err)`. Opt-in/gradual (a param with no `where` is
   unchecked); `and`-composable; suppressed by `--no-contracts`.
+- **Contracts FOLD at compile time when operands are constants.** A predicate
+  that is provably true elides its runtime check; provably false is a
+  **compile error** — at the definition (`requires MIN <= MAX` after a const
+  refactor staled it) or at a call site with the constant arguments
+  substituted (`divide(10, 0)` fails the build; `divide(10, n)` stays a
+  runtime check). Trait-bound-like checking from the contract syntax alone.
+  The evaluator is int64-exact, resolves `const` names and enum members,
+  never evaluates calls (capability boundary), and anything undecidable
+  keeps today's runtime check silently. Fold errors fire even under
+  `--no-contracts`. Escape hatch for deliberately-unreachable violating
+  calls: pass the value through a runtime variable. See
+  docs/contract-folding.md.
 - **Per-function effect tags + purity.** Annotate a function `@pure` / `@no_fs`
   / `@no_net` / `@no_os`; a whole-program call-graph pass errors if the named
   capability is reached transitively (e.g. `@no_fs` calling `file.read_all`). A

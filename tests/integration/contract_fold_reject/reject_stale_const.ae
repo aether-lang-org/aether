@@ -1,0 +1,7 @@
+// Definition-site, the realistic shape: a refactor stales a constant and the
+// clause becomes unsatisfiable. Erroring here beats panicking at the first
+// runtime call.
+const MIN_CAP = 9
+const MAX_CAP = 3
+f(n: int) -> int requires MIN_CAP <= MAX_CAP { return n }
+main() { println("${f(1)}") }

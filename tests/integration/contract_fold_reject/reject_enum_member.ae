@@ -1,0 +1,8 @@
+// Enum members are compile-time constants (resolve_enum_types), so they bind
+// into the environment like any literal. Lvl.Off is 0.
+enum Lvl { Off, Low, High }
+f(n: int) -> int requires n > 0 { return n }
+main() {
+    x = f(Lvl.Off)
+    println("${x}")
+}

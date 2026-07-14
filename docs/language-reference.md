@@ -1141,12 +1141,55 @@ aetherc --no-contracts script.ae out.c    # zero per-call cost
 
 Suppresses contract-check emission entirely. Equivalent to C's `-DNDEBUG` for `assert`. Intended for release builds where the contracts have been validated upstream.
 
-**Const-fold elision**: When the predicate is provably constant-true at compile time (e.g. `requires true`, `ensures 1 > 0`, `requires 1 + 1 == 2`, `ensures !false`), the codegen drops the runtime check entirely and emits a `/* precondition elided (always-true): <text> */` comment in its place. Generated C is byte-for-byte identical to a function written without the clause, the user keeps the documentation; the binary takes zero overhead. The folder handles literals, `< <= > >= == !=`, `&& ||`, `+ - * / %`, unary `!` and unary `-`. Anything with an identifier reference, function call, or member access (i.e., anything the optimizer can't prove pure-and-known) keeps the runtime check.
+**Compile-time folding** (design: [docs/contract-folding.md](contract-folding.md)):
+predicates are evaluated at compile time whenever every operand is a
+compile-time constant — literals, top-level `const` names, enum members,
+arithmetic (`+ - * / %`, exact in int64), comparisons, `&& || !`. Three
+outcomes:
+
+- **Provably true** → the runtime check is **elided**; the emitted C carries a
+  `/* precondition elided (always-true): <text> */` comment and is
+  byte-for-byte identical to a function without the clause. This includes
+  const-operand predicates (`requires cap > MIN_CAP` with a `const MIN_CAP`),
+  not just literal ones.
+- **Provably false at the definition** → **compile error**: no call could ever
+  satisfy the clause. The realistic way to hit this is a refactor that stales
+  a constant.
+- **Provably false at a call site**, with the actual arguments substituted for
+  the parameters → **compile error at that call**:
+
+  ```aether
+  divide(a: int, b: int where b != 0) -> int { return a / b }
+
+  divide(10, 0)     // error: precondition violation at compile time:
+                    //        b != 0 in divide — this call's constant
+                    //        arguments can never satisfy it
+  divide(10, n)     // n is runtime → runtime check, exactly as before
+  ```
+
+  This is trait-bound/concepts-like checking from the contract syntax you
+  already wrote. Anything the evaluator cannot decide — a runtime variable, a
+  call, member access, a partial set of constant arguments — keeps today's
+  runtime check and produces no diagnostic. Platform-dead code cannot
+  false-positive: `when` arms are pruned before the typechecker runs.
+
+  Compile-time contract errors fire **even under `--no-contracts`** — that
+  flag removes runtime *checks*, not free compile-time correctness findings.
+  If a provably-violating call is intentionally unreachable, route the value
+  through a runtime variable; only constant arguments participate in folding.
 
 **Limitations / out-of-scope for v1**:
 
 - Postconditions are checked only at explicit `return <expr>` statements with a single value. Multi-value (tuple) returns and fall-off-the-end of void functions are not yet wrapped, calling `aether_panic` from those paths is a follow-up.
-- The const-fold elision is conservative, short-circuit folding (`x || true` → drop) is intentionally not performed, because the runtime evaluation of `x` may carry a side effect the user expects to fire.
+- Short-circuit folding is asymmetric on purpose. `x || true` (unknown `x`)
+  keeps the runtime check, because evaluating `x` may carry a side effect the
+  user expects to fire — but `true || x` elides, since the runtime would
+  short-circuit past `x` anyway; and `x && false` may be reported
+  always-false, because a false verdict never skips any runtime evaluation
+  (it is either a build error or an emitted runtime check).
+- Call-site folding sees only the call itself: arguments must be constants
+  right there. A constant flowing through an intermediate variable or a
+  helper function is not tracked (that would be dataflow analysis).
 - The `--emit=lib` `aether_describe()` metadata doesn't yet surface contracts to FFI consumers; that's the next layer.
 
 See [examples/basics/contracts.ae](../examples/basics/contracts.ae) for runnable demos. Closes issue #348.

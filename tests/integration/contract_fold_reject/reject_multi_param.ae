@@ -1,0 +1,7 @@
+// A bare `requires` over TWO parameters folds when both arguments are
+// constants.
+clamp(lo: int, hi: int) -> int requires lo <= hi { return lo }
+main() {
+    x = clamp(9, 3)
+    println("${x}")
+}

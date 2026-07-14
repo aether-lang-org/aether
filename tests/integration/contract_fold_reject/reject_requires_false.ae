@@ -1,0 +1,4 @@
+// Definition-site: a predicate that is false with no arguments substituted
+// can never be satisfied by any call.
+f(x: int) -> int requires false { return x }
+main() { println("${f(1)}") }

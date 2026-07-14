@@ -1,0 +1,9 @@
+// Guards the evaluator's int64 domain. 9007199254740993 is 2^53 + 1: in a
+// double-based evaluator BOTH sides round to 2^53 and compare EQUAL, so the
+// fold would stay silent on this violated contract (and, dually, could error
+// on a satisfied one). The int64 evaluator must reject this call.
+f(x: long) -> long requires x == 9007199254740993 { return x }
+main() {
+    x = f(9007199254740992)
+    println("${x}")
+}
