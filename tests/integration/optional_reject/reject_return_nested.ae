@@ -1,0 +1,2 @@
+f() -> int?? { return 5 }
+main() { println("unreachable") }

@@ -2753,14 +2753,32 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         break;
                     }
                     if (l_opt && r_opt) {
-                        // equal iff same presence and (when present) equal value
-                        // (value compare is scalar-correct, the common int?/… case).
+                        // equal iff same presence and (when present) equal value.
+                        // The value compare must match the element type: a plain
+                        // C `==` is right for scalars but a POINTER compare for
+                        // `string?` — two distinct string objects with equal
+                        // bytes would wrongly test unequal (and, since a
+                        // string-valued `.val` is `const char*` carrying an
+                        // AetherString header, `==` isn't even a meaningful C
+                        // comparison). For string element types, dispatch through
+                        // `_aether_safe_str` + `strcmp`, exactly as the ordinary
+                        // string-comparison path below does.
+                        Type* elem = L->node_type ? L->node_type->element_type : NULL;
+                        int str_val = elem && elem->kind == TYPE_STRING;
                         fprintf(gen->output, "(({ %s _l = ", get_c_type(L->node_type));
                         generate_expression(gen, L);
                         fprintf(gen->output, "; %s _r = ", get_c_type(R->node_type));
                         generate_expression(gen, R);
-                        fprintf(gen->output, "; %s(_l.has == _r.has && (!_l.has || _l.val == _r.val)); }))",
+                        if (str_val) {
+                            fprintf(gen->output,
+                                "; %s(_l.has == _r.has && (!_l.has || "
+                                "strcmp(_aether_safe_str(_l.val), _aether_safe_str(_r.val)) == 0)); }))",
                                 is_eq ? "" : "!");
+                        } else {
+                            fprintf(gen->output,
+                                "; %s(_l.has == _r.has && (!_l.has || _l.val == _r.val)); }))",
+                                is_eq ? "" : "!");
+                        }
                         break;
                     }
                 }

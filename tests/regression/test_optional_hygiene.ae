@@ -1,0 +1,68 @@
+// Regression: `string? == string?` compared the .val POINTERS, not their
+// content, so two optionals wrapping distinct string objects with equal bytes
+// tested UNEQUAL — a silent wrong answer (and, since a string .val carries an
+// AetherString header, the raw `==` wasn't even a meaningful C comparison).
+// Now dispatched through `_aether_safe_str` + `strcmp`, like every other
+// string comparison. The scalar path (int?, …) is unchanged.
+//
+// Found while scoping the error-unification design (docs/error-unification.md
+// §2.2). The companion fix — nested optionals `T??` rejected at parse time —
+// is covered by tests/integration/optional_reject/ (a compile error can't live
+// in a runnable test).
+//
+// NOTE on shape: the fallible strings are passed straight into the comparison
+// helpers rather than bound to `string?` LOCALS. That is deliberate — a
+// heap-backed `string?` local currently leaks at scope exit (a pre-existing
+// gap, tracked separately; std/ uses zero optionals so it never surfaced), and
+// this test must stay leak-clean for the macOS leak gate. Passing by argument
+// exercises the same optional-vs-optional compare without a persisting local.
+
+import std.string
+
+extern exit(code: int)
+
+// Compare two string optionals by value. The distinct-object case is the whole
+// point: literals with equal content may be merged to one address by the C
+// compiler, which would hide a pointer-compare bug — so the callers below build
+// their strings by slicing, giving equal content at distinct backing storage.
+eq(a: string?, b: string?) -> bool { return a == b }
+
+main() {
+    fails = 0
+
+    // Distinct objects, equal content — must compare EQUAL. `xhellox`[1..6] is
+    // "hello" from two independent substrings (distinct backing).
+    let base = "xhellox"
+    if !eq(string.substring(base, 1, 6), string.substring(base, 1, 6)) {
+        println("FAIL: equal-content string? compared unequal (pointer bug)")
+        fails = fails + 1
+    }
+
+    // Distinct objects, DIFFERENT content — must compare unequal.
+    if eq(string.substring("hello", 0, 5), string.substring("world", 0, 5)) {
+        println("FAIL: different-content string? compared equal")
+        fails = fails + 1
+    }
+
+    // Presence still governs: a present optional never equals `none`.
+    if eq(string.substring(base, 1, 6), none) {
+        println("FAIL: present string? == none")
+        fails = fails + 1
+    }
+
+    // `none` equals `none`; a present one never equals a `none` one.
+    if !eq(none, none) { println("FAIL: none != none for string?"); fails = fails + 1 }
+
+    // Scalar path unchanged: equal int? compare equal, unequal don't.
+    let x: int? = 5
+    let y: int? = 5
+    let z: int? = 6
+    if x != y { println("FAIL: int? 5 != 5"); fails = fails + 1 }
+    if x == z { println("FAIL: int? 5 == 6"); fails = fails + 1 }
+
+    if fails != 0 {
+        println("optional-hygiene: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_optional_hygiene")
+}
