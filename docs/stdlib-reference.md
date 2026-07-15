@@ -308,6 +308,8 @@ out = bytes.finish(b, 6)                  // "ABABAB"
 - `bytes.finish(b, length)` → `string` - Hand off to refcounted AetherString; buffer is consumed
 - `bytes.free(b)` - Discard without finishing (idempotent on null)
 
+**Streaming binary reads without a per-block copy (#1102).** A fixed-size block reader (walking 512-byte sectors of a device, say) can read straight into a reused `std.bytes` buffer instead of allocating a fresh string per block: `fs.pread_into(file, buf, len, offset)` reads up to `len` bytes at `offset` directly into `buf` (clamped to its capacity), sets `buf`'s length to the count read, and returns `(n, err)` with the same EOF (`n == 0`) / short-read (`0 < n < len`) / I/O-error (`err != ""`) distinction as `fs.pread`. The packed integers are then read in place with `bytes.get_le64` etc., or walked with a cursor. `std.bytes.cursor` offers both byte orders, `read_be_u16/32/64` and `read_le_u16/32/64` (each returns `-1` and leaves the cursor unchanged at end-of-buffer), so little-endian on-disk formats stream as cleanly as big-endian wire formats.
+
 The build-then-walk pattern needed by binary-codec encoders (svndiff and similar) is what `bytes.get` / `bytes.{set,get}_le32` are for, accumulate packed-int ops into the same buffer via `set_le32` at known offsets, then walk and read each back at finish time:
 
 ```aether

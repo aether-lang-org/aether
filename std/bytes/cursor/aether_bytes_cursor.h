@@ -42,6 +42,17 @@ int bytes_cursor_read_be_u32(BytesCursor* c);
  * than 8 bytes remain (cursor left unchanged). */
 long long bytes_cursor_read_be_u64(BytesCursor* c);
 
+/* Little-endian counterparts of the big-endian readers above: read a
+ * 16/32/64-bit value least-significant-byte-first and advance by 2/4/8.
+ * Same contract, returns -1 (cursor unchanged) when fewer than that many
+ * bytes remain. The 32-bit read returns the bit pattern in an `int`
+ * (top bit becomes the sign bit, as with aether_bytes_get_le32). For
+ * little-endian on-disk formats these let a validation loop walk the
+ * buffer with bounds-checked cursor reads instead of manual indexing. */
+int bytes_cursor_read_le_u16(BytesCursor* c);
+int bytes_cursor_read_le_u32(BytesCursor* c);
+long long bytes_cursor_read_le_u64(BytesCursor* c);
+
 /* Read the next `n` bytes into a freshly-allocated AetherBytes and
  * advance by `n`. Returns NULL if fewer than `n` bytes remain (cursor
  * left unchanged), `n` is negative, or allocation fails. The caller

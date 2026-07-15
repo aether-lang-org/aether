@@ -1,0 +1,111 @@
+// Regression test for #1102: fs.pread_into (zero-copy positional read into a
+// reused std.bytes buffer) and the little-endian std.bytes.cursor readers.
+//
+// A fixed-size block reader reuses one buffer across the whole file instead of
+// allocating a fresh string per block, reads little-endian integers in place
+// with bytes.get_le64 and a cursor's read_le_*, and still distinguishes EOF,
+// short read, and I/O error. The copy-free path must match the existing
+// pread + copy_from_string recipe.
+
+import std.fs
+import std.bytes
+import std.bytes.cursor
+import std.io
+
+main() {
+    print("=== fs.pread_into + LE cursor (#1102) ===\n\n")
+
+    // Scratch dir idiom shared with the other std.fs tests.
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    path = "${tmp}/aether_test_pread_into.bin"
+    fs.delete(path)
+
+    // Five little-endian u64s (40 bytes). Two carry embedded NUL bytes so the
+    // binary-safe path is exercised.
+    src = bytes.new(40)
+    bytes.set_le64(src, 0, 1)
+    bytes.set_le64(src, 8, 256)                   // 0x0100: low byte 0x00 then 0x01
+    bytes.set_le64(src, 16, 72057594037927936)    // 2^56: seven 0x00 bytes then 0x01
+    bytes.set_le64(src, 24, -1)                    // all 0xFF
+    bytes.set_le64(src, 32, 305419896)             // 0x12345678
+    data = bytes.finish(src, 40)                   // consumes src
+    werr = fs.write_binary(path, data, 40)
+    if werr != "" { print("FAIL write_binary: ${werr}\n"); exit(1) }
+
+    f, ferr = fs.open(path, "r+")
+    if ferr != "" { print("FAIL open: ${ferr}\n"); exit(1) }
+
+    // One 16-byte buffer, reused for every block below (no per-block alloc).
+    blk = bytes.new(16)
+
+    // Block 0 at offset 0: full 16-byte read.
+    n0, e0 = fs.pread_into(f, blk, 16, 0)
+    if e0 != "" { print("FAIL block0 err: ${e0}\n"); exit(1) }
+    if n0 != 16 { print("FAIL block0 n=${n0}, want 16\n"); exit(1) }
+    if bytes.get_le64(blk, 0) != 1 { print("FAIL block0 v0\n"); exit(1) }
+    if bytes.get_le64(blk, 8) != 256 { print("FAIL block0 v1 (embedded NUL)\n"); exit(1) }
+    print("PASS pread_into full block, in-place get_le64\n")
+
+    // Block 1 at offset 16: reuse the SAME buffer, read with a LE cursor.
+    n1, e1 = fs.pread_into(f, blk, 16, 16)
+    if e1 != "" || n1 != 16 { print("FAIL block1 n=${n1} err=${e1}\n"); exit(1) }
+    c, cerr = cursor.new(blk)
+    if cerr != "" { print("FAIL cursor.new: ${cerr}\n"); exit(1) }
+    if cursor.read_le_u64(c) != 72057594037927936 { print("FAIL cursor le64 #0\n"); exit(1) }
+    if cursor.read_le_u64(c) != -1 { print("FAIL cursor le64 #1\n"); exit(1) }
+    if cursor.read_le_u64(c) != -1 { print("FAIL cursor should be exhausted\n"); exit(1) }
+    if cursor.pos(c) != 16 { print("FAIL cursor advanced on failed read\n"); exit(1) }
+    cursor.free(c)
+    print("PASS reused buffer, cursor read_le_u64\n")
+
+    // Block at offset 32: only 8 bytes remain -> short read (0 < n < len).
+    n2, e2 = fs.pread_into(f, blk, 16, 32)
+    if e2 != "" { print("FAIL short-read err: ${e2}\n"); exit(1) }
+    if n2 != 8 { print("FAIL short read n=${n2}, want 8\n"); exit(1) }
+    if bytes.get_le64(blk, 0) != 305419896 { print("FAIL short-read value\n"); exit(1) }
+    print("PASS short read reports n=8\n")
+
+    // Read at EOF (offset 40): n == 0, no error.
+    n3, e3 = fs.pread_into(f, blk, 16, 40)
+    if e3 != "" { print("FAIL eof err: ${e3}\n"); exit(1) }
+    if n3 != 0 { print("FAIL eof n=${n3}, want 0\n"); exit(1) }
+    print("PASS EOF reports n=0\n")
+
+    // len is clamped to the buffer capacity: ask for more than 16, still get 16.
+    n4, e4 = fs.pread_into(f, blk, 999, 0)
+    if e4 != "" { print("FAIL clamp err: ${e4}\n"); exit(1) }
+    if n4 != 16 { print("FAIL clamp n=${n4}, want 16 (buffer capacity)\n"); exit(1) }
+    print("PASS len clamped to buffer capacity\n")
+
+    // Copy-free path matches the pread + copy_from_string recipe byte-for-byte.
+    payload, pn, perr = fs.pread(f, 16, 0)
+    if perr != "" || pn != 16 { print("FAIL recipe pread: n=${pn} err=${perr}\n"); exit(1) }
+    recipe = bytes.new(16)
+    bytes.copy_from_string(recipe, 0, payload, 16)
+    fs.pread_into(f, blk, 16, 0)
+    if bytes.get_le64(blk, 0) != bytes.get_le64(recipe, 0) { print("FAIL recipe mismatch @0\n"); exit(1) }
+    if bytes.get_le64(blk, 8) != bytes.get_le64(recipe, 8) { print("FAIL recipe mismatch @8\n"); exit(1) }
+    print("PASS copy-free path matches pread + copy_from_string\n")
+
+    // LE cursor 16/32-bit readers over a hand-built buffer.
+    small = bytes.new(6)
+    bytes.set_le16(small, 0, 4660)          // 0x1234
+    bytes.set_le32(small, 2, 287454020)     // 0x11223344
+    sc, scerr = cursor.new(small)
+    if scerr != "" { print("FAIL small cursor.new\n"); exit(1) }
+    if cursor.read_le_u16(sc) != 4660 { print("FAIL le16\n"); exit(1) }
+    if cursor.read_le_u32(sc) != 287454020 { print("FAIL le32\n"); exit(1) }
+    if cursor.read_le_u16(sc) != -1 { print("FAIL le16 past end\n"); exit(1) }
+    if cursor.pos(sc) != 6 { print("FAIL le16 cursor moved on failed read\n"); exit(1) }
+    cursor.free(sc)
+    print("PASS cursor read_le_u16 / read_le_u32\n")
+
+    fs.file_close(f)
+    fs.delete(path)
+    bytes.free(blk)
+    bytes.free(recipe)
+    bytes.free(small)
+    print("\nAll pread_into + LE cursor checks passed.\n")
+}

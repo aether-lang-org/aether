@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`fs.pread_into` and little-endian `std.bytes.cursor` readers** (#1102), for
+  copy-free fixed-size block reading of binary files. `fs.pread_into(file, buf,
+  len, offset)` reads up to `len` bytes at `offset` straight into an existing
+  `std.bytes` buffer (clamped to its capacity), sets the buffer's length to the
+  count read, and returns `(n, err)` with the same EOF (`n == 0`) / short-read
+  (`0 < n < len`) / I/O-error (`err != ""`) distinction as `fs.pread`. A
+  fixed-size block reader reuses one buffer across the whole file instead of
+  allocating a fresh string per block; the packed integers are then read in
+  place (`bytes.get_le64`) or walked with a cursor. `std.bytes.cursor` gains
+  `read_le_u16` / `read_le_u32` / `read_le_u64` alongside the existing big-endian
+  readers (same end-of-buffer contract: returns `-1` with the cursor unchanged),
+  so little-endian on-disk formats stream as cleanly as big-endian wire formats.
+  Exercised by `tests/regression/test_fs_pread_into.ae`.
+
 ## [0.398.0]
 
 ### Fixed
