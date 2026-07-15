@@ -1,0 +1,75 @@
+// Phase 1 of error-unification (docs/error-unification.md §6): std/
+// fallible signatures migrated from raw `-> (T, string)` tuples to the
+// `-> T!` result type. `T!` IS the `(T, string)` tuple with `is_result`
+// set, so the migration is ABI-invariant — every existing `v, e = f()`
+// destructuring caller is byte-identical — AND it unlocks the fallible
+// consumer vocabulary (`!` propagation, `or` handlers) that a raw tuple
+// can't use.
+//
+// This test pins BOTH properties on migrated signatures:
+//   1. destructuring still works (the ABI-invariance guarantee), and
+//   2. `!` and `or` now work (the is_result payoff).
+// It spans several migrated modules (string, json, regex) so a future
+// signature revert would trip it.
+
+import std.string
+import std.json
+import std.regex
+
+// `!` propagation is only legal when the callee is `T!` — so this
+// function compiling at all proves string.to_long migrated.
+tripled(s: string) -> long! {
+    n = string.to_long(s)!
+    return n * 3
+}
+
+main() {
+    fails = 0
+
+    // --- string.to_long : long! ---
+    // destructure (ABI-invariant form)
+    v, e = string.to_long("14")
+    if e != "" { println("FAIL: to_long(14) errored: ${e}"); fails = fails + 1 }
+    if v != 14 { println("FAIL: to_long(14) = ${v}"); fails = fails + 1 }
+
+    // `!` propagation success + error paths
+    t, te = tripled("14")
+    if te != "" { println("FAIL: tripled ok errored"); fails = fails + 1 }
+    if t != 42 { println("FAIL: tripled(14) = ${t}"); fails = fails + 1 }
+    _, te2 = tripled("xyz")
+    if te2 == "" { println("FAIL: tripled(xyz) should propagate error"); fails = fails + 1 }
+
+    // `or` block handler on a T! left side
+    r = string.to_long("nope") or { -7 }
+    if r != -7 { println("FAIL: or-handler = ${r}"); fails = fails + 1 }
+    r2 = string.to_long("100") or { -7 }
+    if r2 != 100 { println("FAIL: or-handler ok = ${r2}"); fails = fails + 1 }
+
+    // --- string.to_int_radix : long! ---
+    hx, hxe = string.to_int_radix("ff", 16)
+    if hxe != "" { println("FAIL: to_int_radix(ff,16): ${hxe}"); fails = fails + 1 }
+    if hx != 255 { println("FAIL: to_int_radix(ff,16) = ${hx}"); fails = fails + 1 }
+
+    // --- json.parse : ptr! ---  (destructure + `or`)
+    j, je = json.parse("{\"a\":1}")
+    if je != "" { println("FAIL: json.parse valid: ${je}"); fails = fails + 1 }
+    if j == null { println("FAIL: json.parse returned null"); fails = fails + 1 }
+    bad = json.parse("{ not json") or { null }
+    if bad != null { println("FAIL: json.parse or-handler should yield null"); fails = fails + 1 }
+
+    // --- regex.compile : ptr! + matches_lit : int! ---
+    re, ree = regex.compile("[0-9]+")
+    if ree != "" { println("FAIL: regex.compile: ${ree}"); fails = fails + 1 }
+    if re == null { println("FAIL: regex.compile null"); fails = fails + 1 }
+    m, me = regex.matches_lit("[0-9]+", "abc123")
+    if me != "" { println("FAIL: matches_lit: ${me}"); fails = fails + 1 }
+    if m != 1 { println("FAIL: matches_lit expected 1, got ${m}"); fails = fails + 1 }
+
+    if fails != 0 {
+        println("result-migration: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_result_migration")
+}
+
+extern exit(code: int)

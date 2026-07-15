@@ -341,7 +341,7 @@ to_int(s: string) -> {
 
 // Parse a string to a long (int64). Returns (value, "") on success,
 // (0, error) on invalid input.
-to_long(s: string) -> (long, string) {
+to_long(s: string) -> long! {
     ok = string_try_long(s)
     if ok == 0 {
         return 0, "invalid long"
@@ -383,7 +383,7 @@ to_double(s: string) -> {
 // quickly and because callers often want the full 64-bit width
 // (32-bit ARGB colors, file offsets, flag masks). Downcast at the
 // call site if you only want an int.
-to_int_radix(s: string, radix: int) -> (long, string) {
+to_int_radix(s: string, radix: int) -> long! {
     if radix < 2 {
         return 0, "radix must be at least 2"
     }

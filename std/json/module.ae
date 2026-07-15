@@ -107,7 +107,7 @@ extern string_concat(a: string, b: string) -> string
 // risk on the failure path. The uniform-heap shape sidesteps the
 // classifier's mixed-path conservatism. See # further-bug-fix4 for
 // the wider context.
-parse(json_str: string) -> (ptr, string) {
+parse(json_str: string) -> ptr! {
     value = json_parse_raw(json_str)
     if value == null {
         return null, string_concat(json_last_error(), "")
@@ -149,7 +149,7 @@ last_error_col()  -> int { return json_last_error_col()  }
 // Aether string — no manual free required.
 //
 // Uniform-heap shape on both positions: see `parse` for the rationale.
-stringify(value: ptr) -> (string, string) {
+stringify(value: ptr) -> string! {
     raw = json_stringify_raw(value)
     if raw == null {
         return string_concat("", ""), string_concat("stringify failed", "")
@@ -169,7 +169,7 @@ stringify(value: ptr) -> (string, string) {
 // non-heap, so the destructure wrapper at the call site never set
 // `_heap_b64 = 1` and the function-exit defer-free never ran. avn's
 // 5000-commit bench retained ~666 MB just from this site.
-get_string(value: ptr) -> (string, string) {
+get_string(value: ptr) -> string! {
     raw = json_get_string_raw(value)
     if raw == null {
         return string_concat("", ""), string_concat("not a string", "")
@@ -327,6 +327,6 @@ push(arr: ptr, value: ptr) -> string {
 // Encode a JSON value tree to a compact string with all escaping
 // handled internally. Returns (string, "") on success, ("", error) on
 // failure — an alias for `stringify`.
-encode(value: ptr) -> (string, string) {
+encode(value: ptr) -> string! {
     return stringify(value)
 }
