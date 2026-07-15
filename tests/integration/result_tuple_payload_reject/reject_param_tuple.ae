@@ -1,0 +1,9 @@
+// Same rejection in parameter position: `(A, B)!` is not a valid type
+// anywhere, not only in return position.
+g(cb: (int, string)!) -> int {
+    return 0
+}
+
+main() {
+    println("unreachable")
+}
