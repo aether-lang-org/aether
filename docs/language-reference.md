@@ -1265,6 +1265,16 @@ if maybe != none {
 }
 ```
 
+Two optionals compare equal when they have the same presence and (when present)
+equal values: `a == b` for `int?` compares the ints, and for `string?` compares
+the **contents** (via the same header-aware string comparison the language uses
+elsewhere), not the underlying pointers.
+
+An optional is a **single** presence layer — `T??` is rejected at parse time
+(*"nested optional `T??` is not supported"*). If you find yourself wanting one,
+you almost certainly want the distinct "fallible-and-absent" spelling instead,
+which composes from a result and an optional rather than nesting two optionals.
+
 ### Force-unwrap `!`
 
 Postfix `!` yields the wrapped value, or panics if the optional is `none`:

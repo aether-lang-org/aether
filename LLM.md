@@ -355,6 +355,14 @@ workaround, they cover cases a porter often hand-rolls.
   (exclusive); overlaps need `@overlap`; it's strictly nominal (cross to the raw
   word with `as`). Byte order is NOT part of it — compose with `std.mem`'s
   `get_u16_be` / `set_u32_le` etc., so the swap stays visible.
+- **Function contracts `requires` / `ensures` (issue #348).** Eiffel-style
+  pre/postconditions between the return arrow and the body: `add(a: int, b: int)
+  -> int requires a >= 0 ensures result >= a { … }`. Each is a boolean
+  expression; `requires` checks at entry (params in scope), `ensures` checks
+  before each `return` with `result` bound to the value. Violation is a hard
+  panic (`precondition violation: <expr> in <fn>`) — a programmer-error signal,
+  **not** a `(value, err)`. Suppressed by `--no-contracts`. The param-level
+  `where` below is the same machinery attached to a single parameter.
 - **Gradual `where` contracts on params.** `divide(a: int, b: int where b != 0)`
   a runtime-checked precondition that lowers to an entry guard; a violation is
   a hard panic (`precondition violation: b != 0 in divide`), a programmer-error
