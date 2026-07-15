@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`string? == string?` now compares content, not pointers.** Two optionals
+  wrapping distinct string objects with equal bytes compared **unequal** — a
+  silent wrong answer (and, since a string's `.val` carries an AetherString
+  header, the raw `==` was not even a meaningful C comparison; in some shapes
+  it failed to compile). Now dispatched through `_aether_safe_str` + `strcmp`,
+  exactly like an ordinary string comparison; the scalar case (`int?`, …) is
+  unchanged. Found while scoping the error-unification design
+  (`docs/error-unification.md` §2.2).
+
+### Changed
+
+- **Nested optionals `T??` are now rejected at parse time.** A double optional
+  parsed (as `ae_opt_ae_opt_<T>`) but the rest of the compiler reasons only one
+  presence layer deep — `none`/wrap coercion, `== none`, and narrowing all
+  assume a single layer — so `int??` miscompiled silently. It is now a clear
+  error (`nested optional \`T??\` is not supported …`) in return, `let`, and
+  parameter positions, matching C3, whose `type_add_optional` likewise refuses
+  to nest. The `??` null-coalescing operator, `?.` chaining, and single `T?`
+  are unaffected. No in-tree code used `T??`.
+
 ## [0.400.0]
 
 ### Added

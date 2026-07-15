@@ -271,9 +271,41 @@ static Type* parse_type_unsuffixed(Parser* parser);
 Type* parse_type(Parser* parser) {
     Type* t = parse_type_unsuffixed(parser);
     if (!t) return NULL;
-    while (peek_token(parser) && peek_token(parser)->type == TOKEN_QUESTION) {
+    /* Nested optionals `T??` are rejected. A double optional parses (as
+     * `ae_opt_ae_opt_<T>`), but the rest of the compiler only reasons ONE
+     * presence layer deep — `none`/wrap coercion, `== none`, and narrowing
+     * all assume a single layer — so it miscompiles silently. Refuse it at
+     * the source, matching C3, whose `type_add_optional` likewise won't nest.
+     *
+     * The lexer greedily fuses `??` into one TOKEN_QUESTION_QUESTION, so
+     * `int??` arrives as `int` followed by `??` — the type-suffix loop below
+     * never sees a first `?`. So catch the `??`-after-a-type shape here BEFORE
+     * consuming a single `?`, and also the (rarer) `int? ?` shape after we do.
+     * Consume the stray token(s) so error recovery doesn't stall. */
+    int nested_opt = 0;
+    if (peek_token(parser) && peek_token(parser)->type == TOKEN_QUESTION_QUESTION) {
+        /* `int??` — the whole nested optional, fused. */
+        advance_token(parser);
+        t = create_optional_type(t);   /* the layer the user did mean */
+        nested_opt = 1;
+    } else if (peek_token(parser) && peek_token(parser)->type == TOKEN_QUESTION) {
         advance_token(parser);
         t = create_optional_type(t);
+        if (peek_token(parser) &&
+            (peek_token(parser)->type == TOKEN_QUESTION ||
+             peek_token(parser)->type == TOKEN_QUESTION_QUESTION)) {
+            /* `int? ?` or `int? ??`. */
+            while (peek_token(parser) &&
+                   (peek_token(parser)->type == TOKEN_QUESTION ||
+                    peek_token(parser)->type == TOKEN_QUESTION_QUESTION))
+                advance_token(parser);
+            nested_opt = 1;
+        }
+    }
+    if (nested_opt) {
+        parser_error(parser,
+            "nested optional `T??` is not supported — an optional is a single "
+            "presence layer; remove the extra `?`");
     }
     // #913: a postfix `!` makes the type a fallible result (`string!`,
     // `int!`), symmetric with the `?` optional suffix above. In type position
