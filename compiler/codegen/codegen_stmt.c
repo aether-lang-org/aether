@@ -1749,6 +1749,19 @@ static void collect_heap_string_var_names(CodeGenerator* gen, ASTNode* node,
          * value persists for the process lifetime, mirroring the
          * scalar/#701 model. This matches how hoist_loop_vars and the
          * if-branch hoists already skip module globals by name. */
+        /* An optional-typed LHS (`b: string? = <string>`) is an
+         * `ae_opt_string`, NOT a bare `const char*`. Without this guard
+         * the initializer-type check below grabs it (the RHS is
+         * TYPE_STRING), hoists a `const char* b`, and the optional
+         * decl-site then assigns an `ae_opt_string` struct into that
+         * `char*` slot — a C type error. Optional-of-string locals are
+         * owned exclusively by the opt-str registry
+         * (collect_opt_str_var_names); skip them here. */
+        if (node->node_type && node->node_type->kind == TYPE_OPTIONAL) {
+            for (int i = 0; i < node->child_count; i++)
+                collect_heap_string_var_names(gen, node->children[i], names, count, cap);
+            return;
+        }
         // Decide whether this declaration's LHS deserves a tracker.
         // Bare `_` is a per-use discard, never a tracked variable —
         // skipped here so a string-typed `_` destructure slot doesn't
@@ -1936,6 +1949,117 @@ void hoist_seq_trackers(CodeGenerator* gen, ASTNode* body) {
         if (is_promoted_capture(gen, name)) continue;
         print_indent(gen);
         fprintf(gen->output, "StringSeq* %s = NULL;\n", name);
+        mark_var_declared(gen, name);
+    }
+}
+
+/* True for a `string?` type: an optional wrapping a bare string. The
+ * heap-ownership tracking only applies to string payloads (scalar
+ * optionals like `int?` carry no allocation). */
+static int is_opt_string_type(Type* t) {
+    return t && t->kind == TYPE_OPTIONAL &&
+           t->element_type && t->element_type->kind == TYPE_STRING;
+}
+
+/* Does the RHS of a `string? = <rhs>` assignment produce an optional
+ * whose `.val` is a freshly-owned heap buffer this slot must free?
+ *
+ * Two provenance cases, mirroring emit_optional_coerced:
+ *   - WRAP (a bare string value coerced into the optional): owned iff
+ *     the value is a heap producer (is_heap_string_expr).
+ *   - PASSTHROUGH (the RHS is already a `string?`): owned only when it
+ *     is a function call returning `string?` — the callee transfers
+ *     ownership of `.val` to us (its return-escape suppression means it
+ *     will NOT free the buffer). An identifier passthrough (`o = other`)
+ *     is an alias, NOT an ownership transfer: treating it as owned would
+ *     double-free when both locals' exit-frees fire, so it stays
+ *     unowned and the source local frees it. Other optional-yielding
+ *     shapes (`??`, `?.`, match-expr) may borrow, so also unowned —
+ *     conservative: never double-frees, at worst leaks a rare case. */
+static int is_heap_opt_string_rhs(CodeGenerator* gen, ASTNode* rhs) {
+    if (!rhs) return 0;
+    if (rhs->type == AST_NONE_LITERAL) return 0;
+    /* A bare identifier RHS — `b = a` where `a` names a heap-string or
+     * another opt-str local — is an ALIAS, not an ownership transfer:
+     * the source local already owns the buffer and will free it. Taking
+     * ownership here too would double-free. Leave `b` unowned; the
+     * source's tracker reclaims the buffer. (True ownership arrives only
+     * via a fresh producer — a call or a heap-string expression that
+     * isn't itself a tracked slot.) */
+    if (rhs->type == AST_IDENTIFIER && rhs->value &&
+        (is_heap_string_var(gen, rhs->value) || is_opt_str_var(gen, rhs->value))) {
+        return 0;
+    }
+    if (rhs->node_type && rhs->node_type->kind == TYPE_OPTIONAL) {
+        return rhs->type == AST_FUNCTION_CALL;
+    }
+    return is_heap_string_expr(gen, rhs);
+}
+
+/* Collect `string?` local declaration names (parallel to
+ * collect_seq_var_names). Keyed on the LHS or initializer carrying a
+ * `string?` type. */
+static void collect_opt_str_var_names(CodeGenerator* gen, ASTNode* node,
+                                      const char** names, int* count, int cap) {
+    if (!node || *count >= cap) return;
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        strcmp(node->value, "_") != 0 &&
+        !is_module_global_var(gen, node->value)) {
+        int is_opt = is_opt_string_type(node->node_type);
+        if (!is_opt && node->child_count > 0 && node->children[0] &&
+            is_opt_string_type(node->children[0]->node_type)) {
+            is_opt = 1;
+        }
+        if (is_opt) {
+            int already = 0;
+            for (int i = 0; i < *count; i++)
+                if (strcmp(names[i], node->value) == 0) { already = 1; break; }
+            if (!already && *count < cap) names[(*count)++] = node->value;
+        }
+    }
+    for (int i = 0; i < node->child_count; i++)
+        collect_opt_str_var_names(gen, node->children[i], names, count, cap);
+}
+
+/* Hoist `int _heapopt_<name> = 0;` + the function-scope `ae_opt_string
+ * <name> = (ae_opt_string){0};` declaration for every `string?` local,
+ * mirroring hoist_seq_trackers. Function-scope hoisting lets the
+ * scope-exit defer-free always reference the slot, and routes every
+ * assignment (including the first) through the reassignment path so the
+ * ownership flag is maintained and the prior `.val` is freed. */
+void hoist_opt_str_trackers(CodeGenerator* gen, ASTNode* body) {
+    if (!body || !gen) return;
+    const char* names[256];
+    int count = 0;
+    collect_opt_str_var_names(gen, body, names, &count, 256);
+    for (int i = 0; i < count; i++) {
+        const char* name = names[i];
+        if (!is_opt_str_var(gen, name)) {
+            print_indent(gen);
+            fprintf(gen->output,
+                    "int _heapopt_%s = 0; (void)_heapopt_%s;\n", name, name);
+            mark_opt_str_var(gen, name);
+        }
+        if (is_var_declared(gen, name)) continue;
+        /* Actor state vars (accessed via self->name), env captures and
+         * promoted captures don't live as a plain function-scope
+         * `ae_opt_string` — skip the C-var hoist for them, exactly as
+         * hoist_seq_trackers / hoist_heap_string_trackers do. */
+        if (gen->current_actor) {
+            int is_state = 0;
+            for (int s = 0; s < gen->state_var_count; s++)
+                if (gen->actor_state_vars[s] &&
+                    strcmp(gen->actor_state_vars[s], name) == 0) { is_state = 1; break; }
+            if (is_state) continue;
+        }
+        int is_env_cap = 0;
+        for (int e = 0; e < gen->current_env_capture_count; e++)
+            if (gen->current_env_captures[e] &&
+                strcmp(gen->current_env_captures[e], name) == 0) { is_env_cap = 1; break; }
+        if (is_env_cap) continue;
+        if (is_promoted_capture(gen, name)) continue;
+        print_indent(gen);
+        fprintf(gen->output, "ae_opt_string %s = (ae_opt_string){0};\n", name);
         mark_var_declared(gen, name);
     }
 }
@@ -2338,6 +2462,37 @@ static int is_nonstoring_builtin(const char* fn) {
            strcmp(fn, "_aether_safe_str") == 0;
 }
 
+/* Does argument position `arg_idx` of `call` escape — i.e. might the
+ * callee store the pointer beyond the call? Shared by the heap-string
+ * and `string?` escape walks so both apply identical precision (a
+ * read-only `string`/`string?` param does NOT escape, which is what
+ * keeps `string.length(s)` and `sink(opt)` from leaking; a `ptr`/
+ * unknown/`@retain` param does). Encapsulates the type-kind check, the
+ * non-storing-builtin allowlist, the visible-body interprocedural walk,
+ * and the extern-retain annotation. */
+static int call_arg_position_escapes(CodeGenerator* gen, ASTNode* call,
+                                     int arg_idx) {
+    if (!call) return 1;
+    char fn_norm[256];
+    const char* fn = call->value
+        ? codegen_normalise_callee(call->value, fn_norm, sizeof(fn_norm))
+        : NULL;
+    if (fn && is_nonstoring_builtin(fn)) return 0;
+    if (fn && is_retain_extern_param(gen, fn, arg_idx)) return 1;
+    if (callee_has_visible_body(gen, call->value)) {
+        /* Visible body → the body-walk is authoritative (sees through
+         * read-only accessors, ignores self-assignment `p = p`). */
+        return callee_param_escapes_via_body(gen, call->value, arg_idx, 0);
+    }
+    /* No visible body (extern / unknown): a `string`-typed param looks
+     * read-only to call_arg_escapes, but a storing wrapper lets it
+     * escape — keep both the kind check and the (no-body → 0) body
+     * walk so unknown callees stay conservatively escaped. */
+    TypeKind k = lookup_callee_param_kind(gen, call->value, arg_idx);
+    return call_arg_escapes(k) ||
+           callee_param_escapes_via_body(gen, call->value, arg_idx, 0);
+}
+
 static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
                                       const char* consumed_lhs) {
     if (!call) return;
@@ -2347,60 +2502,15 @@ static void escape_inspect_call_args(CodeGenerator* gen, ASTNode* call,
         ASTNode* arg = call->children[i];
         if (!arg) continue;
         if (arg->type == AST_IDENTIFIER && arg->value) {
-            /* Bare identifier in argument position. */
+            /* Bare identifier in argument position. See
+             * call_arg_position_escapes for the escape rationale
+             * (read-only string/scalar params don't escape; ptr/
+             * unknown/@retain do). */
             if (is_heap_string_var(gen, arg->value) &&
                 (consumed_lhs == NULL ||
                  strcmp(arg->value, consumed_lhs) != 0)) {
-                /* Type-based escape: only mark escaped if the callee's
-                 * matching parameter is `ptr` (storage likely) or
-                 * unknown (safe-default). Read-only scalar/string
-                 * parameters don't escape — that's the precision that
-                 * keeps `string.length(s)` from leaking.
-                 *
-                 * Exception: a parameter explicitly annotated `@retain`
-                 * tells the walker the function stores the pointer
-                 * beyond the call (string_list_add, map_put_raw's
-                 * key, etc.). Mark escaped regardless of TypeKind so
-                 * the function-exit defer-free skips the free —
-                 * otherwise the stored copy would dangle. The
-                 * lookup is dot-normalised internally so it works
-                 * for both bare and namespaced call sites
-                 * (e.g. `collections.string_list_add` and
-                 * `string_list_add` resolve to the same registry
-                 * entry). */
-                char fn_norm[256];
-                const char* fn = call->value
-                    ? codegen_normalise_callee(call->value, fn_norm, sizeof(fn_norm))
-                    : NULL;
-                if (fn && is_nonstoring_builtin(fn)) {
-                    /* Provably non-storing (print family) — not an
-                     * escape; leave the variable freeable so its
-                     * reassignment-free wrapper fires. */
-                } else if (fn && is_retain_extern_param(gen, fn, i)) {
+                if (call_arg_position_escapes(gen, call, i)) {
                     mark_escaped_string_var(gen, arg->value);
-                } else if (callee_has_visible_body(gen, call->value)) {
-                    /* Visible body → the body-walk is authoritative
-                     * (it sees through read-only accessors and ignores
-                     * self-assignment `p = p`). Trust it instead of the
-                     * conservative call_arg_escapes, so a heap local
-                     * passed to a non-storing user shim (a no-op-free
-                     * stub, an assert helper) stays freeable and its
-                     * reassignment-free / scope-exit free fires.
-                     * Mirrors the arg-drain gate in codegen_expr.c. */
-                    if (callee_param_escapes_via_body(gen, call->value, i, 0)) {
-                        mark_escaped_string_var(gen, arg->value);
-                    }
-                } else {
-                    TypeKind k = lookup_callee_param_kind(gen, call->value, i);
-                    /* No visible body (extern / unknown): a `string`-typed
-                     * param looks read-only to call_arg_escapes, but a
-                     * storing wrapper lets it escape — keep both the
-                     * conservative kind check and the (no-body → 0) body
-                     * walk so unknown callees stay conservatively escaped. */
-                    if (call_arg_escapes(k) ||
-                        callee_param_escapes_via_body(gen, call->value, i, 0)) {
-                        mark_escaped_string_var(gen, arg->value);
-                    }
                 }
             }
         } else {
@@ -2712,6 +2822,125 @@ void push_seq_exit_free_defers(CodeGenerator* gen, ASTNode* body) {
         if (is_promoted_capture(gen, name)) continue;
         char annot[300];
         snprintf(annot, sizeof(annot), "seq_exit_free:%s", name);
+        ASTNode* carrier = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                                            body->line, body->column);
+        if (carrier) {
+            if (carrier->annotation) free(carrier->annotation);
+            carrier->annotation = strdup(annot);
+            push_defer(gen, carrier);
+        }
+    }
+}
+
+/* Escape pre-pass for `string?` locals. Unlike the two-channel
+ * heap-string analysis, a `string?` uses a SINGLE escape set: any
+ * ownership departure — `return`, capture by a closure, a raw store
+ * into a struct field / array element, or being passed to any function
+ * (which may stash the `.val` pointer) — suppresses the scope-exit
+ * free entirely. This is conservative (an in-loop-reassigned optional
+ * that also escapes keeps its intermediate buffers to scope exit
+ * rather than freeing them at each reassign), but it can never
+ * double-free a buffer the recipient still holds. The RHS-of-own-
+ * assignment exception (`o = f(o)`) keeps a self-referential rebind
+ * from marking itself escaped. */
+static void opt_str_escape_walk(CodeGenerator* gen, ASTNode* node,
+                                const char* consumed_lhs) {
+    if (!node) return;
+    if (node->type == AST_RETURN_STATEMENT) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* c = node->children[i];
+            if (c && c->type == AST_IDENTIFIER && c->value &&
+                is_opt_str_var(gen, c->value)) {
+                mark_escaped_opt_str_var(gen, c->value);
+            } else {
+                opt_str_escape_walk(gen, c, consumed_lhs);
+            }
+        }
+        return;
+    }
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        node->child_count > 0) {
+        for (int i = 0; i < node->child_count; i++)
+            opt_str_escape_walk(gen, node->children[i], node->value);
+        return;
+    }
+    /* Non-trivial store `s.field = opt` / `arr[i] = opt`: the write
+     * target outlives this activation, so a `string?` on the RHS
+     * escapes. */
+    if (node->type == AST_BINARY_EXPRESSION && node->value &&
+        strcmp(node->value, "=") == 0 && node->child_count == 2) {
+        ASTNode* lhs = node->children[0];
+        ASTNode* rhs = node->children[1];
+        if (lhs && lhs->type != AST_IDENTIFIER) {
+            if (rhs && rhs->type == AST_IDENTIFIER && rhs->value &&
+                is_opt_str_var(gen, rhs->value)) {
+                mark_escaped_opt_str_var(gen, rhs->value);
+            }
+            opt_str_escape_walk(gen, lhs, NULL);
+            opt_str_escape_walk(gen, rhs, NULL);
+            return;
+        }
+    }
+    if (node->type == AST_CLOSURE) {
+        for (int i = 0; i < node->child_count; i++)
+            opt_str_escape_walk(gen, node->children[i], NULL);
+        return;
+    }
+    if (node->type == AST_FUNCTION_CALL) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* a = node->children[i];
+            if (a && a->type == AST_IDENTIFIER && a->value &&
+                is_opt_str_var(gen, a->value)) {
+                if (consumed_lhs && strcmp(a->value, consumed_lhs) == 0) continue;
+                /* Same parameter-aware precision as the heap-string walk:
+                 * a `string?` passed by value to a read-only callee (its
+                 * param only read, like `sink(x: string?)`) does NOT
+                 * escape — the recipient sees a copy of the `{has,val}`
+                 * struct and, unless it stores `.val`, our exit-free may
+                 * still reclaim it. Only a genuine storing sink escapes. */
+                if (call_arg_position_escapes(gen, node, i)) {
+                    mark_escaped_opt_str_var(gen, a->value);
+                }
+            } else {
+                opt_str_escape_walk(gen, a, consumed_lhs);
+            }
+        }
+        return;
+    }
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION) {
+        return;
+    }
+    for (int i = 0; i < node->child_count; i++)
+        opt_str_escape_walk(gen, node->children[i], consumed_lhs);
+}
+
+void mark_escaped_opt_str_vars(CodeGenerator* gen, ASTNode* body) {
+    if (!gen || !body) return;
+    opt_str_escape_walk(gen, body, NULL);
+}
+
+/* Scope-exit defer-free for non-escaped `string?` locals (parallel to
+ * push_seq_exit_free_defers). The carrier annotation
+ * `opt_str_exit_free:<name>` is recognised by try_emit_opt_str_exit_free. */
+void push_opt_str_exit_free_defers(CodeGenerator* gen, ASTNode* body) {
+    if (!gen || !body) return;
+    if (gen->opt_str_var_count <= 0) return;
+    for (int i = 0; i < gen->opt_str_var_count; i++) {
+        const char* name = gen->opt_str_vars[i];
+        if (!name) continue;
+        if (is_escaped_opt_str_var(gen, name)) continue;
+        int is_env_cap = 0;
+        for (int e = 0; e < gen->current_env_capture_count; e++) {
+            if (gen->current_env_captures[e] &&
+                strcmp(gen->current_env_captures[e], name) == 0) {
+                is_env_cap = 1; break;
+            }
+        }
+        if (is_env_cap) continue;
+        if (is_promoted_capture(gen, name)) continue;
+        char annot[300];
+        snprintf(annot, sizeof(annot), "opt_str_exit_free:%s", name);
         ASTNode* carrier = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
                                             body->line, body->column);
         if (carrier) {
@@ -3731,7 +3960,40 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             // don't understand the `ae_opt_<T>` tagged-struct wrap.
             if (stmt->value && strcmp(stmt->value, "_") != 0 &&
                 stmt->node_type && stmt->node_type->kind == TYPE_OPTIONAL) {
+                /* `string?` heap-ownership: the local is registered by
+                 * hoist_opt_str_trackers, so is_var_declared is already
+                 * true here and this always takes the assign-only branch.
+                 * On reassignment the PREVIOUS `.val` (if this slot owns
+                 * a heap buffer) must be freed before the overwrite, and
+                 * the `_heapopt_<name>` flag re-set from the RHS's
+                 * heap-ness — exactly the bare-string reassignment
+                 * wrapper, adapted to the `{has,val}` struct. */
+                int is_opt_str = is_opt_str_var(gen, stmt->value);
+                int rhs_is_heap = is_opt_str && stmt->child_count > 0 &&
+                                  stmt->children[0] &&
+                                  is_heap_opt_string_rhs(gen, stmt->children[0]);
                 print_indent(gen);
+                if (is_opt_str) {
+                    /* Free the prior owned buffer, then assign the new
+                     * value, then update the ownership flag. A single
+                     * temp captures the old struct so the RHS (which may
+                     * read the same slot, e.g. `o = o ?? x`) evaluates
+                     * against the un-freed value. */
+                    fprintf(gen->output, "{ ae_opt_string _opt_old_%s = %s; ",
+                            stmt->value, stmt->value);
+                    fprintf(gen->output, "%s = ", stmt->value);
+                    if (stmt->child_count > 0 && stmt->children[0]) {
+                        emit_optional_coerced(gen, stmt->children[0], stmt->node_type);
+                    } else {
+                        fprintf(gen->output, "(%s){0}", get_c_type(stmt->node_type));
+                    }
+                    fprintf(gen->output,
+                            "; if (_heapopt_%s && _opt_old_%s.has) aether_heap_str_free((void*)_opt_old_%s.val);",
+                            stmt->value, stmt->value, stmt->value);
+                    fprintf(gen->output, " _heapopt_%s = %d; }\n",
+                            stmt->value, rhs_is_heap ? 1 : 0);
+                    break;
+                }
                 if (!is_var_declared(gen, stmt->value)) {
                     fprintf(gen->output, "%s %s", get_c_type(stmt->node_type), stmt->value);
                     mark_var_declared(gen, stmt->value);

@@ -509,6 +509,12 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->seq_var_count = 0;
     gen->escaped_seq_vars = NULL;
     gen->escaped_seq_var_count = 0;
+    // `string?` heap-ownership tracking — same zero-init requirement as
+    // the seq registry above (field-initialised, not calloc'd).
+    gen->opt_str_vars = NULL;
+    gen->opt_str_var_count = 0;
+    gen->escaped_opt_str_vars = NULL;
+    gen->escaped_opt_str_var_count = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -588,6 +594,7 @@ void free_code_generator(CodeGenerator* gen) {
         }
         clear_heap_string_vars(gen);
     clear_seq_vars(gen);
+    clear_opt_str_vars(gen);
         clear_escaped_string_vars(gen);
         clear_try_clobbered_vars(gen);  /* Issue #501 follow-up */
         if (gen->message_registry) {
@@ -857,6 +864,62 @@ void clear_seq_vars(CodeGenerator* gen) {
     gen->escaped_seq_var_count = 0;
 }
 
+/* ---- `string?` (optional-of-string) heap registry ----
+ * Parallel to the seq registry above, but frees `<name>.val` (guarded by
+ * both the `_heapopt_<name>` ownership flag and the struct's `.has` bit)
+ * via aether_heap_str_free. See the header comment on `opt_str_vars`. */
+int is_opt_str_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->opt_str_var_count; i++) {
+        if (strcmp(gen->opt_str_vars[i], var_name) == 0) return 1;
+    }
+    return 0;
+}
+
+void mark_opt_str_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_opt_str_var(gen, var_name)) return;
+    char** nv = realloc(gen->opt_str_vars, sizeof(char*) * (gen->opt_str_var_count + 1));
+    if (!nv) return;
+    gen->opt_str_vars = nv;
+    gen->opt_str_vars[gen->opt_str_var_count++] = strdup(var_name);
+}
+
+int is_escaped_opt_str_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->escaped_opt_str_var_count; i++) {
+        if (strcmp(gen->escaped_opt_str_vars[i], var_name) == 0) return 1;
+    }
+    return 0;
+}
+
+void mark_escaped_opt_str_var(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_escaped_opt_str_var(gen, var_name)) return;
+    char** nv = realloc(gen->escaped_opt_str_vars,
+                        sizeof(char*) * (gen->escaped_opt_str_var_count + 1));
+    if (!nv) return;
+    gen->escaped_opt_str_vars = nv;
+    gen->escaped_opt_str_vars[gen->escaped_opt_str_var_count++] = strdup(var_name);
+}
+
+void clear_opt_str_vars(CodeGenerator* gen) {
+    if (!gen) return;
+    if (gen->opt_str_vars) {
+        for (int i = 0; i < gen->opt_str_var_count; i++) free(gen->opt_str_vars[i]);
+        free(gen->opt_str_vars);
+    }
+    gen->opt_str_vars = NULL;
+    gen->opt_str_var_count = 0;
+    if (gen->escaped_opt_str_vars) {
+        for (int i = 0; i < gen->escaped_opt_str_var_count; i++)
+            free(gen->escaped_opt_str_vars[i]);
+        free(gen->escaped_opt_str_vars);
+    }
+    gen->escaped_opt_str_vars = NULL;
+    gen->escaped_opt_str_var_count = 0;
+}
+
 /* Return-escape sibling. See the header comment on
  * `return_escaped_string_vars` for the two-set rationale. */
 int is_return_escaped_string_var(CodeGenerator* gen, const char* var_name) {
@@ -1077,6 +1140,28 @@ static int try_emit_seq_exit_free(CodeGenerator* gen, ASTNode* deferred) {
     return 1;
 }
 
+/* `string?` scope-exit free carrier. Annotation: "opt_str_exit_free:<name>".
+ * Frees the optional's `.val` buffer when the slot both currently owns a
+ * heap allocation (`_heapopt_<name>`, set from is_heap_string_expr on the
+ * coerced RHS) AND is present (`.has`). aether_heap_str_free dispatches on
+ * the AetherString magic header, so a borrowed literal would be a no-op
+ * even if it slipped through — but the flag guard keeps it precise. The
+ * flag/`.has` reset keeps a re-emitted drain (multiple return sites)
+ * idempotent. */
+static int try_emit_opt_str_exit_free(CodeGenerator* gen, ASTNode* deferred) {
+    if (!deferred || !deferred->annotation) return 0;
+    const char* prefix = "opt_str_exit_free:";
+    size_t plen = strlen(prefix);
+    if (strncmp(deferred->annotation, prefix, plen) != 0) return 0;
+    const char* name = deferred->annotation + plen;
+    if (!*name) return 0;
+    print_indent(gen);
+    fprintf(gen->output,
+            "/* deferred */ if (_heapopt_%s && %s.has) { aether_heap_str_free((void*)%s.val); %s.val = NULL; %s.has = 0; _heapopt_%s = 0; }\n",
+            name, name, name, name, name, name);
+    return 1;
+}
+
 /* Struct-destructor defer carrier (#465). Annotation:
  *   "struct_destroy:<varname>:<StructName>"
  * Pushed by the struct-local-declaration site in codegen_stmt.c
@@ -1161,6 +1246,7 @@ static void emit_deferred_one(CodeGenerator* gen, int i) {
 
     if (!try_emit_heap_string_exit_free(gen, deferred) &&
         !try_emit_seq_exit_free(gen, deferred) &&
+        !try_emit_opt_str_exit_free(gen, deferred) &&
         !try_emit_struct_destroy(gen, deferred)) {
         print_indent(gen);
         fprintf(gen->output, "/* deferred%s */ ",
@@ -3481,6 +3567,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     clear_declared_vars(gen);  // Reset for main function
     clear_heap_string_vars(gen);
     clear_seq_vars(gen);
+    clear_opt_str_vars(gen);
     clear_escaped_string_vars(gen);
     clear_try_clobbered_vars(gen);  /* Issue #501 follow-up */
     // Reset defer state for main function and enter scope
@@ -3554,8 +3641,10 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
             mark_try_clobbered_vars(gen, main->children[0]);
             hoist_heap_string_trackers(gen, main->children[0]);
             hoist_seq_trackers(gen, main->children[0]);
+            hoist_opt_str_trackers(gen, main->children[0]);
             mark_escaped_heap_string_vars(gen, main->children[0]);
             mark_escaped_seq_vars(gen, main->children[0]);
+            mark_escaped_opt_str_vars(gen, main->children[0]);
             /* Mirror the regular-function path in
              * codegen_func.c::generate_function_definition: push a
              * function-exit defer-free for every non-escaped
@@ -3573,6 +3662,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
              * a buffer the user already released manually. */
             push_heap_string_exit_free_defers(gen, main->children[0]);
             push_seq_exit_free_defers(gen, main->children[0]);
+            push_opt_str_exit_free_defers(gen, main->children[0]);
         }
         generate_statement(gen, main->children[0]);
         gen->current_promoted_captures = prev_promoted;

@@ -1052,6 +1052,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     clear_declared_vars(gen);  // Reset for each function
     clear_heap_string_vars(gen);
     clear_seq_vars(gen);
+    clear_opt_str_vars(gen);
     clear_escaped_string_vars(gen);
     clear_try_clobbered_vars(gen);  /* Issue #501 follow-up — per-fn set */
 
@@ -1264,6 +1265,10 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             // refcount-decrement scope-exit free (parallel to the
             // heap-string passes immediately around this).
             hoist_seq_trackers(gen, body);
+            // `string?` locals: hoist their _heapopt flags + function-
+            // scope decl, mark escapes, and push the scope-exit free of
+            // the owned `.val` buffer (parallel to the seq passes).
+            hoist_opt_str_trackers(gen, body);
             // Mark heap-string vars that escape via call argument or
             // closure capture. The wrapper at codegen_stmt.c:1611
             // skips its `free(_tmp_old)` for escaped vars to avoid
@@ -1272,6 +1277,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             // cost of leaking the value over the function's lifetime.
             mark_escaped_heap_string_vars(gen, body);
             mark_escaped_seq_vars(gen, body);
+            mark_escaped_opt_str_vars(gen, body);
             // Push a function-exit defer-free for every non-escaped
             // hoisted heap-string var (#420 follow-up). The
             // wrapper-on-reassignment frees the previous value on
@@ -1282,6 +1288,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             // every explicit return.
             push_heap_string_exit_free_defers(gen, body);
             push_seq_exit_free_defers(gen, body);
+            push_opt_str_exit_free_defers(gen, body);
         }
         // If body is a block, it handles its own scope
         // If not a block, we still need to generate the statements
@@ -1684,6 +1691,7 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
     clear_declared_vars(gen);
     clear_heap_string_vars(gen);
     clear_seq_vars(gen);
+    clear_opt_str_vars(gen);
     clear_try_clobbered_vars(gen);  /* Issue #501 follow-up — per-fn set */
 
     // Generate each clause as an if/else-if branch
