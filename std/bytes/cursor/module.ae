@@ -21,10 +21,12 @@ exports (
     bytes_cursor_new,
     bytes_cursor_read_u8,
     bytes_cursor_read_be_u16, bytes_cursor_read_be_u32, bytes_cursor_read_be_u64,
+    bytes_cursor_read_le_u16, bytes_cursor_read_le_u32, bytes_cursor_read_le_u64,
     bytes_cursor_read_slice,
     bytes_cursor_remaining, bytes_cursor_peek, bytes_cursor_eof,
     bytes_cursor_pos, bytes_cursor_seek, bytes_cursor_free,
-    new, read_u8, read_be_u16, read_be_u32, read_be_u64, read_slice,
+    new, read_u8, read_be_u16, read_be_u32, read_be_u64,
+    read_le_u16, read_le_u32, read_le_u64, read_slice,
     remaining, peek, eof, pos, seek, free
 )
 
@@ -47,6 +49,14 @@ extern bytes_cursor_read_be_u32(c: ptr) -> int
 // Read a big-endian 64-bit value, advancing by 8. -1 if fewer than 8
 // bytes remain (cursor unchanged).
 extern bytes_cursor_read_be_u64(c: ptr) -> long
+
+// Little-endian counterparts: read a 16/32/64-bit value least-significant
+// byte first, advancing by 2/4/8. Same contract as the big-endian readers
+// (-1, cursor unchanged, when too few bytes remain). For little-endian
+// on-disk formats.
+extern bytes_cursor_read_le_u16(c: ptr) -> int
+extern bytes_cursor_read_le_u32(c: ptr) -> int
+extern bytes_cursor_read_le_u64(c: ptr) -> long
 
 // Read the next `n` bytes into a fresh AetherBytes, advancing by `n`.
 // Returns null if fewer than `n` bytes remain (cursor unchanged), `n`
@@ -106,6 +116,22 @@ read_be_u32(c: ptr) -> int {
 // Read a big-endian 64-bit value, advancing by 8. -1 if too few bytes.
 read_be_u64(c: ptr) -> long {
     return bytes_cursor_read_be_u64(c)
+}
+
+// Read a little-endian 16-bit value, advancing by 2. -1 if too few bytes.
+read_le_u16(c: ptr) -> int {
+    return bytes_cursor_read_le_u16(c)
+}
+
+// Read a little-endian 32-bit value (as an int bit pattern), advancing by
+// 4. -1 if too few bytes.
+read_le_u32(c: ptr) -> int {
+    return bytes_cursor_read_le_u32(c)
+}
+
+// Read a little-endian 64-bit value, advancing by 8. -1 if too few bytes.
+read_le_u64(c: ptr) -> long {
+    return bytes_cursor_read_le_u64(c)
 }
 
 // Read the next `n` bytes into a fresh AetherBytes (caller owns it),

@@ -40,6 +40,25 @@ AetherBytes* aether_bytes_new(int initial_capacity);
 /* Number of bytes the buffer logically contains. -1 if `b` is NULL. */
 int aether_bytes_length(AetherBytes* b);
 
+/* Reserved capacity in bytes (always >= length). -1 if `b` is NULL.
+ * Distinct from length: a buffer created with `aether_bytes_new(512)`
+ * has capacity 512 and length 0. */
+int aether_bytes_capacity(AetherBytes* b);
+
+/* Pointer to the buffer's mutable storage, for zero-copy I/O: a caller
+ * can `read(2)`/`pread(2)` directly into the reserved region (up to
+ * `capacity` bytes) and then publish the byte count with
+ * `aether_bytes_set_length`, avoiding a read-into-temp-then-copy. NULL if
+ * `b` is NULL or its capacity is 0. BORROWED and short-lived: the pointer
+ * is invalidated by any call that may reallocate the buffer (`set`,
+ * `copy_from_*`) and by `aether_bytes_free` / `aether_bytes_finish`. */
+void* aether_bytes_data(AetherBytes* b);
+
+/* Set the buffer's logical length, clamped to [0, capacity]. Used to
+ * publish how many bytes a direct write into `aether_bytes_data`'s region
+ * actually produced. Returns the resulting length, or -1 if `b` is NULL. */
+int aether_bytes_set_length(AetherBytes* b, int length);
+
 /* Write a single byte at `index`. Grows the buffer if needed. The
  * logical length advances to max(length, index + 1) — gaps between
  * the previous tail and `index` are zero-filled. No-op if `b` is

@@ -208,6 +208,12 @@ char* path_rel(const char* base, const char* target);
 // _chsize_s / _commit on Windows.
 int64_t     fs_pwrite_raw(File* file, const char* data, int length, int64_t offset);
 int         fs_pread_raw(File* file, int length, int64_t offset);
+/* Zero-copy positional read into a caller-owned std.bytes buffer (#1102):
+ * fills up to `length` bytes at `offset` (clamped to the buffer's capacity)
+ * and sets its logical length. Returns the count read (0 = EOF, short read =
+ * 0 < n < length), or -1 on error (buffer left empty). */
+struct AetherBytes;
+int         fs_pread_into_raw(File* file, struct AetherBytes* buf, int length, int64_t offset);
 const char* fs_get_pread(void);
 int         fs_get_pread_length(void);
 void        fs_release_pread(void);

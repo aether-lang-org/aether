@@ -70,6 +70,39 @@ long long bytes_cursor_read_be_u64(BytesCursor* c) {
     return (long long)v;
 }
 
+int bytes_cursor_read_le_u16(BytesCursor* c) {
+    if (!c || c->pos + 2 > c->len) return -1;
+    int lo = aether_bytes_get(c->bytes, c->pos);
+    int hi = aether_bytes_get(c->bytes, c->pos + 1);
+    if (lo < 0 || hi < 0) return -1;
+    c->pos += 2;
+    return (hi << 8) | lo;
+}
+
+int bytes_cursor_read_le_u32(BytesCursor* c) {
+    if (!c || c->pos + 4 > c->len) return -1;
+    unsigned int v = 0;
+    for (int i = 0; i < 4; i++) {
+        int b = aether_bytes_get(c->bytes, c->pos + i);
+        if (b < 0) return -1;
+        v |= (unsigned int)b << (8 * i);
+    }
+    c->pos += 4;
+    return (int)v;
+}
+
+long long bytes_cursor_read_le_u64(BytesCursor* c) {
+    if (!c || c->pos + 8 > c->len) return -1;
+    unsigned long long v = 0;
+    for (int i = 0; i < 8; i++) {
+        int b = aether_bytes_get(c->bytes, c->pos + i);
+        if (b < 0) return -1;
+        v |= (unsigned long long)b << (8 * i);
+    }
+    c->pos += 8;
+    return (long long)v;
+}
+
 AetherBytes* bytes_cursor_read_slice(BytesCursor* c, int n) {
     if (!c || n < 0 || c->pos + n > c->len) return NULL;
     AetherBytes* out = aether_bytes_new(n);

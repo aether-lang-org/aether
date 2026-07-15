@@ -4,6 +4,7 @@
 #include "../../runtime/aether_sandbox.h"
 #include "../../runtime/aether_resource_caps.h"
 #include "../string/aether_string.h"
+#include "../bytes/aether_bytes.h"   /* fs_pread_into_raw fills a caller's bytes buffer (#1102) */
 
 #if !AETHER_HAS_FILESYSTEM
 // Stubs when filesystem is unavailable (WASM, embedded)
@@ -88,6 +89,7 @@ int path_is_within_base(const char* base, const char* target) { (void)base; (voi
 char* path_rel(const char* base, const char* target) { (void)base; (void)target; return NULL; }
 int64_t fs_pwrite_raw(File* f, const char* d, int l, int64_t o) { (void)f; (void)d; (void)l; (void)o; return -1; }
 int fs_pread_raw(File* f, int l, int64_t o) { (void)f; (void)l; (void)o; return 0; }
+int fs_pread_into_raw(File* f, AetherBytes* b, int l, int64_t o) { (void)f; (void)b; (void)l; (void)o; return -1; }
 const char* fs_get_pread(void) { return ""; }
 int fs_get_pread_length(void) { return 0; }
 void fs_release_pread(void) {}
@@ -402,6 +404,56 @@ int fs_pread_raw(File* file, int length, int64_t offset) {
     g_pread_cap = alloc;
     g_pread_len = (int)total;
     return 1;
+}
+
+/* Zero-copy sibling of fs_pread_raw (#1102): read up to `length` bytes at
+ * `offset` directly into the caller's `buf` storage, clamped to the
+ * buffer's capacity, then publish the count as its logical length. A
+ * fixed-size block reader can reuse one buffer across a loop instead of
+ * allocating a fresh string per block. Returns the byte count (>= 0; 0 =
+ * EOF, 0 < n < length = short read), or -1 on invalid args / I/O error;
+ * on error the buffer is left empty. */
+int fs_pread_into_raw(File* file, AetherBytes* buf, int length, int64_t offset) {
+    if (!buf) return -1;
+    if (!file || !file->is_open || length < 0 || offset < 0) {
+        aether_bytes_set_length(buf, 0);
+        return -1;
+    }
+    int cap = aether_bytes_capacity(buf);
+    if (cap < 0) { return -1; }
+    if (length > cap) length = cap;          /* clamp to buffer capacity */
+    aether_bytes_set_length(buf, 0);         /* empty until success publishes the count */
+    if (length == 0) return 0;
+
+    unsigned char* dst = (unsigned char*)aether_bytes_data(buf);
+    if (!dst) return -1;
+
+    FILE* fp = (FILE*)file->handle;
+    fflush(fp);
+    int fd = fileno(fp);
+    if (fd < 0) return -1;
+
+    size_t total = 0;
+    while (total < (size_t)length) {
+#ifdef _WIN32
+        if (_fseeki64(fp, offset + (int64_t)total, SEEK_SET) != 0) return -1;
+        size_t r = fread(dst + total, 1, (size_t)length - total, fp);
+        if (r == 0) break;  /* EOF or error: return what we have (short read is success). */
+        total += r;
+#else
+        ssize_t r = pread(fd, dst + total, (size_t)length - total,
+                          (off_t)(offset + (int64_t)total));
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            aether_bytes_set_length(buf, 0);
+            return -1;
+        }
+        if (r == 0) break;  /* EOF: short read is success per the contract. */
+        total += (size_t)r;
+#endif
+    }
+    aether_bytes_set_length(buf, (int)total);
+    return (int)total;
 }
 
 /* ftruncate — set file length to `length` bytes. POSIX truncate(2)

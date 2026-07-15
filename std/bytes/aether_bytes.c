@@ -66,6 +66,24 @@ int aether_bytes_length(AetherBytes* b) {
     return (int)b->length;
 }
 
+int aether_bytes_capacity(AetherBytes* b) {
+    if (!b) return -1;
+    return (int)b->capacity;
+}
+
+void* aether_bytes_data(AetherBytes* b) {
+    if (!b || b->capacity == 0) return NULL;
+    return b->data;
+}
+
+int aether_bytes_set_length(AetherBytes* b, int length) {
+    if (!b) return -1;
+    if (length < 0) length = 0;
+    if ((size_t)length > b->capacity) length = (int)b->capacity;
+    b->length = (size_t)length;
+    return length;
+}
+
 int aether_bytes_set(AetherBytes* b, int index, int byte) {
     if (!b || index < 0) return 0;
     size_t needed = (size_t)index + 1;
