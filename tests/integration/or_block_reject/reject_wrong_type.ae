@@ -1,0 +1,8 @@
+// The block's value must be assignable to the fallible's success type.
+f(x: bool) -> int! { if x { return 0, "e" } return 7 }
+main() {
+    b = f(true) or {
+        "not an int"
+    }
+    println("b=${b}")
+}

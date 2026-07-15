@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`x = f() or { ... }` no longer yields an uninitialized value — the block's
+  last statement is now the handler's value.**
+
+  ```aether
+  b = f(true) or { -1 }          // was: silent garbage (observed 1396619984)
+                                 // now: -1
+
+  c = f(true) or {
+      println("recovering: ${err}")
+      -2                          // multi-statement blocks work too
+  }
+  ```
+
+  Block handlers had been designed as must-exit (`or { return … }`) and the
+  value-yielding form was neither implemented nor rejected: the trailing
+  expression was emitted as a discarded statement and the result local was
+  read **uninitialized** on the error path — a silent miscompile. Found while
+  scoping the `T?`/`(value, err)` error-unification design, the same way
+  `defer catch`'s groundwork found the `expr!` defer leak.
+
+  The typechecker now also **rejects** a block that neither yields a value of
+  the right type nor exits (`return` / `panic` / `break` / `continue`), since
+  that shape can only ever produce the uninitialized read. The early-return
+  form and the bare-expression default (`or -1`) are unchanged.
+
+### Upgrade notes
+
+If an `or { }` block previously ended with something that is neither a value
+nor an exit (a trailing `if`, an empty block), it now fails to compile instead
+of silently reading garbage — end the block with the fallback value or a
+`return`. No in-tree code needed changing (the only two block uses both end in
+`return`); code that compiled into the uninitialized read could not have been
+relied upon.
+
 ## [0.397.0]
 
 ### Added

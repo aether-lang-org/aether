@@ -1,0 +1,89 @@
+// Regression: the value-producing block form of `or` — `x = f() or { ... v }`.
+//
+// Before the fix, a block handler's trailing expression was emitted as a
+// DISCARDED statement and the result local was never assigned on the error
+// path, so `x = f() or { -1 }` yielded an UNINITIALIZED C local — silent
+// garbage (observed: b=1396619984). Block handlers had been designed as
+// must-exit (`or { return ... }`) and the value-yielding form was neither
+// implemented nor rejected.
+//
+// Now: the block's last statement is the handler's value (assigned to the
+// result slot), `err` is bound throughout the block, and a block that neither
+// yields a value nor exits is rejected at typecheck (see
+// tests/integration/or_block_reject/). The early-return form is unchanged.
+
+extern exit(code: int)
+
+f(fail: bool) -> int! {
+    if fail { return 0, "boom" }
+    return 7
+}
+
+g(fail: bool) -> string! {
+    if fail { return "", "g-failed" }
+    return "ok"
+}
+
+// The early-return form — the previously-tested shape, must stay unchanged.
+h(fail: bool) -> (int, string) {
+    v = f(fail) or { return -9, "" }
+    return v, ""
+}
+
+check(got: int, want: int, lbl: string) -> int {
+    if got != want {
+        println("FAIL ${lbl}: ${got} != ${want}")
+        return 1
+    }
+    return 0
+}
+
+main() {
+    fails = 0
+
+    // The original miscompile, pinned: single-expression block yields its value.
+    a = f(false) or { -1 }
+    b = f(true) or { -1 }
+    fails = fails + check(a, 7, "success path ignores handler")
+    fails = fails + check(b, -1, "error path yields the block's value (was garbage)")
+
+    // Multi-statement block: statements run, `err` is bound, last value yields.
+    seen = ""
+    c = f(true) or {
+        seen = err
+        -2
+    }
+    fails = fails + check(c, -2, "multi-statement block yields its last expression")
+    if seen != "boom" { println("FAIL: err not bound in block: '${seen}'"); fails = fails + 1 }
+
+    // Value type follows the fallible's success type, not just int.
+    s = g(true) or {
+        "fallback"
+    }
+    if s != "fallback" { println("FAIL: string-typed or-block: '${s}'"); fails = fails + 1 }
+
+    // Early-return block form — unchanged behaviour.
+    x, _ = h(true)
+    fails = fails + check(x, -9, "early-return block unchanged")
+    y, _ = h(false)
+    fails = fails + check(y, 7, "early-return success path unchanged")
+
+    // Bare-expression default — unchanged behaviour.
+    d = f(true) or -1
+    fails = fails + check(d, -1, "bare-expression or unchanged")
+
+    // Hammer the error path so an uninitialized-read regression is loud under
+    // the ASan/Valgrind CI gates, not a one-in-a-run flake.
+    i = 0
+    while i < 64 {
+        v = f(true) or { -1 }
+        fails = fails + check(v, -1, "loop")
+        i = i + 1
+    }
+
+    if fails != 0 {
+        println("or-block-value: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_or_block_value")
+}
