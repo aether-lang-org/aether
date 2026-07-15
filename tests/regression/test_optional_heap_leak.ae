@@ -1,0 +1,90 @@
+// Regression: a heap-backed `string?` local leaked its `.val` buffer at
+// scope exit and on reassignment. `ae_opt_string` lowers to a by-value
+// `{ int has; const char* val; }`; the optional decl/assign path emitted
+// no heap tracker and no scope-exit free (unlike a bare `string` local),
+// so every `let a: string? = <heap>` in a loop lost its buffer. The fix
+// adds a `_heapopt_<name>` ownership tracker (parallel to `_heap_<name>`
+// for bare strings): the prior `.val` is freed on reassignment and at
+// scope exit, with the usual escape suppression so a `return`ed or
+// stored optional is NOT freed by the producer.
+//
+// This test has no asserts about the leak itself — the leak is invisible
+// to program output. Its value is under the leak-detection CI gates
+// (valgrind on Linux, `leaks` on macOS): before the fix it lost
+// 32 bytes/iteration; after, it is leak-clean. The asserts here only
+// pin the observable BEHAVIOUR (values survive the ownership plumbing).
+
+import std.string
+
+extern exit(code: int)
+
+// Heap producer returning `string?` — `.val` is a fresh AetherString.
+mk(i: int) -> string? {
+    return string.concat("v-", string.from_int(i))
+}
+
+// A `string?` local that is RETURNED: the caller owns the buffer, so
+// this function's scope-exit free must be suppressed (else the caller's
+// pointer dangles — a use-after-free, not a leak).
+forward(i: int) -> string? {
+    let a: string? = mk(i)
+    return a
+}
+
+// A `string?` passed by value to a read-only callee: the recipient sees
+// a copy of `{has,val}` and only reads it, so the caller's exit-free
+// still reclaims the buffer (mirrors bare-string `string.length(s)`).
+peek(x: string?) -> int {
+    let s = x ?? ""
+    return string.length(s)
+}
+
+main() {
+    let mut fails = 0
+    let mut n = 0
+    let mut total = 0
+
+    while n < 40 {
+        // Reassign-in-loop: each iteration's prior `.val` is freed by the
+        // reassignment wrapper; the final one by the scope-exit free.
+        let a: string? = mk(n)
+        let s = a ?? "MISSING"
+        if string.length(s) < 3 {
+            fails = fails + 1
+        }
+
+        // Return-escape path: forward() hands us an owned optional.
+        let r: string? = forward(n)
+        let rs = r ?? "MISSING"
+        if string.length(rs) < 3 {
+            fails = fails + 1
+        }
+
+        // Pass-to-read-only-callee path.
+        total = total + peek(a)
+
+        // Alias path: a heap `string` local wrapped into a `string?`.
+        // Both `h` (bare-string tracker) and `b` (opt-str tracker) would
+        // otherwise claim the same buffer and double-free at scope exit;
+        // the alias is treated as non-owning so only `h` frees it.
+        let h = string.concat("h-", string.from_int(n))
+        let b: string? = h
+        let bs = b ?? "MISSING"
+        if string.length(bs) < 3 {
+            fails = fails + 1
+        }
+
+        n = n + 1
+    }
+
+    if total <= 0 {
+        println("FAIL: peek accumulated nothing")
+        fails = fails + 1
+    }
+
+    if fails != 0 {
+        println("optional-heap-leak: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_optional_heap_leak")
+}

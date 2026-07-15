@@ -57,6 +57,11 @@ void mark_seq_var(CodeGenerator* gen, const char* var_name);
 void clear_seq_vars(CodeGenerator* gen);
 int is_escaped_seq_var(CodeGenerator* gen, const char* var_name);
 void mark_escaped_seq_var(CodeGenerator* gen, const char* var_name);
+int is_opt_str_var(CodeGenerator* gen, const char* var_name);
+void mark_opt_str_var(CodeGenerator* gen, const char* var_name);
+void clear_opt_str_vars(CodeGenerator* gen);
+int is_escaped_opt_str_var(CodeGenerator* gen, const char* var_name);
+void mark_escaped_opt_str_var(CodeGenerator* gen, const char* var_name);
 /* Classifier: does the expression produce an OWNED *StringSeq (a fresh
  * ref the caller must free), vs a borrowed spine pointer (seq_tail)?
  * Defined in codegen_stmt.c. */
@@ -217,6 +222,11 @@ void push_heap_string_exit_free_defers(CodeGenerator* gen, ASTNode* body);
 void hoist_seq_trackers(CodeGenerator* gen, ASTNode* body);
 void mark_escaped_seq_vars(CodeGenerator* gen, ASTNode* body);
 void push_seq_exit_free_defers(CodeGenerator* gen, ASTNode* body);
+
+/* `string?` heap-ownership lifecycle (parallel to the seq passes). */
+void hoist_opt_str_trackers(CodeGenerator* gen, ASTNode* body);
+void mark_escaped_opt_str_vars(CodeGenerator* gen, ASTNode* body);
+void push_opt_str_exit_free_defers(CodeGenerator* gen, ASTNode* body);
 
 /* Actor generation (codegen_actor.c) */
 void generate_actor_definition(CodeGenerator* gen, ASTNode* actor);
