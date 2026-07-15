@@ -65,13 +65,23 @@ main() {
     if bad != null { println("FAIL: json.parse bad should be null"); fails = fails + 1 }
 
     // --- regex.compile : ptr! + matches_lit : int! ---
-    re, ree = regex.compile("[0-9]+")
-    if ree != "" { println("FAIL: regex.compile: ${ree}"); fails = fails + 1 }
-    if re == null { println("FAIL: regex.compile null"); fails = fails + 1 }
-    if re != null { regex.free(re) }
-    m, me = regex.matches_lit("[0-9]+", "abc123")
-    if me != "" { println("FAIL: matches_lit: ${me}"); fails = fails + 1 }
-    if m != 1 { println("FAIL: matches_lit expected 1, got ${m}"); fails = fails + 1 }
+    // Only meaningful when the build linked libpcre2-8 (Windows CI does
+    // not); probe first and skip the regex assertions otherwise, matching
+    // tests/regression/test_regex.ae. The migration itself is already
+    // proven by string/json above — regex here is extra coverage.
+    probe, perr = regex.compile("a")
+    if probe == null {
+        println("  [SKIP] regex built without libpcre2-8: ${perr}")
+    } else {
+        regex.free(probe)
+        re, ree = regex.compile("[0-9]+")
+        if ree != "" { println("FAIL: regex.compile: ${ree}"); fails = fails + 1 }
+        if re == null { println("FAIL: regex.compile null"); fails = fails + 1 }
+        if re != null { regex.free(re) }
+        m, me = regex.matches_lit("[0-9]+", "abc123")
+        if me != "" { println("FAIL: matches_lit: ${me}"); fails = fails + 1 }
+        if m != 1 { println("FAIL: matches_lit expected 1, got ${m}"); fails = fails + 1 }
+    }
 
     if fails != 0 {
         println("result-migration: ${fails} failure(s)")
