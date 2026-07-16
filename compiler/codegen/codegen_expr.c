@@ -2096,6 +2096,21 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             int err_idx = tup->tuple_count - 1;
             static int oe_counter = 0;
             int id = oe_counter++;
+            /* The trailing error slot is discarded on BOTH paths — on the
+             * error path the handler consumes it (as `err`) then it is
+             * dead; on the success path it is the `""` success sentinel.
+             * When the fallible's error position is classified HEAP, every
+             * return (both paths) was wrapped in `aether_uniform_heap_str`
+             * (emit_tuple_return_position), so the slot is always a
+             * malloc-owned pointer — an AetherString or a plain malloc'd
+             * copy — and leaks unless freed. `aether_heap_str_free`
+             * reclaims both shapes. When the error position is NON-heap
+             * (e.g. `string.to_long`'s raw literal "invalid long"), the
+             * slot is a `.rodata` literal and must NOT be freed — so gate
+             * the free on the SAME static classification the `v, e = f()`
+             * destructure site uses for `_heap_e`, keeping the two forms
+             * consistent. */
+            int err_slot_heap = or_fallible_error_slot_is_heap(gen, fallible);
             fprintf(gen->output, "({ %s _oe%d = ", tuple_c, id);
             generate_expression(gen, fallible);
             fprintf(gen->output, "; %s _oer%d;\nif (_oe%d._%d && _oe%d._%d[0]) {\n",
@@ -2137,8 +2152,29 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 generate_expression(gen, handler);
                 fprintf(gen->output, ";\n");
             }
-            fprintf(gen->output, "} else { _oer%d = _oe%d._0; } _oer%d; })",
-                    id, id, id);
+            /* Error path done: `err` (the error slot) is now dead — free it
+             * if statically heap. The value slot `_oe._0` is left alone: on
+             * this path it was the failed call's value (often a null/empty
+             * sentinel), and whether it is heap-owned and safe to reclaim is
+             * the caller's classification concern, not the `or` lowering's;
+             * a blind free here risks the failed-call value aliasing the
+             * handler's own result. Freeing only the always-discarded error
+             * slot is the safe, sufficient fix. */
+            if (err_slot_heap) {
+                fprintf(gen->output, "aether_heap_str_free((void*)_oe%d._%d);\n",
+                        id, err_idx);
+            }
+            /* Success path: yield the value slot as the result (must NOT be
+             * freed — it is what the expression evaluates to); free only the
+             * discarded success-sentinel error slot, again only when heap. */
+            if (err_slot_heap) {
+                fprintf(gen->output,
+                        "} else { _oer%d = _oe%d._0; aether_heap_str_free((void*)_oe%d._%d); } _oer%d; })",
+                        id, id, id, err_idx, id);
+            } else {
+                fprintf(gen->output, "} else { _oer%d = _oe%d._0; } _oer%d; })",
+                        id, id, id);
+            }
             break;
         }
 

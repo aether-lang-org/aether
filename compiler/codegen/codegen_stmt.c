@@ -1671,6 +1671,35 @@ static int function_def_returns_heap_at(CodeGenerator* gen, ASTNode* fn_def,
     return result;
 }
 
+/* Is the error (last) slot of `fallible` a heap-owned string that the
+ * `or` lowering must release when it discards it? True only when the
+ * fallible is a call to a user function whose error position is
+ * classified heap by `function_def_returns_heap_at` — in which case
+ * emit_tuple_return_position wrapped EVERY return (including the `""`
+ * success sentinel) in `aether_uniform_heap_str`, so the slot is always
+ * a malloc-owned pointer, uniformly freeable. When the error position is
+ * non-heap (e.g. `string.to_long` returning the raw literal "invalid
+ * long"), the slot is a `.rodata` literal and must NOT be freed. This is
+ * exactly the gate the `v, e = f()` destructure site uses to decide
+ * `_heap_e`, so the `or` and destructure forms stay consistent. Callees
+ * with no resolvable definition (externs, unknowns) are conservatively
+ * treated as non-heap — matching the destructure default. */
+int or_fallible_error_slot_is_heap(CodeGenerator* gen, ASTNode* fallible) {
+    if (!fallible || fallible->type != AST_FUNCTION_CALL || !fallible->value ||
+        !gen || !gen->program) {
+        return 0;
+    }
+    Type* tup = fallible->node_type;
+    if (!tup || tup->kind != TYPE_TUPLE || tup->tuple_count < 2) return 0;
+    int err_idx = tup->tuple_count - 1;
+    char fn_norm[256];
+    const char* fn = codegen_normalise_callee(fallible->value, fn_norm,
+                                              sizeof(fn_norm));
+    ASTNode* callee = find_function_definition_by_name(gen->program, fn);
+    if (!callee) return 0;
+    return function_def_returns_heap_at(gen, callee, err_idx);
+}
+
 /* Emit one position of a multi-value `return e0, e1, ...`. When the
  * enclosing function classifies tuple position `j` as a heap-string
  * position (`function_def_returns_heap_at`), route that position's
