@@ -1271,11 +1271,17 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             return create_optional_type(create_type(TYPE_UNKNOWN));
 
         case AST_NULL_COALESCE: {
-            // `opt ?? d` -> the optional's inner T (or T if LHS already non-opt).
+            // `x ?? d` yields the value type:
+            //   - optional `T?`     -> inner T
+            //   - result `T!` / (value, err) tuple -> the value slot (#e-u P1.3:
+            //     `??` on a fallible is the same value-or-default as `f() or {d}`)
+            //   - already non-opt   -> T
             if (expr->child_count < 2) return create_type(TYPE_UNKNOWN);
             Type* o = infer_type(expr->children[0], table);
             Type* r;
             if (o && o->kind == TYPE_OPTIONAL && o->element_type) r = clone_type(o->element_type);
+            else if (o && o->kind == TYPE_TUPLE && o->tuple_count >= 2 && o->tuple_types[0])
+                r = clone_type(o->tuple_types[0]);
             else if (o) r = clone_type(o);
             else r = infer_type(expr->children[1], table);
             if (o) free_type(o);
@@ -5857,28 +5863,49 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             typecheck_expression(expr->children[0], table);
             typecheck_expression(expr->children[1], table);
             Type* o = infer_type(expr->children[0], table);
-            if (!o || o->kind != TYPE_OPTIONAL) {
-                type_error("`??` requires an optional `T?` on its left",
+            /* `??` accepts EITHER an optional `T?` (value-or-default over
+             * presence) OR a fallible `T!` / `(value, err)` tuple (value-or-
+             * default over failure — #error-unification P1.3, the same
+             * value-yielding lowering as `f() or { default }`). The value
+             * type is the optional's element or the tuple's first slot. */
+            int is_opt = o && o->kind == TYPE_OPTIONAL;
+            int is_result = o && o->kind == TYPE_TUPLE && o->tuple_count >= 2 &&
+                            o->tuple_types[0];
+            if (!is_opt && !is_result) {
+                type_error("`??` requires an optional `T?` or a fallible `T!` "
+                           "on its left",
                            expr->line, expr->column);
                 if (o) free_type(o);
                 if (expr->node_type) free_type(expr->node_type);
                 expr->node_type = create_type(TYPE_UNKNOWN);
                 return 0;
             }
-            Type* inner = o->element_type ? clone_type(o->element_type)
-                                          : create_type(TYPE_UNKNOWN);
+            Type* value_t = is_opt
+                ? (o->element_type ? clone_type(o->element_type)
+                                   : create_type(TYPE_UNKNOWN))
+                : clone_type(o->tuple_types[0]);
             Type* d = infer_type(expr->children[1], table);
-            if (d && inner->kind != TYPE_UNKNOWN && d->kind != TYPE_UNKNOWN &&
-                !is_assignable(d, inner)) {
+            if (d && value_t->kind != TYPE_UNKNOWN && d->kind != TYPE_UNKNOWN &&
+                !is_assignable(d, value_t)) {
                 char msg[200];
                 snprintf(msg, sizeof(msg),
                     "`??` default type %s is not assignable to the value type %s",
-                    type_name(d), type_name(inner));
+                    type_name(d), type_name(value_t));
                 type_error(msg, expr->line, expr->column);
             }
             if (d) free_type(d);
             if (expr->node_type) free_type(expr->node_type);
-            expr->node_type = inner;   // transfer ownership
+            expr->node_type = value_t;   // transfer ownership
+            /* #error-unification P1.3: `result ?? default` IS `result or
+             * { default }` — same value-or-default-over-failure lowering.
+             * Rewrite the node to AST_OR_ELSE (a bare-expression handler) so
+             * codegen reuses the single, ownership-correct `or` lowering
+             * (error-slot free, uniform-heap boxing, heap classification, arg
+             * drain) with no duplicated logic. The optional `??` keeps its own
+             * codegen (AST_NULL_COALESCE). Left unchanged for is_opt. */
+            if (is_result) {
+                expr->type = AST_OR_ELSE;
+            }
             free_type(o);
             return 1;
         }
