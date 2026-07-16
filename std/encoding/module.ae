@@ -8,19 +8,24 @@
 // fallible decode returns `string!` — the value on success, a non-empty
 // error on malformed input.
 //
-// hex is RFC 4648 §8; base64 is RFC 4648 §4. The hex codec is a direct
-// port of C3's `std::encoding::hex` (RFC 4648, https://rfc-editor.org/
-// rfc/rfc4648) — Copyright (c) 2022-2026 Christoffer Lernö and
-// contributors, MIT (the c3c stdlib), re-expressed in Aether. base64
-// re-surfaces Aether's existing, tested implementation
-// (std/cryptography/aether_cryptography.c).
+// hex is RFC 4648 §8; base64 is §4; base32 is §6. The hex and base32
+// codecs are direct ports of C3's `std::encoding::{hex,base32}` (RFC 4648,
+// https://rfc-editor.org/rfc/rfc4648) — Copyright (c) 2022-2026 Christoffer
+// Lernö and contributors, MIT (the c3c stdlib), re-expressed in Aether.
+// base64 wraps Aether's existing implementation in
+// std/cryptography/aether_cryptography.c — it moved here from
+// std.cryptography (its correct home: base64 is an encoding, not
+// cryptography). `cryptography.random_base64` still offers the
+// crypto-random-bytes-to-base64 convenience, now built on this module.
 
 import std.string
 import std.bytes
 
 exports (
     hex_encode, hex_decode,
-    base64_encode, base64_encode_url, base64_decode
+    base64_encode, base64_encode_padded, base64_decode,
+    base32_encode, base32_decode,
+    csv_split, csv_count, csv_field, csv_free
 )
 
 // ---------------------------------------------------------------------------
@@ -101,9 +106,10 @@ base64_encode(data: string, length: int) -> string {
     return cryptography_base64_encode_raw(data, length)
 }
 
-// Standard-alphabet base64 WITH `=` padding — the form most non-strict
-// decoders on the wire expect.
-base64_encode_url(data: string, length: int) -> string {
+// Standard-alphabet base64 WITH `=` padding to a multiple of 4 — the form
+// some auth headers and JSON blob formats require. (Standard `+/`
+// alphabet; NOT the url-safe `-_` alphabet.)
+base64_encode_padded(data: string, length: int) -> string {
     if length <= 0 { return "" }
     return cryptography_base64_encode_padded_raw(data, length)
 }
@@ -122,4 +128,166 @@ base64_decode(b64: string) -> string! {
     owned = string_new_with_length(raw, n)
     cryptography_release_base64_decode()
     return owned
+}
+
+// ---------------------------------------------------------------------------
+// base32 (RFC 4648 §6) — standard alphabet, `=` padded. Ported from C3's
+// `std::encoding::base32` (MIT, Copyright (c) 2022-2026 Christoffer Lernö and
+// contributors): 5 input bytes -> 8 output chars, five bits per char.
+// ---------------------------------------------------------------------------
+
+// Standard base32 alphabet index (0..31) -> ASCII. A..Z map to 0..25,
+// 2..7 map to 26..31. (RFC 4648 §6.)
+fn b32_digit(v: int) -> int {
+    if v < 26 { return 65 + v }        // 'A' + v
+    return 24 + v                       // '2' + (v - 26) == 50 + v - 26
+}
+
+// ASCII base32 char -> value 0..31, or -1 if not in the alphabet.
+// Case-insensitive on the A..Z portion.
+fn b32_value(c: int) -> int {
+    if c >= 65 && c <= 90 { return c - 65 }   // 'A'..'Z'
+    if c >= 97 && c <= 122 { return c - 97 }  // 'a'..'z' (accepted)
+    if c >= 50 && c <= 55 { return c - 24 }   // '2'..'7' -> 26..31
+    return -1
+}
+
+// Encode `length` bytes of `data` as standard, `=`-padded base32.
+base32_encode(data: string, length: int) -> string {
+    if length <= 0 { return "" }
+    // Output is ceil(length/5)*8 characters (padded).
+    groups = (length + 4) / 5
+    out_len = groups * 8
+    buf = bytes.new(out_len)
+    i = 0
+    o = 0
+    while i < length {
+        // Load up to 5 bytes into a 40-bit value (missing bytes = 0).
+        n = length - i
+        if n > 5 { n = 5 }
+        b0 = string.char_at_n(data, length, i) & 255
+        b1 = 0
+        b2 = 0
+        b3 = 0
+        b4 = 0
+        if n > 1 { b1 = string.char_at_n(data, length, i + 1) & 255 }
+        if n > 2 { b2 = string.char_at_n(data, length, i + 2) & 255 }
+        if n > 3 { b3 = string.char_at_n(data, length, i + 3) & 255 }
+        if n > 4 { b4 = string.char_at_n(data, length, i + 4) & 255 }
+        // 40-bit accumulator across two ints (msb: top 32 bits, lsb adds b4).
+        // Extract eight 5-bit chunks, most-significant first.
+        c0 = (b0 >> 3) & 31
+        c1 = ((b0 << 2) | (b1 >> 6)) & 31
+        c2 = (b1 >> 1) & 31
+        c3 = ((b1 << 4) | (b2 >> 4)) & 31
+        c4 = ((b2 << 1) | (b3 >> 7)) & 31
+        c5 = (b3 >> 2) & 31
+        c6 = ((b3 << 3) | (b4 >> 5)) & 31
+        c7 = b4 & 31
+        // Number of output chars produced by `n` input bytes (RFC 4648):
+        // 1->2, 2->4, 3->5, 4->7, 5->8; the rest are '='.
+        produced = 8
+        if n == 1 { produced = 2 }
+        if n == 2 { produced = 4 }
+        if n == 3 { produced = 5 }
+        if n == 4 { produced = 7 }
+        bytes.set(buf, o, b32_digit(c0))
+        bytes.set(buf, o + 1, b32_digit(c1))
+        if produced > 2 { bytes.set(buf, o + 2, b32_digit(c2)) } else { bytes.set(buf, o + 2, 61) }
+        if produced > 3 { bytes.set(buf, o + 3, b32_digit(c3)) } else { bytes.set(buf, o + 3, 61) }
+        if produced > 4 { bytes.set(buf, o + 4, b32_digit(c4)) } else { bytes.set(buf, o + 4, 61) }
+        if produced > 5 { bytes.set(buf, o + 5, b32_digit(c5)) } else { bytes.set(buf, o + 5, 61) }
+        if produced > 6 { bytes.set(buf, o + 6, b32_digit(c6)) } else { bytes.set(buf, o + 6, 61) }
+        if produced > 7 { bytes.set(buf, o + 7, b32_digit(c7)) } else { bytes.set(buf, o + 7, 61) }
+        o = o + 8
+        i = i + 5
+    }
+    return bytes.finish(buf, out_len)
+}
+
+// Decode a standard-alphabet base32 string (with or without `=` padding)
+// to its bytes. Returns the decoded bytes, or a non-empty error on a
+// character outside the alphabet.
+base32_decode(s: string) -> string! {
+    n = string.length(s)
+    if n == 0 { return "" }
+    // Strip trailing '=' padding for the bit math; each 8-char group of
+    // chars carries 40 bits -> 5 bytes, fewer for a short final group.
+    real = n
+    while real > 0 && (string.char_at_n(s, n, real - 1) & 255) == 61 {
+        real = real - 1
+    }
+    // Output length: real chars * 5 bits / 8.
+    out_len = (real * 5) / 8
+    buf = bytes.new(out_len)
+    // Accumulate 5 bits per char into a running bit buffer; emit a byte
+    // every time we have >= 8 bits.
+    acc = 0
+    nbits = 0
+    o = 0
+    i = 0
+    while i < real {
+        v = b32_value(string.char_at_n(s, n, i) & 255)
+        if v < 0 {
+            bytes.free(buf)
+            return "", "base32: invalid character"
+        }
+        acc = (acc << 5) | v
+        nbits = nbits + 5
+        if nbits >= 8 {
+            nbits = nbits - 8
+            bytes.set(buf, o, (acc >> nbits) & 255)
+            o = o + 1
+        }
+        i = i + 1
+    }
+    return bytes.finish(buf, out_len)
+}
+
+// ---------------------------------------------------------------------------
+// csv (RFC 4180-lite) — field splitting on a caller-chosen separator, the
+// same simple model as C3's `std::encoding::csv` (MIT, Copyright (c)
+// 2022-2026 Christoffer Lernö and contributors): split a record on the
+// separator, no embedded-quote handling. Multi-row input is handled by the
+// caller splitting on "\n" first; csv_split trims a trailing "\r" so
+// "\r\n"-terminated lines parse cleanly.
+//
+// Usage:
+//   h = encoding.csv_split("a,b,c", ",")
+//   n = encoding.csv_count(h)          // 3
+//   f = encoding.csv_field(h, 0)       // "a"
+//   encoding.csv_free(h)               // release the field array
+// ---------------------------------------------------------------------------
+
+// Split one CSV record into fields on `sep`. Returns an owned handle;
+// read it with csv_count / csv_field, then release with csv_free. A
+// trailing "\r" (from a "\r\n" line ending) is trimmed before splitting.
+csv_split(record: string, sep: string) -> ptr {
+    n = string.length(record)
+    rec = record
+    if n > 0 && (string.char_at_n(record, n, n - 1) & 255) == 13 {
+        // strip trailing '\r'
+        rec = string.substring(record, 0, n - 1)
+    }
+    return string.split(rec, sep)
+}
+
+// Number of fields in a handle returned by csv_split.
+csv_count(handle: ptr) -> int {
+    return string.array_size(handle)
+}
+
+// Field `i` (0-based) as a string. Out-of-range yields "". The returned
+// string is BORROWED from the handle — valid until csv_free(handle); copy
+// it (string.concat(f, "")) if you need to hold it past the free.
+csv_field(handle: ptr, i: int) -> string {
+    if i < 0 || i >= string.array_size(handle) { return "" }
+    p = string.array_get(handle, i)
+    if p == null { return "" }
+    return p as string
+}
+
+// Release a handle returned by csv_split.
+csv_free(handle: ptr) {
+    string.array_free(handle)
 }

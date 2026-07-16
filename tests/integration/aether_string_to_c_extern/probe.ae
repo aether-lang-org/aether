@@ -16,6 +16,7 @@
 import std.string
 import std.bytes
 import std.cryptography
+import std.encoding
 
 extern read_first4_as_int(content: string) -> int
 extern memcpy_into(dst: string, src: string, n: int) -> int
@@ -43,9 +44,9 @@ main() {
     // Case 2: cryptography.base64_decode returns an AetherString*
     // with embedded NULs. The C side memcpys 4 bytes; the buffer
     // we receive should contain those 4 bytes verbatim.
-    raw, raw_len, _ = cryptography.base64_decode("AABCAA==")  // 0x00 0x00 0x42 0x00
-    if raw_len != 4 {
-        println("FAIL: base64 raw_len=${raw_len}, want 4")
+    raw, _ = encoding.base64_decode("AABCAA==")  // 0x00 0x00 0x42 0x00
+    if string.length(raw) != 4 {
+        println("FAIL: base64 raw_len=${string.length(raw)}, want 4")
         exit(1)
     }
     b = bytes.new(8)

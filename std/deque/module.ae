@@ -1,0 +1,137 @@
+// std.deque — a fixed-capacity double-ended queue / ring buffer of `long`
+// values (a `long` holds any int, and a pointer via mem.ptr_to_long, so this
+// backs work queues, sliding windows, and FIFO/LIFO buffers uniformly).
+//
+// Circular-buffer backed: push/pop at either end are O(1) with no element
+// shuffling. `push_back` on a full buffer OVERWRITES the oldest element
+// (front), matching C3's `std::collections::ringbuffer` semantics — the
+// classic sliding-window behaviour. Use the fallible `pop_*` return to
+// distinguish empty. Values are `long`; store an int directly or a pointer
+// via std.mem.
+//
+// Modelled on C3's ringbuffer + deque (MIT, Copyright (c) 2022-2026
+// Christoffer Lernö and contributors), re-expressed for a concrete `long`
+// element type (no generics).
+
+import std.longarr
+
+exports (
+    Deque,
+    new, free,
+    len, cap, is_empty, is_full,
+    push_back, push_front,
+    pop_front, pop_back,
+    peek_front, peek_back,
+    clear
+)
+
+// A ring buffer. `head` is the index of the current front element; `count`
+// is how many are live. The backing store holds `capacity` slots.
+struct Deque {
+    store: ptr      // longarr of `capacity` slots
+    capacity: int
+    head: int       // index of the front element
+    count: int      // number of live elements
+}
+
+// Create a deque holding up to `capacity` elements (capacity >= 1).
+new(capacity: int) -> Deque {
+    n = capacity
+    if n < 1 { n = 1 }
+    s, _ = longarr.new_filled(n, 0)
+    d = Deque { store: s, capacity: n, head: 0, count: 0 }
+    return d
+}
+
+// Release the backing store. The Deque value is invalid afterwards.
+free(d: Deque) {
+    longarr.free(d.store)
+}
+
+len(d: Deque) -> int { return d.count }
+cap(d: Deque) -> int { return d.capacity }
+is_empty(d: Deque) -> bool { return d.count == 0 }
+is_full(d: Deque) -> bool { return d.count == d.capacity }
+
+// Index of the slot `offset` positions after `head`, wrapping.
+fn wrap(d: Deque, offset: int) -> int {
+    i = d.head + offset
+    while i >= d.capacity { i = i - d.capacity }
+    while i < 0 { i = i + d.capacity }
+    return i
+}
+
+// Append at the back. On a full buffer this OVERWRITES the oldest (front)
+// element and advances the front — the ring-buffer/sliding-window
+// behaviour. Returns the updated Deque (value semantics: reassign it,
+// `d = deque.push_back(d, x)`).
+push_back(d: Deque, value: long) -> Deque {
+    r = d
+    if r.count == r.capacity {
+        // full: drop the front, write over its slot at the back
+        slot = wrap(r, r.count)          // == head (the front slot)
+        longarr.set(r.store, slot, value)
+        r.head = wrap(r, 1)
+        return r
+    }
+    slot = wrap(r, r.count)
+    longarr.set(r.store, slot, value)
+    r.count = r.count + 1
+    return r
+}
+
+// Prepend at the front. On a full buffer this OVERWRITES the newest (back)
+// element. Returns the updated Deque.
+push_front(d: Deque, value: long) -> Deque {
+    r = d
+    r.head = wrap(r, -1)
+    longarr.set(r.store, r.head, value)
+    if r.count < r.capacity {
+        r.count = r.count + 1
+    }
+    return r
+}
+
+// Remove and return the front element as (value, deque, ""), or
+// (0, deque, error) when empty. Reassign the returned deque.
+pop_front(d: Deque) -> (long, Deque, string) {
+    r = d
+    if r.count == 0 { return 0, r, "deque: empty" }
+    v, _ = longarr.get(r.store, r.head)
+    r.head = wrap(r, 1)
+    r.count = r.count - 1
+    return v, r, ""
+}
+
+// Remove and return the back element as (value, deque, ""), or
+// (0, deque, error) when empty.
+pop_back(d: Deque) -> (long, Deque, string) {
+    r = d
+    if r.count == 0 { return 0, r, "deque: empty" }
+    slot = wrap(r, r.count - 1)
+    v, _ = longarr.get(r.store, slot)
+    r.count = r.count - 1
+    return v, r, ""
+}
+
+// Read the front element without removing it: (value, "") or (0, error).
+peek_front(d: Deque) -> (long, string) {
+    if d.count == 0 { return 0, "deque: empty" }
+    v, _ = longarr.get(d.store, d.head)
+    return v, ""
+}
+
+// Read the back element without removing it.
+peek_back(d: Deque) -> (long, string) {
+    if d.count == 0 { return 0, "deque: empty" }
+    v, _ = longarr.get(d.store, wrap(d, d.count - 1))
+    return v, ""
+}
+
+// Empty the deque (keeps capacity). Returns the updated Deque.
+clear(d: Deque) -> Deque {
+    r = d
+    r.head = 0
+    r.count = 0
+    return r
+}

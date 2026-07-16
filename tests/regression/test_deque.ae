@@ -1,0 +1,89 @@
+// std.deque regression — fixed-capacity ring buffer / double-ended queue.
+// Vectors adapted from C3's stdlib unit test (test/unit/stdlib/collections/
+// ringbuffer.c3) — Copyright (c) 2022-2026 Christoffer Lernö and
+// contributors, MIT — re-expressed for Aether's value-semantics API
+// (push/pop return the updated Deque).
+
+import std.deque
+import std.string
+
+extern exit(code: int)
+
+fn ck(cond: bool, msg: string) -> int {
+    if !cond { println("FAIL: ${msg}"); return 1 }
+    return 0
+}
+
+main() {
+    fails = 0
+
+    // ---- empty invariants ----
+    d = deque.new(8)
+    fails = fails + ck(deque.is_empty(d), "new is empty")
+    fails = fails + ck(!deque.is_full(d), "new not full")
+    fails = fails + ck(deque.len(d) == 0, "new len 0")
+    fails = fails + ck(deque.cap(d) == 8, "cap 8")
+    // pop on empty errors
+    _, d, pe = deque.pop_front(d)
+    fails = fails + ck(pe != "", "pop empty errors")
+
+    // ---- push half, check len (C3 push_pop) ----
+    i = 1
+    while i <= 4 { d = deque.push_back(d, i); i = i + 1 }
+    fails = fails + ck(deque.len(d) == 4 && !deque.is_full(d), "half filled")
+
+    // ---- fill to capacity ----
+    while i <= 8 { d = deque.push_back(d, i); i = i + 1 }
+    fails = fails + ck(deque.is_full(d) && deque.len(d) == 8, "full")
+
+    // ---- FIFO pop order: 1,2,3,...,8 ----
+    j = 1
+    ok = true
+    while j <= 8 {
+        v, d2, e = deque.pop_front(d)
+        d = d2
+        if e != "" || v != j { ok = false }
+        j = j + 1
+    }
+    fails = fails + ck(ok, "FIFO pop order 1..8")
+    fails = fails + ck(deque.is_empty(d), "empty after draining")
+
+    // ---- overwrite-on-full (ring/sliding window) ----
+    r = deque.new(3)
+    r = deque.push_back(r, 10)
+    r = deque.push_back(r, 20)
+    r = deque.push_back(r, 30)   // full: [10,20,30]
+    r = deque.push_back(r, 40)   // overwrite 10: [20,30,40]
+    fails = fails + ck(deque.len(r) == 3, "ring stays at cap")
+    pf, _ = deque.peek_front(r)
+    pb, _ = deque.peek_back(r)
+    fails = fails + ck(pf == 20 && pb == 40, "ring overwrote oldest")
+
+    // ---- double-ended: push_front / pop_back ----
+    q = deque.new(4)
+    q = deque.push_back(q, 2)
+    q = deque.push_back(q, 3)
+    q = deque.push_front(q, 1)   // [1,2,3]
+    fq, _ = deque.peek_front(q)
+    bq, _ = deque.peek_back(q)
+    fails = fails + ck(fq == 1 && bq == 3, "push_front/back ends")
+    vb, q, _ = deque.pop_back(q)  // pops 3
+    fails = fails + ck(vb == 3, "pop_back")
+    vf, q, _ = deque.pop_front(q) // pops 1
+    fails = fails + ck(vf == 1, "pop_front after pop_back")
+    fails = fails + ck(deque.len(q) == 1, "one left")
+
+    // ---- clear ----
+    q = deque.clear(q)
+    fails = fails + ck(deque.is_empty(q), "cleared")
+
+    deque.free(d)
+    deque.free(r)
+    deque.free(q)
+
+    if fails != 0 {
+        println("deque: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_deque")
+}

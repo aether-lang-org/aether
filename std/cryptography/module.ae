@@ -17,15 +17,11 @@
 
 import std.string
 import std.bytes
+import std.encoding
 
 exports (
     cryptography_sha1_hex_raw, cryptography_sha256_hex_raw,
     cryptography_hash_hex_raw, cryptography_hash_supported,
-    cryptography_base64_encode_raw, cryptography_base64_encode_padded_raw,
-    cryptography_base64_decode_raw,
-    cryptography_get_base64_decode,
-    cryptography_get_base64_decode_length,
-    cryptography_release_base64_decode,
     cryptography_md4_hex_raw, cryptography_md5_hex_raw,
     cryptography_hmac_sha256_hex_raw, cryptography_hmac_sha256_bytes_raw,
     cryptography_md4_bytes_raw, cryptography_md5_bytes_raw,
@@ -40,7 +36,6 @@ exports (
     cryptography_digest_final_hex_raw, cryptography_digest_final_bytes_raw,
     cryptography_digest_free_raw,
     sha1_hex, sha256_hex, hash_hex, hash_supported,
-    base64_encode, base64_encode_padded, base64_decode,
     md4_hex, md5_hex, hmac_sha256_hex, hmac_sha256_bytes,
     md4_bytes, md5_bytes, sha1_bytes, sha256_bytes, hash_bytes,
     random_bytes, random_hex, random_base64,
@@ -52,12 +47,6 @@ extern cryptography_sha1_hex_raw(data: string, length: int) -> string
 extern cryptography_sha256_hex_raw(data: string, length: int) -> string
 extern cryptography_hash_hex_raw(algo: string, data: string, length: int) -> string
 extern cryptography_hash_supported(algo: string) -> int
-extern cryptography_base64_encode_raw(data: string, length: int) -> string
-extern cryptography_base64_encode_padded_raw(data: string, length: int) -> string
-extern cryptography_base64_decode_raw(b64: string) -> int
-extern cryptography_get_base64_decode() -> string
-extern cryptography_get_base64_decode_length() -> int
-extern cryptography_release_base64_decode()
 extern cryptography_md4_hex_raw(data: string, length: int) -> string
 extern cryptography_md5_hex_raw(data: string, length: int) -> string
 extern cryptography_hmac_sha256_hex_raw(key: string, key_len: int,
@@ -140,59 +129,10 @@ hash_supported(algo: string) -> int {
     return cryptography_hash_supported(algo)
 }
 
-// Encode `length` bytes of `data` as Base64 (RFC 4648 §4 standard
-// alphabet, unpadded for compactness). Callers that need `=`
-// padding to make the output length a multiple of 4 can append it
-// themselves; the unpadded length is `((n + 2) / 3) * 4` for an
-// n-byte input.
-//
-// Returns (b64_string, "") on success, ("", error) on failure.
-base64_encode(data: string, length: int) -> {
-    out = cryptography_base64_encode_raw(data, length)
-    if out == 0 {
-        return "", "openssl unavailable"
-    }
-    return out, ""
-}
-
-// Padded sibling of base64_encode — RFC 4648 §4 standard alphabet
-// WITH `=` padding to a multiple of 4 bytes. Reach for this when
-// the wire format on the other end expects padded base64 — most
-// non-strict decoders accept either, but some auth headers and
-// JSON-encoded blob formats explicitly require padding.
-//
-// Returns (b64_string, "") on success, ("", error) on failure.
-base64_encode_padded(data: string, length: int) -> {
-    out = cryptography_base64_encode_padded_raw(data, length)
-    if out == 0 {
-        return "", "openssl unavailable"
-    }
-    return out, ""
-}
-
-// Decode a Base64 string back into raw bytes. Accepts both padded
-// and unpadded RFC 4648 §4 input. Returns (bytes, length, "")
-// on success — `bytes` is an AetherString preserving any embedded
-// NULs in the decoded payload.
-//
-// Returns ("", 0, error) on:
-//   - malformed Base64 input
-//   - OpenSSL unavailable
-//   - allocation failure
-//
-// Same shape as fs.read_binary so callers can chain through the
-// same destructure pattern.
-base64_decode(b64: string) -> {
-    ok = cryptography_base64_decode_raw(b64)
-    if ok == 0 {
-        return "", 0, "base64 decode failed"
-    }
-    raw = cryptography_get_base64_decode()
-    n = cryptography_get_base64_decode_length()
-    owned = string_new_with_length(raw, n)
-    cryptography_release_base64_decode()
-    return owned, n, ""
-}
+// Base64 now lives in std.encoding (its correct home — it is an encoding,
+// not cryptography). Use `encoding.base64_encode` / `_padded` / `_decode`.
+// `random_base64` below still offers a crypto-random-bytes-to-base64
+// convenience, now built on encoding.base64_encode.
 
 // MD4 hex digest. Legacy — included for interop with formats that
 // bake it into the wire shape (zsync's per-block strong checksum,
@@ -399,7 +339,7 @@ random_base64(n: int) -> {
     if n == 0 {
         return "", ""
     }
-    return base64_encode(raw, raw_n)
+    return encoding.base64_encode(raw, raw_n), ""
 }
 
 // ---- Incremental (streaming) digest context ----

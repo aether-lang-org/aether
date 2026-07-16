@@ -18,14 +18,15 @@
 
 import std.string
 import std.cryptography
+import std.encoding
 
 extern exit(code: int)
 
 main() {
     // Case 1: wrapped concat with binary content — embedded NULs survive.
-    raw, raw_len, _ = cryptography.base64_decode("AABCAA==")  // 4 bytes: 0x00 0x00 0x42 0x00
-    if raw_len != 4 {
-        println("FAIL: base64_decode raw_len=${raw_len}, expected 4")
+    raw, _ = encoding.base64_decode("AABCAA==")  // 4 bytes: 0x00 0x00 0x42 0x00
+    if string.length(raw) != 4 {
+        println("FAIL: base64_decode raw_len=${string.length(raw)}, expected 4")
         exit(1)
     }
     joined = string_concat_wrapped("[", raw)
