@@ -1,0 +1,9 @@
+// A second module with a SAME-NAMED fault member (`NotFound`). The
+// namespace-qualified content (`"anet.NotFound"` vs `"afs.NotFound"`)
+// is what keeps the two identities distinct across the import boundary.
+fault NotFound, Timeout
+
+dial(kind: int) -> string! {
+    if kind == 1 { return "", NotFound }
+    return "ok"
+}

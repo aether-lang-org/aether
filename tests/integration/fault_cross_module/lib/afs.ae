@@ -1,0 +1,8 @@
+// A library module declaring a fault set and returning faults as errors.
+fault NotFound, PermissionDenied
+
+open(kind: int) -> string! {
+    if kind == 1 { return "", NotFound }
+    if kind == 2 { return "", PermissionDenied }
+    return "ok"
+}

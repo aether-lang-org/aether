@@ -1,0 +1,54 @@
+// Phase 3 of error-unification: `fault` declarations. A `fault` set mints
+// named error identities, each an interned string whose CONTENT is its
+// name. A fault value IS a `const char*` string, so it flows through the
+// `(value, err)` / `T!` convention unchanged: presence (`e != ""`) works,
+// printing shows the name, and `err == fault.Name` compares by content
+// (string `==` is already a strcmp).
+//
+// This test covers the single-module (main-program) case: bare member
+// names, bare content. Cross-module namespace-qualified identity is
+// covered by tests/integration/fault_cross_module.
+
+import std.string
+
+extern exit(code: int)
+
+fault NotFound, PermissionDenied, IsDirectory
+
+// A fallible function returning a fault as its error value.
+open(kind: int) -> string! {
+    if kind == 1 { return "", NotFound }
+    if kind == 2 { return "", PermissionDenied }
+    if kind == 3 { return "", IsDirectory }
+    return "ok"
+}
+
+main() {
+    fails = 0
+
+    // success path
+    v, e = open(0)
+    if e != "" || v != "ok" { println("FAIL: success path"); fails = fails + 1 }
+
+    // fault identity via `==`
+    _, e1 = open(1)
+    if e1 != NotFound { println("FAIL: e1 should be NotFound, got ${e1}"); fails = fails + 1 }
+    if e1 == PermissionDenied { println("FAIL: NotFound must not equal PermissionDenied"); fails = fails + 1 }
+
+    _, e2 = open(2)
+    if e2 != PermissionDenied { println("FAIL: e2 should be PermissionDenied"); fails = fails + 1 }
+
+    // presence convention unchanged: a fault is non-empty
+    _, e3 = open(3)
+    if e3 == "" { println("FAIL: fault must be non-empty (presence)"); fails = fails + 1 }
+
+    // a fault value IS its name (printing / string identity)
+    if e1 != "NotFound" { println("FAIL: fault content should be its name, got ${e1}"); fails = fails + 1 }
+    if string.length(e1) != 8 { println("FAIL: NotFound length"); fails = fails + 1 }
+
+    if fails != 0 {
+        println("fault-basic: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_fault_basic")
+}

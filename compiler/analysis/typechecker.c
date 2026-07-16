@@ -2873,6 +2873,22 @@ int typecheck_program(ASTNode* program) {
                 if (bs) bs->node = child;
                 break;
             }
+            case AST_FAULT_DEFINITION: {
+                /* #error-unification P3: each fault member is a string-valued
+                 * global whose content is its qualified name. Register each
+                 * member's identifier as a TYPE_STRING symbol so `fs.NotFound`
+                 * (rewritten to the bare member identifier by the module-merge
+                 * namespace pass, exactly like a `const`) resolves, and so
+                 * `err == fs.NotFound` typechecks as string == string. The
+                 * member's C symbol / string content is emitted by codegen. */
+                for (int mi = 0; mi < child->child_count; mi++) {
+                    ASTNode* m = child->children[mi];
+                    if (!m || !m->value) continue;
+                    add_symbol(global_table, m->value,
+                               create_type(TYPE_STRING), 0, 0, 0);
+                }
+                break;
+            }
             case AST_MESSAGE_DEFINITION: {
                 // Register message type so receive patterns can look up field types
                 Type* msg_type = create_type(TYPE_MESSAGE);
