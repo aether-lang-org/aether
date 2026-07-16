@@ -206,7 +206,7 @@ errno_message() -> string {
 //     fd, err = io.fd_open_read("data.bin")
 //     if err != "" { return err }
 //     defer io.fd_close(fd)
-fd_open_read(path: string) -> (int, string) {
+fd_open_read(path: string) -> int! {
     return io_fd_open_read_tuple(path)
 }
 
@@ -215,7 +215,7 @@ fd_open_read(path: string) -> (int, string) {
 // matches std.fs.write_binary semantics; if you need O_APPEND or
 // open-without-truncate, file an issue (the porter says no svn-aether
 // site needs them today).
-fd_open_write(path: string) -> (int, string) {
+fd_open_write(path: string) -> int! {
     return io_fd_open_write_tuple(path)
 }
 

@@ -88,14 +88,14 @@ extern aether_regex_clear_last_error()
 
 // Compile a pattern. Returns (re, "") on success; (null, error) on a
 // pattern-syntax error or when the build lacks libpcre2-8.
-compile(pattern: string) -> (ptr, string) {
+compile(pattern: string) -> ptr! {
     re = aether_regex_compile(pattern, 0)
     if re == null { return null, aether_regex_last_error() }
     return re, ""
 }
 
 // As compile, with PCRE2 option bits (FLAG_CASELESS | FLAG_MULTILINE …).
-compile_flags(pattern: string, flags: int) -> (ptr, string) {
+compile_flags(pattern: string, flags: int) -> ptr! {
     re = aether_regex_compile(pattern, flags)
     if re == null { return null, aether_regex_last_error() }
     return re, ""
@@ -148,7 +148,7 @@ find(re: ptr, s: string) -> (int, int, string) {
 // captures, in left-to-right order. capture(caps, i) returns "" for
 // out-of-range or unset (optional, didn't participate) groups.
 
-captures(re: ptr, s: string) -> (ptr, string) {
+captures(re: ptr, s: string) -> ptr! {
     caps = aether_regex_captures(re, s)
     if caps == null {
         e = aether_regex_last_error()
@@ -179,7 +179,7 @@ captures_free(caps: ptr) { aether_regex_captures_free(caps) }
 // where fa is a handle holding N spans; iterate via find_all_count +
 // find_all_start(i) / find_all_end(i). Free with find_all_free.
 
-find_all(re: ptr, s: string) -> (ptr, string) {
+find_all(re: ptr, s: string) -> ptr! {
     fa = aether_regex_find_all(re, s)
     if fa == null {
         e = aether_regex_last_error()
@@ -221,7 +221,7 @@ replace_all(re: ptr, s: string, repl: string) -> {
 // Compile + match/find + free, for callers that don't need to reuse the
 // pattern. For hot loops, compile() once and reuse the handle.
 
-matches_lit(pattern: string, s: string) -> (int, string) {
+matches_lit(pattern: string, s: string) -> int! {
     re, err = compile(pattern)
     if err != "" { return 0, err }
     ok = aether_regex_matches(re, s)

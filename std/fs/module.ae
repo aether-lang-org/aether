@@ -881,7 +881,7 @@ pread(file: ptr, length: int, offset: long) -> {
 // Returns (n, err): `n` is the byte count (n == 0 = EOF, 0 < n < length =
 // short read), `err` is "" on success or a message on I/O error. Same
 // EOF / short-read / error distinction as `pread`.
-pread_into(file: ptr, buf: ptr, length: int, offset: long) -> (int, string) {
+pread_into(file: ptr, buf: ptr, length: int, offset: long) -> int! {
     n = fs_pread_into_raw(file, buf, length, offset)
     if n < 0 {
         return 0, "pread_into failed"
