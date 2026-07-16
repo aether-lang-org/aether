@@ -1,13 +1,26 @@
 # Unifying `T?` and `(value, err)` — costed design
 
-> **Status:** Design under review. **Phase 0 has shipped** — the `or {}`
-> value-block miscompile (§2.1) was fixed in PR #1145 (v0.398.0), including
-> the typecheck rejection of never-yielding handler blocks. Phases 1–3 are
-> not implemented. Costed against the compiler as of v0.397.0; every claim below is verified against the tree (`file:line`), not
-> recalled. Origin: `docs/cross-references/c3.md` §4 — the survey's "one large
-> win": C3 proves one mechanism can serve both the "absent" and the "failed"
-> axes. This document scopes the Aether version — and concludes the Aether
-> version is **not C3's design**, for reasons the tree itself supplies.
+> **Status: IMPLEMENTED.** The whole arc has shipped:
+> - **P0** — `or {}` value-block miscompile fix (PR #1145, v0.398.0).
+> - **P1** — migrate the 14 two-slot fallible signatures to `T!` (PR #1155).
+> - **P1.5** — reject the ABI-incompatible tuple-payload `(A, B)!`, pinning
+>   `T!` as single-payload; the 4 three-slot functions stay raw tuples by
+>   design (PR #1156).
+> - **P2** — a dropped `T!` result is a compile error (PR #1161).
+> - **P3** — declared `fault`s: interned string-valued identities with
+>   namespace-qualified cross-module identity via `==` (PR #1162).
+> - **P1.3** — `??` accepts a fallible `T!` left side, one default operator
+>   across both axes (PR #1163).
+>
+> Plus two `or {}` heap-leak fixes surfaced while implementing: the discarded
+> error slot (PR #1159) and the yielded value slot (PR #1160).
+>
+> Costed against the compiler as of v0.397.0; every claim below was verified
+> against the tree (`file:line`) at design time, not recalled. Origin:
+> `docs/cross-references/c3.md` §4 — the survey's "one large win": C3 proves
+> one mechanism can serve both the "absent" and the "failed" axes. This
+> document scopes the Aether version — and concludes the Aether version is
+> **not C3's design**, for reasons the tree itself supplies.
 
 ## 0. Summary, and what the reconnaissance changed
 
