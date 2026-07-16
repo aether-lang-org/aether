@@ -1,0 +1,61 @@
+// Regression: std.longarr.get truncated 64-bit values to 32 bits.
+//
+// `get(arr, i) -> {` used an INFERRED tuple return type. Its error paths
+// return `0, "..."` — an INT literal in slot 0 — which pinned the tuple's
+// value slot to 32-bit int (the tuple-slot-inference gotcha). The happy
+// path `return longarr_get_raw(arr, i), ""` then narrowed the `long` to
+// that int slot, so any stored value above 2^31 came back truncated
+// (`9000000000` -> `410065408`). Fixed by giving get an explicit
+// `-> (long, string)` return type so slot 0 is `long`.
+//
+// The value is stored correctly (set/new_filled were always fine); only the
+// READ wrapper truncated, so a raw-read saw the right bits while the wrapper
+// did not — this test drives the wrapper on both ends.
+
+import std.longarr
+
+extern exit(code: int)
+
+fn ck(cond: bool, msg: string) -> int {
+    if !cond { println("FAIL: ${msg}"); return 1 }
+    return 0
+}
+
+main() {
+    fails = 0
+
+    a, _ = longarr.new_filled(4, 0)
+
+    // Values that exceed the 32-bit range must survive set -> get.
+    longarr.set(a, 0, 9000000000)          // ~2^33
+    longarr.set(a, 1, 30000000000)         // ~2^34
+    longarr.set(a, 2, 1099511627776)       // 2^40
+    longarr.set(a, 3, -9000000000)         // negative, |v| > 2^31
+
+    v0, e0 = longarr.get(a, 0)
+    fails = fails + ck(e0 == "" && v0 == 9000000000, "9e9 round-trips (was 410065408)")
+    v1, _ = longarr.get(a, 1)
+    fails = fails + ck(v1 == 30000000000, "3e10 round-trips")
+    v2, _ = longarr.get(a, 2)
+    fails = fails + ck(v2 == 1099511627776, "2^40 round-trips")
+    v3, _ = longarr.get(a, 3)
+    fails = fails + ck(v3 == -9000000000, "negative large round-trips")
+
+    // new_filled with a large init decodes correctly through get too.
+    b, _ = longarr.new_filled(2, 5000000000)
+    bv, _ = longarr.get(b, 1)
+    fails = fails + ck(bv == 5000000000, "new_filled large init")
+
+    // error path still reports errors (and the value slot is a benign 0).
+    _, oe = longarr.get(a, 99)
+    fails = fails + ck(oe != "", "out-of-range errors")
+
+    longarr.free(a)
+    longarr.free(b)
+
+    if fails != 0 {
+        println("longarr-64bit: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_longarr_64bit")
+}
