@@ -1,0 +1,125 @@
+// std.encoding — general-purpose binary/text encodings.
+//
+// A discoverable home for the codecs that were previously either missing
+// or buried in other modules (base64 lived under `std.cryptography`, which
+// is the wrong namespace — it is encoding, not cryptography). Binary data
+// is carried in a length-aware Aether string (embedded NULs survive), the
+// same representation `std.bytes` / `std.cryptography` already use. A
+// fallible decode returns `string!` — the value on success, a non-empty
+// error on malformed input.
+//
+// hex is RFC 4648 §8; base64 is RFC 4648 §4. The hex codec is a direct
+// port of C3's `std::encoding::hex` (RFC 4648, https://rfc-editor.org/
+// rfc/rfc4648) — Copyright (c) 2022-2026 Christoffer Lernö and
+// contributors, MIT (the c3c stdlib), re-expressed in Aether. base64
+// re-surfaces Aether's existing, tested implementation
+// (std/cryptography/aether_cryptography.c).
+
+import std.string
+import std.bytes
+
+exports (
+    hex_encode, hex_decode,
+    base64_encode, base64_encode_url, base64_decode
+)
+
+// ---------------------------------------------------------------------------
+// hex (RFC 4648 §8) — lowercase on encode, case-insensitive on decode.
+// ---------------------------------------------------------------------------
+
+// Lowercase nibble -> ASCII hex digit. 0..9 -> '0'..'9', 10..15 -> 'a'..'f'.
+fn hex_digit(nibble: int) -> int {
+    if nibble < 10 { return 48 + nibble }   // '0'
+    return 87 + nibble                       // 'a' + (nibble - 10)
+}
+
+// ASCII hex digit -> nibble value, or -1 if not a hex digit. Accepts both
+// upper- and lower-case (RFC 4648 §8 permits either on decode).
+fn hex_value(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48 }   // '0'..'9'
+    if c >= 65 && c <= 70 { return c - 55 }   // 'A'..'F'
+    if c >= 97 && c <= 102 { return c - 87 }  // 'a'..'f'
+    return -1
+}
+
+// Encode `length` bytes of `data` as lowercase hex. Output is 2*length
+// characters; empty input yields "".
+hex_encode(data: string, length: int) -> string {
+    if length <= 0 { return "" }
+    buf = bytes.new(length * 2)
+    i = 0
+    while i < length {
+        c = string.char_at_n(data, length, i) & 255
+        bytes.set(buf, i * 2, hex_digit((c >> 4) & 15))
+        bytes.set(buf, i * 2 + 1, hex_digit(c & 15))
+        i = i + 1
+    }
+    return bytes.finish(buf, length * 2)
+}
+
+// Decode a hex string to its bytes. The input must have even length and
+// contain only hex digits. Returns the decoded bytes on success, a
+// non-empty error otherwise.
+hex_decode(s: string) -> string! {
+    n = string.length(s)
+    if n == 0 { return "" }
+    if n % 2 != 0 { return "", "hex: input is not of even length" }
+    buf = bytes.new(n / 2)
+    j = 0
+    while j < n {
+        a = hex_value(string.char_at_n(s, n, j) & 255)
+        b = hex_value(string.char_at_n(s, n, j + 1) & 255)
+        if a < 0 || b < 0 {
+            bytes.free(buf)
+            return "", "hex: invalid character"
+        }
+        bytes.set(buf, j / 2, (a << 4) | b)
+        j = j + 2
+    }
+    return bytes.finish(buf, n / 2)
+}
+
+// ---------------------------------------------------------------------------
+// base64 (RFC 4648 §4) — re-surfaced from the existing cryptography codec.
+// The C symbols below live in std/cryptography/aether_cryptography.c and are
+// already compiled into libaether; re-declaring the externs here binds the
+// same implementation under the correct `std.encoding` namespace.
+// ---------------------------------------------------------------------------
+
+extern cryptography_base64_encode_raw(data: string, length: int) -> string
+extern cryptography_base64_encode_padded_raw(data: string, length: int) -> string
+extern cryptography_base64_decode_raw(b64: string) -> int
+extern cryptography_get_base64_decode() -> string
+extern cryptography_get_base64_decode_length() -> int
+extern cryptography_release_base64_decode()
+extern string_new_with_length(data: string, length: int) -> ptr
+
+// Standard-alphabet base64 WITHOUT padding (RFC 4648 §4, the `+/` alphabet;
+// no trailing `=`). Encodes `length` bytes of `data`.
+base64_encode(data: string, length: int) -> string {
+    if length <= 0 { return "" }
+    return cryptography_base64_encode_raw(data, length)
+}
+
+// Standard-alphabet base64 WITH `=` padding — the form most non-strict
+// decoders on the wire expect.
+base64_encode_url(data: string, length: int) -> string {
+    if length <= 0 { return "" }
+    return cryptography_base64_encode_padded_raw(data, length)
+}
+
+// Decode a base64 string (accepts padded and unpadded standard-alphabet
+// input) to its bytes. Returns the decoded bytes on success, a non-empty
+// error on malformed input.
+base64_decode(b64: string) -> string! {
+    if string.length(b64) == 0 { return "" }
+    ok = cryptography_base64_decode_raw(b64)
+    if ok == 0 {
+        return "", "base64: invalid input"
+    }
+    raw = cryptography_get_base64_decode()
+    n = cryptography_get_base64_decode_length()
+    owned = string_new_with_length(raw, n)
+    cryptography_release_base64_decode()
+    return owned
+}
