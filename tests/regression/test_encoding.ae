@@ -46,8 +46,24 @@ main() {
     fails = fails + check(encoding.base64_encode("foobar", 6) == "Zm9vYmFy", "b64 encode foobar")
 
     // ---- base64 encode (padded, from c3 encode) ----
-    fails = fails + check(encoding.base64_encode_url("f", 1) == "Zg==", "b64 padded f")
-    fails = fails + check(encoding.base64_encode_url("foobar", 6) == "Zm9vYmFy", "b64 padded foobar")
+    fails = fails + check(encoding.base64_encode_padded("f", 1) == "Zg==", "b64 padded f")
+    fails = fails + check(encoding.base64_encode_padded("foobar", 6) == "Zm9vYmFy", "b64 padded foobar")
+
+    // ---- base32 (RFC 4648 §6 vectors, from c3 base32.c3) ----
+    fails = fails + check(encoding.base32_encode("", 0) == "", "b32 empty")
+    fails = fails + check(encoding.base32_encode("f", 1) == "MY======", "b32 f")
+    fails = fails + check(encoding.base32_encode("fo", 2) == "MZXQ====", "b32 fo")
+    fails = fails + check(encoding.base32_encode("foo", 3) == "MZXW6===", "b32 foo")
+    fails = fails + check(encoding.base32_encode("foob", 4) == "MZXW6YQ=", "b32 foob")
+    fails = fails + check(encoding.base32_encode("fooba", 5) == "MZXW6YTB", "b32 fooba")
+    fails = fails + check(encoding.base32_encode("foobar", 6) == "MZXW6YTBOI======", "b32 foobar")
+    b32d, b32e = encoding.base32_decode("MZXW6YTBOI======")
+    fails = fails + check(b32e == "" && b32d == "foobar", "b32 decode foobar")
+    b32d2, b32e2 = encoding.base32_decode("MZXW6===")
+    fails = fails + check(b32e2 == "" && b32d2 == "foo", "b32 decode foo")
+    // base32 round-trip
+    b32r, _ = encoding.base32_decode(encoding.base32_encode("hello world", 11))
+    fails = fails + check(b32r == "hello world", "b32 round-trip")
 
     // ---- base64 decode (padded and unpadded, from c3 decode) ----
     bd1, be1 = encoding.base64_decode("Zm9vYmFy")
@@ -64,6 +80,31 @@ main() {
     fails = fails + check(hround == msg, "hex round-trip")
     bround, _ = encoding.base64_decode(encoding.base64_encode(msg, mlen))
     fails = fails + check(bround == msg, "base64 round-trip")
+
+    // ---- csv (vectors from c3 encoding/csv test) ----
+    // comma-separated
+    h1 = encoding.csv_split("aaa,bbb,ccc", ",")
+    fails = fails + check(encoding.csv_count(h1) == 3, "csv comma count")
+    fails = fails + check(encoding.csv_field(h1, 0) == "aaa", "csv f0")
+    fails = fails + check(encoding.csv_field(h1, 2) == "ccc", "csv f2")
+    encoding.csv_free(h1)
+    // semicolon separator (c3 vector {"aaa;bbb;ccc",";"})
+    h2 = encoding.csv_split("aaa;bbb;ccc", ";")
+    fails = fails + check(encoding.csv_count(h2) == 3, "csv semicolon count")
+    fails = fails + check(encoding.csv_field(h2, 1) == "bbb", "csv semicolon f1")
+    encoding.csv_free(h2)
+    // whitespace preserved inside fields (c3 vector: "aaa , bbb" -> "aaa ", " bbb")
+    h3 = encoding.csv_split("aaa , bbb ,ccc", ",")
+    fails = fails + check(encoding.csv_field(h3, 0) == "aaa " && encoding.csv_field(h3, 1) == " bbb ", "csv preserves spaces")
+    encoding.csv_free(h3)
+    // \r\n line ending: trailing \r trimmed (caller split on \n)
+    h4 = encoding.csv_split("111,222,333\r", ",")
+    fails = fails + check(encoding.csv_count(h4) == 3 && encoding.csv_field(h4, 2) == "333", "csv strips trailing CR")
+    encoding.csv_free(h4)
+    // out-of-range field yields ""
+    h5 = encoding.csv_split("a,b", ",")
+    fails = fails + check(encoding.csv_field(h5, 9) == "", "csv oob empty")
+    encoding.csv_free(h5)
 
     if fails != 0 {
         println("encoding: ${fails} failure(s)")

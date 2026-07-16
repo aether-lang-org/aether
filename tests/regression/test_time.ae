@@ -1,0 +1,98 @@
+// std.time regression — civil date/time over Unix epoch (UTC).
+//
+// Vectors adapted from C3's stdlib unit tests (test/unit/stdlib/time/
+// datetime.c3) — Copyright (c) 2022-2026 Christoffer Lernö and
+// contributors, MIT — plus known Unix-epoch fixtures. Aether's API is
+// free-function + struct-field rather than C3's methods/operators, so the
+// vectors are re-expressed (e.g. `d.add_weeks(1)` -> `time.add_days(d, 7)`).
+
+import std.time
+import std.string
+
+extern exit(code: int)
+
+fn ck(cond: bool, msg: string) -> int {
+    if !cond { println("FAIL: ${msg}"); return 1 }
+    return 0
+}
+
+main() {
+    fails = 0
+
+    // ---- known epoch fixtures ----
+    e0 = time.from_unix(0)
+    fails = fails + ck(e0.year == 1970 && e0.month == 1 && e0.day == 1, "epoch date")
+    fails = fails + ck(e0.hour == 0 && e0.minute == 0 && e0.second == 0, "epoch time")
+    fails = fails + ck(e0.wday == 4, "epoch is Thursday (wday 4)")
+
+    // 1234567890 = 2009-02-13T23:31:30Z (a Friday)
+    t = time.from_unix(1234567890)
+    fails = fails + ck(t.year == 2009 && t.month == 2 && t.day == 13, "1234567890 date")
+    fails = fails + ck(t.hour == 23 && t.minute == 31 && t.second == 30, "1234567890 time")
+    fails = fails + ck(t.wday == 5, "1234567890 is Friday")
+
+    // ---- civil round-trip ----
+    c = time.from_civil(2009, 2, 13, 23, 31, 30)
+    fails = fails + ck(c.epoch == 1234567890, "civil -> epoch round-trip")
+
+    // ---- C3 datetime vector: 1973-04-27, add 1 week -> 1973-05-04 ----
+    d = time.from_civil(1973, 4, 27, 0, 0, 0)
+    fails = fails + ck(d.year == 1973 && d.month == 4 && d.day == 27, "c3 base date")
+    d1 = time.add_days(d, 7)
+    fails = fails + ck(d1.year == 1973 && d1.month == 5 && d1.day == 4, "c3 add 1 week")
+    // + 1 day / - 1 day
+    dp = time.add_days(d1, 1)
+    fails = fails + ck(dp.day == 5, "c3 add 1 day")
+    dm = time.add_days(dp, -1)
+    fails = fails + ck(dm.day == 4, "c3 sub 1 day")
+
+    // ---- leap-year handling: 2000 is leap, 1900 is not, 2001 is not ----
+    fails = fails + ck(time.is_leap_year(2000), "2000 leap")
+    fails = fails + ck(!time.is_leap_year(1900), "1900 not leap")
+    fails = fails + ck(!time.is_leap_year(2001), "2001 not leap")
+    fails = fails + ck(time.is_leap_year(2024), "2024 leap")
+    fails = fails + ck(time.days_in_month(2024, 2) == 29, "feb 2024 = 29")
+    fails = fails + ck(time.days_in_month(2023, 2) == 28, "feb 2023 = 28")
+
+    // crossing a leap day: 2024-02-28 + 1 day = 2024-02-29
+    ld = time.add_days(time.from_civil(2024, 2, 28, 0, 0, 0), 1)
+    fails = fails + ck(ld.month == 2 && ld.day == 29, "leap-day crossing")
+
+    // ---- ISO-8601 format + parse round-trip ----
+    fails = fails + ck(time.to_iso8601(t) == "2009-02-13T23:31:30Z", "iso format")
+    p, pe = time.parse_iso8601("2009-02-13T23:31:30Z")
+    fails = fails + ck(pe == "" && p.epoch == 1234567890, "iso parse")
+    // space separator accepted
+    p2, pe2 = time.parse_iso8601("2009-02-13 23:31:30")
+    fails = fails + ck(pe2 == "" && p2.epoch == 1234567890, "iso parse (space sep)")
+    // malformed rejected
+    _, be = time.parse_iso8601("not-a-date")
+    fails = fails + ck(be != "", "malformed rejected")
+    _, be2 = time.parse_iso8601("2009-13-13T00:00:00Z")   // month 13
+    fails = fails + ck(be2 != "", "bad month rejected")
+    _, be3 = time.parse_iso8601("2023-02-29T00:00:00Z")   // not a leap year
+    fails = fails + ck(be3 != "", "feb 29 non-leap rejected")
+
+    // ---- diff + ordering ----
+    a = time.from_unix(1000)
+    b = time.from_unix(1060)
+    fails = fails + ck(time.diff_seconds(b, a) == 60, "diff 60s")
+    fails = fails + ck(time.is_before(a, b), "a before b")
+    fails = fails + ck(time.is_after(b, a), "b after a")
+
+    // ---- add_hours / add_minutes ----
+    h = time.add_hours(e0, 25)   // 1970-01-02T01:00:00Z
+    fails = fails + ck(h.day == 2 && h.hour == 1, "add 25 hours")
+
+    // ---- a far-future + negative (pre-epoch) date, exact civil math ----
+    // 1969-12-31T23:59:59Z = epoch -1
+    neg = time.from_unix(-1)
+    fails = fails + ck(neg.year == 1969 && neg.month == 12 && neg.day == 31, "pre-epoch date")
+    fails = fails + ck(neg.hour == 23 && neg.minute == 59 && neg.second == 59, "pre-epoch time")
+
+    if fails != 0 {
+        println("time: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_time")
+}

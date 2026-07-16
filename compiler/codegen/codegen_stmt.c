@@ -3679,7 +3679,28 @@ static void emit_return_value(CodeGenerator* gen, ASTNode* stmt) {
         if (!(v->node_type && v->node_type->kind == TYPE_TUPLE)) {
             fprintf(gen->output, "(%s){ ._0 = ",
                     get_c_type(gen->current_func_return_type));
-            generate_expression(gen, v);
+            /* When position 0 of this `T!` is classified heap (some other
+             * return yields a heap value there), EVERY value-slot return —
+             * including this single-value auto-wrap of a literal `""` — must
+             * be uniform-heap-wrapped, exactly as the multi-value
+             * `emit_tuple_return_position` does. Otherwise a bare `return
+             * ""` hands the caller a `.rodata` literal that its `_heap_`
+             * tracker (set because the position is heap) frees at scope
+             * exit → invalid free. Gate on the same classifier the caller's
+             * destructure uses, and only for a string value slot. */
+            Type* v0 = gen->current_func_return_type->tuple_types
+                       ? gen->current_func_return_type->tuple_types[0] : NULL;
+            int wrap_v0 = v0 && v0->kind == TYPE_STRING &&
+                          gen->current_function &&
+                          function_def_returns_heap_at(gen, gen->current_function, 0);
+            if (wrap_v0) {
+                fprintf(gen->output, "aether_uniform_heap_str((const char*)(");
+                generate_expression(gen, v);
+                fprintf(gen->output, "), %d)",
+                        is_heap_string_expr(gen, v) ? 1 : 0);
+            } else {
+                generate_expression(gen, v);
+            }
             fprintf(gen->output, ", ._1 = \"\" }");
             return;
         }

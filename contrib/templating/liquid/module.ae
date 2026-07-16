@@ -32,6 +32,7 @@ import std.strbuilder
 import std.map
 import std.collections
 import std.cryptography
+import std.encoding
 import std.fs
 import std.path
 import std.mem
@@ -1336,13 +1337,11 @@ apply_filter(val: string, name: string, args: string) -> (string, string) {
         if argc != 0 { return "", "base64_encode takes no args" }
         // Use the PADDED form to match Shopify's `base64_encode` filter
         // (RFC 4648 standard alphabet with `=` padding to a multiple of 4).
-        out, b64err = cryptography.base64_encode_padded(val, string_length(val))
-        if b64err != "" { return "", b64err }
-        return out, ""
+        return encoding.base64_encode_padded(val, string_length(val)), ""
     }
     if string.equals(name, "base64_decode") == 1 {
         if argc != 0 { return "", "base64_decode takes no args" }
-        out, _, derr = cryptography.base64_decode(val)
+        out, derr = encoding.base64_decode(val)
         if derr != "" { return "", derr }
         return out, ""
     }

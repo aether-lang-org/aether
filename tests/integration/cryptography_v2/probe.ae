@@ -13,6 +13,7 @@
 // Same SKIP-when-no-OpenSSL pattern as cryptography_sha test.
 
 import std.cryptography
+import std.encoding
 import std.string
 import std.io
 
@@ -37,8 +38,7 @@ main() {
 
     // ---- Test 1: base64_encode("Man", 3) == "TWFu" ----
     print("Test 1: base64_encode(\"Man\", 3) == \"TWFu\"\n")
-    e1, eerr1 = cryptography.base64_encode("Man", 3)
-    if eerr1 != "" { println("  FAIL: ${eerr1}"); exit(1) }
+    e1 = encoding.base64_encode("Man", 3)
     if string.equals(e1, "TWFu") != 1 {
         println("  FAIL: got '${e1}', want 'TWFu'")
         exit(1)
@@ -47,8 +47,7 @@ main() {
 
     // ---- Test 2: base64_encode("hello world", 11) == "aGVsbG8gd29ybGQ" ----
     print("\nTest 2: base64_encode(\"hello world\", 11)\n")
-    e2, eerr2 = cryptography.base64_encode("hello world", 11)
-    if eerr2 != "" { println("  FAIL: ${eerr2}"); exit(1) }
+    e2 = encoding.base64_encode("hello world", 11)
     if string.equals(e2, "aGVsbG8gd29ybGQ") != 1 {
         println("  FAIL: got '${e2}', want 'aGVsbG8gd29ybGQ'")
         exit(1)
@@ -58,11 +57,11 @@ main() {
     // ---- Test 3: ASCII round-trip ----
     print("\nTest 3: ASCII round-trip\n")
     payload3 = "the quick brown fox"
-    enc3, _ = cryptography.base64_encode(payload3, 19)
-    dec3, dlen3, derr3 = cryptography.base64_decode(enc3)
+    enc3 = encoding.base64_encode(payload3, 19)
+    dec3, derr3 = encoding.base64_decode(enc3)
     if derr3 != "" { println("  FAIL decode: ${derr3}"); exit(1) }
-    if dlen3 != 19 {
-        println("  FAIL: expected 19 bytes, got ${dlen3}")
+    if string.length(dec3) != 19 {
+        println("  FAIL: expected 19 bytes, got ${string.length(dec3)}")
         exit(1)
     }
     if string.equals(dec3, payload3) != 1 {
@@ -78,19 +77,18 @@ main() {
     print("\nTest 4: binary payload with NUL round-trips\n")
     bin = cryptography_v2_probe_make_binary()
     bin_len = 10
-    enc4, eerr4 = cryptography.base64_encode(bin, bin_len)
-    if eerr4 != "" { println("  FAIL encode: ${eerr4}"); exit(1) }
-    dec4, dlen4, derr4 = cryptography.base64_decode(enc4)
+    enc4 = encoding.base64_encode(bin, bin_len)
+    dec4, derr4 = encoding.base64_decode(enc4)
     if derr4 != "" { println("  FAIL decode: ${derr4}"); exit(1) }
-    if dlen4 != 10 {
-        println("  FAIL: expected 10 bytes, got ${dlen4}")
+    if string.length(dec4) != 10 {
+        println("  FAIL: expected 10 bytes, got ${string.length(dec4)}")
         exit(1)
     }
     // Verify byte-identical via sha256: the digest of the round-tripped
     // bytes must match the digest of the original. We can't string.equals
     // because of the embedded NUL.
     h_orig, _ = cryptography.sha256_hex(bin, bin_len)
-    h_rt, _   = cryptography.sha256_hex(dec4, dlen4)
+    h_rt, _   = cryptography.sha256_hex(dec4, string.length(dec4))
     if string.equals(h_orig, h_rt) != 1 {
         println("  FAIL: round-tripped digest differs")
         println("    orig=${h_orig}")
@@ -101,16 +99,15 @@ main() {
 
     // ---- Test 5: empty input ----
     print("\nTest 5: empty input encodes to \"\", decodes to 0 bytes\n")
-    e5, eerr5 = cryptography.base64_encode("", 0)
-    if eerr5 != "" { println("  FAIL encode: ${eerr5}"); exit(1) }
+    e5 = encoding.base64_encode("", 0)
     if string.length(e5) != 0 {
         println("  FAIL: empty encode should be 0 chars, got '${e5}'")
         exit(1)
     }
-    _, dlen5, derr5 = cryptography.base64_decode("")
+    d5, derr5 = encoding.base64_decode("")
     if derr5 != "" { println("  FAIL decode: ${derr5}"); exit(1) }
-    if dlen5 != 0 {
-        println("  FAIL: empty decode should be 0 bytes, got ${dlen5}")
+    if string.length(d5) != 0 {
+        println("  FAIL: empty decode should be 0 bytes, got ${string.length(d5)}")
         exit(1)
     }
     print("  PASS\n")

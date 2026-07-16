@@ -1,0 +1,115 @@
+// std.hash — fast NON-cryptographic hashes for checksums and hashmap
+// seeding. NOT for security (use std.cryptography for that).
+//
+//   fnv32 / fnv64  — FNV-1a (Fowler–Noll–Vo), simple and fast for short keys
+//   murmur3_32     — MurmurHash3 x86 32-bit, good distribution for hashmaps
+//
+// Input is a byte string (embedded NULs honoured via the supplied length).
+// Results are the exact 32-/64-bit unsigned values the reference algorithms
+// produce, carried in Aether's signed `int`/`long` (mask with 0xFFFFFFFF /
+// interpret bit-for-bit as unsigned). Ported from C3's `std::hash::*` (MIT,
+// Copyright (c) 2022-2026 Christoffer Lernö and contributors).
+
+import std.string
+import std.bits
+
+exports (
+    fnv32, fnv64, murmur3_32
+)
+
+// FNV-1a 32-bit. offset basis 0x811c9dc5, prime 0x01000193. Returned as a
+// non-negative 32-bit value in a `long` (masked each step so the multiply
+// wraps like unsigned uint32 regardless of Aether's signed int width).
+fnv32(data: string, length: int) -> long {
+    let mask: long = 0xFFFFFFFF
+    let h: long = 0x811c9dc5
+    i = 0
+    while i < length {
+        b = (string.char_at_n(data, length, i) & 255) as long
+        h = (h ^ b) & mask
+        h = (h * 0x01000193) & mask
+        i = i + 1
+    }
+    return h
+}
+
+// FNV-1a 64-bit. offset basis 0xcbf29ce484222325, prime 0x100000001b3.
+// Uses wrapping 64-bit multiply so the product wraps like unsigned uint64.
+fnv64(data: string, length: int) -> long {
+    h = 0xcbf29ce484222325
+    prime = 0x100000001b3
+    i = 0
+    while i < length {
+        b = (string.char_at_n(data, length, i) & 255) as long
+        h = h ^ b
+        h = bits.wrapping_mul64(h, prime)
+        i = i + 1
+    }
+    return h
+}
+
+// MurmurHash3 x86 32-bit. `seed` lets callers salt the hash (0 for a plain
+// digest). Processes 4-byte little-endian blocks then the 1..3-byte tail,
+// with the standard fmix32 finalizer.
+// Implemented in 64-bit `long` throughout with an explicit 32-bit mask after
+// every step, so the arithmetic matches unsigned uint32 exactly regardless
+// of Aether's signed-int width, and the final value is a non-negative 32-bit
+// number. Rotates use the 32-bit rotate on the masked value.
+murmur3_32(data: string, length: int, seed: int) -> long {
+    let c1: long = 0xcc9e2d51
+    let c2: long = 0x1b873593
+    let mask: long = 0xFFFFFFFF
+    let h1: long = (seed as long) & mask
+    nblocks = length / 4
+    i = 0
+    while i < nblocks {
+        base = i * 4
+        b0 = (string.char_at_n(data, length, base) & 255) as long
+        b1 = (string.char_at_n(data, length, base + 1) & 255) as long
+        b2 = (string.char_at_n(data, length, base + 2) & 255) as long
+        b3 = (string.char_at_n(data, length, base + 3) & 255) as long
+        let k1: long = (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)) & mask
+        k1 = (k1 * c1) & mask
+        k1 = rotl32m(k1, 15)
+        k1 = (k1 * c2) & mask
+        h1 = (h1 ^ k1) & mask
+        h1 = rotl32m(h1, 13)
+        h1 = ((h1 * 5) + 0xe6546b64) & mask
+        i = i + 1
+    }
+    // tail: remaining 1..3 bytes
+    tail = nblocks * 4
+    rem = length - tail
+    let k1t: long = 0
+    if rem == 3 { k1t = k1t ^ (((string.char_at_n(data, length, tail + 2) & 255) as long) << 16) }
+    if rem >= 2 { k1t = k1t ^ (((string.char_at_n(data, length, tail + 1) & 255) as long) << 8) }
+    if rem >= 1 {
+        k1t = k1t ^ ((string.char_at_n(data, length, tail) & 255) as long)
+        k1t = (k1t * c1) & mask
+        k1t = rotl32m(k1t, 15)
+        k1t = (k1t * c2) & mask
+        h1 = (h1 ^ k1t) & mask
+    }
+    // finalization
+    h1 = (h1 ^ (length as long)) & mask
+    h1 = fmix32(h1)
+    return h1
+}
+
+// 32-bit left rotate of a value already masked to 32 bits, in `long`.
+fn rotl32m(x: long, r: int) -> long {
+    let mask: long = 0xFFFFFFFF
+    return ((x << r) | (x >> (32 - r))) & mask
+}
+
+// MurmurHash3 32-bit finalizer (in `long`, masked).
+fn fmix32(h0: long) -> long {
+    let mask: long = 0xFFFFFFFF
+    h = h0 & mask
+    h = (h ^ (h >> 16)) & mask
+    h = (h * 0x85ebca6b) & mask
+    h = (h ^ (h >> 13)) & mask
+    h = (h * 0xc2b2ae35) & mask
+    h = (h ^ (h >> 16)) & mask
+    return h
+}

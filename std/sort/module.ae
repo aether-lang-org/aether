@@ -1,0 +1,179 @@
+// std.sort — in-place ascending sort + binary search over the concrete
+// numeric array types (std.intarr / std.longarr / std.floatarr).
+//
+// Scoped to concrete types by design (see docs/cross-references/
+// c3-stdlib-gaps.md §2.3): C3's `std::sort` is generics-first, which
+// Aether lowers differently; here each element type gets a direct sort so
+// there is no generic machinery to reason about. The default order is
+// ascending. Sorts are IN PLACE and stable is not guaranteed (shell sort).
+//
+// The algorithm choice (shell sort with the Ciura gap sequence) and the
+// binary-search contract follow C3's `std::sort` at the capability level
+// (MIT, Copyright (c) 2022-2026 Christoffer Lernö and contributors),
+// re-expressed for Aether's concrete array types.
+
+exports (
+    ints, longs, floats,
+    int_search, long_search, float_search
+)
+
+// ---- array externs (bound to the same C the array modules use) -----------
+extern intarr_size(arr: ptr) -> int
+extern intarr_get_unchecked(arr: ptr, i: int) -> int
+extern intarr_set_unchecked(arr: ptr, i: int, value: int)
+
+extern longarr_size(arr: ptr) -> int
+extern longarr_get_unchecked(arr: ptr, i: int) -> long
+extern longarr_set_unchecked(arr: ptr, i: int, value: long)
+
+extern floatarr_size(arr: ptr) -> int
+extern floatarr_get_unchecked(arr: ptr, i: int) -> double
+extern floatarr_set_unchecked(arr: ptr, i: int, value: double)
+
+// Ciura's gap sequence, extended by *2.25 for larger n. A module-level
+// const array of the fixed prefix; larger gaps are computed on the fly.
+const CIURA[] = [1, 4, 10, 23, 57, 132, 301, 701]
+
+// ---- intarr ---------------------------------------------------------------
+
+// Sort an intarr ascending, in place.
+ints(arr: ptr) {
+    n = intarr_size(arr)
+    if n < 2 { return }
+    // Build the largest starting gap <= n/2 (Ciura, then *2.25 growth).
+    gap = 1
+    idx = 0
+    while idx < 8 && CIURA[idx] < n {
+        gap = CIURA[idx]
+        idx = idx + 1
+    }
+    while gap < n / 2 {
+        gap = (gap * 9) / 4   // ~*2.25
+    }
+    // Shell sort with the descending gap chain.
+    while gap >= 1 {
+        i = gap
+        while i < n {
+            tmp = intarr_get_unchecked(arr, i)
+            j = i
+            while j >= gap && intarr_get_unchecked(arr, j - gap) > tmp {
+                intarr_set_unchecked(arr, j, intarr_get_unchecked(arr, j - gap))
+                j = j - gap
+            }
+            intarr_set_unchecked(arr, j, tmp)
+            i = i + 1
+        }
+        if gap == 1 {
+            gap = 0
+        } else {
+            gap = (gap * 4) / 9
+            if gap < 1 { gap = 1 }
+        }
+    }
+}
+
+// Binary search a SORTED intarr for `x`. Returns the index of `x` if
+// present, otherwise the insertion point (the index where `x` would be
+// inserted to keep the array sorted) — matching C3's binarysearch contract.
+int_search(arr: ptr, x: int) -> int {
+    lo = 0
+    hi = intarr_size(arr)
+    while lo < hi {
+        mid = lo + (hi - lo) / 2
+        v = intarr_get_unchecked(arr, mid)
+        if v < x { lo = mid + 1 } else { hi = mid }
+    }
+    return lo
+}
+
+// ---- longarr --------------------------------------------------------------
+
+longs(arr: ptr) {
+    n = longarr_size(arr)
+    if n < 2 { return }
+    gap = 1
+    idx = 0
+    while idx < 8 && CIURA[idx] < n {
+        gap = CIURA[idx]
+        idx = idx + 1
+    }
+    while gap < n / 2 {
+        gap = (gap * 9) / 4
+    }
+    while gap >= 1 {
+        i = gap
+        while i < n {
+            tmp = longarr_get_unchecked(arr, i)
+            j = i
+            while j >= gap && longarr_get_unchecked(arr, j - gap) > tmp {
+                longarr_set_unchecked(arr, j, longarr_get_unchecked(arr, j - gap))
+                j = j - gap
+            }
+            longarr_set_unchecked(arr, j, tmp)
+            i = i + 1
+        }
+        if gap == 1 {
+            gap = 0
+        } else {
+            gap = (gap * 4) / 9
+            if gap < 1 { gap = 1 }
+        }
+    }
+}
+
+long_search(arr: ptr, x: long) -> int {
+    lo = 0
+    hi = longarr_size(arr)
+    while lo < hi {
+        mid = lo + (hi - lo) / 2
+        v = longarr_get_unchecked(arr, mid)
+        if v < x { lo = mid + 1 } else { hi = mid }
+    }
+    return lo
+}
+
+// ---- floatarr -------------------------------------------------------------
+
+floats(arr: ptr) {
+    n = floatarr_size(arr)
+    if n < 2 { return }
+    gap = 1
+    idx = 0
+    while idx < 8 && CIURA[idx] < n {
+        gap = CIURA[idx]
+        idx = idx + 1
+    }
+    while gap < n / 2 {
+        gap = (gap * 9) / 4
+    }
+    while gap >= 1 {
+        i = gap
+        while i < n {
+            tmp = floatarr_get_unchecked(arr, i)
+            j = i
+            while j >= gap && floatarr_get_unchecked(arr, j - gap) > tmp {
+                floatarr_set_unchecked(arr, j, floatarr_get_unchecked(arr, j - gap))
+                j = j - gap
+            }
+            floatarr_set_unchecked(arr, j, tmp)
+            i = i + 1
+        }
+        if gap == 1 {
+            gap = 0
+        } else {
+            gap = (gap * 4) / 9
+            if gap < 1 { gap = 1 }
+        }
+    }
+}
+
+float_search(arr: ptr, x: double) -> int {
+    lo = 0
+    hi = floatarr_size(arr)
+    while lo < hi {
+        mid = lo + (hi - lo) / 2
+        v = floatarr_get_unchecked(arr, mid)
+        if v < x { lo = mid + 1 } else { hi = mid }
+    }
+    return lo
+}
