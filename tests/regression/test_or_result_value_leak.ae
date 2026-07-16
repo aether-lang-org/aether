@@ -1,0 +1,81 @@
+// Regression: `s = f() or { … }` leaked the yielded value when the
+// fallible's success value slot is a heap string but the handler default
+// is a literal. The paths have heterogeneous ownership — success yields a
+// malloc-owned pointer, the handler default is a `.rodata` literal — which
+// the caller's single `_heap_<s>` tracker can't represent, so the `or`
+// result was classified non-heap and the success value never freed.
+//
+// Fix (uniform-heap boxing): when the success value slot is statically
+// heap (function_def_returns_heap_at position 0), the `or` lowering boxes
+// the handler's value through `aether_uniform_heap_str` — passing an
+// already-heap handler value through untouched, malloc-copying a literal —
+// so BOTH paths yield a uniformly malloc-owned pointer. The AST_OR_ELSE
+// case in is_heap_string_expr then classifies the expression heap so the
+// caller frees it at scope exit. The failed call's own (discarded) value
+// slot is freed on the error path. The `v, e = f()` destructure form
+// already froze the value via its tracker; this brings `or` in line.
+//
+// No output asserts the leak (invisible to the program); the value is
+// under the leak-detection CI gates. Asserts pin the observable behaviour
+// so every path runs.
+
+import std.json
+import std.string
+
+extern exit(code: int)
+
+// Returning an `or`-expression: the function's result is heap (the value
+// slot is uniform-heap), so the caller must free it. Exercises the
+// single-value return-heap classifier's AST_OR_ELSE path.
+forward(j: ptr) -> string {
+    return json.stringify(j) or { "none" }
+}
+
+main() {
+    fails = 0
+    n = 0
+
+    while n < 40 {
+        j, _ = json.parse("{\"k\":${n}}")
+
+        // Success value heap, handler default a LITERAL. Was leaked.
+        s1 = json.stringify(j) or { "" }
+        if string.length(s1) < 3 { println("FAIL: stringify or-literal too short"); fails = fails + 1 }
+
+        // Error path taken (get_string on a non-string errors), handler
+        // default a LITERAL — boxed default must be freed, failed call's
+        // own value slot must be freed.
+        s2 = json.get_string(j) or { "default" }
+        if s2 != "default" { println("FAIL: get_string or-default = ${s2}"); fails = fails + 1 }
+
+        // Error path taken, handler yields a HEAP value (string.concat) —
+        // must pass through the box untouched (no re-copy leak of the
+        // original), and be freed at scope exit.
+        s3 = json.get_string(j) or { string.concat("hv-", string.from_int(n)) }
+        if string.length(s3) < 3 { println("FAIL: get_string or-heap too short"); fails = fails + 1 }
+
+        // Block-form handler with a heap trailing value on the error path.
+        s4 = json.get_string(j) or { let m = "blk"; string.concat(m, "!") }
+        if s4 != "blk!" { println("FAIL: block-handler = ${s4}"); fails = fails + 1 }
+
+        // `or`-result passed DIRECTLY as a call argument (no bound local):
+        // the heap temporary must be drained by the argument-lifetime wrap,
+        // and the fallible must be evaluated exactly once.
+        if string.length(json.stringify(j) or { "" }) < 3 {
+            println("FAIL: or-result-as-arg too short"); fails = fails + 1
+        }
+
+        // `or`-result RETURNED from a function, then held by the caller.
+        s5 = forward(j)
+        if string.length(s5) < 3 { println("FAIL: returned or-result too short"); fails = fails + 1 }
+
+        json.free(j)
+        n = n + 1
+    }
+
+    if fails != 0 {
+        println("or-result-value-leak: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_or_result_value_leak")
+}

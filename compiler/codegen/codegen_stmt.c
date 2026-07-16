@@ -800,11 +800,38 @@ int is_seq_owning_expr(CodeGenerator* gen, ASTNode* expr) {
     return 0;
 }
 
+int or_fallible_value_slot_is_heap(CodeGenerator* gen, ASTNode* fallible);
+
 int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr) {
     if (!expr) return 0;
 
     // String interpolation (non-printf mode) allocates via _aether_interp.
     if (expr->type == AST_STRING_INTERP) {
+        return 1;
+    }
+
+    /* `fallible or handler` whose result is a string and whose success
+     * value slot is heap: the `or` lowering boxes the handler's default
+     * via aether_uniform_heap_str so BOTH paths yield a malloc-owned
+     * pointer, making the whole expression uniformly heap. Classifying it
+     * here sets the caller's `_heap_<lhs>` tracker so the yielded value is
+     * freed at scope exit (the `v, e = f()` destructure form already frees
+     * the value via its own tracker; without this the `or` form leaked
+     * it). Must stay in lock-step with the boxing in the AST_OR_ELSE
+     * codegen — both gate on or_fallible_value_slot_is_heap. */
+    /* The `or`-node's own node_type is not reliably stamped in every
+     * position (e.g. a `return f() or { … }` node can reach here with a
+     * NULL node_type), so derive string-ness from the fallible's VALUE
+     * slot type (`tuple_types[0]`) rather than the `or`-node itself —
+     * that is the type the expression actually yields, and it is what
+     * or_fallible_value_slot_is_heap already keys on. */
+    if (expr->type == AST_OR_ELSE && expr->child_count >= 1 &&
+        expr->children[0] && expr->children[0]->node_type &&
+        expr->children[0]->node_type->kind == TYPE_TUPLE &&
+        expr->children[0]->node_type->tuple_count >= 2 &&
+        expr->children[0]->node_type->tuple_types[0] &&
+        expr->children[0]->node_type->tuple_types[0]->kind == TYPE_STRING &&
+        or_fallible_value_slot_is_heap(gen, expr->children[0])) {
         return 1;
     }
 
@@ -1671,33 +1698,55 @@ static int function_def_returns_heap_at(CodeGenerator* gen, ASTNode* fn_def,
     return result;
 }
 
-/* Is the error (last) slot of `fallible` a heap-owned string that the
- * `or` lowering must release when it discards it? True only when the
- * fallible is a call to a user function whose error position is
- * classified heap by `function_def_returns_heap_at` — in which case
- * emit_tuple_return_position wrapped EVERY return (including the `""`
- * success sentinel) in `aether_uniform_heap_str`, so the slot is always
- * a malloc-owned pointer, uniformly freeable. When the error position is
- * non-heap (e.g. `string.to_long` returning the raw literal "invalid
- * long"), the slot is a `.rodata` literal and must NOT be freed. This is
- * exactly the gate the `v, e = f()` destructure site uses to decide
- * `_heap_e`, so the `or` and destructure forms stay consistent. Callees
- * with no resolvable definition (externs, unknowns) are conservatively
- * treated as non-heap — matching the destructure default. */
-int or_fallible_error_slot_is_heap(CodeGenerator* gen, ASTNode* fallible) {
+/* Is tuple `position` of `fallible`'s result classified heap by
+ * `function_def_returns_heap_at`? Shared by the `or` lowering's
+ * error-slot free (position = last) and its value-slot uniform-heap
+ * boxing (position 0). True only when the fallible is a call to a
+ * resolvable user function — for such a function
+ * emit_tuple_return_position wrapped EVERY return at that position in
+ * `aether_uniform_heap_str`, so the slot is uniformly malloc-owned.
+ * Callees with no resolvable definition (externs, unknowns) are
+ * conservatively non-heap, matching the `v, e = f()` destructure
+ * default. */
+static int or_fallible_slot_is_heap(CodeGenerator* gen, ASTNode* fallible,
+                                    int position) {
     if (!fallible || fallible->type != AST_FUNCTION_CALL || !fallible->value ||
         !gen || !gen->program) {
         return 0;
     }
     Type* tup = fallible->node_type;
     if (!tup || tup->kind != TYPE_TUPLE || tup->tuple_count < 2) return 0;
-    int err_idx = tup->tuple_count - 1;
+    if (position < 0 || position >= tup->tuple_count) return 0;
     char fn_norm[256];
     const char* fn = codegen_normalise_callee(fallible->value, fn_norm,
                                               sizeof(fn_norm));
     ASTNode* callee = find_function_definition_by_name(gen->program, fn);
     if (!callee) return 0;
-    return function_def_returns_heap_at(gen, callee, err_idx);
+    return function_def_returns_heap_at(gen, callee, position);
+}
+
+/* Is the error (last) slot of `fallible` a heap-owned string that the
+ * `or` lowering must release when it discards it? When true,
+ * emit_tuple_return_position wrapped every return (including the `""`
+ * success sentinel) in `aether_uniform_heap_str`, so the slot is always
+ * malloc-owned; when false (e.g. `string.to_long` returning the raw
+ * literal "invalid long") the slot is a `.rodata` literal that must NOT
+ * be freed. Same gate the `v, e = f()` destructure site uses for
+ * `_heap_e`, keeping the two forms consistent. */
+int or_fallible_error_slot_is_heap(CodeGenerator* gen, ASTNode* fallible) {
+    Type* tup = fallible ? fallible->node_type : NULL;
+    if (!tup || tup->kind != TYPE_TUPLE || tup->tuple_count < 2) return 0;
+    return or_fallible_slot_is_heap(gen, fallible, tup->tuple_count - 1);
+}
+
+/* Is the VALUE (position 0) slot of `fallible` a heap-owned string? Used
+ * by the `or` lowering to decide uniform-heap boxing of the result: when
+ * the success value is heap, the `or`-expression is classified heap (so
+ * the caller's `_heap_<lhs>` tracker frees it at scope exit) and the
+ * handler's non-heap default is boxed via `aether_uniform_heap_str` so
+ * BOTH paths yield a uniformly malloc-owned pointer. */
+int or_fallible_value_slot_is_heap(CodeGenerator* gen, ASTNode* fallible) {
+    return or_fallible_slot_is_heap(gen, fallible, 0);
 }
 
 /* Emit one position of a multi-value `return e0, e1, ...`. When the
