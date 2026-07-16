@@ -1,0 +1,60 @@
+// Phase 2 (error-unification): every LEGITIMATE way to consume a `T!`
+// result must remain accepted after the unconsumed-result check landed.
+// A bare `f()` drop is rejected (see tests/integration/
+// result_unconsumed_reject); this test pins that the consumers still
+// compile AND behave, so the check can't over-fire and break real code.
+
+import std.string
+
+extern exit(code: int)
+
+fallible(x: int) -> int! {
+    if x < 0 { return 0, "neg" }
+    return x
+}
+
+// `!` propagation as a statement is a consumer (it forwards the error).
+propagate(x: int) -> int! {
+    n = fallible(x)!
+    return n * 2
+}
+
+main() {
+    fails = 0
+
+    // destructure
+    v, e = fallible(7)
+    if e != "" || v != 7 { println("FAIL: destructure"); fails = fails + 1 }
+
+    // single-value binding (the whole result is bound to one name)
+    r = string.to_long("21")
+    // r holds the (long, string) tuple; re-destructure to read it
+    rv, re = r
+    if re != "" || rv != 21 { println("FAIL: single-bind"); fails = fails + 1 }
+
+    // `or` handler
+    o = fallible(-1) or { 99 }
+    if o != 99 { println("FAIL: or-handler = ${o}"); fails = fails + 1 }
+
+    // `!` propagation (through a helper)
+    p, pe = propagate(4)
+    if pe != "" || p != 8 { println("FAIL: propagate = ${p}/${pe}"); fails = fails + 1 }
+    _, pe2 = propagate(-3)
+    if pe2 == "" { println("FAIL: propagate should forward error"); fails = fails + 1 }
+
+    // explicit discard
+    _, _ = fallible(1)
+
+    // return position
+    // (covered by fallible/propagate returning results above)
+
+    // argument position: pass a T! call's result by destructuring first,
+    // then using it — the call itself as a nested arg is also a consumer.
+    if string.length("${v}") < 1 { println("FAIL: interp"); fails = fails + 1 }
+
+    if fails != 0 {
+        println("result-consumers: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_result_consumers")
+}

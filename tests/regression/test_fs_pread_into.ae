@@ -84,7 +84,8 @@ main() {
     if perr != "" || pn != 16 { print("FAIL recipe pread: n=${pn} err=${perr}\n"); exit(1) }
     recipe = bytes.new(16)
     bytes.copy_from_string(recipe, 0, payload, 16)
-    fs.pread_into(f, blk, 16, 0)
+    rn2, rerr2 = fs.pread_into(f, blk, 16, 0)
+    if rerr2 != "" || rn2 != 16 { print("FAIL recipe pread2: n=${rn2} err=${rerr2}\n"); exit(1) }
     if bytes.get_le64(blk, 0) != bytes.get_le64(recipe, 0) { print("FAIL recipe mismatch @0\n"); exit(1) }
     if bytes.get_le64(blk, 8) != bytes.get_le64(recipe, 8) { print("FAIL recipe mismatch @8\n"); exit(1) }
     print("PASS copy-free path matches pread + copy_from_string\n")

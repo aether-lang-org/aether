@@ -1,0 +1,14 @@
+// The check must NOT fire on a raw `(value, string)` tuple that has not
+// migrated to `T!` — gradualism is structural, so an un-migrated fallible
+// is still droppable. This file MUST COMPILE (it is the negative control
+// in the reject suite: the runner asserts it builds, unlike its siblings).
+// A plain 2-tuple function without `is_result` set is dropped freely.
+raw_pair(x: int) -> (int, string) {
+    if x < 0 { return 0, "neg" }
+    return x, ""
+}
+
+main() {
+    raw_pair(5)   // raw tuple, is_result unset — allowed to drop
+    println("ok")
+}

@@ -1,0 +1,11 @@
+// Phase 2 (error-unification): a `T!` result dropped as a bare expression
+// statement is a compile error — the fallible outcome must be consumed.
+// `string.to_long` returns `long!`, so calling it and ignoring the result
+// is rejected. Enforcement keys on `is_result`, so a raw `(value, string)`
+// tuple would NOT be flagged.
+import std.string
+
+main() {
+    string.to_long("42")   // dropped `long!` — must be consumed
+    println("unreachable")
+}
