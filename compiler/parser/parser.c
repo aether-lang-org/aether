@@ -5662,6 +5662,56 @@ ASTNode* parse_top_level_decl(Parser* parser) {
             }
         }
 
+        // #error-unification P3: `fault NotFound, PermissionDenied, ...` — a
+        // set of named error identities. `fault` is a contextual identifier
+        // (usable as a name elsewhere); only the `fault <ident>` shape here is
+        // intercepted (an identifier immediately following `fault`, which no
+        // ordinary statement/decl produces at top level). Members are bare
+        // identifiers separated by commas and/or newlines.
+        if (token->type == TOKEN_IDENTIFIER && token->value &&
+            strcmp(token->value, "fault") == 0) {
+            Token* n1 = peek_ahead(parser, 1);
+            if (n1 && n1->type == TOKEN_IDENTIFIER) {
+                advance_token(parser);   // consume 'fault'
+                ASTNode* fdef = create_ast_node(AST_FAULT_DEFINITION, NULL,
+                                                token->line, token->column);
+                /* Comma-separated member list on one logical line (the lexer
+                 * does not surface newlines as tokens, so commas are the
+                 * separator — matching the documented `fault A, B, C` form).
+                 * A member is a bare identifier; the list ends at the first
+                 * token that is not `<comma> <identifier>`. */
+                for (;;) {
+                    Token* m = peek_token(parser);
+                    if (!m || m->type != TOKEN_IDENTIFIER) break;
+                    ASTNode* member = create_ast_node(AST_IDENTIFIER, m->value,
+                                                      m->line, m->column);
+                    /* children[0] holds the member's interned string CONTENT —
+                     * its bare name for now; the module-merge namespace pass
+                     * rewrites it to the qualified `"<ns>.<name>"`. Codegen
+                     * emits `static const char <name>[] = <content>;`. */
+                    ASTNode* content = create_ast_node(AST_LITERAL, m->value,
+                                                       m->line, m->column);
+                    content->node_type = create_type(TYPE_STRING);
+                    add_child(member, content);
+                    add_child(fdef, member);
+                    advance_token(parser);   // consume member name
+                    if (peek_token(parser) &&
+                        peek_token(parser)->type == TOKEN_COMMA) {
+                        advance_token(parser);   // consume ',' and continue
+                    } else {
+                        break;                   // no comma → member list ended
+                    }
+                }
+                if (fdef->child_count == 0) {
+                    parser_error(parser,
+                        "`fault` requires at least one member "
+                        "(`fault NotFound, PermissionDenied, ...`)");
+                    return NULL;
+                }
+                return fdef;
+            }
+        }
+
         // #480: `type Name = distinct Base` — a zero-cost nominal type over
         // Base. `type` and `distinct` are contextual identifiers (usable as
         // names elsewhere); only the `type <ident> = distinct ...` shape here

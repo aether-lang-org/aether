@@ -1286,6 +1286,16 @@ static int collect_module_const_names(ASTNode* mod_ast, const char** names, int 
         if (decl->type == AST_CONST_DECLARATION && decl->value) {
             names[count++] = decl->value;
         }
+        /* #error-unification P3: fault members are const-like — a bare
+         * `return NotFound` inside the module must be renamed to
+         * `<ns>_NotFound` just like a const reference, so include each
+         * fault member's bare name in the intra-module rename list. */
+        else if (decl->type == AST_FAULT_DEFINITION) {
+            for (int mi = 0; mi < decl->child_count && count < max; mi++) {
+                ASTNode* mem = decl->children[mi];
+                if (mem && mem->value) names[count++] = mem->value;
+            }
+        }
     }
     return count;
 }
@@ -1621,6 +1631,25 @@ static int program_has_const(ASTNode* program, const char* prefixed_name) {
         if (existing && existing->type == AST_CONST_DECLARATION &&
             existing->value && strcmp(existing->value, prefixed_name) == 0) {
             return 1;
+        }
+    }
+    return 0;
+}
+
+/* Is a fault member with the given (already-prefixed) C symbol name already
+ * present in a merged AST_FAULT_DEFINITION? Dedup guard for a module imported
+ * more than once — without it the member's `static const char` would be
+ * emitted twice (duplicate C definition). */
+static int program_has_fault_member(ASTNode* program, const char* prefixed_name) {
+    if (!program || !prefixed_name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (!existing || existing->type != AST_FAULT_DEFINITION) continue;
+        for (int k = 0; k < existing->child_count; k++) {
+            ASTNode* mem = existing->children[k];
+            if (mem && mem->value && strcmp(mem->value, prefixed_name) == 0) {
+                return 1;
+            }
         }
     }
     return 0;
@@ -2138,6 +2167,58 @@ void module_merge_into_program(ASTNode* program) {
                                          const_names, const_count, NULL, 0);
 
                 insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_FAULT_DEFINITION) {
+                /* #error-unification P3: a fault set imported from module `ns`.
+                 * Mirror the const branch: clone the definition, prefix each
+                 * member's C symbol to `<ns>_<name>` (so the member-access
+                 * rewrite resolves `ns.Name` → that identifier, exactly like a
+                 * const), and rewrite each member's interned string CONTENT to
+                 * the qualified `"<ns>.<name>"` (so cross-module identity is
+                 * unambiguous — two modules' same-named faults no longer
+                 * compare equal by content). The parser/typecheck-registration/
+                 * codegen stages already consume AST_FAULT_DEFINITION with this
+                 * exact `<ns>_<name>` symbol / `<ns>.<name>` content contract;
+                 * this branch is the piece that fulfils it. */
+                ASTNode* clone = clone_ast_node(decl);
+                int kept = 0;
+                for (int mi = 0; mi < clone->child_count; mi++) {
+                    ASTNode* mem = clone->children[mi];
+                    if (!mem || !mem->value) continue;
+                    /* Selective import: `import ns (Name)` filters members. */
+                    if (has_selection) {
+                        int selected = 0;
+                        for (int k = 0; k < child->child_count; k++) {
+                            ASTNode* sel = child->children[k];
+                            if (sel && sel->type == AST_IDENTIFIER && sel->value &&
+                                strcmp(sel->value, mem->value) == 0) {
+                                selected = 1; break;
+                            }
+                        }
+                        if (!selected) continue;
+                    }
+                    char sym[256];
+                    snprintf(sym, sizeof(sym), "%s_%s", ns, mem->value);
+                    if (program_has_fault_member(program, sym)) continue;
+                    char qualified[512];
+                    snprintf(qualified, sizeof(qualified), "%s.%s", ns, mem->value);
+                    /* Rewrite the interned content (children[0], an
+                     * AST_LITERAL) to the qualified name, then the symbol. */
+                    if (mem->child_count > 0 && mem->children[0] &&
+                        mem->children[0]->value) {
+                        free(mem->children[0]->value);
+                        mem->children[0]->value = strdup(qualified);
+                    }
+                    free(mem->value);
+                    mem->value = strdup(sym);
+                    /* Compact surviving members down over filtered/duped ones. */
+                    clone->children[kept++] = mem;
+                }
+                clone->child_count = kept;
+                if (kept > 0) {
+                    insert_child_at(program, clone, insert_idx++);
+                } else {
+                    free_ast_node(clone);
+                }
             } else if (decl->type == AST_STRUCT_DEFINITION && decl->value) {
                 // Struct definitions from imported modules enter the
                 // consumer's program AST under their bare name (no

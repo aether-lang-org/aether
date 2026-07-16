@@ -1,0 +1,35 @@
+// Cross-module fault identity: `afs.NotFound` resolves across the import
+// boundary and compares by qualified content, so a fault from `afs` does
+// NOT collide with the same-named fault member in `anet`.
+import afs
+import anet
+
+extern exit(code: int)
+
+main() {
+    fails = 0
+
+    // afs fault matches afs.NotFound, NOT anet.NotFound (no collision).
+    _, e = afs.open(1)
+    if e != afs.NotFound { println("FAIL: e should be afs.NotFound, got ${e}"); fails = fails + 1 }
+    if e == anet.NotFound { println("FAIL: afs err collided with anet.NotFound"); fails = fails + 1 }
+
+    // anet fault matches anet.NotFound, NOT afs.NotFound.
+    _, ne = anet.dial(1)
+    if ne != anet.NotFound { println("FAIL: ne should be anet.NotFound"); fails = fails + 1 }
+    if ne == afs.NotFound { println("FAIL: anet err collided with afs.NotFound"); fails = fails + 1 }
+
+    // content is the qualified name.
+    if e != "afs.NotFound" { println("FAIL: afs content should be qualified, got ${e}"); fails = fails + 1 }
+    if ne != "anet.NotFound" { println("FAIL: anet content should be qualified, got ${ne}"); fails = fails + 1 }
+
+    // a distinct member still works.
+    _, pe = afs.open(2)
+    if pe != afs.PermissionDenied { println("FAIL: pe should be afs.PermissionDenied"); fails = fails + 1 }
+
+    if fails != 0 {
+        println("fault-cross-module: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: fault_cross_module")
+}

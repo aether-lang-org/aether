@@ -264,7 +264,7 @@ typedef enum {
                             // emits a C bitfield: it lowers to shift/mask on the
                             // backing integer, so the layout is exact and
                             // endianness-independent.
-    AST_BITSTRUCT_FIELD     // one field. `value` = field name; `node_type` = the
+    AST_BITSTRUCT_FIELD,    // one field. `value` = field name; `node_type` = the
                             // field's declared type (bool, or an integer type).
                             // `bit_lo` / `bit_hi` are the INCLUSIVE bit range
                             // (a single-bit field has bit_lo == bit_hi). NB the
@@ -272,6 +272,17 @@ typedef enum {
                             // here — it already means two different things
                             // (extern-struct bit width, and @c_struct byte
                             // offset), and a third meaning would be a trap.
+
+    // #error-unification P3: `fault NotFound, PermissionDenied, ...` — a set of
+    // named error identities. `value` is unused; children are AST_IDENTIFIER
+    // nodes, one per member name (in source order). Each member lowers to an
+    // interned string constant whose CONTENT is its namespace-qualified name
+    // (`"fs.NotFound"`), so a fault value IS a `const char*` string: it prints
+    // as its name, satisfies the `e && e[0]` presence convention, and
+    // `err == fs.NotFound` compares by content (string `==` is already a
+    // strcmp). The qualified name is filled in at module-merge time when the
+    // namespace prefix is known (bare name in the main module).
+    AST_FAULT_DEFINITION
 } ASTNodeType;
 
 typedef enum {

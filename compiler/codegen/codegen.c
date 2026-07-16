@@ -4690,6 +4690,26 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
     }
 
+    /* #error-unification P3: fault members. Each mints an interned
+     * `static const char <name>[] = "<ns>.<name>";` — a file-scope string
+     * whose ADDRESS is stable within the TU (enabling a pointer fast-path)
+     * and whose CONTENT is the qualified name (so cross-`.so` identity and
+     * printing both work through the value itself). The member's C symbol is
+     * `<name>` (already namespace-prefixed by the module-merge pass, exactly
+     * like a const), so `fs.NotFound` — rewritten to that identifier —
+     * evaluates to a `const char*` to the interned name. */
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* fd = program->children[i];
+        if (!fd || fd->type != AST_FAULT_DEFINITION) continue;
+        for (int mi = 0; mi < fd->child_count; mi++) {
+            ASTNode* m = fd->children[mi];
+            if (!m || !m->value || m->child_count == 0) continue;
+            fprintf(gen->output, "static const char %s[] = ", m->value);
+            generate_expression(gen, m->children[0]);   /* the string content */
+            fprintf(gen->output, ";\n");
+        }
+    }
+
     // Generate forward declarations for all functions FIRST so that
     // hoisted closure functions can call them without implicit declarations.
     print_line(gen, "// Forward declarations");
