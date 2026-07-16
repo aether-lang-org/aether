@@ -1,0 +1,64 @@
+// Regression: `f() or { … }` leaked the discarded error string. The `or`
+// lowering (codegen_expr.c AST_OR_ELSE) evaluates the fallible's
+// `(value, err)` tuple once, then on the error path binds `err` for the
+// handler and on the success path yields the value — but never released
+// the trailing error slot on EITHER path. Stdlib fallibles build that
+// slot with `string_concat(...)` (a heap AetherString), so every
+// `json.parse(bad) or { … }` leaked its error message, and every
+// successful `json.stringify(v) or { … }` leaked its heap `""` success
+// sentinel.
+//
+// Fixed by releasing the error slot before yielding, on both paths, via
+// `string_release` — which is literal-safe (is_aether_string
+// short-circuits on the first non-magic byte), so a plain-literal error
+// slot (e.g. string.to_long's "invalid long", or a bare "" sentinel) is
+// a clean no-op and only a heap AetherString is refcount-decremented.
+//
+// No output asserts the leak (it is invisible to the program); the test's
+// value is under the leak-detection CI gates (valgrind + macOS `leaks`).
+// The asserts pin the observable behaviour so the paths actually run.
+//
+// NOTE: this covers the ERROR-SLOT leak. A separate value-slot leak —
+// `s = f() or { … }` not heap-tracking the yielded value when the paths
+// have heterogeneous ownership (heap success value vs literal handler
+// default) — is a distinct, harder problem (needs uniform-heap boxing of
+// the `or` result) tracked separately; it is deliberately not exercised
+// here so this test stays leak-gate-clean.
+
+import std.json
+import std.string
+
+extern exit(code: int)
+
+main() {
+    fails = 0
+    n = 0
+
+    while n < 40 {
+        // Error path: a failed parse's heap error string is discarded by
+        // the `or` handler. Was leaked; now released.
+        bad = json.parse("{ not valid") or { null }
+        if bad != null { println("FAIL: bad parse should yield null via or"); fails = fails + 1 }
+
+        // Success path: a valid parse; the heap "" success sentinel in the
+        // error slot is discarded. Was leaked; now released. The value is
+        // freed explicitly (json.free) — that path is already correct.
+        ok = json.parse("{\"k\":1}") or { null }
+        if ok == null { println("FAIL: good parse should yield value via or"); fails = fails + 1 }
+        if ok != null { json.free(ok) }
+
+        // Literal-error fallible through `or`: string.to_long's error is a
+        // literal ("invalid long"), so string_release must no-op on it (no
+        // invalid free / crash). Exercises the literal-safe path.
+        v = string.to_long("not a number") or { -1 }
+        if v != -1 { println("FAIL: to_long bad should yield -1 via or"); fails = fails + 1 }
+
+        n = n + 1
+    }
+
+    if fails != 0 {
+        println("or-block-error-slot-leak: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_or_block_error_slot_leak")
+}

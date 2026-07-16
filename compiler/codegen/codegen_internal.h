@@ -72,6 +72,10 @@ int is_seq_owning_expr(CodeGenerator* gen, ASTNode* expr);
  * temp lifetime wrap (ArgDrainSub) to detect heap-returning
  * function calls in argument position. */
 int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr);
+/* Whether the discarded error slot of an `or`-expression's fallible is a
+ * heap-owned string the `or` lowering must release (vs a raw literal it
+ * must not free). See the definition in codegen_stmt.c. */
+int or_fallible_error_slot_is_heap(CodeGenerator* gen, ASTNode* fallible);
 
 /* Returns 1 if some `AST_VARIABLE_DECLARATION` for `var_name` inside
  * `node` assigns it from a heap-string source (`is_heap_string_expr`
