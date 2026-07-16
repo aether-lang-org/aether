@@ -76,6 +76,10 @@ int is_heap_string_expr(CodeGenerator* gen, ASTNode* expr);
  * heap-owned string the `or` lowering must release (vs a raw literal it
  * must not free). See the definition in codegen_stmt.c. */
 int or_fallible_error_slot_is_heap(CodeGenerator* gen, ASTNode* fallible);
+/* Whether an `or`-expression's fallible value slot (position 0) is a
+ * heap-owned string — gates uniform-heap boxing of the `or` result so
+ * the yielded value is freed at scope exit. See codegen_stmt.c. */
+int or_fallible_value_slot_is_heap(CodeGenerator* gen, ASTNode* fallible);
 
 /* Returns 1 if some `AST_VARIABLE_DECLARATION` for `var_name` inside
  * `node` assigns it from a heap-string source (`is_heap_string_expr`

@@ -2010,7 +2010,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
      * lifetime is managed by the wrap. */
     if (expr->type == AST_FUNCTION_CALL ||
         expr->type == AST_STRING_INTERP ||
-        expr->type == AST_CLOSURE) {
+        expr->type == AST_CLOSURE ||
+        expr->type == AST_OR_ELSE) {
         const char* sub = arg_drain_lookup(expr);
         if (sub) {
             fprintf(gen->output, "%s", sub);
@@ -2111,6 +2112,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
              * destructure site uses for `_heap_e`, keeping the two forms
              * consistent. */
             int err_slot_heap = or_fallible_error_slot_is_heap(gen, fallible);
+            /* Uniform-heap boxing of the RESULT: when the success value
+             * slot is a heap string, the success path yields a malloc-owned
+             * pointer but the handler's default (`"" `, a literal) is not —
+             * heterogeneous ownership the caller's single `_heap_<lhs>`
+             * tracker can't represent, so it leaked the success value. Box
+             * the handler's value through `aether_uniform_heap_str(_, 0)`
+             * (malloc-copies a literal, passes a heap value through) so BOTH
+             * paths yield a uniformly malloc-owned pointer; then the
+             * AST_OR_ELSE case in is_heap_string_expr classifies the whole
+             * expression heap and the caller frees it at scope exit. Only
+             * for a string result whose value slot is statically heap. */
+            int box_val = (tup->tuple_types[0] &&
+                           tup->tuple_types[0]->kind == TYPE_STRING &&
+                           or_fallible_value_slot_is_heap(gen, fallible));
             fprintf(gen->output, "({ %s _oe%d = ", tuple_c, id);
             generate_expression(gen, fallible);
             fprintf(gen->output, "; %s _oer%d;\nif (_oe%d._%d && _oe%d._%d[0]) {\n",
@@ -2139,27 +2154,45 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 if (last >= 0 && handler->children[last] &&
                     handler->children[last]->type == AST_EXPRESSION_STATEMENT &&
                     handler->children[last]->child_count > 0) {
+                    ASTNode* hv = handler->children[last]->children[0];
+                    /* is_heap flag = whether hv is ALREADY heap: a heap
+                     * value passes through uniform_heap_str untouched
+                     * (must NOT re-copy — that would leak the original);
+                     * a literal is malloc-copied. */
+                    int hv_heap = is_heap_string_expr(gen, hv);
                     print_indent(gen);
                     fprintf(gen->output, "_oer%d = ", id);
-                    generate_expression(gen, handler->children[last]->children[0]);
+                    if (box_val) fprintf(gen->output, "aether_uniform_heap_str((const char*)(");
+                    generate_expression(gen, hv);
+                    if (box_val) fprintf(gen->output, "), %d)", hv_heap ? 1 : 0);
                     fprintf(gen->output, ";\n");
                 } else if (last >= 0 && handler->children[last]) {
                     generate_statement(gen, handler->children[last]);
                 }
                 fprintf(gen->output, "\n");
             } else {
+                int hv_heap = is_heap_string_expr(gen, handler);
                 fprintf(gen->output, "_oer%d = ", id);
+                if (box_val) fprintf(gen->output, "aether_uniform_heap_str((const char*)(");
                 generate_expression(gen, handler);
+                if (box_val) fprintf(gen->output, "), %d)", hv_heap ? 1 : 0);
                 fprintf(gen->output, ";\n");
             }
-            /* Error path done: `err` (the error slot) is now dead — free it
-             * if statically heap. The value slot `_oe._0` is left alone: on
-             * this path it was the failed call's value (often a null/empty
-             * sentinel), and whether it is heap-owned and safe to reclaim is
-             * the caller's classification concern, not the `or` lowering's;
-             * a blind free here risks the failed-call value aliasing the
-             * handler's own result. Freeing only the always-discarded error
-             * slot is the safe, sufficient fix. */
+            /* Error path done. Free the discarded slots the handler
+             * replaced:
+             *   - the error slot `err`, now dead, if statically heap;
+             *   - the failed call's VALUE slot `_oe._0`, when it is a
+             *     uniformly-heap string (box_val): the handler produced a
+             *     fresh `_oer` value, so `_oe._0` (the failed call's own
+             *     value, itself uniform-heap-wrapped — e.g. json's
+             *     `("", err)` empty sentinel) is genuinely discarded and
+             *     non-aliasing here, so it must be reclaimed. Without
+             *     box_val the value slot's ownership is unknown, so it is
+             *     left alone (as before). */
+            if (box_val) {
+                fprintf(gen->output, "aether_heap_str_free((void*)_oe%d._0);\n",
+                        id);
+            }
             if (err_slot_heap) {
                 fprintf(gen->output, "aether_heap_str_free((void*)_oe%d._%d);\n",
                         id, err_idx);
@@ -4268,8 +4301,15 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                              * call returned. Observed as ~34 byte/call
                              * leak on `outer(string_returning_call("seed-${i}"))`
                              * shape; 100k iterations grew RSS by 3.3 MB. */
+                            /* AST_OR_ELSE included: `f(g() or { … })`
+                             * yields a uniformly-heap string (the `or`
+                             * lowering boxes both paths) with no consumer,
+                             * so it leaks in argument position exactly like
+                             * a bare heap-returning call. is_heap_string_expr
+                             * classifies it, so drain it the same way. */
                             if (arg->type != AST_FUNCTION_CALL &&
-                                arg->type != AST_STRING_INTERP) continue;
+                                arg->type != AST_STRING_INTERP &&
+                                arg->type != AST_OR_ELSE) continue;
                             if (arg_drain_lookup(arg)) continue;
                             if (!is_heap_string_expr(gen, arg)) continue;
                             /* @retain parameter: callee stores the
