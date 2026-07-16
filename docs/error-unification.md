@@ -200,6 +200,7 @@ Three phases, each independently shippable, each leaving the tree green.
 ### Phase 1 — repair and converge (no new semantics)
 
 1. **Fix the `or {}` value-block bug** (§2.1 — its own PR, first).
+   *Shipped: PR #1145 (v0.398.0).*
 2. **Migrate `std/` signatures** from `-> (T, string)` to `-> T!`.
    ABI-invariant (§0.2): callers' `v, e = f()` destructuring, `e != ""`
    tests, `defer catch`, everything continues byte-identically. ~17
@@ -207,10 +208,29 @@ Three phases, each independently shippable, each leaving the tree green.
    single-line `-> (…string)` forms; the long tail is wrappers), 279
    return sites — mechanical, reviewable module-by-module (fs, io, os,
    json, regex first).
+
+   **Boundary found during migration (PR #1155 / #1.5): `T!` is
+   single-payload only.** `create_result_type(inner)` wraps its argument,
+   so a tuple payload `(A, B)!` lowers to the *nested* tuple
+   `((A, B), string)` — C layout `{ _tuple_A_B _0; const char* _1; }` —
+   which is **not** ABI-compatible with the *flat* `(A, B, string)` tuple
+   (`{ A _0; B _1; const char* _2; }`) the multi-value stdlib functions
+   return; a 3-way `a, b, e = f()` destructure sees only 2 values and
+   fails downstream. So the 14 two-slot `(T, string)` functions migrated
+   to `T!`; the 4 three-slot functions (`json.parse_strict`,
+   `json.object_entry`, `regex.find`, `regex.find_lit`) **stay raw
+   tuples** — Phase 2 enforcement keys on `is_result`, so they are simply
+   not-yet-enforced (gradualism is structural). `(A, B)!` is now a parse
+   error with guidance pointing at the raw-tuple form (PR #1.5).
 3. **Vocabulary convergence, minimal:** make `??` accept a `T!` left side
    (same lowering as bare-expression `or`; today it cleanly rejects). One
    default operator across both worlds; `or` remains for block handlers.
    Optional — costs ~40 lines, drop if contentious.
+
+   *Related bug found (PR #1155): the `or {}` lowering does not free a
+   heap error slot it discards on the error path — `x = json.parse(s) or
+   {…}` leaks the error string when the parse fails. Pre-existing, orthogonal
+   to migration; tracked separately.*
 
 ### Phase 2 — enforcement (the safety payoff)
 

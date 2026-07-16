@@ -1,0 +1,14 @@
+// A tuple payload in `T!` — `(A, B)!` — is rejected at parse time. It
+// would lower to the NESTED tuple `((A, B), string)`, whose C layout
+// differs from the flat `(A, B, string)` tuple the stdlib multi-value
+// fallibles use, so the two are not ABI-interchangeable and a 3-way
+// destructure fails downstream. `T!` is the single-payload spine; a
+// multi-value fallible stays a raw `(A, B, string)` tuple.
+f(x: int) -> (ptr, int)! {
+    return null, x
+}
+
+main() {
+    a, b, e = f(5)
+    println("${b} ${e}")
+}

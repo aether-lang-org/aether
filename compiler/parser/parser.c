@@ -314,6 +314,24 @@ Type* parse_type(Parser* parser) {
     // tuple, so it interops with the stdlib convention.
     if (peek_token(parser) && peek_token(parser)->type == TOKEN_EXCLAIM) {
         advance_token(parser);
+        /* A tuple payload — `(A, B)!` — would lower to the NESTED tuple
+         * `((A, B), string)`, whose C layout (`{ _tuple_A_B _0; const
+         * char* _1; }`) differs from the FLAT `(A, B, string)` tuple the
+         * stdlib multi-value fallibles use (`{ A _0; B _1; const char*
+         * _2; }`). The two are not ABI-interchangeable, and a 3-way
+         * `a, b, e = f()` destructure sees only 2 values (payload +
+         * error) and fails with a confusing count mismatch downstream.
+         * `T!` is the single-payload fallible spine; a multi-value
+         * fallible stays a raw `(A, B, string)` tuple. Reject here with
+         * guidance rather than emit the mis-shaped type. */
+        if (t && t->kind == TYPE_TUPLE) {
+            parser_error(parser,
+                "a tuple payload in `T!` is not supported — `(A, B)!` would "
+                "nest as `((A, B), string)`, which is not ABI-compatible with "
+                "a flat `(A, B, string)` tuple and breaks `a, b, e = f()` "
+                "destructuring. Use a raw `(A, B, string)` tuple for a "
+                "multi-value fallible return; `T!` is for a single payload.");
+        }
         t = create_result_type(t);
     }
     return t;

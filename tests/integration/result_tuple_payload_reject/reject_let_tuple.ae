@@ -1,0 +1,5 @@
+// Same rejection in a local type annotation.
+main() {
+    let x: (int, int)! = (1, 2)
+    println("unreachable")
+}
