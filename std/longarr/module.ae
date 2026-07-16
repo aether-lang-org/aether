@@ -85,7 +85,7 @@ new_filled(size: int, init: long) -> {
 // for null array or OOB index. Use the raw `longarr_get_raw` directly
 // (imported above) when you don't need to tell absent apart from
 // stored-zero — it's one fewer function call and one fewer branch.
-get(arr: ptr, i: int) -> {
+get(arr: ptr, i: int) -> (long, string) {
     if arr == null {
         return 0, "null array"
     }
