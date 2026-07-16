@@ -544,6 +544,39 @@ static int function_can_fail(Type* ret) {
     return last && last->kind == TYPE_STRING;
 }
 
+/* Phase 2 of error-unification: a `T!` result used as a bare expression
+ * statement — dropped on the floor — is a compile error; the fallible
+ * outcome must be consumed. `expr` is the direct child of an
+ * AST_EXPRESSION_STATEMENT (or a raw call used as a statement). If its
+ * inferred type is a `T!` (`is_result` set), emit the "unconsumed result"
+ * diagnostic and return 1.
+ *
+ * Enforcement keys on `is_result`, NOT on the structural
+ * `function_can_fail` shape: a raw `(value, string)` stdlib tuple that has
+ * not migrated to `T!` is deliberately NOT flagged (gradualism is
+ * structural — a signature opts in the moment it becomes `T!`). Every
+ * legitimate consumer nests the call as a CHILD of a non-expression-
+ * statement node — destructure/assign bind it, `return`/argument pass it,
+ * and `!`/`or` unwrap it to the success type with `is_result` cleared — so
+ * none of them reach here as the statement's own expression. */
+Type* infer_type(ASTNode* expr, SymbolTable* table);   /* defined below */
+static int check_unconsumed_result(ASTNode* expr, SymbolTable* table) {
+    if (!expr) return 0;
+    Type* t = infer_type(expr, table);
+    int flagged = 0;
+    if (t && t->is_result) {
+        aether_error_with_suggestion(
+            "fallible result must be consumed, not discarded",
+            expr->line, expr->column,
+            "bind it (`v, e = f(...)`), propagate with `!`, handle with "
+            "`f(...) or { ... }`, or discard explicitly with `_, _ = f(...)`");
+        error_count++;
+        flagged = 1;
+    }
+    if (t) free_type(t);
+    return flagged;
+}
+
 /* Walk a function body for `defer try` / `defer catch`, without descending into
  * nested closures or function definitions (which have their own return type and
  * are checked separately). */
@@ -5265,6 +5298,11 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
         case AST_EXPRESSION_STATEMENT: {
             if (stmt->child_count > 0) {
                 typecheck_expression(stmt->children[0], table);
+                /* Phase 2: a `T!` result dropped as a bare statement is
+                 * an error — it must be consumed. Only fires on a raw
+                 * result expression; every consumer nests the call and
+                 * clears/binds the result-ness. */
+                check_unconsumed_result(stmt->children[0], table);
             }
             return 1;
         }
@@ -5287,6 +5325,18 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
 
         case AST_FUNCTION_CALL:
             // Function call used as a statement (e.g. println(...), user_fn(...))
+            //
+            // NB: this case is ALSO reached when the statement walker
+            // recurses into a sub-expression that happens to be a call —
+            // e.g. `return f() or { … }` routes the `or`-expr through
+            // typecheck_node → the default statement branch → typecheck_node
+            // on the or-expr's fallible child, which lands here. So this is
+            // NOT a reliable "bare statement" position, and the Phase 2
+            // unconsumed-result check must NOT run here (it would false-fire
+            // on the consumed fallible inside an `or`/return). The genuine
+            // bare-drop `f()` always arrives wrapped in AST_EXPRESSION_
+            // STATEMENT (the parser wraps every statement-position
+            // expression), where the check does run.
             return typecheck_function_call(stmt, table);
 
         case AST_TRY_STATEMENT: {

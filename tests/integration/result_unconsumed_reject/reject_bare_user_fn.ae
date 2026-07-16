@@ -1,0 +1,11 @@
+// A user-defined `T!`-returning function is enforced too — the check keys
+// on the resolved return type's `is_result`, not on any stdlib allowlist.
+fallible(x: int) -> int! {
+    if x < 0 { return 0, "neg" }
+    return x
+}
+
+main() {
+    fallible(5)   // dropped `int!` — must be consumed
+    println("unreachable")
+}
