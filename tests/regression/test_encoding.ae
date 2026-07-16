@@ -1,0 +1,73 @@
+// std.encoding regression test — hex and base64 codecs (RFC 4648).
+//
+// Test vectors are ported from the c3c standard-library unit tests
+// (test/unit/stdlib/encoding/{hex,base64}.c3) — Copyright (c) 2022-2026
+// Christoffer Lernö and contributors, MIT. The classic RFC 4648 §10
+// "" / "f" / "fo" / "foo" / "foobar" progression plus hex byte patterns.
+
+import std.encoding
+import std.string
+
+extern exit(code: int)
+
+fn check(cond: bool, msg: string) -> int {
+    if !cond { println("FAIL: ${msg}"); return 1 }
+    return 0
+}
+
+main() {
+    fails = 0
+
+    // ---- hex encode (lowercase; from c3 hex.c3 test cases) ----
+    fails = fails + check(encoding.hex_encode("", 0) == "", "hex encode empty")
+    fails = fails + check(encoding.hex_encode("g", 1) == "67", "hex encode 'g'")
+    fails = fails + check(encoding.hex_encode("hello", 5) == "68656c6c6f", "hex encode hello")
+
+    // ---- hex decode (case-insensitive; even length) ----
+    d1, e1 = encoding.hex_decode("68656c6c6f")
+    fails = fails + check(e1 == "" && d1 == "hello", "hex decode lower")
+    d2, e2 = encoding.hex_decode("E3A1")   // upper-case accepted
+    fails = fails + check(e2 == "" && string.length(d2) == 2, "hex decode upper len")
+    // round-trip: upper and lower decode to the same bytes
+    dl, _ = encoding.hex_decode("e3a1")
+    fails = fails + check(dl == d2, "hex decode case-insensitive")
+
+    // ---- hex decode errors ----
+    _, oe = encoding.hex_decode("abc")     // odd length
+    fails = fails + check(oe != "", "hex odd-length rejected")
+    _, ce = encoding.hex_decode("zz")      // non-hex chars
+    fails = fails + check(ce != "", "hex invalid-char rejected")
+
+    // ---- base64 encode (unpadded, from c3 base64.c3 encode_nopadding) ----
+    fails = fails + check(encoding.base64_encode("", 0) == "", "b64 encode empty")
+    fails = fails + check(encoding.base64_encode("f", 1) == "Zg", "b64 encode f")
+    fails = fails + check(encoding.base64_encode("fo", 2) == "Zm8", "b64 encode fo")
+    fails = fails + check(encoding.base64_encode("foo", 3) == "Zm9v", "b64 encode foo")
+    fails = fails + check(encoding.base64_encode("foobar", 6) == "Zm9vYmFy", "b64 encode foobar")
+
+    // ---- base64 encode (padded, from c3 encode) ----
+    fails = fails + check(encoding.base64_encode_url("f", 1) == "Zg==", "b64 padded f")
+    fails = fails + check(encoding.base64_encode_url("foobar", 6) == "Zm9vYmFy", "b64 padded foobar")
+
+    // ---- base64 decode (padded and unpadded, from c3 decode) ----
+    bd1, be1 = encoding.base64_decode("Zm9vYmFy")
+    fails = fails + check(be1 == "" && bd1 == "foobar", "b64 decode foobar")
+    bd2, be2 = encoding.base64_decode("Zg==")
+    fails = fails + check(be2 == "" && bd2 == "f", "b64 decode padded f")
+    bd3, be3 = encoding.base64_decode("Zm8")
+    fails = fails + check(be3 == "" && bd3 == "fo", "b64 decode unpadded fo")
+
+    // ---- round-trip a longer string through both ----
+    let msg = "The quick brown fox"
+    let mlen = string.length(msg)
+    hround, _ = encoding.hex_decode(encoding.hex_encode(msg, mlen))
+    fails = fails + check(hround == msg, "hex round-trip")
+    bround, _ = encoding.base64_decode(encoding.base64_encode(msg, mlen))
+    fails = fails + check(bround == msg, "base64 round-trip")
+
+    if fails != 0 {
+        println("encoding: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_encoding")
+}

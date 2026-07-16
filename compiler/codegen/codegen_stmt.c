@@ -1555,6 +1555,25 @@ static void walk_returns_for_heap_at(CodeGenerator* gen, ASTNode* node,
                         gen->program, fn);
                 }
             }
+            /* `T!` auto-wrap, NOT a tuple passthrough: a single-child
+             * `return <expr>` whose expr is a plain (non-tuple) value is
+             * the result auto-wrap `(<expr>, "")` — position 0 is exactly
+             * <expr>, and emit_tuple_return_position DOES wrap it. So if
+             * <expr> is a heap-string producer, position 0 is heap; no veto.
+             * This is the shape a fallible `-> T!` uses when it returns a
+             * bare heap value (`return bytes.finish(...)` /
+             * `return string.concat(...)`), as opposed to the genuine
+             * whole-tuple passthrough (`return g(...)` where g is
+             * tuple-typed) the veto below guards. Distinguish by the
+             * child's own type: a non-tuple child is an auto-wrap. */
+            int child_is_tuple =
+                child && child->node_type &&
+                child->node_type->kind == TYPE_TUPLE;
+            if (position == 0 && !child_is_tuple &&
+                is_heap_string_expr(gen, child)) {
+                *any_heap = 1;
+                return;
+            }
             if (callee && function_def_returns_heap_at(gen, callee, position)) {
                 *any_heap = 1;
             } else if (ext_callee && ext_callee->node_type &&
@@ -1564,6 +1583,12 @@ static void walk_returns_for_heap_at(CodeGenerator* gen, ASTNode* node,
                        ext_callee->node_type->tuple_heap_flags &&
                        ext_callee->node_type->tuple_heap_flags[position]) {
                 *any_heap = 1;
+            } else if (position == 0 && !child_is_tuple) {
+                /* Auto-wrap of a non-heap value at position 0 (e.g.
+                 * `return ""` / `return borrowed`): not heap, but NOT a
+                 * veto either — it is a legitimate non-heap success value,
+                 * not an unfreeable passthrough. Leave found set, any_heap
+                 * unchanged, no veto. */
             } else {
                 *vetoed = 1;
             }
