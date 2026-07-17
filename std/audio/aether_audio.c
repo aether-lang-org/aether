@@ -1,51 +1,80 @@
 /* std.audio playback substrate — see aether_audio.h.
  *
- * v1 carries a self-contained WAV (PCM / IEEE-float) decoder and a NULL
- * backend: playback advances the play cursor against the monotonic clock
- * rather than driving a device, so every transport/seek/position behaviour
- * is exercised deterministically and headlessly (no sound card, valgrind-
- * clean). This is the CI path and the default. A real device backend
- * (ALSA/CoreAudio/WASAPI or vendored miniaudio) replaces the cursor-advance
- * with a data callback without touching the FFI surface or the Aether API.
+ * Backed by vendored miniaudio (std/audio/miniaudio.h — public domain /
+ * MIT-0, David Reid). miniaudio's high-level engine (ma_engine / ma_sound)
+ * provides device output + decode (wav/mp3/flac) + per-sound volume/seek in
+ * one battle-tested layer, so this glue is bindings, not logic. The device
+ * pulls samples on miniaudio's own realtime thread — the runtime-stays-C
+ * hard line (docs/cross-references/audio.md §6): no Aether-emitted code runs
+ * there; control (play/pause/volume/seek) flows in through ma_engine's own
+ * atomics.
  *
- * All buffers go through the caps allocator so resource accounting balances
- * exactly like every other std/ C module. */
+ * Backend selection: open() first tries a real device; if none initialises
+ * (headless CI, no sound card), it falls back to miniaudio's NULL backend so
+ * every transport/seek/position behaviour stays deterministic and testable.
+ * is_null_backend() reports which path won. All Aether-facing allocations go
+ * through the caps allocator; miniaudio's own allocations use its default
+ * (they are below the FFI line, like OpenSSL's). */
 #include "aether_audio.h"
 #include "../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
-/* Monotonic nanoseconds — the null backend's clock. */
-static int64_t audio_now_ns(void) {
-    struct timespec ts;
-#if defined(CLOCK_MONOTONIC)
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-#else
-    clock_gettime(CLOCK_REALTIME, &ts);
-#endif
-    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
-}
+#define MINIAUDIO_IMPLEMENTATION
+/* Trim the build: we only need decoding + playback, no capture/encoding/
+ * resource-manager niceties beyond what ma_engine needs by default. */
+#define MA_NO_ENCODING
+#include "miniaudio.h"
 
 /* ---- engine ------------------------------------------------------------ */
 
-static int g_audio_open = 0;
+static ma_engine g_engine;
+static ma_context g_null_ctx;
+static int g_engine_ready = 0;
+static int g_is_null = 0;
 static const char* g_audio_err = "";
 
 int aether_audio_open(void) {
-    g_audio_open = 1;
+    if (g_engine_ready) return 1;
     g_audio_err = "";
+
+    /* First attempt: default engine, real device auto-selected. */
+    if (ma_engine_init(NULL, &g_engine) == MA_SUCCESS) {
+        g_is_null = 0;
+        g_engine_ready = 1;
+        return 1;
+    }
+
+    /* Fallback: force the null backend so headless environments still get a
+     * fully-functional (silent) engine — decode, transport, seek, position
+     * all work against the null device's steady clock. */
+    ma_backend nullBackend = ma_backend_null;
+    if (ma_context_init(&nullBackend, 1, NULL, &g_null_ctx) != MA_SUCCESS) {
+        g_audio_err = "audio: could not initialise any backend";
+        return 0;
+    }
+    ma_engine_config cfg = ma_engine_config_init();
+    cfg.pContext = &g_null_ctx;
+    if (ma_engine_init(&cfg, &g_engine) != MA_SUCCESS) {
+        ma_context_uninit(&g_null_ctx);
+        g_audio_err = "audio: could not initialise the null engine";
+        return 0;
+    }
+    g_is_null = 1;
+    g_engine_ready = 1;
     return 1;
 }
 
 void aether_audio_close(void) {
-    g_audio_open = 0;
+    if (!g_engine_ready) return;
+    ma_engine_uninit(&g_engine);
+    if (g_is_null) ma_context_uninit(&g_null_ctx);
+    g_engine_ready = 0;
 }
 
 int aether_audio_is_null_backend(void) {
-    /* v1 ships only the null backend. */
-    return 1;
+    return g_is_null;
 }
 
 const char* aether_audio_last_error(void) {
@@ -55,43 +84,62 @@ const char* aether_audio_last_error(void) {
 /* ---- sound handle ------------------------------------------------------ */
 
 typedef struct {
-    float*  samples;        /* interleaved f32, channels*frames */
-    int64_t frames;         /* total frames */
-    int     channels;
-    int     sample_rate;
-
-    /* transport (null backend) */
-    int     playing;
-    int64_t cursor_frames;  /* play position when last paused/seeked */
-    int64_t play_start_ns;  /* monotonic clock at the last play() */
-    double  volume;         /* 0.0 .. 1.0 */
+    ma_sound    sound;
+    ma_decoder  decoder;
+    void*       data;        /* owned copy of the encoded input, kept alive */
+    size_t      data_len;
+    int         have_sound;
+    int         have_decoder;
 } AudioSound;
 
-/* Current play cursor in frames, advancing over wall-clock while playing,
- * clamped to [0, frames]; auto-stops at end. */
-static int64_t sound_cursor(AudioSound* s) {
-    if (!s->playing) return s->cursor_frames;
-    int64_t elapsed_ns = audio_now_ns() - s->play_start_ns;
-    if (elapsed_ns < 0) elapsed_ns = 0;
-    int64_t advanced = (int64_t)((double)elapsed_ns * (double)s->sample_rate
-                                 / 1000000000.0);
-    int64_t pos = s->cursor_frames + advanced;
-    if (pos >= s->frames) {
-        /* reached the end — settle the state so is_playing() reports done */
-        s->playing = 0;
-        s->cursor_frames = s->frames;
-        return s->frames;
+/* Decode `length` bytes of `data` (wav / mp3 / flac — any format miniaudio
+ * recognises) into a playable sound. Returns the handle or NULL, setting
+ * g_audio_err on failure. The encoded bytes are copied and owned by the
+ * handle so the caller's buffer need not outlive it. */
+void* aether_audio_load_wav(const char* data, int length) {
+    if (!g_engine_ready) { g_audio_err = "audio: engine not open"; return NULL; }
+    if (!data || length <= 0) { g_audio_err = "audio: empty input"; return NULL; }
+
+    AudioSound* s = (AudioSound*)aether_caps_malloc(sizeof(AudioSound));
+    if (!s) { g_audio_err = "audio: out of memory"; return NULL; }
+    memset(s, 0, sizeof(*s));
+
+    /* Own a copy of the encoded data — ma_decoder_init_memory does not copy,
+     * it reads from the pointer for the sound's whole lifetime. */
+    s->data = aether_caps_malloc((size_t)length);
+    if (!s->data) {
+        aether_caps_free(s, sizeof(AudioSound));
+        g_audio_err = "audio: out of memory"; return NULL;
     }
-    return pos;
+    memcpy(s->data, data, (size_t)length);
+    s->data_len = (size_t)length;
+
+    if (ma_decoder_init_memory(s->data, s->data_len, NULL, &s->decoder) != MA_SUCCESS) {
+        aether_caps_free(s->data, s->data_len);
+        aether_caps_free(s, sizeof(AudioSound));
+        g_audio_err = "audio: unsupported or malformed audio data"; return NULL;
+    }
+    s->have_decoder = 1;
+
+    if (ma_sound_init_from_data_source(&g_engine, &s->decoder, 0, NULL, &s->sound)
+        != MA_SUCCESS) {
+        ma_decoder_uninit(&s->decoder);
+        aether_caps_free(s->data, s->data_len);
+        aether_caps_free(s, sizeof(AudioSound));
+        g_audio_err = "audio: could not create sound"; return NULL;
+    }
+    s->have_sound = 1;
+
+    g_audio_err = "";
+    return s;
 }
 
 void aether_audio_unload(void* sound) {
     if (!sound) return;
     AudioSound* s = (AudioSound*)sound;
-    if (s->samples) {
-        aether_caps_free(s->samples,
-                         (size_t)s->frames * (size_t)s->channels * sizeof(float));
-    }
+    if (s->have_sound)   ma_sound_uninit(&s->sound);
+    if (s->have_decoder) ma_decoder_uninit(&s->decoder);
+    if (s->data) aether_caps_free(s->data, s->data_len);
     aether_caps_free(s, sizeof(AudioSound));
 }
 
@@ -100,205 +148,98 @@ void aether_audio_unload(void* sound) {
 int aether_audio_play(void* sound) {
     if (!sound) return 0;
     AudioSound* s = (AudioSound*)sound;
-    if (s->playing) return 1;
-    /* resume from the settled cursor (rewound to 0 if already at end) */
-    if (s->cursor_frames >= s->frames) s->cursor_frames = 0;
-    s->play_start_ns = audio_now_ns();
-    s->playing = 1;
-    return 1;
+    /* If it finished, rewind so play() restarts rather than no-ops. */
+    if (ma_sound_at_end(&s->sound)) {
+        ma_sound_seek_to_pcm_frame(&s->sound, 0);
+    }
+    return ma_sound_start(&s->sound) == MA_SUCCESS ? 1 : 0;
 }
 
 int aether_audio_pause(void* sound) {
     if (!sound) return 0;
     AudioSound* s = (AudioSound*)sound;
-    if (s->playing) {
-        s->cursor_frames = sound_cursor(s);
-        s->playing = 0;
-    }
-    return 1;
+    /* ma_sound_stop halts playback but keeps the cursor — this is "pause". */
+    return ma_sound_stop(&s->sound) == MA_SUCCESS ? 1 : 0;
 }
 
 int aether_audio_stop(void* sound) {
     if (!sound) return 0;
     AudioSound* s = (AudioSound*)sound;
-    s->playing = 0;
-    s->cursor_frames = 0;
+    ma_sound_stop(&s->sound);
+    ma_sound_seek_to_pcm_frame(&s->sound, 0);
     return 1;
 }
 
 int aether_audio_is_playing(void* sound) {
     if (!sound) return 0;
-    AudioSound* s = (AudioSound*)sound;
-    (void)sound_cursor(s);   /* settle auto-stop-at-end */
-    return s->playing;
+    return ma_sound_is_playing(&((AudioSound*)sound)->sound) ? 1 : 0;
 }
 
 /* ---- volume ------------------------------------------------------------ */
 
 int aether_audio_set_volume(void* sound, double v) {
     if (!sound) return 0;
-    AudioSound* s = (AudioSound*)sound;
     if (v < 0.0) v = 0.0;
     if (v > 1.0) v = 1.0;
-    s->volume = v;
+    ma_sound_set_volume(&((AudioSound*)sound)->sound, (float)v);
     return 1;
 }
 
 double aether_audio_get_volume(void* sound) {
     if (!sound) return 0.0;
-    return ((AudioSound*)sound)->volume;
+    return (double)ma_sound_get_volume(&((AudioSound*)sound)->sound);
 }
 
 /* ---- position / duration ---------------------------------------------- */
 
-static int64_t frames_to_ns(int64_t frames, int sample_rate) {
-    if (sample_rate <= 0) return 0;
-    return (int64_t)((double)frames * 1000000000.0 / (double)sample_rate);
+static int sound_sample_rate(AudioSound* s) {
+    ma_uint32 rate = 0;
+    ma_sound_get_data_format(&s->sound, NULL, NULL, &rate, NULL, 0);
+    return (int)rate;
+}
+
+static int64_t frames_to_ns(ma_uint64 frames, int rate) {
+    if (rate <= 0) return 0;
+    return (int64_t)((double)frames * 1000000000.0 / (double)rate);
 }
 
 int64_t aether_audio_position_ns(void* sound) {
     if (!sound) return 0;
     AudioSound* s = (AudioSound*)sound;
-    return frames_to_ns(sound_cursor(s), s->sample_rate);
+    ma_uint64 cur = 0;
+    ma_sound_get_cursor_in_pcm_frames(&s->sound, &cur);
+    return frames_to_ns(cur, sound_sample_rate(s));
 }
 
 int64_t aether_audio_duration_ns(void* sound) {
     if (!sound) return 0;
     AudioSound* s = (AudioSound*)sound;
-    return frames_to_ns(s->frames, s->sample_rate);
+    ma_uint64 len = 0;
+    ma_sound_get_length_in_pcm_frames(&s->sound, &len);
+    return frames_to_ns(len, sound_sample_rate(s));
 }
 
 int aether_audio_seek_ns(void* sound, int64_t ns) {
     if (!sound) return 0;
     AudioSound* s = (AudioSound*)sound;
     if (ns < 0) ns = 0;
-    int64_t frame = (int64_t)((double)ns * (double)s->sample_rate / 1000000000.0);
-    if (frame > s->frames) frame = s->frames;
-    s->cursor_frames = frame;
-    /* keep playing from the new spot */
-    if (s->playing) s->play_start_ns = audio_now_ns();
-    return 1;
+    int rate = sound_sample_rate(s);
+    ma_uint64 len = 0;
+    ma_sound_get_length_in_pcm_frames(&s->sound, &len);
+    ma_uint64 frame = (ma_uint64)((double)ns * (double)rate / 1000000000.0);
+    if (frame > len) frame = len;
+    return ma_sound_seek_to_pcm_frame(&s->sound, frame) == MA_SUCCESS ? 1 : 0;
 }
 
 int aether_audio_channels(void* sound) {
     if (!sound) return 0;
-    return ((AudioSound*)sound)->channels;
+    AudioSound* s = (AudioSound*)sound;
+    ma_uint32 ch = 0;
+    ma_sound_get_data_format(&s->sound, NULL, &ch, NULL, NULL, 0);
+    return (int)ch;
 }
 
 int aether_audio_sample_rate(void* sound) {
     if (!sound) return 0;
-    return ((AudioSound*)sound)->sample_rate;
-}
-
-/* ---- WAV decoder ------------------------------------------------------- */
-
-static uint32_t rd_u32le(const unsigned char* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
-         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-static uint16_t rd_u16le(const unsigned char* p) {
-    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-
-/* Decode a canonical RIFF/WAVE file: PCM (8/16/24/32-bit int) or IEEE
- * float32. Converts every sample to interleaved f32 in [-1, 1]. Sets
- * g_audio_err and returns NULL on any malformed / unsupported input. */
-void* aether_audio_load_wav(const char* data, int length) {
-    const unsigned char* p = (const unsigned char*)data;
-    if (!p || length < 44) { g_audio_err = "audio: not a WAV (too short)"; return NULL; }
-    if (memcmp(p, "RIFF", 4) != 0 || memcmp(p + 8, "WAVE", 4) != 0) {
-        g_audio_err = "audio: not a RIFF/WAVE file"; return NULL;
-    }
-
-    int      fmt_found = 0;
-    uint16_t audio_format = 0, channels = 0, bits = 0;
-    uint32_t sample_rate = 0;
-    const unsigned char* pcm = NULL;
-    uint32_t pcm_len = 0;
-
-    /* walk chunks starting at offset 12 */
-    int off = 12;
-    while (off + 8 <= length) {
-        const unsigned char* ch = p + off;
-        uint32_t csize = rd_u32le(ch + 4);
-        const unsigned char* body = ch + 8;
-        if ((int)(off + 8 + csize) > length) {
-            /* clamp a truncated final chunk to what we actually have */
-            csize = (uint32_t)(length - (off + 8));
-        }
-        if (memcmp(ch, "fmt ", 4) == 0 && csize >= 16) {
-            audio_format = rd_u16le(body + 0);
-            channels     = rd_u16le(body + 2);
-            sample_rate  = rd_u32le(body + 4);
-            bits         = rd_u16le(body + 14);
-            fmt_found = 1;
-        } else if (memcmp(ch, "data", 4) == 0) {
-            pcm = body;
-            pcm_len = csize;
-        }
-        off += 8 + (int)csize;
-        if (csize & 1) off += 1;   /* chunks are word-aligned */
-    }
-
-    if (!fmt_found) { g_audio_err = "audio: WAV missing fmt chunk"; return NULL; }
-    if (!pcm)       { g_audio_err = "audio: WAV missing data chunk"; return NULL; }
-    if (channels < 1) { g_audio_err = "audio: WAV has no channels"; return NULL; }
-    /* 1 = PCM int, 3 = IEEE float */
-    if (audio_format != 1 && audio_format != 3) {
-        g_audio_err = "audio: unsupported WAV format (only PCM / float)"; return NULL;
-    }
-    int bytes_per_sample = bits / 8;
-    if (bytes_per_sample < 1) { g_audio_err = "audio: WAV bad bit depth"; return NULL; }
-
-    int64_t total_samples = pcm_len / bytes_per_sample;        /* across all channels */
-    int64_t frames = total_samples / channels;
-    if (frames < 0) frames = 0;
-
-    float* out = NULL;
-    if (frames > 0) {
-        out = (float*)aether_caps_malloc((size_t)total_samples * sizeof(float));
-        if (!out) { g_audio_err = "audio: out of memory"; return NULL; }
-    }
-
-    for (int64_t i = 0; i < total_samples; i++) {
-        const unsigned char* sp = pcm + i * bytes_per_sample;
-        float v = 0.0f;
-        if (audio_format == 3 && bits == 32) {
-            float f; memcpy(&f, sp, 4); v = f;
-        } else if (bits == 16) {
-            int16_t s16 = (int16_t)rd_u16le(sp);
-            v = (float)s16 / 32768.0f;
-        } else if (bits == 8) {
-            /* 8-bit WAV is UNSIGNED, centred at 128 */
-            v = ((float)sp[0] - 128.0f) / 128.0f;
-        } else if (bits == 24) {
-            int32_t s24 = (int32_t)((uint32_t)sp[0] | ((uint32_t)sp[1] << 8)
-                                    | ((uint32_t)sp[2] << 16));
-            if (s24 & 0x800000) s24 |= (int32_t)0xFF000000; /* sign-extend */
-            v = (float)s24 / 8388608.0f;
-        } else if (bits == 32) {
-            int32_t s32 = (int32_t)rd_u32le(sp);
-            v = (float)s32 / 2147483648.0f;
-        } else {
-            aether_caps_free(out, (size_t)total_samples * sizeof(float));
-            g_audio_err = "audio: unsupported WAV bit depth"; return NULL;
-        }
-        out[i] = v;
-    }
-
-    AudioSound* s = (AudioSound*)aether_caps_malloc(sizeof(AudioSound));
-    if (!s) {
-        aether_caps_free(out, (size_t)total_samples * sizeof(float));
-        g_audio_err = "audio: out of memory"; return NULL;
-    }
-    s->samples       = out;
-    s->frames        = frames;
-    s->channels      = channels;
-    s->sample_rate   = (int)sample_rate;
-    s->playing       = 0;
-    s->cursor_frames = 0;
-    s->play_start_ns = 0;
-    s->volume        = 1.0;
-    g_audio_err = "";
-    return s;
+    return sound_sample_rate((AudioSound*)sound);
 }
