@@ -6,8 +6,17 @@
 
 import std.hash
 import std.string
+import std.bytes
 
 extern exit(code: int)
+
+// Build the SipHash reference message of length n: bytes 0,1,...,n-1.
+fn ref_msg(n: int) -> string {
+    b = bytes.new(n)
+    i = 0
+    while i < n { bytes.set(b, i, i); i = i + 1 }
+    return bytes.finish(b, n)
+}
 
 fn ck(cond: bool, msg: string) -> int {
     if !cond { println("FAIL: ${msg}"); return 1 }
@@ -48,6 +57,26 @@ main() {
     m4 = hash.murmur3_32("ABCD", 4, 0)
     m5 = hash.murmur3_32("ABCDE", 5, 0)
     fails = fails + ck(m1 != m2 && m2 != m3 && m3 != m4 && m4 != m5, "murmur tail lengths distinct")
+
+    // ---- SipHash-2-4 (canonical reference vectors, Aumasson & Bernstein) ----
+    // Key = bytes 00..0f: k0 = 0x0706050403020100, k1 = 0x0f0e0d0c0b0a0908.
+    // Message n = bytes 0,1,...,n-1. Expected 64-bit digests are from the
+    // SipHash reference `vectors.h` (bit-for-bit, so a top-bit-set value
+    // appears here as a negative long).
+    let k0 = 0x0706050403020100
+    let k1 = 0x0f0e0d0c0b0a0908
+    // empty message -> 0x726fdb47dd0e0e31
+    fails = fails + ck(hash.siphash24("", 0, k0, k1) == 8246050544436514353, "siphash empty")
+    // n=1 -> 0x74f839c593dc67fd
+    fails = fails + ck(hash.siphash24(ref_msg(1), 1, k0, k1) == 8428550223375919101, "siphash n1")
+    // n=8 (one full block) -> 0x93f5f5799a932462
+    fails = fails + ck(hash.siphash24(ref_msg(8), 8, k0, k1) == -7785046478206851998, "siphash n8 (full block)")
+    // n=15 (block + 7-byte tail) -> 0xa129ca6149be45e5
+    fails = fails + ck(hash.siphash24(ref_msg(15), 15, k0, k1) == -6833708440360172059, "siphash n15 (block+tail)")
+    // keying: a different key gives a different digest for the same message
+    fails = fails + ck(hash.siphash24(ref_msg(8), 8, 0, 0) != hash.siphash24(ref_msg(8), 8, k0, k1), "siphash key matters")
+    // determinism
+    fails = fails + ck(hash.siphash24(ref_msg(8), 8, k0, k1) == hash.siphash24(ref_msg(8), 8, k0, k1), "siphash deterministic")
 
     if fails != 0 {
         println("hash: ${fails} failure(s)")

@@ -1,20 +1,25 @@
 // std.hash — fast NON-cryptographic hashes for checksums and hashmap
-// seeding. NOT for security (use std.cryptography for that).
+// seeding.
 //
 //   fnv32 / fnv64  — FNV-1a (Fowler–Noll–Vo), simple and fast for short keys
 //   murmur3_32     — MurmurHash3 x86 32-bit, good distribution for hashmaps
+//   siphash24      — SipHash-2-4, a KEYED PRF: DoS-resistant hashmap seeding
+//                    and short-message MACs. Not a general crypto hash, but
+//                    unlike the others it is keyed and hash-flood resistant.
 //
 // Input is a byte string (embedded NULs honoured via the supplied length).
 // Results are the exact 32-/64-bit unsigned values the reference algorithms
 // produce, carried in Aether's signed `int`/`long` (mask with 0xFFFFFFFF /
-// interpret bit-for-bit as unsigned). Ported from C3's `std::hash::*` (MIT,
-// Copyright (c) 2022-2026 Christoffer Lernö and contributors).
+// interpret bit-for-bit as unsigned). fnv/murmur are ported from C3's
+// `std::hash::*` (MIT, Copyright (c) 2022-2026 Christoffer Lernö and
+// contributors); siphash from C3's std::hash::siphash (MIT, Copyright (c)
+// 2025 Zack Puhl), both re-expressed in Aether.
 
 import std.string
 import std.bits
 
 exports (
-    fnv32, fnv64, murmur3_32
+    fnv32, fnv64, murmur3_32, siphash24
 )
 
 // FNV-1a 32-bit. offset basis 0x811c9dc5, prime 0x01000193. Returned as a
@@ -112,4 +117,85 @@ fn fmix32(h0: long) -> long {
     h = (h * 0xc2b2ae35) & mask
     h = (h ^ (h >> 16)) & mask
     return h
+}
+
+// ---------------------------------------------------------------------------
+// SipHash-2-4 (64-bit output). A KEYED pseudorandom function — the standard
+// choice for hash-flood-resistant hashmaps and short-message MACs. Ported
+// from C3's std::hash::siphash (MIT, © 2025 Zack Puhl), following the
+// reference SipHash construction (Aumasson & Bernstein).
+//
+// All arithmetic is 64-bit with modular (wrapping) addition — bits.
+// wrapping_add64 — and 64-bit left rotates (bits.rotl64). The 128-bit key is
+// supplied as two `long` halves (k0 = low 64 bits, k1 = high 64 bits); the
+// message is a byte string of the given length. The returned `long` is the
+// 64-bit digest interpreted bit-for-bit (may be negative when the top bit is
+// set). c = 2 compression rounds per block, d = 4 finalization rounds.
+// ---------------------------------------------------------------------------
+
+// One SipRound over the 4-word state; returns the updated (v0,v1,v2,v3).
+fn sipround(v0: long, v1: long, v2: long, v3: long) -> (long, long, long, long) {
+    a0 = bits.wrapping_add64(v0, v1)
+    b1 = bits.rotl64(v1, 13) ^ a0
+    a0b = bits.rotl64(a0, 32)
+    a2 = bits.wrapping_add64(v2, v3)
+    b3 = bits.rotl64(v3, 16) ^ a2
+    a0c = bits.wrapping_add64(a0b, b3)
+    b3b = bits.rotl64(b3, 21) ^ a0c
+    a2b = bits.wrapping_add64(a2, b1)
+    b1b = bits.rotl64(b1, 17) ^ a2b
+    a2c = bits.rotl64(a2b, 32)
+    return a0c, b1b, a2c, b3b
+}
+
+// Read up to 8 little-endian bytes starting at `off` into a 64-bit word
+// (missing bytes are 0). `cnt` bytes are taken.
+fn le64(data: string, length: int, off: int, cnt: int) -> long {
+    let w: long = 0
+    i = 0
+    while i < cnt {
+        b = (string.char_at_n(data, length, off + i) & 255) as long
+        w = w | (b << (i * 8))
+        i = i + 1
+    }
+    return w
+}
+
+// SipHash-2-4 of `length` bytes of `data` under the 128-bit key (k0, k1).
+siphash24(data: string, length: int, k0: long, k1: long) -> long {
+    let v0: long = 0x736f6d6570736575 ^ k0
+    let v1: long = 0x646f72616e646f6d ^ k1
+    let v2: long = 0x6c7967656e657261 ^ k0
+    let v3: long = 0x7465646279746573 ^ k1
+
+    // full 8-byte blocks
+    nblocks = length / 8
+    b = 0
+    while b < nblocks {
+        m = le64(data, length, b * 8, 8)
+        v3 = v3 ^ m
+        v0, v1, v2, v3 = sipround(v0, v1, v2, v3)   // c = 2
+        v0, v1, v2, v3 = sipround(v0, v1, v2, v3)
+        v0 = v0 ^ m
+        b = b + 1
+    }
+
+    // final block: remaining bytes + the length in the top byte
+    tail = nblocks * 8
+    rem = length - tail
+    mlast = le64(data, length, tail, rem)
+    mlast = mlast | ((length as long) << 56)
+    v3 = v3 ^ mlast
+    v0, v1, v2, v3 = sipround(v0, v1, v2, v3)
+    v0, v1, v2, v3 = sipround(v0, v1, v2, v3)
+    v0 = v0 ^ mlast
+
+    // finalization: d = 4 rounds
+    v2 = v2 ^ 0xff
+    v0, v1, v2, v3 = sipround(v0, v1, v2, v3)
+    v0, v1, v2, v3 = sipround(v0, v1, v2, v3)
+    v0, v1, v2, v3 = sipround(v0, v1, v2, v3)
+    v0, v1, v2, v3 = sipround(v0, v1, v2, v3)
+
+    return v0 ^ v1 ^ v2 ^ v3
 }
