@@ -44,6 +44,17 @@
 //
 // which is the deterministic, toolkit-free path headless apps and tests use.
 //
+// ---- cooperative / threadless builds ----
+//
+// Blocking IO inherently needs a thread off the actor scheduler (a blocking
+// actor handler starves its scheduler core — the same reason std.http's h2
+// server runs handlers on its own pthread pool). So `work` runs on a fresh OS
+// thread. On the cooperative / AETHER_NO_THREADING build (embedded, wasm,
+// ci-coop) there are no threads: `work` then runs SYNCHRONOUSLY at the run()
+// call, and its completion is still delivered through the poster/drain path on
+// the next deliver/drain. No parallelism there — but the contract (work runs;
+// done fires on the loop thread) holds unchanged.
+//
 // ---- lifetime ----
 //
 // The work/done closures and any heap strings they capture stay alive across
