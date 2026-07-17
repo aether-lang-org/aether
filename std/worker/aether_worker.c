@@ -31,7 +31,25 @@ typedef struct WorkerJob {
 
 /* ---- module state ------------------------------------------------------- */
 
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+/* g_lock guards the ready-list and the poster slot. It is initialised lazily:
+ * the Win32 threading shim maps pthread_mutex_t to a CRITICAL_SECTION, which
+ * has no static initialiser (PTHREAD_MUTEX_INITIALIZER is POSIX-only), so we
+ * cannot init it at file scope. ensure_init() runs pthread_mutex_init exactly
+ * once, gated by an atomic CAS; first entry is a plain call before any worker
+ * thread exists, so there is effectively no contention. */
+static pthread_mutex_t g_lock;
+static atomic_int g_init_state = 0;   /* 0 = uninit, 1 = initialising, 2 = ready */
+
+static void ensure_init(void) {
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&g_init_state, &expected, 1)) {
+        pthread_mutex_init(&g_lock, NULL);
+        atomic_store(&g_init_state, 2);
+        return;
+    }
+    /* Another thread is initialising (or already did): wait until ready. */
+    while (atomic_load(&g_init_state) != 2) { /* spin — bounded, one-shot */ }
+}
 
 /* Ready-list of completed jobs awaiting aether_worker_drain() (poster-less
  * path). Singly-linked FIFO: head popped, tail pushed. */
@@ -113,6 +131,7 @@ static void* worker_entry(void* arg) {
 
 static int launch(AetherWorkerClosure work, AetherWorkerClosure done, int detached) {
     if (!work.fn) return 0;
+    ensure_init();   /* runs on the caller's thread, before the worker starts */
 
     WorkerJob* job = (WorkerJob*)calloc(1, sizeof(WorkerJob));
     if (!job) return 0;
@@ -144,6 +163,7 @@ int aether_worker_run_detached(AetherWorkerClosure work) {
 /* ---- poster / delivery / drain ----------------------------------------- */
 
 void aether_worker_set_main_poster(AetherWorkerClosure poster) {
+    ensure_init();
     pthread_mutex_lock(&g_lock);
     g_poster = poster;
     pthread_mutex_unlock(&g_lock);
@@ -158,6 +178,7 @@ void aether_worker_deliver(void* arg) {
 }
 
 int aether_worker_drain(int max) {
+    ensure_init();
     int ran = 0;
     for (;;) {
         if (max > 0 && ran >= max) break;
