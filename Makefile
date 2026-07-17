@@ -532,6 +532,13 @@ test-manual-runtime: compiler
 	@echo "Running manual runtime test..."
 	./build/test_runtime_manual$(EXE_EXT)
 
+# Cross-compilation smoke test (#1105): `ae build --target=<triple>` via
+# the zig cc backend. Self-skips when zig is not installed, so it is safe
+# to run anywhere (it is not part of the default `test` gate because CI
+# does not carry the zig toolchain).
+test-cross: ae stdlib
+	@bash tests/scripts/cross_compile.sh
+
 # Test .ae source files - compiles and runs each test file
 ifdef WINDOWS_NATIVE
 test-ae: compiler ae stdlib
@@ -1063,6 +1070,12 @@ build/MANIFEST: Makefile | $(BUILD_DIR)
 	  echo ""; \
 	  echo "# Standard library sources:"; \
 	  for f in $(STD_SRC); do echo "$$f"; done; \
+	  echo ""; \
+	  echo "# Collections sources:"; \
+	  for f in $(COLLECTIONS_SRC); do echo "$$f"; done; \
+	  echo ""; \
+	  echo "# Reactor sources:"; \
+	  for f in $(STD_REACTOR_SRC); do echo "$$f"; done; \
 	) > build/MANIFEST
 	@echo "✓ MANIFEST: $$(grep -c -v -E '^(#|$$)' build/MANIFEST) link-suitable files"
 # Sandbox preload library (libaether_sandbox.so) — the LD_PRELOAD
@@ -1944,7 +1957,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-macos-leaks test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-macos-leaks test-memory test-manual-runtime test-cross test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
 
 # Cross-language benchmark UI (alias for benchmark)
 benchmark-ui: benchmark

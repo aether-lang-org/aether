@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`ae build --target=<triple>` cross-compiles via a `zig cc` backend** (#1105).
+  Builds a foreign-OS/arch binary using zig as a self-contained cross toolchain:
+  zig bundles each target's libc, headers, and linker, so the Aether runtime and
+  standard library compile straight from source for the target with no cross-gcc
+  or sysroot. The platform backend (`epoll` vs `kqueue`, `spawn_sandboxed_linux`
+  vs the BSD/stub path) is chosen by the `__linux__` / `__APPLE__` macros zig
+  predefines, so one source set serves every target. Supported triples:
+  `aarch64-macos`, `x86_64-macos`, `aarch64-linux`, `x86_64-linux`. The runtime
+  and stdlib are compiled from source, archived, and linked on demand (so a user
+  function may share a name with an unreferenced runtime global, exactly as a
+  native `-laether` link allows). Cross binaries are built without OpenSSL / zlib
+  / nghttp2 / PCRE2, so features needing them (HTTPS/TLS, hashing, base64, regex,
+  compression, HTTP/2) report errors at runtime like a native build lacking those
+  libraries; `ae build` prints a note and builds anyway. Executables only for now
+  (`--emit=lib`/`--emit=both` are rejected), POSIX host. Native builds are
+  unchanged. See `docs/build-system.md`.
+
+### Fixed
+
+- **`MANIFEST` now lists the collections and reactor sources.** The authoritative
+  link-suitable source list (`build/MANIFEST`, #329) was generated from
+  `RUNTIME_SRC` + `STD_SRC` only, silently omitting `COLLECTIONS_SRC` and
+  `STD_REACTOR_SRC`, which are part of `libaether.a`. A downstream consumer
+  linking from MANIFEST would fail to resolve `std.collections`
+  (hashmap/vector/set/...) symbols. Both source groups are now emitted.
+
 ## [0.401.0]
 
 ### Fixed

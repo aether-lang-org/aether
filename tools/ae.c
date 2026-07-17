@@ -4901,6 +4901,242 @@ int cmd_build_namespace(int argc, char** argv) {
     return rc;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Cross-compilation via a zig cc backend (#1105)
+ *
+ *  `ae build --target=<triple>` builds a foreign-target binary using
+ *  zig as a self-contained cross-compiler: zig bundles each target's
+ *  libc, system headers and linker, so the Aether runtime and stdlib
+ *  compile straight from source for the target. The platform backend
+ *  (epoll vs kqueue, spawn_sandboxed_linux vs bsd) is chosen by the
+ *  compile-time __linux__ / __APPLE__ macros zig predefines for the
+ *  target, so one source set serves every target with no per-host
+ *  file selection.
+ *
+ *  PR 1 scope: dependency-free programs. Stdlib modules whose C code
+ *  needs an external library we cannot yet cross-build (openssl,
+ *  nghttp2, zlib, pcre2) are left out of the compile set, and a
+ *  program importing one is rejected up front with a clear message.
+ *  Networking / crypto / compression / regex cross builds are the
+ *  documented follow-up. Native builds are entirely unaffected.
+ * ------------------------------------------------------------------ */
+
+/* Map an Aether target string to a zig `-target` triple. Returns NULL
+ * for anything that isn't a supported cross triple (native / wasm /
+ * unknown), which the caller treats as "not a cross build". */
+static const char* cross_target_to_zig(const char* t) {
+    if (!t) return NULL;
+    if (!strcmp(t, "aarch64-macos") || !strcmp(t, "arm64-macos"))  return "aarch64-macos-none";
+    if (!strcmp(t, "x86_64-macos")  || !strcmp(t, "amd64-macos"))  return "x86_64-macos-none";
+    if (!strcmp(t, "aarch64-linux") || !strcmp(t, "arm64-linux"))  return "aarch64-linux-gnu";
+    if (!strcmp(t, "x86_64-linux")  || !strcmp(t, "amd64-linux"))  return "x86_64-linux-gnu";
+    return NULL;
+}
+
+/* Locate the authoritative source MANIFEST and the base directory its
+ * entries are relative to. Dev tree: <root>/build/MANIFEST (entries
+ * relative to <root>). Installed: <root>/share/aether/MANIFEST
+ * (entries relative to <root>/share/aether). Returns false if neither
+ * exists. */
+static bool cross_find_manifest(char* manifest, size_t msz,
+                                char* base, size_t bsz) {
+    snprintf(manifest, msz, "%s/build/MANIFEST", tc.root);
+    if (path_exists(manifest)) { snprintf(base, bsz, "%s", tc.root); return true; }
+    snprintf(manifest, msz, "%s/share/aether/MANIFEST", tc.root);
+    if (path_exists(manifest)) { snprintf(base, bsz, "%s/share/aether", tc.root); return true; }
+    return false;
+}
+
+/* Read MANIFEST into `out`, one absolute source path per entry, for
+ * every link-suitable source. Returns the count (capped at `max`), or
+ * -1 on error (unreadable manifest). `zig cc -c` emits only one object
+ * when handed several sources at once, so the caller compiles each path
+ * individually.
+ *
+ * Every runtime/stdlib source compiles for a cross target with no
+ * external library: each openssl / nghttp2 / zlib / pcre2 dependency is
+ * behind an AETHER_HAS_* guard that falls to a graceful "unavailable"
+ * stub when the macro is undefined (which it is here). So we build the
+ * full set, archive it, and let the final link pull only the objects the
+ * program references, exactly as a native `-laether` link against the
+ * complete libaether.a does. Library-backed features (TLS, real crypto,
+ * regex, zlib, HTTP/2) then report unavailable at runtime on the target,
+ * exactly like a native build on a host without those libraries, while
+ * pure helpers such as base64 (std.encoding) keep working. */
+#define CROSS_SRC_PATH_MAX 1024
+static int cross_collect_core_list(char out[][CROSS_SRC_PATH_MAX], int max,
+                                   const char* manifest, const char* base) {
+    FILE* f = fopen(manifest, "r");
+    if (!f) return -1;
+    int count = 0;
+    char line[1024];
+    while (fgets(line, sizeof(line), f) && count < max) {
+        size_t n = strlen(line);
+        while (n && (line[n-1] == '\n' || line[n-1] == '\r' ||
+                     line[n-1] == ' '  || line[n-1] == '\t')) line[--n] = '\0';
+        char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0' || *p == '#') continue;                 /* comment / blank */
+        size_t plen = strlen(p);
+        if (plen < 2 || strcmp(p + plen - 2, ".c") != 0) continue;
+        snprintf(out[count], CROSS_SRC_PATH_MAX, "%s/%s", base, p);
+        count++;
+    }
+    fclose(f);
+    return count;
+}
+
+/* Scan a program's (transitive) imports via `aetherc --emit=inspect`.
+ * If it uses a stdlib module with library-backed features that are not
+ * cross-built (so they report "unavailable" at runtime on the target),
+ * write the module name to `which` and return true. Used to warn, not
+ * to block: the program still builds and the non-library parts still
+ * work. On inspect failure returns false (no warning). */
+static bool cross_uses_unsupported_module(const char* file, char* which, size_t wsz) {
+    static char out[65536];
+    if (aetherc_capture_stdout("--emit=inspect", file, NULL, out, sizeof(out)) != 0)
+        return false;
+    static const char* mods[] = {
+        "std.http", "std.net", "std.cryptography", "std.regex", "std.zlib",
+        "std.encoding", NULL   /* base64 in std.encoding is openssl-backed */
+    };
+    for (int i = 0; mods[i]; i++) {
+        if (strstr(out, mods[i])) { snprintf(which, wsz, "%s", mods[i]); return true; }
+    }
+    return false;
+}
+
+/* Execute a full cross build: compile the dependency-free core to
+ * per-file objects, archive them, then link the program against the
+ * archive. Linking against an archive (rather than force-linking every
+ * runtime object into the image) reproduces a native `-laether` link's
+ * on-demand object pulling: an object is pulled only when the program
+ * references one of its symbols. That is what lets a user program define
+ * a top-level function named like an *unreferenced* runtime global
+ * (e.g. `describe`, `notify`, `event` in aether_host.c) without a
+ * duplicate-symbol clash, exactly as a native build allows. Returns 0
+ * on success, non-zero (with a diagnostic) otherwise. POSIX host only.
+ *
+ * Feature defines mirror the runtime archive's normal Makefile CFLAGS:
+ * AETHER_HAS_SANDBOX is the only one not auto-derived by
+ * aether_optimization_config.h (filesystem / networking / threading
+ * default on when no AETHER_NO_* is passed). The external-library macros
+ * (AETHER_HAS_OPENSSL / _ZLIB / _NGHTTP2 / _PCRE2) are deliberately left
+ * undefined so their stub paths compile, matching the excluded sources. */
+static int run_cross_build(const char* c_file, const char* out_file,
+                           bool optimize, const char* extra,
+                           const char* ztriple) {
+    char manifest[2048], base[1024];
+    if (!cross_find_manifest(manifest, sizeof(manifest), base, sizeof(base))) {
+        fprintf(stderr,
+            "Error: cross-compilation needs the runtime source MANIFEST, which was "
+            "not found (looked under %s/build and %s/share/aether). Run `make stdlib` "
+            "in a source tree, or reinstall the toolchain.\n", tc.root, tc.root);
+        return 1;
+    }
+    static char srcs[256][CROSS_SRC_PATH_MAX];
+    int n = cross_collect_core_list(srcs, 256, manifest, base);
+    if (n <= 0) {
+        fprintf(stderr, "Error: could not assemble the cross-compile source set from %s.\n",
+                manifest);
+        return 1;
+    }
+
+    /* Fresh per-build object directory under the system temp. */
+    char objdir[1024];
+    snprintf(objdir, sizeof(objdir), "%s/ae-cross-%d", get_temp_dir(), (int)getpid());
+    mkdirs(objdir);
+
+    const char* user_cflags = get_cflags();
+    const char* opt = optimize ? "-O2" : "-O0 -g";
+    const char* ex = extra ? extra : "";
+    const char* feature_defs = "-DAETHER_HAS_SANDBOX";
+    static char cmd[24576];
+    /* Accumulated quoted "<objpath>" list, in compile order, for the ar
+     * step. posix_run tokenizes the command itself (no shell), so the
+     * archive must name each object explicitly rather than glob. */
+    static char objlist[24576];
+    size_t obj_pos = 0;
+    objlist[0] = '\0';
+    int rc = 1;
+
+    int w;
+    do {
+        /* 1. Compile each core source to its own object in objdir. zig cc
+         *    -c emits only one object when handed several sources at once,
+         *    so compile one at a time (all core basenames are unique). */
+        bool compile_failed = false;
+        for (int i = 0; i < n; i++) {
+            const char* bn = strrchr(srcs[i], '/');
+            bn = bn ? bn + 1 : srcs[i];
+            char objpath[2048];
+            /* basename with its trailing ".c" replaced by ".o" */
+            snprintf(objpath, sizeof(objpath), "%s/%.*so", objdir,
+                     (int)(strlen(bn) - 1), bn);
+            w = snprintf(cmd, sizeof(cmd),
+                "zig cc -target %s %s %s %s %s -c \"%s\" -o \"%s\"",
+                ztriple, opt, feature_defs, user_cflags, tc.include_flags,
+                srcs[i], objpath);
+            if (w < 0 || (size_t)w >= sizeof(cmd)) {
+                fprintf(stderr, "Error: cross-compile command exceeded the %zu-byte buffer.\n",
+                        sizeof(cmd));
+                compile_failed = true;
+                break;
+            }
+            if (run_cmd_show_warnings(cmd) != 0) {
+                fprintf(stderr, "Error: cross-compiling %s for %s failed.\n", srcs[i], ztriple);
+                compile_failed = true;
+                break;
+            }
+            int ow = snprintf(objlist + obj_pos, sizeof(objlist) - obj_pos,
+                              "%s\"%s\"", obj_pos ? " " : "", objpath);
+            if (ow < 0 || obj_pos + (size_t)ow >= sizeof(objlist)) {
+                fprintf(stderr, "Error: cross-compile object list overflowed its buffer.\n");
+                compile_failed = true;
+                break;
+            }
+            obj_pos += (size_t)ow;
+        }
+        if (compile_failed) break;
+
+        /* 2. Archive the objects (named explicitly, no glob) so the final
+         *    link pulls only what the program references (native
+         *    `-laether` semantics). */
+        w = snprintf(cmd, sizeof(cmd),
+            "zig ar rcs \"%s/libaether.a\" %s", objdir, objlist);
+        if (w < 0 || (size_t)w >= sizeof(cmd)) {
+            fprintf(stderr, "Error: cross-compile archive command exceeded the %zu-byte buffer.\n",
+                    sizeof(cmd));
+            break;
+        }
+        if (run_cmd_show_warnings(cmd) != 0) {
+            fprintf(stderr, "Error: archiving the cross runtime failed.\n");
+            break;
+        }
+
+        /* 3. Link the program against the archive. */
+        w = snprintf(cmd, sizeof(cmd),
+            "zig cc -target %s %s %s %s \"%s\" %s \"%s/libaether.a\" -o \"%s\" -lm",
+            ztriple, opt, feature_defs, tc.include_flags, c_file, ex, objdir, out_file);
+        if (w < 0 || (size_t)w >= sizeof(cmd)) {
+            fprintf(stderr, "Error: cross-compile link command exceeded the %zu-byte buffer.\n",
+                    sizeof(cmd));
+            break;
+        }
+        if (run_cmd_show_warnings(cmd) != 0) {
+            fprintf(stderr, "Error: cross-linking for %s failed.\n", ztriple);
+            break;
+        }
+        rc = 0;
+    } while (0);
+
+    /* Best-effort removal of the temp object tree. */
+    char rmcmd[1100];
+    snprintf(rmcmd, sizeof(rmcmd), "rm -rf \"%s\"", objdir);
+    (void)system(rmcmd);
+    return rc;
+}
+
 static int cmd_build(int argc, char** argv) {
     const char* file = NULL;
     const char* output_name = NULL;
@@ -4925,6 +5161,8 @@ static int cmd_build(int argc, char** argv) {
             quick = true;
         } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
             target = argv[++i];
+        } else if (strncmp(argv[i], "--target=", 9) == 0) {
+            target = argv[i] + 9;
         } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
@@ -5062,12 +5300,17 @@ static int cmd_build(int argc, char** argv) {
         }
     }
 
-    // Validate target
-    if (target && strcmp(target, "wasm") != 0 && strcmp(target, "native") != 0) {
-        fprintf(stderr, "Error: Unknown target '%s'. Valid targets: native, wasm\n", target);
+    // Validate target. Beyond native/wasm, a cross triple routes the
+    // build through the zig cc backend (#1105).
+    const char* ztriple = cross_target_to_zig(target);
+    if (target && strcmp(target, "wasm") != 0 && strcmp(target, "native") != 0 && !ztriple) {
+        fprintf(stderr, "Error: Unknown target '%s'.\n", target);
+        fprintf(stderr, "Valid targets: native, wasm, or a cross triple "
+                        "(aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux).\n");
         return 1;
     }
     int is_wasm = target && strcmp(target, "wasm") == 0;
+    int is_cross = ztriple != NULL;
 
     // Resolve directory argument (e.g. "." or "myproject/") to src/main.ae
     if (file && dir_exists(file)) {
@@ -5099,8 +5342,10 @@ static int cmd_build(int argc, char** argv) {
 
     if (!file) {
         fprintf(stderr, "Error: No input file specified.\n");
-        fprintf(stderr, "Usage: ae build <file.ae> [-o output] [--extra file.c] [--quick]\n");
+        fprintf(stderr, "Usage: ae build <file.ae> [-o output] [--extra file.c] [--quick] [--target=<triple>]\n");
         fprintf(stderr, "  --quick    Compile with -O0 -g for faster iteration (default: -O2)\n");
+        fprintf(stderr, "  --target   Cross-compile via zig cc: wasm, aarch64-macos, x86_64-macos,\n");
+        fprintf(stderr, "             aarch64-linux, x86_64-linux (dependency-free programs)\n");
         return 1;
     }
 
@@ -5206,6 +5451,36 @@ static int cmd_build(int argc, char** argv) {
         return 1;
     }
 
+    // Pre-flight for cross builds: zig provides the backend compiler +
+    // target libc/linker, and the program must be dependency-free (PR 1).
+    if (is_cross) {
+        // Cross builds produce executables only for now; --emit=lib /
+        // --emit=both would emit library-shaped C (no main) that the
+        // executable link rejects. Reject up front, like unknown targets.
+        if (g_emit_lib) {
+            fprintf(stderr,
+                "Error: cross-compilation (--target=%s) supports executables only; "
+                "--emit=lib and --emit=both are not supported yet.\n", target);
+            return 1;
+        }
+        if (run_cmd_quiet("zig version") != 0) {
+            fprintf(stderr, "Error: zig not found on PATH (required to cross-compile for %s).\n",
+                    target);
+            fprintf(stderr, "Install zig 0.11+: https://ziglang.org/download/  (macOS: brew install zig)\n");
+            return 1;
+        }
+        char mod[64];
+        if (cross_uses_unsupported_module(file, mod, sizeof(mod))) {
+            fprintf(stderr,
+                "Note: '%s' uses %s. Cross binaries are built without OpenSSL / zlib /\n"
+                "nghttp2 / PCRE2, so features that need them (HTTPS/TLS, hashing, base64,\n"
+                "regex, compression, HTTP/2) report errors at runtime on %s, exactly like\n"
+                "a native build on a host without those libraries. Plain sockets and pure\n"
+                "helpers still work. Building anyway.\n",
+                file, mod, target);
+        }
+    }
+
     // Merge toml [[bin]] extra_sources into extra_files BEFORE the cache
     // check so an FFI shim edit invalidates the cached exe (extras
     // content is part of the cache key).
@@ -5229,7 +5504,7 @@ static int cmd_build(int argc, char** argv) {
     // (emcc emits .js + .wasm) and --emit=lib produces a different artefact
     // type; both deserve their own cache shape later. --namespace mode
     // produces SDKs in subdirectories, also out of scope.
-    bool cache_eligible = !is_wasm && g_emit_exe && !g_emit_lib;
+    bool cache_eligible = !is_wasm && !is_cross && g_emit_exe && !g_emit_lib;
     char cached_exe[1024] = "";
     unsigned long long cache_key = 0;
     if (cache_eligible) {
@@ -5253,7 +5528,8 @@ static int cmd_build(int argc, char** argv) {
         }
     }
 
-    printf("Building %s%s...\n", file, is_wasm ? " (wasm)" : "");
+    if (is_cross)      printf("Building %s (cross: %s)...\n", file, target);
+    else               printf("Building %s%s...\n", file, is_wasm ? " (wasm)" : "");
 
     // Binary-import prepass: synthesize interface stubs for any
     // `import foo` resolving to a precompiled libfoo.so, link it in.
@@ -5303,27 +5579,38 @@ static int cmd_build(int argc, char** argv) {
     // Step 2: .c to executable (or wasm) with runtime.
     // toml [[bin]] extra_sources were already merged into extra_files
     // above (before the cache check), so no further reading is needed.
-    if (is_wasm) {
-        if (!build_wasm_cmd(cmd, sizeof(cmd), c_file, exe_file)) {
+    // Cross builds run a multi-step compile/archive/link sequence that
+    // surfaces its own errors, so they bypass the shared command run.
+    int build_ret;
+    if (is_cross) {
+        const char* extra = extra_files[0] ? extra_files : NULL;
+        build_ret = run_cross_build(c_file, exe_file, !quick, extra, ztriple);
+        if (build_ret != 0) {
+            fprintf(stderr, "Build failed.\n");
             return 1;
         }
     } else {
-        const char* extra = extra_files[0] ? extra_files : NULL;
-        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, !quick, extra);
-    }
-
-    int build_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
-    if (build_ret != 0) {
-        // Retry with visible output for error messages
         if (is_wasm) {
-            build_wasm_cmd(cmd, sizeof(cmd), c_file, exe_file);
+            if (!build_wasm_cmd(cmd, sizeof(cmd), c_file, exe_file)) {
+                return 1;
+            }
         } else {
             const char* extra = extra_files[0] ? extra_files : NULL;
             build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, !quick, extra);
         }
-        run_cmd(cmd);
-        fprintf(stderr, "Build failed.\n");
-        return 1;
+        build_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+        if (build_ret != 0) {
+            // Retry with visible output for error messages
+            if (is_wasm) {
+                build_wasm_cmd(cmd, sizeof(cmd), c_file, exe_file);
+            } else {
+                const char* extra = extra_files[0] ? extra_files : NULL;
+                build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, !quick, extra);
+            }
+            run_cmd(cmd);
+            fprintf(stderr, "Build failed.\n");
+            return 1;
+        }
     }
 
     // Clean up intermediate C file — ae build produces a binary, not C source
@@ -5371,6 +5658,9 @@ static int cmd_build(int argc, char** argv) {
     }
 
     printf("Built: %s\n", exe_file);
+    if (is_cross) {
+        printf("       target %s: copy to a matching host to run.\n", target);
+    }
     if (is_wasm) {
         // .wasm file is co-located with .js
         char wasm_file[2048];

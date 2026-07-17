@@ -258,9 +258,51 @@ qemu-aarch64 ./probe    # load/run the emitted lib under an emulator
 ```
 
 That produces an arm64 `.so` on a cheap x86_64 runner with no arm64 hardware
-and no new codegen. Cross-OS targets (Linux to Windows or macOS) still need
-native runners. A compiler that cannot be found fails fast with
+and no new codegen. A compiler that cannot be found fails fast with
 `C compiler '<name>' (from $CC) not found` rather than a later link error.
+Cross-**OS** targets (for example Linux to macOS) need a matching C toolchain
+plus that OS's headers, which a stock cross-gcc does not carry: for those, use
+the `zig cc` backend below.
+
+### `ae build --target=<triple>` (cross-OS via a `zig cc` backend)
+
+`ae build --target=<triple>` cross-compiles a foreign-OS/arch binary using
+[zig](https://ziglang.org) as a self-contained cross toolchain. zig bundles
+each target's libc, system headers, and linker, so the Aether runtime and
+standard library compile straight from source for the target: no cross-gcc, no
+target sysroot, no per-host file juggling. The platform backend (`epoll` vs
+`kqueue`, `spawn_sandboxed_linux` vs the BSD/stub path) is selected by the
+`__linux__` / `__APPLE__` macros zig predefines for the target, so one source
+set serves every target.
+
+```bash
+ae build --target=x86_64-linux  hello.ae -o hello      # ELF x86-64
+ae build --target=aarch64-macos hello.ae -o hello      # Mach-O arm64
+```
+
+Supported triples: `aarch64-macos`, `x86_64-macos`, `aarch64-linux`,
+`x86_64-linux` (the `arm64-`/`amd64-` spellings are accepted too). `zig` must
+be on `PATH` (`brew install zig`, or <https://ziglang.org/download/>); the
+build fails fast with an install hint otherwise.
+
+**How it links.** The full runtime and standard library are compiled from
+source for the target and archived, then the program links against that
+archive, so the linker pulls only the objects it references, exactly as a
+native `-laether` link against the complete `libaether.a` does. The first build
+recompiles the runtime from source (a few seconds); caching the per-target
+archive is a planned optimization.
+
+**Scope.** Cross binaries are built without OpenSSL / zlib / nghttp2 / PCRE2
+(zig ships none of those), so standard-library features that need them
+(HTTPS/TLS, hashing, base64, regex, compression, HTTP/2) report errors at
+runtime, exactly like a native build on a host that lacks those libraries;
+plain sockets and pure helpers keep working. `ae build` prints a note when a
+program uses such a module (`std.http`, `std.net`, `std.cryptography`,
+`std.regex`, `std.zlib`, `std.encoding`), then builds it anyway. Cross-building
+those libraries is the documented follow-up. Executables only
+(`--emit=lib`/`--emit=both` are rejected for now), and the host must be POSIX
+(Linux/macOS). The generated binary targets another platform, so it is not
+runnable on the build host; copy it to a matching machine (or an emulator).
 
 ## Build Recommendations
 
@@ -273,6 +315,7 @@ native runners. A compiler that cannot be found fails fast with
 | Hardened | `HARDEN=1` | See "Hardening" section below |
 | WASM | `PLATFORM=wasm` | Cooperative scheduler, Emscripten |
 | Embedded | `PLATFORM=embedded` | Cooperative scheduler, no OS |
+| Cross-OS/arch | `ae build --target=<triple>` | `zig cc` backend, POSIX host, executables |
 
 ## Hardening (`HARDEN=1`)
 
