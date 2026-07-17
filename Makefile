@@ -393,9 +393,14 @@ $(OBJ_DIR)/std/lzf/aether_lzf.o: CFLAGS += $(LZF_CFLAGS_RELAX)
 # Vendored miniaudio (single-header, ~96k lines) is compiled inside
 # aether_audio.c via MINIAUDIO_IMPLEMENTATION. Relax the warnings we don't
 # own — same treatment as vendored liblzf above.
+#   -Wno-stringop-overflow: MinGW-w64 GCC mis-analyses miniaudio's atomic
+#     intrinsics (ma_atomic_*_32 on opaque node-graph/resource-manager structs)
+#     as "writing into a region of size 0". A known GCC false positive on
+#     miniaudio's own realtime code — not our storage, not a real overflow.
 AUDIO_CFLAGS_RELAX = -Wno-unused-function -Wno-unused-variable \
                      -Wno-implicit-fallthrough -Wno-sign-compare \
-                     -Wno-unused-parameter -Wno-type-limits
+                     -Wno-unused-parameter -Wno-type-limits \
+                     -Wno-stringop-overflow
 $(OBJ_DIR)/std/audio/aether_audio.o: CFLAGS += $(AUDIO_CFLAGS_RELAX)
 
 # Compiler target (incremental build with object files)
