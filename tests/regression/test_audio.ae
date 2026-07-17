@@ -52,7 +52,10 @@ main() {
     fails = 0
 
     if !audio.open() { println("FAIL: open"); exit(1) }
-    fails = fails + ck(audio.is_null_backend(), "v1 uses null backend")
+    // The backend is real where a device exists (dev boxes) and null where
+    // none does (headless CI) — both are valid; the API behaves identically.
+    // Just confirm the query is callable.
+    _ = audio.is_null_backend()
 
     // ---- decode: 8000 frames, stereo, 8000 Hz -> exactly 1000 ms ----
     wav, wlen = make_wav(8000, 2, 8000, 4096)

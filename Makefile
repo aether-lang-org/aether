@@ -226,7 +226,20 @@ ifeq ($(shell uname -s),FreeBSD)
                     $(firstword $(wildcard /lib/libcap_sysctl.so.* /usr/lib/libcap_sysctl.so.*))
 endif
 
-LDFLAGS = -lm $(OPENSSL_LDFLAGS) $(ZLIB_LDFLAGS) $(NGHTTP2_LDFLAGS) $(PCRE2_LDFLAGS) $(CASPER_LDFLAGS)
+# std.audio's vendored miniaudio backend (std/audio/miniaudio.h). miniaudio
+# dlopens the actual OS audio backends (ALSA/PulseAudio/sndio) at runtime, so
+# only the loader/threads/math libs are needed at link time; macOS needs the
+# audio frameworks. Windows folds its audio into the existing WIN_LINK_LIBs.
+AUDIO_LDFLAGS :=
+ifeq ($(shell uname -s),Linux)
+  AUDIO_LDFLAGS := -lpthread -ldl -lm
+else ifeq ($(shell uname -s),FreeBSD)
+  AUDIO_LDFLAGS := -lpthread -lm
+else ifeq ($(shell uname -s),Darwin)
+  AUDIO_LDFLAGS := -framework CoreFoundation -framework CoreAudio -framework AudioToolbox
+endif
+
+LDFLAGS = -lm $(OPENSSL_LDFLAGS) $(ZLIB_LDFLAGS) $(NGHTTP2_LDFLAGS) $(PCRE2_LDFLAGS) $(CASPER_LDFLAGS) $(AUDIO_LDFLAGS)
 
 # Hardening flags (issue #396). Opt-in via `HARDEN=1`. The CI matrix
 # pins a Linux/gcc + HARDEN=1 entry so a hardened-build regression
@@ -376,6 +389,14 @@ LZF_CFLAGS_RELAX = -Wno-implicit-fallthrough -Wno-expansion-to-defined
 $(OBJ_DIR)/std/lzf/lzf_c.o: CFLAGS += $(LZF_CFLAGS_RELAX)
 $(OBJ_DIR)/std/lzf/lzf_d.o: CFLAGS += $(LZF_CFLAGS_RELAX)
 $(OBJ_DIR)/std/lzf/aether_lzf.o: CFLAGS += $(LZF_CFLAGS_RELAX)
+
+# Vendored miniaudio (single-header, ~96k lines) is compiled inside
+# aether_audio.c via MINIAUDIO_IMPLEMENTATION. Relax the warnings we don't
+# own — same treatment as vendored liblzf above.
+AUDIO_CFLAGS_RELAX = -Wno-unused-function -Wno-unused-variable \
+                     -Wno-implicit-fallthrough -Wno-sign-compare \
+                     -Wno-unused-parameter -Wno-type-limits
+$(OBJ_DIR)/std/audio/aether_audio.o: CFLAGS += $(AUDIO_CFLAGS_RELAX)
 
 # Compiler target (incremental build with object files)
 compiler: $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(OBJ_DIR)/runtime/aether_resource_caps.o $(IO_POLLER_OBJS)
@@ -978,7 +999,7 @@ ae: compiler
 	@echo "==================================="
 	@echo "Building ae command-line tool ($(DETECTED_OS)) v$(VERSION)"
 	@echo "==================================="
-	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_OPENSSL_LIBS='"$(OPENSSL_LDFLAGS)"' -DAETHER_ZLIB_LIBS='"$(ZLIB_LDFLAGS)"' -DAETHER_NGHTTP2_LIBS='"$(NGHTTP2_LDFLAGS)"' -DAETHER_PCRE2_LIBS='"$(PCRE2_LDFLAGS)"' -DAETHER_CASPER_LIBS='"$(CASPER_LDFLAGS)"' $(if $(AETHER_ENABLE_LLM),-DAETHER_ENABLE_LLM=1) -Itools tools/ae.c tools/ae_help.c tools/ae_fmt.c tools/apkg/toml_parser.c $(if $(AETHER_ENABLE_LLM),tools/llm_shim.c $(LLM_LDFLAGS)) -o build/ae$(EXE_EXT) $(LDFLAGS)
+	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_OPENSSL_LIBS='"$(OPENSSL_LDFLAGS)"' -DAETHER_ZLIB_LIBS='"$(ZLIB_LDFLAGS)"' -DAETHER_NGHTTP2_LIBS='"$(NGHTTP2_LDFLAGS)"' -DAETHER_PCRE2_LIBS='"$(PCRE2_LDFLAGS)"' -DAETHER_CASPER_LIBS='"$(CASPER_LDFLAGS)"' -DAETHER_AUDIO_LIBS='"$(AUDIO_LDFLAGS)"' $(if $(AETHER_ENABLE_LLM),-DAETHER_ENABLE_LLM=1) -Itools tools/ae.c tools/ae_help.c tools/ae_fmt.c tools/apkg/toml_parser.c $(if $(AETHER_ENABLE_LLM),tools/llm_shim.c $(LLM_LDFLAGS)) -o build/ae$(EXE_EXT) $(LDFLAGS)
 	@echo "✓ Built successfully: build/ae$(EXE_EXT)"
 	@echo ""
 	@echo "Usage:"
