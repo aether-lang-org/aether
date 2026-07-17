@@ -19,6 +19,21 @@
 #include <string.h>
 #include <stdatomic.h>
 
+/* Threads are the whole point of this module — but the cooperative /
+ * AETHER_NO_THREADING build has no scheduler threads and deliberately leaves
+ * pthread_create unstubbed (aether_thread.h: "calling them on a threadless
+ * platform is a logic error and should fail at link time"). So when threading
+ * is off we do NOT spawn: `work` runs synchronously on the caller's thread at
+ * launch, and its result is delivered through the normal loop path (poster or
+ * drain). No parallelism — but the contract (work runs; done fires on the loop
+ * thread) still holds, which is exactly the cooperative model. This mirrors the
+ * h2 server's "sequential fallback" when its pool is unavailable. */
+#if defined(AETHER_NO_THREADING)
+#  define AETHER_WORKER_HAS_THREADS 0
+#else
+#  define AETHER_WORKER_HAS_THREADS 1
+#endif
+
 /* ---- job ---------------------------------------------------------------- */
 
 typedef struct WorkerJob {
@@ -97,11 +112,11 @@ static WorkerJob* ready_pop(void) {
     return job;
 }
 
-/* ---- worker thread entry ----------------------------------------------- */
+/* ---- job execution ----------------------------------------------------- */
 
-static void* worker_entry(void* arg) {
-    WorkerJob* job = (WorkerJob*)arg;
-
+/* Run the work closure, then route the completion. Called on a worker thread
+ * (threaded build) or inline on the caller's thread (AETHER_NO_THREADING). */
+static void run_job(WorkerJob* job) {
     job->result = call_work(job->work);
 
     if (job->detached) {
@@ -109,12 +124,11 @@ static void* worker_entry(void* arg) {
          * business (it either returns something disposable or NULL). */
         atomic_fetch_sub(&g_pending, 1);
         free(job);
-        return NULL;
+        return;
     }
 
     /* Snapshot the poster under the lock; if one is installed, hand the job to
-     * it (off-thread) so the host can marshal to the loop thread. Otherwise
-     * queue for drain. */
+     * it so the host can marshal to the loop thread. Otherwise queue for drain. */
     pthread_mutex_lock(&g_lock);
     AetherWorkerClosure poster = g_poster;
     int have_poster = (poster.fn != NULL);
@@ -124,8 +138,14 @@ static void* worker_entry(void* arg) {
     if (have_poster) {
         call_poster(poster, job);   /* host marshals -> aether_worker_deliver */
     }
+}
+
+#if AETHER_WORKER_HAS_THREADS
+static void* worker_entry(void* arg) {
+    run_job((WorkerJob*)arg);
     return NULL;
 }
+#endif
 
 /* ---- launch ------------------------------------------------------------- */
 
@@ -141,6 +161,7 @@ static int launch(AetherWorkerClosure work, AetherWorkerClosure done, int detach
 
     atomic_fetch_add(&g_pending, 1);
 
+#if AETHER_WORKER_HAS_THREADS
     pthread_t th;
     if (pthread_create(&th, NULL, worker_entry, job) != 0) {
         atomic_fetch_sub(&g_pending, 1);
@@ -148,6 +169,12 @@ static int launch(AetherWorkerClosure work, AetherWorkerClosure done, int detach
         return 0;
     }
     pthread_detach(th);   /* self-reaping; we never join */
+#else
+    /* Cooperative / threadless build: no off-thread execution. Run the work
+     * synchronously here; the completion still flows through the poster/drain
+     * path, so `done` fires on the loop thread on the next deliver/drain. */
+    run_job(job);
+#endif
     return 1;
 }
 
