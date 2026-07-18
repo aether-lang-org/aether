@@ -1,0 +1,12 @@
+// Consumer that imports a module owning an enum and a sum type, and calls
+// accessors over both. Exercises the imported enum/sum by name in value,
+// return, and match positions.
+import types
+
+main() {
+    c = types.default_color()          // Color.Green
+    println("${types.color_code(c)}")  // 1
+
+    s = types.a_rect()                 // Shape = Rect
+    println("${types.shape_kind(s)}")  // 2
+}

@@ -1706,6 +1706,38 @@ static int program_has_bitstruct(ASTNode* program, const char* name) {
     return 0;
 }
 
+/* An `enum X { ... }` already present in the program (the consumer's own, or
+ * an earlier merge). Used to dedup enum merges. */
+static int program_has_enum(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (!existing) continue;
+        ASTNode* unwrapped = unwrap_export(existing);
+        if (unwrapped && unwrapped->type == AST_ENUM_DEFINITION &&
+            unwrapped->value && strcmp(unwrapped->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A `type X = A | B | C` sum-type def already present in the program (the
+ * consumer's own, or an earlier merge). Used to dedup sum-type merges. */
+static int program_has_sum(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (!existing) continue;
+        ASTNode* unwrapped = unwrap_export(existing);
+        if (unwrapped && unwrapped->type == AST_SUM_TYPE_DEF &&
+            unwrapped->value && strcmp(unwrapped->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* #1006: an `actor X { ... }` already present in the program (the consumer's
  * own, or an earlier merge). Used to dedup cross-module actor merges. */
 static int program_has_actor(ASTNode* program, const char* name) {
@@ -2291,6 +2323,29 @@ void module_merge_into_program(ASTNode* program) {
                 ASTNode* clone = clone_ast_node(decl);
                 clone->is_imported = 1;
                 insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_ENUM_DEFINITION && decl->value) {
+                // An `enum X { ... }` from an imported module must enter the
+                // consumer's program AST (bare name, like structs/bitstructs) so
+                // the typechecker's enum registry learns `X` (resolving `X.Member`
+                // selectors and `match` arms) and codegen emits its typedef.
+                // Without this an imported enum used by name fails: `Undefined
+                // variable 'X'` at type-check, or `unknown type name 'X'` in the
+                // emitted C. Bypasses the selective-import filter (same as
+                // structs): a merged body over the enum can't type-check without
+                // the def in scope. Dedup by name.
+                if (program_has_enum(program, decl->value)) continue;
+                ASTNode* clone = clone_ast_node(decl);
+                clone->is_imported = 1;
+                insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_SUM_TYPE_DEF && decl->value) {
+                // A `type X = A | B | C` sum type from an imported module enters
+                // the consumer's program AST (bare name) so its variant names and
+                // typedef resolve on both the type-check and codegen sides. Same
+                // failure/fix shape as enums/structs. Dedup by name.
+                if (program_has_sum(program, decl->value)) continue;
+                ASTNode* clone = clone_ast_node(decl);
+                clone->is_imported = 1;
+                insert_child_at(program, clone, insert_idx++);
             } else if (decl->type == AST_MESSAGE_DEFINITION && decl->value) {
                 // #1006: `message X { ... }` from an imported module enters the
                 // consumer's program AST under its bare name (like structs), so
@@ -2630,6 +2685,18 @@ void module_merge_into_program(ASTNode* program) {
                     // bitstruct reached through a chain of imports must still
                     // land in program->children so its typedef is emitted.
                     if (program_has_bitstruct(program, decl->value)) continue;
+                    ASTNode* clone = clone_ast_node(decl);
+                    clone->is_imported = 1;
+                    insert_child_at(program, clone, insert_idx++);
+                } else if (decl->type == AST_ENUM_DEFINITION && decl->value) {
+                    // Transitive sibling of the enum merge above.
+                    if (program_has_enum(program, decl->value)) continue;
+                    ASTNode* clone = clone_ast_node(decl);
+                    clone->is_imported = 1;
+                    insert_child_at(program, clone, insert_idx++);
+                } else if (decl->type == AST_SUM_TYPE_DEF && decl->value) {
+                    // Transitive sibling of the sum-type merge above.
+                    if (program_has_sum(program, decl->value)) continue;
                     ASTNode* clone = clone_ast_node(decl);
                     clone->is_imported = 1;
                     insert_child_at(program, clone, insert_idx++);

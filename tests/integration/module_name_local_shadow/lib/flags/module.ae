@@ -1,0 +1,17 @@
+// A module named `flags` whose own function body declares a LOCAL variable
+// ALSO named `flags`. This is the shadowing shape from the imported-bitstruct
+// ask's verbatim reproducer.
+//
+// Before the fix, the consumer's `flags.get(...)` call worked, but the
+// module's own merged body — `flags = S{...}; return flags.count` — had its
+// `flags.count` field access mis-resolved as a namespace-const reference
+// (`flags_count`), because the member-access handler took the namespace branch
+// whenever the base name matched a visible namespace, with no precedence for a
+// same-named in-scope local. Result: `module 'flags' has no export 'count'`.
+// (Reproduced with a plain struct too — not bitstruct-specific.)
+struct S { count: int }
+
+get(v: int) -> int {
+    flags = S { count: v }   // local shadows the module name `flags`
+    return flags.count       // must resolve as struct-field, not flags_count
+}
