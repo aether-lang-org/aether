@@ -25,7 +25,11 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 
-got=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tr '\n' ' ' | sed 's/ *$//')
+# The program prints "1" and "2" on their own lines. Extract just those
+# result lines — clang on macOS emits -Wparentheses-equality warnings for the
+# generated `match` comparisons on stderr, which 2>&1 folds in; a bare-line
+# grep keeps this assertion about the program's output, not the C diagnostics.
+got=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' | tr '\n' ' ' | sed 's/ *$//')
 if [ "$got" != "1 2" ]; then
     echo "  [FAIL] enum_sum_cross_module: expected '1 2', got '$got'"
     echo "$out" | head -20 | sed 's/^/          /'
