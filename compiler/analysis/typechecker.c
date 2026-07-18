@@ -6489,8 +6489,18 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             // Rewrite AST to AST_IDENTIFIER so codegen emits the C variable name directly.
             // Issue #243: gate on the strict per-scope visibility check
             // so user code can't reach into transitively-merged consts.
+            //
+            // A same-named in-scope VALUE (local / param / global) shadows the
+            // namespace: if `flags` is a bound variable, `flags.field` is a value
+            // member access, never a module-const reference. Without this guard a
+            // module named `flags` whose own (merged) body has a local `flags`
+            // has its `flags.field` mis-resolved as `flags_field` const lookup ->
+            // spurious "module 'flags' has no export 'field'". Skip the namespace
+            // branch when the base resolves to a value symbol so struct-field
+            // resolution below takes precedence.
             if (expr->child_count > 0 && expr->children[0] &&
                 expr->children[0]->type == AST_IDENTIFIER && expr->children[0]->value &&
+                !lookup_symbol(table, expr->children[0]->value) &&
                 is_visible_namespace(expr->children[0]->value, table) && expr->value) {
                 // Enforce export visibility for constants
                 if (is_export_blocked(expr->children[0]->value, expr->value)) {

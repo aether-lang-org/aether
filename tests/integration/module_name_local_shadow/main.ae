@@ -1,0 +1,8 @@
+// Consumer imports the module named `flags` and calls its accessor. The call
+// `flags.get(7)` must resolve as a module-member call even though the module's
+// body has a local `flags` shadowing the namespace inside itself.
+import flags
+
+main() {
+    println("${flags.get(7)}")   // 7
+}
