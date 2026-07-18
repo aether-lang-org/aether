@@ -1690,6 +1690,22 @@ static int program_has_distinct(ASTNode* program, const char* name) {
     return 0;
 }
 
+/* A `bitstruct Name : <backing> { ... }` def already present in the program
+ * (the consumer's own, or an earlier merge). Used to dedup bitstruct merges. */
+static int program_has_bitstruct(ASTNode* program, const char* name) {
+    if (!program || !name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (!existing) continue;
+        ASTNode* unwrapped = unwrap_export(existing);
+        if (unwrapped && unwrapped->type == AST_BITSTRUCT_DEFINITION &&
+            unwrapped->value && strcmp(unwrapped->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* #1006: an `actor X { ... }` already present in the program (the consumer's
  * own, or an earlier merge). Used to dedup cross-module actor merges. */
 static int program_has_actor(ASTNode* program, const char* name) {
@@ -2259,6 +2275,22 @@ void module_merge_into_program(ASTNode* program) {
                 ASTNode* clone = clone_ast_node(decl);
                 clone->is_imported = 1;
                 insert_child_at(program, clone, insert_idx++);
+            } else if (decl->type == AST_BITSTRUCT_DEFINITION && decl->value) {
+                // A `bitstruct Name : <backing> { ... }` from an imported module
+                // must enter the consumer's program AST (bare name, like structs
+                // and distinct types) so resolve_bitstruct_types registers it and
+                // codegen emits its `typedef <backing> Name;`. Without this the
+                // imported bitstruct is unknown to both passes: the `word as
+                // Name` cast in the module's own (merged) function fails its kind
+                // check, and codegen emits a prototype referencing `Name` with no
+                // typedef ("unknown type name 'Name'"). Bypasses the selective-
+                // import filter on purpose (same as structs/distincts): a merged
+                // body that casts to/reads a field of the bitstruct cannot
+                // type-check without the def in scope. Dedup by name.
+                if (program_has_bitstruct(program, decl->value)) continue;
+                ASTNode* clone = clone_ast_node(decl);
+                clone->is_imported = 1;
+                insert_child_at(program, clone, insert_idx++);
             } else if (decl->type == AST_MESSAGE_DEFINITION && decl->value) {
                 // #1006: `message X { ... }` from an imported module enters the
                 // consumer's program AST under its bare name (like structs), so
@@ -2590,6 +2622,14 @@ void module_merge_into_program(ASTNode* program) {
                 } else if (decl->type == AST_DISTINCT_TYPE_DEF && decl->value) {
                     // #908: transitive sibling of the distinct-def merge above.
                     if (program_has_distinct(program, decl->value)) continue;
+                    ASTNode* clone = clone_ast_node(decl);
+                    clone->is_imported = 1;
+                    insert_child_at(program, clone, insert_idx++);
+                } else if (decl->type == AST_BITSTRUCT_DEFINITION && decl->value) {
+                    // Transitive sibling of the bitstruct merge above: a
+                    // bitstruct reached through a chain of imports must still
+                    // land in program->children so its typedef is emitted.
+                    if (program_has_bitstruct(program, decl->value)) continue;
                     ASTNode* clone = clone_ast_node(decl);
                     clone->is_imported = 1;
                     insert_child_at(program, clone, insert_idx++);
