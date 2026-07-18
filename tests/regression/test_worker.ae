@@ -1,0 +1,131 @@
+// std.worker regression — off-thread work + completion delivered on the
+// draining (loop) thread. No poster is installed, so completions queue and we
+// pump them with worker.drain() on THIS thread — the deterministic, headless
+// path (a GUI host would instead install a poster that marshals to its UI
+// thread; the contract is identical).
+//
+// Covers the acceptance points from asks/ui-async-worker-for-blocking-io.md:
+//   - work runs off-thread; done fires afterwards on the loop thread with the
+//     work's ptr result, and can read it safely (no crash / race).
+//   - a work closure that CAPTURES a heap string and returns a heap-bearing
+//     result reads correct data in done (the capture-lifetime guarantee).
+//   - many concurrent workers, and a detached (fire-and-forget) worker.
+//
+// Shared tallies live in a `bytes` scratch buffer whose ptr the completion
+// closures capture (a ptr capture copies the pointer; the buffer is shared).
+// Completions run on the drain thread — the same thread as main, serialised by
+// drain() — so these writes are race-free without a lock.
+//   slot 0: total completions delivered
+//   slot 1: last captured-string length seen off-thread
+//   slot 2: last result marker
+//   slot 3: 1 if the off-thread capture re-derivation was correct
+
+import std.worker
+import std.string
+import std.bytes
+
+extern exit(code: int)
+
+fn ck(cond: bool, msg: string) -> int {
+    if !cond { println("FAIL: ${msg}"); return 1 }
+    return 0
+}
+
+main() {
+    fails = 0
+    t = bytes.new(4)          // shared tally buffer
+    _ = bytes.set(t, 0, 0)
+    _ = bytes.set(t, 1, 0)
+    _ = bytes.set(t, 2, 0)
+    _ = bytes.set(t, 3, 0)
+
+    // ---- one worker: heap-string capture -> ptr result -> done reads it ----
+    // `tag` is a COMPUTED heap string (string.concat). The work closure
+    // captures it, reads it off-thread, and returns a bytes payload derived
+    // from it. done reads the payload AND re-reads the capture — both must be
+    // intact across the thread hop.
+    tag = string.concat("song-", "4242")     // "song-4242" = len 9
+    ok = worker.run(
+        || {
+            // WORKER thread — blocking is fine here.
+            p = bytes.new(4)
+            bytes.set(p, 0, string.length(tag))   // read captured heap string
+            bytes.set(p, 1, 100)                  // arbitrary marker
+            // Re-derive from the capture to prove it is still valid off-thread.
+            joined = string.concat(tag, "-x")
+            bytes.set(p, 2, string.length(joined))  // "song-4242-x" = len 11
+            return p
+        },
+        |res: ptr| {
+            // LOOP thread (this thread, via drain).
+            bytes.set(t, 1, bytes.get(res, 0))     // captured length
+            bytes.set(t, 2, bytes.get(res, 1))     // marker
+            if bytes.get(res, 2) == 11 { bytes.set(t, 3, 1) }
+            bytes.set(t, 0, bytes.get(t, 0) + 1)   // completion count
+            bytes.free(res)
+        }
+    )
+    fails = fails + ck(ok, "worker.run launched")
+
+    // Pump until the completion has been delivered. drain() runs completions on
+    // THIS thread; spin until pending() drains.
+    spins = 0
+    while worker.pending() > 0 && spins < 10000000 {
+        _ = worker.drain(0)
+        spins = spins + 1
+    }
+    fails = fails + ck(bytes.get(t, 0) == 1, "one completion delivered")
+    fails = fails + ck(bytes.get(t, 1) == 9, "captured heap string length read off-thread (9)")
+    fails = fails + ck(bytes.get(t, 2) == 100, "result marker carried to done")
+    fails = fails + ck(bytes.get(t, 3) == 1, "capture re-derived correctly off-thread (len 11)")
+    fails = fails + ck(worker.pending() == 0, "pending back to 0")
+
+    // ---- many concurrent workers: each returns its own index ----
+    _ = bytes.set(t, 0, 0)     // reset completion count
+    n = 0
+    while n < 16 {
+        idx = n
+        _ = worker.run(
+            || {
+                p = bytes.new(1)
+                bytes.set(p, 0, idx)    // capture idx by value
+                return p
+            },
+            |res: ptr| {
+                bytes.set(t, 0, bytes.get(t, 0) + 1)
+                bytes.free(res)
+            }
+        )
+        n = n + 1
+    }
+    spins = 0
+    while worker.pending() > 0 && spins < 10000000 {
+        _ = worker.drain(0)
+        spins = spins + 1
+    }
+    fails = fails + ck(bytes.get(t, 0) == 16, "all 16 concurrent completions delivered")
+
+    // ---- detached worker: runs, no post-back, nothing to drain ----
+    d_ok = worker.run_detached(
+        || {
+            p = bytes.new(1)
+            bytes.set(p, 0, 7)
+            bytes.free(p)      // detached owns its own result; free it here
+            return null
+        }
+    )
+    fails = fails + ck(d_ok, "detached worker launched")
+    spins = 0
+    while worker.pending() > 0 && spins < 10000000 {
+        spins = spins + 1
+    }
+    fails = fails + ck(worker.pending() == 0, "detached worker drained pending")
+
+    bytes.free(t)
+
+    if fails != 0 {
+        println("worker: ${fails} failure(s)")
+        exit(1)
+    }
+    println("PASS: test_worker")
+}

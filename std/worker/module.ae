@@ -1,0 +1,126 @@
+// std.worker — run blocking work off the loop thread, deliver the result back
+// on it. Import with: import std.worker
+//
+// The primitive every GUI toolkit has (Qt QThread+signal, GTK g_thread +
+// g_idle_add, Swing SwingWorker), made toolkit-agnostic:
+//
+//     run this closure on a worker thread; when it returns, call this
+//     completion closure back on the thread that owns the event loop, so the
+//     completion may safely touch UI / shared state without a data race.
+//
+//     import std.worker
+//
+//     search_async(term: string, on_done: fn) {
+//         worker.run(
+//             || {                             // WORKER thread — blocking is fine
+//                 req = client.request("GET", api_url(term))
+//                 resp, _ = client.send_request(req)
+//                 return parse_songs(client.response_body(resp))   // *ptr list
+//             },
+//             |songs: ptr| { on_done(songs) }  // LOOP thread — safe to touch widgets
+//         )
+//     }
+//
+// The work closure returns a `ptr` (a boxed value / list ptr — it carries any
+// result the completion needs); the completion closure takes that `ptr`. A
+// single ptr in, a single ptr out, by design (non-goals: no typed generics, no
+// async/await, no cancellation — see asks/ui-async-worker-for-blocking-io.md).
+//
+// ---- getting onto the loop thread ----
+//
+// `done` MUST run on the loop-owning thread. This library does not know how to
+// get there — that is the host's job. A GUI host installs a poster once at
+// startup:
+//
+//     worker.set_main_poster(|job: ptr| {
+//         // marshal `job` onto the UI thread (g_idle_add / dispatch_async /
+//         // PostMessage), and there call worker.deliver(job).
+//     })
+//
+// With no poster installed, completions queue and the app pumps them itself on
+// its own loop thread:
+//
+//     worker.drain(0)          // run all ready completions, on THIS thread
+//
+// which is the deterministic, toolkit-free path headless apps and tests use.
+//
+// ---- cooperative / threadless builds ----
+//
+// Blocking IO inherently needs a thread off the actor scheduler (a blocking
+// actor handler starves its scheduler core — the same reason std.http's h2
+// server runs handlers on its own pthread pool). So `work` runs on a fresh OS
+// thread. On the cooperative / AETHER_NO_THREADING build (embedded, wasm,
+// ci-coop) there are no threads: `work` then runs SYNCHRONOUSLY at the run()
+// call, and its completion is still delivered through the poster/drain path on
+// the next deliver/drain. No parallelism there — but the contract (work runs;
+// done fires on the loop thread) holds unchanged.
+//
+// ---- lifetime ----
+//
+// The work/done closures and any heap strings they capture stay alive across
+// the thread hop: passing a closure to an extern callee suppresses the env
+// drain (closure_extern_retains_no_uaf), and computed string captures are
+// retained on capture. The `ptr` result is owned by `done` — free it there if
+// it is heap memory you allocated in `work`.
+
+exports (
+    aether_worker_run, aether_worker_run_detached,
+    aether_worker_set_main_poster, aether_worker_deliver,
+    aether_worker_drain, aether_worker_pending,
+    run, run_detached, set_main_poster, deliver, drain, pending
+)
+
+// ---- raw externs (std/worker/aether_worker.c) ----
+// `fn` lowers to the compiler's _AeClosure ({fn, env}); the C side stores it
+// and invokes it (on the worker thread for `work`, on the loop thread for
+// `done`) with the emitted fn(env, args...) convention. `ptr` job handles are
+// opaque WorkerJob*.
+extern aether_worker_run(work: fn, done: fn) -> int
+extern aether_worker_run_detached(work: fn) -> int
+extern aether_worker_set_main_poster(poster: fn)
+extern aether_worker_deliver(job: ptr)
+extern aether_worker_drain(max: int) -> int
+extern aether_worker_pending() -> int
+
+// ---- Aether-side wrappers ----
+
+// Run `work` on a background thread; when it returns a `ptr` result, deliver
+// that result to `done` on the loop thread (through the installed poster, or
+// the drain queue if none). Returns true if the worker launched, false on
+// failure (no threads / out of memory) — on false neither closure runs.
+run(work: fn, done: fn) -> bool {
+    return aether_worker_run(work, done) == 1
+}
+
+// Fire-and-forget: run `work` off-thread and discard its result. No post-back,
+// nothing to drain. Returns true if launched.
+run_detached(work: fn) -> bool {
+    return aether_worker_run_detached(work) == 1
+}
+
+// Install the host's "post to the loop thread" trampoline. `poster` is invoked
+// (on the worker thread) with an opaque job `ptr`; the host must marshal that
+// ptr onto its loop thread and there call `deliver(job)`. Call once at startup.
+set_main_poster(poster: fn) {
+    aether_worker_set_main_poster(poster)
+}
+
+// Run a job's completion now, on the calling thread: invokes its `done` with
+// the work result, then reclaims the job. The host calls this from its loop
+// thread inside the marshaled poster callback.
+deliver(job: ptr) {
+    aether_worker_deliver(job)
+}
+
+// Pump ready completions on the calling thread. `max` <= 0 runs all currently
+// ready; a positive `max` caps it. Returns how many ran. Only jobs that
+// finished while NO poster was installed appear here. The headless / test loop.
+drain(max: int) -> int {
+    return aether_worker_drain(max)
+}
+
+// Launched jobs not yet delivered (running, ready-but-undrained, or in flight
+// through the poster). For backpressure and test synchronisation.
+pending() -> int {
+    return aether_worker_pending()
+}
