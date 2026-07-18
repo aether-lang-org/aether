@@ -67,6 +67,19 @@ jobs:
       if: matrix.install != ''
       run: ${{ matrix.install }}
 
+    # Cache the compiled miniaudio object (std.audio's ~96k-line vendored
+    # header costs ~1 min to compile, and `make ci` starts with a clean).
+    # Keyed per-OS + per-compiler + per-build-variant + the header/source
+    # content, so a hit is only ever a byte-identical object; the Makefile's
+    # audio-cache-restore double-checks a content stamp before reusing it and
+    # falls back to a fresh compile on any mismatch. Never shared across
+    # platforms (matrix.os/matrix.cc are in the key).
+    - name: Cache miniaudio object
+      uses: actions/cache@v4
+      with:
+        path: .ci-cache
+        key: audio-obj-${{ matrix.os }}-${{ matrix.cc }}-h${{ matrix.harden }}-${{ hashFiles('std/audio/miniaudio.h', 'std/audio/aether_audio.c', 'std/audio/aether_audio.h') }}
+
     - name: Run full CI suite
       run: HARDEN=${{ matrix.harden }} CC=${{ matrix.cc }} make ci
 
