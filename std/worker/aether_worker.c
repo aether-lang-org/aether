@@ -114,6 +114,21 @@ static WorkerJob* ready_pop(void) {
 
 /* ---- job execution ----------------------------------------------------- */
 
+/* Reclaim a job's per-job closure environments. The env is a plain malloc
+ * block the compiler heap-allocated for the closure's captures; because we
+ * received the closures through an extern boundary, codegen does NOT free them
+ * (the env-drain is suppressed — closure_extern_retains_no_uaf), so ownership
+ * is ours once the closures have fired. Freeing here keeps a long-lived app
+ * (thousands of worker.run calls) from leaking an env per job. NOTE: if a
+ * capture is a retained AetherString, its refcount is not released by this
+ * plain free (the retain-on-capture ref is never released by design) — that
+ * residual is the language's existing bounded per-closure behaviour, not new.
+ * The poster env is host-owned (installed once) and is never touched here. */
+static void free_job_envs(WorkerJob* job) {
+    if (job->work.env) free(job->work.env);
+    if (job->done.env) free(job->done.env);
+}
+
 /* Run the work closure, then route the completion. Called on a worker thread
  * (threaded build) or inline on the caller's thread (AETHER_NO_THREADING). */
 static void run_job(WorkerJob* job) {
@@ -122,6 +137,7 @@ static void run_job(WorkerJob* job) {
     if (job->detached) {
         /* No post-back, no delivery: the result is the work closure's own
          * business (it either returns something disposable or NULL). */
+        free_job_envs(job);
         atomic_fetch_sub(&g_pending, 1);
         free(job);
         return;
@@ -200,6 +216,7 @@ void aether_worker_deliver(void* arg) {
     if (!arg) return;
     WorkerJob* job = (WorkerJob*)arg;
     if (job->done.fn) call_done(job->done, job->result);
+    free_job_envs(job);   /* work + done envs are ours now that both have fired */
     atomic_fetch_sub(&g_pending, 1);
     free(job);
 }
