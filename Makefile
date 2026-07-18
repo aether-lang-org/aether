@@ -406,6 +406,55 @@ AUDIO_CFLAGS_RELAX = -Wno-unused-function -Wno-unused-variable \
                      $(AUDIO_GCC_ONLY_RELAX)
 $(OBJ_DIR)/std/audio/aether_audio.o: CFLAGS += $(AUDIO_CFLAGS_RELAX)
 
+# ---- miniaudio object cache (CI) ---------------------------------------
+# Compiling MINIAUDIO_IMPLEMENTATION (the ~96k-line vendored header) costs ~1
+# minute per build, paid on every matrix leg because `make ci` starts with
+# `clean` (rm -rf build). miniaudio.h changes ~never, so we cache the compiled
+# object OUTSIDE build/ (so clean can't wipe it) and restore it after clean.
+#
+# Safety: a cached object is used ONLY when it would be byte-identical to a
+# fresh compile. AUDIO_CACHE_STAMP is a content hash of the source, the header,
+# and the compiler identity + audio flags; the restore refuses a stamp mismatch
+# and falls back to a normal compile. In CI the actions/cache KEY already pins
+# hash(miniaudio.h)+OS+compiler, so a restored object is guaranteed to match;
+# the stamp guards local/edge use. A miss always rebuilds — never stale.
+AUDIO_CACHE_DIR    := .ci-cache
+AUDIO_CACHE_OBJ    := $(AUDIO_CACHE_DIR)/aether_audio.o
+AUDIO_CACHE_STAMP  := $(AUDIO_CACHE_DIR)/aether_audio.stamp
+AUDIO_OBJ          := $(OBJ_DIR)/std/audio/aether_audio.o
+# Portable content hasher (sha256sum on Linux, shasum on macOS, cksum fallback).
+CKSUM_CMD := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || (command -v shasum >/dev/null 2>&1 && echo 'shasum -a 256' || echo cksum))
+# Content key: source + vendored header + compiler identity + every build knob
+# that can change the emitted object — compiler version, the audio relax flags,
+# and the build-variant flags (HARDEN, EXTRA_CFLAGS: coop/wasm/embedded set
+# -DAETHER_NO_THREADING etc). If any of these differ the stamp differs, so a
+# hardened / coop / cross object never gets restored over a plain one.
+AUDIO_CACHE_KEY := $(shell cat std/audio/aether_audio.c std/audio/miniaudio.h std/audio/aether_audio.h 2>/dev/null | $(CKSUM_CMD) 2>/dev/null | cut -d' ' -f1)-$(shell $(CC) --version 2>/dev/null | head -1 | tr -dc 'a-zA-Z0-9.')-h$(HARDEN)-$(shell printf '%s %s' "$(AUDIO_GCC_ONLY_RELAX)" "$(EXTRA_CFLAGS)" | $(CKSUM_CMD) 2>/dev/null | cut -d' ' -f1)
+
+# Restore the cached object into build/ if the stamp matches, then touch it
+# newer than its source so make treats it as up-to-date and skips the compile.
+# No-op (silent) when there is no valid cache — the normal rule then builds it.
+.PHONY: audio-cache-restore
+audio-cache-restore:
+	@if [ -f "$(AUDIO_CACHE_OBJ)" ] && [ -f "$(AUDIO_CACHE_STAMP)" ] && \
+	    [ "$$(cat $(AUDIO_CACHE_STAMP))" = "$(AUDIO_CACHE_KEY)" ]; then \
+	  mkdir -p "$(dir $(AUDIO_OBJ))"; \
+	  cp "$(AUDIO_CACHE_OBJ)" "$(AUDIO_OBJ)"; \
+	  touch "$(AUDIO_OBJ)"; \
+	  echo "audio-cache: restored miniaudio object (stamp hit) — skipping ~96k-line compile"; \
+	else \
+	  echo "audio-cache: no valid cached object — will compile miniaudio from source"; \
+	fi
+
+# Save the freshly-built object + its stamp to the cache dir (idempotent).
+# actions/cache then persists $(AUDIO_CACHE_DIR) between runs.
+.PHONY: audio-cache-save
+audio-cache-save: $(AUDIO_OBJ)
+	@mkdir -p "$(AUDIO_CACHE_DIR)"
+	@cp "$(AUDIO_OBJ)" "$(AUDIO_CACHE_OBJ)"
+	@printf '%s' "$(AUDIO_CACHE_KEY)" > "$(AUDIO_CACHE_STAMP)"
+	@echo "audio-cache: saved miniaudio object to $(AUDIO_CACHE_OBJ)"
+
 # Compiler target (incremental build with object files)
 compiler: $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(OBJ_DIR)/runtime/aether_resource_caps.o $(IO_POLLER_OBJS)
 	@echo "Linking compiler..."
@@ -1851,8 +1900,12 @@ ci: clean
 	@echo "  Parallel: $(NPROC) jobs (build) / $(NPROC) (.ae tests) / $${SH_NPROC:-1} (shell tests)"
 	@echo "==================================="
 	@echo ""
+	@echo "[0/9] Restoring miniaudio object cache (if valid)..."
+	@$(MAKE) audio-cache-restore
+	@echo ""
 	@echo "[1/9] Building compiler (-Werror)..."
 	@$(MAKE) -j$(NPROC) compiler EXTRA_CFLAGS=-Werror
+	@$(MAKE) audio-cache-save
 	@echo ""
 	@echo "[2/9] Building ae CLI..."
 	@$(MAKE) -j$(NPROC) ae

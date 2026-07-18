@@ -94,3 +94,4 @@ editor/vscode/*.vsix
 .DS_Store
 Thumbs.db
 desktop.ini
+.ci-cache/
