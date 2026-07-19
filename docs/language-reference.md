@@ -1859,7 +1859,30 @@ walk(e: *ErrChain) {
 }
 ```
 
-Lifetime is the operand's, `mk_err` owns the raw allocation it returned, and the caller is responsible for freeing the chain. (For Aether-managed lifetimes on a similar shape with refcount-aware structural sharing, see `*StringSeq` in [sequences.md](sequences.md).)
+The recursion above reads naturally and is fine for the short chains errors usually form. But Aether does **not** turn tail calls into loops, so each cell costs one C stack frame: walking (or freeing) a `*Struct` chain that can grow without bound, a long linked list, a deep tree assembled from untrusted input, an error chain accumulated in a hot retry loop, risks a stack overflow. For unbounded shapes, walk the spine iteratively instead, which is O(1) stack at any depth, exactly as the refcounted `*StringSeq` does internally ([sequences.md](sequences.md) documents "O(n) time, O(1) stack" for 10k+ cells):
+
+```aether
+// Iterative traversal: O(1) stack regardless of depth.
+cur = e
+while cur != 0 {
+    println("[${cur.code}] ${cur.msg} (${cur.file}:${cur.line})")
+    cur = cur.cause
+}
+```
+
+Lifetime is the operand's, `mk_err` owns the raw allocation it returned, and the caller is responsible for freeing the chain. Free it with the same iterative spine walk, capturing each cell's successor *before* freeing it so the walk never dereferences freed memory:
+
+```aether
+// Iterative free: capture next before freeing the current cell.
+cur = e
+while cur != 0 {
+    next = cur.cause
+    free(cur as ptr)
+    cur = next
+}
+```
+
+There is no generic library helper for this: each user shape names its link field differently (`cause`, `next`, `tail`, ...), and the loop is three lines. Prefer it over recursion for any chain whose length you do not control. (For Aether-managed lifetimes on a similar shape with refcount-aware structural sharing, see `*StringSeq` in [sequences.md](sequences.md).)
 
 ---
 

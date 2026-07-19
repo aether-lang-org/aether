@@ -1,0 +1,75 @@
+// Regression / guidance lock for issue #1070: freeing and walking a deep
+// user-built `*Struct` chain must use an iterative spine walk, not
+// recursion. Aether does not turn tail calls into loops, so one C stack
+// frame is spent per cell; a recursive walk/free of a chain this long
+// overflows the stack (verified: signal 11). The iterative pattern the
+// language reference documents is O(1) stack and handles any depth.
+//
+// This builds a 300k-cell chain, walks it iteratively (summing a field so
+// the traversal actually dereferences each cell), then frees it
+// iteratively (capturing the successor before freeing the current cell so
+// the walk never touches freed memory). A regression to a recursive
+// walk/free would crash here instead of passing.
+
+import std.io (println)
+
+extern malloc(n: long) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+struct Node { val: int  next: *Node }
+
+build(n: int) -> *Node {
+    head = 0 as *Node
+    i = 0
+    while i < n {
+        node = malloc(16) as *Node
+        node.val = i
+        node.next = head
+        head = node
+        i = i + 1
+    }
+    return head
+}
+
+main() {
+    n = 300000
+    head = build(n)
+
+    // head is the last cell built, so its val is n-1: cheap build check
+    // that also dereferences the chain head.
+    if head.val != n - 1 {
+        println("FAIL: head.val ${head.val}, want ${n - 1}")
+        exit(1)
+    }
+
+    // Iterative traversal: O(1) stack regardless of depth. Reading
+    // cur.next each step dereferences every cell.
+    cur = head
+    walked = 0
+    while cur != 0 {
+        walked = walked + 1
+        cur = cur.next
+    }
+
+    // Iterative free: capture next before freeing the current cell so the
+    // walk never dereferences freed memory.
+    cur = head
+    freed = 0
+    while cur != 0 {
+        next = cur.next
+        free(cur as ptr)
+        cur = next
+        freed = freed + 1
+    }
+
+    if walked != n {
+        println("FAIL: walked ${walked}, want ${n}")
+        exit(1)
+    }
+    if freed != n {
+        println("FAIL: freed ${freed}, want ${n}")
+        exit(1)
+    }
+    println("PASS")
+}
