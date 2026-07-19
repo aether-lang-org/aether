@@ -177,7 +177,19 @@ int list_add_closure_owned(ArrayList* list, void* box) {
 }
 
 void* list_get_raw(ArrayList* list, int index) {
-    if (!list || index < 0 || index >= list->size) return NULL;
+    /* Validity guard before touching any field. `list` may be NULL, a
+     * low-address scalar (a small int intptr-cast to `ptr`), a freed list
+     * (list_free zeroes `_kind_magic`), a struct whose memory has been
+     * reused, or another kind (e.g. a HashMap) mistaken for a list. Any of
+     * those would otherwise fault on `list->size` / `list->items[index]`.
+     * Applying the same `_kind_magic` + low-address discriminator that
+     * aether_value_is_list uses turns a type-confusion / use-after-free
+     * into a safe NULL instead of a SIGSEGV deep inside the accessor. */
+    if (!list || (uintptr_t)list < AETHER_KIND_MIN_VALID_ADDR
+              || list->_kind_magic != AETHER_KIND_LIST_MAGIC) {
+        return NULL;
+    }
+    if (index < 0 || index >= list->size) return NULL;
     return list->items[index];
 }
 

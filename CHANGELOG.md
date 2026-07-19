@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`list.get` / `list_get_raw` no longer segfaults on an invalid list
+  pointer.** The accessor read `list->size` / `list->items[index]` without
+  validating the pointer, so a dangling, type-confused, or freed list — a
+  struct with the wrong `_kind_magic`, a reused struct, or a small int
+  intptr-cast to `ptr` — crashed deep inside the accessor instead of
+  returning a safe NULL. It now applies the same `_kind_magic` +
+  low-address discriminator `aether_value_is_list` uses, so a bad pointer
+  yields `(null, "")` (out-of-range index behaviour is unchanged). Surfaced
+  by an aeb build whose generated code passed such a pointer to `list.get`.
+
 ## [0.413.0]
 
 ### Added

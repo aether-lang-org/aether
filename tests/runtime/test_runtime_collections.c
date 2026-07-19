@@ -24,6 +24,34 @@ TEST_CATEGORY(list_add_and_get, TEST_CATEGORY_COLLECTIONS) {
     list_free(list);
 }
 
+/* Regression: list_get_raw must reject a non-list pointer with a safe NULL
+ * rather than faulting on list->size / list->items[index]. A dangling /
+ * type-confused pointer (wrong _kind_magic) reaching the accessor used to
+ * SIGSEGV deep inside it; the kind + low-address guard now catches it. */
+TEST_CATEGORY(list_get_raw_rejects_invalid_pointers, TEST_CATEGORY_COLLECTIONS) {
+    /* NULL list. */
+    ASSERT_NULL(list_get_raw(NULL, 0));
+
+    /* Low-address scalar: a small int intptr-cast to `ptr`. Below the
+     * mmap-min guard, so it must never be dereferenced. */
+    ASSERT_NULL(list_get_raw((ArrayList*)(uintptr_t)42, 0));
+
+    /* Another kind mistaken for a list: a HashMap has a valid struct at a
+     * valid address but carries AETHER_KIND_MAP_MAGIC, not the list magic —
+     * exactly the shape that crashed (valid pointer, wrong magic). */
+    HashMap* map = map_new();
+    ASSERT_NOT_NULL(map);
+    ASSERT_NULL(list_get_raw((ArrayList*)map, 0));
+    map_free(map);
+
+    /* The guard must not regress valid lists. */
+    ArrayList* list = list_new();
+    int v = 7;
+    list_add_raw(list, &v);
+    ASSERT_EQ(&v, list_get_raw(list, 0));
+    list_free(list);
+}
+
 TEST_CATEGORY(list_set_and_remove, TEST_CATEGORY_COLLECTIONS) {
     ArrayList* list = list_new();
 
