@@ -55,26 +55,13 @@ main() {
     fails = fails + check("-1", "-1", "neg one")
     fails = fails + check("42", "42", "small pos")
     fails = fails + check("-42", "-42", "small neg")
-    fails = fails + check("1000000", "1e+06", "one million (stringify uses %g)")
+    fails = fails + check("1000000", "1000000", "one million (exact integer, #1204)")
 
-    // int64 edges — 9223372036854775807 and -9223372036854775808.
-    // These are 19 decimal digits, at the int64 boundary. The fast-int
-    // path accepts them; stringify prints in %g form (6-significant-digit
-    // default), so the round-trip is lossy. That's expected: the parser
-    // preserves the VALUE, stringify's precision is a separate concern.
-    // We don't strictly check the output — just that the parse didn't error.
+    // int64 edges round-trip EXACTLY now: integers store in the int64 slot
+    // and stringify emits %lld, not lossy %g (#1204).
     print("\nLarge int boundary:\n")
-    v, perr = json.parse("9223372036854775807")
-    match (perr) {
-        "" -> {
-            println("  PASS int64-max parses without error")
-            json.free(v)
-        }
-        _ -> {
-            println("  FAIL int64-max: ${perr}")
-            fails = fails + 1
-        }
-    }
+    fails = fails + check("9223372036854775807", "9223372036854775807", "int64 max")
+    fails = fails + check("-9223372036854775808", "-9223372036854775808", "int64 min")
 
     // --- fast-double path ---
 

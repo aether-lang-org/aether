@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`std.json` now reads 64-bit integers exactly** (#1204). `json.get_int`
+  returned a 32-bit `int`, so any JSON number above 2^31-1 (a 10-digit ID, a
+  large byte-count) was silently corrupted on read with no diagnostic, even
+  though construction (`json.from_int`) already accepted the full int64 range.
+  The parser now stores integer-valued numbers in a dedicated int64 slot
+  (previously they were parsed into a `double`, lossy past 2^53), a new
+  `json.get_long(value) -> long` reads the exact int64 value, and
+  `json.get_int` now clamps to `+/-2147483647` on overflow instead of
+  truncating. Large integers also round-trip through parse/stringify exactly.
+
 ## [0.421.0]
 
 ### Added
@@ -27,6 +41,8 @@ next version number before tagging the release.
   programs; a program pulling `std.http` / `std.cryptography` additionally needs
   those third-party libs built into the sysroot (aether-crossbuild's
   `provision.sh`), untested through this path yet. Requires zig on `PATH`.
+
+## [0.420.0]
 
 ### Added
 

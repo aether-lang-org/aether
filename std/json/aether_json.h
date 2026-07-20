@@ -58,6 +58,7 @@ int json_is_null(JsonValue* value);
 int json_get_bool(JsonValue* value);
 double json_get_number(JsonValue* value);
 int json_get_int(JsonValue* value);
+long long json_get_long(JsonValue* value);
 // Borrowed pointer into the JsonValue's internal string. NULL when
 // `value` is not a JSON_STRING. Valid until json_free(root) is called.
 // The Aether wrapper `json.get_string` copies this into an owned
