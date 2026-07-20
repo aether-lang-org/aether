@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Swappable allocator convention (`std.alloc`) + tracking allocator
+  (`std.tracking`)** (#1045, #1049). An allocator is now an explicit handle,
+  never an implicit ambient context: `alloc.system()` is the default,
+  `alloc.of_arena(a)` allocates through a `std.arena`, and `alloc.raw` /
+  `resize` / `release` allocate raw bytes through any handle. Collections gain
+  an `_in` constructor that routes their own memory through a given allocator;
+  `std.list` (`list_new_in`) is the first, with `map` / `bytes` / `strbuilder`
+  to follow. On top of this, `std.tracking` wraps any allocator and records
+  every live allocation, so a leak becomes a deterministic in-test assertion
+  (`tracking.count(t) == 0`) rather than something only a coarse external CI
+  gate can catch, which matters because Aether has no GC backstop. Existing
+  code is unchanged: the default constructors keep the cap-aware system path.
+  See `docs/allocators.md`.
+
 ## [0.417.0]
 
 ### Fixed

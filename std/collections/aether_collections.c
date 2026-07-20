@@ -2,8 +2,31 @@
 #include "../../runtime/aether_resource_caps.h"
 #include "../../runtime/aether_value_kind.h"
 #include "../string/aether_string.h"
+#include "../alloc/aether_alloc.h"
 #include <stdlib.h>
 #include <string.h>
+
+/* std.list backing-allocator dispatch (#1045): NULL keeps the default
+ * cap-aware path unchanged; a non-NULL handle routes the list's own
+ * struct/items/owned_flags memory through it. */
+static void* cl_alloc(AetherAllocator* a, size_t n) {
+    return a ? aether_allocator_alloc(a, n) : aether_caps_malloc(n);
+}
+static void* cl_calloc(AetherAllocator* a, size_t n, size_t sz) {
+    if (!a) return aether_caps_calloc(n, sz);
+    size_t total = n * sz;
+    void* p = aether_allocator_alloc(a, total);
+    if (p) memset(p, 0, total);
+    return p;
+}
+static void* cl_realloc(AetherAllocator* a, void* p, size_t oldn, size_t newn) {
+    return a ? aether_allocator_realloc(a, p, oldn, newn)
+             : aether_caps_realloc(p, oldn, newn);
+}
+static void cl_free(AetherAllocator* a, void* p, size_t n) {
+    if (a) aether_allocator_free(a, p, n);
+    else aether_caps_free(p, n);
+}
 
 /* The leading uint32_t kind-magic on both ArrayList and HashMap is
  * the discriminator used by aether_value_kind() in runtime/
@@ -36,19 +59,23 @@ struct ArrayList {
      * safe by construction. NULL on a fresh list that has never
      * had an owned-put; first owned-put allocates it. */
     int* owned_flags;
+    AetherAllocator* alloc;   /* #1045: NULL = default cap-aware path */
 };
 
-ArrayList* list_new() {
-    /* #343: cap-aware. Items array is allocated lazily on first
-     * add — only the struct is accounted here. */
-    ArrayList* list = (ArrayList*)aether_caps_malloc(sizeof(ArrayList));
+ArrayList* list_new_in(AetherAllocator* alloc) {
+    ArrayList* list = (ArrayList*)cl_alloc(alloc, sizeof(ArrayList));
     if (!list) return NULL;
     list->_kind_magic = AETHER_KIND_LIST_MAGIC;
     list->items = NULL;
     list->size = 0;
     list->capacity = 0;
     list->owned_flags = NULL;
+    list->alloc = alloc;
     return list;
+}
+
+ArrayList* list_new() {
+    return list_new_in(NULL);
 }
 
 // list_add_raw returns 1 on success, 0 on failure (realloc error or
@@ -62,7 +89,7 @@ ArrayList* list_new() {
 static int list_grow_owned_flags(ArrayList* list) {
     if (!list || list->capacity == 0) return 1;
     if (list->owned_flags) return 1;
-    list->owned_flags = (int*)aether_caps_calloc(
+    list->owned_flags = (int*)cl_calloc(list->alloc,
         (size_t)list->capacity, sizeof(int));
     return list->owned_flags ? 1 : 0;
 }
@@ -74,8 +101,8 @@ int list_add_raw(ArrayList* list, void* item) {
         int new_capacity = list->capacity == 0 ? 8 : list->capacity * 2;
         size_t old_bytes = (size_t)list->capacity * sizeof(void*);
         size_t new_bytes = (size_t)new_capacity * sizeof(void*);
-        void** new_items = (void**)aether_caps_realloc(list->items,
-                                                       old_bytes, new_bytes);
+        void** new_items = (void**)cl_realloc(list->alloc, list->items,
+                                              old_bytes, new_bytes);
         if (!new_items) return 0;
         list->items = new_items;
         /* Mirror the grow in owned_flags when present. New slots
@@ -83,8 +110,8 @@ int list_add_raw(ArrayList* list, void* item) {
         if (list->owned_flags) {
             size_t old_fbytes = (size_t)list->capacity * sizeof(int);
             size_t new_fbytes = (size_t)new_capacity * sizeof(int);
-            int* new_flags = (int*)aether_caps_realloc(list->owned_flags,
-                                                       old_fbytes, new_fbytes);
+            int* new_flags = (int*)cl_realloc(list->alloc, list->owned_flags,
+                                              old_fbytes, new_fbytes);
             if (!new_flags) return 0;
             /* Zero the new tail explicitly — aether_caps_realloc
              * doesn't zero-fill the extension. */
@@ -121,7 +148,7 @@ int list_add_string_owned(ArrayList* list, const void* item) {
     /* Lazy-allocate the flags array on first owned-put. */
     if (!list->owned_flags) {
         if (list->capacity > 0) {
-            list->owned_flags = (int*)aether_caps_calloc(
+            list->owned_flags = (int*)cl_calloc(list->alloc,
                 (size_t)list->capacity, sizeof(int));
             if (!list->owned_flags) {
                 /* Best-effort: still store the item even if flag
@@ -139,7 +166,7 @@ int list_add_string_owned(ArrayList* list, const void* item) {
      * was 0 at lazy-alloc time. Retry now that list_add_raw has
      * grown capacity. */
     if (!list->owned_flags && list->capacity > 0) {
-        list->owned_flags = (int*)aether_caps_calloc(
+        list->owned_flags = (int*)cl_calloc(list->alloc,
             (size_t)list->capacity, sizeof(int));
     }
     if (list->owned_flags) list->owned_flags[slot] = 1;
@@ -162,14 +189,14 @@ typedef struct { void (*fn)(void); void* env; } AeClosureBox;
 int list_add_closure_owned(ArrayList* list, void* box) {
     if (!list) return 0;
     if (!list->owned_flags && list->capacity > 0) {
-        list->owned_flags = (int*)aether_caps_calloc(
+        list->owned_flags = (int*)cl_calloc(list->alloc,
             (size_t)list->capacity, sizeof(int));
     }
     int slot = list->size;
     int ok = list_add_raw(list, box);
     if (!ok) return 0;
     if (!list->owned_flags && list->capacity > 0) {
-        list->owned_flags = (int*)aether_caps_calloc(
+        list->owned_flags = (int*)cl_calloc(list->alloc,
             (size_t)list->capacity, sizeof(int));
     }
     if (list->owned_flags) list->owned_flags[slot] = 2;
@@ -218,6 +245,7 @@ void list_clear(ArrayList* list) {
 
 void list_free(ArrayList* list) {
     if (!list) return;
+    AetherAllocator* a = list->alloc;
     /* Owned heap-string elements (#467): walk and release each
      * `owned_flags[i] == 1` element before freeing the backing
      * array. Per-element tracking lets owned heap strings coexist
@@ -244,8 +272,8 @@ void list_free(ArrayList* list) {
         }
     }
     if (list->owned_flags) {
-        aether_caps_free(list->owned_flags,
-                         (size_t)list->capacity * sizeof(int));
+        cl_free(a, list->owned_flags,
+                (size_t)list->capacity * sizeof(int));
         list->owned_flags = NULL;
     }
     /* Clear the kind-magic so a use-after-free probe via
@@ -260,10 +288,10 @@ void list_free(ArrayList* list) {
      * Struct is sizeof(ArrayList). Both pair with the alloc-side
      * accounting in list_new + list_add_raw. */
     if (list->items) {
-        aether_caps_free(list->items,
-                         (size_t)list->capacity * sizeof(void*));
+        cl_free(a, list->items,
+                (size_t)list->capacity * sizeof(void*));
     }
-    aether_caps_free(list, sizeof(ArrayList));
+    cl_free(a, list, sizeof(ArrayList));
 }
 
 #define HASHMAP_INITIAL_CAPACITY 16

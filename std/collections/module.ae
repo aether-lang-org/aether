@@ -9,7 +9,7 @@
 //     operations that can fail.
 
 exports (
-    list_new, list_add_raw, list_get_raw, list_set, list_size,
+    list_new, list_new_in, list_add_raw, list_get_raw, list_set, list_size,
     list_remove, list_clear, list_free,
     map_new, map_put_raw, map_get_raw, map_has, map_remove,
     map_size, map_clear, map_free, map_keys_raw, map_keys_free,
@@ -26,6 +26,7 @@ exports (
 
 // ---- ArrayList raw externs ----
 extern list_new() -> ptr
+extern list_new_in(alloc: ptr) -> ptr
 extern list_add_raw(list: ptr, item: ptr) -> int
 // Heap-string-aware add (#467). Retains the value, tags the list,
 // stores the pointer. list_free releases owned-string elements

@@ -115,3 +115,40 @@ size_t arena_get_size(Arena* arena) {
     return total;
 }
 
+
+/* The std.alloc arena bridge lives here, not in std/alloc/aether_alloc.c:
+ * it references the arena, which the bootstrap compiler does not link while
+ * it does link std/alloc via STD_SRC. Moving it there breaks the compiler
+ * link. */
+#include "../../std/alloc/aether_alloc.h"
+
+static void* arena_alloc_fn(void* data, size_t size) {
+    return arena_alloc((Arena*)data, size);
+}
+static void* arena_realloc_fn(void* data, void* ptr, size_t old_size, size_t new_size) {
+    if (new_size == 0) return NULL;
+    void* dst = arena_alloc((Arena*)data, new_size);
+    if (dst && ptr) {
+        size_t n = old_size < new_size ? old_size : new_size;
+        memcpy(dst, ptr, n);
+    }
+    return dst;
+}
+static void arena_free_fn(void* data, void* ptr, size_t size) {
+    (void)data; (void)ptr; (void)size;
+}
+
+AetherAllocator* aether_allocator_arena(struct Arena* arena) {
+    if (!arena) return NULL;
+    AetherAllocator* a = (AetherAllocator*)malloc(sizeof(AetherAllocator));
+    if (!a) return NULL;
+    a->alloc_fn   = arena_alloc_fn;
+    a->realloc_fn = arena_realloc_fn;
+    a->free_fn    = arena_free_fn;
+    a->data       = arena;
+    return a;
+}
+
+void aether_allocator_arena_destroy(AetherAllocator* a) {
+    free(a);
+}
