@@ -46,6 +46,76 @@ BASE_CFLAGS=(
     -I"$ROOT/std/json"
 )
 
+# --- cross-compile (target/sysroot) mode -------------------------------------
+# When CONTRIB_TARGET is set, build the contrib archives for a FOREIGN target
+# with `zig cc -target <triple>`, mirroring what #1208 did to ae.c's
+# run_cross_build. Two sysroots feed it (both optional per tier):
+#   AETHER_SYSROOT     — the OS base sysroot (FreeBSD needs this; provides libc
+#                        headers/libs). Same var + flag recipe as ae.c #1208.
+#   CROSSBUILD_SYSROOT — aether-crossbuild's sysroots/<triple>/, holding the
+#                        Tier-2/3 deps (openssl/zlib/nghttp2/pcre2, and — once
+#                        recipes/sqlite.sh lands — sqlite3) as .a + headers.
+# Tier 1 modules (no external C dep) need neither and compile like core.
+CONTRIB_TARGET="${CONTRIB_TARGET:-}"
+CROSS_MODE=""
+CROSS_ARCH_WANT=""     # a `file`(1) substring the produced archive must match
+if [ -n "$CONTRIB_TARGET" ]; then
+    CROSS_MODE=1
+    command -v zig >/dev/null 2>&1 || {
+        echo "Error: CONTRIB_TARGET=$CONTRIB_TARGET needs zig on PATH." >&2
+        exit 1
+    }
+    CC="zig cc -target $CONTRIB_TARGET"
+
+    # FreeBSD (Tier B) base sysroot — verbatim from #1208: --sysroot ALONE does
+    # not make zig search a FreeBSD sysroot's include/lib, so -I/-L are explicit.
+    # Archiving needs only the COMPILE flags (no CRT/libc.so.7 link dance).
+    case "$CONTRIB_TARGET" in
+        *freebsd*)
+            if [ -z "${AETHER_SYSROOT:-}" ]; then
+                echo "Error: $CONTRIB_TARGET needs a FreeBSD base sysroot, but AETHER_SYSROOT is unset." >&2
+                echo "  Provision one with aether-crossbuild (scripts/fetch-freebsd-base.sh <cpu> [major])" >&2
+                echo "  then set AETHER_SYSROOT=<crossbuild>/bases/<cpu>-freebsd[ver]." >&2
+                exit 1
+            fi
+            BASE_CFLAGS+=(
+                "--sysroot=$AETHER_SYSROOT"
+                -I"$AETHER_SYSROOT/usr/include"
+                -L"$AETHER_SYSROOT/usr/lib" -L"$AETHER_SYSROOT/lib"
+            )
+            CROSS_ARCH_WANT="FreeBSD"
+            ;;
+        *linux*)  CROSS_ARCH_WANT="ELF" ;;
+        *macos*)  CROSS_ARCH_WANT="Mach-O" ;;
+    esac
+
+    # Tier-2/3 deps: point compiles at the crossbuild sysroot, NOT host libs.
+    if [ -n "${CROSSBUILD_SYSROOT:-}" ] && [ -d "$CROSSBUILD_SYSROOT" ]; then
+        BASE_CFLAGS+=( -I"$CROSSBUILD_SYSROOT/include" -L"$CROSSBUILD_SYSROOT/lib" )
+    fi
+
+    echo "  Cross mode: CONTRIB_TARGET=$CONTRIB_TARGET"
+    [ -n "${AETHER_SYSROOT:-}" ]     && echo "             AETHER_SYSROOT=$AETHER_SYSROOT"
+    [ -n "${CROSSBUILD_SYSROOT:-}" ] && echo "             CROSSBUILD_SYSROOT=$CROSSBUILD_SYSROOT"
+fi
+
+# In target mode a dep is "present" iff the crossbuild sysroot carries it — the
+# host's pkg-config/system libs are irrelevant to a foreign target. Returns 0
+# and echoes the -I include flag when <header> is found under CROSSBUILD_SYSROOT
+# (and, for a named lib, its .a too); returns 1 (→ SKIP/FAIL) otherwise. Tier-1
+# modules don't call this (no external dep). Tier-2/3 route their probes here.
+cross_dep_present() {   # <header-basename> [lib-basename-without-lib/.a]
+    local hdr="$1" lib="${2:-}"
+    [ -n "${CROSSBUILD_SYSROOT:-}" ] || return 1
+    [ -f "$CROSSBUILD_SYSROOT/include/$hdr" ] || return 1
+    if [ -n "$lib" ]; then
+        [ -f "$CROSSBUILD_SYSROOT/lib/lib$lib.a" ] || \
+        [ -f "$CROSSBUILD_SYSROOT/lib/lib$lib.so" ] || return 1
+    fi
+    echo "-I$CROSSBUILD_SYSROOT/include"
+    return 0
+}
+
 # probe_<lang> echoes dev-include flags on stdout when the dep is
 # available. Returns 0 if available, 1 if not. (Mirror of the probe
 # helpers in contrib_host_demos.sh — kept in sync, not sourced, so
@@ -61,6 +131,15 @@ BASE_CFLAGS=(
 # now apt-installs the matching -dev kit per `--with=<lang>` layer.
 
 probe_sqlite() {
+    # Cross mode: sqlite3 is Tier 3 (absent from the FreeBSD base and from
+    # zig's bundled targets). It's "present" iff aether-crossbuild's
+    # recipes/sqlite.sh staged libsqlite3.a + sqlite3.h into CROSSBUILD_SYSROOT.
+    # If not, return 1 → the two-mode loop SKIPs (build-all) or FAILs
+    # (explicit MODULES=), never emitting a broken archive.
+    if [ -n "$CROSS_MODE" ]; then
+        cross_dep_present sqlite3.h sqlite3
+        return
+    fi
     if pkg-config --exists sqlite3 2>/dev/null; then
         pkg-config --cflags-only-I sqlite3
         return 0
@@ -217,6 +296,36 @@ probe_aether() {
     return 0
 }
 
+# Cross-mode module classification (only consulted when CROSS_MODE is set).
+# The native probes shell pkg-config/brew/apt, which describe the HOST — wrong
+# for a foreign target. So in cross mode we decide per module by tier instead:
+#   tier1  — no external C dep (compiles like core): build it.
+#   tier3:<hdr>:<lib> — needs a dep from CROSSBUILD_SYSROOT (Tier 2/3): build
+#            iff that sysroot carries <hdr> + lib<lib>.a, else SKIP/FAIL.
+#   nocross — host-language bridge that can't be cross-built here: SKIP/FAIL.
+# Keyed by module name (build_module's $1). Unlisted → treated as nocross.
+cross_class() {   # <module-name> -> echoes the class token
+    case "$1" in
+        tinyweb)               echo "tier1" ;;       # libc-only (SHA1+base64 inline)
+        sqlite)                echo "tier3:sqlite3.h:sqlite3" ;;
+        # Header-only dlopen bridges: they load the runtime lib via dlopen at
+        # RUNTIME ("dlopen, not -l<x>") but #include the language headers at
+        # COMPILE time. Contrib archives are .o-only (no link), so the sysroot
+        # needs only the headers — the `tier3:<hdr>:` form (empty lib) checks
+        # for the header alone. aether-crossbuild recipes/{lua,duktape}.sh stage
+        # them. Cross-buildable; the target dlopen's its own liblua/libduktape.
+        host_lua)              echo "tier3:lua.h:" ;;
+        host_duktape)          echo "tier3:duktape.h:" ;;
+        # host bridges whose headers are arch/config-GENERATED multiarch
+        # dispatchers (pyconfig.h / ruby/config.h / perl's config.h) that can't
+        # be portably cross-staged — ctr_notes.md Bug 6. Not cross-buildable here.
+        host_python|host_perl|host_ruby|host_tcl|\
+        host_tinygo|host_factor|host_racket|host_aether)
+                               echo "nocross" ;;
+        *)                     echo "nocross" ;;
+    esac
+}
+
 # build_module <module_name> <relative_src_path> <AETHER_HAS_FLAG> <probe_fn>
 # Returns: 0 OK, 1 SKIP (probe failed), 2 FAIL (compile/archive failed)
 # Caller decides whether SKIP or FAIL is fatal (depends on MODULES mode).
@@ -227,9 +336,30 @@ build_module() {
     local probe="$4"
 
     local incs
-    if ! incs=$($probe 2>/dev/null); then
-        printf "  %-18s SKIP (dev library not found)\n" "$name"
-        return 1
+    if [ -n "$CROSS_MODE" ]; then
+        # Target mode: classify by tier; the host probes don't apply.
+        local class; class=$(cross_class "$name")
+        case "$class" in
+            tier1)
+                incs=""
+                ;;
+            tier3:*)
+                local hdr="${class#tier3:}"; local lib="${hdr#*:}"; hdr="${hdr%%:*}"
+                if ! incs=$(cross_dep_present "$hdr" "$lib" 2>/dev/null); then
+                    printf "  %-18s SKIP (dep '%s' not in CROSSBUILD_SYSROOT)\n" "$name" "$lib"
+                    return 1
+                fi
+                ;;
+            nocross|*)
+                printf "  %-18s SKIP (host bridge — not cross-buildable)\n" "$name"
+                return 1
+                ;;
+        esac
+    else
+        if ! incs=$($probe 2>/dev/null); then
+            printf "  %-18s SKIP (dev library not found)\n" "$name"
+            return 1
+        fi
     fi
 
     # shellcheck disable=SC2086
@@ -241,9 +371,32 @@ build_module() {
     fi
     rm -f "$OUT/$name.err"
 
-    if ! ar rcs "$OUT/libaether_$name.a" "$OUT/$name.o"; then
+    # Archive. In cross mode use `zig ar` so the archive index is written by
+    # the same toolchain that produced the foreign objects.
+    local AR="ar"
+    [ -n "$CROSS_MODE" ] && AR="zig ar"
+    if ! $AR rcs "$OUT/libaether_$name.a" "$OUT/$name.o"; then
         printf "  %-18s FAIL (archive)\n" "$name"
         return 2
+    fi
+
+    # In cross mode, assert the archive is actually the TARGET arch so the
+    # libaether_<name>.a name can't lie (same discipline as #1208's file check).
+    # Extract a member with `zig ar` and file(1) it; skip the check only if file
+    # is unavailable (never silently ship a mis-arch archive when it IS).
+    if [ -n "$CROSS_MODE" ] && [ -n "$CROSS_ARCH_WANT" ] && command -v file >/dev/null 2>&1; then
+        local ck="$OUT/.archck"; rm -rf "$ck"; mkdir -p "$ck"
+        ( cd "$ck" && zig ar x "$OUT/libaether_$name.a" 2>/dev/null || true )
+        local member; member=$(find "$ck" -name '*.o' 2>/dev/null | head -1)
+        if [ -n "$member" ]; then
+            local desc; desc=$(file -b "$member")
+            if ! printf '%s' "$desc" | grep -q "$CROSS_ARCH_WANT"; then
+                printf "  %-18s FAIL (wrong arch: '%s', want '%s')\n" "$name" "$desc" "$CROSS_ARCH_WANT"
+                rm -rf "$ck"
+                return 2
+            fi
+        fi
+        rm -rf "$ck"
     fi
 
     printf "  %-18s OK   build/contrib/libaether_%s.a\n" "$name" "$name"
