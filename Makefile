@@ -1479,6 +1479,15 @@ install: $(VERSION_HEADER) release ae stdlib
 	@install -d $(PREFIX)/share/aether
 	@cp -R runtime $(PREFIX)/share/aether/
 	@cp -R std     $(PREFIX)/share/aether/
+	@# include/ too: share/aether/runtime/libaether_caps.c does
+	@# `#include "../include/libaether.h"`, which resolves against
+	@# share/aether/include/ — present in the source tree but, before this,
+	@# absent from the install (headers go to include/aether/, a different
+	@# root). Native builds add an extra -I that hides the gap; the cross
+	@# path (which reuses tc.include_flags) does not, so a caps-runtime
+	@# cross-build died on `'../include/libaether.h' file not found`. Mirror
+	@# the source layout so the relative include resolves either way.
+	@cp -R include $(PREFIX)/share/aether/
 	@# Contrib module.ae descriptors + headers (issue #334). With these
 	@# in place, `import contrib.X` resolves the same way `import std.X`
 	@# does — share/aether/contrib/<X>/module.ae sits next to
