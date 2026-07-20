@@ -42,6 +42,16 @@ jobs:
           make
           bc
 
+    # Cache the compiled miniaudio object — same rationale as ci.yml. The
+    # MinGW toolchain identity is folded into the Makefile stamp, and the key
+    # is Windows/MinGW-specific, so it never collides with the Linux/macOS
+    # caches.
+    - name: Cache miniaudio object
+      uses: actions/cache@v4
+      with:
+        path: .ci-cache
+        key: audio-obj-windows-mingw64-${{ hashFiles('std/audio/miniaudio.h', 'std/audio/aether_audio.c', 'std/audio/aether_audio.h') }}
+
     - name: Run full CI suite
       # See ci.yml::ci-windows for why SSL_CERT_FILE is exported here.
       # Hardcoded probe paths in aether_http.c don't match the GitHub

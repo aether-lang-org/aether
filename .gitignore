@@ -94,3 +94,5 @@ editor/vscode/*.vsix
 .DS_Store
 Thumbs.db
 desktop.ini
+.ci-cache/
+runtime/aether_version.h

@@ -1,0 +1,34 @@
+// A library module that owns a packed-word `bitstruct` layout and exposes
+// accessors over it — the MicroQuickJS property-flags shape from
+// asks/imported-module-bitstruct-emission.md (hash_next : 0..<30,
+// prop_type : 30..<32 in a uint32_t word).
+//
+// The consumer imports this module and calls the accessors. Before the fix,
+// the imported bitstruct's typedef was never emitted into the consumer's
+// generated C (the module-merge pass cloned imported `struct`s but not
+// `bitstruct`s), so a prototype referencing the bitstruct type failed to
+// compile: `unknown type name 'PropertyFlags'`.
+import std.mem
+
+bitstruct PropertyFlags : uint32_t {
+    hash_next: int 0..<30
+    prop_type: int 30..<32
+}
+
+// Returns the bitstruct by value across the import boundary (exercises the
+// type in a return position / prototype).
+from_word(word: uint32_t) -> PropertyFlags {
+    return word as PropertyFlags
+}
+
+// Reads a packed word from memory and returns one field — the accessor the
+// consumer actually calls.
+prop_type_of(p: ptr) -> int {
+    bits = mem.get_uint32(p, 0) as PropertyFlags
+    return bits.prop_type
+}
+
+hash_next_of(p: ptr) -> int {
+    bits = mem.get_uint32(p, 0) as PropertyFlags
+    return bits.hash_next
+}

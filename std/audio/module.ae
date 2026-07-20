@@ -1,0 +1,158 @@
+// std.audio — audio playback (v1: playback tier).
+//
+// Design (docs/cross-references/audio.md): map Go beep's pull-based model —
+// a `Source` is the unit of playback; play/pause/seek/volume operate on it.
+// v1 ships a self-contained WAV decoder over a NULL (silent, deterministic)
+// backend: every transport/seek/position behaviour works headlessly and is
+// testable without a sound card. The device/decode layer is C by necessity
+// (the runtime-stays-C hard line — a real backend pulls samples on a
+// realtime thread no Aether code may run on); a real backend or vendored
+// miniaudio slots in behind this same surface without changing the API.
+//
+// Load is fallible (`ptr!`) — same shape as fs.read. Positions are in
+// MILLISECONDS (`long`): the granularity a transport / seek slider needs,
+// and free of the friction that Duration's sealed type imposes at the FFI
+// edge today (there is no Duration-from-ns constructor yet — see the note on
+// `position`). A later tier can add Duration accessors once that lands.
+//
+// Not in v1 (named later tiers): synthesis/DSP, capture, game-style sample
+// banks, the actor pipeline, and format breadth beyond WAV. mp3/flac arrive
+// with the vendored-decoder substrate.
+
+import std.string
+
+exports (
+    open, close, is_null_backend,
+    load_wav, last_error,
+    play, pause, stop, is_playing,
+    volume, get_volume,
+    seek_ms, position_ms, duration_ms,
+    channels, sample_rate,
+    unload
+)
+
+// ---- substrate externs (std/audio/aether_audio.c) ----
+extern aether_audio_open() -> int
+extern aether_audio_close()
+extern aether_audio_is_null_backend() -> int
+extern aether_audio_load_wav(data: string, length: int) -> ptr
+extern aether_audio_last_error() -> string
+extern aether_audio_unload(sound: ptr)
+extern aether_audio_play(sound: ptr) -> int
+extern aether_audio_pause(sound: ptr) -> int
+extern aether_audio_stop(sound: ptr) -> int
+extern aether_audio_is_playing(sound: ptr) -> int
+extern aether_audio_set_volume(sound: ptr, v: float) -> int
+extern aether_audio_get_volume(sound: ptr) -> float
+extern aether_audio_position_ns(sound: ptr) -> long
+extern aether_audio_duration_ns(sound: ptr) -> long
+extern aether_audio_seek_ns(sound: ptr, ns: long) -> int
+extern aether_audio_channels(sound: ptr) -> int
+extern aether_audio_sample_rate(sound: ptr) -> int
+
+// ---- engine lifecycle ----
+
+// Initialise the audio engine. Call once before loading/playing. Returns
+// true on success. v1 always succeeds (null backend).
+open() -> bool {
+    return aether_audio_open() == 1
+}
+
+// Shut the engine down. Unload sounds first.
+close() {
+    aether_audio_close()
+}
+
+// True when the active backend is the NULL (silent) backend — the v1
+// default. Lets a caller / test assert deterministic, device-free
+// behaviour.
+is_null_backend() -> bool {
+    return aether_audio_is_null_backend() == 1
+}
+
+// ---- loading ----
+
+// Decode `length` bytes of `data` (a WAV byte string — e.g. from
+// fs.read_binary) into a playable source. Returns the source on success,
+// or a non-empty error on malformed / unsupported input. The source is
+// owned by the caller: release it with `unload`.
+load_wav(data: string, length: int) -> ptr! {
+    s = aether_audio_load_wav(data, length)
+    if s == null {
+        // The error is a static C string (valid until the next load) —
+        // return it BORROWED, no allocation, so the caller's error slot
+        // isn't a heap string it must free.
+        e = aether_audio_last_error()
+        if e == null { return null, "audio: load failed" }
+        return null, e
+    }
+    return s
+}
+
+// The reason the most recent load failed (or "" after a success). BORROWED
+// from the substrate — a static C string valid until the next load_wav.
+last_error() -> string {
+    e = aether_audio_last_error()
+    if e == null { return "" }
+    return e
+}
+
+// Release a source. After this the pointer is invalid.
+unload(src: ptr) {
+    aether_audio_unload(src)
+}
+
+// ---- transport ----
+
+// Start or resume playback from the current position. Returns true on
+// success (false only for a null source). A source that had reached its
+// end rewinds to the start.
+play(src: ptr) -> bool { return aether_audio_play(src) == 1 }
+
+// Halt playback, keeping the current position for a later `play`.
+pause(src: ptr) -> bool { return aether_audio_pause(src) == 1 }
+
+// Halt playback and rewind to the start.
+stop(src: ptr) -> bool { return aether_audio_stop(src) == 1 }
+
+// True while the source is actively playing (false when paused, stopped,
+// or finished).
+is_playing(src: ptr) -> bool { return aether_audio_is_playing(src) == 1 }
+
+// ---- volume ----
+
+// Set the source's volume in [0.0, 1.0] (clamped). Returns true on success.
+volume(src: ptr, v: float) -> bool {
+    return aether_audio_set_volume(src, v) == 1
+}
+
+// The source's current volume in [0.0, 1.0].
+get_volume(src: ptr) -> float {
+    return aether_audio_get_volume(src)
+}
+
+// ---- position / duration (milliseconds) ----
+
+// Seek to `ms` milliseconds from the start (clamped to [0, duration]).
+// Returns true on success. Keeps the play/pause state.
+seek_ms(src: ptr, ms: long) -> bool {
+    return aether_audio_seek_ns(src, ms * 1000000) == 1
+}
+
+// The current play position in milliseconds — poll this from a UI tick to
+// drive a seek slider. (Milliseconds rather than Duration because the
+// language has no Duration-from-ns constructor yet; a Duration accessor is
+// a clean later addition.)
+position_ms(src: ptr) -> long {
+    return aether_audio_position_ns(src) / 1000000
+}
+
+// The total length of the source in milliseconds.
+duration_ms(src: ptr) -> long {
+    return aether_audio_duration_ns(src) / 1000000
+}
+
+// ---- format ----
+
+channels(src: ptr) -> int { return aether_audio_channels(src) }
+sample_rate(src: ptr) -> int { return aether_audio_sample_rate(src) }

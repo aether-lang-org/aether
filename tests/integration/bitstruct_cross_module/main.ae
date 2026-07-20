@@ -1,0 +1,19 @@
+// Consumer that imports a module owning a `bitstruct` and calls its
+// accessors. The word 0x80000015 packs prop_type = 0b10 (= 2) in bits 30..<32
+// and hash_next = 0x15 (= 21) in bits 0..<30.
+import mqtypes
+import std.mem
+
+extern malloc(n: long) -> ptr
+extern free(p: ptr)
+
+main() {
+    p = malloc(4)
+    mem.set_uint32(p, 0, 0x80000015)
+    println("${mqtypes.prop_type_of(p)}")   // 2
+    println("${mqtypes.hash_next_of(p)}")    // 21
+    // Also exercise the by-value return path.
+    pf = mqtypes.from_word(0x40000003)
+    println("${pf.prop_type}")               // 0b01 = 1
+    free(p)
+}

@@ -5,11 +5,62 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.385.0]`. When a PR merges to
+**Workflow**: New changes go under `## [0.413.0]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [current]
+## [0.417.0]
+
+### Fixed
+
+- **`list.get` / `list_get_raw` no longer segfaults on an invalid list
+  pointer.** The accessor read `list->size` / `list->items[index]` without
+  validating the pointer, so a dangling, type-confused, or freed list — a
+  struct with the wrong `_kind_magic`, a reused struct, or a small int
+  intptr-cast to `ptr` — crashed deep inside the accessor instead of
+  returning a safe NULL. It now applies the same `_kind_magic` +
+  low-address discriminator `aether_value_is_list` uses, so a bad pointer
+  yields `(null, "")` (out-of-range index behaviour is unchanged). Surfaced
+  by an aeb build whose generated code passed such a pointer to `list.get`.
+
+## [0.413.0]
+
+### Added
+
+- **`std.worker` — run blocking work off the loop thread, deliver the result
+  back on it** (#1184). The primitive every GUI toolkit has (Qt `QThread`+signal,
+  GTK `g_thread` + `g_idle_add`, Swing `SwingWorker`), made toolkit-agnostic:
+  `worker.run(work, done)` runs the `work` closure on a background thread (a
+  blocking `send_request` / `fs.read` / subprocess is fine there) and, when it
+  returns a `ptr` result, delivers that result to the `done` closure **back on
+  the thread that owns the app's event loop** — so a GUI callback no longer
+  freezes the window. Getting onto the loop thread is the host's job: a GUI host
+  installs a poster once (`set_main_poster`, wrapping `g_idle_add` /
+  `dispatch_async` / `PostMessage`); with none installed, completions queue and
+  the app pumps them with `worker.drain()` on its own loop thread (the headless /
+  test path). Blocking IO runs on an off-scheduler OS thread by necessity — a
+  blocking actor handler starves its cooperative scheduler core, the same reason
+  `std.http`'s h2 server runs handlers on its own pthread pool; on the
+  cooperative / `AETHER_NO_THREADING` build `work` runs synchronously while the
+  same completion contract holds. Surface: `run`, `run_detached`,
+  `set_main_poster`, `deliver`, `drain`, `pending`. Answers
+  `asks/ui-async-worker-for-blocking-io.md`.
+
+- **`std.audio` — audio playback backed by vendored miniaudio** (#1180, #1183).
+  A playback-tier audio API mapping Go beep's pull-based model: a source is the
+  unit of playback; `load_wav` decodes bytes into a source (wav / mp3 / flac via
+  miniaudio's built-in decoders) and `play` / `pause` / `stop` / `seek_ms` /
+  `volume` / `position_ms` / `duration_ms` / `channels` / `sample_rate` operate
+  on it. Real device output (ALSA / PulseAudio / CoreAudio / WASAPI, auto-selected
+  by miniaudio), with automatic fallback to miniaudio's null backend when no
+  device initialises (headless CI) — behaviour stays deterministic and testable
+  either way, and `is_null_backend()` reports which path won. The device/decode
+  layer is C by necessity (a real backend pulls samples on a realtime thread no
+  Aether code may run on); the vendored single-header `std/audio/miniaudio.h`
+  (public domain / MIT-0) is compiled once behind the FFI. See
+  `docs/cross-references/audio.md`.
+
+## [0.409.0]
 
 ### Added
 
@@ -51,6 +102,91 @@ next version number before tagging the release.
   the overflow risk, mirroring what `docs/sequences.md` already says for
   `*StringSeq`. Locked by a regression test that builds and iteratively
   walks/frees a 300k-cell chain.
+## [0.408.0]
+
+### Added
+
+- **`std.hash` — SipHash-2-4 (keyed, hash-flood resistant)** (#1174). Adds the
+  keyed PRF alongside the module's non-cryptographic hashes: a 128-bit key over
+  arbitrary bytes yields a 64-bit tag, the standard defence for hash tables
+  exposed to adversarial keys (hash-flooding DoS). Ported from C3's
+  `std::hash::siphash` and verified against the reference test vectors.
+
+## [0.406.0]
+
+### Added
+
+- **Five foundational modules ported from the C3 standard library** (#1167,
+  #1169). Implements the high-value gaps from
+  `docs/cross-references/c3-stdlib-gaps.md` by porting from C3 *source* (not
+  transplanting its generated C), staying pure Aether, with test vectors taken
+  from C3's own unit tests. Re-expressed in Aether's idiom — free functions +
+  structs/tuples rather than C3's generics/methods/operators.
+  - **`std.encoding`** — `hex` (RFC 4648 §8), `base32` (§6), `base64` (§4), and
+    `csv` field-splitting. `base64` moved here from `std.cryptography` (its
+    correct home — an encoding, not cryptography); `base64_encode_url` renamed to
+    the accurate `base64_encode_padded`, and `cryptography.random_base64` rebuilt
+    on top of it.
+  - **`std.time`** — `DateTime` over Unix-epoch seconds (UTC) with exact,
+    dependency-free civil↔epoch math (Hinnant's algorithms, no libc timezone
+    state): `now`, `from_civil` / `from_unix`, ISO-8601 format / parse,
+    `add_*` / `diff` / ordering, leap-year and day-of-week.
+  - **`std.sort`** — in-place ascending sort (shell sort, Ciura gaps) + binary
+    search over the concrete numeric array types (`intarr` / `longarr` /
+    `floatarr`). Concrete-types-first by design, not C3's generics.
+  - **`std.deque`** — fixed-capacity ring buffer / double-ended queue of `long`:
+    O(1) push/pop at both ends, overwrite-oldest-on-full (sliding window), value
+    semantics.
+  - **`std.hash`** — non-cryptographic FNV-1a 32/64 and MurmurHash3 x86 32-bit,
+    verified against canonical reference vectors.
+
+### Fixed
+
+- **`T!` auto-wrap: a single-child `return <heap-expr>` in a result function is
+  now wrapped correctly** (surfaced by the C3 ports, #1169). A bare
+  `return <heap-expr>` in a `T!` (result) function was mis-classified as a
+  tuple pass-through instead of the `(<expr>, "")` success auto-wrap, so a
+  heap-string result could cross a module boundary without its ownership
+  tracked — a cross-module leak. Fixed in the codegen return-heap classifier.
+
+- **`std.longarr.get()` no longer truncates 64-bit values to 32 bits.** An
+  inferred `-> {` return whose error path used an int literal (`return 0, "err"`)
+  pinned the value slot to 32-bit `int`, so a stored `long` came back with its
+  high 32 bits lost. The signature is now explicitly `-> (long, string)`. Found
+  during the C3 ports (the sibling `floatarr` was unaffected — its error paths
+  use `0.0`).
+
+## [0.404.0]
+
+### Added
+
+- **Error-unification arc: the `T!` result type** (#1155, #1156, #1161, #1162,
+  #1163 — landed in phases over 0.402–0.404; design in
+  `docs/error-unification.md`). Unifies Aether's two-slot `(value, err)` fallible
+  convention into a single first-class result type, `T!`:
+  - A `T!` function returns a bare `return v` for success (auto-wrapped to
+    `(v, "")`) or `return v, "err"` for failure; `expr!` propagates a failure
+    from a callee, and `or { ... }` handles it. The stdlib's two-slot fallible
+    signatures were migrated to `T!` (P1, #1155).
+  - **Unconsumed `T!` results are a compile error** (P2, #1161): a fallible call
+    whose error slot is ignored is rejected with guidance, so a failure can't be
+    silently dropped.
+  - **Tuple-payload `T!` is rejected at parse time** with guidance (P1.5, #1156):
+    the result carries a single payload, keeping the boundary shape unambiguous.
+  - **`fault` declarations** (P3, #1162): declared fault values over `const char*`,
+    so an error can be a named, comparable constant (`err == fs.NotFound`) rather
+    than a bare string.
+  - **`??` accepts a fallible `T!` left side** (P1.3, #1163): the coalescing
+    operator now takes a `T!`, yielding the value on success or the right-hand
+    fallback on failure.
+
+### Fixed
+
+- **`s = f() or { … }` now heap-tracks its value and frees the discarded error
+  slot.** Two leaks on the `or`-handled path: the bound success value wasn't
+  registered with the heap tracker (so a heap string leaked at scope exit), and
+  the handled error slot was never freed. Both fixed in codegen. (Earlier in the
+  arc, 0.402.0, heap-backed `string?` locals also gained scope-exit frees.)
 
 ## [0.401.0]
 
