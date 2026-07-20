@@ -90,6 +90,18 @@ next version number before tagging the release.
   linking from MANIFEST would fail to resolve `std.collections`
   (hashmap/vector/set/...) symbols. Both source groups are now emitted.
 
+### Documentation
+
+- **Iterative traversal/free for deep `*Struct` chains** (#1070). The language
+  reference taught recursion for walking and freeing self-referential `*Struct`
+  chains (the `*ErrChain` example). Aether does not turn tail calls into loops,
+  so a recursive walk/free spends one C stack frame per cell and overflows the
+  stack on a long chain (verified: a 300k-cell chain segfaults recursively).
+  The reference now documents the O(1)-stack iterative spine walk for both
+  traversal and free (capturing each successor before the free), with a note on
+  the overflow risk, mirroring what `docs/sequences.md` already says for
+  `*StringSeq`. Locked by a regression test that builds and iteratively
+  walks/frees a 300k-cell chain.
 ## [0.408.0]
 
 ### Added
