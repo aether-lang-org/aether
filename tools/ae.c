@@ -4945,7 +4945,22 @@ static const char* cross_target_to_zig(const char* t) {
     if (!strcmp(t, "x86_64-macos")  || !strcmp(t, "amd64-macos"))  return "x86_64-macos-none";
     if (!strcmp(t, "aarch64-linux") || !strcmp(t, "arm64-linux"))  return "aarch64-linux-gnu";
     if (!strcmp(t, "x86_64-linux")  || !strcmp(t, "amd64-linux"))  return "x86_64-linux-gnu";
+    /* FreeBSD (Tier B): zig cc does NOT bundle a FreeBSD libc, so these
+     * additionally require a base sysroot (headers + libc) provided via
+     * AETHER_SYSROOT — see cross_target_needs_sysroot() and the
+     * aether-crossbuild repo (scripts/fetch-freebsd-base.sh). The zig target
+     * has no OS-version; the base sysroot carries FreeBSD 14 vs 15. */
+    if (!strcmp(t, "aarch64-freebsd") || !strcmp(t, "arm64-freebsd")) return "aarch64-freebsd";
+    if (!strcmp(t, "x86_64-freebsd")  || !strcmp(t, "amd64-freebsd")) return "x86_64-freebsd";
     return NULL;
+}
+
+/* True if `t` is a cross target whose libc zig cc does NOT bundle, so a base
+ * sysroot must be supplied (via AETHER_SYSROOT). Tier A (macos/linux) is
+ * self-contained; Tier B (freebsd) is not. */
+static bool cross_target_needs_sysroot(const char* t) {
+    if (!t) return false;
+    return strstr(t, "freebsd") != NULL;
 }
 
 /* Locate the authoritative source MANIFEST and the base directory its
@@ -5066,6 +5081,43 @@ static int run_cross_build(const char* c_file, const char* out_file,
     const char* opt = optimize ? "-O2" : "-O0 -g";
     const char* ex = extra ? extra : "";
     const char* feature_defs = "-DAETHER_HAS_SANDBOX";
+    /* Tier-B (FreeBSD) targets need a base sysroot zig cc doesn't bundle;
+     * AETHER_SYSROOT points at it (bases/<cpu>-freebsd[ver]/ from
+     * aether-crossbuild). Applied to BOTH compile and link. Empty for the
+     * self-contained Tier-A targets. NB: for a FreeBSD target, `--sysroot`
+     * ALONE does not make zig cc search the sysroot's usr/include and
+     * usr/lib (unlike its bundled targets) — the -I/-L must be explicit
+     * (verified with zig 0.13). */
+    char sysroot_flag[3200];   /* COMPILE flags: --sysroot + -I/-L */
+    char fbsd_link[4096];      /* LINK tail: CRT objects + the real libc.so.7 */
+    sysroot_flag[0] = '\0';
+    fbsd_link[0] = '\0';
+    if (cross_target_needs_sysroot(ztriple)) {
+        const char* sr = getenv("AETHER_SYSROOT");
+        if (!sr || !*sr) {
+            fprintf(stderr,
+                "Error: target %s needs a FreeBSD base sysroot, but AETHER_SYSROOT is unset.\n"
+                "  zig cc does not bundle a FreeBSD libc. Provision one with aether-crossbuild:\n"
+                "    ./scripts/fetch-freebsd-base.sh <cpu> [major]   # e.g. x86_64 15\n"
+                "  then: AETHER_SYSROOT=<crossbuild>/bases/<cpu>-freebsd[ver] ae build ... --target=%s\n",
+                ztriple, ztriple);
+            return 1;
+        }
+        snprintf(sysroot_flag, sizeof(sysroot_flag),
+                 "--sysroot=%s -I%s/usr/include -L%s/usr/lib -L%s/lib",
+                 sr, sr, sr, sr);
+        /* zig cc can't provide a FreeBSD libc ("error: libc not available"),
+         * and the sysroot's usr/lib/libc.so is a GROUP linker script naming
+         * ABSOLUTE /lib paths that don't exist on this build host. So link
+         * FreeBSD explicitly: -nostdlib + the base's CRT startup objects
+         * (crt1/crti/crtn — crt1 pulls __libc_start1, a FreeBSD-15 symbol) +
+         * the real versioned libc.so.7. Verified end-to-end with zig 0.13
+         * against a FreeBSD-15 base sysroot. */
+        snprintf(fbsd_link, sizeof(fbsd_link),
+                 "-nostdlib \"%s/usr/lib/crt1.o\" \"%s/usr/lib/crti.o\" "
+                 "\"%s/lib/libc.so.7\" \"%s/usr/lib/crtn.o\"",
+                 sr, sr, sr, sr);
+    }
     static char cmd[24576];
     /* Accumulated quoted "<objpath>" list, in compile order, for the ar
      * step. posix_run tokenizes the command itself (no shell), so the
@@ -5089,8 +5141,8 @@ static int run_cross_build(const char* c_file, const char* out_file,
             snprintf(objpath, sizeof(objpath), "%s/%.*so", objdir,
                      (int)(strlen(bn) - 1), bn);
             w = snprintf(cmd, sizeof(cmd),
-                "zig cc -target %s %s %s %s %s -c \"%s\" -o \"%s\"",
-                ztriple, opt, feature_defs, user_cflags, tc.include_flags,
+                "zig cc -target %s %s %s %s %s %s -c \"%s\" -o \"%s\"",
+                ztriple, sysroot_flag, opt, feature_defs, user_cflags, tc.include_flags,
                 srcs[i], objpath);
             if (w < 0 || (size_t)w >= sizeof(cmd)) {
                 fprintf(stderr, "Error: cross-compile command exceeded the %zu-byte buffer.\n",
@@ -5129,18 +5181,44 @@ static int run_cross_build(const char* c_file, const char* out_file,
             break;
         }
 
-        /* 3. Link the program against the archive. */
-        w = snprintf(cmd, sizeof(cmd),
-            "zig cc -target %s %s %s %s \"%s\" %s \"%s/libaether.a\" -o \"%s\" -lm",
-            ztriple, opt, feature_defs, tc.include_flags, c_file, ex, objdir, out_file);
+        /* Clear any stale output so the FreeBSD "output exists == linked"
+         * success signal below can't be fooled by a prior build's binary. */
+        remove(out_file);
+
+        /* 3. Link the program against the archive. FreeBSD (Tier B) needs the
+         *    explicit CRT objects + real libc.so.7 (fbsd_link); zig's bundled
+         *    FreeBSD-14 libc can't satisfy a 15 base's __libc_start1. The CRT
+         *    objects bracket the program/runtime; libm comes from the sysroot
+         *    -L. Tier A keeps the compact -lm form. */
+        if (fbsd_link[0]) {
+            w = snprintf(cmd, sizeof(cmd),
+                "zig cc -target %s %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" -lm -o \"%s\"",
+                ztriple, sysroot_flag, fbsd_link, opt, feature_defs, tc.include_flags,
+                c_file, ex, objdir, out_file);
+        } else {
+            w = snprintf(cmd, sizeof(cmd),
+                "zig cc -target %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" -o \"%s\" -lm",
+                ztriple, sysroot_flag, opt, feature_defs, tc.include_flags, c_file, ex, objdir, out_file);
+        }
         if (w < 0 || (size_t)w >= sizeof(cmd)) {
             fprintf(stderr, "Error: cross-compile link command exceeded the %zu-byte buffer.\n",
                     sizeof(cmd));
             break;
         }
         if (run_cmd_show_warnings(cmd) != 0) {
-            fprintf(stderr, "Error: cross-linking for %s failed.\n", ztriple);
-            break;
+            /* zig cc exits nonzero on a FreeBSD -nostdlib link with a COSMETIC
+             * "error: libc not available" note, even though clang+lld produced
+             * a valid binary (zig reserves that message for targets it can't
+             * supply a libc for — which is exactly why we bring our own). A
+             * GENUINE link failure (undefined symbol) leaves NO output file, so
+             * "the output exists and is non-empty" cleanly separates the two.
+             * Verified with zig 0.13 against a FreeBSD-15 base sysroot. */
+            if (!(fbsd_link[0] && path_exists(out_file))) {
+                fprintf(stderr, "Error: cross-linking for %s failed.\n", ztriple);
+                break;
+            }
+            fprintf(stderr, "note: zig cc reported \"libc not available\" for %s; "
+                            "the FreeBSD binary linked correctly regardless.\n", ztriple);
         }
         rc = 0;
     } while (0);
@@ -5321,7 +5399,8 @@ static int cmd_build(int argc, char** argv) {
     if (target && strcmp(target, "wasm") != 0 && strcmp(target, "native") != 0 && !ztriple) {
         fprintf(stderr, "Error: Unknown target '%s'.\n", target);
         fprintf(stderr, "Valid targets: native, wasm, or a cross triple "
-                        "(aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux).\n");
+                        "(aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, "
+                        "aarch64-freebsd, x86_64-freebsd).\n");
         return 1;
     }
     int is_wasm = target && strcmp(target, "wasm") == 0;
@@ -5360,7 +5439,8 @@ static int cmd_build(int argc, char** argv) {
         fprintf(stderr, "Usage: ae build <file.ae> [-o output] [--extra file.c] [--quick] [--target=<triple>]\n");
         fprintf(stderr, "  --quick    Compile with -O0 -g for faster iteration (default: -O2)\n");
         fprintf(stderr, "  --target   Cross-compile via zig cc: wasm, aarch64-macos, x86_64-macos,\n");
-        fprintf(stderr, "             aarch64-linux, x86_64-linux (dependency-free programs)\n");
+        fprintf(stderr, "             aarch64-linux, x86_64-linux, aarch64-freebsd, x86_64-freebsd\n");
+        fprintf(stderr, "             (freebsd needs AETHER_SYSROOT=<base sysroot>; see aether-crossbuild)\n");
         return 1;
     }
 
