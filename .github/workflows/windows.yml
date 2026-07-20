@@ -1,6 +1,10 @@
 name: Windows Build
 
 on:
+  # push to main also runs so the merge build can FILL the miniaudio object
+  # cache (PR runs only read it; see the Restore/Save split below).
+  push:
+    branches: [ main ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
@@ -45,9 +49,12 @@ jobs:
     # Cache the compiled miniaudio object — same rationale as ci.yml. The
     # MinGW toolchain identity is folded into the Makefile stamp, and the key
     # is Windows/MinGW-specific, so it never collides with the Linux/macOS
-    # caches.
-    - name: Cache miniaudio object
-      uses: actions/cache@v4
+    # caches. Split restore/save: PR runs only RESTORE; only a push to main
+    # SAVES, and only on a cache miss (an unchanged source is a key hit, so
+    # there is nothing new to write — the key already embeds the source hash).
+    - name: Restore miniaudio object cache
+      id: audio_cache
+      uses: actions/cache/restore@v4
       with:
         path: .ci-cache
         key: audio-obj-windows-mingw64-${{ hashFiles('std/audio/miniaudio.h', 'std/audio/aether_audio.c', 'std/audio/aether_audio.h') }}
@@ -61,6 +68,15 @@ jobs:
         echo "SSL_CERT_FILE=$SSL_CERT_FILE"
         ls -la "$(cygpath -u "$SSL_CERT_FILE")"
         make ci
+
+    - name: Save miniaudio object cache (merge to main, on miss only)
+      if: >-
+        github.event_name == 'push' && github.ref == 'refs/heads/main'
+        && steps.audio_cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .ci-cache
+        key: audio-obj-windows-mingw64-${{ hashFiles('std/audio/miniaudio.h', 'std/audio/aether_audio.c', 'std/audio/aether_audio.h') }}
 
     - name: Upload Windows binaries
       uses: actions/upload-artifact@v4

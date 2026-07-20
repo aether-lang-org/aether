@@ -74,14 +74,32 @@ jobs:
     # audio-cache-restore double-checks a content stamp before reusing it and
     # falls back to a fresh compile on any mismatch. Never shared across
     # platforms (matrix.os/matrix.cc are in the key).
-    - name: Cache miniaudio object
-      uses: actions/cache@v4
+    #
+    # Split restore/save: every run RESTORES, but only a trusted push to main
+    # SAVES, and only on a cache MISS. So PR builds (throwaway) read the cache
+    # but never fill it; the cache is populated once from the merge and shared
+    # to every subsequent PR (GitHub lets PR runs read the default branch's
+    # cache). The key embeds the source hash, so an unchanged miniaudio source
+    # is a key hit → nothing new to save. A miss simply recompiles miniaudio;
+    # correctness never depends on a cache hit.
+    - name: Restore miniaudio object cache
+      id: audio_cache
+      uses: actions/cache/restore@v4
       with:
         path: .ci-cache
         key: audio-obj-${{ matrix.os }}-${{ matrix.cc }}-h${{ matrix.harden }}-${{ hashFiles('std/audio/miniaudio.h', 'std/audio/aether_audio.c', 'std/audio/aether_audio.h') }}
 
     - name: Run full CI suite
       run: HARDEN=${{ matrix.harden }} CC=${{ matrix.cc }} make ci
+
+    - name: Save miniaudio object cache (merge to main, on miss only)
+      if: >-
+        github.event_name == 'push' && github.ref == 'refs/heads/main'
+        && steps.audio_cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .ci-cache
+        key: audio-obj-${{ matrix.os }}-${{ matrix.cc }}-h${{ matrix.harden }}-${{ hashFiles('std/audio/miniaudio.h', 'std/audio/aether_audio.c', 'std/audio/aether_audio.h') }}
 
     # macOS leaks(1) gate (#468). Runs only on the ARM64 macOS job —
     # one macOS arch is enough leak coverage, and MallocStackLogging
