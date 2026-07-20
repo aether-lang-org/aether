@@ -1,0 +1,9 @@
+// Imports two native-backed modules (std.regex -> pcre2, std.zlib -> zlib).
+// The generated C must carry a `// aether-link:` header naming both libs,
+// derived from the resolved import graph.
+import std.regex
+import std.zlib
+
+main() {
+    println("ok")
+}
