@@ -98,6 +98,52 @@ else
     bad "unknown target: wrong error"; sed 's/^/        /' "$TMP/err"
 fi
 
+# FreeBSD (Tier B): the triple is RECOGNIZED (not "Unknown target") — this
+# guards the target-list wiring even where zig is absent. A freebsd target
+# needs a base sysroot zig cc doesn't bundle, so without AETHER_SYSROOT it
+# must report the guided sysroot error, NOT "Unknown target".
+env -u AETHER_SYSROOT "$AE" build --target=x86_64-freebsd "$HELLO" -o "$TMP/fb" \
+    >/dev/null 2>"$TMP/err"
+if grep -q "Unknown target" "$TMP/err"; then
+    bad "x86_64-freebsd: reported Unknown target (target-list wiring missing)"
+else
+    ok "x86_64-freebsd recognized as a valid target"
+fi
+# The sysroot-unset guided error lives behind the zig-presence gate (it's
+# raised inside run_cross_build), so only assert it when zig is available —
+# without zig the build errors on zig-not-found first, which is also correct.
+if env -u AETHER_SYSROOT "$AE" build --target=x86_64-freebsd "$HELLO" -o "$TMP/fb" \
+     >/dev/null 2>"$TMP/err"; then
+    bad "x86_64-freebsd without AETHER_SYSROOT: build unexpectedly succeeded"
+elif grep -q "needs a FreeBSD base sysroot" "$TMP/err"; then
+    ok "x86_64-freebsd without AETHER_SYSROOT: guided sysroot error"
+elif grep -q "zig not found" "$TMP/err"; then
+    # Cannot reach the sysroot check without zig — the SKIP guard at the top
+    # means this branch is unreachable here, but keep it explicit for clarity.
+    ok "x86_64-freebsd without AETHER_SYSROOT: zig absent (sysroot check gated behind zig)"
+else
+    bad "x86_64-freebsd without AETHER_SYSROOT: wrong error"; sed 's/^/        /' "$TMP/err"
+fi
+
+# If a real FreeBSD base sysroot is available (AETHER_SYSROOT points at one),
+# build for real and assert a FreeBSD ELF. Skipped in ordinary CI, which has
+# no sysroot; exercised on a box provisioned via aether-crossbuild.
+if [ -n "${AETHER_SYSROOT:-}" ] && [ -f "${AETHER_SYSROOT}/lib/libc.so.7" ]; then
+    if "$AE" build --target=x86_64-freebsd "$HELLO" -o "$TMP/fbsd" \
+         >/dev/null 2>"$TMP/err"; then
+        desc="$(file -b "$TMP/fbsd")"
+        if printf '%s' "$desc" | grep -qi "FreeBSD"; then
+            ok "x86_64-freebsd (real sysroot): $desc"
+        else
+            bad "x86_64-freebsd (real sysroot): expected FreeBSD ELF, got '$desc'"
+        fi
+    else
+        bad "x86_64-freebsd (real sysroot): build failed"; sed 's/^/        /' "$TMP/err"
+    fi
+else
+    echo "  SKIP  x86_64-freebsd real build (no AETHER_SYSROOT base sysroot present)"
+fi
+
 # A program using a library-backed module (std.http) still cross-builds,
 # with a note that those features report unavailable at runtime (matching a
 # native build without OpenSSL/zlib/nghttp2/PCRE2).

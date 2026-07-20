@@ -5,11 +5,28 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.413.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.420.0]
+## [current]
+
+### Added
+
+- **`ae build --target=<triple>` now cross-compiles for FreeBSD** (extends the
+  zig cc backend, #1105). Adds `x86_64-freebsd` / `aarch64-freebsd` (+ `amd64` /
+  `arm64` aliases) as the first Tier B targets: unlike the self-contained Tier A
+  targets (macOS/Linux, whose libc zig bundles), FreeBSD needs a version-matched
+  base sysroot — supplied via `AETHER_SYSROOT` (a `bases/<cpu>-freebsd<ver>/`
+  tree from aether-crossbuild). Without it, the build reports a guided error
+  naming the fetch script. The link is done explicitly against the base's CRT
+  objects and real `libc.so.7` (zig's bundled FreeBSD-14 libc can't satisfy a
+  15 base's `__libc_start1`, and the sysroot's `libc.so` is an absolute-path
+  linker script). Verified end-to-end: a `println` program cross-built on Linux
+  ran on a FreeBSD 15.0 box. Scope matches #1105 — dependency-free / libc-only
+  programs; a program pulling `std.http` / `std.cryptography` additionally needs
+  those third-party libs built into the sysroot (aether-crossbuild's
+  `provision.sh`), untested through this path yet. Requires zig on `PATH`.
 
 ### Added
 
@@ -27,6 +44,30 @@ next version number before tagging the release.
   code is unchanged: the default constructors keep the cap-aware system path.
   See `docs/allocators.md`.
 
+## [0.419.0]
+
+### Added
+
+- **`aetherc` emits a `// aether-link:` header from the resolved import graph**
+  (#1202). The first line of the generated C now names the native libraries the
+  program's imports pull in, so a downstream build linking the `.c` recovers
+  them generically (`AE_LINK="$(sed -n 's|^// aether-link:||p' out.c)"`) instead
+  of rediscovering the list by `undefined reference` per platform. Written by
+  the same resolution that compiled the file (can't disagree with what was
+  compiled) and travels with the artifact. A truthful `{module → libs}` table
+  covers openssl (`std.net`/`std.http.client`/`std.cryptography`), pcre2
+  (`std.regex`), nghttp2 (`std.net` + h2), zlib (`std.zlib` + `http/middleware`),
+  sqlite (`contrib.sqlite`), audio (`std.audio`); matched against the transitive
+  import closure, de-duplicated, stable order. Only import-introduced libs
+  appear — the runtime baseline stays with `ae cflags --libs`. Answers
+  `emit-link-requirements-from-import-graph.md`.
+
+### Fixed
+
+- **Windows: `-DPCRE2_STATIC` when linking static libpcre2-8** (#1200). Without
+  it, MinGW builds of `std.regex`-using programs failed to link against the
+  static PCRE2 import symbols.
+
 ## [0.417.0]
 
 ### Fixed
@@ -40,6 +81,52 @@ next version number before tagging the release.
   low-address discriminator `aether_value_is_list` uses, so a bad pointer
   yields `(null, "")` (out-of-range index behaviour is unchanged). Surfaced
   by an aeb build whose generated code passed such a pointer to `list.get`.
+
+## [0.416.0]
+
+### Fixed
+
+- **Imported `enum` and `sum` types are now emitted** (#1194). The module-merge
+  pass cloned imported `struct` / `bitstruct` / distinct definitions into the
+  consumer's program AST but not `enum` or `sum` ones, so an imported enum used
+  by name failed (`Undefined variable 'Color'`) and an imported sum type failed
+  (`unknown type name 'Shape'` in the generated C). Both are now merged (with
+  dedup), mirroring the struct/bitstruct arms.
+- **A local variable named the same as its own module resolves correctly**
+  (#1194). The member-access typechecker took its namespace-qualified-constant
+  branch whenever the base matched a visible namespace, with no precedence for a
+  same-named in-scope value — so a module named `flags` whose body had a local
+  `flags` mis-resolved `flags.field` as a `flags_field` const lookup
+  (`module 'flags' has no export 'field'`). A local now shadows the namespace.
+  Not bitstruct-specific (reproduced with a plain struct); surfaced by the
+  imported-bitstruct ask's verbatim repro.
+
+## [0.415.0]
+
+### Fixed
+
+- **Imported-module `bitstruct` typedefs are now emitted** (#1192). A
+  `bitstruct` declared in an imported module was referenced by the consumer's
+  generated C (accessor prototypes/return types) but its backing typedef was
+  never emitted — `error: unknown type name 'PropertyFlags'` — because the
+  module-merge pass cloned imported `struct`s but not `bitstruct`s. Reported
+  while porting MicroQuickJS, whose packed property-flags word wanted a
+  layout-exact bitstruct in the module that owns the layout. Answers
+  `asks/imported-module-bitstruct-emission.md`.
+
+## [0.414.0]
+
+### Added
+
+- **Version-stamped SDK: a compile-time header macro + include-tree sidecar**
+  (#1189). An installed SDK tree could not identify itself. Now a generated,
+  dependency-free `runtime/aether_version.h` exposes `AETHER_VERSION` (string)
+  plus `AETHER_VERSION_MAJOR/_MINOR/_PATCH` and `AETHER_VERSION_NUM`
+  (`MAJOR*1000000 + MINOR*1000 + PATCH`) for `#if`-based gating
+  (`#if AETHER_VERSION_NUM < 390000 → #error`), and the install writes an
+  `include/aether/VERSION` sidecar mirroring `lib/aether/VERSION`. All derive
+  from the Makefile's `$(VERSION)` in lockstep with `aetherc --version` — no
+  hand-maintained constant. Answers the version-stamp ask.
 
 ## [0.413.0]
 
