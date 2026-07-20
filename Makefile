@@ -247,6 +247,13 @@ else
 endif
 ifneq ($(PCRE2_LDFLAGS),)
   PCRE2_CFLAGS += -DAETHER_HAS_PCRE2
+  # On Windows/MinGW we link the STATIC libpcre2-8.a; without PCRE2_STATIC the
+  # pcre2.h prototypes default to __declspec(dllimport), so the linker looks for
+  # __imp_pcre2_* import stubs that the static lib doesn't provide. Define it so
+  # the header declares plain symbols matching the static archive.
+  ifneq ($(IS_WINDOWS),)
+    PCRE2_CFLAGS += -DPCRE2_STATIC
+  endif
 endif
 
 # #959: homebrew's pkg-config .pc files emit versioned
