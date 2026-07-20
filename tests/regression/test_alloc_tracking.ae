@@ -1,0 +1,96 @@
+// #1045 + #1049: allocator convention (system, arena) + tracking allocator.
+
+import std.io (println)
+import std.alloc (system, raw, resize, release, of_arena, arena_free)
+import std.tracking (wrap, count, bytes, report, destroy)
+import std.list (list_new_in, list_add_raw, add, list_size, list_free)
+import std.arena
+
+extern exit(code: int)
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    sys = system()
+    p = raw(sys, 64)
+    if p == 0 { fail("system raw(64) returned null") }
+    p = resize(sys, p, 64, 256)
+    if p == 0 { fail("system resize to 256 returned null") }
+    release(sys, p, 256)
+
+    t = wrap(system())
+    if count(t) != 0 { fail("fresh tracker count ${count(t)}, want 0") }
+
+    a = raw(t, 32)
+    b = raw(t, 100)
+    c = raw(t, 8)
+    if a == 0 { fail("tracked raw a null") }
+    if b == 0 { fail("tracked raw b null") }
+    if c == 0 { fail("tracked raw c null") }
+    if count(t) != 3 { fail("after 3 allocs count ${count(t)}, want 3") }
+    if bytes(t) != 140 { fail("after 3 allocs bytes ${bytes(t)}, want 140") }
+
+    release(t, b, 100)
+    if count(t) != 2 { fail("after 1 free count ${count(t)}, want 2") }
+    if bytes(t) != 40 { fail("after 1 free bytes ${bytes(t)}, want 40") }
+
+    a = resize(t, a, 32, 48)
+    if count(t) != 2 { fail("after resize count ${count(t)}, want 2") }
+    if bytes(t) != 56 { fail("after resize bytes ${bytes(t)}, want 56") }
+
+    leaks = report(t)
+    if leaks != 2 { fail("report ${leaks}, want 2") }
+
+    release(t, a, 48)
+    release(t, c, 8)
+    if count(t) != 0 { fail("after freeing all count ${count(t)}, want 0") }
+    if bytes(t) != 0 { fail("after freeing all bytes ${bytes(t)}, want 0") }
+    destroy(t)
+
+    ar = arena.create(64 * 1024)
+    ah = of_arena(ar)
+    if ah == 0 { fail("of_arena returned null") }
+    x = raw(ah, 500)
+    y = raw(ah, 500)
+    if x == 0 { fail("arena raw x null") }
+    if y == 0 { fail("arena raw y null") }
+    used_before = arena.used(ar)
+    if used_before < 1000 { fail("arena used ${used_before}, want >= 1000") }
+    release(ah, x, 500)
+    arena.reset(ar)
+    if arena.used(ar) != 0 { fail("after reset arena used ${arena.used(ar)}, want 0") }
+    arena_free(ah)
+    arena.destroy(ar)
+
+    lt = wrap(system())
+    l = list_new_in(lt)
+    i = 0
+    while i < 64 {
+        list_add_raw(l, l)
+        i = i + 1
+    }
+    if list_size(l) != 64 { fail("list size ${list_size(l)}, want 64") }
+    if count(lt) < 1 { fail("tracker saw no list container allocations") }
+    list_free(l)
+    if count(lt) != 0 { fail("list_free left ${count(lt)} live (container leak)") }
+    destroy(lt)
+
+    oar = arena.create(16 * 1024)
+    oah = of_arena(oar)
+    ol = list_new_in(oah)
+    j = 0
+    while j < 20 {
+        add(ol, "item ${j}")
+        j = j + 1
+    }
+    if list_size(ol) != 20 { fail("owned list size ${list_size(ol)}, want 20") }
+    list_free(ol)
+    arena.reset(oar)
+    arena_free(oah)
+    arena.destroy(oar)
+
+    println("PASS")
+}

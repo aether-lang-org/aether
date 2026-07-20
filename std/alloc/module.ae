@@ -1,0 +1,36 @@
+// std.alloc (#1045): swappable allocator convention. See docs/allocators.md.
+
+exports (
+    system, of_arena, arena_free,
+    raw, resize, release
+)
+
+extern aether_allocator_system() -> ptr
+extern aether_allocator_arena(arena: ptr) -> ptr
+extern aether_allocator_arena_destroy(a: ptr)
+extern aether_allocator_alloc(a: ptr, size: int) -> ptr
+extern aether_allocator_realloc(a: ptr, block: ptr, old_size: int, new_size: int) -> ptr
+extern aether_allocator_free(a: ptr, block: ptr, size: int)
+
+system() -> ptr {
+    return aether_allocator_system()
+}
+
+of_arena(arena: ptr) -> ptr {
+    return aether_allocator_arena(arena)
+}
+arena_free(a: ptr) {
+    aether_allocator_arena_destroy(a)
+}
+
+raw(a: ptr, size: int) -> ptr {
+    return aether_allocator_alloc(a, size)
+}
+
+resize(a: ptr, block: ptr, old_size: int, new_size: int) -> ptr {
+    return aether_allocator_realloc(a, block, old_size, new_size)
+}
+
+release(a: ptr, block: ptr, size: int) {
+    aether_allocator_free(a, block, size)
+}

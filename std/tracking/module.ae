@@ -1,0 +1,31 @@
+// std.tracking (#1049): leak-detecting allocator wrapper. See docs/allocators.md.
+
+exports (
+    wrap, count, bytes, report, destroy
+)
+
+extern aether_tracking_wrap(inner: ptr) -> ptr
+extern aether_tracking_count(t: ptr) -> int
+extern aether_tracking_bytes(t: ptr) -> long
+extern aether_tracking_report(t: ptr) -> int
+extern aether_tracking_destroy(t: ptr)
+
+wrap(inner: ptr) -> ptr {
+    return aether_tracking_wrap(inner)
+}
+
+count(t: ptr) -> int {
+    return aether_tracking_count(t)
+}
+
+bytes(t: ptr) -> long {
+    return aether_tracking_bytes(t)
+}
+
+report(t: ptr) -> int {
+    return aether_tracking_report(t)
+}
+
+destroy(t: ptr) {
+    aether_tracking_destroy(t)
+}

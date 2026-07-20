@@ -2,6 +2,7 @@
 #define AETHER_COLLECTIONS_H
 
 #include "../string/aether_string.h"
+#include "../alloc/aether_alloc.h"
 #include <stddef.h>
 
 typedef struct ArrayList ArrayList;
@@ -11,6 +12,7 @@ typedef struct FloatArray FloatArray;
 typedef struct LongArray LongArray;
 
 ArrayList* list_new();
+ArrayList* list_new_in(AetherAllocator* alloc);
 int list_add_raw(ArrayList* list, void* item);
 
 /* Heap-string-aware add (#467). Retains the value (AetherString
