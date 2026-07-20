@@ -1,0 +1,69 @@
+// #1205: std.worker runs jobs through a bounded pool, not a thread-per-job.
+// A tiny pool (2) with far more jobs must still complete every job by queuing
+// them, and run_detached must still spawn its own thread. Completions run on
+// the drain (this) thread, serialised, so the counter needs no lock.
+
+import std.io (println)
+import std.bytes
+import std.worker
+
+extern exit(code: int)
+
+main() {
+    worker.pool_size(2)
+
+    t = bytes.new(4)
+    bytes.set(t, 0, 0)
+
+    total = 200
+    n = 0
+    while n < total {
+        idx = n
+        _ = worker.run(
+            || {
+                p = bytes.new(1)
+                bytes.set(p, 0, idx)
+                return p
+            },
+            |res: ptr| {
+                bytes.set(t, 0, bytes.get(t, 0) + 1)
+                bytes.free(res)
+            }
+        )
+        n = n + 1
+    }
+
+    spins = 0
+    while worker.pending() > 0 && spins < 100000000 {
+        _ = worker.drain(0)
+        spins = spins + 1
+    }
+
+    got = bytes.get(t, 0)
+    if got != 200 {
+        println("FAIL: ${got}/200 jobs completed through the bounded pool")
+        exit(1)
+    }
+    if worker.pending() != 0 {
+        println("FAIL: pending ${worker.pending()} after drain")
+        exit(1)
+    }
+
+    dok = worker.run_detached(
+        || {
+            q = bytes.new(1)
+            bytes.free(q)
+            return null
+        }
+    )
+    if dok == false { println("FAIL: run_detached did not launch"); exit(1) }
+
+    spins = 0
+    while worker.pending() > 0 && spins < 100000000 {
+        spins = spins + 1
+    }
+
+    bytes.free(t)
+    worker.pool_shutdown()
+    println("PASS")
+}

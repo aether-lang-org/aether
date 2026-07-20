@@ -177,21 +177,14 @@ typedef struct HttpServer {
     int h2_max_concurrent_streams;  /* nghttp2 SETTINGS; 0 → 100 default */
 
     // Per-stream concurrent dispatch worker count. When > 0, the
-    // server provisions a SHARED pool of this many pthreads — every
-    // h2 connection on this server submits stream-level dispatch
-    // tasks into the same pool (mirroring how the HTTP/1.1
-    // connection pool is shared across accepted connections). When
-    // 0 (default), streams dispatch sequentially on the connection
-    // thread (legacy behaviour). Set via
-    // http_server_set_h2_concurrent_dispatch_raw.
-    //
-    // The pool itself lives in `h2_dispatch_pool_opaque` (forward-
-    // declared as void* so this header doesn't pull in libnghttp2
-    // / pthread types). It's created lazily by the h2 wrapper on
-    // first session that needs it, and torn down by
-    // http_server_free.
+    // stream-level dispatch runs on the shared std.worker pool,
+    // sized to this many threads (aether_worker_pool_configure).
+    // Every h2 connection on this server submits dispatch tasks
+    // into that one pool, mirroring how the HTTP/1.1 connection
+    // pool is shared across accepted connections. When 0 (default),
+    // streams dispatch sequentially on the connection thread. Set
+    // via http_server_set_h2_concurrent_dispatch_raw.
     int   h2_dispatch_workers;
-    void* h2_dispatch_pool_opaque;
 
     // Routing
     HttpRoute* routes;

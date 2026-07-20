@@ -47,13 +47,16 @@
 // ---- cooperative / threadless builds ----
 //
 // Blocking IO inherently needs a thread off the actor scheduler (a blocking
-// actor handler starves its scheduler core — the same reason std.http's h2
-// server runs handlers on its own pthread pool). So `work` runs on a fresh OS
-// thread. On the cooperative / AETHER_NO_THREADING build (embedded, wasm,
-// ci-coop) there are no threads: `work` then runs SYNCHRONOUSLY at the run()
-// call, and its completion is still delivered through the poster/drain path on
-// the next deliver/drain. No parallelism there — but the contract (work runs;
-// done fires on the loop thread) holds unchanged.
+// actor handler starves its scheduler core). `run` submits to a bounded pool
+// of reusable worker threads (size defaults to the core count; set it with
+// `pool_size`), so firing 30 concurrent jobs no longer spawns 30 threads: job
+// N+1 queues behind the N in flight (the standard SwingWorker-style trade).
+// `run_detached` still spawns a fresh thread, the escape hatch for a job that
+// must never queue behind others. On the cooperative / AETHER_NO_THREADING
+// build (embedded, wasm, ci-coop) there are no threads: `work` runs
+// SYNCHRONOUSLY at the run() call, with completion delivered through the
+// poster/drain path on the next deliver/drain. No parallelism there, but the
+// contract (work runs; done fires on the loop thread) holds unchanged.
 //
 // ---- lifetime ----
 //
@@ -67,7 +70,9 @@ exports (
     aether_worker_run, aether_worker_run_detached,
     aether_worker_set_main_poster, aether_worker_deliver,
     aether_worker_drain, aether_worker_pending,
-    run, run_detached, set_main_poster, deliver, drain, pending
+    aether_worker_pool_configure, aether_worker_pool_shutdown,
+    run, run_detached, set_main_poster, deliver, drain, pending,
+    pool_size, pool_shutdown
 )
 
 // ---- raw externs (std/worker/aether_worker.c) ----
@@ -81,6 +86,8 @@ extern aether_worker_set_main_poster(poster: fn)
 extern aether_worker_deliver(job: ptr)
 extern aether_worker_drain(max: int) -> int
 extern aether_worker_pending() -> int
+extern aether_worker_pool_configure(n: int)
+extern aether_worker_pool_shutdown()
 
 // ---- Aether-side wrappers ----
 
@@ -123,4 +130,20 @@ drain(max: int) -> int {
 // through the poster). For backpressure and test synchronisation.
 pending() -> int {
     return aether_worker_pending()
+}
+
+// Set the bounded pool size. Only takes effect before the first run(); the
+// default is derived from the core count. N concurrently-blocking jobs queue
+// job N+1 (the standard SwingWorker-style trade); use run_detached for a job
+// that must never queue.
+pool_size(n: int) {
+    aether_worker_pool_configure(n)
+}
+
+// Join and free the pool threads once they finish their current + queued jobs.
+// For deterministic teardown; NOT run automatically. Process exit abandons
+// in-flight/queued jobs (instant, like the pre-pool model), so a job blocked in
+// user work can never hang exit. Call this only when jobs are known to finish.
+pool_shutdown() {
+    aether_worker_pool_shutdown()
 }

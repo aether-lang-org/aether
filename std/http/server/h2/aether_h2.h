@@ -89,11 +89,11 @@ int aether_h2_session_want_close(AetherH2Session* sess);
 /* Concurrent dispatch (#260 follow-up).
  *
  * When http_server_set_h2_concurrent_dispatch_raw set the worker
- * count > 0, each session spawns a small pthread pool. Stream
- * handlers run on those workers in parallel; the connection thread
- * keeps reading frames + serialising responses. nghttp2_session is
- * NOT thread-safe — only the connection thread calls into it; the
- * pool wakes the connection thread via a self-pipe whose read end
+ * count > 0, stream handlers run on the shared std.worker pool in
+ * parallel; the connection thread keeps reading frames + serialising
+ * responses. nghttp2_session is NOT thread-safe: only the connection
+ * thread calls into it; a completed task wakes the connection thread
+ * via a self-pipe whose read end
  * `aether_h2_session_wake_fd` exposes for the caller to poll
  * alongside its socket fd.
  *

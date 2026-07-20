@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`std.worker` now runs jobs on a bounded pool instead of a thread per job**
+  (#1205). `worker.run` previously spawned (and detached) a fresh OS thread for
+  every job, so a UI app firing 30 concurrent requests spawned 30 threads. It
+  now submits to a lazily-started pool of reusable worker threads (size defaults
+  to the core count, clamped to [2, 32]; set it with `worker.pool_size(n)`
+  before the first `run`): N concurrently-blocking jobs queue job N+1, the
+  standard SwingWorker-style trade. `worker.run_detached` keeps the fresh-thread
+  behavior as the escape hatch for a job that must never queue, and the
+  cooperative / `AETHER_NO_THREADING` synchronous fallback is unchanged. Process
+  exit abandons in-flight and queued jobs (instant, as the pre-pool
+  thread-per-job model behaved), so a job blocked in user work never hangs exit;
+  `worker.pool_shutdown()` joins and frees the pool for deterministic teardown
+  when the jobs are known to finish.
+- **The HTTP/2 concurrent-dispatch pool is now the shared `std.worker` pool**
+  (#1205). Per-stream h2 dispatch (`server.set_h2_concurrent_dispatch(n)`) used
+  to run on a second, h2-private thread pool duplicating the worker pool's job.
+  It now submits stream handlers through `std.worker`, so one process-wide pool
+  serves both `worker.run` and every h2 connection on every server, keeping the
+  OS thread count constant instead of standing up two independent pools. The h2
+  worker count still sizes that shared pool; behavior and the empirical
+  parallelism guarantee are unchanged.
+
 ## [0.424.0]
 
 ### Fixed

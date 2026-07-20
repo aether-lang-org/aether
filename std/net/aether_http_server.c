@@ -1185,7 +1185,6 @@ const char* http_server_set_h2_concurrent_dispatch_raw(HttpServer* server,
     server->h2_dispatch_workers = worker_count;
     return "";
 #else
-    (void)worker_count;
     return "HTTP/2 unavailable: built without libnghttp2";
 #endif
 }
@@ -3901,29 +3900,11 @@ void http_server_stop(HttpServer* server) {
     }
 }
 
-/* Defined in std/http/server/h2/aether_h2.c — frees the
- * server-level h2 dispatch pool (joins all worker pthreads, drains
- * stragglers). No-op when the pool was never created. Forward-
- * declared here as void* so this file doesn't have to pull in
- * libnghttp2 / pthread types. */
-void aether_h2_dispatch_pool_free(void* opaque);
-
 void http_server_free(HttpServer* server) {
     if (!server) return;
 
     http_server_stop(server);
 
-    /* Tear down the h2 dispatch pool (if any) BEFORE freeing
-     * routes / middleware: workers running handlers reach into
-     * those tables, so they must be joined first. http_server_stop
-     * already flipped is_running, which terminates accept loops;
-     * any in-flight h2 sessions must complete before this point —
-     * graceful shutdown via http_server_shutdown_graceful_raw is
-     * the recommended path, and aether_h2_session_free spins on
-     * its own in_flight counter. By the time we reach
-     * http_server_free, all sessions are gone. */
-    aether_h2_dispatch_pool_free(server->h2_dispatch_pool_opaque);
-    server->h2_dispatch_pool_opaque = NULL;
 
     free(server->host);
     
