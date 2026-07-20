@@ -3812,9 +3812,116 @@ static void mangle_keyword_value_idents(ASTNode* node) {
     }
 }
 
+/* ---- link-requirement emission (emit-link-requirements-from-import-graph) --
+ *
+ * aetherc resolves the full import graph, so it knows exactly which native
+ * libraries a program pulls in. We emit that as a `// aether-link:` comment on
+ * the first line of the generated C, so a downstream build that links the .c
+ * doesn't have to rediscover the list by `undefined reference` archaeology:
+ *
+ *     // aether-link: -lsqlite3 -lssl -lcrypto -lpcre2-8
+ *     AE_LINK="$(sed -n 's|^// aether-link:||p' out.c)"; cc ... out.c $AE_LINK
+ *
+ * Only libraries INTRODUCED BY imports appear here; the runtime baseline
+ * (-laether -pthread -lm, winsock/bcrypt on Windows) stays with
+ * `ae cflags --libs`, as the ask specifies. The mapping is a static table
+ * keyed on the dotted module name — the same shape as the `gated[]`
+ * capability table in aetherc.c — using the canonical pkg-config `-l` names,
+ * which are stable across Linux/macOS/MinGW (only -L paths differ, and those
+ * belong to the consumer). It is matched against the RESOLVED import closure
+ * (global_module_registry, which module_orchestrate populates transitively),
+ * so an import reached only through another module still contributes its libs.
+ * Order is table order (stable); tokens are de-duplicated. */
+typedef struct { const char* module; const char* libs; } AetherLinkReq;
+
+/* Truthful, per-module: each entry names a module whose C backing directly
+ * links the given lib (verified against the extern references in the std C
+ * sources -- openssl in std/net + std/http/client + std/cryptography, pcre2 in
+ * std/regex, nghttp2 in std/net + h2, zlib in std/zlib + http/middleware).
+ * Matched by EXACT dotted name, deliberately: the pure-Aether crypto submodules
+ * (std.cryptography.sha, .blake2, etc.) carry no native dep and must NOT
+ * inherit std.cryptography's openssl. New native-backed modules add a row. */
+static const AetherLinkReq g_link_reqs[] = {
+    { "std.regex",            "-lpcre2-8" },
+    { "std.net",              "-lssl -lcrypto -lnghttp2" },
+    { "std.http",             "-lssl -lcrypto -lnghttp2" },
+    { "std.http.client",      "-lssl -lcrypto" },
+    { "std.http.server.h2",   "-lnghttp2 -lssl -lcrypto" },
+    { "std.cryptography",     "-lssl -lcrypto" },
+    { "std.zlib",             "-lz" },
+    { "std.http.middleware",  "-lz" },
+    { "std.audio",            "-lpthread -ldl -lm" },
+    { "contrib.sqlite",       "-laether_sqlite -lsqlite3" },
+};
+static const int g_link_req_count = (int)(sizeof(g_link_reqs) / sizeof(g_link_reqs[0]));
+
+/* True if `mod` (a dotted module name) is in the program's resolved import
+ * closure. Prefers the transitive registry; falls back to direct imports on
+ * the program AST if the registry is unavailable (e.g. a bare codegen call). */
+static int program_imports_module(ASTNode* program, const char* mod) {
+    if (global_module_registry) {
+        for (int i = 0; i < global_module_registry->module_count; i++) {
+            AetherModule* m = global_module_registry->modules[i];
+            if (m && m->name && strcmp(m->name, mod) == 0) return 1;
+        }
+    }
+    if (program) {
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (c && c->type == AST_IMPORT_STATEMENT && c->value &&
+                strcmp(c->value, mod) == 0) return 1;
+        }
+    }
+    return 0;
+}
+
+/* Emit `// aether-link: <tokens>` as the first line of the TU when the import
+ * closure introduces any native-library dependency. De-dupes tokens across
+ * modules (e.g. std.http and std.cryptography both want -lssl -lcrypto). */
+static void emit_link_requirements(CodeGenerator* gen, ASTNode* program) {
+    /* Accumulate unique tokens in first-seen (table) order. */
+    const char* toks[64];
+    int ntok = 0;
+    for (int r = 0; r < g_link_req_count; r++) {
+        if (!program_imports_module(program, g_link_reqs[r].module)) continue;
+        /* Split g_link_reqs[r].libs on spaces, add each token once. */
+        const char* s = g_link_reqs[r].libs;
+        while (*s) {
+            while (*s == ' ') s++;
+            if (!*s) break;
+            const char* start = s;
+            while (*s && *s != ' ') s++;
+            size_t len = (size_t)(s - start);
+            /* dedup against what we already have */
+            int dup = 0;
+            for (int k = 0; k < ntok; k++) {
+                if (strlen(toks[k]) == len && strncmp(toks[k], start, len) == 0) { dup = 1; break; }
+            }
+            if (!dup && ntok < (int)(sizeof(toks) / sizeof(toks[0]))) {
+                /* store a heap copy (start isn't NUL-terminated at the token) */
+                char* copy = (char*)malloc(len + 1);
+                if (copy) { memcpy(copy, start, len); copy[len] = '\0'; toks[ntok++] = copy; }
+            }
+        }
+    }
+    if (ntok == 0) return;
+
+    fputs("// aether-link:", gen->output);
+    for (int i = 0; i < ntok; i++) {
+        fprintf(gen->output, " %s", toks[i]);
+        free((void*)toks[i]);
+    }
+    fputc('\n', gen->output);
+}
+
 void generate_program(CodeGenerator* gen, ASTNode* program) {
     if (!program || program->type != AST_PROGRAM) return;
     gen->program = program;
+
+    /* Link requirements from the resolved import graph — the very first line
+     * of the TU (a // comment is inert to the preprocessor, so it may precede
+     * the MinGW #if below). */
+    emit_link_requirements(gen, program);
     // #976: rewrite C-keyword value identifiers to a valid C spelling before
     // any codegen pass reads their names (must run before escape analysis and
     // emission, which both key off the identifier names).

@@ -1,0 +1,5 @@
+// Imports nothing that pulls a native library — the generated C must NOT
+// carry an `// aether-link:` header (only imports introduce the comment).
+main() {
+    println("ok")
+}
