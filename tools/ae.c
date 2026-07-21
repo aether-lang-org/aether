@@ -5216,6 +5216,17 @@ static int run_cross_build(const char* c_file, const char* out_file,
                  * by the lib that follows. Probed on the VENEER so a program
                  * that doesn't use sqlite links nothing extra. */
                 { "aether_sqlite", "-laether_sqlite -lsqlite3" },
+                /* contrib.host.python: the embedded-Python bridge veneer. NO
+                 * -lpython — the bridge dlopen()s the deploy host's libpython
+                 * at runtime (AETHER_PYTHON_SONAME), so the .a has no
+                 * unresolved CPython symbols and needs no python at link. Just
+                 * the veneer archive. Probed on it so a program not embedding
+                 * python links nothing extra. */
+                { "aether_host_python", "-laether_host_python" },
+                /* contrib.host.ruby: same dlopen model as python (no -lruby;
+                 * the deploy host's libruby is dlopen'd at runtime). Veneer
+                 * only. */
+                { "aether_host_ruby", "-laether_host_ruby" },
             };
             for (size_t i = 0; i < sizeof(t2) / sizeof(t2[0]); i++) {
                 snprintf(probe, sizeof(probe), "%s/lib/lib%s.a", xsr, t2[i].lib);
