@@ -5090,8 +5090,10 @@ static int run_cross_build(const char* c_file, const char* out_file,
      * (verified with zig 0.13). */
     char sysroot_flag[3200];   /* COMPILE flags: --sysroot + -I/-L */
     char fbsd_link[4096];      /* LINK tail: CRT objects + the real libc.so.7 */
+    char fbsd_platform_libs[2048]; /* LINK tail: FreeBSD platform -l names */
     sysroot_flag[0] = '\0';
     fbsd_link[0] = '\0';
+    fbsd_platform_libs[0] = '\0';
     if (cross_target_needs_sysroot(ztriple)) {
         const char* sr = getenv("AETHER_SYSROOT");
         if (!sr || !*sr) {
@@ -5117,6 +5119,34 @@ static int run_cross_build(const char* c_file, const char* out_file,
                  "-nostdlib \"%s/usr/lib/crt1.o\" \"%s/usr/lib/crti.o\" "
                  "\"%s/lib/libc.so.7\" \"%s/usr/lib/crtn.o\"",
                  sr, sr, sr, sr);
+
+        /* Platform libs the FreeBSD link needs, mirroring the NATIVE FreeBSD
+         * build (ae.c ~2368). The base sysroot's -L (from sysroot_flag) already
+         * resolves these; only the -l names were missing on the cross path.
+         *
+         * casper — ALWAYS: std/casper/aether_casper.c is unconditionally in
+         * libaether.a and calls cap_getpwnam / cap_sysctlbyname / ..., so a
+         * FreeBSD cross-link fails with `undefined symbol: cap_getpwnam`
+         * regardless of what the app imports. The base ships all of them
+         * (libcasper, libcap_pwd, libcap_sysctl, libcap_grp). We emit the
+         * names literally rather than via AETHER_CASPER_LIBS — that macro is
+         * populated by globbing the HOST's /lib when `ae` is built on FreeBSD,
+         * and is empty in an `ae` cross-compiled/built on Linux.
+         *
+         * openssl / nghttp2 / zlib / pcre2 — CONDITIONAL on CROSSBUILD_SYSROOT:
+         * these are NOT in the FreeBSD base; aether-crossbuild's provision.sh
+         * builds them into sysroots/<triple>/. When that sysroot is provided,
+         * add its -L + the -l names so std.cryptography / std.http / std.zlib /
+         * std.regex link for real. Without it, keep today's warn-and-omit (the
+         * program still builds; those features report unavailable at runtime).
+         * Same CROSSBUILD_SYSROOT contract #1213 added to contrib_build.sh. */
+        int pw = snprintf(fbsd_platform_libs, sizeof(fbsd_platform_libs),
+                          "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp");
+        const char* xsr = getenv("CROSSBUILD_SYSROOT");
+        if (xsr && *xsr && pw > 0 && (size_t)pw < sizeof(fbsd_platform_libs)) {
+            snprintf(fbsd_platform_libs + pw, sizeof(fbsd_platform_libs) - (size_t)pw,
+                     " -L%s/lib -lssl -lcrypto -lnghttp2 -lz -lpcre2-8", xsr);
+        }
     }
     static char cmd[24576];
     /* Accumulated quoted "<objpath>" list, in compile order, for the ar
@@ -5191,10 +5221,13 @@ static int run_cross_build(const char* c_file, const char* out_file,
          *    objects bracket the program/runtime; libm comes from the sysroot
          *    -L. Tier A keeps the compact -lm form. */
         if (fbsd_link[0]) {
+            /* Platform -l names go AFTER libaether.a — it references their
+             * symbols (casper's cap_*, openssl's SSL_*, …), so they must
+             * follow it on the link line for ld.lld's single-pass resolution. */
             w = snprintf(cmd, sizeof(cmd),
-                "zig cc -target %s %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" -lm -o \"%s\"",
+                "zig cc -target %s %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" %s -lm -o \"%s\"",
                 ztriple, sysroot_flag, fbsd_link, opt, feature_defs, tc.include_flags,
-                c_file, ex, objdir, out_file);
+                c_file, ex, objdir, fbsd_platform_libs, out_file);
         } else {
             w = snprintf(cmd, sizeof(cmd),
                 "zig cc -target %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" -o \"%s\" -lm",
