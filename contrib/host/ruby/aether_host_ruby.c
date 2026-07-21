@@ -42,7 +42,7 @@
 // C strings (no Ruby format extensions), so we want libc snprintf
 // — undef the substitution.
 #undef snprintf
-#include <dlfcn.h>
+#include "../aep_dl.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -59,6 +59,10 @@ static struct {
     void (*ruby_init)(void);
     void (*ruby_init_loadpath)(void);
     void (*ruby_init_stack)(volatile VALUE* addr);
+    // Windows-only: ruby_sysinit(&argc,&argv) MUST run before ruby_init on
+    // Windows (sets up the ucrt/argv layer ruby_init assumes). Absent/unneeded
+    // on POSIX. Soft-resolved; only called under _WIN32.
+    void (*ruby_sysinit)(int* argc, char*** argv);
     void (*ruby_finalize)(void);
     // Eval + error introspection.
     VALUE (*rb_eval_string_protect)(const char*, int*);
@@ -92,6 +96,8 @@ static int resolve_ruby_symbols(void* h) {
     RESOLVE(ruby_init,              "ruby_init");
     RESOLVE(ruby_init_loadpath,     "ruby_init_loadpath");
     RESOLVE(ruby_init_stack,        "ruby_init_stack");
+    // soft-resolve (not RESOLVE): POSIX libruby need not export it.
+    *(void**)(&g_rb.ruby_sysinit) = dlsym(h, "ruby_sysinit");
     RESOLVE(ruby_finalize,          "ruby_finalize");
     RESOLVE(rb_eval_string_protect, "rb_eval_string_protect");
     RESOLVE(rb_errinfo,             "rb_errinfo");
@@ -202,6 +208,16 @@ int ruby_init_host(void) {
     // stack bottom for GC. Must happen on the calling thread, before
     // ruby_init().
     volatile VALUE stack_bottom = 0;
+#if defined(_WIN32)
+    // Windows requires ruby_sysinit() before any other ruby_* call.
+    if (g_rb.ruby_sysinit) {
+        static char* aep_argv0 = "aether";
+        char* aep_argv_storage[2] = { aep_argv0, (char*)0 };
+        char** aep_argv = aep_argv_storage;
+        int aep_argc = 1;
+        g_rb.ruby_sysinit(&aep_argc, &aep_argv);
+    }
+#endif
     g_rb.ruby_init_stack(&stack_bottom);
 
     g_rb.ruby_init();
