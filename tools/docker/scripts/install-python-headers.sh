@@ -17,6 +17,14 @@ HEADERS_DIR="${HEADERS_DIR:-/opt/hosted-language-headers}"
 mkdir -p /opt/aether/include
 cp -r "$HEADERS_DIR/python" /opt/aether/include/python
 
+# The configured pyconfig.h is PER-TARGET (captured from a real machine of each
+# platform; removed from the shared tree — see hosted-language-headers/targets/
+# README.md). This docker image is linux-x86_64-glibc, so overlay that target's
+# real config. (Was previously a Debian multiarch dispatcher in the shared tree;
+# the overlay is the actual configured header it used to dispatch to.)
+cp "$HEADERS_DIR/targets/x86_64-linux-gnu/python/pyconfig.h" \
+   /opt/aether/include/python/pyconfig.h
+
 # Verify the contract.
 test -f /opt/aether/include/python/Python.h || {
     echo "install-python-headers: Python.h missing in $HEADERS_DIR/python" >&2
