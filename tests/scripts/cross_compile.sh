@@ -53,6 +53,9 @@ chmod +x "$STUB/zig"
 FB="$_fbtmp/fbbase"; mkdir -p "$FB/usr/lib" "$FB/lib" "$FB/usr/include"
 touch "$FB/usr/lib/crt1.o" "$FB/usr/lib/crti.o" "$FB/usr/lib/crtn.o" "$FB/lib/libc.so.7"
 XB="$_fbtmp/xbuild"; mkdir -p "$XB/lib" "$XB/include"
+# The Tier-2 append is per-lib-probed (ae.c links only libs actually staged),
+# so the fake sysroot must carry the .a files for them to appear on the line.
+for _l in ssl crypto nghttp2 z pcre2-8; do : > "$XB/lib/lib$_l.a"; done
 _HELLO="examples/basics/hello.ae"
 
 # (a) base sysroot only → casper libs present, openssl absent.
@@ -79,6 +82,48 @@ if printf '%s' "$_lb" | grep -q -- "-lcasper" && \
     ok "x86_64-freebsd link adds Tier-2 libs with CROSSBUILD_SYSROOT"
 else
     bad "x86_64-freebsd link missing Tier-2 libs under CROSSBUILD_SYSROOT"; echo "        $_lb"
+fi
+
+# --- Windows (Tier A, self-contained — no sysroot). Same stub zig. ---
+# (c) recognized + emits .exe + NO casper (casper is FreeBSD-only) + NO Tier-2
+#     libs without a sysroot.
+PATH="$STUB:$PATH" "$AE" build --target=x86_64-windows "$_HELLO" -o "$_fbtmp/w" 2>"$_fbtmp/wc" >/dev/null || true
+if grep -q "Unknown target" "$_fbtmp/wc"; then
+    bad "x86_64-windows: reported Unknown target"
+else
+    ok "x86_64-windows recognized as a valid target"
+fi
+_lw="$(grep 'ZIGCC:' "$_fbtmp/wc" | grep -F 'libaether.a' | tail -1)"
+if printf '%s' "$_lw" | grep -q -- "-lcasper"; then
+    bad "x86_64-windows link added casper (FreeBSD-only)"
+else
+    ok "x86_64-windows link omits casper"
+fi
+if printf '%s' "$_lw" | grep -qE -- "-o [^ ]*\.exe"; then
+    ok "x86_64-windows output named .exe"
+else
+    bad "x86_64-windows output not .exe: $_lw"
+fi
+# (d) windows WITH CROSSBUILD_SYSROOT → Tier-2 libs (per-lib probed), no casper.
+PATH="$STUB:$PATH" CROSSBUILD_SYSROOT="$XB" \
+    "$AE" build --target=x86_64-windows "$_HELLO" -o "$_fbtmp/w2" 2>"$_fbtmp/wc2" >/dev/null || true
+_lw2="$(grep 'ZIGCC:' "$_fbtmp/wc2" | grep -F 'libaether.a' | tail -1)"
+if printf '%s' "$_lw2" | grep -q -- "-lssl -lcrypto" && \
+   printf '%s' "$_lw2" | grep -q -- "-lpcre2-8" && \
+   ! printf '%s' "$_lw2" | grep -q -- "-lcasper"; then
+    ok "x86_64-windows link adds Tier-2 libs (no casper) with CROSSBUILD_SYSROOT"
+else
+    bad "x86_64-windows Tier-2 wiring wrong: $_lw2"
+fi
+# (e) per-lib probe: a sysroot with ONLY pcre2 links -lpcre2-8 but NOT -lssl.
+XP="$_fbtmp/xpart"; mkdir -p "$XP/lib"; : > "$XP/lib/libpcre2-8.a"
+PATH="$STUB:$PATH" CROSSBUILD_SYSROOT="$XP" \
+    "$AE" build --target=x86_64-windows "$_HELLO" -o "$_fbtmp/w3" 2>"$_fbtmp/wc3" >/dev/null || true
+_lw3="$(grep 'ZIGCC:' "$_fbtmp/wc3" | grep -F 'libaether.a' | tail -1)"
+if printf '%s' "$_lw3" | grep -q -- "-lpcre2-8" && ! printf '%s' "$_lw3" | grep -q -- "-lssl"; then
+    ok "CROSSBUILD_SYSROOT per-lib probe links only staged libs"
+else
+    bad "per-lib probe wrong (linked an absent lib): $_lw3"
 fi
 rm -rf "$_fbtmp"
 

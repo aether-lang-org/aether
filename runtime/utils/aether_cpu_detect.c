@@ -18,7 +18,14 @@
 #endif
 
 #if AETHER_HAS_SIMD
-#  ifdef _WIN32
+   /* CPUID intrinsics come from different headers per toolchain. MSVC exposes
+    * __cpuidex via <intrin.h>; a GNU compiler (gcc/clang, INCLUDING zig cc's
+    * MinGW target and MSYS2 mingw) exposes __cpuid_count via <cpuid.h> and does
+    * NOT declare __cpuidex from <intrin.h>. Keying on _WIN32 alone picked the
+    * MSVC path for mingw/zig and broke the cross-Windows build with
+    * "call to undeclared function '__cpuidex'". Split on the compiler, not the
+    * OS: MSVC -> <intrin.h>; GNU on x86 -> <cpuid.h>. */
+#  if defined(_MSC_VER)
 #    include <intrin.h>
 #  elif defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 #    include <cpuid.h>
@@ -44,7 +51,10 @@ static int g_cpu_info_initialized = 0;
 #if AETHER_HAS_SIMD
 // CPUID wrapper
 static void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t* eax, uint32_t* ebx, uint32_t* ecx, uint32_t* edx) {
-#ifdef _WIN32
+    /* MSVC path (its <intrin.h> __cpuidex). A GNU compiler on Windows
+     * (mingw/zig cc) falls through to the __cpuid_count path below, exactly
+     * like native Linux — matching the header split above. */
+#if defined(_MSC_VER)
     int regs[4];
     __cpuidex(regs, leaf, subleaf);
     *eax = regs[0];

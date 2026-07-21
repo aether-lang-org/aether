@@ -5,7 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+/* The Win32-aware pthread shim (CRITICAL_SECTION on Windows) rather than raw
+ * <pthread.h> — zig's MinGW target has no pthread.h. Portable across the
+ * native POSIX, MSYS2, and zig-cross-Windows builds. */
+#include "../utils/aether_thread.h"
 
 // ---- Sink configuration (resolved once, lazily) ----
 
@@ -40,7 +43,31 @@ static int ring_count = 0;   // entries currently held (<= AUDIT_RING_CAP)
 // One mutex guards both the sink-mode resolution and the ring buffer.
 // Audit is off the hot path of normal execution (it fires only inside
 // a sandbox block), so a single coarse lock is fine.
+//
+// PTHREAD_MUTEX_INITIALIZER is POSIX-only: the Win32 shim maps
+// pthread_mutex_t to a CRITICAL_SECTION, which has no static initialiser. On
+// Windows, lazily pthread_mutex_init() the lock exactly once via an atomic
+// gate (audit fires only inside a sandbox block, and the first such call runs
+// before any concurrent one in practice). audit_lock_get() returns the ready
+// lock on every platform.
+#if defined(_WIN32)
+#include <stdatomic.h>
+static pthread_mutex_t audit_lock;
+static atomic_int audit_lock_state = 0;   /* 0 uninit, 1 initing, 2 ready */
+static pthread_mutex_t* audit_lock_get(void) {
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&audit_lock_state, &expected, 1)) {
+        pthread_mutex_init(&audit_lock, NULL);
+        atomic_store(&audit_lock_state, 2);
+    } else {
+        while (atomic_load(&audit_lock_state) != 2) { /* spin: one-shot */ }
+    }
+    return &audit_lock;
+}
+#else
 static pthread_mutex_t audit_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t* audit_lock_get(void) { return &audit_lock; }
+#endif
 
 // Resolve the sink mode from AETHER_SANDBOX_AUDIT on first use. Caller
 // must hold audit_lock.
@@ -85,7 +112,7 @@ void aether_sandbox_audit(const char* category, const char* resource,
     if (!category) category = "";
     if (!resource) resource = "";
 
-    pthread_mutex_lock(&audit_lock);
+    pthread_mutex_lock(audit_lock_get());
 
     resolve_sink_locked();
     sink_emit_locked(category, resource, allowed);
@@ -100,7 +127,7 @@ void aether_sandbox_audit(const char* category, const char* resource,
     ring_head = (ring_head + 1) % AUDIT_RING_CAP;
     if (ring_count < AUDIT_RING_CAP) ring_count++;
 
-    pthread_mutex_unlock(&audit_lock);
+    pthread_mutex_unlock(audit_lock_get());
 }
 
 // ---- Query API ----
@@ -114,39 +141,39 @@ static int logical_to_physical(int i) {
 }
 
 int aether_audit_count(void) {
-    pthread_mutex_lock(&audit_lock);
+    pthread_mutex_lock(audit_lock_get());
     int n = ring_count;
-    pthread_mutex_unlock(&audit_lock);
+    pthread_mutex_unlock(audit_lock_get());
     return n;
 }
 
 const char* aether_audit_entry_category(int i) {
-    pthread_mutex_lock(&audit_lock);
+    pthread_mutex_lock(audit_lock_get());
     const char* r = "";
     if (i >= 0 && i < ring_count) r = ring[logical_to_physical(i)].cat;
-    pthread_mutex_unlock(&audit_lock);
+    pthread_mutex_unlock(audit_lock_get());
     return r;
 }
 
 const char* aether_audit_entry_resource(int i) {
-    pthread_mutex_lock(&audit_lock);
+    pthread_mutex_lock(audit_lock_get());
     const char* r = "";
     if (i >= 0 && i < ring_count) r = ring[logical_to_physical(i)].res;
-    pthread_mutex_unlock(&audit_lock);
+    pthread_mutex_unlock(audit_lock_get());
     return r;
 }
 
 int aether_audit_entry_allowed(int i) {
-    pthread_mutex_lock(&audit_lock);
+    pthread_mutex_lock(audit_lock_get());
     int r = -1;
     if (i >= 0 && i < ring_count) r = ring[logical_to_physical(i)].allowed;
-    pthread_mutex_unlock(&audit_lock);
+    pthread_mutex_unlock(audit_lock_get());
     return r;
 }
 
 void aether_audit_clear(void) {
-    pthread_mutex_lock(&audit_lock);
+    pthread_mutex_lock(audit_lock_get());
     ring_head = 0;
     ring_count = 0;
-    pthread_mutex_unlock(&audit_lock);
+    pthread_mutex_unlock(audit_lock_get());
 }

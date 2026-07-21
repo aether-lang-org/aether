@@ -4945,6 +4945,13 @@ static const char* cross_target_to_zig(const char* t) {
     if (!strcmp(t, "x86_64-macos")  || !strcmp(t, "amd64-macos"))  return "x86_64-macos-none";
     if (!strcmp(t, "aarch64-linux") || !strcmp(t, "arm64-linux"))  return "aarch64-linux-gnu";
     if (!strcmp(t, "x86_64-linux")  || !strcmp(t, "amd64-linux"))  return "x86_64-linux-gnu";
+    /* Windows (Tier A — self-contained): zig bundles the full MinGW-w64 target
+     * (CRT, Win32 headers, import libs), so no base sysroot, no --sysroot, no
+     * CRT/libc dance — identical to the linux/macos arms. The runtime's _WIN32
+     * guards (already exercised by native MSYS2 builds) compile against zig's
+     * mingw-w64 bundle. cross_target_needs_sysroot stays false for windows. */
+    if (!strcmp(t, "x86_64-windows")  || !strcmp(t, "amd64-windows")) return "x86_64-windows-gnu";
+    if (!strcmp(t, "aarch64-windows") || !strcmp(t, "arm64-windows")) return "aarch64-windows-gnu";
     /* FreeBSD (Tier B): zig cc does NOT bundle a FreeBSD libc, so these
      * additionally require a base sysroot (headers + libc) provided via
      * AETHER_SYSROOT — see cross_target_needs_sysroot() and the
@@ -5140,19 +5147,51 @@ static int run_cross_build(const char* c_file, const char* out_file,
          * /lib when `ae` is built on FreeBSD, and is empty in an `ae`
          * cross-compiled/built on Linux.
          *
-         * openssl / nghttp2 / zlib / pcre2 — CONDITIONAL on CROSSBUILD_SYSROOT:
-         * these are NOT in the FreeBSD base; aether-crossbuild's provision.sh
-         * builds them into sysroots/<triple>/. When that sysroot is provided,
-         * add its -L + the -l names so std.cryptography / std.http / std.zlib /
-         * std.regex link for real. Without it, keep today's warn-and-omit (the
-         * program still builds; those features report unavailable at runtime).
-         * Same CROSSBUILD_SYSROOT contract #1213 added to contrib_build.sh. */
-        int pw = snprintf(fbsd_platform_libs, sizeof(fbsd_platform_libs),
-                          "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp -lcap_dns");
+         * casper is FreeBSD-only. The openssl/nghttp2/zlib/pcre2 (Tier-2) libs
+         * are target-AGNOSTIC and handled by crossbuild_libs below, so they
+         * work for windows/linux/macos too — not just freebsd. */
+        snprintf(fbsd_platform_libs, sizeof(fbsd_platform_libs),
+                 "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp -lcap_dns");
+    }
+
+    /* Tier-2 libs from a CROSSBUILD_SYSROOT — CONDITIONAL and TARGET-AGNOSTIC.
+     * openssl/nghttp2/zlib/pcre2 are not bundled by zig for any target;
+     * aether-crossbuild's provision.sh <triple> builds them into
+     * sysroots/<triple>/. When that sysroot is provided (same CROSSBUILD_SYSROOT
+     * contract #1213 gave contrib_build.sh), append its -L + the -l names so
+     * std.cryptography / std.http / std.zlib / std.regex link for real — for
+     * FreeBSD AND Windows AND linux/macos. Without it, warn-and-omit stands
+     * (the features report unavailable at runtime). The -l names are the same
+     * across targets; only the -L (the sysroot) differs. */
+    char crossbuild_libs[2048];
+    crossbuild_libs[0] = '\0';
+    {
         const char* xsr = getenv("CROSSBUILD_SYSROOT");
-        if (xsr && *xsr && pw > 0 && (size_t)pw < sizeof(fbsd_platform_libs)) {
-            snprintf(fbsd_platform_libs + pw, sizeof(fbsd_platform_libs) - (size_t)pw,
-                     " -L%s/lib -lssl -lcrypto -lnghttp2 -lz -lpcre2-8", xsr);
+        if (xsr && *xsr) {
+            /* Append each -l ONLY when that lib is actually staged in the
+             * sysroot. provision.sh may build a subset (a target might have
+             * pcre2 + zlib but not openssl yet), and zig hard-errors on a
+             * requested-but-absent lib. Probing per-lib links exactly what's
+             * provisioned — the same "link what's there" discipline #1213's
+             * contrib cross mode uses. openssl is -lssl + -lcrypto (both from
+             * libssl.a/libcrypto.a); the rest are 1:1. */
+            size_t p = 0;
+            p += (size_t)snprintf(crossbuild_libs + p, sizeof(crossbuild_libs) - p,
+                                  "-L%s/lib", xsr);
+            char probe[2600];
+            struct { const char* lib; const char* names; } t2[] = {
+                { "ssl",     "-lssl -lcrypto" },  /* libssl.a present => both */
+                { "nghttp2", "-lnghttp2" },
+                { "z",       "-lz" },
+                { "pcre2-8", "-lpcre2-8" },
+            };
+            for (size_t i = 0; i < sizeof(t2) / sizeof(t2[0]); i++) {
+                snprintf(probe, sizeof(probe), "%s/lib/lib%s.a", xsr, t2[i].lib);
+                if (path_exists(probe) && p < sizeof(crossbuild_libs)) {
+                    p += (size_t)snprintf(crossbuild_libs + p, sizeof(crossbuild_libs) - p,
+                                          " %s", t2[i].names);
+                }
+            }
         }
     }
     static char cmd[24576];
@@ -5232,13 +5271,15 @@ static int run_cross_build(const char* c_file, const char* out_file,
              * symbols (casper's cap_*, openssl's SSL_*, …), so they must
              * follow it on the link line for ld.lld's single-pass resolution. */
             w = snprintf(cmd, sizeof(cmd),
-                "zig cc -target %s %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" %s -lm -o \"%s\"",
+                "zig cc -target %s %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" %s %s -lm -o \"%s\"",
                 ztriple, sysroot_flag, fbsd_link, opt, feature_defs, tc.include_flags,
-                c_file, ex, objdir, fbsd_platform_libs, out_file);
+                c_file, ex, objdir, fbsd_platform_libs, crossbuild_libs, out_file);
         } else {
+            /* Tier A (linux/macos/windows): compact form + any CROSSBUILD_SYSROOT
+             * Tier-2 libs after libaether.a (it references their symbols). */
             w = snprintf(cmd, sizeof(cmd),
-                "zig cc -target %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" -o \"%s\" -lm",
-                ztriple, sysroot_flag, opt, feature_defs, tc.include_flags, c_file, ex, objdir, out_file);
+                "zig cc -target %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" %s -o \"%s\" -lm",
+                ztriple, sysroot_flag, opt, feature_defs, tc.include_flags, c_file, ex, objdir, crossbuild_libs, out_file);
         }
         if (w < 0 || (size_t)w >= sizeof(cmd)) {
             fprintf(stderr, "Error: cross-compile link command exceeded the %zu-byte buffer.\n",
@@ -5440,7 +5481,8 @@ static int cmd_build(int argc, char** argv) {
         fprintf(stderr, "Error: Unknown target '%s'.\n", target);
         fprintf(stderr, "Valid targets: native, wasm, or a cross triple "
                         "(aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, "
-                        "aarch64-freebsd, x86_64-freebsd).\n");
+                        "aarch64-freebsd, x86_64-freebsd, x86_64-windows, "
+                        "aarch64-windows).\n");
         return 1;
     }
     int is_wasm = target && strcmp(target, "wasm") == 0;
@@ -5479,7 +5521,8 @@ static int cmd_build(int argc, char** argv) {
         fprintf(stderr, "Usage: ae build <file.ae> [-o output] [--extra file.c] [--quick] [--target=<triple>]\n");
         fprintf(stderr, "  --quick    Compile with -O0 -g for faster iteration (default: -O2)\n");
         fprintf(stderr, "  --target   Cross-compile via zig cc: wasm, aarch64-macos, x86_64-macos,\n");
-        fprintf(stderr, "             aarch64-linux, x86_64-linux, aarch64-freebsd, x86_64-freebsd\n");
+        fprintf(stderr, "             aarch64-linux, x86_64-linux, aarch64-freebsd, x86_64-freebsd,\n");
+        fprintf(stderr, "             x86_64-windows, aarch64-windows (-> foo.exe; self-contained)\n");
         fprintf(stderr, "             (freebsd needs AETHER_SYSROOT=<base sysroot>; see aether-crossbuild)\n");
         return 1;
     }
@@ -5529,6 +5572,17 @@ static int cmd_build(int argc, char** argv) {
             strcpy(dot, ".js");
         } else {
             strncat(exe_file, ".js", sizeof(exe_file) - strlen(exe_file) - 1);
+        }
+    }
+
+    // Windows cross target: ensure the output ends in .exe. On the Linux/macOS
+    // cross-host EXE_EXT is empty, so `-o foo` would produce an extensionless
+    // file for a Windows target — append .exe if it's not already there so the
+    // artifact is named the way Windows (and the user) expects.
+    if (ztriple && strstr(ztriple, "windows")) {
+        size_t el = strlen(exe_file);
+        if (el < 4 || strcasecmp(exe_file + el - 4, ".exe") != 0) {
+            strncat(exe_file, ".exe", sizeof(exe_file) - el - 1);
         }
     }
 
