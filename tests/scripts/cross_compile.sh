@@ -104,6 +104,16 @@ if printf '%s' "$_lw" | grep -qE -- "-o [^ ]*\.exe"; then
 else
     bad "x86_64-windows output not .exe: $_lw"
 fi
+# Windows system libs — ALWAYS: zig bundles the mingw CRT but not these -l
+# names. The runtime + static openssl reference them (BCryptGenRandom needs
+# bcrypt; winsock needs ws2_32; etc.), so the cross link must append them or a
+# real socket/RNG program fails to link. Same always-on shape as freebsd casper.
+if printf '%s' "$_lw" | grep -q -- "-lws2_32" && \
+   printf '%s' "$_lw" | grep -q -- "-lbcrypt"; then
+    ok "x86_64-windows link appends Windows system libs (ws2_32/bcrypt/...)"
+else
+    bad "x86_64-windows link missing Windows system libs: $_lw"
+fi
 # (d) windows WITH CROSSBUILD_SYSROOT → Tier-2 libs (per-lib probed), no casper.
 PATH="$STUB:$PATH" CROSSBUILD_SYSROOT="$XB" \
     "$AE" build --target=x86_64-windows "$_HELLO" -o "$_fbtmp/w2" 2>"$_fbtmp/wc2" >/dev/null || true

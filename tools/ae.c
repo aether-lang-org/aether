@@ -5087,7 +5087,20 @@ static int run_cross_build(const char* c_file, const char* out_file,
     const char* user_cflags = get_cflags();
     const char* opt = optimize ? "-O2" : "-O0 -g";
     const char* ex = extra ? extra : "";
-    const char* feature_defs = "-DAETHER_HAS_SANDBOX";
+    /* std.audio's vendored miniaudio auto-selects a backend by platform macro:
+     * on a macos target it #includes <CoreAudio/CoreAudio.h>, an APPLE FRAMEWORK
+     * header that zig's bundled macOS SDK stubs deliberately do NOT ship (the
+     * Apple-licensed part). A cross-built binary can't use CoreAudio without a
+     * real Mac SDK anyway, so disable it: -DMA_NO_COREAUDIO makes miniaudio fall
+     * back to its null backend (std.audio reports unavailable at runtime — same
+     * warn-and-degrade as openssl/nghttp2 on a Tier-B target). Without this, a
+     * macos cross-build of ANY program fails compiling aether_audio.c, even one
+     * that never touches std.audio (the runtime always compiles it). */
+    char feature_defs[128] = "-DAETHER_HAS_SANDBOX";
+    if (strstr(ztriple, "macos")) {
+        strncat(feature_defs, " -DMA_NO_COREAUDIO",
+                sizeof(feature_defs) - strlen(feature_defs) - 1);
+    }
     /* Tier-B (FreeBSD) targets need a base sysroot zig cc doesn't bundle;
      * AETHER_SYSROOT points at it (bases/<cpu>-freebsd[ver]/ from
      * aether-crossbuild). Applied to BOTH compile and link. Empty for the
@@ -5098,9 +5111,21 @@ static int run_cross_build(const char* c_file, const char* out_file,
     char sysroot_flag[3200];   /* COMPILE flags: --sysroot + -I/-L */
     char fbsd_link[4096];      /* LINK tail: CRT objects + the real libc.so.7 */
     char fbsd_platform_libs[2048]; /* LINK tail: FreeBSD platform -l names */
+    char win_platform_libs[512];   /* LINK tail: Windows system -l names */
     sysroot_flag[0] = '\0';
     fbsd_link[0] = '\0';
     fbsd_platform_libs[0] = '\0';
+    win_platform_libs[0] = '\0';
+    /* Windows system libs. std.cryptography's OS RNG uses BCryptGenRandom
+     * (bcrypt.dll); winsock, crypt32, advapi32 etc. are pulled by the runtime
+     * and static openssl. Same shape as fbsd_platform_libs (casper) — a
+     * target-specific always-on set the cross link must append (zig bundles the
+     * mingw CRT but NOT these -l names). Matches the native Windows
+     * win_link_libs. Detected off the zig triple (…-windows-gnu). */
+    if (strstr(ztriple, "windows")) {
+        snprintf(win_platform_libs, sizeof(win_platform_libs),
+                 "-lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt -ldbghelp");
+    }
     if (cross_target_needs_sysroot(ztriple)) {
         const char* sr = getenv("AETHER_SYSROOT");
         if (!sr || !*sr) {
@@ -5184,6 +5209,13 @@ static int run_cross_build(const char* c_file, const char* out_file,
                 { "nghttp2", "-lnghttp2" },
                 { "z",       "-lz" },
                 { "pcre2-8", "-lpcre2-8" },
+                /* contrib.sqlite: the Aether veneer archive
+                 * (libaether_sqlite.a, from contrib_build.sh CONTRIB_TARGET
+                 * mode) BEFORE the underlying C lib (libsqlite3.a) — ld.lld's
+                 * single pass needs the veneer's sqlite3_* references resolved
+                 * by the lib that follows. Probed on the VENEER so a program
+                 * that doesn't use sqlite links nothing extra. */
+                { "aether_sqlite", "-laether_sqlite -lsqlite3" },
             };
             for (size_t i = 0; i < sizeof(t2) / sizeof(t2[0]); i++) {
                 snprintf(probe, sizeof(probe), "%s/lib/lib%s.a", xsr, t2[i].lib);
@@ -5276,10 +5308,11 @@ static int run_cross_build(const char* c_file, const char* out_file,
                 c_file, ex, objdir, fbsd_platform_libs, crossbuild_libs, out_file);
         } else {
             /* Tier A (linux/macos/windows): compact form + any CROSSBUILD_SYSROOT
-             * Tier-2 libs after libaether.a (it references their symbols). */
+             * Tier-2 libs AND the Windows system libs after libaether.a (it
+             * references their symbols — BCryptGenRandom etc.). */
             w = snprintf(cmd, sizeof(cmd),
-                "zig cc -target %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" %s -o \"%s\" -lm",
-                ztriple, sysroot_flag, opt, feature_defs, tc.include_flags, c_file, ex, objdir, crossbuild_libs, out_file);
+                "zig cc -target %s %s %s %s %s \"%s\" %s \"%s/libaether.a\" %s %s -o \"%s\" -lm",
+                ztriple, sysroot_flag, opt, feature_defs, tc.include_flags, c_file, ex, objdir, crossbuild_libs, win_platform_libs, out_file);
         }
         if (w < 0 || (size_t)w >= sizeof(cmd)) {
             fprintf(stderr, "Error: cross-compile link command exceeded the %zu-byte buffer.\n",
