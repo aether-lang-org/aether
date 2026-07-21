@@ -23,13 +23,71 @@ pass=0; fail=0
 ok()   { printf '  \033[0;32mOK\033[0m    %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  \033[0;31mFAIL\033[0m  %s\n' "$1"; fail=$((fail+1)); }
 
-if ! command -v zig >/dev/null 2>&1; then
-    echo "SKIP: zig not installed; cross-compilation test requires zig on PATH."
-    exit 0
-fi
 if [ ! -x "$AE" ]; then
     echo "SKIP: build/ae not found; run 'make ae' first."
     exit 0
+fi
+
+# --- FreeBSD cross-LINK platform libs (asks/freebsd-cross-link-platform-libs.md)
+# These run WITHOUT a real zig (they provide a stub `zig` that echoes its argv)
+# so they execute even on hosts lacking the toolchain — hence before the zig
+# SKIP guard below. They assert the emitted LINK COMMAND, not a produced binary:
+#   casper libs ALWAYS (aether_casper.o is unconditionally in libaether.a and
+#   calls cap_getpwnam/cap_sysctlbyname/…), openssl/nghttp2/zlib/pcre2 ONLY when
+#   CROSSBUILD_SYSROOT is provided. A minimal fake base sysroot satisfies the
+#   path checks.
+_fbtmp="$(mktemp -d)"
+STUB="$_fbtmp/stubzig"; mkdir -p "$STUB"
+cat > "$STUB/zig" <<'STUBEOF'
+#!/bin/sh
+case "$1" in
+  version) echo "0.13.0" ;;
+  cc)  echo "ZIGCC: $*" >&2
+       out=""; prev=""; for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+       [ -n "$out" ] && : > "$out"; exit 0 ;;
+  ar)  shift; exec ar "$@" ;;
+  *) exit 0 ;;
+esac
+STUBEOF
+chmod +x "$STUB/zig"
+FB="$_fbtmp/fbbase"; mkdir -p "$FB/usr/lib" "$FB/lib" "$FB/usr/include"
+touch "$FB/usr/lib/crt1.o" "$FB/usr/lib/crti.o" "$FB/usr/lib/crtn.o" "$FB/lib/libc.so.7"
+XB="$_fbtmp/xbuild"; mkdir -p "$XB/lib" "$XB/include"
+_HELLO="examples/basics/hello.ae"
+
+# (a) base sysroot only → casper libs present, openssl absent.
+PATH="$STUB:$PATH" AETHER_SYSROOT="$FB" \
+    "$AE" build --target=x86_64-freebsd "$_HELLO" -o "$_fbtmp/lk" 2>"$_fbtmp/zc" >/dev/null || true
+_la="$(grep 'ZIGCC:' "$_fbtmp/zc" | grep -F 'libaether.a' | tail -1)"
+if printf '%s' "$_la" | grep -q -- "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp"; then
+    ok "x86_64-freebsd link appends casper libs (always)"
+else
+    bad "x86_64-freebsd link missing casper libs"; echo "        $_la"
+fi
+if printf '%s' "$_la" | grep -q -- "-lssl"; then
+    bad "x86_64-freebsd link added openssl WITHOUT CROSSBUILD_SYSROOT"
+else
+    ok "x86_64-freebsd link omits openssl without CROSSBUILD_SYSROOT"
+fi
+
+# (b) with CROSSBUILD_SYSROOT → casper + openssl/nghttp2/zlib/pcre2.
+PATH="$STUB:$PATH" AETHER_SYSROOT="$FB" CROSSBUILD_SYSROOT="$XB" \
+    "$AE" build --target=x86_64-freebsd "$_HELLO" -o "$_fbtmp/lk2" 2>"$_fbtmp/zc2" >/dev/null || true
+_lb="$(grep 'ZIGCC:' "$_fbtmp/zc2" | grep -F 'libaether.a' | tail -1)"
+if printf '%s' "$_lb" | grep -q -- "-lcasper" && \
+   printf '%s' "$_lb" | grep -q -- "-lssl -lcrypto -lnghttp2 -lz -lpcre2-8"; then
+    ok "x86_64-freebsd link adds Tier-2 libs with CROSSBUILD_SYSROOT"
+else
+    bad "x86_64-freebsd link missing Tier-2 libs under CROSSBUILD_SYSROOT"; echo "        $_lb"
+fi
+rm -rf "$_fbtmp"
+
+if ! command -v zig >/dev/null 2>&1; then
+    echo "SKIP: rest of cross-compilation test requires a real zig on PATH."
+    echo ""
+    echo "  $pass passed, $fail failed"
+    [ "$fail" -eq 0 ]
+    exit $?
 fi
 
 TMP="$(mktemp -d)"
