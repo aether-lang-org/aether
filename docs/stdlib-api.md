@@ -479,8 +479,10 @@ Infallible externs (no tuple):
 - `json.type(value)` → `int` returns one of the `JSON_*` constants.
 - `json.is_null(value)` → `int`.
 - `json.get_bool(value)` → `int` 0 on wrong type.
-- `json.get_number(value)` → `float` 0.0 on wrong type.
-- `json.get_int(value)` → `int` truncates the double.
+- `json.get_number(value)` → `float` 0.0 on wrong type (lossy past 2^53).
+- `json.get_int(value)` → `int`, clamps to `+/-2147483647` on overflow.
+- `json.get_long(value)` → `long`, the full int64 value exactly. Use this for
+  large integer IDs / byte-counts; `get_int` clamps and `get_number` is lossy.
 - `json.object_has(obj, key)` → `int`.
 - `json.array_size(arr)` → `int`.
 - `json.create_null()`, `json.create_bool(v)`, `json.create_number(v)`,

@@ -982,8 +982,9 @@ The `parse_strict` shape is the std.fs pilot from issue #392 extended to a secon
 - `json.is_null(value)` - Check if null (returns 1/0)
 
 **Value Getters:**
-- `json.get_number(value)` - Get float value
-- `json.get_int(value)` - Get integer value
+- `json.get_number(value)` - Get float value (lossy past 2^53)
+- `json.get_int(value)` - Get 32-bit integer (clamps to +/-2147483647 on overflow)
+- `json.get_long(value)` - Get the full int64 value exactly (IDs, byte-counts)
 - `json.get_bool(value)` - Get boolean (1/0)
 - `json.get_string(value)` → `(string, string)` - Get string value; `(text, err)` tuple, errors with `"not a string"` if `value` is not a `JSON_STRING`
 

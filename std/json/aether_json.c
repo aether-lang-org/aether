@@ -616,6 +616,11 @@ static JsonValue* jv_new_number(Arena* a, double n) {
     if (v) v->data.number = n;
     return v;
 }
+static JsonValue* jv_new_integer(Arena* a, long long n) {
+    JsonValue* v = jv_new_in(a, JSON_NUMBER);
+    if (v) { v->data.integer = n; v->flags |= JV_FLAG_INTEGER; }
+    return v;
+}
 
 // ---------------------------------------------------------------------------
 // Number parser
@@ -743,19 +748,20 @@ static JsonValue* parse_number(Parser* s) {
         // Signed result. int_acc <= INT64_MAX for non-negative; for negative
         // we allow the full INT64_MIN magnitude (1 more than INT64_MAX abs).
         if (negative) {
-            if (int_acc > (uint64_t)INT64_MAX + 1ULL) {
-                // Exceeds INT64_MIN magnitude — fall through to strtod.
+            if (int_acc == 0 || int_acc > (uint64_t)INT64_MAX + 1ULL) {
+                /* int_acc==0 is "-0": keep the negative zero via the double
+                 * path. A magnitude past INT64_MIN falls through to strtod. */
             } else {
-                double val = -(double)int_acc;
-                if (int_acc == (uint64_t)INT64_MAX + 1ULL) val = (double)INT64_MIN;
-                JsonValue* v = jv_new_number(s->arena, val);
+                long long val = (int_acc == (uint64_t)INT64_MAX + 1ULL)
+                                    ? INT64_MIN
+                                    : -(long long)int_acc;
+                JsonValue* v = jv_new_integer(s->arena, val);
                 if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
                 return v;
             }
         } else {
             if (int_acc <= (uint64_t)INT64_MAX) {
-                double val = (double)(int64_t)int_acc;
-                JsonValue* v = jv_new_number(s->arena, val);
+                JsonValue* v = jv_new_integer(s->arena, (long long)int_acc);
                 if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
                 return v;
             }
@@ -1336,13 +1342,22 @@ double json_get_number(JsonValue* v) {
     return v->data.number;
 }
 
+long long json_get_long(JsonValue* v) {
+    if (!v || v->type != JSON_NUMBER) return 0;
+    if (v->flags & JV_FLAG_INTEGER) return v->data.integer;
+    return (long long)v->data.number;
+}
+
 int json_get_int(JsonValue* v) {
     if (!v || v->type != JSON_NUMBER) return 0;
-    /* Integer-flavoured values read the dedicated slot directly so the
-     * full int64 range survives the round-trip — int->int doesn't lose
-     * precision past 2^53 the way double->int would. */
-    if (v->flags & JV_FLAG_INTEGER) return (int)v->data.integer;
-    return (int)v->data.number;
+    if (v->flags & JV_FLAG_INTEGER) {
+        long long n = v->data.integer;
+        return n > INT32_MAX ? INT32_MAX : (n < INT32_MIN ? INT32_MIN : (int)n);
+    }
+    double d = v->data.number;
+    if (d >= (double)INT32_MAX) return INT32_MAX;
+    if (d <= (double)INT32_MIN) return INT32_MIN;
+    return (int)d;
 }
 
 const char* json_get_string_raw(JsonValue* v) {
