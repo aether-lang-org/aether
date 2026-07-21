@@ -5125,13 +5125,20 @@ static int run_cross_build(const char* c_file, const char* out_file,
          * resolves these; only the -l names were missing on the cross path.
          *
          * casper — ALWAYS: std/casper/aether_casper.c is unconditionally in
-         * libaether.a and calls cap_getpwnam / cap_sysctlbyname / ..., so a
-         * FreeBSD cross-link fails with `undefined symbol: cap_getpwnam`
-         * regardless of what the app imports. The base ships all of them
-         * (libcasper, libcap_pwd, libcap_sysctl, libcap_grp). We emit the
-         * names literally rather than via AETHER_CASPER_LIBS — that macro is
-         * populated by globbing the HOST's /lib when `ae` is built on FreeBSD,
-         * and is empty in an `ae` cross-compiled/built on Linux.
+         * libaether.a and calls cap_getpwnam / cap_sysctlbyname / cap_getaddrinfo
+         * / ..., so a FreeBSD cross-link fails with `undefined symbol: cap_*`
+         * regardless of what the app imports. The base ships all of them. The
+         * complete set, per the cap_* symbols aether_casper.c references:
+         *   cap_init/cap_close/cap_service_open -> libcasper (core)
+         *   cap_getpwnam                        -> libcap_pwd
+         *   cap_sysctl(byname)                  -> libcap_sysctl
+         *   (grp)                               -> libcap_grp
+         *   cap_getaddrinfo (aether_casper_resolve, DNS) -> libcap_dns
+         * cap_dns was the one #1216 missed (its DNS path only surfaces after
+         * pwd/sysctl resolve). We emit the names literally rather than via
+         * AETHER_CASPER_LIBS — that macro is populated by globbing the HOST's
+         * /lib when `ae` is built on FreeBSD, and is empty in an `ae`
+         * cross-compiled/built on Linux.
          *
          * openssl / nghttp2 / zlib / pcre2 — CONDITIONAL on CROSSBUILD_SYSROOT:
          * these are NOT in the FreeBSD base; aether-crossbuild's provision.sh
@@ -5141,7 +5148,7 @@ static int run_cross_build(const char* c_file, const char* out_file,
          * program still builds; those features report unavailable at runtime).
          * Same CROSSBUILD_SYSROOT contract #1213 added to contrib_build.sh. */
         int pw = snprintf(fbsd_platform_libs, sizeof(fbsd_platform_libs),
-                          "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp");
+                          "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp -lcap_dns");
         const char* xsr = getenv("CROSSBUILD_SYSROOT");
         if (xsr && *xsr && pw > 0 && (size_t)pw < sizeof(fbsd_platform_libs)) {
             snprintf(fbsd_platform_libs + pw, sizeof(fbsd_platform_libs) - (size_t)pw,
