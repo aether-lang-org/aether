@@ -671,7 +671,7 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 - `http.server_set_tls(server, cert_path, key_path)` → `string` - HTTPS with PEM cert + key
 - `http.server_set_keepalive(server, enable, max_requests, idle_timeout)` → `string` - HTTP/1.1 keep-alive with a `Duration` idle timeout
 - `http.server_set_h2(server, max_concurrent_streams)` → `string` - HTTP/2 (h2 + h2c + ALPN). `0` uses libnghttp2's default (100). Returns error string when libnghttp2 isn't linked.
-- `http.server_set_h2_concurrent_dispatch(server, worker_count)` → `string` - Server-level pthread pool for h2 stream handlers. `worker_count > 0` lets streams across all h2 connections execute their handlers in parallel; `0` (default) keeps dispatch sequential. POSIX-only; on Windows the call is a silent no-op.
+- `http.server_set_h2_concurrent_dispatch(server, worker_count)` → `string` - Routes h2 stream handlers onto the shared `std.worker` thread pool, sized to `worker_count`. `worker_count > 0` lets streams across all h2 connections execute their handlers in parallel; `0` (default) keeps dispatch sequential. POSIX-only; on Windows the call is a silent no-op.
 - `http.server_shutdown_graceful(server, timeout)` → `string` - Stop accepting, drain in-flight for up to a `Duration`, exit. h2 sessions emit GOAWAY so peers don't start new streams.
 - `http.server_set_health_probes(server, live_path, ready_path, ready_check, ud)` → `string` - Built-in `/healthz` (always 200) + `/readyz` (200 only when readiness check returns 1)
 - `http.server_set_access_log(server, format, output_path)` → `string` - `"combined"` or `"json"` to a file path / `"-"` (stderr) / `""` (disable)

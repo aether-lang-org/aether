@@ -117,13 +117,13 @@ the next stream's handler begins. For workloads where handlers do
 non-trivial work (database queries, large I/O, downstream HTTP
 calls), this caps the throughput a single TCP connection can drive.
 
-`http.server_set_h2_concurrent_dispatch(server, n)` opts the server
-into a **server-level** dispatch pool of `n` pthreads, shared
-across every h2 connection bound to the server. Stream handlers
-run on those workers in parallel; the connection thread keeps
-reading frames and serialising responses. POSIX-only (macOS /
-Linux); on Windows the call is silently ignored and streams stay
-sequential.
+`http.server_set_h2_concurrent_dispatch(server, n)` routes stream
+handlers onto the **shared `std.worker` pool**, sized to `n`
+threads. Handlers run on that pool in parallel; the connection
+thread keeps reading frames and serialising responses. One
+process-wide pool serves both `worker.run` and every h2 connection
+on every server. POSIX-only (macOS / Linux); on Windows the call is
+silently ignored and streams stay sequential.
 
 ```aether
 http.server_set_h2(server, 0)                          // h2 enabled
@@ -153,20 +153,21 @@ few worker threads, blocking handlers under load would starve the
 host's entire actor system, including unrelated actors that have
 nothing to do with HTTP.
 
-Dedicated pthreads sidestep that: each blocked handler ties up
-*one* OS thread but the kernel keeps the rest of the system
-responsive. The OS scheduler is the right primitive when work
-units may block.
+Pool threads sidestep that: each blocked handler ties up *one* OS
+thread but the kernel keeps the rest of the system responsive. The
+OS scheduler is the right primitive when work units may block.
 
-#### Why server-level, not per-connection?
+#### Why one shared pool, not per-connection?
 
-The pool is shared across all h2 connections on the server. With a
-per-connection pool of size 4 and 1,000 keep-alive clients, the
-process would carry 4,000 pthreads, most of them idle. The
-server-level pool keeps the OS thread count bounded by `n`
-regardless of connection fan-out, mirroring how
+Dispatch runs on the shared `std.worker` pool, one process-wide set
+of reusable threads. With a per-connection pool of size 4 and 1,000
+keep-alive clients, the process would carry 4,000 pthreads, most of
+them idle. A single shared pool keeps the OS thread count bounded by
+`n` regardless of connection (or server) fan-out, mirroring how
 `HttpConnectionPool` (the existing HTTP/1.1 worker pool) is sized
-once at server startup.
+once at server startup. Reusing `std.worker` also means the whole
+runtime draws blocking work from one budget instead of standing up a
+second, redundant h2-private pool.
 
 Per-session state (the wake pipe + ready queue) stays local
 because the connection thread doing nghttp2 serialisation is
@@ -183,9 +184,14 @@ on connection A doesn't bother connection B's poll loop.
 - Each session tracks an `in_flight` counter. `aether_h2_session_free`
   spins on it until all worker tasks belonging to that session
   have been submitted, so the session never goes away while a
-  worker is mid-handler.
-- The pool itself is freed by `http_server_free`, after all
-  sessions have already been torn down.
+  worker is mid-handler. This per-session spin, not a pool join, is
+  what guarantees no task touches freed server state: sessions are
+  freed before the server, and each session's tasks have completed
+  by the time it is freed.
+- The shared `std.worker` pool outlives any single server (it is
+  process-lifetime), so `http_server_free` frees no pool. Call
+  `worker.pool_shutdown()` for deterministic teardown when every
+  job is known to have finished.
 - Graceful shutdown (`http_server_shutdown_graceful`) waits for
   in-flight tasks to complete before flipping `want_close`,
   workers can't be discarded mid-handler.

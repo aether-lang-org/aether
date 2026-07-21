@@ -37,6 +37,13 @@ int aether_worker_run(AetherWorkerClosure work, AetherWorkerClosure done);
  * nothing to drain. Returns 1 if launched, 0 on failure. */
 int aether_worker_run_detached(AetherWorkerClosure work);
 
+/* Run `work` on the shared pool with no completion delivery and no env
+ * ownership (the caller keeps/frees the env and handles its own completion).
+ * The single entry point for library subsystems that need pooled blocking
+ * work but deliver results their own way. Returns 1 if it ran off-thread, 0
+ * on a threadless build (caller runs it inline). */
+int aether_worker_submit(AetherWorkerClosure work);
+
 /* Install the host's "post to the loop thread" trampoline. `poster` is invoked
  * (on the worker thread) with a single opaque job pointer; the host must
  * marshal that pointer onto its loop thread and there call
@@ -59,5 +66,17 @@ int aether_worker_drain(int max);
 /* Number of launched jobs not yet delivered (running, or ready-but-not-drained,
  * or in flight through the poster). For backpressure and test synchronisation. */
 int aether_worker_pending(void);
+
+/* Set the bounded pool size. Only takes effect before the pool starts
+ * (first run()); a no-op afterwards and on threadless builds. Default is
+ * derived from the core count. */
+void aether_worker_pool_configure(int n);
+
+/* Join and free the pool threads once they finish their current and queued
+ * jobs. For deterministic teardown (tests); idempotent. NOT called at process
+ * exit: exit abandons in-flight/queued jobs, so a job blocked in user work
+ * can never hang the process (as the pre-pool thread-per-job model behaved).
+ * Only call this when the pool's jobs are known to complete. */
+void aether_worker_pool_shutdown(void);
 
 #endif /* AETHER_WORKER_H */

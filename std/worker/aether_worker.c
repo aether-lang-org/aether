@@ -18,6 +18,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#if !defined(_WIN32)
+#  include <unistd.h>
+#endif
 
 /* Threads are the whole point of this module — but the cooperative /
  * AETHER_NO_THREADING build has no scheduler threads and deliberately leaves
@@ -41,6 +44,7 @@ typedef struct WorkerJob {
     AetherWorkerClosure done;
     void*               result;
     int                 detached;   /* no done, no post-back */
+    int                 raw;        /* run work only: no delivery, caller owns env (aether_worker_submit) */
     struct WorkerJob*   next;       /* ready-list link (drain path) */
 } WorkerJob;
 
@@ -55,10 +59,17 @@ typedef struct WorkerJob {
 static pthread_mutex_t g_lock;
 static atomic_int g_init_state = 0;   /* 0 = uninit, 1 = initialising, 2 = ready */
 
+#if AETHER_WORKER_HAS_THREADS
+static pthread_cond_t g_pend_cv;   /* signalled on enqueue / shutdown */
+#endif
+
 static void ensure_init(void) {
     int expected = 0;
     if (atomic_compare_exchange_strong(&g_init_state, &expected, 1)) {
         pthread_mutex_init(&g_lock, NULL);
+#if AETHER_WORKER_HAS_THREADS
+        pthread_cond_init(&g_pend_cv, NULL);
+#endif
         atomic_store(&g_init_state, 2);
         return;
     }
@@ -76,6 +87,21 @@ static AetherWorkerClosure g_poster = { NULL, NULL };
 
 /* Jobs launched but not yet delivered. */
 static atomic_int g_pending = 0;
+
+#if AETHER_WORKER_HAS_THREADS
+/* Bounded pool (#1205). run() submits here instead of spawning a thread per
+ * job; run_detached() still spawns a fresh thread. All fields under g_lock;
+ * g_pend_cv wakes a worker when a job is queued or on shutdown. Reuses the
+ * WorkerJob.next link (a job is on the pending queue OR the ready-list, never
+ * both). */
+static WorkerJob* g_pend_head = NULL;
+static WorkerJob* g_pend_tail = NULL;
+static pthread_t* g_pool = NULL;
+static int        g_pool_n = 0;        /* threads actually running */
+static int        g_pool_want = 0;     /* configured size; 0 = derive from cores */
+static int        g_pool_started = 0;
+static int        g_pool_shutdown = 0;
+#endif
 
 /* ---- closure invocation ------------------------------------------------- */
 /* The compiler emits closure calls as fn(env, args...); we recover the real
@@ -132,6 +158,12 @@ static void free_job_envs(WorkerJob* job) {
 /* Run the work closure, then route the completion. Called on a worker thread
  * (threaded build) or inline on the caller's thread (AETHER_NO_THREADING). */
 static void run_job(WorkerJob* job) {
+    if (job->raw) {
+        ((void (*)(void*))job->work.fn)(job->work.env);
+        free(job);
+        return;
+    }
+
     job->result = call_work(job->work);
 
     if (job->detached) {
@@ -161,6 +193,81 @@ static void* worker_entry(void* arg) {
     run_job((WorkerJob*)arg);
     return NULL;
 }
+
+/* ---- bounded pool (#1205) ---------------------------------------------- */
+
+static int default_pool_size(void) {
+#if defined(_WIN32)
+    int n = 4;
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 4;
+#endif
+    if (n < 2)  n = 2;
+    if (n > 32) n = 32;
+    return (int)n;
+}
+
+static void pend_push(WorkerJob* job) {   /* under g_lock */
+    job->next = NULL;
+    if (g_pend_tail) g_pend_tail->next = job;
+    else             g_pend_head = job;
+    g_pend_tail = job;
+}
+static WorkerJob* pend_pop(void) {        /* under g_lock */
+    WorkerJob* job = g_pend_head;
+    if (job) {
+        g_pend_head = job->next;
+        if (!g_pend_head) g_pend_tail = NULL;
+        job->next = NULL;
+    }
+    return job;
+}
+
+static void* pool_worker(void* arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&g_lock);
+        while (!g_pend_head && !g_pool_shutdown)
+            pthread_cond_wait(&g_pend_cv, &g_lock);
+        if (!g_pend_head && g_pool_shutdown) {
+            pthread_mutex_unlock(&g_lock);
+            return NULL;
+        }
+        WorkerJob* job = pend_pop();
+        pthread_mutex_unlock(&g_lock);
+        if (job) run_job(job);
+    }
+}
+
+/* Caller holds g_lock. Returns the running worker count; 0 means the pool
+ * could not start and the caller should fall back to a fresh thread. */
+static int pool_ensure_started(void) {
+    if (g_pool_started) return g_pool_n;
+    g_pool_started = 1;
+    int want = g_pool_want > 0 ? g_pool_want : default_pool_size();
+    g_pool = (pthread_t*)calloc((size_t)want, sizeof(pthread_t));
+    if (!g_pool) return 0;
+    int made = 0;
+    for (int i = 0; i < want; i++) {
+        if (pthread_create(&g_pool[made], NULL, pool_worker, NULL) == 0) made++;
+    }
+    g_pool_n = made;
+    if (made == 0) { free(g_pool); g_pool = NULL; }
+    return made;
+}
+
+/* Caller must NOT hold g_lock. Returns 1 if queued, 0 if the pool is
+ * unavailable. */
+static int pool_submit(WorkerJob* job) {
+    pthread_mutex_lock(&g_lock);
+    int n = pool_ensure_started();
+    if (n == 0) { pthread_mutex_unlock(&g_lock); return 0; }
+    pend_push(job);
+    pthread_cond_signal(&g_pend_cv);
+    pthread_mutex_unlock(&g_lock);
+    return 1;
+}
 #endif
 
 /* ---- launch ------------------------------------------------------------- */
@@ -178,6 +285,12 @@ static int launch(AetherWorkerClosure work, AetherWorkerClosure done, int detach
     atomic_fetch_add(&g_pending, 1);
 
 #if AETHER_WORKER_HAS_THREADS
+    /* run() submits to the bounded pool; run_detached() (and a pool that
+     * failed to start) spawns a fresh self-reaping thread so a truly
+     * long-blocking job never starves the pool. */
+    if (!detached && pool_submit(job)) {
+        return 1;
+    }
     pthread_t th;
     if (pthread_create(&th, NULL, worker_entry, job) != 0) {
         atomic_fetch_sub(&g_pending, 1);
@@ -201,6 +314,33 @@ int aether_worker_run(AetherWorkerClosure work, AetherWorkerClosure done) {
 int aether_worker_run_detached(AetherWorkerClosure work) {
     AetherWorkerClosure none = { NULL, NULL };
     return launch(work, none, 1);
+}
+
+/* Run `work.fn(work.env)` on the pool with no completion delivery and no env
+ * ownership: the caller keeps and frees the env and does its own completion
+ * (used by the h2 server, whose task carries per-session ready-queue + wake
+ * plumbing). Returns 1 if it ran off-thread (pool or, if the pool can't
+ * start, a fresh thread), 0 on a threadless build so the caller runs it
+ * inline. */
+int aether_worker_submit(AetherWorkerClosure work) {
+    if (!work.fn) return 0;
+    ensure_init();
+#if AETHER_WORKER_HAS_THREADS
+    WorkerJob* job = (WorkerJob*)calloc(1, sizeof(WorkerJob));
+    if (!job) return 0;
+    job->work = work;
+    job->raw = 1;
+    if (pool_submit(job)) return 1;
+    pthread_t th;
+    if (pthread_create(&th, NULL, worker_entry, job) == 0) {
+        pthread_detach(th);
+        return 1;
+    }
+    free(job);
+    return 0;
+#else
+    return 0;
+#endif
 }
 
 /* ---- poster / delivery / drain ----------------------------------------- */
@@ -240,4 +380,33 @@ int aether_worker_drain(int max) {
 
 int aether_worker_pending(void) {
     return atomic_load(&g_pending);
+}
+
+/* ---- pool control (#1205) ---------------------------------------------- */
+
+void aether_worker_pool_configure(int n) {
+#if AETHER_WORKER_HAS_THREADS
+    ensure_init();
+    pthread_mutex_lock(&g_lock);
+    if (!g_pool_started && n > 0) g_pool_want = n;
+    pthread_mutex_unlock(&g_lock);
+#else
+    (void)n;
+#endif
+}
+
+void aether_worker_pool_shutdown(void) {
+#if AETHER_WORKER_HAS_THREADS
+    pthread_mutex_lock(&g_lock);
+    if (!g_pool_started || g_pool_n == 0) { pthread_mutex_unlock(&g_lock); return; }
+    g_pool_shutdown = 1;
+    pthread_cond_broadcast(&g_pend_cv);
+    pthread_t* threads = g_pool;
+    int n = g_pool_n;
+    g_pool = NULL;
+    g_pool_n = 0;
+    pthread_mutex_unlock(&g_lock);
+    for (int i = 0; i < n; i++) pthread_join(threads[i], NULL);
+    free(threads);
+#endif
 }
