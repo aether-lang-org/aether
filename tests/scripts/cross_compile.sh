@@ -59,7 +59,7 @@ _HELLO="examples/basics/hello.ae"
 PATH="$STUB:$PATH" AETHER_SYSROOT="$FB" \
     "$AE" build --target=x86_64-freebsd "$_HELLO" -o "$_fbtmp/lk" 2>"$_fbtmp/zc" >/dev/null || true
 _la="$(grep 'ZIGCC:' "$_fbtmp/zc" | grep -F 'libaether.a' | tail -1)"
-if printf '%s' "$_la" | grep -q -- "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp"; then
+if printf '%s' "$_la" | grep -q -- "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp -lcap_dns"; then
     ok "x86_64-freebsd link appends casper libs (always)"
 else
     bad "x86_64-freebsd link missing casper libs"; echo "        $_la"
