@@ -5147,10 +5147,20 @@ static int run_cross_build(const char* c_file, const char* out_file,
          * (crt1/crti/crtn — crt1 pulls __libc_start1, a FreeBSD-15 symbol) +
          * the real versioned libc.so.7. Verified end-to-end with zig 0.13
          * against a FreeBSD-15 base sysroot. */
+        /* libthr.so.3 (POSIX threads) BY EXPLICIT PATH, next to libc.so.7. The
+         * Aether runtime (scheduler, actor threads) and std.http's server call
+         * pthread_create/mutex/cond, so a FreeBSD cross-link fails `undefined
+         * symbol: pthread_create` regardless of what the app imports (the native
+         * FreeBSD build gets this via -pthread, ae.c ~2367). It MUST be a path,
+         * not `-lpthread`: base/usr/lib/libpthread.so is a symlink onto libthr,
+         * and -lthr/-lpthread does NOT resolve under zig-lld + -nostdlib against
+         * this split base (verified: the -l form leaves pthread_create undefined,
+         * the explicit libthr.so.3 path links clean). Versioned .so.3 like
+         * libc.so.7 above. */
         snprintf(fbsd_link, sizeof(fbsd_link),
                  "-nostdlib \"%s/usr/lib/crt1.o\" \"%s/usr/lib/crti.o\" "
-                 "\"%s/lib/libc.so.7\" \"%s/usr/lib/crtn.o\"",
-                 sr, sr, sr, sr);
+                 "\"%s/lib/libc.so.7\" \"%s/lib/libthr.so.3\" \"%s/usr/lib/crtn.o\"",
+                 sr, sr, sr, sr, sr);
 
         /* Platform libs the FreeBSD link needs, mirroring the NATIVE FreeBSD
          * build (ae.c ~2368). The base sysroot's -L (from sysroot_flag) already

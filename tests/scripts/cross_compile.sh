@@ -67,6 +67,14 @@ if printf '%s' "$_la" | grep -q -- "-lcasper -lcap_pwd -lcap_sysctl -lcap_grp -l
 else
     bad "x86_64-freebsd link missing casper libs"; echo "        $_la"
 fi
+# libthr.so.3 (POSIX threads) must be linked BY PATH, next to libc.so.7 — the
+# runtime/scheduler + std.http server call pthread_create, and -lthr/-lpthread
+# does NOT resolve under zig-lld + -nostdlib against the split base sysroot.
+if printf '%s' "$_la" | grep -q -- "/lib/libthr.so.3"; then
+    ok "x86_64-freebsd link includes libthr.so.3 by path"
+else
+    bad "x86_64-freebsd link missing libthr.so.3 (pthread_create would be undefined)"; echo "        $_la"
+fi
 if printf '%s' "$_la" | grep -q -- "-lssl"; then
     bad "x86_64-freebsd link added openssl WITHOUT CROSSBUILD_SYSROOT"
 else
