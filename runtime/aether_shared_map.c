@@ -15,6 +15,11 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#elif defined(_WIN32)
+/* generate_token() below uses clock_gettime(CLOCK_MONOTONIC); Windows has no
+ * POSIX clocks, but the thread shim supplies both via QueryPerformanceCounter.
+ * (The shm map itself is a POSIX-only stub on Windows — see the guards below.) */
+#include "utils/aether_thread.h"
 #endif
 
 #define MAX_ENTRIES 256

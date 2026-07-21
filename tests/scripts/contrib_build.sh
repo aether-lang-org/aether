@@ -85,8 +85,11 @@ if [ -n "$CONTRIB_TARGET" ]; then
             )
             CROSS_ARCH_WANT="FreeBSD"
             ;;
-        *linux*)  CROSS_ARCH_WANT="ELF" ;;
-        *macos*)  CROSS_ARCH_WANT="Mach-O" ;;
+        *linux*)   CROSS_ARCH_WANT="ELF" ;;
+        *macos*)   CROSS_ARCH_WANT="Mach-O" ;;
+        # Windows (Tier A, self-contained like linux): zig bundles the full
+        # MinGW-w64 target — no sysroot. A contrib .o member is a PE/COFF object.
+        *windows*) CROSS_ARCH_WANT="COFF" ;;
     esac
 
     # Tier-2/3 deps: point compiles at the crossbuild sysroot, NOT host libs.
