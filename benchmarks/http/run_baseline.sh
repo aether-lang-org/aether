@@ -8,37 +8,46 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
+cpu_model() {
+    if command -v lscpu >/dev/null 2>&1; then
+        lscpu | grep 'Model name' | sed 's/.*: *//'
+    elif [ "$(uname -s)" = "Darwin" ]; then
+        sysctl -n machdep.cpu.brand_string
+    else
+        uname -m
+    fi
+}
+
+cpu_cores() {
+    if command -v nproc >/dev/null 2>&1; then
+        nproc
+    else
+        sysctl -n hw.ncpu 2>/dev/null || echo "unknown"
+    fi
+}
+
 echo "=== Building baseline benchmark ==="
+# Link the precompiled stdlib archive rather than naming individual
+# sources. A hand-maintained source list silently rots as the runtime
+# grows; `make stdlib` is the authoritative set.
+make stdlib >/dev/null
 gcc -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils \
     -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math \
     -Istd/net -Istd/collections -Istd/json \
-    benchmarks/http/bench_thread_http.c \
-    std/net/aether_http_server.c std/net/aether_http.c std/net/aether_net.c \
-    std/string/aether_string.c std/collections/aether_collections.c \
-    std/collections/aether_hashmap.c std/json/aether_json.c \
-    std/fs/aether_fs.c std/math/aether_math.c std/log/aether_log.c \
-    std/io/aether_io.c \
-    runtime/scheduler/multicore_scheduler.c \
-    runtime/scheduler/scheduler_optimizations.c \
-    runtime/config/aether_optimization_config.c \
-    runtime/memory/memory.c runtime/memory/aether_arena_optimized.c \
-    runtime/memory/aether_batch.c runtime/memory/aether_pool.c \
-    runtime/memory/aether_memory_stats.c \
-    runtime/utils/aether_tracing.c runtime/utils/aether_test.c \
-    runtime/utils/aether_simd_vectorized.c runtime/utils/aether_cpu_detect.c \
-    runtime/utils/aether_bounds_check.c \
-    runtime/aether_runtime.c runtime/aether_runtime_types.c runtime/aether_numa.c \
-    runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c \
-    runtime/actors/aether_actor_thread.c runtime/actors/aether_message_registry.c \
+    benchmarks/http/bench_thread_http.c build/libaether.a \
     -o build/bench_thread_http \
-    -pthread -lm
+    -pthread -lm \
+    $(pkg-config --libs openssl 2>/dev/null) \
+    $(pkg-config --libs zlib 2>/dev/null) \
+    $(pkg-config --libs libnghttp2 2>/dev/null) \
+    $(pkg-config --libs libpcre2-8 2>/dev/null)
 echo "Build OK"
 
 RESULTS_FILE="benchmarks/http/baseline_results.txt"
 echo "=== HTTP Baseline Benchmark (thread-per-connection) ===" > "$RESULTS_FILE"
 echo "Date: $(date)" >> "$RESULTS_FILE"
-echo "CPU: $(lscpu | grep 'Model name' | sed 's/.*: *//')" >> "$RESULTS_FILE"
-echo "Cores: $(nproc)" >> "$RESULTS_FILE"
+echo "CPU: $(cpu_model)" >> "$RESULTS_FILE"
+echo "Cores: $(cpu_cores)" >> "$RESULTS_FILE"
 echo "" >> "$RESULTS_FILE"
 
 # Start server in background
