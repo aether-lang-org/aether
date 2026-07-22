@@ -110,8 +110,13 @@ Token* read_string() {
     char* buffer = malloc(capacity);
     int i = 0;
     bool has_interp = false;
+    // Depth of ${...} nesting we're currently inside. While > 0, an
+    // unescaped '"' opens a NESTED string literal (e.g. ${id("hi")})
+    // rather than ending the outer string, and a '}' closes one level
+    // of interpolation instead of being ordinary literal text.
+    int interp_depth = 0;
 
-    while (current_pos < source_length && peek() != '"') {
+    while (current_pos < source_length && (interp_depth > 0 || peek() != '"')) {
         if (i >= capacity - 3) {
             capacity *= 2;
             char* new_buf = realloc(buffer, capacity);
@@ -120,9 +125,57 @@ Token* read_string() {
         }
         if (peek() == '$' && current_pos + 1 < source_length && source[current_pos + 1] == '{') {
             has_interp = true;
+            interp_depth++;
             // Store raw ${...} content without escape processing
             buffer[i++] = advance(); // $
             buffer[i++] = advance(); // {
+        } else if (interp_depth > 0 &&
+                   (peek() == '"' ||
+                    (peek() == '\\' && current_pos + 1 < source_length && source[current_pos + 1] == '"'))) {
+            // Nested string literal inside ${...}: copy it through verbatim
+            // (including its own escapes) so the parser's re-lex of the
+            // interpolation expression sees real Aether source, not text
+            // that was only valid in the OUTER string's escaping convention.
+            // A leading '\"' is accepted the same as '"' (the natural
+            // spelling a developer reaches for since the outer string's own
+            // quotes must be escaped) and normalized down to a plain '"' —
+            // it's not needed here since a bare '"' no longer terminates
+            // the outer string, but rejecting it outright would resurrect
+            // the silent-empty trap for whichever spelling isn't the one
+            // this branch expects.
+            if (peek() == '\\') advance(); // drop the escaping backslash
+            buffer[i++] = advance(); // opening "
+            bool closed = false;
+            while (current_pos < source_length) {
+                if (i >= capacity - 3) { capacity *= 2; char* nb = realloc(buffer, capacity); if (!nb) { free(buffer); return create_token(TOKEN_ERROR, "out of memory", current_line, current_column); } buffer = nb; }
+                if (peek() == '"') {
+                    buffer[i++] = advance(); // closing "
+                    closed = true;
+                    break;
+                }
+                if (peek() == '\\' && current_pos + 1 < source_length && source[current_pos + 1] == '"') {
+                    advance(); // drop the escaping backslash
+                    buffer[i++] = advance(); // closing " (normalized, unescaped)
+                    closed = true;
+                    break;
+                }
+                if (peek() == '\\' && current_pos + 1 < source_length) {
+                    buffer[i++] = advance(); // backslash
+                    buffer[i++] = advance(); // escaped char
+                } else {
+                    buffer[i++] = advance();
+                }
+            }
+            if (!closed) {
+                free(buffer);
+                return create_token(TOKEN_ERROR, "unterminated string literal", current_line, current_column);
+            }
+        } else if (interp_depth > 0 && peek() == '{') {
+            interp_depth++;
+            buffer[i++] = advance();
+        } else if (interp_depth > 0 && peek() == '}') {
+            interp_depth--;
+            buffer[i++] = advance();
         } else if (peek() == '\\') {
             if (has_interp) {
                 // In interpolated strings, keep escape sequences raw so parser can handle them

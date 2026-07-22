@@ -839,10 +839,21 @@ static ASTNode* parse_interp_string_expr(const char* raw) {
             FLUSH_LIT();
             p += 2; // skip ${
 
-            // Collect expression source until matching }
+            // Collect expression source until matching }. Skip over nested
+            // string literals so a '{' or '}' inside one (e.g. ${id("a}b")})
+            // doesn't miscount the interpolation's own brace depth.
             int depth = 1;
             const char* expr_start = p;
             while (*p && depth > 0) {
+                if (*p == '"') {
+                    p++;
+                    while (*p && *p != '"') {
+                        if (*p == '\\' && p[1]) p++;
+                        p++;
+                    }
+                    if (*p == '"') p++;
+                    continue;
+                }
                 if (*p == '{') depth++;
                 else if (*p == '}') { if (--depth == 0) break; }
                 p++;

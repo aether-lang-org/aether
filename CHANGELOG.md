@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **String-literal argument to a call inside `${...}` interpolation.**
+  `${id("hi")}` used to be a parse error (the `"` ended the *outer*
+  string), and the workaround developers reached for instead,
+  `${id(\"hi\")}`, compiled clean but silently evaluated to `""` — no
+  error, wrong value. The lexer now tracks interpolation depth and
+  treats a `"` (or `\"`) inside `${...}` as opening a real nested
+  string literal, so both spellings parse and evaluate correctly.
+  `ae fmt` updated to match, so formatting a file using this no longer
+  mangles the string. (#1237)
+
 ## [0.434.0]
 
 ### Added
