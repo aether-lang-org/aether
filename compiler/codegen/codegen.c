@@ -2271,11 +2271,10 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
         const char* param_types[32];
         const char* param_names[32];
         int param_count = 0;
-        ASTNode* body = NULL;
         for (int p = 0; p < fn->child_count; p++) {
             ASTNode* c = fn->children[p];
             if (c->type == AST_GUARD_CLAUSE) continue;
-            if (c->type == AST_BLOCK) { body = c; continue; }
+            if (c->type == AST_BLOCK) continue;
             if (c->type == AST_VARIABLE_DECLARATION || c->type == AST_PATTERN_VARIABLE) {
                 const char* t = get_abi_type(c->node_type);
                 if (!t || strcmp(t, "void") == 0 || param_count >= 32) { ok = 0; break; }
@@ -2288,7 +2287,6 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
                 break;
             }
         }
-        (void)body;
         if (!ok) {
             char msg[256];
             snprintf(msg, sizeof(msg),

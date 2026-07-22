@@ -29,28 +29,28 @@
 
 /* Insert / overwrite. Both `key` and `value` are duplicated
  * internally. NULL key or NULL value is a no-op. */
-void aether_config_put(const char* key, const char* value);
+void aether_config_store_put(const char* key, const char* value);
 
 /* Retrieve. Returns the empty string "" if the key isn't set
  * (matches Aether's Go-style "" = absent convention) — never
  * returns NULL. The pointer is borrowed from the registry's
  * internal storage; it stays valid until the next put / clear
  * touching the same key. */
-const char* aether_config_get(const char* key);
+const char* aether_config_store_get(const char* key);
 
 /* Retrieve with a fallback. Returns the registered value if set,
  * otherwise the caller's `default_value`. NULL default is treated
  * as "". */
-const char* aether_config_get_or(const char* key, const char* default_value);
+const char* aether_config_store_get_or(const char* key, const char* default_value);
 
 /* Membership test. 1 if key has been put, 0 otherwise. */
-int aether_config_has(const char* key);
+int aether_config_store_has(const char* key);
 
 /* Number of keys currently registered. Mostly for tests / debug. */
-int aether_config_size(void);
+int aether_config_store_size(void);
 
 /* Wipe all keys. Tests use this for isolation; production code
  * almost never needs it. */
-void aether_config_clear(void);
+void aether_config_store_clear(void);
 
 #endif /* AETHER_CONFIG_H */

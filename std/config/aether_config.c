@@ -79,7 +79,7 @@ static ae_cfg_entry* find_in_bucket(ae_cfg_entry* head, const char* key) {
     return NULL;
 }
 
-void aether_config_put(const char* key, const char* value) {
+void aether_config_store_put(const char* key, const char* value) {
     if (!key || !value) return;
     ensure_lock_init();
 
@@ -120,7 +120,7 @@ void aether_config_put(const char* key, const char* value) {
     ae_cfg_rwlock_wrunlock(&g_lock);
 }
 
-const char* aether_config_get(const char* key) {
+const char* aether_config_store_get(const char* key) {
     if (!key) return "";
     ensure_lock_init();
     uint32_t h = fnv1a(key);
@@ -133,7 +133,7 @@ const char* aether_config_get(const char* key) {
     return v;
 }
 
-const char* aether_config_get_or(const char* key, const char* default_value) {
+const char* aether_config_store_get_or(const char* key, const char* default_value) {
     if (!key) return default_value ? default_value : "";
     ensure_lock_init();
     uint32_t h = fnv1a(key);
@@ -148,7 +148,7 @@ const char* aether_config_get_or(const char* key, const char* default_value) {
     return v;
 }
 
-int aether_config_has(const char* key) {
+int aether_config_store_has(const char* key) {
     if (!key) return 0;
     ensure_lock_init();
     uint32_t h = fnv1a(key);
@@ -161,7 +161,7 @@ int aether_config_has(const char* key) {
     return result;
 }
 
-int aether_config_size(void) {
+int aether_config_store_size(void) {
     ensure_lock_init();
     ae_cfg_rwlock_rdlock(&g_lock);
     int n = g_size;
@@ -169,7 +169,7 @@ int aether_config_size(void) {
     return n;
 }
 
-void aether_config_clear(void) {
+void aether_config_store_clear(void) {
     ensure_lock_init();
     ae_cfg_rwlock_wrlock(&g_lock);
     for (int i = 0; i < AE_CFG_BUCKETS; i++) {

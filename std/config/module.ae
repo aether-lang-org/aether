@@ -30,51 +30,51 @@
 // Section 2 of nuther-ask-of-aether-team.md / Nico's reply.
 
 exports (
-    aether_config_put, aether_config_get, aether_config_get_or,
-    aether_config_has, aether_config_size, aether_config_clear,
+    aether_config_store_put, aether_config_store_get, aether_config_store_get_or,
+    aether_config_store_has, aether_config_store_size, aether_config_store_clear,
     put, get, get_or, has, size, clear
 )
 
 // ---- Raw externs ----
-extern aether_config_put(key: string, value: string)
-extern aether_config_get(key: string) -> string
-extern aether_config_get_or(key: string, default_value: string) -> string
-extern aether_config_has(key: string) -> int
-extern aether_config_size() -> int
-extern aether_config_clear()
+extern aether_config_store_put(key: string, value: string)
+extern aether_config_store_get(key: string) -> string
+extern aether_config_store_get_or(key: string, default_value: string) -> string
+extern aether_config_store_has(key: string) -> int
+extern aether_config_store_size() -> int
+extern aether_config_store_clear()
 
 // ---- Aether-side wrappers ----
 
 // Insert / overwrite. Both `key` and `value` are duplicated
 // internally; the caller's string lifetimes don't matter.
 put(key: string, value: string) {
-    aether_config_put(key, value)
+    aether_config_store_put(key, value)
 }
 
 // Retrieve. Returns "" if the key isn't set (matches Aether's
 // Go-style "" = absent convention).
 get(key: string) -> string {
-    return aether_config_get(key)
+    return aether_config_store_get(key)
 }
 
 // Retrieve with a fallback. Returns the registered value if set,
 // otherwise `default_value`.
 get_or(key: string, default_value: string) -> string {
-    return aether_config_get_or(key, default_value)
+    return aether_config_store_get_or(key, default_value)
 }
 
 // 1 if `key` has been put, 0 otherwise.
 has(key: string) -> int {
-    return aether_config_has(key)
+    return aether_config_store_has(key)
 }
 
 // Number of keys currently registered. Mostly for tests / debug.
 size() -> int {
-    return aether_config_size()
+    return aether_config_store_size()
 }
 
 // Wipe all keys. Tests use this for isolation; production code
 // almost never needs it.
 clear() {
-    aether_config_clear()
+    aether_config_store_clear()
 }

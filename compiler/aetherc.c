@@ -1754,37 +1754,6 @@ int compile_source(const char* input_path, const char* output_path) {
     return 1;
 }
 
-// Compile C file to executable using system compiler (gcc)
-int compile_c_to_exe(const char* c_file, const char* exe_file) {
-    char cmd[1024];
-    
-    // Assume runtime is in "runtime/" relative to current dir, or check specific paths
-    // For now, assume user is running from project root or has runtime folder nearby.
-    // We try to locate the runtime folder.
-    
-    const char* runtime_path = "runtime";
-    if (!compiler_file_exists("runtime/actor.c")) {
-        if (compiler_file_exists("../runtime/actor.c")) {
-            runtime_path = "../runtime";
-        } else {
-            fprintf(stderr, "Error: Could not locate Aether runtime files.\n");
-            return 0;
-        }
-    }
-
-#ifdef _WIN32
-    snprintf(cmd, sizeof(cmd), "gcc \"%s\" \"%s\\*.c\" -o \"%s\" -I\"%s\" -O2 -lpthread", 
-             c_file, runtime_path, exe_file, runtime_path);
-#else
-    snprintf(cmd, sizeof(cmd), "gcc \"%s\" \"%s\"/*.c -o \"%s\" -I\"%s\" -O2 -lpthread", 
-             c_file, runtime_path, exe_file, runtime_path);
-#endif
-
-    if (verbose_mode) printf("Executing: %s\n", cmd);
-    int result = system(cmd);
-    return result == 0;
-}
-
 // ---------------------------------------------------------------------------
 // --concat-ae: source-to-source merge of multiple .ae files into one
 // synthetic .ae. Issue #268.1.
@@ -2049,7 +2018,6 @@ void print_help(const char* program_name) {
     printf("Aether Compiler v%s\n\n", AETHER_VERSION);
     printf("Usage:\n");
     printf("  %s <input.ae> <output.c>         Compile Aether to C\n", program_name);
-    printf("  %s run <input.ae>                Compile and run immediately\n", program_name);
     printf("  %s lsp                           Run the language server on stdio\n", program_name);
     printf("  %s --concat-ae <files...> -o <out.ae>\n", program_name);
     printf("                                   Discover-and-dedupe source merge — emits one\n");
@@ -2303,47 +2271,19 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Check for "run" command
     if (strcmp(argv[arg_offset], "run") == 0) {
-        if (argc - arg_offset < 2) {
-            fprintf(stderr, "Usage: %s run <input.ae>\n", argv[0]);
-            return 1;
-        }
-        
-        const char* input_path = argv[arg_offset + 1];
-        
-        // Generate temp filenames
-        char c_path[256];
-        char exe_path[256];
-        
-        // Simple temp name generation based on input
-        // "test.ae" -> "test.ae.c", "test.ae.exe"
-        snprintf(c_path, sizeof(c_path), "%s.c", input_path);
-        snprintf(exe_path, sizeof(exe_path), "%s.exe", input_path); // .exe works on Linux too usually, or just append nothing
-        
-        // 1. Compile Aether -> C
-        if (!compile_source(input_path, c_path)) {
-            return 1;
-        }
-        
-        // 2. Compile C -> Exe
-        if (!compile_c_to_exe(c_path, exe_path)) {
-            fprintf(stderr, "Build failed.\n");
-            // Try to cleanup temp C file at least
-            remove(c_path); 
-            return 1;
-        }
-        
-        // 3. Run Exe
-        printf("Running program...\n----------------\n");
-        int result = system(exe_path);
-        
-        // 4. Cleanup
-        // Note: Temporary files are kept for debugging
-        
-        return result;
+        fprintf(stderr,
+                "aetherc does not run programs: it is the compiler front end.\n"
+                "Use the `ae` toolchain driver instead:\n"
+                "\n"
+                "    ae run %s\n"
+                "\n"
+                "`ae` resolves the stdlib, runtime and link flags for your\n"
+                "platform; aetherc only translates Aether to C (--emit=c).\n",
+                (argc - arg_offset >= 2) ? argv[arg_offset + 1] : "<input.ae>");
+        return 1;
     }
-    
+
     // --dump-ast only needs the input file
     if (dump_ast_mode) {
         if (!compile_source(argv[arg_offset], "/dev/null")) {

@@ -14,6 +14,7 @@
 #else
     #include <unistd.h>
 #endif
+#include <dirent.h>
 #ifdef __APPLE__
     #include <mach-o/dyld.h>
 #endif
@@ -699,6 +700,43 @@ char* module_resolve_contrib_path(const char* module_name) {
     return resolve_pkg_path("contrib", converted);
 }
 
+#define PKG_MAX_MATCHES 16
+
+/* Order matches by full path. Every match shares the same
+ * ~/.aether/packages prefix, so this orders by "<host>/<owner>"
+ * without copying either component into a fixed-size buffer
+ * (d_name is 256 bytes on glibc, 260 on MinGW, 1024 on macOS, so
+ * any hardcoded join buffer is wrong on some platform). */
+static int pkg_match_cmp(const void* a, const void* b) {
+    return strcmp(*(const char* const*)a, *(const char* const*)b);
+}
+
+/* Probe one installed-package root for the module entry point.
+ * `sub_path` is the import path after the package name (leading '/'),
+ * or NULL when the import names the package itself. Returns a
+ * malloc'd path on a hit, NULL otherwise. */
+static char* pkg_probe_root(const char* root, const char* sub_path) {
+    char path[4096];
+    if (sub_path) {
+        snprintf(path, sizeof(path), "%s/src%s/module.ae", root, sub_path);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s/src%s.ae", root, sub_path);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s/lib%s/module.ae", root, sub_path);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s%s/module.ae", root, sub_path);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s%s.ae", root, sub_path);
+        if (access(path, F_OK) == 0) return strdup(path);
+    } else {
+        snprintf(path, sizeof(path), "%s/src/module.ae", root);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s/module.ae", root);
+        if (access(path, F_OK) == 0) return strdup(path);
+    }
+    return NULL;
+}
+
 // Resolve a local module path (e.g., "mypackage.utils") to a file path.
 char* module_resolve_local_path(const char* module_path) {
     char converted[512];
@@ -780,32 +818,91 @@ char* module_resolve_local_path(const char* module_path) {
             // The sub-path within the package (everything after package name)
             const char* sub_path = strchr(converted, '/');
 
-            // Scan ~/.aether/packages/ for directories ending with /pkg_name
             char pkg_base[512];
             snprintf(pkg_base, sizeof(pkg_base), "%s/.aether/packages", home);
 
-            // Try common GitHub package layout: ~/.aether/packages/github.com/*/pkg_name/
-            char search[1024];
-            // Direct match: ~/.aether/packages/pkg_name/
-            if (sub_path) {
-                snprintf(path, sizeof(path), "%s/%s/src%s/module.ae", pkg_base, pkg_name, sub_path);
-                if (access(path, F_OK) == 0) return strdup(path);
-                snprintf(path, sizeof(path), "%s/%s/src%s.ae", pkg_base, pkg_name, sub_path);
-                if (access(path, F_OK) == 0) return strdup(path);
-                snprintf(path, sizeof(path), "%s/%s/lib%s/module.ae", pkg_base, pkg_name, sub_path);
-                if (access(path, F_OK) == 0) return strdup(path);
-            } else {
-                snprintf(path, sizeof(path), "%s/%s/src/module.ae", pkg_base, pkg_name);
-                if (access(path, F_OK) == 0) return strdup(path);
-                snprintf(path, sizeof(path), "%s/%s/module.ae", pkg_base, pkg_name);
-                if (access(path, F_OK) == 0) return strdup(path);
+            // Flat layout: ~/.aether/packages/<pkg_name>/
+            char root[2048];
+            snprintf(root, sizeof(root), "%s/%s", pkg_base, pkg_name);
+            char* hit = pkg_probe_root(root, sub_path);
+            if (hit) return hit;
+
+            /* Host-nested layout: ~/.aether/packages/<host>/<owner>/<pkg_name>/,
+             * which is what `ae add <host>/<owner>/<repo>` and `apkg install`
+             * create. Without this scan an installed package is unreachable:
+             * `import repo` only ever probed the flat path above.
+             *
+             * CRITICAL: collect every match rather than returning the first.
+             * readdir order is unspecified (ext4 hashes entries, APFS makes
+             * no guarantee), so returning the first hit would let the same
+             * source resolve to a different package on another machine. We
+             * sort by "<host>/<owner>" for a reproducible result and refuse
+             * to guess when two owners ship the same package name. */
+            char* matches[PKG_MAX_MATCHES];
+            int match_count = 0;
+            int match_overflow = 0;
+            size_t base_len = strlen(pkg_base);
+
+            DIR* d_host = opendir(pkg_base);
+            if (d_host) {
+                struct dirent* e_host;
+                while ((e_host = readdir(d_host)) != NULL) {
+                    if (e_host->d_name[0] == '.') continue;
+                    char host_dir[1024];
+                    snprintf(host_dir, sizeof(host_dir), "%s/%s", pkg_base, e_host->d_name);
+                    DIR* d_owner = opendir(host_dir);
+                    if (!d_owner) continue;
+                    struct dirent* e_owner;
+                    while ((e_owner = readdir(d_owner)) != NULL) {
+                        if (e_owner->d_name[0] == '.') continue;
+                        snprintf(root, sizeof(root), "%s/%s/%s",
+                                 host_dir, e_owner->d_name, pkg_name);
+                        char* found = pkg_probe_root(root, sub_path);
+                        if (!found) continue;
+                        if (match_count < PKG_MAX_MATCHES) {
+                            matches[match_count++] = found;
+                        } else {
+                            match_overflow = 1;
+                            free(found);
+                        }
+                    }
+                    closedir(d_owner);
+                }
+                closedir(d_host);
             }
 
-            // Also try GitHub-style nested: ~/.aether/packages/github.com/*/pkg_name/
-            // Scan for any subdirectory pattern matching **/pkg_name
-            // For simplicity, check the most common pattern
-            (void)search;
-            (void)pkg_base;
+            if (match_count > 0) {
+                qsort(matches, (size_t)match_count, sizeof(matches[0]),
+                      pkg_match_cmp);
+
+                if (match_count > 1) {
+                    /* Two owners ship a package with this name. Picking one
+                     * silently would link against an arbitrary dependency, so
+                     * report it and let the user disambiguate. Each owner is
+                     * printed straight out of its match path, no copy. */
+                    char msg[512];
+                    int off = snprintf(msg, sizeof(msg),
+                                       "ambiguous package import '%s': installed under ",
+                                       pkg_name);
+                    for (int m = 0; m < match_count && off < (int)sizeof(msg) - 64; m++) {
+                        const char* rel = matches[m] + base_len + 1;
+                        const char* host_end = strchr(rel, '/');
+                        const char* owner_end = host_end ? strchr(host_end + 1, '/') : NULL;
+                        int owner_len = owner_end ? (int)(owner_end - rel)
+                                                  : (int)strlen(rel);
+                        off += snprintf(msg + off, sizeof(msg) - off,
+                                        "%s%.*s", (m ? ", " : ""), owner_len, rel);
+                    }
+                    snprintf(msg + off, sizeof(msg) - off,
+                             "%s. Remove the duplicate from ~/.aether/packages.",
+                             match_overflow ? ", ..." : "");
+                    aether_error_simple(msg, 0, 0);
+                    for (int m = 0; m < match_count; m++) free(matches[m]);
+                    return NULL;
+                }
+
+                return matches[0];
+            }
         }
     }
 
@@ -908,6 +1005,7 @@ static char* resolve_import_path(ASTNode* import_node) {
     if (!module_path) return NULL;
 
     char* file_path;
+    int errors_before = aether_error_count();
     if (strncmp(module_path, "std.", 4) == 0) {
         file_path = module_resolve_stdlib_path(module_path + 4);
     } else if (strncmp(module_path, "contrib.", 8) == 0) {
@@ -916,6 +1014,12 @@ static char* resolve_import_path(ASTNode* import_node) {
         file_path = module_resolve_local_path(module_path);
     }
     if (file_path) return file_path;
+
+    /* The resolver failed hard (e.g. an ambiguous installed package) rather
+     * than simply not finding the path. Retrying as `module.symbol` would
+     * re-walk the same roots and report the identical error a second time,
+     * so surface the original diagnostic alone. */
+    if (aether_error_count() > errors_before) return NULL;
 
     const char* last_dot = strrchr(module_path, '.');
     if (!last_dot) return NULL;

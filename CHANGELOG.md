@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Packages installed by `ae add` are now importable** (system cleanup sweep).
+  `ae add <host>/<owner>/<repo>` and `apkg install` clone into
+  `~/.aether/packages/<host>/<owner>/<repo>/`, but the module resolver only
+  ever probed the flat `~/.aether/packages/<name>/` path, so every package
+  installed through the documented workflow failed to resolve with "module not
+  found". The nested-layout scan the code intended (a `char search[1024]` that
+  was declared, never written, and tombstoned with `(void)search`) is now
+  implemented: the resolver walks `<host>/<owner>/` and probes the same
+  candidate set it already used for flat packages. Flat layouts keep working.
+- **`--emit=lib` no longer fails to link when the module imports `std.config`**.
+  `std/config` exported C symbols (`aether_config_get`, `_has`, `_put`, ...)
+  that collided with the identically-named embed ABI in
+  `runtime/aether_config.c`, which takes a different signature. Because
+  `ae build --emit=lib` appends `runtime/aether_config.c` to the link *and*
+  links `libaether.a`, any library using `std.config` died with
+  `duplicate symbol '_aether_config_has'`. The store's C symbols are now
+  `aether_config_store_*`; the documented embed ABI is untouched, and the
+  Aether-facing `config.put` / `config.get` / `config.has` API is unchanged.
+
+### Removed
+
+- **The message-batching subsystem** (`runtime/memory/aether_batch.{c,h}`).
+  `batch_send()` looped over the batch calling a placeholder `actor_send()`
+  that was a no-op, so every batched message was silently discarded, and that
+  non-static `actor_send` symbol shipped in `libaether.a` for any translation
+  unit to link against by accident. It had no production caller; its only
+  consumer was a test that is wired into no build target and that never called
+  `batch_send()` at all (it simulated the send with a counter increment, so the
+  "1.78x speedup" advertised in the header measured nothing). Removed along
+  with that orphaned test.
+- **`aetherc run`**, which could never succeed. It gated on `runtime/actor.c`,
+  a file that has not existed since the runtime was split into
+  `runtime/actors/`, so every invocation failed with "Could not locate Aether
+  runtime files" after already writing a stray `<input>.ae.c` next to the
+  user's source. `aetherc` now explains that it is the compiler front end and
+  points at `ae run`, which is the working, documented entry point. The dead
+  `compile_c_to_exe` helper it was the sole caller of is gone.
+- **`runtime/io/`**, an orphaned poller hub duplicating the active pollers in
+  `runtime/scheduler/`. Nothing included it, and the install step carried an
+  `rm -rf` to hide it from consumers that scan for linkable sources; deleting
+  the sources removes the need for that workaround.
+
 ## [0.428.0]
 
 ### Changed
