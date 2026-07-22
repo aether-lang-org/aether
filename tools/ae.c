@@ -1428,6 +1428,7 @@ found_root:
                 "%s/std/math/aether_math.c "
                 "%s/std/net/aether_http.c "
                 "%s/std/net/aether_http_server.c "
+                "%s/std/net/aether_http_pool.c "
                 "%s/std/net/aether_net.c "
                 "%s/std/net/aether_actor_bridge.c "
                 "%s/std/collections/aether_collections.c "
@@ -1452,7 +1453,7 @@ found_root:
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
-                tc.root);
+                tc.root, tc.root);
         }
     } else {
         // Installed layout: headers in include/aether/, source in
@@ -1507,6 +1508,7 @@ found_root:
                 "%s/std/math/aether_math.c "
                 "%s/std/net/aether_http.c "
                 "%s/std/net/aether_http_server.c "
+                "%s/std/net/aether_http_pool.c "
                 "%s/std/net/aether_net.c "
                 "%s/std/net/aether_actor_bridge.c "
                 "%s/std/collections/aether_collections.c "
@@ -1531,7 +1533,7 @@ found_root:
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
-                src);
+                src, src);
         }
     }
 }
@@ -2449,6 +2451,7 @@ static int build_wasm_cmd(char* cmd, size_t size,
         "std/math/aether_math.c",
         "std/net/aether_http.c",
         "std/net/aether_http_server.c",
+        "std/net/aether_http_pool.c",
         "std/net/aether_net.c",
         "std/net/aether_actor_bridge.c",
         "std/collections/aether_collections.c",
