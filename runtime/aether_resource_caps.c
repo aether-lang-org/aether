@@ -7,6 +7,7 @@
  */
 
 #include "aether_resource_caps.h"
+#include "utils/aether_thread.h"
 #include "utils/aether_compiler.h"
 
 #include <stdatomic.h>
@@ -29,22 +30,11 @@ static _Atomic uint64_t g_mem_cap  = 0;   /* 0 = unlimited */
 static AETHER_TLS_SHARED int64_t g_deadline_at_ns = 0;
 static AETHER_TLS_SHARED int     g_tripped        = 0;
 
-/* Monotonic nanoseconds since some fixed epoch. CLOCK_MONOTONIC on
- * POSIX (immune to wall-clock changes), QueryPerformanceCounter on
- * Windows. The exact epoch doesn't matter — only differences. */
+/* Monotonic nanoseconds since an arbitrary epoch; only differences
+ * matter. Delegates to aether_now_ns so Windows goes through the
+ * overflow-free QueryPerformanceCounter split in the thread shim. */
 static int64_t now_ns(void) {
-#ifdef _WIN32
-    LARGE_INTEGER freq, count;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&count);
-    /* (count / freq) seconds × 1e9 nanoseconds. Compute as
-     * (count * 1e9) / freq with overflow-safe ordering. */
-    return (int64_t)((count.QuadPart * 1000000000LL) / freq.QuadPart);
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
-#endif
+    return (int64_t)aether_now_ns();
 }
 
 int aether_caps_check_alloc(size_t bytes) {

@@ -3116,7 +3116,7 @@ int typecheck_program(ASTNode* program) {
                 if (!*tail || *tail == '_') continue;  // private / malformed
                 if (glob_count >= glob_cap) {
                     glob_cap = glob_cap == 0 ? 16 : glob_cap * 2;
-                    glob_names = (const char**)realloc(
+                    glob_names = (const char**)aether_xrealloc(
                         glob_names, sizeof(const char*) * glob_cap);
                 }
                 glob_names[glob_count++] = tail;

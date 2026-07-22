@@ -1,4 +1,5 @@
 #include "aether_actor_registry.h"
+#include "../../runtime/aether_resource_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -38,14 +39,6 @@ typedef struct ae_reg_entry {
 static ae_reg_entry* g_buckets[AE_REG_BUCKETS];
 static int g_size = 0;
 static ae_reg_rwlock_t g_lock = AE_REG_RWLOCK_INITIALIZER;
-static int g_lock_initialized = 0;
-
-static void ensure_lock_init(void) {
-    if (!g_lock_initialized) {
-        ae_reg_rwlock_init(&g_lock);
-        g_lock_initialized = 1;
-    }
-}
 
 static uint32_t fnv1a(const char* s) {
     uint32_t h = 2166136261u;
@@ -59,7 +52,7 @@ static uint32_t fnv1a(const char* s) {
 static char* dup_str(const char* s) {
     if (!s) return NULL;
     size_t n = strlen(s);
-    char* d = (char*)malloc(n + 1);
+    char* d = (char*)aether_caps_malloc(n + 1);
     if (!d) return NULL;
     memcpy(d, s, n + 1);
     return d;
@@ -74,7 +67,6 @@ static ae_reg_entry* find_in_bucket(ae_reg_entry* head, const char* name) {
 
 void aether_actor_register(const char* name, void* ref) {
     if (!name || !ref) return;
-    ensure_lock_init();
     uint32_t h = fnv1a(name);
     int idx = (int)(h & (AE_REG_BUCKETS - 1));
 
@@ -86,14 +78,14 @@ void aether_actor_register(const char* name, void* ref) {
         ae_reg_rwlock_wrunlock(&g_lock);
         return;
     }
-    ae_reg_entry* e = (ae_reg_entry*)malloc(sizeof(ae_reg_entry));
+    ae_reg_entry* e = (ae_reg_entry*)aether_caps_malloc(sizeof(ae_reg_entry));
     if (!e) {
         ae_reg_rwlock_wrunlock(&g_lock);
         return;
     }
     e->name = dup_str(name);
     if (!e->name) {
-        free(e);
+        aether_caps_free(e, sizeof(ae_reg_entry));
         ae_reg_rwlock_wrunlock(&g_lock);
         return;
     }
@@ -106,7 +98,6 @@ void aether_actor_register(const char* name, void* ref) {
 
 void* aether_actor_whereis(const char* name) {
     if (!name) return NULL;
-    ensure_lock_init();
     uint32_t h = fnv1a(name);
     int idx = (int)(h & (AE_REG_BUCKETS - 1));
 
@@ -119,7 +110,6 @@ void* aether_actor_whereis(const char* name) {
 
 int aether_actor_unregister(const char* name) {
     if (!name) return 0;
-    ensure_lock_init();
     uint32_t h = fnv1a(name);
     int idx = (int)(h & (AE_REG_BUCKETS - 1));
 
@@ -129,8 +119,8 @@ int aether_actor_unregister(const char* name) {
         if (strcmp((*prev)->name, name) == 0) {
             ae_reg_entry* dead = *prev;
             *prev = dead->next;
-            free(dead->name);
-            free(dead);
+            aether_caps_free(dead->name, strlen(dead->name) + 1);
+            aether_caps_free(dead, sizeof(ae_reg_entry));
             g_size--;
             ae_reg_rwlock_wrunlock(&g_lock);
             return 1;
@@ -143,7 +133,6 @@ int aether_actor_unregister(const char* name) {
 
 int aether_actor_is_registered(const char* name) {
     if (!name) return 0;
-    ensure_lock_init();
     uint32_t h = fnv1a(name);
     int idx = (int)(h & (AE_REG_BUCKETS - 1));
 
@@ -155,7 +144,6 @@ int aether_actor_is_registered(const char* name) {
 }
 
 int aether_actor_registry_size(void) {
-    ensure_lock_init();
     ae_reg_rwlock_rdlock(&g_lock);
     int n = g_size;
     ae_reg_rwlock_rdunlock(&g_lock);
@@ -163,14 +151,13 @@ int aether_actor_registry_size(void) {
 }
 
 void aether_actor_registry_clear(void) {
-    ensure_lock_init();
     ae_reg_rwlock_wrlock(&g_lock);
     for (int i = 0; i < AE_REG_BUCKETS; i++) {
         ae_reg_entry* e = g_buckets[i];
         while (e) {
             ae_reg_entry* next = e->next;
-            free(e->name);
-            free(e);
+            aether_caps_free(e->name, strlen(e->name) + 1);
+            aether_caps_free(e, sizeof(ae_reg_entry));
             e = next;
         }
         g_buckets[i] = NULL;

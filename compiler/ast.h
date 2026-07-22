@@ -1,6 +1,8 @@
 #ifndef AST_H
 #define AST_H
 
+#include <stddef.h>
+
 #include "parser/tokens.h"
 
 typedef enum {
@@ -424,6 +426,13 @@ typedef struct Type {
     // handler / the "must handle" check apply. 0 on a plain tuple.
     int is_result;
 } Type;
+
+/* realloc that cannot fail. The `p = realloc(p, n)` idiom used across
+ * the compiler both loses the original pointer when realloc returns
+ * NULL and leaves the next statement dereferencing NULL. A compiler
+ * cannot meaningfully continue past OOM, so this reports and exits
+ * rather than corrupting the caller. */
+void* aether_xrealloc(void* ptr, size_t size);
 
 typedef struct ASTNode {
     ASTNodeType type;

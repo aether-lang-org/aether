@@ -9,6 +9,18 @@
 #include <unistd.h>
 #endif
 
+/* system() reports the child's exit status; a failed mkdir left the
+ * caller cloning into a directory that does not exist, so git's error
+ * masked the real cause (a read-only or permission-denied cache path). */
+static int apkg_run_mkdir(const char* cmd, const char* path) {
+    int rc = system(cmd);
+    if (rc != 0) {
+        fprintf(stderr, "Error: cannot create directory '%s'\n", path);
+        return 0;
+    }
+    return 1;
+}
+
 // Version is set by Makefile from VERSION file
 #ifndef AETHER_VERSION
 #define AETHER_VERSION "0.0.0-dev"
@@ -824,12 +836,12 @@ int apkg_download_package(const char* name, const char* version) {
     
     #ifdef _WIN32
         snprintf(mkdir_cmd, sizeof(mkdir_cmd), "if not exist \"%s\" mkdir \"%s\"", cache_dir, cache_dir);
-        system(mkdir_cmd);
+        if (!apkg_run_mkdir(mkdir_cmd, cache_dir)) return 1;
         snprintf(mkdir_cmd, sizeof(mkdir_cmd), "if not exist \"%s\" mkdir \"%s\"", parent_dir, parent_dir);
-        system(mkdir_cmd);
+        if (!apkg_run_mkdir(mkdir_cmd, parent_dir)) return 1;
     #else
         snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", parent_dir);
-        system(mkdir_cmd);
+        if (!apkg_run_mkdir(mkdir_cmd, parent_dir)) return 1;
     #endif
     
     // Extract user part for parent directory
@@ -843,7 +855,7 @@ int apkg_download_package(const char* name, const char* version) {
         #else
             snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", user_dir);
         #endif
-        system(mkdir_cmd);
+        if (!apkg_run_mkdir(mkdir_cmd, user_dir)) return 1;
     }
     
     // Clone repository

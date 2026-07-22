@@ -25,7 +25,7 @@ static void add_protected_name(char*** names, int* count, int* cap, const char* 
     }
     if (*count >= *cap) {
         *cap = *cap ? *cap * 2 : 4;
-        *names = realloc(*names, *cap * sizeof(char*));
+        *names = aether_xrealloc(*names, *cap * sizeof(char*));
     }
     (*names)[(*count)++] = strdup(name);
 }
@@ -5089,7 +5089,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         } else {
                             if (gen->closure_var_count >= gen->closure_var_capacity) {
                                 gen->closure_var_capacity = gen->closure_var_capacity ? gen->closure_var_capacity * 2 : 16;
-                                gen->closure_var_map = realloc(gen->closure_var_map,
+                                gen->closure_var_map = aether_xrealloc(gen->closure_var_map,
                                     gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
                             }
                             gen->closure_var_map[gen->closure_var_count].var_name = strdup(stmt->value);

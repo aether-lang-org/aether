@@ -342,4 +342,19 @@ static inline int aether_win32_sched_yield(void) {
 
 #endif // _WIN32
 
+// ---- monotonic nanosecond clock -----------------------------------------
+// One implementation for every caller. On Windows this routes through the
+// aether_win32_clock_gettime shim above, which splits the
+// QueryPerformanceCounter division into whole seconds plus remainder.
+// Open-coded copies that computed `count * 1000000000 / freq` overflow
+// int64 once the counter passes ~9.2e9 ticks (about 15 minutes of uptime
+// at a typical 10 MHz QPC frequency); copies going through `double` lose
+// precision at nanosecond magnitudes. The epoch is arbitrary, only
+// differences are meaningful.
+static inline uint64_t aether_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 #endif // AETHER_THREAD_H

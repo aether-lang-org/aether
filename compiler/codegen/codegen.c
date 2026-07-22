@@ -542,7 +542,7 @@ void register_fnptr_local(CodeGenerator* gen, const char* name, Type* sig) {
     }
     if (gen->fnptr_local_count >= gen->fnptr_local_capacity) {
         int new_cap = gen->fnptr_local_capacity ? gen->fnptr_local_capacity * 2 : 8;
-        gen->fnptr_locals = realloc(gen->fnptr_locals,
+        gen->fnptr_locals = aether_xrealloc(gen->fnptr_locals,
             (size_t)new_cap * sizeof(*gen->fnptr_locals));
         gen->fnptr_local_capacity = new_cap;
     }
@@ -3337,7 +3337,7 @@ void ensure_tuple_typedef(CodeGenerator* gen, Type* type) {
     // Register
     if (gen->tuple_type_count >= gen->tuple_type_capacity) {
         gen->tuple_type_capacity = gen->tuple_type_capacity ? gen->tuple_type_capacity * 2 : 8;
-        gen->tuple_type_names = realloc(gen->tuple_type_names, gen->tuple_type_capacity * sizeof(char*));
+        gen->tuple_type_names = aether_xrealloc(gen->tuple_type_names, gen->tuple_type_capacity * sizeof(char*));
     }
     gen->tuple_type_names[gen->tuple_type_count++] = strdup(name);
 }
@@ -3361,7 +3361,7 @@ void ensure_optional_typedef(CodeGenerator* gen, Type* type) {
     fprintf(gen->output, "typedef struct { int has; %s val; } %s;\n", inner_c, opt_name);
     if (gen->opt_type_count >= gen->opt_type_capacity) {
         gen->opt_type_capacity = gen->opt_type_capacity ? gen->opt_type_capacity * 2 : 8;
-        gen->opt_type_names = realloc(gen->opt_type_names, gen->opt_type_capacity * sizeof(char*));
+        gen->opt_type_names = aether_xrealloc(gen->opt_type_names, gen->opt_type_capacity * sizeof(char*));
     }
     gen->opt_type_names[gen->opt_type_count++] = strdup(opt_name);
 }
@@ -4522,7 +4522,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 _p->node_type && _p->node_type->kind == TYPE_PTR) { \
                 if (gen->builder_func_count >= gen->builder_func_capacity) { \
                     gen->builder_func_capacity = gen->builder_func_capacity ? gen->builder_func_capacity * 2 : 16; \
-                    gen->builder_funcs = realloc(gen->builder_funcs, \
+                    gen->builder_funcs = aether_xrealloc(gen->builder_funcs, \
                         gen->builder_func_capacity * sizeof(char*)); \
                 } \
                 gen->builder_funcs[gen->builder_func_count++] = strdup(_n->value); \
@@ -4555,7 +4555,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         if (!child || child->type != AST_BUILDER_FUNCTION || !child->value) continue;
         if (gen->builder_func_reg_count >= gen->builder_func_reg_capacity) {
             gen->builder_func_reg_capacity = gen->builder_func_reg_capacity ? gen->builder_func_reg_capacity * 2 : 16;
-            gen->builder_funcs_reg = realloc(gen->builder_funcs_reg,
+            gen->builder_funcs_reg = aether_xrealloc(gen->builder_funcs_reg,
                 gen->builder_func_reg_capacity * sizeof(struct BuilderFuncEntry));
         }
         gen->builder_funcs_reg[gen->builder_func_reg_count].name = strdup(child->value);
@@ -5009,7 +5009,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 if (reply_msg) {
                     if (gen->reply_type_count >= gen->reply_type_capacity) {
                         gen->reply_type_capacity = gen->reply_type_capacity ? gen->reply_type_capacity * 2 : 16;
-                        gen->reply_type_map = realloc(gen->reply_type_map,
+                        gen->reply_type_map = aether_xrealloc(gen->reply_type_map,
                             gen->reply_type_capacity * sizeof(*gen->reply_type_map));
                     }
                     gen->reply_type_map[gen->reply_type_count].request_msg = strdup(req_msg);

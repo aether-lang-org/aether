@@ -457,7 +457,7 @@ static Type* parse_type_unsuffixed(Parser* parser) {
                 return NULL;
             }
             tup->tuple_count++;
-            tup->tuple_types = realloc(tup->tuple_types,
+            tup->tuple_types = aether_xrealloc(tup->tuple_types,
                                        (size_t)tup->tuple_count * sizeof(Type*));
             tup->tuple_types[tup->tuple_count - 1] = elem;
 
@@ -615,7 +615,7 @@ static Type* parse_type_unsuffixed(Parser* parser) {
                                 return NULL;
                             }
                             type->param_count++;
-                            type->param_types = realloc(type->param_types,
+                            type->param_types = aether_xrealloc(type->param_types,
                                 (size_t)type->param_count * sizeof(Type*));
                             type->param_types[type->param_count - 1] = p;
                         } while (match_token(parser, TOKEN_COMMA));

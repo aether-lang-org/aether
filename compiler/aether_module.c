@@ -210,7 +210,7 @@ void module_register(AetherModule* module) {
     // Grow array if needed
     if (global_module_registry->module_count >= global_module_registry->module_capacity) {
         int new_capacity = global_module_registry->module_capacity == 0 ? 8 : global_module_registry->module_capacity * 2;
-        AetherModule** new_modules = (AetherModule**)realloc(
+        AetherModule** new_modules = (AetherModule**)aether_xrealloc(
             global_module_registry->modules,
             new_capacity * sizeof(AetherModule*)
         );

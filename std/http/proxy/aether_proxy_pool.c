@@ -19,29 +19,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "../../../runtime/utils/aether_thread.h"
 
 /* ----- helpers exposed to other proxy .c files ----- */
 
 long aether_proxy_now_ms(void) {
-#if defined(_WIN32)
-    /* QPC + frequency table. We compute frequency once in a static
-     * cell. clock_gettime(CLOCK_MONOTONIC) maps to QPC under
-     * MinGW's pthreads-w32 on the test runners we care about, so
-     * fall back to it when present; otherwise inline the QPC. */
-    static LARGE_INTEGER freq = {0};
-    static LARGE_INTEGER first = {0};
-    if (freq.QuadPart == 0) {
-        QueryPerformanceFrequency(&freq);
-        QueryPerformanceCounter(&first);
-    }
-    LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    return (long)((now.QuadPart - first.QuadPart) * 1000LL / freq.QuadPart);
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long)(ts.tv_sec * 1000L + ts.tv_nsec / 1000000L);
-#endif
+    /* Only differences matter here (health-check and breaker timings).
+     * Delegates to the shared monotonic clock so Windows uses the
+     * overflow-free QueryPerformanceCounter split in one place. */
+    return (long)(aether_now_ns() / 1000000ULL);
 }
 
 /* ----- LB algo string mapping ----- */

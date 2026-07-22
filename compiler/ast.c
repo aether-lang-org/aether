@@ -390,6 +390,16 @@ Type* make_string_seq_ptr_type(void) {
     return t;
 }
 
+void* aether_xrealloc(void* ptr, size_t size) {
+    void* grown = realloc(ptr, size);
+    if (!grown && size != 0) {
+        fprintf(stderr, "Fatal: out of memory (requested %zu bytes)\n", size);
+        free(ptr);
+        exit(1);
+    }
+    return grown;
+}
+
 // AST Node functions
 ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int column) {
     ASTNode* node = malloc(sizeof(ASTNode));

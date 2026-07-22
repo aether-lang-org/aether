@@ -242,7 +242,7 @@ static char* derive_header_path(const char* output_path) {
     if (len > 2 && header_path[len-2] == '.' && header_path[len-1] == 'c') {
         header_path[len-1] = 'h';
     } else {
-        header_path = realloc(header_path, len + 3);
+        header_path = aether_xrealloc(header_path, len + 3);
         strcat(header_path, ".h");
     }
     return header_path;
