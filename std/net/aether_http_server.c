@@ -3428,14 +3428,25 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
 // ============================================================================
 // Bounded thread pool for connection handling
 // ============================================================================
-// Replaces thread-per-connection with a fixed pool of worker threads.
-// Connections beyond pool capacity wait in the kernel accept backlog.
-// This prevents unbounded thread creation under load.
+// Replaces thread-per-connection with a bounded pool of worker threads.
+// Connections beyond pool capacity wait in the kernel accept backlog, and
+// the bounded queue applies backpressure to the accept loop rather than
+// buffering client fds without limit.
+//
+// This pool is deliberately NOT the shared std.worker pool, even though
+// both are bounded worker pools. A worker task runs one unit of work and
+// returns; handle_client_connection owns its socket for the whole
+// connection, and with keep-alive enabled (keep_alive_max == 0 meaning
+// unlimited) that is unbounded in time. Routing connections onto the
+// shared pool would let a handful of idle keep-alive clients occupy every
+// thread in it, starving worker.run jobs and HTTP/2 stream dispatch,
+// which share that pool. Separate lifetimes need separate thread budgets.
 
-#if AETHER_HAS_THREADS && !defined(_WIN32)
+#if AETHER_HAS_THREADS
 
-#define HTTP_POOL_WORKERS   8
-#define HTTP_POOL_QUEUE_CAP 256
+#define HTTP_POOL_QUEUE_CAP  256
+#define HTTP_POOL_MIN_WORKERS 8
+#define HTTP_POOL_MAX_WORKERS 64
 
 typedef struct {
     HttpServer* server;
@@ -3445,8 +3456,30 @@ typedef struct {
     pthread_cond_t  not_empty;
     pthread_cond_t  not_full;
     int shutdown;
-    pthread_t workers[HTTP_POOL_WORKERS];
+    int worker_count;                 // threads actually started
+    pthread_t workers[HTTP_POOL_MAX_WORKERS];
 } HttpConnectionPool;
+
+/* Connection handlers block on socket I/O rather than burning CPU, so the
+ * pool is sized above the core count. aether_cpu_detect lives in the
+ * runtime, which the compiler does not link against this file, so the
+ * probe is done directly here. */
+static int http_pool_worker_count(void) {
+    long cores = 0;
+#if defined(_WIN32)
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    cores = (long)si.dwNumberOfProcessors;
+#elif defined(_SC_NPROCESSORS_ONLN)
+    cores = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+    if (cores < 1) cores = 1;
+
+    long want = cores * 2;
+    if (want < HTTP_POOL_MIN_WORKERS) want = HTTP_POOL_MIN_WORKERS;
+    if (want > HTTP_POOL_MAX_WORKERS) want = HTTP_POOL_MAX_WORKERS;
+    return (int)want;
+}
 
 static void* http_pool_worker(void* arg) {
     HttpConnectionPool* pool = (HttpConnectionPool*)arg;
@@ -3477,8 +3510,25 @@ static HttpConnectionPool* http_pool_create(HttpServer* server) {
     pthread_mutex_init(&pool->lock, NULL);
     pthread_cond_init(&pool->not_empty, NULL);
     pthread_cond_init(&pool->not_full, NULL);
-    for (int i = 0; i < HTTP_POOL_WORKERS; i++) {
-        pthread_create(&pool->workers[i], NULL, http_pool_worker, pool);
+
+    int want = http_pool_worker_count();
+    for (int i = 0; i < want; i++) {
+        /* CRITICAL: only count threads that actually started. Joining an
+         * uninitialised pthread_t in http_pool_destroy is undefined
+         * behaviour, so worker_count, not `want`, bounds that loop. */
+        if (pthread_create(&pool->workers[pool->worker_count], NULL,
+                           http_pool_worker, pool) != 0) {
+            break;
+        }
+        pool->worker_count++;
+    }
+
+    if (pool->worker_count == 0) {
+        pthread_mutex_destroy(&pool->lock);
+        pthread_cond_destroy(&pool->not_empty);
+        pthread_cond_destroy(&pool->not_full);
+        free(pool);
+        return NULL;
     }
     return pool;
 }
@@ -3507,7 +3557,7 @@ static void http_pool_destroy(HttpConnectionPool* pool) {
     pthread_cond_broadcast(&pool->not_empty);
     pthread_cond_broadcast(&pool->not_full);
     pthread_mutex_unlock(&pool->lock);
-    for (int i = 0; i < HTTP_POOL_WORKERS; i++) {
+    for (int i = 0; i < pool->worker_count; i++) {
         pthread_join(pool->workers[i], NULL);
     }
     pthread_mutex_destroy(&pool->lock);
@@ -3516,7 +3566,7 @@ static void http_pool_destroy(HttpConnectionPool* pool) {
     free(pool);
 }
 
-#endif // AETHER_HAS_THREADS && !_WIN32
+#endif // AETHER_HAS_THREADS
 
 // ---------------------------------------------------------------------------
 // Accept thread context (one per core in multi-accept mode)
@@ -3782,7 +3832,7 @@ int http_server_start_raw(HttpServer* server) {
             server->on_start(server, server->on_start_user_data);
         }
 
-#if AETHER_HAS_THREADS && !defined(_WIN32)
+#if AETHER_HAS_THREADS
         HttpConnectionPool* pool = http_pool_create(server);
 #endif
 
@@ -3802,16 +3852,20 @@ int http_server_start_raw(HttpServer* server) {
                 continue;
             }
 
-#if !AETHER_HAS_THREADS
-            handle_client_connection(server, client_fd);
-#elif defined(_WIN32)
-            handle_client_connection(server, client_fd);
+#if AETHER_HAS_THREADS
+            /* Pool creation can fail only when no worker thread could be
+             * started; handling inline then is slower but still correct. */
+            if (pool) {
+                http_pool_submit(pool, client_fd);
+            } else {
+                handle_client_connection(server, client_fd);
+            }
 #else
-            http_pool_submit(pool, client_fd);
+            handle_client_connection(server, client_fd);
 #endif
         }
 
-#if AETHER_HAS_THREADS && !defined(_WIN32)
+#if AETHER_HAS_THREADS
         http_pool_destroy(pool);
 #endif
 
