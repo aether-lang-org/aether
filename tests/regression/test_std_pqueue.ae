@@ -1,0 +1,152 @@
+// Regression test for std.pqueue, the binary-heap priority queue.
+//
+// What this test guards:
+//   1. pop() returns entries in ascending priority order
+//   2. Insertion order does not affect the result
+//   3. peek() returns the next item without removing it
+//   4. peek_priority() reports that item's priority
+//   5. Equal priorities are all returned (no entries dropped)
+//   6. pop() on an empty queue returns null, size stays 0
+//   7. clear() empties the queue but leaves it usable
+//   8. Growth past the initial capacity keeps the heap ordered
+//   9. Null-queue calls are safe
+
+import std.pqueue
+import std.string
+
+extern exit(code: int)
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+expect_pop(q: ptr, want: string) {
+    got = pqueue.pop(q)
+    if got != want {
+        fail("expected ${want}, got ${got}")
+    }
+}
+
+main() {
+    q = pqueue.new()
+    if q == null {
+        fail("pqueue.new returned null")
+    }
+
+    // 1 + 2. Ascending order regardless of insertion order.
+    pqueue.push(q, 5, "deploy")
+    pqueue.push(q, 1, "compile")
+    pqueue.push(q, 3, "test")
+    pqueue.push(q, 2, "lint")
+    if pqueue.size(q) != 4 {
+        fail("expected size 4 after 4 pushes")
+    }
+
+    // 3 + 4. peek does not consume.
+    if pqueue.peek(q) != "compile" {
+        fail("peek should return the lowest-priority item")
+    }
+    if pqueue.peek_priority(q) != 1 {
+        fail("peek_priority should be 1")
+    }
+    if pqueue.size(q) != 4 {
+        fail("peek must not remove the entry")
+    }
+    println("PASS 3+4: peek reports the next item without consuming it")
+
+    expect_pop(q, "compile")
+    expect_pop(q, "lint")
+    expect_pop(q, "test")
+    expect_pop(q, "deploy")
+    println("PASS 1+2: pop returns ascending priority regardless of push order")
+
+    // 5. Equal priorities: every entry comes back.
+    pqueue.push(q, 7, "a")
+    pqueue.push(q, 7, "b")
+    pqueue.push(q, 7, "c")
+    if pqueue.size(q) != 3 {
+        fail("equal priorities must not collapse entries")
+    }
+    pqueue.pop(q)
+    pqueue.pop(q)
+    pqueue.pop(q)
+    if pqueue.size(q) != 0 {
+        fail("all equal-priority entries should pop")
+    }
+    println("PASS 5: equal priorities all returned")
+
+    // 6. Empty queue behaviour.
+    if pqueue.pop(q) != null {
+        fail("pop on empty queue should return null")
+    }
+    if pqueue.peek(q) != null {
+        fail("peek on empty queue should return null")
+    }
+    if pqueue.is_empty(q) != true {
+        fail("is_empty should be true on an empty queue")
+    }
+    if pqueue.size(q) != 0 {
+        fail("size should stay 0 on empty pops")
+    }
+    println("PASS 6: empty queue returns null without corrupting size")
+
+    // 7. clear leaves the queue usable.
+    pqueue.push(q, 1, "x")
+    pqueue.push(q, 2, "y")
+    pqueue.clear(q)
+    if pqueue.size(q) != 0 {
+        fail("size should be 0 after clear")
+    }
+    pqueue.push(q, 9, "after-clear")
+    if pqueue.peek(q) != "after-clear" {
+        fail("queue should still be usable after clear")
+    }
+    pqueue.clear(q)
+    println("PASS 7: clear empties but keeps the queue usable")
+
+    // 8. Growth past the initial capacity (16) stays ordered.
+    // Push descending priorities so every insert sifts to the root.
+    i = 40
+    while i > 0 {
+        pqueue.push(q, i, string.from_int(i))
+        i = i - 1
+    }
+    if pqueue.size(q) != 40 {
+        n = pqueue.size(q)
+        fail("expected 40 entries after growth, got ${n}")
+    }
+    long prev = 0
+    while pqueue.size(q) > 0 {
+        p = pqueue.peek_priority(q)
+        if p < prev {
+            fail("heap order violated after growth: ${p} came after ${prev}")
+        }
+        prev = p
+        // The queue never owns its items, so the strings pushed above
+        // are released here by the caller that allocated them.
+        item = pqueue.pop(q)
+        string.free(item)
+    }
+    println("PASS 8: growth past initial capacity preserves heap order")
+
+    // 9. Null-queue calls are safe.
+    if pqueue.size(null) != 0 {
+        fail("size(null) should be 0")
+    }
+    if pqueue.pop(null) != null {
+        fail("pop(null) should be null")
+    }
+    if pqueue.peek(null) != null {
+        fail("peek(null) should be null")
+    }
+    if pqueue.is_empty(null) != true {
+        fail("is_empty(null) should be true")
+    }
+    pqueue.clear(null)
+    pqueue.free(null)
+    println("PASS 9: null-queue calls are safe")
+
+    pqueue.free(q)
+    println("=== All cases passed ===")
+}

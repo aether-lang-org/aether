@@ -1,0 +1,74 @@
+// Set and PriorityQueue - deduplicating and ordering work
+// Run with: ae run examples/stdlib/set-and-pqueue.ae
+//
+// std.set  : unordered collection of unique strings, O(1) average lookup
+// std.pqueue: (priority, item) queue, lowest priority value comes out first
+
+import std.set
+import std.pqueue
+import std.string
+
+main() {
+    print("=== std.set ===\n\n")
+
+    // A set answers "have I already seen this?" without a manual scan.
+    visited = set.new()
+    defer set.free(visited)
+
+    urls = "/index /about /index /contact /about"
+    print("  crawling: ${urls}\n")
+
+    added_index = set.add(visited, "/index")
+    dup_index   = set.add(visited, "/index")
+    set.add(visited, "/about")
+    set.add(visited, "/contact")
+
+    print("  first add of /index returned  : ${added_index}\n")
+    print("  second add of /index returned : ${dup_index}\n")
+    print("  unique pages visited          : ${set.size(visited)}\n")
+
+    seen_about = set.contains(visited, "/about")
+    seen_admin = set.contains(visited, "/admin")
+    print("  visited /about?               : ${seen_about}\n")
+    print("  visited /admin?               : ${seen_admin}\n")
+
+    set.remove(visited, "/about")
+    print("  after removing /about, size   : ${set.size(visited)}\n")
+
+    print("\n=== std.pqueue ===\n\n")
+
+    // A priority queue runs work in importance order rather than
+    // arrival order. Lower numbers run first.
+    jobs = pqueue.new()
+    defer pqueue.free(jobs)
+
+    pqueue.push(jobs, 30, "send newsletter")
+    pqueue.push(jobs, 10, "restore backup")
+    pqueue.push(jobs, 20, "rebuild index")
+    pqueue.push(jobs, 5,  "page on-call")
+
+    print("  queued ${pqueue.size(jobs)} jobs out of order\n")
+    next_job = pqueue.peek(jobs)
+    next_pri = pqueue.peek_priority(jobs)
+    print("  next up: ${next_job} (priority ${next_pri})\n\n")
+
+    print("  draining in priority order:\n")
+    while pqueue.size(jobs) > 0 {
+        priority = pqueue.peek_priority(jobs)
+        job = pqueue.pop(jobs)
+        print("    [${priority}] ${job}\n")
+    }
+
+    empty = pqueue.is_empty(jobs)
+    print("\n  queue empty: ${empty}\n")
+
+    // The queue holds item pointers without owning them, so anything
+    // heap allocated is still yours to release after popping.
+    owned = pqueue.new()
+    defer pqueue.free(owned)
+    label = string.concat("build-", "artifact")
+    pqueue.push(owned, 1, label)
+    popped = pqueue.pop(owned)
+    string.free(popped)
+    print("  caller-owned item released after pop\n")
+}

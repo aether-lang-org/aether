@@ -1436,10 +1436,14 @@ found_root:
                 "%s/std/fs/aether_fs.c "
                 "%s/std/log/aether_log.c "
                 "%s/std/os/aether_os.c "
-                "%s/std/collections/aether_hashmap.c "
                 "%s/std/collections/aether_set.c "
-                "%s/std/collections/aether_vector.c "
-                "%s/std/collections/aether_pqueue.c",
+                "%s/std/collections/aether_pqueue.c "
+                "%s/std/collections/aether_intarr.c "
+                "%s/std/collections/aether_floatarr.c "
+                "%s/std/collections/aether_longarr.c "
+                "%s/std/collections/aether_bits.c "
+                "%s/std/collections/aether_stringlist.c "
+                "%s/std/collections/aether_stringseq.c",
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
@@ -1447,7 +1451,8 @@ found_root:
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
-                tc.root, tc.root);
+                tc.root, tc.root, tc.root, tc.root, tc.root,
+                tc.root);
         }
     } else {
         // Installed layout: headers in include/aether/, source in
@@ -1510,10 +1515,14 @@ found_root:
                 "%s/std/fs/aether_fs.c "
                 "%s/std/log/aether_log.c "
                 "%s/std/os/aether_os.c "
-                "%s/std/collections/aether_hashmap.c "
                 "%s/std/collections/aether_set.c "
-                "%s/std/collections/aether_vector.c "
-                "%s/std/collections/aether_pqueue.c",
+                "%s/std/collections/aether_pqueue.c "
+                "%s/std/collections/aether_intarr.c "
+                "%s/std/collections/aether_floatarr.c "
+                "%s/std/collections/aether_longarr.c "
+                "%s/std/collections/aether_bits.c "
+                "%s/std/collections/aether_stringlist.c "
+                "%s/std/collections/aether_stringseq.c",
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
@@ -1521,7 +1530,8 @@ found_root:
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
-                src, src);
+                src, src, src, src, src,
+                src);
         }
     }
 }
@@ -2447,10 +2457,14 @@ static int build_wasm_cmd(char* cmd, size_t size,
         "std/log/aether_log.c",
         "std/io/aether_io.c",
         "std/os/aether_os.c",
-        "std/collections/aether_hashmap.c",
         "std/collections/aether_set.c",
-        "std/collections/aether_vector.c",
         "std/collections/aether_pqueue.c",
+        "std/collections/aether_intarr.c",
+        "std/collections/aether_floatarr.c",
+        "std/collections/aether_longarr.c",
+        "std/collections/aether_bits.c",
+        "std/collections/aether_stringlist.c",
+        "std/collections/aether_stringseq.c",
         NULL
     };
     char runtime[8192];

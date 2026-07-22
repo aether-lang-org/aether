@@ -377,7 +377,7 @@ STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.
 # because aetherc does not link the runtime scheduler, but included in
 # libaether.a and user programs where the runtime is present.
 STD_REACTOR_SRC = std/net/aether_actor_bridge.c
-COLLECTIONS_SRC = std/collections/aether_hashmap.c std/collections/aether_set.c std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_floatarr.c std/collections/aether_longarr.c std/collections/aether_bits.c std/collections/aether_stringlist.c std/collections/aether_stringseq.c
+COLLECTIONS_SRC = std/collections/aether_set.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_floatarr.c std/collections/aether_longarr.c std/collections/aether_bits.c std/collections/aether_stringlist.c std/collections/aether_stringseq.c
 
 # I/O poller backends (needed by both compiler and runtime targets)
 IO_POLLER_SRC = runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c
@@ -844,7 +844,7 @@ test-release-archive: compiler ae stdlib
 	done && \
 	cp -r runtime "$$reldir/share/aether/" && \
 	cp -r std     "$$reldir/share/aether/" && \
-	rm -rf "$$reldir/share/aether/runtime/examples" "$$reldir/share/aether/runtime/io" && \
+	rm -rf "$$reldir/share/aether/runtime/examples" && \
 	echo "  Created release layout in $$reldir" && \
 	echo "  Packing tarball..." && \
 	(cd "$$reldir" && tar -czf "$$tmpdir/aether-test.tar.gz" *) && \
@@ -2233,8 +2233,8 @@ ci-wasm: clean compiler ae
 		std/net/aether_http_server.c std/net/aether_net.c std/net/aether_actor_bridge.c \
 		std/collections/aether_collections.c \
 		std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c \
-		std/os/aether_os.c std/collections/aether_hashmap.c std/collections/aether_set.c \
-		std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_longarr.c std/collections/aether_bits.c \
+		std/os/aether_os.c \
+		std/collections/aether_set.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_longarr.c std/collections/aether_bits.c \
 		runtime/sandbox/capsicum_autosandbox.c"; \
 	for src in build/wasm/hello.c build/wasm/counter.c build/wasm/test_platform_caps.c \
 	           build/wasm/test_coop_chain.c; do \

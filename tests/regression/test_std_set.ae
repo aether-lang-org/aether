@@ -1,0 +1,120 @@
+// Regression test for std.set, the unordered set of unique strings
+// backed by the std.map hash table.
+//
+// What this test guards:
+//   1. add() reports true the first time and false for a duplicate
+//   2. size() counts unique items only
+//   3. contains() reports membership accurately
+//   4. remove() drops an item; removing an absent item is a no-op
+//   5. clear() empties the set but leaves it usable
+//   6. items() snapshots the members
+//   7. Keys are copied on insert, so a mutated source buffer does not
+//      corrupt the set
+//   8. Null-set calls are safe and report empty rather than crashing
+
+import std.set
+import std.string
+
+extern exit(code: int)
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    s = set.new()
+    if s == null {
+        fail("set.new returned null")
+    }
+
+    // 1. add reports insertion vs duplicate
+    if set.add(s, "alpha") != true {
+        fail("first add of alpha should report true")
+    }
+    if set.add(s, "alpha") != false {
+        fail("duplicate add of alpha should report false")
+    }
+    println("PASS 1: add distinguishes new from duplicate")
+
+    // 2. size counts unique items
+    set.add(s, "beta")
+    set.add(s, "gamma")
+    if set.size(s) != 3 {
+        n = set.size(s)
+        fail("expected size 3 after 3 unique adds, got ${n}")
+    }
+    println("PASS 2: size counts unique items")
+
+    // 3. contains
+    if set.contains(s, "beta") != true {
+        fail("contains(beta) should be true")
+    }
+    if set.contains(s, "missing") != false {
+        fail("contains(missing) should be false")
+    }
+    println("PASS 3: contains reports membership")
+
+    // 4. remove, including the absent case
+    set.remove(s, "beta")
+    if set.contains(s, "beta") != false {
+        fail("beta should be gone after remove")
+    }
+    if set.size(s) != 2 {
+        fail("size should drop to 2 after remove")
+    }
+    set.remove(s, "never-present")
+    if set.size(s) != 2 {
+        fail("removing an absent item must not change size")
+    }
+    println("PASS 4: remove drops members and ignores absent ones")
+
+    // 5. clear leaves the set usable
+    set.clear(s)
+    if set.size(s) != 0 {
+        fail("size should be 0 after clear")
+    }
+    set.add(s, "after-clear")
+    if set.contains(s, "after-clear") != true {
+        fail("set should still be usable after clear")
+    }
+    println("PASS 5: clear empties but keeps the set usable")
+
+    // 6. items snapshot
+    set.clear(s)
+    set.add(s, "one")
+    set.add(s, "two")
+    snap, err = set.items(s)
+    if err != "" {
+        fail("set.items returned error: ${err}")
+    }
+    if snap == null {
+        fail("set.items returned null snapshot")
+    }
+    set.items_free(snap)
+    println("PASS 6: items snapshots the members")
+
+    // 7. keys are copied, not aliased
+    set.clear(s)
+    key = string.concat("dyn", "amic")
+    set.add(s, key)
+    if set.contains(s, "dynamic") != true {
+        fail("set should contain the copied key")
+    }
+    println("PASS 7: keys are copied on insert")
+
+    // 8. null-set calls are safe
+    if set.size(null) != 0 {
+        fail("size(null) should be 0")
+    }
+    if set.contains(null, "x") != false {
+        fail("contains(null) should be false")
+    }
+    set.remove(null, "x")
+    set.clear(null)
+    set.free(null)
+    println("PASS 8: null-set calls are safe")
+
+    set.free(s)
+    println("=== All cases passed ===")
+}
