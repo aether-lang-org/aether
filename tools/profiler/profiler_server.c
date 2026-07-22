@@ -345,31 +345,14 @@ MetricsSnapshot profiler_get_current_metrics() {
     metrics.total_messages_processed = g_profiler.total_messages_processed;
     metrics.active_actors = g_profiler.active_actors_count;
 
-    /* Measured over the retained event ring: each PROCESSED event is paired
-     * with the most recent preceding SENT event addressed to the same actor,
-     * and the mean of those intervals is reported. Events carry no message
-     * id, so this is a per-actor FIFO approximation rather than exact
-     * per-message latency; it is 0 when the ring holds no such pair.
-     * It previously reported a hardcoded 0.5, which read as a real
-     * measurement of the user's program. */
-    double latency_total = 0.0;
-    int    latency_pairs = 0;
-    for (int i = 0; i < g_profiler.event_count; i++) {
-        const ProfilerEvent* done = &g_profiler.events[i];
-        if (done->type != PROF_EVENT_ACTOR_MESSAGE_PROCESSED) continue;
-        for (int j = i - 1; j >= 0; j--) {
-            const ProfilerEvent* sent = &g_profiler.events[j];
-            if (sent->type != PROF_EVENT_ACTOR_MESSAGE_SENT) continue;
-            if (sent->target_actor_id != done->actor_id) continue;
-            if (done->timestamp_ms >= sent->timestamp_ms) {
-                latency_total += done->timestamp_ms - sent->timestamp_ms;
-                latency_pairs++;
-            }
-            break;
-        }
-    }
-    metrics.avg_message_latency_ms =
-        latency_pairs ? latency_total / (double)latency_pairs : 0.0;
+    /* Not instrumented. Events carry no message id, so a SENT event cannot
+     * be matched to the PROCESSED event it caused; any pairing would be an
+     * invented approximation, and scanning the ring on every poll would be
+     * quadratic while holding this mutex. Reported as zero so the dashboard
+     * cannot present a guess as a measurement. It previously returned a
+     * hardcoded 0.5, which read as the user's real latency. Instrumenting
+     * this needs a correlation id on the event, not a cleverer reader. */
+    metrics.avg_message_latency_ms = 0.0;
     pthread_mutex_unlock(&g_profiler.event_mutex);
 
     metrics.timestamp_ms = get_current_time_ms() - g_profiler.start_time_ms;
