@@ -873,12 +873,18 @@ static bool is_safe_path(const char* path) {
     return true;
 }
 
+/* True when `path` names an existing regular file. Every caller probes
+ * for a file (a compiler binary, a library, a source), and pairs this
+ * with dir_exists where a directory is meant. The POSIX branch used
+ * access(F_OK), which also succeeds for directories, so the same probe
+ * answered differently per platform; both now mean "regular file". */
 static bool path_exists(const char* path) {
 #ifdef _WIN32
     DWORD attrs = GetFileAttributesA(path);
     return (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY));
 #else
-    return access(path, F_OK) == 0;
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 #endif
 }
 
