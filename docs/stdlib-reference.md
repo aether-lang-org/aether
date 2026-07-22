@@ -170,6 +170,89 @@ main() {
 
 Raw extern: `map_put_raw` (returns 1/0).
 
+### Set (`std.set`)
+
+Unordered collection of unique strings, backed by the same hash table as
+`std.map`, so lookups are O(1) on average. Items are copied on insert, so
+the caller's string lifetime does not matter.
+
+```aether
+import std.set
+
+main() {
+    visited = set.new()
+    defer set.free(visited)
+
+    set.add(visited, "/index")          // true, newly added
+    set.add(visited, "/index")          // false, already present
+    set.add(visited, "/about")
+
+    if set.contains(visited, "/about") {
+        println("pages: ${set.size(visited)}")
+    }
+
+    set.remove(visited, "/about")
+}
+```
+
+**Functions:**
+- `set.new()` → `ptr` - Create a new set (null on allocation failure)
+- `set.add(set, item)` → `bool` - True if added, false if already present or the insert failed
+- `set.contains(set, item)` → `bool` - Membership test
+- `set.remove(set, item)` - Drop an item; absent items are ignored
+- `set.size(set)` → `int` - Number of unique items
+- `set.clear(set)` - Drop every item, keeping the set usable
+- `set.free(set)` - Release the set (items were copied in, nothing else to free)
+- `set.items(set)` → `(ptr, string)` - Snapshot of the items in unspecified order; release with `set.items_free`
+- `set.items_free(items)` - Release a snapshot from `set.items`
+
+Calls on a null set are safe: `size` reports 0, `contains` reports false.
+
+Raw externs are the `aether_set_*` entry points, which return C-style ints.
+
+### Priority queue (`std.pqueue`)
+
+Binary heap over `(priority, item)` pairs. The lowest priority value comes
+out first; negate the priority for highest-first. Push and pop are
+O(log n); peek and size are O(1).
+
+The queue stores item pointers **without taking ownership**: it never frees
+them, so heap items you push remain yours to release.
+
+```aether
+import std.pqueue
+
+main() {
+    jobs = pqueue.new()
+    defer pqueue.free(jobs)
+
+    pqueue.push(jobs, 30, "send newsletter")
+    pqueue.push(jobs, 5,  "page on-call")
+    pqueue.push(jobs, 20, "rebuild index")
+
+    while pqueue.size(jobs) > 0 {
+        priority = pqueue.peek_priority(jobs)
+        job = pqueue.pop(jobs)
+        println("[${priority}] ${job}")     // 5, 20, 30
+    }
+}
+```
+
+**Functions:**
+- `pqueue.new()` → `ptr` - Create a new queue (null on allocation failure)
+- `pqueue.push(pq, priority, item)` → `bool` - Enqueue; false on a null queue or allocation failure
+- `pqueue.pop(pq)` → `ptr` - Remove and return the lowest-priority item, null when empty
+- `pqueue.peek(pq)` → `ptr` - Next item without removing it, null when empty
+- `pqueue.peek_priority(pq)` → `long` - Priority of the item `peek` would return (0 when empty)
+- `pqueue.size(pq)` → `int` - Number of queued entries
+- `pqueue.is_empty(pq)` → `bool` - True when nothing is queued
+- `pqueue.clear(pq)` - Drop every entry, keeping the queue usable (items are not freed)
+- `pqueue.free(pq)` - Release the queue (items were never owned by it)
+
+Calls on a null queue are safe: `size` reports 0, `pop` and `peek` return null.
+
+Raw externs are the `aether_pqueue_*` entry points, which return C-style ints.
+
 ### Fixed-size int array (`std.intarr`)
 
 Packed int buffer with O(1) random access. For DP tables, flat

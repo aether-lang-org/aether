@@ -55,7 +55,9 @@
     <li><a href="net.html">net</a></li>
     <li><a href="os.html">os</a></li>
     <li><a href="path.html">path</a></li>
+    <li><a href="pqueue.html">pqueue</a></li>
     <li><a href="regex.html">regex</a></li>
+    <li><a href="set.html">set</a></li>
     <li><a href="signal.html">signal</a></li>
     <li><a href="snapshot.html">snapshot</a></li>
     <li><a href="sort.html">sort</a></li>
@@ -279,10 +281,20 @@
       <p>std.path - Path Utilities (alias for std.fs) This is a convenience module that re-exports path functions from std.fs.</p>
       <span class="count">2 exports</span>
     </a>
+    <a href="pqueue.html" class="module-card">
+      <h3>pqueue</h3>
+      <p>std.pqueue - priority queue over (priority, item) pairs Backed by a binary heap: push and pop are O(log n), peek and size are O(1).</p>
+      <span class="count">18 exports</span>
+    </a>
     <a href="regex.html" class="module-card">
       <h3>regex</h3>
       <p>std.regex — Perl-compatible regular expressions (PCRE2-backed).</p>
       <span class="count">45 exports</span>
+    </a>
+    <a href="set.html" class="module-card">
+      <h3>set</h3>
+      <p>std.set - unordered set of unique strings Backed by the same hash table as std.map, so lookups are O(1) on average and items are copied on insert (the caller's string lifetime does not matter).</p>
+      <span class="count">18 exports</span>
     </a>
     <a href="signal.html" class="module-card">
       <h3>signal</h3>
@@ -1306,6 +1318,24 @@
       <li class="function-item" data-name="getcwd"><a href="os.html#getcwd"><span class="fn-name">getcwd</span><span class="fn-module">os</span></a></li>
       <li class="function-item" data-name="this"><a href="path.html#this"><span class="fn-name">this</span><span class="fn-module">path</span></a></li>
       <li class="function-item" data-name="module"><a href="path.html#module"><span class="fn-name">module</span><span class="fn-module">path</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_new"><a href="pqueue.html#aether_pqueue_new"><span class="fn-name">aether_pqueue_new</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_push"><a href="pqueue.html#aether_pqueue_push"><span class="fn-name">aether_pqueue_push</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_pop"><a href="pqueue.html#aether_pqueue_pop"><span class="fn-name">aether_pqueue_pop</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_peek"><a href="pqueue.html#aether_pqueue_peek"><span class="fn-name">aether_pqueue_peek</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_peek_priority"><a href="pqueue.html#aether_pqueue_peek_priority"><span class="fn-name">aether_pqueue_peek_priority</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_size"><a href="pqueue.html#aether_pqueue_size"><span class="fn-name">aether_pqueue_size</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_is_empty"><a href="pqueue.html#aether_pqueue_is_empty"><span class="fn-name">aether_pqueue_is_empty</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_clear"><a href="pqueue.html#aether_pqueue_clear"><span class="fn-name">aether_pqueue_clear</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="aether_pqueue_free"><a href="pqueue.html#aether_pqueue_free"><span class="fn-name">aether_pqueue_free</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="new"><a href="pqueue.html#new"><span class="fn-name">new</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="push"><a href="pqueue.html#push"><span class="fn-name">push</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="pop"><a href="pqueue.html#pop"><span class="fn-name">pop</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="peek"><a href="pqueue.html#peek"><span class="fn-name">peek</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="peek_priority"><a href="pqueue.html#peek_priority"><span class="fn-name">peek_priority</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="size"><a href="pqueue.html#size"><span class="fn-name">size</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="is_empty"><a href="pqueue.html#is_empty"><span class="fn-name">is_empty</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="clear"><a href="pqueue.html#clear"><span class="fn-name">clear</span><span class="fn-module">pqueue</span></a></li>
+      <li class="function-item" data-name="free"><a href="pqueue.html#free"><span class="fn-name">free</span><span class="fn-module">pqueue</span></a></li>
       <li class="function-item" data-name="aether_regex_compile"><a href="regex.html#aether_regex_compile"><span class="fn-name">aether_regex_compile</span><span class="fn-module">regex</span></a></li>
       <li class="function-item" data-name="aether_regex_free"><a href="regex.html#aether_regex_free"><span class="fn-name">aether_regex_free</span><span class="fn-module">regex</span></a></li>
       <li class="function-item" data-name="aether_regex_matches"><a href="regex.html#aether_regex_matches"><span class="fn-name">aether_regex_matches</span><span class="fn-module">regex</span></a></li>
@@ -1351,6 +1381,24 @@
       <li class="function-item" data-name="FLAG_DOTALL"><a href="regex.html#FLAG_DOTALL"><span class="fn-name">FLAG_DOTALL</span><span class="fn-module">regex</span></a></li>
       <li class="function-item" data-name="FLAG_EXTENDED"><a href="regex.html#FLAG_EXTENDED"><span class="fn-name">FLAG_EXTENDED</span><span class="fn-module">regex</span></a></li>
       <li class="function-item" data-name="FLAG_UNGREEDY"><a href="regex.html#FLAG_UNGREEDY"><span class="fn-name">FLAG_UNGREEDY</span><span class="fn-module">regex</span></a></li>
+      <li class="function-item" data-name="aether_set_new"><a href="set.html#aether_set_new"><span class="fn-name">aether_set_new</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="aether_set_add"><a href="set.html#aether_set_add"><span class="fn-name">aether_set_add</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="aether_set_has"><a href="set.html#aether_set_has"><span class="fn-name">aether_set_has</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="aether_set_remove"><a href="set.html#aether_set_remove"><span class="fn-name">aether_set_remove</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="aether_set_size"><a href="set.html#aether_set_size"><span class="fn-name">aether_set_size</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="aether_set_clear"><a href="set.html#aether_set_clear"><span class="fn-name">aether_set_clear</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="aether_set_free"><a href="set.html#aether_set_free"><span class="fn-name">aether_set_free</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="aether_set_items_raw"><a href="set.html#aether_set_items_raw"><span class="fn-name">aether_set_items_raw</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="aether_set_items_free"><a href="set.html#aether_set_items_free"><span class="fn-name">aether_set_items_free</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="new"><a href="set.html#new"><span class="fn-name">new</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="add"><a href="set.html#add"><span class="fn-name">add</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="contains"><a href="set.html#contains"><span class="fn-name">contains</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="remove"><a href="set.html#remove"><span class="fn-name">remove</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="size"><a href="set.html#size"><span class="fn-name">size</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="clear"><a href="set.html#clear"><span class="fn-name">clear</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="free"><a href="set.html#free"><span class="fn-name">free</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="items"><a href="set.html#items"><span class="fn-name">items</span><span class="fn-module">set</span></a></li>
+      <li class="function-item" data-name="items_free"><a href="set.html#items_free"><span class="fn-name">items_free</span><span class="fn-module">set</span></a></li>
       <li class="function-item" data-name="SIGHUP"><a href="signal.html#SIGHUP"><span class="fn-name">SIGHUP</span><span class="fn-module">signal</span></a></li>
       <li class="function-item" data-name="SIGINT"><a href="signal.html#SIGINT"><span class="fn-name">SIGINT</span><span class="fn-module">signal</span></a></li>
       <li class="function-item" data-name="SIGQUIT"><a href="signal.html#SIGQUIT"><span class="fn-name">SIGQUIT</span><span class="fn-module">signal</span></a></li>

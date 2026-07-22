@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>set - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search set..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_set_new">aether_set_new</a></li>
+    <li><a href="#aether_set_add">aether_set_add</a></li>
+    <li><a href="#aether_set_has">aether_set_has</a></li>
+    <li><a href="#aether_set_remove">aether_set_remove</a></li>
+    <li><a href="#aether_set_size">aether_set_size</a></li>
+    <li><a href="#aether_set_clear">aether_set_clear</a></li>
+    <li><a href="#aether_set_free">aether_set_free</a></li>
+    <li><a href="#aether_set_items_raw">aether_set_items_raw</a></li>
+    <li><a href="#aether_set_items_free">aether_set_items_free</a></li>
+    <li><a href="#new">new</a></li>
+    <li><a href="#add">add</a></li>
+    <li><a href="#contains">contains</a></li>
+    <li><a href="#remove">remove</a></li>
+    <li><a href="#size">size</a></li>
+    <li><a href="#clear">clear</a></li>
+    <li><a href="#free">free</a></li>
+    <li><a href="#items">items</a></li>
+    <li><a href="#items_free">items_free</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audio.html">audio</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="pqueue.html">pqueue</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li class="active"><a href="set.html">set</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="worker.html">worker</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>set</h1>
+    <p class="module-desc">std.set - unordered set of unique strings Backed by the same hash table as std.map, so lookups are O(1) on average and items are copied on insert (the caller's string lifetime does not matter).</p>
+    <p class="import-line"><code>import std.set</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_set_new" data-name="aether_set_new">
+      <h3 class="function-name">aether_set_new <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_new() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">---- raw externs (std/collections/aether_set.c) ----</p>
+    </div>
+    <div class="function" id="aether_set_add" data-name="aether_set_add">
+      <h3 class="function-name">aether_set_add <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_add(set, item) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr, item: string</span></p>
+    </div>
+    <div class="function" id="aether_set_has" data-name="aether_set_has">
+      <h3 class="function-name">aether_set_has <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_has(set, item) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr, item: string</span></p>
+    </div>
+    <div class="function" id="aether_set_remove" data-name="aether_set_remove">
+      <h3 class="function-name">aether_set_remove <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_remove(set, item)</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr, item: string</span></p>
+    </div>
+    <div class="function" id="aether_set_size" data-name="aether_set_size">
+      <h3 class="function-name">aether_set_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_size(set) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr</span></p>
+    </div>
+    <div class="function" id="aether_set_clear" data-name="aether_set_clear">
+      <h3 class="function-name">aether_set_clear <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_clear(set)</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr</span></p>
+    </div>
+    <div class="function" id="aether_set_free" data-name="aether_set_free">
+      <h3 class="function-name">aether_set_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_free(set)</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr</span></p>
+    </div>
+    <div class="function" id="aether_set_items_raw" data-name="aether_set_items_raw">
+      <h3 class="function-name">aether_set_items_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_items_raw(set) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr</span></p>
+    </div>
+    <div class="function" id="aether_set_items_free" data-name="aether_set_items_free">
+      <h3 class="function-name">aether_set_items_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_set_items_free(items)</code></pre>
+      <p class="signature"><span class="sig-params">items: ptr</span></p>
+    </div>
+    <div class="function" id="new" data-name="new">
+      <h3 class="function-name">new <span class="kind">fn</span></h3>
+      <pre class="usage"><code>new() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">Create an empty set. Returns null on allocation failure.</p>
+    </div>
+    <div class="function" id="add" data-name="add">
+      <h3 class="function-name">add <span class="kind">fn</span></h3>
+      <pre class="usage"><code>add(set, item) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr, item: string</span></p>
+      <p class="doc">Insert `item`. Returns true if it was added, false if it was already present or the insert failed.</p>
+    </div>
+    <div class="function" id="contains" data-name="contains">
+      <h3 class="function-name">contains <span class="kind">fn</span></h3>
+      <pre class="usage"><code>contains(set, item) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr, item: string</span></p>
+      <p class="doc">True when `item` is in the set.</p>
+    </div>
+    <div class="function" id="remove" data-name="remove">
+      <h3 class="function-name">remove <span class="kind">fn</span></h3>
+      <pre class="usage"><code>remove(set, item)</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr, item: string</span></p>
+      <p class="doc">Drop `item`. Absent items are ignored.</p>
+    </div>
+    <div class="function" id="size" data-name="size">
+      <h3 class="function-name">size <span class="kind">fn</span></h3>
+      <pre class="usage"><code>size(set) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr</span></p>
+      <p class="doc">Number of items currently in the set.</p>
+    </div>
+    <div class="function" id="clear" data-name="clear">
+      <h3 class="function-name">clear <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clear(set)</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr</span></p>
+      <p class="doc">Drop every item, keeping the set usable.</p>
+    </div>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">fn</span></h3>
+      <pre class="usage"><code>free(set)</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr</span></p>
+      <p class="doc">Release the set. Items were copied in, so nothing else needs freeing.</p>
+    </div>
+    <div class="function" id="items" data-name="items">
+      <h3 class="function-name">items <span class="kind">fn</span></h3>
+      <pre class="usage"><code>items(set) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">set: ptr</span></p>
+      <p class="doc">Snapshot the set's items, in unspecified order. Returns (MapKeys ptr, &quot;&quot;) on success, (null, error) otherwise. The snapshot is released with `set.items_free`.</p>
+    </div>
+    <div class="function" id="items_free" data-name="items_free">
+      <h3 class="function-name">items_free <span class="kind">fn</span></h3>
+      <pre class="usage"><code>items_free(items)</code></pre>
+      <p class="signature"><span class="sig-params">items: ptr</span></p>
+      <p class="doc">Release a snapshot returned by `set.items`.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

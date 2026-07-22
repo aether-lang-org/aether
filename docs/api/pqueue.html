@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pqueue - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search pqueue..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_pqueue_new">aether_pqueue_new</a></li>
+    <li><a href="#aether_pqueue_push">aether_pqueue_push</a></li>
+    <li><a href="#aether_pqueue_pop">aether_pqueue_pop</a></li>
+    <li><a href="#aether_pqueue_peek">aether_pqueue_peek</a></li>
+    <li><a href="#aether_pqueue_peek_priority">aether_pqueue_peek_priority</a></li>
+    <li><a href="#aether_pqueue_size">aether_pqueue_size</a></li>
+    <li><a href="#aether_pqueue_is_empty">aether_pqueue_is_empty</a></li>
+    <li><a href="#aether_pqueue_clear">aether_pqueue_clear</a></li>
+    <li><a href="#aether_pqueue_free">aether_pqueue_free</a></li>
+    <li><a href="#new">new</a></li>
+    <li><a href="#push">push</a></li>
+    <li><a href="#pop">pop</a></li>
+    <li><a href="#peek">peek</a></li>
+    <li><a href="#peek_priority">peek_priority</a></li>
+    <li><a href="#size">size</a></li>
+    <li><a href="#is_empty">is_empty</a></li>
+    <li><a href="#clear">clear</a></li>
+    <li><a href="#free">free</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audio.html">audio</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li class="active"><a href="pqueue.html">pqueue</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="set.html">set</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="worker.html">worker</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>pqueue</h1>
+    <p class="module-desc">std.pqueue - priority queue over (priority, item) pairs Backed by a binary heap: push and pop are O(log n), peek and size are O(1).</p>
+    <p class="import-line"><code>import std.pqueue</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_pqueue_new" data-name="aether_pqueue_new">
+      <h3 class="function-name">aether_pqueue_new <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_new() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">---- raw externs (std/collections/aether_pqueue.c) ----</p>
+    </div>
+    <div class="function" id="aether_pqueue_push" data-name="aether_pqueue_push">
+      <h3 class="function-name">aether_pqueue_push <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_push(pq, priority, item) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr, priority: long, item: ptr</span></p>
+    </div>
+    <div class="function" id="aether_pqueue_pop" data-name="aether_pqueue_pop">
+      <h3 class="function-name">aether_pqueue_pop <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_pop(pq) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+    </div>
+    <div class="function" id="aether_pqueue_peek" data-name="aether_pqueue_peek">
+      <h3 class="function-name">aether_pqueue_peek <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_peek(pq) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+    </div>
+    <div class="function" id="aether_pqueue_peek_priority" data-name="aether_pqueue_peek_priority">
+      <h3 class="function-name">aether_pqueue_peek_priority <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_peek_priority(pq) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+    </div>
+    <div class="function" id="aether_pqueue_size" data-name="aether_pqueue_size">
+      <h3 class="function-name">aether_pqueue_size <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_size(pq) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+    </div>
+    <div class="function" id="aether_pqueue_is_empty" data-name="aether_pqueue_is_empty">
+      <h3 class="function-name">aether_pqueue_is_empty <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_is_empty(pq) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+    </div>
+    <div class="function" id="aether_pqueue_clear" data-name="aether_pqueue_clear">
+      <h3 class="function-name">aether_pqueue_clear <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_clear(pq)</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+    </div>
+    <div class="function" id="aether_pqueue_free" data-name="aether_pqueue_free">
+      <h3 class="function-name">aether_pqueue_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_pqueue_free(pq)</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+    </div>
+    <div class="function" id="new" data-name="new">
+      <h3 class="function-name">new <span class="kind">fn</span></h3>
+      <pre class="usage"><code>new() <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="doc">Create an empty queue. Returns null on allocation failure.</p>
+    </div>
+    <div class="function" id="push" data-name="push">
+      <h3 class="function-name">push <span class="kind">fn</span></h3>
+      <pre class="usage"><code>push(pq, priority, item) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr, priority: long, item: ptr</span></p>
+      <p class="doc">Enqueue `item` at `priority`. Lower priority values pop first. Returns false on a null queue or allocation failure.</p>
+    </div>
+    <div class="function" id="pop" data-name="pop">
+      <h3 class="function-name">pop <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pop(pq) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+      <p class="doc">Remove and return the lowest-priority item, or null when empty.</p>
+    </div>
+    <div class="function" id="peek" data-name="peek">
+      <h3 class="function-name">peek <span class="kind">fn</span></h3>
+      <pre class="usage"><code>peek(pq) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+      <p class="doc">The lowest-priority item without removing it, or null when empty.</p>
+    </div>
+    <div class="function" id="peek_priority" data-name="peek_priority">
+      <h3 class="function-name">peek_priority <span class="kind">fn</span></h3>
+      <pre class="usage"><code>peek_priority(pq) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+      <p class="doc">Priority of the item `peek` would return. Meaningless when the queue is empty, so check `size` first.</p>
+    </div>
+    <div class="function" id="size" data-name="size">
+      <h3 class="function-name">size <span class="kind">fn</span></h3>
+      <pre class="usage"><code>size(pq) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+      <p class="doc">Number of queued entries.</p>
+    </div>
+    <div class="function" id="is_empty" data-name="is_empty">
+      <h3 class="function-name">is_empty <span class="kind">fn</span></h3>
+      <pre class="usage"><code>is_empty(pq) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+      <p class="doc">True when nothing is queued.</p>
+    </div>
+    <div class="function" id="clear" data-name="clear">
+      <h3 class="function-name">clear <span class="kind">fn</span></h3>
+      <pre class="usage"><code>clear(pq)</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+      <p class="doc">Drop every entry, keeping the queue usable. Items are not freed.</p>
+    </div>
+    <div class="function" id="free" data-name="free">
+      <h3 class="function-name">free <span class="kind">fn</span></h3>
+      <pre class="usage"><code>free(pq)</code></pre>
+      <p class="signature"><span class="sig-params">pq: ptr</span></p>
+      <p class="doc">Release the queue. Items were never owned by it, so free them yourself if they were heap allocated.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

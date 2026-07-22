@@ -33,6 +33,8 @@ Functions are called using **namespace-style syntax**: `namespace.function()`
 | `import std.tcp` | `tcp` | `tcp.connect(host, port)`, `tcp.write(sock, data)` |
 | `import std.list` | `list` | `list.new()`, `list.add(l, item)` |
 | `import std.map` | `map` | `map.new()`, `map.put(m, key, val)` |
+| `import std.set` | `set` | `set.new()`, `set.add(s, item)` |
+| `import std.pqueue` | `pqueue` | `pqueue.new()`, `pqueue.push(q, pri, item)` |
 | `import std.math` | `math` | `math.sqrt(x)`, `math.sin(x)` |
 | `import std.log` | `log` | `log.init(file, level)`, `log.write(level, msg)` |
 | `import std.io` | `io` | `io.print(str)`, `io.read_file(path)`, `io.getenv(name)` |
@@ -53,6 +55,8 @@ import std.http         // HTTP client & server
 import std.tcp          // TCP sockets
 import std.list         // ArrayList
 import std.map          // HashMap
+import std.set          // Unique-string set
+import std.pqueue       // Priority queue
 import std.math         // Math functions
 import std.log          // Logging
 import std.io           // Console I/O, environment variables
@@ -942,6 +946,59 @@ main() {
 - `map.free(map)` - Free map
 
 Raw extern: `map_put_raw` (returns 1/0).
+
+### Set
+
+Unique strings, backed by the `std.map` hash table. Items are copied on
+insert. O(1) average lookup.
+
+```aether
+import std.set
+
+visited = set.new()
+set.add(visited, "/index")      // true
+set.add(visited, "/index")      // false, already present
+```
+
+- `set.new()` → `ptr` - Create a new set (null on allocation failure)
+- `set.add(set, item)` → `bool` - True if added, false if already present or the insert failed
+- `set.contains(set, item)` → `bool` - Membership test
+- `set.remove(set, item)` - Drop an item; absent items are ignored
+- `set.size(set)` → `int` - Number of unique items
+- `set.clear(set)` - Drop every item, keeping the set usable
+- `set.free(set)` - Release the set
+- `set.items(set)` → `(ptr, string)` - Snapshot of the items, unspecified order; release with `set.items_free`
+- `set.items_free(items)` - Release a snapshot
+
+Null-set calls are safe (`size` 0, `contains` false). Raw externs are the
+`aether_set_*` entry points.
+
+### PriorityQueue
+
+Binary heap over `(priority, item)` pairs; lowest priority pops first.
+Push/pop are O(log n), peek/size O(1). The queue does **not** own items,
+it never frees them.
+
+```aether
+import std.pqueue
+
+jobs = pqueue.new()
+pqueue.push(jobs, 5, "page on-call")
+next = pqueue.pop(jobs)
+```
+
+- `pqueue.new()` → `ptr` - Create a new queue (null on allocation failure)
+- `pqueue.push(pq, priority, item)` → `bool` - Enqueue; false on a null queue or allocation failure
+- `pqueue.pop(pq)` → `ptr` - Remove and return the lowest-priority item, null when empty
+- `pqueue.peek(pq)` → `ptr` - Next item without removing it, null when empty
+- `pqueue.peek_priority(pq)` → `long` - Priority of the next item (0 when empty)
+- `pqueue.size(pq)` → `int` - Number of queued entries
+- `pqueue.is_empty(pq)` → `bool` - True when nothing is queued
+- `pqueue.clear(pq)` - Drop every entry, keeping the queue usable
+- `pqueue.free(pq)` - Release the queue
+
+Null-queue calls are safe (`size` 0, `pop`/`peek` null). Raw externs are the
+`aether_pqueue_*` entry points.
 
 ---
 

@@ -11,6 +11,21 @@ next version number before tagging the release.
 
 ## [current]
 
+### Added
+
+- **`std.set`, an unordered collection of unique strings.** Backed by the
+  `std.map` hash table rather than a second one, so lookups are O(1) on
+  average and items are copied on insert (the caller's string lifetime does
+  not matter). `set.add` reports whether the item was new, and `set.items`
+  snapshots the members. Calls on a null set report empty instead of
+  crashing. See `examples/stdlib/set-and-pqueue.ae`.
+- **`std.pqueue`, a priority queue over `(priority, item)` pairs.** Binary
+  heap: push and pop are O(log n), peek and size are O(1). The lowest
+  priority value comes out first, so negate the priority for highest-first.
+  The queue stores item pointers without taking ownership, it never frees
+  them, so heap items you push remain yours to release. Calls on a null
+  queue return null rather than crashing.
+
 ### Fixed
 
 - **Packages installed by `ae add` are now importable** (system cleanup sweep).
@@ -54,6 +69,15 @@ next version number before tagging the release.
   `runtime/scheduler/`. Nothing included it, and the install step carried an
   `rm -rf` to hide it from consumers that scan for linkable sources; deleting
   the sources removes the need for that workaround.
+- **The duplicate collection implementations** `aether_hashmap`, `aether_set`
+  (the old vtable-based one) and `aether_vector`. They shipped in every build
+  and defined a second `HashMap` type with the same name as the live one in
+  the same directory, while `std.map` and `std.list` already covered their
+  jobs. No Aether module bound to them and no C caller used them; their only
+  consumers were tests under `tests/stdlib/`, which no build target ever ran.
+  The genuinely missing capabilities they hinted at, Set and PriorityQueue,
+  are now shipped as real modules (see Added) built on the live hash table
+  instead of a parallel one.
 
 ## [0.428.0]
 
