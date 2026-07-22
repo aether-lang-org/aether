@@ -1731,8 +1731,11 @@ int compile_source(const char* input_path, const char* output_path) {
     if (!close_generated_file(csrc_catalog, csrc_catalog_path)) write_ok = 0;
     if (!close_generated_file(header_output, header_path))      write_ok = 0;
     if (!write_ok) {
+        /* compile_source reports failure as 0; every caller tests
+         * !compile_source(...). Returning 1 here would print the error and
+         * then hand the truncated output to the C compiler anyway. */
         if (header_path) free(header_path);
-        return 1;
+        return 0;
     }
     if (header_path) {
         free(header_path);

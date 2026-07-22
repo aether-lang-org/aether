@@ -14,8 +14,10 @@ typedef struct AetherPQueue AetherPQueue;
 // Returns NULL on allocation failure.
 AetherPQueue* aether_pqueue_new(void);
 
-// 1 on success, 0 on a null queue or allocation failure.
-int aether_pqueue_push(AetherPQueue* pq, long priority, void* item);
+// 1 on success, 0 on a null queue or allocation failure. Priority is
+// long long, not long: Aether `long` is 64-bit and Windows C `long`
+// is 32, matching the string_to_long_raw convention.
+int aether_pqueue_push(AetherPQueue* pq, long long priority, void* item);
 
 // Removes and returns the lowest-priority item, or NULL when empty.
 // A NULL return is ambiguous if NULL items were pushed; use
@@ -27,7 +29,7 @@ void* aether_pqueue_peek(AetherPQueue* pq);
 
 // Priority of the item aether_pqueue_peek would return. Returns 0 when empty,
 // so check aether_pqueue_size first.
-long aether_pqueue_peek_priority(AetherPQueue* pq);
+long long aether_pqueue_peek_priority(AetherPQueue* pq);
 
 int aether_pqueue_size(AetherPQueue* pq);
 int aether_pqueue_is_empty(AetherPQueue* pq);
