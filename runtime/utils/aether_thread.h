@@ -342,6 +342,12 @@ static inline int aether_win32_sched_yield(void) {
 
 #endif // _WIN32
 
+/* Bare-metal newlib declares clock_gettime but not the clock ids, and
+ * the CLOCK_MONOTONIC fallback above lives in the Windows branch. */
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+#endif
+
 // ---- monotonic nanosecond clock -----------------------------------------
 // One implementation for every caller. On Windows this routes through the
 // aether_win32_clock_gettime shim above, which splits the
