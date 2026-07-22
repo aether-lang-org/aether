@@ -1,0 +1,97 @@
+// std.set - unordered set of unique strings
+//
+// Backed by the same hash table as std.map, so lookups are O(1) on
+// average and items are copied on insert (the caller's string lifetime
+// does not matter).
+//
+//     import std.set
+//
+//     main() {
+//         seen = set.new()
+//         set.add(seen, "alpha")
+//         set.add(seen, "alpha")      // already present, set stays size 1
+//         if set.contains(seen, "alpha") {
+//             println("size=${set.size(seen)}")
+//         }
+//         set.free(seen)
+//     }
+//
+// API shape:
+//   - Raw externs mirror the C entry points and use the C-style int
+//     returns. They are the escape hatch for advanced callers.
+//   - Aether-native wrappers (below) return bools and Go-style
+//     `(value, err)` tuples.
+
+exports (
+    aether_set_new, aether_set_add, aether_set_has, aether_set_remove, aether_set_size, aether_set_clear, aether_set_free,
+    aether_set_items_raw, aether_set_items_free,
+    new, add, contains, remove, size, clear, free, items, items_free
+)
+
+// ---- raw externs (std/collections/aether_set.c) ----
+extern aether_set_new() -> ptr
+extern aether_set_add(set: ptr, item: string) -> int
+extern aether_set_has(set: ptr, item: string) -> int
+extern aether_set_remove(set: ptr, item: string)
+extern aether_set_size(set: ptr) -> int
+extern aether_set_clear(set: ptr)
+extern aether_set_free(set: ptr)
+extern aether_set_items_raw(set: ptr) -> ptr
+extern aether_set_items_free(items: ptr)
+
+// ---- Aether-side wrappers ----
+
+// Create an empty set. Returns null on allocation failure.
+new() -> ptr {
+    return aether_set_new()
+}
+
+// Insert `item`. Returns true if it was added, false if it was already
+// present or the insert failed.
+add(set: ptr, item: string) -> bool {
+    return aether_set_add(set, item) == 1
+}
+
+// True when `item` is in the set.
+contains(set: ptr, item: string) -> bool {
+    return aether_set_has(set, item) == 1
+}
+
+// Drop `item`. Absent items are ignored.
+remove(set: ptr, item: string) {
+    aether_set_remove(set, item)
+}
+
+// Number of items currently in the set.
+size(set: ptr) -> int {
+    return aether_set_size(set)
+}
+
+// Drop every item, keeping the set usable.
+clear(set: ptr) {
+    aether_set_clear(set)
+}
+
+// Release the set. Items were copied in, so nothing else needs freeing.
+free(set: ptr) {
+    aether_set_free(set)
+}
+
+// Snapshot the set's items, in unspecified order. Returns
+// (MapKeys ptr, "") on success, (null, error) otherwise. The snapshot
+// is released with `set.items_free`.
+items(set: ptr) -> {
+    if set == null {
+        return null, "null set"
+    }
+    it = aether_set_items_raw(set)
+    if it == null {
+        return null, "allocation failed"
+    }
+    return it, ""
+}
+
+// Release a snapshot returned by `set.items`.
+items_free(items: ptr) {
+    aether_set_items_free(items)
+}

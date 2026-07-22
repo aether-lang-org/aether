@@ -1,6 +1,8 @@
 #ifndef AST_H
 #define AST_H
 
+#include <stddef.h>
+
 #include "parser/tokens.h"
 
 typedef enum {
@@ -425,6 +427,13 @@ typedef struct Type {
     int is_result;
 } Type;
 
+/* realloc that cannot fail. The `p = realloc(p, n)` idiom used across
+ * the compiler both loses the original pointer when realloc returns
+ * NULL and leaves the next statement dereferencing NULL. A compiler
+ * cannot meaningfully continue past OOM, so this reports and exits
+ * rather than corrupting the caller. */
+void* aether_xrealloc(void* ptr, size_t size);
+
 typedef struct ASTNode {
     ASTNodeType type;
     char* value;                // For literals, identifiers, etc.
@@ -474,6 +483,12 @@ typedef struct ASTNode {
                                // pre-typecheck inference that fills node_type,
                                // unlike a TYPE_UNKNOWN sentinel. Drives the
                                // #698 silent-narrowing guard.
+
+    /* Allocated slots in `children`. Only add_child maintains this;
+     * code that replaces the array wholesale resets it to 0, which
+     * merely forces the next add_child to regrow. The invariant that
+     * matters is capacity <= slots actually allocated. */
+    int child_capacity;
 } ASTNode;
 
 // Type functions

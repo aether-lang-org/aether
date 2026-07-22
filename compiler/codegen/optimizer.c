@@ -523,6 +523,7 @@ static int splice_when_selected_arm(ASTNode* parent, int idx, ASTNode* selected_
     free(parent->children);
     free(spliced);
     parent->children = rebuilt;
+    parent->child_capacity = 0;
     parent->child_count = new_count;
     return n;
 }

@@ -1,4 +1,5 @@
 #include "aether_os.h"
+#include "../mem/aether_grow.h"
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/aether_sandbox.h"
 #include "../../runtime/aether_resource_caps.h"
@@ -1906,8 +1907,8 @@ static int wbuf_reserve(WBuf* b, size_t extra) {
     if (b->oom) return 0;
     size_t need = b->len + extra + 1;
     if (need > b->cap) {
-        size_t new_cap = b->cap ? b->cap * 2 : 256;
-        while (new_cap < need) new_cap *= 2;
+        size_t new_cap = aether_buf_grow_capacity(b->cap, 256, need, sizeof(wchar_t));
+        if (!new_cap) { b->oom = 1; return 0; }
         wchar_t* nd = (wchar_t*)realloc(b->data, sizeof(wchar_t) * new_cap);
         if (!nd) { b->oom = 1; return 0; }
         b->data = nd;

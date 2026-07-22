@@ -1,0 +1,95 @@
+// std.pqueue - priority queue over (priority, item) pairs
+//
+// Backed by a binary heap: push and pop are O(log n), peek and size are
+// O(1). The lowest priority value comes out first; negate the priority
+// when you want highest-first.
+//
+//     import std.pqueue
+//
+//     main() {
+//         jobs = pqueue.new()
+//         pqueue.push(jobs, 5, "deploy")
+//         pqueue.push(jobs, 1, "compile")     // lower number, runs first
+//         pqueue.push(jobs, 3, "test")
+//
+//         while pqueue.size(jobs) > 0 {
+//             job = pqueue.pop(jobs)
+//             println(job)                    // compile, test, deploy
+//         }
+//         pqueue.free(jobs)
+//     }
+//
+// The queue stores item pointers without taking ownership: it never
+// frees them, so heap items you push are still yours to release.
+//
+// API shape:
+//   - Raw externs mirror the C entry points and use C-style int returns.
+//   - Aether-native wrappers (below) return bools and Go-style
+//     `(value, err)` tuples.
+
+exports (
+    aether_pqueue_new, aether_pqueue_push, aether_pqueue_pop, aether_pqueue_peek, aether_pqueue_peek_priority,
+    aether_pqueue_size, aether_pqueue_is_empty, aether_pqueue_clear, aether_pqueue_free,
+    new, push, pop, peek, peek_priority, size, is_empty, clear, free
+)
+
+// ---- raw externs (std/collections/aether_pqueue.c) ----
+extern aether_pqueue_new() -> ptr
+extern aether_pqueue_push(pq: ptr, priority: long, item: ptr) -> int
+extern aether_pqueue_pop(pq: ptr) -> ptr
+extern aether_pqueue_peek(pq: ptr) -> ptr
+extern aether_pqueue_peek_priority(pq: ptr) -> long
+extern aether_pqueue_size(pq: ptr) -> int
+extern aether_pqueue_is_empty(pq: ptr) -> int
+extern aether_pqueue_clear(pq: ptr)
+extern aether_pqueue_free(pq: ptr)
+
+// ---- Aether-side wrappers ----
+
+// Create an empty queue. Returns null on allocation failure.
+new() -> ptr {
+    return aether_pqueue_new()
+}
+
+// Enqueue `item` at `priority`. Lower priority values pop first.
+// Returns false on a null queue or allocation failure.
+push(pq: ptr, priority: long, item: ptr) -> bool {
+    return aether_pqueue_push(pq, priority, item) == 1
+}
+
+// Remove and return the lowest-priority item, or null when empty.
+pop(pq: ptr) -> ptr {
+    return aether_pqueue_pop(pq)
+}
+
+// The lowest-priority item without removing it, or null when empty.
+peek(pq: ptr) -> ptr {
+    return aether_pqueue_peek(pq)
+}
+
+// Priority of the item `peek` would return. Meaningless when the queue
+// is empty, so check `size` first.
+peek_priority(pq: ptr) -> long {
+    return aether_pqueue_peek_priority(pq)
+}
+
+// Number of queued entries.
+size(pq: ptr) -> int {
+    return aether_pqueue_size(pq)
+}
+
+// True when nothing is queued.
+is_empty(pq: ptr) -> bool {
+    return aether_pqueue_is_empty(pq) == 1
+}
+
+// Drop every entry, keeping the queue usable. Items are not freed.
+clear(pq: ptr) {
+    aether_pqueue_clear(pq)
+}
+
+// Release the queue. Items were never owned by it, so free them
+// yourself if they were heap allocated.
+free(pq: ptr) {
+    aether_pqueue_free(pq)
+}

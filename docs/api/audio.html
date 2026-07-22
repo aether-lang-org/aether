@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>audio - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search audio..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#open">open</a></li>
+    <li><a href="#close">close</a></li>
+    <li><a href="#is_null_backend">is_null_backend</a></li>
+    <li><a href="#load_wav">load_wav</a></li>
+    <li><a href="#last_error">last_error</a></li>
+    <li><a href="#play">play</a></li>
+    <li><a href="#pause">pause</a></li>
+    <li><a href="#stop">stop</a></li>
+    <li><a href="#is_playing">is_playing</a></li>
+    <li><a href="#volume">volume</a></li>
+    <li><a href="#get_volume">get_volume</a></li>
+    <li><a href="#seek_ms">seek_ms</a></li>
+    <li><a href="#position_ms">position_ms</a></li>
+    <li><a href="#duration_ms">duration_ms</a></li>
+    <li><a href="#channels">channels</a></li>
+    <li><a href="#sample_rate">sample_rate</a></li>
+    <li><a href="#unload">unload</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li class="active"><a href="audio.html">audio</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="pqueue.html">pqueue</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="set.html">set</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="worker.html">worker</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>audio</h1>
+    <p class="module-desc">std.audio — audio playback (v1: playback tier).</p>
+    <p class="import-line"><code>import std.audio</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="open" data-name="open">
+      <h3 class="function-name">open <span class="kind">fn</span></h3>
+      <pre class="usage"><code>open() <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="doc">Initialise the audio engine. Call once before loading/playing. Returns true on success. v1 always succeeds (null backend).</p>
+    </div>
+    <div class="function" id="close" data-name="close">
+      <h3 class="function-name">close <span class="kind">fn</span></h3>
+      <pre class="usage"><code>close()</code></pre>
+      <p class="doc">Shut the engine down. Unload sounds first.</p>
+    </div>
+    <div class="function" id="is_null_backend" data-name="is_null_backend">
+      <h3 class="function-name">is_null_backend <span class="kind">fn</span></h3>
+      <pre class="usage"><code>is_null_backend() <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="doc">True when the active backend is the NULL (silent) backend — the v1 default. Lets a caller / test assert deterministic, device-free behaviour.</p>
+    </div>
+    <div class="function" id="load_wav" data-name="load_wav">
+      <h3 class="function-name">load_wav <span class="kind">fn</span></h3>
+      <pre class="usage"><code>load_wav(data, length) <span class="arrow">-&gt;</span> ptr!</code></pre>
+      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
+      <p class="doc">Decode `length` bytes of `data` (a WAV byte string — e.g. from fs.read_binary) into a playable source. Returns the source on success, or a non-empty error on malformed / unsupported input. The source is owned by the caller: release it with `unload`.</p>
+    </div>
+    <div class="function" id="last_error" data-name="last_error">
+      <h3 class="function-name">last_error <span class="kind">fn</span></h3>
+      <pre class="usage"><code>last_error() <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="doc">The reason the most recent load failed (or &quot;&quot; after a success). BORROWED from the substrate — a static C string valid until the next load_wav.</p>
+    </div>
+    <div class="function" id="play" data-name="play">
+      <h3 class="function-name">play <span class="kind">fn</span></h3>
+      <pre class="usage"><code>play(src) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+      <p class="doc">Start or resume playback from the current position. Returns true on success (false only for a null source). A source that had reached its end rewinds to the start.</p>
+    </div>
+    <div class="function" id="pause" data-name="pause">
+      <h3 class="function-name">pause <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pause(src) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+      <p class="doc">Halt playback, keeping the current position for a later `play`.</p>
+    </div>
+    <div class="function" id="stop" data-name="stop">
+      <h3 class="function-name">stop <span class="kind">fn</span></h3>
+      <pre class="usage"><code>stop(src) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+      <p class="doc">Halt playback and rewind to the start.</p>
+    </div>
+    <div class="function" id="is_playing" data-name="is_playing">
+      <h3 class="function-name">is_playing <span class="kind">fn</span></h3>
+      <pre class="usage"><code>is_playing(src) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+      <p class="doc">True while the source is actively playing (false when paused, stopped, or finished).</p>
+    </div>
+    <div class="function" id="volume" data-name="volume">
+      <h3 class="function-name">volume <span class="kind">fn</span></h3>
+      <pre class="usage"><code>volume(src, v) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr, v: float</span></p>
+      <p class="doc">Set the source's volume in [0.0, 1.0] (clamped). Returns true on success.</p>
+    </div>
+    <div class="function" id="get_volume" data-name="get_volume">
+      <h3 class="function-name">get_volume <span class="kind">fn</span></h3>
+      <pre class="usage"><code>get_volume(src) <span class="arrow">-&gt;</span> float</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+      <p class="doc">The source's current volume in [0.0, 1.0].</p>
+    </div>
+    <div class="function" id="seek_ms" data-name="seek_ms">
+      <h3 class="function-name">seek_ms <span class="kind">fn</span></h3>
+      <pre class="usage"><code>seek_ms(src, ms) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr, ms: long</span></p>
+      <p class="doc">Seek to `ms` milliseconds from the start (clamped to [0, duration]). Returns true on success. Keeps the play/pause state.</p>
+    </div>
+    <div class="function" id="position_ms" data-name="position_ms">
+      <h3 class="function-name">position_ms <span class="kind">fn</span></h3>
+      <pre class="usage"><code>position_ms(src) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+      <p class="doc">The current play position in milliseconds — poll this from a UI tick to drive a seek slider. (Milliseconds rather than Duration because the language has no Duration-from-ns constructor yet; a Duration accessor is a clean later addition.)</p>
+    </div>
+    <div class="function" id="duration_ms" data-name="duration_ms">
+      <h3 class="function-name">duration_ms <span class="kind">fn</span></h3>
+      <pre class="usage"><code>duration_ms(src) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+      <p class="doc">The total length of the source in milliseconds.</p>
+    </div>
+    <div class="function" id="channels" data-name="channels">
+      <h3 class="function-name">channels <span class="kind">fn</span></h3>
+      <pre class="usage"><code>channels(src) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+    </div>
+    <div class="function" id="sample_rate" data-name="sample_rate">
+      <h3 class="function-name">sample_rate <span class="kind">fn</span></h3>
+      <pre class="usage"><code>sample_rate(src) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+    </div>
+    <div class="function" id="unload" data-name="unload">
+      <h3 class="function-name">unload <span class="kind">fn</span></h3>
+      <pre class="usage"><code>unload(src)</code></pre>
+      <p class="signature"><span class="sig-params">src: ptr</span></p>
+      <p class="doc">Release a source. After this the pointer is invalid.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

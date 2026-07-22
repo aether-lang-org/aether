@@ -370,14 +370,14 @@ endif
 
 COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/analysis/contract_eval.c compiler/analysis/derive.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c lsp/aether_lsp.c
 COMPILER_LIB_SRC = compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/analysis/contract_eval.c compiler/analysis/derive.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c lsp/aether_lsp.c
-RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/sandbox/spawn_sandboxed_linux.c runtime/sandbox/spawn_sandboxed_bsd.c runtime/sandbox/spawn_sandboxed_stub.c runtime/sandbox/capsicum_autosandbox.c runtime/sandbox/aether_audit.c runtime/aether_shared_map.c runtime/aether_host.c runtime/aether_resource_caps.c runtime/libaether_caps.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c runtime/actors/aether_panic.c
-STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/xml/aether_xml.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c std/os/aether_os.c std/ipc/aether_ipc.c std/mem/aether_mem.c std/cryptography/aether_cryptography.c std/zlib/aether_zlib.c std/lzf/lzf_c.c std/lzf/lzf_d.c std/lzf/aether_lzf.c std/dl/aether_dl.c std/http/middleware/aether_middleware.c std/http/server/h2/aether_h2.c std/http/proxy/aether_proxy_pool.c std/http/proxy/aether_proxy_lb.c std/http/proxy/aether_proxy_breaker.c std/http/proxy/aether_proxy_health.c std/http/proxy/aether_proxy_cache.c std/http/proxy/aether_proxy_opts.c std/http/proxy/aether_proxy_metrics.c std/http/proxy/aether_proxy_middleware.c std/http/script_gateway/aether_script_gateway.c std/bytes/aether_bytes.c std/bytes/cursor/aether_bytes_cursor.c std/strbuilder/aether_strbuilder.c std/config/aether_config.c std/actors/aether_actor_registry.c std/regex/aether_regex.c std/capsicum/aether_capsicum.c std/casper/aether_casper.c std/snapshot/aether_snapshot.c std/audio/aether_audio.c std/worker/aether_worker.c std/alloc/aether_alloc.c std/tracking/aether_tracking.c
+RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/sandbox/spawn_sandboxed_linux.c runtime/sandbox/spawn_sandboxed_bsd.c runtime/sandbox/spawn_sandboxed_stub.c runtime/sandbox/capsicum_autosandbox.c runtime/sandbox/aether_audit.c runtime/aether_shared_map.c runtime/aether_host.c runtime/aether_resource_caps.c runtime/libaether_caps.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c runtime/actors/aether_panic.c
+STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_http_pool.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/xml/aether_xml.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c std/os/aether_os.c std/ipc/aether_ipc.c std/mem/aether_mem.c std/cryptography/aether_cryptography.c std/zlib/aether_zlib.c std/lzf/lzf_c.c std/lzf/lzf_d.c std/lzf/aether_lzf.c std/dl/aether_dl.c std/http/middleware/aether_middleware.c std/http/server/h2/aether_h2.c std/http/proxy/aether_proxy_pool.c std/http/proxy/aether_proxy_lb.c std/http/proxy/aether_proxy_breaker.c std/http/proxy/aether_proxy_health.c std/http/proxy/aether_proxy_cache.c std/http/proxy/aether_proxy_opts.c std/http/proxy/aether_proxy_metrics.c std/http/proxy/aether_proxy_middleware.c std/http/script_gateway/aether_script_gateway.c std/bytes/aether_bytes.c std/bytes/cursor/aether_bytes_cursor.c std/strbuilder/aether_strbuilder.c std/config/aether_config.c std/actors/aether_actor_registry.c std/regex/aether_regex.c std/capsicum/aether_capsicum.c std/casper/aether_casper.c std/snapshot/aether_snapshot.c std/audio/aether_audio.c std/worker/aether_worker.c std/alloc/aether_alloc.c std/tracking/aether_tracking.c
 # Stdlib sources that reference scheduler internals (scheduler_io_register,
 # g_sync_step_actor, current_core_id). Excluded from the compiler binary
 # because aetherc does not link the runtime scheduler, but included in
 # libaether.a and user programs where the runtime is present.
 STD_REACTOR_SRC = std/net/aether_actor_bridge.c
-COLLECTIONS_SRC = std/collections/aether_hashmap.c std/collections/aether_set.c std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_floatarr.c std/collections/aether_longarr.c std/collections/aether_bits.c std/collections/aether_stringlist.c std/collections/aether_stringseq.c
+COLLECTIONS_SRC = std/collections/aether_set.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_floatarr.c std/collections/aether_longarr.c std/collections/aether_bits.c std/collections/aether_stringlist.c std/collections/aether_stringseq.c
 
 # I/O poller backends (needed by both compiler and runtime targets)
 IO_POLLER_SRC = runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c
@@ -677,7 +677,7 @@ test-memory: compiler stdlib-memory
 
 test-manual-runtime: compiler
 	@echo "Building manual runtime test..."
-	$(CC) $(CFLAGS) tests/test_runtime_manual.c $(RUNTIME_SRC) $(LDFLAGS) -o build/test_runtime_manual$(EXE_EXT)
+	$(CC) $(CFLAGS) tests/runtime/test_runtime_manual.c $(RUNTIME_SRC) $(LDFLAGS) -o build/test_runtime_manual$(EXE_EXT)
 	@echo "Running manual runtime test..."
 	./build/test_runtime_manual$(EXE_EXT)
 
@@ -844,7 +844,7 @@ test-release-archive: compiler ae stdlib
 	done && \
 	cp -r runtime "$$reldir/share/aether/" && \
 	cp -r std     "$$reldir/share/aether/" && \
-	rm -rf "$$reldir/share/aether/runtime/examples" "$$reldir/share/aether/runtime/io" && \
+	rm -rf "$$reldir/share/aether/runtime/examples" && \
 	echo "  Created release layout in $$reldir" && \
 	echo "  Packing tarball..." && \
 	(cd "$$reldir" && tar -czf "$$tmpdir/aether-test.tar.gz" *) && \
@@ -1521,14 +1521,11 @@ install: $(VERSION_HEADER) release ae stdlib
 	@find $(PREFIX)/share/aether/contrib -type f -name '*.m' -delete 2>/dev/null || true
 	@# Trim install-noise that confuses external consumers (aetherBuild
 	@# and the like). runtime/examples/ holds standalone benches with
-	@# their own main() — never link-suitable. runtime/io/ is an
-	@# orphaned poller hub the main aetherc build doesn't use; the
-	@# active poller variants live under runtime/scheduler/. Both
-	@# trip naive `find runtime -name '*.c'` consumers. See
+	@# their own main(), never link-suitable, so a naive
+	@# `find runtime -name '*.c'` consumer would try to link them. See
 	@# new_nic_consideration.md for the broader "drop sources from
 	@# install" question (Option C in aetherBuild's ask 3).
 	@rm -rf $(PREFIX)/share/aether/runtime/examples
-	@rm -rf $(PREFIX)/share/aether/runtime/io
 	@# Authoritative MANIFEST listing link-suitable .c files (#329).
 	@# Downstream consumers (aetherBuild's aeb-link et al.) read this
 	@# instead of guessing via `find runtime -name '*.c'` — the find
@@ -2227,17 +2224,17 @@ ci-wasm: clean compiler ae
 		runtime/config/aether_optimization_config.c runtime/memory/aether_arena.c \
 		runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c \
 		runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c \
-		runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c \
+		runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c \
 		runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c \
 		runtime/aether_host.c \
 		runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c \
 		runtime/actors/aether_actor_thread.c \
 		std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c \
-		std/net/aether_http_server.c std/net/aether_net.c std/net/aether_actor_bridge.c \
+		std/net/aether_http_server.c std/net/aether_http_pool.c std/net/aether_net.c std/net/aether_actor_bridge.c \
 		std/collections/aether_collections.c \
 		std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c \
-		std/os/aether_os.c std/collections/aether_hashmap.c std/collections/aether_set.c \
-		std/collections/aether_vector.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_longarr.c std/collections/aether_bits.c \
+		std/os/aether_os.c \
+		std/collections/aether_set.c std/collections/aether_pqueue.c std/collections/aether_intarr.c std/collections/aether_longarr.c std/collections/aether_bits.c \
 		runtime/sandbox/capsicum_autosandbox.c"; \
 	for src in build/wasm/hello.c build/wasm/counter.c build/wasm/test_platform_caps.c \
 	           build/wasm/test_coop_chain.c; do \

@@ -1,238 +1,133 @@
 #include "aether_pqueue.h"
 #include "../../runtime/aether_resource_caps.h"
-#include <stdlib.h>
-#include <string.h>
+
+#include <limits.h>
+#include <stddef.h>
 #include <stdint.h>
 
-#define DEFAULT_CAPACITY 16
-#define GROWTH_FACTOR 2
+#define PQUEUE_INITIAL_CAPACITY 16
 
-// Helper macros for heap navigation
-#define PARENT(i) (((i) - 1) / 2)
-#define LEFT_CHILD(i) (2 * (i) + 1)
-#define RIGHT_CHILD(i) (2 * (i) + 2)
+typedef struct {
+    long  priority;
+    void* item;
+} PQueueEntry;
 
-PriorityQueue* aether_pqueue_create(size_t initial_capacity,
-                            int (*compare)(const void*, const void*),
-                            void (*element_free)(void*),
-                            void* (*element_clone)(const void*)) {
-    
-    if (!compare) return NULL;
-    
-    /* #463: cap-aware. The backing array's byte count is recoverable
-     * at free / realloc time from `pq->capacity * sizeof(void*)`. */
-    PriorityQueue* pq = (PriorityQueue*)aether_caps_malloc(sizeof(PriorityQueue));
-    if (!pq) return NULL;
+struct AetherPQueue {
+    PQueueEntry* entries;
+    int          size;
+    int          capacity;
+};
 
-    if (initial_capacity < DEFAULT_CAPACITY) {
-        initial_capacity = DEFAULT_CAPACITY;
-    }
-
-    pq->data = (void**)aether_caps_malloc(initial_capacity * sizeof(void*));
-    if (!pq->data) {
-        aether_caps_free(pq, sizeof(PriorityQueue));
-        return NULL;
-    }
-    
-    pq->size = 0;
-    pq->capacity = initial_capacity;
-    pq->compare = compare;
-    pq->element_free = element_free;
-    pq->element_clone = element_clone;
-    
-    return pq;
+static size_t entries_bytes(int capacity) {
+    return (size_t)capacity * sizeof(PQueueEntry);
 }
 
-void aether_pqueue_free(PriorityQueue* pq) {
-    if (!pq) return;
-    
-    if (pq->data) {
-        if (pq->element_free) {
-            for (size_t i = 0; i < pq->size; i++) {
-                pq->element_free(pq->data[i]);
-            }
-        }
-        aether_caps_free(pq->data, pq->capacity * sizeof(void*));
-    }
+static int pqueue_grow(AetherPQueue* pq) {
+    /* CRITICAL: capacity is an int scaled by sizeof(PQueueEntry). Doubling
+     * unchecked would overflow into a small allocation and let the heap
+     * writes below run past the buffer. */
+    if (pq->capacity > INT_MAX / 2) return 0;
+    int new_capacity = pq->capacity ? pq->capacity * 2 : PQUEUE_INITIAL_CAPACITY;
+    if ((size_t)new_capacity > SIZE_MAX / sizeof(PQueueEntry)) return 0;
 
-    aether_caps_free(pq, sizeof(PriorityQueue));
-}
+    PQueueEntry* grown = (PQueueEntry*)aether_caps_realloc(
+        pq->entries, entries_bytes(pq->capacity), entries_bytes(new_capacity));
+    if (!grown) return 0;
 
-// Ensure capacity
-static bool aether_pqueue_ensure_capacity(PriorityQueue* pq, size_t min_capacity) {
-    if (pq->capacity >= min_capacity) {
-        return true;
-    }
-    
-    size_t new_capacity = pq->capacity * GROWTH_FACTOR;
-    if (new_capacity < min_capacity) {
-        new_capacity = min_capacity;
-    }
-    
-    void** new_data = (void**)aether_caps_realloc(pq->data,
-                                                  pq->capacity * sizeof(void*),
-                                                  new_capacity * sizeof(void*));
-    if (!new_data) {
-        return false;
-    }
-
-    pq->data = new_data;
+    pq->entries  = grown;
     pq->capacity = new_capacity;
-    return true;
+    return 1;
 }
 
-// Swap elements
-static void aether_pqueue_swap(PriorityQueue* pq, size_t i, size_t j) {
-    void* temp = pq->data[i];
-    pq->data[i] = pq->data[j];
-    pq->data[j] = temp;
+static void swap_entries(PQueueEntry* a, PQueueEntry* b) {
+    PQueueEntry tmp = *a;
+    *a = *b;
+    *b = tmp;
 }
 
-// Heapify up (bubble up) - restore heap property upwards
-static void aether_pqueue_heapify_up(PriorityQueue* pq, size_t index) {
+static void sift_up(AetherPQueue* pq, int index) {
     while (index > 0) {
-        size_t parent = PARENT(index);
-        
-        // If current element has higher priority than parent, swap
-        if (pq->compare(pq->data[index], pq->data[parent]) < 0) {
-            aether_pqueue_swap(pq, index, parent);
-            index = parent;
-        } else {
-            break;
-        }
+        int parent = (index - 1) / 2;
+        if (pq->entries[parent].priority <= pq->entries[index].priority) break;
+        swap_entries(&pq->entries[parent], &pq->entries[index]);
+        index = parent;
     }
 }
 
-// Heapify down (bubble down) - restore heap property downwards
-static void aether_pqueue_heapify_down(PriorityQueue* pq, size_t index) {
-    while (true) {
-        size_t smallest = index;
-        size_t left = LEFT_CHILD(index);
-        size_t right = RIGHT_CHILD(index);
-        
-        // Find smallest among node and its children
-        if (left < pq->size && pq->compare(pq->data[left], pq->data[smallest]) < 0) {
+static void sift_down(AetherPQueue* pq, int index) {
+    for (;;) {
+        int left     = index * 2 + 1;
+        int right    = left + 1;
+        int smallest = index;
+
+        if (left < pq->size &&
+            pq->entries[left].priority < pq->entries[smallest].priority) {
             smallest = left;
         }
-        
-        if (right < pq->size && pq->compare(pq->data[right], pq->data[smallest]) < 0) {
+        if (right < pq->size &&
+            pq->entries[right].priority < pq->entries[smallest].priority) {
             smallest = right;
         }
-        
-        // If heap property is satisfied, stop
-        if (smallest == index) {
-            break;
-        }
-        
-        aether_pqueue_swap(pq, index, smallest);
+        if (smallest == index) break;
+
+        swap_entries(&pq->entries[smallest], &pq->entries[index]);
         index = smallest;
     }
 }
 
-bool aether_pqueue_insert(PriorityQueue* pq, void* element) {
-    if (!pq) return false;
-    
-    if (!aether_pqueue_ensure_capacity(pq, pq->size + 1)) {
-        return false;
-    }
-    
-    // Add element at end
-    pq->data[pq->size] = element;
-    pq->size++;
-    
-    // Restore heap property
-    aether_pqueue_heapify_up(pq, pq->size - 1);
-    
-    return true;
-}
-
-void* aether_pqueue_extract(PriorityQueue* pq) {
-    if (!pq || pq->size == 0) return NULL;
-    
-    void* result = pq->data[0];
-    
-    // Move last element to root
-    pq->data[0] = pq->data[pq->size - 1];
-    pq->size--;
-    
-    // Restore heap property
-    if (pq->size > 0) {
-        aether_pqueue_heapify_down(pq, 0);
-    }
-    
-    return result;
-}
-
-void* aether_pqueue_peek(PriorityQueue* pq) {
-    if (!pq || pq->size == 0) return NULL;
-    return pq->data[0];
-}
-
-size_t aether_pqueue_size(PriorityQueue* pq) {
-    return pq ? pq->size : 0;
-}
-
-bool aether_pqueue_is_empty(PriorityQueue* pq) {
-    return pq ? (pq->size == 0) : true;
-}
-
-void aether_pqueue_clear(PriorityQueue* pq) {
-    if (!pq) return;
-    
-    if (pq->element_free) {
-        for (size_t i = 0; i < pq->size; i++) {
-            pq->element_free(pq->data[i]);
-        }
-    }
-    
-    pq->size = 0;
-}
-
-bool aether_pqueue_contains(PriorityQueue* pq, const void* element,
-                    bool (*equals)(const void*, const void*)) {
-    if (!pq || !equals) return false;
-    
-    for (size_t i = 0; i < pq->size; i++) {
-        if (equals(pq->data[i], element)) {
-            return true;
-        }
-    }
-    
-    return false;
-}
-
-// Build heap from array - O(n) using Floyd's algorithm
-PriorityQueue* aether_pqueue_from_array(void** elements, size_t count,
-                                int (*compare)(const void*, const void*),
-                                void (*element_free)(void*),
-                                void* (*element_clone)(const void*)) {
-    
-    PriorityQueue* pq = aether_pqueue_create(count, compare, element_free, element_clone);
-    if (!pq) return NULL;
-    
-    // Copy elements
-    for (size_t i = 0; i < count; i++) {
-        pq->data[i] = element_clone ? element_clone(elements[i]) : elements[i];
-    }
-    pq->size = count;
-    
-    // Heapify from bottom up (Floyd's algorithm)
-    for (int i = (int)count / 2 - 1; i >= 0; i--) {
-        aether_pqueue_heapify_down(pq, (size_t)i);
-    }
-    
+AetherPQueue* aether_pqueue_new(void) {
+    AetherPQueue* pq = (AetherPQueue*)aether_caps_calloc(1, sizeof(AetherPQueue));
     return pq;
 }
 
-// Common comparators
-int aether_pqueue_compare_int_min(const void* a, const void* b) {
-    long ia = (long)(intptr_t)a;
-    long ib = (long)(intptr_t)b;
-    return (ia < ib) ? -1 : (ia > ib) ? 1 : 0;
+int aether_pqueue_push(AetherPQueue* pq, long priority, void* item) {
+    if (!pq) return 0;
+    if (pq->size == pq->capacity && !pqueue_grow(pq)) return 0;
+
+    pq->entries[pq->size].priority = priority;
+    pq->entries[pq->size].item     = item;
+    pq->size++;
+    sift_up(pq, pq->size - 1);
+    return 1;
 }
 
-int aether_pqueue_compare_int_max(const void* a, const void* b) {
-    // Invert comparison for max-heap
-    return -aether_pqueue_compare_int_min(a, b);
+void* aether_pqueue_pop(AetherPQueue* pq) {
+    if (!pq || pq->size == 0) return NULL;
+
+    void* item = pq->entries[0].item;
+    pq->size--;
+    if (pq->size > 0) {
+        pq->entries[0] = pq->entries[pq->size];
+        sift_down(pq, 0);
+    }
+    return item;
 }
 
+void* aether_pqueue_peek(AetherPQueue* pq) {
+    if (!pq || pq->size == 0) return NULL;
+    return pq->entries[0].item;
+}
+
+long aether_pqueue_peek_priority(AetherPQueue* pq) {
+    if (!pq || pq->size == 0) return 0;
+    return pq->entries[0].priority;
+}
+
+int aether_pqueue_size(AetherPQueue* pq) {
+    return pq ? pq->size : 0;
+}
+
+int aether_pqueue_is_empty(AetherPQueue* pq) {
+    return (!pq || pq->size == 0) ? 1 : 0;
+}
+
+void aether_pqueue_clear(AetherPQueue* pq) {
+    if (!pq) return;
+    pq->size = 0;
+}
+
+void aether_pqueue_free(AetherPQueue* pq) {
+    if (!pq) return;
+    if (pq->entries) aether_caps_free(pq->entries, entries_bytes(pq->capacity));
+    aether_caps_free(pq, sizeof(AetherPQueue));
+}

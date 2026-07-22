@@ -22,6 +22,7 @@
  */
 
 #include "aether_proxy_internal.h"
+#include "../../mem/aether_grow.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -37,8 +38,8 @@ typedef struct {
 
 static int tb_reserve(TextBuf* b, size_t need) {
     if (b->len + need + 1 <= b->cap) return 0;
-    size_t cap = b->cap == 0 ? 4096 : b->cap;
-    while (b->len + need + 1 > cap) cap *= 2;
+    size_t cap = aether_buf_grow_capacity(b->cap, 4096, b->len + need + 1, 1);
+    if (!cap) return -1;
     char* g = (char*)realloc(b->data, cap);
     if (!g) return -1;
     b->data = g;

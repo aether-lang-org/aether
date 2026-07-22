@@ -1,5 +1,6 @@
 #include "aether_http_server.h"
 #include "aether_net.h"
+#include "aether_http_pool.h"
 #if !defined(_WIN32)
 #include <signal.h>    /* pthread_sigmask / sigset_t for the embedded-server signal mask */
 #include <pthread.h>
@@ -3425,98 +3426,6 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
     http_server_drain_connection(server, client_fd);
 }
 
-// ============================================================================
-// Bounded thread pool for connection handling
-// ============================================================================
-// Replaces thread-per-connection with a fixed pool of worker threads.
-// Connections beyond pool capacity wait in the kernel accept backlog.
-// This prevents unbounded thread creation under load.
-
-#if AETHER_HAS_THREADS && !defined(_WIN32)
-
-#define HTTP_POOL_WORKERS   8
-#define HTTP_POOL_QUEUE_CAP 256
-
-typedef struct {
-    HttpServer* server;
-    int queue[HTTP_POOL_QUEUE_CAP];   // Ring buffer of pending client fds
-    int head, tail, count;
-    pthread_mutex_t lock;
-    pthread_cond_t  not_empty;
-    pthread_cond_t  not_full;
-    int shutdown;
-    pthread_t workers[HTTP_POOL_WORKERS];
-} HttpConnectionPool;
-
-static void* http_pool_worker(void* arg) {
-    HttpConnectionPool* pool = (HttpConnectionPool*)arg;
-    while (1) {
-        pthread_mutex_lock(&pool->lock);
-        while (pool->count == 0 && !pool->shutdown) {
-            pthread_cond_wait(&pool->not_empty, &pool->lock);
-        }
-        if (pool->shutdown && pool->count == 0) {
-            pthread_mutex_unlock(&pool->lock);
-            break;
-        }
-        int client_fd = pool->queue[pool->head];
-        pool->head = (pool->head + 1) % HTTP_POOL_QUEUE_CAP;
-        pool->count--;
-        pthread_cond_signal(&pool->not_full);
-        pthread_mutex_unlock(&pool->lock);
-
-        handle_client_connection(pool->server, client_fd);
-    }
-    return NULL;
-}
-
-static HttpConnectionPool* http_pool_create(HttpServer* server) {
-    HttpConnectionPool* pool = calloc(1, sizeof(HttpConnectionPool));
-    if (!pool) return NULL;
-    pool->server = server;
-    pthread_mutex_init(&pool->lock, NULL);
-    pthread_cond_init(&pool->not_empty, NULL);
-    pthread_cond_init(&pool->not_full, NULL);
-    for (int i = 0; i < HTTP_POOL_WORKERS; i++) {
-        pthread_create(&pool->workers[i], NULL, http_pool_worker, pool);
-    }
-    return pool;
-}
-
-static void http_pool_submit(HttpConnectionPool* pool, int client_fd) {
-    pthread_mutex_lock(&pool->lock);
-    while (pool->count >= HTTP_POOL_QUEUE_CAP && !pool->shutdown) {
-        pthread_cond_wait(&pool->not_full, &pool->lock);
-    }
-    if (pool->shutdown) {
-        pthread_mutex_unlock(&pool->lock);
-        close(client_fd);
-        return;
-    }
-    pool->queue[pool->tail] = client_fd;
-    pool->tail = (pool->tail + 1) % HTTP_POOL_QUEUE_CAP;
-    pool->count++;
-    pthread_cond_signal(&pool->not_empty);
-    pthread_mutex_unlock(&pool->lock);
-}
-
-static void http_pool_destroy(HttpConnectionPool* pool) {
-    if (!pool) return;
-    pthread_mutex_lock(&pool->lock);
-    pool->shutdown = 1;
-    pthread_cond_broadcast(&pool->not_empty);
-    pthread_cond_broadcast(&pool->not_full);
-    pthread_mutex_unlock(&pool->lock);
-    for (int i = 0; i < HTTP_POOL_WORKERS; i++) {
-        pthread_join(pool->workers[i], NULL);
-    }
-    pthread_mutex_destroy(&pool->lock);
-    pthread_cond_destroy(&pool->not_empty);
-    pthread_cond_destroy(&pool->not_full);
-    free(pool);
-}
-
-#endif // AETHER_HAS_THREADS && !_WIN32
 
 // ---------------------------------------------------------------------------
 // Accept thread context (one per core in multi-accept mode)
@@ -3782,7 +3691,7 @@ int http_server_start_raw(HttpServer* server) {
             server->on_start(server, server->on_start_user_data);
         }
 
-#if AETHER_HAS_THREADS && !defined(_WIN32)
+#if AETHER_HAS_THREADS
         HttpConnectionPool* pool = http_pool_create(server);
 #endif
 
@@ -3802,16 +3711,20 @@ int http_server_start_raw(HttpServer* server) {
                 continue;
             }
 
-#if !AETHER_HAS_THREADS
-            handle_client_connection(server, client_fd);
-#elif defined(_WIN32)
-            handle_client_connection(server, client_fd);
+#if AETHER_HAS_THREADS
+            /* Pool creation can fail only when no worker thread could be
+             * started; handling inline then is slower but still correct. */
+            if (pool) {
+                http_pool_submit(pool, client_fd);
+            } else {
+                handle_client_connection(server, client_fd);
+            }
 #else
-            http_pool_submit(pool, client_fd);
+            handle_client_connection(server, client_fd);
 #endif
         }
 
-#if AETHER_HAS_THREADS && !defined(_WIN32)
+#if AETHER_HAS_THREADS
         http_pool_destroy(pool);
 #endif
 

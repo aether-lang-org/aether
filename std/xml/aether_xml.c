@@ -8,6 +8,7 @@
  * config XML needs — see aether_xml.h.
  */
 #include "aether_xml.h"
+#include "../mem/aether_grow.h"
 #include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
@@ -29,8 +30,8 @@ static void sb_init(Sb* s) { s->data = NULL; s->len = 0; s->cap = 0; s->oom = 0;
 static int sb_reserve(Sb* s, size_t extra) {
     if (s->oom) return 0;
     if (s->len + extra + 1 <= s->cap) return 1;
-    size_t want = s->cap ? s->cap * 2 : 64;
-    while (want < s->len + extra + 1) want *= 2;
+    size_t want = aether_buf_grow_capacity(s->cap, 64, s->len + extra + 1, 1);
+    if (!want) { s->oom = 1; return 0; }
     char* p = (char*)realloc(s->data, want);
     if (!p) { s->oom = 1; return 0; }
     s->data = p;

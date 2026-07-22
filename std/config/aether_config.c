@@ -41,17 +41,6 @@ typedef struct ae_cfg_entry {
 static ae_cfg_entry* g_buckets[AE_CFG_BUCKETS];
 static int g_size = 0;
 static ae_cfg_rwlock_t g_lock = AE_CFG_RWLOCK_INITIALIZER;
-static int g_lock_initialized = 0;
-
-/* Lazy init for platforms whose static initializer macro is a stub
- * (some Windows toolchains ship SRWLOCK_INIT but it's always safe
- * to call InitializeSRWLock too; this guard keeps the path uniform). */
-static void ensure_lock_init(void) {
-    if (!g_lock_initialized) {
-        ae_cfg_rwlock_init(&g_lock);
-        g_lock_initialized = 1;
-    }
-}
 
 /* FNV-1a 32-bit. Good enough for short config keys; not crypto. */
 static uint32_t fnv1a(const char* s) {
@@ -79,9 +68,8 @@ static ae_cfg_entry* find_in_bucket(ae_cfg_entry* head, const char* key) {
     return NULL;
 }
 
-void aether_config_put(const char* key, const char* value) {
+void aether_config_store_put(const char* key, const char* value) {
     if (!key || !value) return;
-    ensure_lock_init();
 
     char* new_value = dup_str(value);
     if (!new_value) return;  /* OOM — silent (matches stdlib's other
@@ -120,9 +108,8 @@ void aether_config_put(const char* key, const char* value) {
     ae_cfg_rwlock_wrunlock(&g_lock);
 }
 
-const char* aether_config_get(const char* key) {
+const char* aether_config_store_get(const char* key) {
     if (!key) return "";
-    ensure_lock_init();
     uint32_t h = fnv1a(key);
     int idx = (int)(h & (AE_CFG_BUCKETS - 1));
 
@@ -133,9 +120,8 @@ const char* aether_config_get(const char* key) {
     return v;
 }
 
-const char* aether_config_get_or(const char* key, const char* default_value) {
+const char* aether_config_store_get_or(const char* key, const char* default_value) {
     if (!key) return default_value ? default_value : "";
-    ensure_lock_init();
     uint32_t h = fnv1a(key);
     int idx = (int)(h & (AE_CFG_BUCKETS - 1));
 
@@ -148,9 +134,8 @@ const char* aether_config_get_or(const char* key, const char* default_value) {
     return v;
 }
 
-int aether_config_has(const char* key) {
+int aether_config_store_has(const char* key) {
     if (!key) return 0;
-    ensure_lock_init();
     uint32_t h = fnv1a(key);
     int idx = (int)(h & (AE_CFG_BUCKETS - 1));
 
@@ -161,16 +146,14 @@ int aether_config_has(const char* key) {
     return result;
 }
 
-int aether_config_size(void) {
-    ensure_lock_init();
+int aether_config_store_size(void) {
     ae_cfg_rwlock_rdlock(&g_lock);
     int n = g_size;
     ae_cfg_rwlock_rdunlock(&g_lock);
     return n;
 }
 
-void aether_config_clear(void) {
-    ensure_lock_init();
+void aether_config_store_clear(void) {
     ae_cfg_rwlock_wrlock(&g_lock);
     for (int i = 0; i < AE_CFG_BUCKETS; i++) {
         ae_cfg_entry* e = g_buckets[i];

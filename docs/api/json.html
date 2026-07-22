@@ -24,6 +24,7 @@
     <li><a href="#get_bool">get_bool</a></li>
     <li><a href="#get_number">get_number</a></li>
     <li><a href="#get_int">get_int</a></li>
+    <li><a href="#get_long">get_long</a></li>
     <li><a href="#get_string_raw">get_string_raw</a></li>
     <li><a href="#object_get_raw">object_get_raw</a></li>
     <li><a href="#object_set_raw">object_set_raw</a></li>
@@ -73,7 +74,9 @@
   <h2>Modules</h2>
   <ul class="module-list">
     <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
     <li><a href="arena.html">arena</a></li>
+    <li><a href="audio.html">audio</a></li>
     <li><a href="audit.html">audit</a></li>
     <li><a href="bignum.html">bignum</a></li>
     <li><a href="bits.html">bits</a></li>
@@ -84,11 +87,14 @@
     <li><a href="collections.html">collections</a></li>
     <li><a href="config.html">config</a></li>
     <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
     <li><a href="dir.html">dir</a></li>
     <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
     <li><a href="file.html">file</a></li>
     <li><a href="floatarr.html">floatarr</a></li>
     <li><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
     <li><a href="host.html">host</a></li>
     <li><a href="http.html">http</a></li>
     <li><a href="intarr.html">intarr</a></li>
@@ -107,16 +113,22 @@
     <li><a href="net.html">net</a></li>
     <li><a href="os.html">os</a></li>
     <li><a href="path.html">path</a></li>
+    <li><a href="pqueue.html">pqueue</a></li>
     <li><a href="regex.html">regex</a></li>
+    <li><a href="set.html">set</a></li>
     <li><a href="signal.html">signal</a></li>
     <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
     <li><a href="strbuilder.html">strbuilder</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="tcp.html">tcp</a></li>
+    <li><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
     <li><a href="tsid.html">tsid</a></li>
     <li><a href="ulid.html">ulid</a></li>
     <li><a href="url.html">url</a></li>
     <li><a href="uuid.html">uuid</a></li>
+    <li><a href="worker.html">worker</a></li>
     <li><a href="xml.html">xml</a></li>
     <li><a href="zlib.html">zlib</a></li>
   </ul>
@@ -163,7 +175,7 @@
       <h3 class="function-name">get_bool <span class="kind">extern</span></h3>
       <pre class="usage"><code>get_bool(value) <span class="arrow">-&gt;</span> int</code></pre>
       <p class="signature"><span class="sig-params">value: ptr</span></p>
-      <p class="doc">---- typed getters (infallible — sentinel 0/0.0 on wrong type) ----</p>
+      <p class="doc">---- typed getters (infallible — sentinel 0/0.0 on wrong type) ---- get_int is 32-bit and clamps to +/-2147483647 on overflow; use get_long for the full int64 range (IDs, byte-counts). get_number is a float and is lossy past 2^53.</p>
     </div>
     <div class="function" id="get_number" data-name="get_number">
       <h3 class="function-name">get_number <span class="kind">extern</span></h3>
@@ -173,6 +185,11 @@
     <div class="function" id="get_int" data-name="get_int">
       <h3 class="function-name">get_int <span class="kind">extern</span></h3>
       <pre class="usage"><code>get_int(value) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">value: ptr</span></p>
+    </div>
+    <div class="function" id="get_long" data-name="get_long">
+      <h3 class="function-name">get_long <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_long(value) <span class="arrow">-&gt;</span> long</code></pre>
       <p class="signature"><span class="sig-params">value: ptr</span></p>
     </div>
     <div class="function" id="get_string_raw" data-name="get_string_raw">
@@ -262,19 +279,19 @@
     </div>
     <div class="function" id="parse" data-name="parse">
       <h3 class="function-name">parse <span class="kind">fn</span></h3>
-      <pre class="usage"><code>parse(json_str) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <pre class="usage"><code>parse(json_str) <span class="arrow">-&gt;</span> ptr!</code></pre>
       <p class="signature"><span class="sig-params">json_str: string</span></p>
       <p class="doc">Parse a JSON string. Returns (value, &quot;&quot;) on success, (null, error) on failure. The error is a position-qualified message like &quot;expected ':' at 3:17&quot;. Caller owns the returned value and must free with json.free. Heap-classification shape: position 1 (the error message) is heap on both return paths so the destructure wrapper at the call site fires uniformly. The failure path uses string_concat(json_last_error(), &quot;&quot;) for an owned copy; the success path uses string_concat(&quot;&quot;, &quot;&quot;) for a (tiny) empty heap string. Without both paths returning heap, function_def_returns_heap_at's AND-fold would mark position 1 non-heap and every destructure of `_, err = json.parse(...)` would leak the success-path &quot;&quot; allocation — except the success &quot;&quot; was already a literal so there'd be nothing TO leak, only an over-free risk on the failure path. The uniform-heap shape sidesteps the classifier's mixed-path conservatism. See # further-bug-fix4 for the wider context.</p>
     </div>
     <div class="function" id="stringify" data-name="stringify">
       <h3 class="function-name">stringify <span class="kind">fn</span></h3>
-      <pre class="usage"><code>stringify(value) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <pre class="usage"><code>stringify(value) <span class="arrow">-&gt;</span> string!</code></pre>
       <p class="signature"><span class="sig-params">value: ptr</span></p>
       <p class="doc">Serialize a JSON value to a compact string. Returns (string, &quot;&quot;) on success, (&quot;&quot;, error) on failure. The returned string is a refcounted Aether string — no manual free required. Uniform-heap shape on both positions: see `parse` for the rationale.</p>
     </div>
     <div class="function" id="get_string" data-name="get_string">
       <h3 class="function-name">get_string <span class="kind">fn</span></h3>
-      <pre class="usage"><code>get_string(value) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <pre class="usage"><code>get_string(value) <span class="arrow">-&gt;</span> string!</code></pre>
       <p class="signature"><span class="sig-params">value: ptr</span></p>
       <p class="doc">Read the string payload out of a JSON value. Returns (string, &quot;&quot;) on success, (&quot;&quot;, error) if `value` is not a JSON_STRING. The returned string is an owned copy — safe to hold past a json.free of the value. Uniform-heap shape on both positions. This is the high-volume avn hot-path identified in `further-bug-fix4.md`: every `b64, _ = json.get_string(jcontent)` in a commit loop is a ~133 KB allocation per call. Pre-refactor the failure-path literal `&quot;&quot;` at position 0 made `function_def_returns_heap_at` AND-fold to non-heap, so the destructure wrapper at the call site never set `_heap_b64 = 1` and the function-exit defer-free never ran. avn's 5000-commit bench retained ~666 MB just from this site.</p>
     </div>
@@ -361,7 +378,7 @@
     </div>
     <div class="function" id="encode" data-name="encode">
       <h3 class="function-name">encode <span class="kind">fn</span></h3>
-      <pre class="usage"><code>encode(value) <span class="arrow">-&gt;</span> (string, string)</code></pre>
+      <pre class="usage"><code>encode(value) <span class="arrow">-&gt;</span> string!</code></pre>
       <p class="signature"><span class="sig-params">value: ptr</span></p>
       <p class="doc">Encode a JSON value tree to a compact string with all escaping handled internally. Returns (string, &quot;&quot;) on success, (&quot;&quot;, error) on failure — an alias for `stringify`.</p>
     </div>

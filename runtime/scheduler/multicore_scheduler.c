@@ -28,19 +28,6 @@
 #include "../actors/aether_send_buffer.h"
 #include "../actors/aether_panic.h"
 
-// Portable nanosecond clock for preemption timing
-static inline uint64_t aether_now_ns(void) {
-#ifdef _WIN32
-    LARGE_INTEGER freq, now;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&now);
-    return (uint64_t)((double)now.QuadPart / freq.QuadPart * 1000000000.0);
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
-#endif
-}
 
 // Forward declaration to avoid header cycle with aether_send_message.h
 extern void aether_send_message(void* actor_ptr, void* message_data, size_t message_size);

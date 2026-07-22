@@ -1,51 +1,40 @@
 #ifndef AETHER_PQUEUE_H
 #define AETHER_PQUEUE_H
 
-#include <stddef.h>
-#include <stdbool.h>
+// Priority queue over (priority, item) pairs, backed by a binary heap.
+// Lowest priority value comes out first; negate the priority for
+// highest-first. Push and pop are O(log n), peek and size are O(1).
+//
+// The queue stores item pointers without taking ownership: it never
+// frees them, so the caller decides their lifetime. Aether-facing
+// wrappers live in std/pqueue/module.ae.
 
-// Priority Queue (Binary Heap) implementation
-// Min-heap or Max-heap based on comparator
+typedef struct AetherPQueue AetherPQueue;
 
-typedef struct {
-    void** data;
-    size_t size;
-    size_t capacity;
-    int (*compare)(const void*, const void*); // <0 if a<b, 0 if a==b, >0 if a>b
-    void (*element_free)(void*);
-    void* (*element_clone)(const void*);
-} PriorityQueue;
+// Returns NULL on allocation failure.
+AetherPQueue* aether_pqueue_new(void);
 
-// Creation and destruction
-PriorityQueue* aether_pqueue_create(size_t initial_capacity,
-                            int (*compare)(const void*, const void*),
-                            void (*element_free)(void*),
-                            void* (*element_clone)(const void*));
-void aether_pqueue_free(PriorityQueue* pq);
+// 1 on success, 0 on a null queue or allocation failure.
+int aether_pqueue_push(AetherPQueue* pq, long priority, void* item);
 
-// Core operations - O(log n)
-bool aether_pqueue_insert(PriorityQueue* pq, void* element);
-void* aether_pqueue_extract(PriorityQueue* pq);  // Extract min/max
+// Removes and returns the lowest-priority item, or NULL when empty.
+// A NULL return is ambiguous if NULL items were pushed; use
+// aether_pqueue_size to distinguish.
+void* aether_pqueue_pop(AetherPQueue* pq);
 
-// Query operations - O(1)
-void* aether_pqueue_peek(PriorityQueue* pq);     // Peek at min/max
-size_t aether_pqueue_size(PriorityQueue* pq);
-bool aether_pqueue_is_empty(PriorityQueue* pq);
+// Lowest-priority item without removing it, or NULL when empty.
+void* aether_pqueue_peek(AetherPQueue* pq);
 
-// Utility
-void aether_pqueue_clear(PriorityQueue* pq);
-bool aether_pqueue_contains(PriorityQueue* pq, const void* element, 
-                    bool (*equals)(const void*, const void*));
+// Priority of the item aether_pqueue_peek would return. Returns 0 when empty,
+// so check aether_pqueue_size first.
+long aether_pqueue_peek_priority(AetherPQueue* pq);
 
-// Heapify from array
-PriorityQueue* aether_pqueue_from_array(void** elements, size_t count,
-                                int (*compare)(const void*, const void*),
-                                void (*element_free)(void*),
-                                void* (*element_clone)(const void*));
+int aether_pqueue_size(AetherPQueue* pq);
+int aether_pqueue_is_empty(AetherPQueue* pq);
 
-// Common comparators
-int aether_pqueue_compare_int_min(const void* a, const void* b);  // Min-heap for ints
-int aether_pqueue_compare_int_max(const void* a, const void* b);  // Max-heap for ints
+// Drops every entry but keeps the queue usable. Items are not freed.
+void aether_pqueue_clear(AetherPQueue* pq);
+
+void aether_pqueue_free(AetherPQueue* pq);
 
 #endif // AETHER_PQUEUE_H
-

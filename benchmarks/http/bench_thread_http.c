@@ -43,8 +43,8 @@ int main() {
 
     printf("Thread-per-connection HTTP server starting on :8080\n");
 
-    // http_server_start() calls bind internally
-    if (http_server_start(server) != 0) {
+    // http_server_start_raw() calls bind internally
+    if (http_server_start_raw(server) != 0) {
         fprintf(stderr, "Failed to start server\n");
         http_server_free(server);
         return 1;

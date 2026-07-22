@@ -1,50 +1,37 @@
 #ifndef AETHER_SET_H
 #define AETHER_SET_H
 
-#include <stddef.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include "aether_hashmap.h"
+#include "aether_collections.h"
 
-// Set implementation using HashMap (value is dummy)
-typedef struct {
-    HashMap* map;
-} Set;
+// Unordered set of unique strings, backed by the std.map hash table.
+// Keys are copied on insert, so the caller's string lifetime does not
+// matter. Aether-facing wrappers live in std/set/module.ae.
 
-// Set creation and destruction
-Set* set_create(size_t initial_capacity,
-               uint64_t (*hash_func)(const void*),
-               bool (*key_equals)(const void*, const void*),
-               void (*key_free)(void*),
-               void* (*key_clone)(const void*));
+typedef struct AetherSet AetherSet;
 
-void set_free(Set* set);
+// Returns NULL on allocation failure.
+AetherSet* aether_set_new(void);
 
-// Core operations
-bool set_add(Set* set, void* element);
-bool set_remove(Set* set, const void* element);
-bool set_contains(Set* set, const void* element);
-void set_clear(Set* set);
+// 1 if the item was added, 0 if it was already present, -1 on a null
+// argument or allocation failure.
+int aether_set_add(AetherSet* set, const char* item);
 
-// Size operations
-size_t set_size(Set* set);
-bool set_is_empty(Set* set);
+// 1 if present, 0 otherwise (also 0 for a null set or item).
+int aether_set_has(AetherSet* set, const char* item);
 
-// Set operations
-Set* set_union(Set* a, Set* b);
-Set* set_intersection(Set* a, Set* b);
-Set* set_difference(Set* a, Set* b);
-bool set_is_subset(Set* a, Set* b);
-bool set_is_superset(Set* a, Set* b);
+// No-op when the item is absent.
+void aether_set_remove(AetherSet* set, const char* item);
 
-// Iterator (reuses HashMap iterator)
-typedef HashMapIterator SetIterator;
-SetIterator set_iterator(Set* set);
-bool set_iterator_next(SetIterator* iter, void** element);
+int aether_set_size(AetherSet* set);
 
-// Convenience constructors
-Set* set_create_string(size_t initial_capacity);
-Set* set_create_int(size_t initial_capacity);
+// Drops every item but keeps the set usable.
+void aether_set_clear(AetherSet* set);
+
+void aether_set_free(AetherSet* set);
+
+// Snapshot of the set's items in unspecified order. Caller frees with
+// aether_set_items_free. Returns NULL on allocation failure or a null set.
+MapKeys* aether_set_items_raw(AetherSet* set);
+void aether_set_items_free(MapKeys* items);
 
 #endif // AETHER_SET_H
-

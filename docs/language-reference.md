@@ -2314,6 +2314,8 @@ result = utils.double_value(21);
 | `std.string` | `string` | String manipulation (`string.new()`, `string.length()`) |
 | `std.list` | `list` | Dynamic array (`list.new()`, `list.add()`) |
 | `std.map` | `map` | Hash map (`map.new()`, `map.put()`) |
+| `std.set` | `set` | Unique-string set (`set.new()`, `set.add()`) |
+| `std.pqueue` | `pqueue` | Priority queue (`pqueue.new()`, `pqueue.push()`) |
 | `std.json` | `json` | JSON encoding/decoding (`json.parse()`, `json.free()`) |
 | `std.http` | `http` | HTTP client & server (`http.get()`, `http.server_create()`) |
 | `std.tcp` | `tcp` | TCP sockets (`tcp.connect()`, `tcp.write()`) |

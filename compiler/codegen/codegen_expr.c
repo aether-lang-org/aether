@@ -246,7 +246,7 @@ static void collect_identifiers(ASTNode* node, char*** names, int* count, int* c
         }
         if (*count >= *cap) {
             *cap = *cap ? *cap * 2 : 16;
-            *names = realloc(*names, *cap * sizeof(char*));
+            *names = aether_xrealloc(*names, *cap * sizeof(char*));
         }
         (*names)[(*count)++] = strdup(node->value);
     }
@@ -270,7 +270,7 @@ static void collect_write_targets(ASTNode* node, char*** names, int* count, int*
         }
         if (*count >= *cap) {
             *cap = *cap ? *cap * 2 : 8;
-            *names = realloc(*names, *cap * sizeof(char*));
+            *names = aether_xrealloc(*names, *cap * sizeof(char*));
         }
         (*names)[(*count)++] = strdup(node->value);
     skip:;
@@ -805,7 +805,7 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
             if (is_cap) {
                 if (cap_count >= cap_cap) {
                     cap_cap = cap_cap ? cap_cap * 2 : 8;
-                    captures = realloc(captures, cap_cap * sizeof(char*));
+                    captures = aether_xrealloc(captures, cap_cap * sizeof(char*));
                 }
                 captures[cap_count++] = strdup(all_ids[i]);
             }
@@ -854,7 +854,7 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
                 if (is_top_level_decl_in_function(gen->program, enclosing_func, writes[i])) {
                     if (cap_count >= cap_cap) {
                         cap_cap = cap_cap ? cap_cap * 2 : 8;
-                        captures = realloc(captures, cap_cap * sizeof(char*));
+                        captures = aether_xrealloc(captures, cap_cap * sizeof(char*));
                     }
                     captures[cap_count++] = strdup(writes[i]);
                 }
@@ -866,7 +866,7 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
         // Register closure
         if (gen->closure_count >= gen->closure_capacity) {
             gen->closure_capacity = gen->closure_capacity ? gen->closure_capacity * 2 : 16;
-            gen->closures = realloc(gen->closures, gen->closure_capacity * sizeof(gen->closures[0]));
+            gen->closures = aether_xrealloc(gen->closures, gen->closure_capacity * sizeof(gen->closures[0]));
         }
         gen->closures[gen->closure_count].id = id;
         gen->closures[gen->closure_count].closure_node = node;
@@ -949,7 +949,7 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
             if (existing_idx < 0) {
                 if (gen->closure_var_count >= gen->closure_var_capacity) {
                     gen->closure_var_capacity = gen->closure_var_capacity ? gen->closure_var_capacity * 2 : 16;
-                    gen->closure_var_map = realloc(gen->closure_var_map,
+                    gen->closure_var_map = aether_xrealloc(gen->closure_var_map,
                         gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
                 }
                 gen->closure_var_map[gen->closure_var_count].var_name = strdup(node->value);
@@ -1048,7 +1048,7 @@ static void add_promoted_name(CodeGenerator* gen, const char* func_name, const c
     if (idx < 0) {
         if (gen->promoted_func_count >= gen->promoted_func_capacity) {
             gen->promoted_func_capacity = gen->promoted_func_capacity ? gen->promoted_func_capacity * 2 : 8;
-            gen->promoted_funcs = realloc(gen->promoted_funcs,
+            gen->promoted_funcs = aether_xrealloc(gen->promoted_funcs,
                 gen->promoted_func_capacity * sizeof(gen->promoted_funcs[0]));
         }
         idx = gen->promoted_func_count++;
@@ -1059,7 +1059,7 @@ static void add_promoted_name(CodeGenerator* gen, const char* func_name, const c
     for (int i = 0; i < gen->promoted_funcs[idx].count; i++) {
         if (strcmp(gen->promoted_funcs[idx].names[i], name) == 0) return;
     }
-    gen->promoted_funcs[idx].names = realloc(gen->promoted_funcs[idx].names,
+    gen->promoted_funcs[idx].names = aether_xrealloc(gen->promoted_funcs[idx].names,
         (gen->promoted_funcs[idx].count + 1) * sizeof(char*));
     gen->promoted_funcs[idx].names[gen->promoted_funcs[idx].count++] = strdup(name);
 }
@@ -1142,7 +1142,7 @@ static void add_capture(CodeGenerator* gen, int ci, const char* name) {
         if (strcmp(gen->closures[ci].captures[i], name) == 0) return;
     }
     int n = gen->closures[ci].capture_count;
-    gen->closures[ci].captures = realloc(gen->closures[ci].captures,
+    gen->closures[ci].captures = aether_xrealloc(gen->closures[ci].captures,
                                          (n + 1) * sizeof(char*));
     gen->closures[ci].captures[n] = strdup(name);
     gen->closures[ci].capture_count = n + 1;

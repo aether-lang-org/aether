@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>worker - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search worker..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#aether_worker_run">aether_worker_run</a></li>
+    <li><a href="#aether_worker_run_detached">aether_worker_run_detached</a></li>
+    <li><a href="#aether_worker_set_main_poster">aether_worker_set_main_poster</a></li>
+    <li><a href="#aether_worker_deliver">aether_worker_deliver</a></li>
+    <li><a href="#aether_worker_drain">aether_worker_drain</a></li>
+    <li><a href="#aether_worker_pending">aether_worker_pending</a></li>
+    <li><a href="#aether_worker_pool_configure">aether_worker_pool_configure</a></li>
+    <li><a href="#aether_worker_pool_shutdown">aether_worker_pool_shutdown</a></li>
+    <li><a href="#run">run</a></li>
+    <li><a href="#run_detached">run_detached</a></li>
+    <li><a href="#set_main_poster">set_main_poster</a></li>
+    <li><a href="#deliver">deliver</a></li>
+    <li><a href="#drain">drain</a></li>
+    <li><a href="#pending">pending</a></li>
+    <li><a href="#pool_size">pool_size</a></li>
+    <li><a href="#pool_shutdown">pool_shutdown</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audio.html">audio</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="pqueue.html">pqueue</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="set.html">set</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li class="active"><a href="worker.html">worker</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>worker</h1>
+    <p class="module-desc">std.worker — run blocking work off the loop thread, deliver the result back on it.</p>
+    <p class="import-line"><code>import std.worker</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="aether_worker_run" data-name="aether_worker_run">
+      <h3 class="function-name">aether_worker_run <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_worker_run(work, done) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">work: fn, done: fn</span></p>
+      <p class="doc">---- raw externs (std/worker/aether_worker.c) ---- `fn` lowers to the compiler's _AeClosure ({fn, env}); the C side stores it and invokes it (on the worker thread for `work`, on the loop thread for `done`) with the emitted fn(env, args...) convention. `ptr` job handles are opaque WorkerJob*.</p>
+    </div>
+    <div class="function" id="aether_worker_run_detached" data-name="aether_worker_run_detached">
+      <h3 class="function-name">aether_worker_run_detached <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_worker_run_detached(work) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">work: fn</span></p>
+    </div>
+    <div class="function" id="aether_worker_set_main_poster" data-name="aether_worker_set_main_poster">
+      <h3 class="function-name">aether_worker_set_main_poster <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_worker_set_main_poster(poster)</code></pre>
+      <p class="signature"><span class="sig-params">poster: fn</span></p>
+    </div>
+    <div class="function" id="aether_worker_deliver" data-name="aether_worker_deliver">
+      <h3 class="function-name">aether_worker_deliver <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_worker_deliver(job)</code></pre>
+      <p class="signature"><span class="sig-params">job: ptr</span></p>
+    </div>
+    <div class="function" id="aether_worker_drain" data-name="aether_worker_drain">
+      <h3 class="function-name">aether_worker_drain <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_worker_drain(max) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">max: int</span></p>
+    </div>
+    <div class="function" id="aether_worker_pending" data-name="aether_worker_pending">
+      <h3 class="function-name">aether_worker_pending <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_worker_pending() <span class="arrow">-&gt;</span> int</code></pre>
+    </div>
+    <div class="function" id="aether_worker_pool_configure" data-name="aether_worker_pool_configure">
+      <h3 class="function-name">aether_worker_pool_configure <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_worker_pool_configure(n)</code></pre>
+      <p class="signature"><span class="sig-params">n: int</span></p>
+    </div>
+    <div class="function" id="aether_worker_pool_shutdown" data-name="aether_worker_pool_shutdown">
+      <h3 class="function-name">aether_worker_pool_shutdown <span class="kind">extern</span></h3>
+      <pre class="usage"><code>aether_worker_pool_shutdown()</code></pre>
+    </div>
+    <div class="function" id="run" data-name="run">
+      <h3 class="function-name">run <span class="kind">fn</span></h3>
+      <pre class="usage"><code>run(work, done) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">work: fn, done: fn</span></p>
+      <p class="doc">Run `work` on a background thread; when it returns a `ptr` result, deliver that result to `done` on the loop thread (through the installed poster, or the drain queue if none). Returns true if the worker launched, false on failure (no threads / out of memory) — on false neither closure runs.</p>
+    </div>
+    <div class="function" id="run_detached" data-name="run_detached">
+      <h3 class="function-name">run_detached <span class="kind">fn</span></h3>
+      <pre class="usage"><code>run_detached(work) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">work: fn</span></p>
+      <p class="doc">Fire-and-forget: run `work` off-thread and discard its result. No post-back, nothing to drain. Returns true if launched.</p>
+    </div>
+    <div class="function" id="set_main_poster" data-name="set_main_poster">
+      <h3 class="function-name">set_main_poster <span class="kind">fn</span></h3>
+      <pre class="usage"><code>set_main_poster(poster)</code></pre>
+      <p class="signature"><span class="sig-params">poster: fn</span></p>
+      <p class="doc">Install the host's &quot;post to the loop thread&quot; trampoline. `poster` is invoked (on the worker thread) with an opaque job `ptr`; the host must marshal that ptr onto its loop thread and there call `deliver(job)`. Call once at startup.</p>
+    </div>
+    <div class="function" id="deliver" data-name="deliver">
+      <h3 class="function-name">deliver <span class="kind">fn</span></h3>
+      <pre class="usage"><code>deliver(job)</code></pre>
+      <p class="signature"><span class="sig-params">job: ptr</span></p>
+      <p class="doc">Run a job's completion now, on the calling thread: invokes its `done` with the work result, then reclaims the job. The host calls this from its loop thread inside the marshaled poster callback.</p>
+    </div>
+    <div class="function" id="drain" data-name="drain">
+      <h3 class="function-name">drain <span class="kind">fn</span></h3>
+      <pre class="usage"><code>drain(max) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">max: int</span></p>
+      <p class="doc">Pump ready completions on the calling thread. `max` &lt;= 0 runs all currently ready; a positive `max` caps it. Returns how many ran. Only jobs that finished while NO poster was installed appear here. The headless / test loop.</p>
+    </div>
+    <div class="function" id="pending" data-name="pending">
+      <h3 class="function-name">pending <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pending() <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="doc">Launched jobs not yet delivered (running, ready-but-undrained, or in flight through the poster). For backpressure and test synchronisation.</p>
+    </div>
+    <div class="function" id="pool_size" data-name="pool_size">
+      <h3 class="function-name">pool_size <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pool_size(n)</code></pre>
+      <p class="signature"><span class="sig-params">n: int</span></p>
+      <p class="doc">Set the bounded pool size. Only takes effect before the first run(); the default is derived from the core count. N concurrently-blocking jobs queue job N+1 (the standard SwingWorker-style trade); use run_detached for a job that must never queue.</p>
+    </div>
+    <div class="function" id="pool_shutdown" data-name="pool_shutdown">
+      <h3 class="function-name">pool_shutdown <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pool_shutdown()</code></pre>
+      <p class="doc">Join and free the pool threads once they finish their current + queued jobs. For deterministic teardown; NOT run automatically. Process exit abandons in-flight/queued jobs (instant, like the pre-pool model), so a job blocked in user work can never hang exit. Call this only when jobs are known to finish.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>
