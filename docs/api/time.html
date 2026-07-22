@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>time - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search time..." onkeyup="searchModule()">
+  <h2>Exports</h2>
+  <ul class="function-nav">
+    <li><a href="#DateTime">DateTime</a></li>
+    <li><a href="#now">now</a></li>
+    <li><a href="#now_ms">now_ms</a></li>
+    <li><a href="#from_civil">from_civil</a></li>
+    <li><a href="#from_unix">from_unix</a></li>
+    <li><a href="#to_unix">to_unix</a></li>
+    <li><a href="#weekday">weekday</a></li>
+    <li><a href="#day_of_year">day_of_year</a></li>
+    <li><a href="#is_leap_year">is_leap_year</a></li>
+    <li><a href="#days_in_month">days_in_month</a></li>
+    <li><a href="#add_seconds">add_seconds</a></li>
+    <li><a href="#add_minutes">add_minutes</a></li>
+    <li><a href="#add_hours">add_hours</a></li>
+    <li><a href="#add_days">add_days</a></li>
+    <li><a href="#diff_seconds">diff_seconds</a></li>
+    <li><a href="#is_before">is_before</a></li>
+    <li><a href="#is_after">is_after</a></li>
+    <li><a href="#to_iso8601">to_iso8601</a></li>
+    <li><a href="#parse_iso8601">parse_iso8601</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
+    <li><a href="arena.html">arena</a></li>
+    <li><a href="audio.html">audio</a></li>
+    <li><a href="audit.html">audit</a></li>
+    <li><a href="bignum.html">bignum</a></li>
+    <li><a href="bits.html">bits</a></li>
+    <li><a href="bytes.html">bytes</a></li>
+    <li><a href="capsicum.html">capsicum</a></li>
+    <li><a href="cas.html">cas</a></li>
+    <li><a href="casper.html">casper</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="config.html">config</a></li>
+    <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
+    <li><a href="dir.html">dir</a></li>
+    <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
+    <li><a href="file.html">file</a></li>
+    <li><a href="floatarr.html">floatarr</a></li>
+    <li><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
+    <li><a href="host.html">host</a></li>
+    <li><a href="http.html">http</a></li>
+    <li><a href="intarr.html">intarr</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="ipc.html">ipc</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="ksuid.html">ksuid</a></li>
+    <li><a href="list.html">list</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="longarr.html">longarr</a></li>
+    <li><a href="lzf.html">lzf</a></li>
+    <li><a href="map.html">map</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="mem.html">mem</a></li>
+    <li><a href="nanoid.html">nanoid</a></li>
+    <li><a href="net.html">net</a></li>
+    <li><a href="os.html">os</a></li>
+    <li><a href="path.html">path</a></li>
+    <li><a href="regex.html">regex</a></li>
+    <li><a href="signal.html">signal</a></li>
+    <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
+    <li><a href="strbuilder.html">strbuilder</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="tcp.html">tcp</a></li>
+    <li class="active"><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
+    <li><a href="tsid.html">tsid</a></li>
+    <li><a href="ulid.html">ulid</a></li>
+    <li><a href="url.html">url</a></li>
+    <li><a href="uuid.html">uuid</a></li>
+    <li><a href="worker.html">worker</a></li>
+    <li><a href="xml.html">xml</a></li>
+    <li><a href="zlib.html">zlib</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>time</h1>
+    <p class="module-desc">std.time — civil date/time over Unix epoch seconds (UTC).</p>
+    <p class="import-line"><code>import std.time</code></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="DateTime" data-name="DateTime">
+      <h3 class="function-name">DateTime <span class="kind">struct</span></h3>
+      <pre class="usage"><code>struct DateTime</code></pre>
+      <p class="doc">A civil UTC date/time. `epoch` (epoch seconds) is canonical; the civil fields are a decoded view of it. Build with from_civil / from_unix / now; read fields directly.</p>
+    </div>
+    <div class="function" id="now" data-name="now">
+      <h3 class="function-name">now <span class="kind">fn</span></h3>
+      <pre class="usage"><code>now() <span class="arrow">-&gt;</span> DateTime</code></pre>
+      <p class="doc">Current UTC time (whole seconds).</p>
+    </div>
+    <div class="function" id="now_ms" data-name="now_ms">
+      <h3 class="function-name">now_ms <span class="kind">fn</span></h3>
+      <pre class="usage"><code>now_ms() <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="doc">Current Unix time in milliseconds (raw, no civil decode).</p>
+    </div>
+    <div class="function" id="from_civil" data-name="from_civil">
+      <h3 class="function-name">from_civil <span class="kind">fn</span></h3>
+      <pre class="usage"><code>from_civil(year, month, day, hour, minute, second) <span class="arrow">-&gt;</span> DateTime</code></pre>
+      <p class="signature"><span class="sig-params">year: int, month: int, day: int, hour: int, minute: int, second: int</span></p>
+      <p class="doc">Build a DateTime from civil UTC fields (normalising via epoch seconds).</p>
+    </div>
+    <div class="function" id="from_unix" data-name="from_unix">
+      <h3 class="function-name">from_unix <span class="kind">fn</span></h3>
+      <pre class="usage"><code>from_unix(epoch) <span class="arrow">-&gt;</span> DateTime</code></pre>
+      <p class="signature"><span class="sig-params">epoch: long</span></p>
+      <p class="doc">Build a DateTime from an epoch-seconds value, decoding civil fields.</p>
+    </div>
+    <div class="function" id="to_unix" data-name="to_unix">
+      <h3 class="function-name">to_unix <span class="kind">fn</span></h3>
+      <pre class="usage"><code>to_unix(dt) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">dt: DateTime</span></p>
+      <p class="doc">The canonical epoch-seconds value of a DateTime.</p>
+    </div>
+    <div class="function" id="weekday" data-name="weekday">
+      <h3 class="function-name">weekday <span class="kind">fn</span></h3>
+      <pre class="usage"><code>weekday(dt) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">dt: DateTime</span></p>
+    </div>
+    <div class="function" id="day_of_year" data-name="day_of_year">
+      <h3 class="function-name">day_of_year <span class="kind">fn</span></h3>
+      <pre class="usage"><code>day_of_year(dt) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">dt: DateTime</span></p>
+    </div>
+    <div class="function" id="is_leap_year" data-name="is_leap_year">
+      <h3 class="function-name">is_leap_year <span class="kind">fn</span></h3>
+      <pre class="usage"><code>is_leap_year(y) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">y: int</span></p>
+    </div>
+    <div class="function" id="days_in_month" data-name="days_in_month">
+      <h3 class="function-name">days_in_month <span class="kind">fn</span></h3>
+      <pre class="usage"><code>days_in_month(y, m) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">y: int, m: int</span></p>
+    </div>
+    <div class="function" id="add_seconds" data-name="add_seconds">
+      <h3 class="function-name">add_seconds <span class="kind">fn</span></h3>
+      <pre class="usage"><code>add_seconds(dt, s) <span class="arrow">-&gt;</span> DateTime</code></pre>
+      <p class="signature"><span class="sig-params">dt: DateTime, s: long</span></p>
+    </div>
+    <div class="function" id="add_minutes" data-name="add_minutes">
+      <h3 class="function-name">add_minutes <span class="kind">fn</span></h3>
+      <pre class="usage"><code>add_minutes(dt, m) <span class="arrow">-&gt;</span> DateTime</code></pre>
+      <p class="signature"><span class="sig-params">dt: DateTime, m: long</span></p>
+    </div>
+    <div class="function" id="add_hours" data-name="add_hours">
+      <h3 class="function-name">add_hours <span class="kind">fn</span></h3>
+      <pre class="usage"><code>add_hours(dt, h) <span class="arrow">-&gt;</span> DateTime</code></pre>
+      <p class="signature"><span class="sig-params">dt: DateTime, h: long</span></p>
+    </div>
+    <div class="function" id="add_days" data-name="add_days">
+      <h3 class="function-name">add_days <span class="kind">fn</span></h3>
+      <pre class="usage"><code>add_days(dt, d) <span class="arrow">-&gt;</span> DateTime</code></pre>
+      <p class="signature"><span class="sig-params">dt: DateTime, d: long</span></p>
+    </div>
+    <div class="function" id="diff_seconds" data-name="diff_seconds">
+      <h3 class="function-name">diff_seconds <span class="kind">fn</span></h3>
+      <pre class="usage"><code>diff_seconds(a, b) <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="signature"><span class="sig-params">a: DateTime, b: DateTime</span></p>
+      <p class="doc">Signed difference a - b in whole seconds.</p>
+    </div>
+    <div class="function" id="is_before" data-name="is_before">
+      <h3 class="function-name">is_before <span class="kind">fn</span></h3>
+      <pre class="usage"><code>is_before(a, b) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">a: DateTime, b: DateTime</span></p>
+    </div>
+    <div class="function" id="is_after" data-name="is_after">
+      <h3 class="function-name">is_after <span class="kind">fn</span></h3>
+      <pre class="usage"><code>is_after(a, b) <span class="arrow">-&gt;</span> bool</code></pre>
+      <p class="signature"><span class="sig-params">a: DateTime, b: DateTime</span></p>
+    </div>
+    <div class="function" id="to_iso8601" data-name="to_iso8601">
+      <h3 class="function-name">to_iso8601 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>to_iso8601(dt) <span class="arrow">-&gt;</span> string</code></pre>
+      <p class="signature"><span class="sig-params">dt: DateTime</span></p>
+      <p class="doc">Format as &quot;YYYY-MM-DDTHH:MM:SSZ&quot; (RFC-3339 UTC). Years are zero-padded to at least 4 digits.</p>
+    </div>
+    <div class="function" id="parse_iso8601" data-name="parse_iso8601">
+      <h3 class="function-name">parse_iso8601 <span class="kind">fn</span></h3>
+      <pre class="usage"><code>parse_iso8601(s) <span class="arrow">-&gt;</span> (DateTime, string)</code></pre>
+      <p class="signature"><span class="sig-params">s: string</span></p>
+      <p class="doc">Parse &quot;YYYY-MM-DDTHH:MM:SS&quot; with an optional trailing 'Z' (UTC). A space may replace the 'T'. Returns the DateTime, or a non-empty error on a malformed shape / out-of-range field.</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>uuid - Aether</title>
+  <title>sort - Aether</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,11 +12,15 @@
     <h1><a href="index.html">Aether</a></h1>
     <p class="tagline">Standard Library</p>
   </div>
-  <input type="text" id="search" placeholder="Search uuid..." onkeyup="searchModule()">
+  <input type="text" id="search" placeholder="Search sort..." onkeyup="searchModule()">
   <h2>Exports</h2>
   <ul class="function-nav">
-    <li><a href="#v4">v4</a></li>
-    <li><a href="#v7">v7</a></li>
+    <li><a href="#ints">ints</a></li>
+    <li><a href="#longs">longs</a></li>
+    <li><a href="#floats">floats</a></li>
+    <li><a href="#int_search">int_search</a></li>
+    <li><a href="#long_search">long_search</a></li>
+    <li><a href="#float_search">float_search</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
@@ -64,7 +68,7 @@
     <li><a href="regex.html">regex</a></li>
     <li><a href="signal.html">signal</a></li>
     <li><a href="snapshot.html">snapshot</a></li>
-    <li><a href="sort.html">sort</a></li>
+    <li class="active"><a href="sort.html">sort</a></li>
     <li><a href="strbuilder.html">strbuilder</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="tcp.html">tcp</a></li>
@@ -73,7 +77,7 @@
     <li><a href="tsid.html">tsid</a></li>
     <li><a href="ulid.html">ulid</a></li>
     <li><a href="url.html">url</a></li>
-    <li class="active"><a href="uuid.html">uuid</a></li>
+    <li><a href="uuid.html">uuid</a></li>
     <li><a href="worker.html">worker</a></li>
     <li><a href="xml.html">xml</a></li>
     <li><a href="zlib.html">zlib</a></li>
@@ -81,20 +85,42 @@
 </nav>
 <main class="content">
   <div class="module-header">
-    <h1>uuid</h1>
-    <p class="module-desc">std.uuid — UUID v4 and v7 (RFC 9562).</p>
-    <p class="import-line"><code>import std.uuid</code></p>
+    <h1>sort</h1>
+    <p class="module-desc">std.sort — in-place ascending sort + binary search over the concrete numeric array types (std.intarr / std.longarr / std.floatarr).</p>
+    <p class="import-line"><code>import std.sort</code></p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="v4" data-name="v4">
-      <h3 class="function-name">v4 <span class="kind">fn</span></h3>
-      <pre class="usage"><code>v4() <span class="arrow">-&gt;</span> (string, _1)</code></pre>
-      <p class="doc">UUIDv4 — 128 bits with six fixed bits (version=0100, variant=10): xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx   y ∈ {8,9,a,b} Returns (uuid, &quot;&quot;) on success, (&quot;&quot;, error) on CSPRNG failure.</p>
+    <div class="function" id="ints" data-name="ints">
+      <h3 class="function-name">ints <span class="kind">fn</span></h3>
+      <pre class="usage"><code>ints(arr)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr</span></p>
+      <p class="doc">Sort an intarr ascending, in place.</p>
     </div>
-    <div class="function" id="v7" data-name="v7">
-      <h3 class="function-name">v7 <span class="kind">fn</span></h3>
-      <pre class="usage"><code>v7() <span class="arrow">-&gt;</span> (string, _1)</code></pre>
-      <p class="doc">UUIDv7 (RFC 9562 §5.7) — 48-bit big-endian Unix-ms timestamp in bytes 0..5, then version=0111 in the high nibble of byte 6, variant=10 in the top two bits of byte 8, remaining 74 bits from the CSPRNG. Sortable by issuance time at ms resolution. At very high QPS (&gt;1000 IDs/ms per process) the timestamp can collide with the previous tick; this implementation does NOT add a monotonic counter, so back-to-back same-ms IDs sort arbitrarily within the same millisecond. RFC-allowed and what the fbs-core storage use case wants. Higher-QPS callers should layer a per-process counter on top.</p>
+    <div class="function" id="longs" data-name="longs">
+      <h3 class="function-name">longs <span class="kind">fn</span></h3>
+      <pre class="usage"><code>longs(arr)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr</span></p>
+    </div>
+    <div class="function" id="floats" data-name="floats">
+      <h3 class="function-name">floats <span class="kind">fn</span></h3>
+      <pre class="usage"><code>floats(arr)</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr</span></p>
+    </div>
+    <div class="function" id="int_search" data-name="int_search">
+      <h3 class="function-name">int_search <span class="kind">fn</span></h3>
+      <pre class="usage"><code>int_search(arr, x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, x: int</span></p>
+      <p class="doc">Binary search a SORTED intarr for `x`. Returns the index of `x` if present, otherwise the insertion point (the index where `x` would be inserted to keep the array sorted) — matching C3's binarysearch contract.</p>
+    </div>
+    <div class="function" id="long_search" data-name="long_search">
+      <h3 class="function-name">long_search <span class="kind">fn</span></h3>
+      <pre class="usage"><code>long_search(arr, x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, x: long</span></p>
+    </div>
+    <div class="function" id="float_search" data-name="float_search">
+      <h3 class="function-name">float_search <span class="kind">fn</span></h3>
+      <pre class="usage"><code>float_search(arr, x) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">arr: ptr, x: double</span></p>
     </div>
   </div>
 </main>

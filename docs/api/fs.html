@@ -40,6 +40,11 @@
     <li><a href="#get_stat_kind">get_stat_kind</a></li>
     <li><a href="#get_stat_size">get_stat_size</a></li>
     <li><a href="#get_stat_mtime">get_stat_mtime</a></li>
+    <li><a href="#try_statvfs">try_statvfs</a></li>
+    <li><a href="#get_statvfs_total">get_statvfs_total</a></li>
+    <li><a href="#get_statvfs_free">get_statvfs_free</a></li>
+    <li><a href="#get_statvfs_avail">get_statvfs_avail</a></li>
+    <li><a href="#statvfs">statvfs</a></li>
     <li><a href="#try_read_binary">try_read_binary</a></li>
     <li><a href="#get_read_binary">get_read_binary</a></li>
     <li><a href="#get_read_binary_length">get_read_binary_length</a></li>
@@ -47,6 +52,7 @@
     <li><a href="#read_binary_tuple">read_binary_tuple</a></li>
     <li><a href="#dir_list_count">dir_list_count</a></li>
     <li><a href="#dir_list_get">dir_list_get</a></li>
+    <li><a href="#dir_list_kind">dir_list_kind</a></li>
     <li><a href="#dir_list_free">dir_list_free</a></li>
     <li><a href="#path_join">path_join</a></li>
     <li><a href="#path_dirname">path_dirname</a></li>
@@ -63,6 +69,7 @@
     <li><a href="#first_element">first_element</a></li>
     <li><a href="#pwrite_raw">pwrite_raw</a></li>
     <li><a href="#pread_raw">pread_raw</a></li>
+    <li><a href="#pread_into_raw">pread_into_raw</a></li>
     <li><a href="#get_pread">get_pread</a></li>
     <li><a href="#get_pread_length">get_pread_length</a></li>
     <li><a href="#release_pread">release_pread</a></li>
@@ -70,10 +77,15 @@
     <li><a href="#fsync_raw">fsync_raw</a></li>
     <li><a href="#pwrite">pwrite</a></li>
     <li><a href="#pread">pread</a></li>
+    <li><a href="#pread_into">pread_into</a></li>
     <li><a href="#ftruncate">ftruncate</a></li>
     <li><a href="#fsync">fsync</a></li>
+    <li><a href="#file_fd_raw">file_fd_raw</a></li>
+    <li><a href="#fd">fd</a></li>
     <li><a href="#glob_raw">glob_raw</a></li>
     <li><a href="#glob_multi_raw">glob_multi_raw</a></li>
+    <li><a href="#walk_raw">walk_raw</a></li>
+    <li><a href="#watch_open_raw">watch_open_raw</a></li>
     <li><a href="#open">open</a></li>
     <li><a href="#read">read</a></li>
     <li><a href="#write">write</a></li>
@@ -91,6 +103,10 @@
     <li><a href="#list_dir">list_dir</a></li>
     <li><a href="#glob">glob</a></li>
     <li><a href="#glob_multi">glob_multi</a></li>
+    <li><a href="#walk">walk</a></li>
+    <li><a href="#watch_open">watch_open</a></li>
+    <li><a href="#watch_wait">watch_wait</a></li>
+    <li><a href="#watch_close">watch_close</a></li>
     <li><a href="#write_binary">write_binary</a></li>
     <li><a href="#write_atomic">write_atomic</a></li>
     <li><a href="#rename">rename</a></li>
@@ -122,7 +138,9 @@
   <h2>Modules</h2>
   <ul class="module-list">
     <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
     <li><a href="arena.html">arena</a></li>
+    <li><a href="audio.html">audio</a></li>
     <li><a href="audit.html">audit</a></li>
     <li><a href="bignum.html">bignum</a></li>
     <li><a href="bits.html">bits</a></li>
@@ -133,11 +151,14 @@
     <li><a href="collections.html">collections</a></li>
     <li><a href="config.html">config</a></li>
     <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
     <li><a href="dir.html">dir</a></li>
     <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
     <li><a href="file.html">file</a></li>
     <li><a href="floatarr.html">floatarr</a></li>
     <li class="active"><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
     <li><a href="host.html">host</a></li>
     <li><a href="http.html">http</a></li>
     <li><a href="intarr.html">intarr</a></li>
@@ -159,13 +180,17 @@
     <li><a href="regex.html">regex</a></li>
     <li><a href="signal.html">signal</a></li>
     <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
     <li><a href="strbuilder.html">strbuilder</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="tcp.html">tcp</a></li>
+    <li><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
     <li><a href="tsid.html">tsid</a></li>
     <li><a href="ulid.html">ulid</a></li>
     <li><a href="url.html">url</a></li>
     <li><a href="uuid.html">uuid</a></li>
+    <li><a href="worker.html">worker</a></li>
     <li><a href="xml.html">xml</a></li>
     <li><a href="zlib.html">zlib</a></li>
   </ul>
@@ -216,14 +241,15 @@
     </div>
     <div class="function" id="file_size_raw" data-name="file_size_raw">
       <h3 class="function-name">file_size_raw <span class="kind">extern</span></h3>
-      <pre class="usage"><code>file_size_raw(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <pre class="usage"><code>file_size_raw(path) <span class="arrow">-&gt;</span> long</code></pre>
       <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Size in bytes, as `long` (#1021): the old int surface wrapped files &gt;= 2 GiB to a negative value. Returns -1 on stat failure.</p>
     </div>
     <div class="function" id="file_mtime" data-name="file_mtime">
       <h3 class="function-name">file_mtime <span class="kind">extern</span></h3>
-      <pre class="usage"><code>file_mtime(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <pre class="usage"><code>file_mtime(path) <span class="arrow">-&gt;</span> long</code></pre>
       <p class="signature"><span class="sig-params">path: string</span></p>
-      <p class="doc">Get file modification time as a Unix timestamp. Infallible — returns 0 for missing files, null paths, or stat failure. Kept as a raw extern with no Go-style wrapper because callers already use the 0 sentinel for &quot;no mtime&quot;.</p>
+      <p class="doc">Get file modification time as a Unix timestamp. Infallible — returns 0 for missing files, null paths, or stat failure. Kept as a raw extern with no Go-style wrapper because callers already use the 0 sentinel for &quot;no mtime&quot;. `long` since #1021 (Y2038-safe).</p>
     </div>
     <div class="function" id="dir_exists" data-name="dir_exists">
       <h3 class="function-name">dir_exists <span class="kind">extern</span></h3>
@@ -303,11 +329,36 @@
     </div>
     <div class="function" id="get_stat_size" data-name="get_stat_size">
       <h3 class="function-name">get_stat_size <span class="kind">extern</span></h3>
-      <pre class="usage"><code>get_stat_size() <span class="arrow">-&gt;</span> int</code></pre>
+      <pre class="usage"><code>get_stat_size() <span class="arrow">-&gt;</span> long</code></pre>
+      <p class="doc">size/mtime are `long` (#1021): 64-bit sizes (no &gt;= 2 GiB wrap) and Y2038-safe mtimes.</p>
     </div>
     <div class="function" id="get_stat_mtime" data-name="get_stat_mtime">
       <h3 class="function-name">get_stat_mtime <span class="kind">extern</span></h3>
-      <pre class="usage"><code>get_stat_mtime() <span class="arrow">-&gt;</span> int</code></pre>
+      <pre class="usage"><code>get_stat_mtime() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="try_statvfs" data-name="try_statvfs">
+      <h3 class="function-name">try_statvfs <span class="kind">extern</span></h3>
+      <pre class="usage"><code>try_statvfs(path) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Split-accessor statvfs (#1117): fs_try_statvfs first, then read the three byte-count getters. All `long` (exact bytes, 64-bit). Thread-local like the stat pair. fs_try_statvfs returns 0 on failure (incl. Windows).</p>
+    </div>
+    <div class="function" id="get_statvfs_total" data-name="get_statvfs_total">
+      <h3 class="function-name">get_statvfs_total <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_statvfs_total() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="get_statvfs_free" data-name="get_statvfs_free">
+      <h3 class="function-name">get_statvfs_free <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_statvfs_free() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="get_statvfs_avail" data-name="get_statvfs_avail">
+      <h3 class="function-name">get_statvfs_avail <span class="kind">extern</span></h3>
+      <pre class="usage"><code>get_statvfs_avail() <span class="arrow">-&gt;</span> long</code></pre>
+    </div>
+    <div class="function" id="statvfs" data-name="statvfs">
+      <h3 class="function-name">statvfs <span class="kind">fn</span></h3>
+      <pre class="usage"><code>statvfs(path) <span class="arrow">-&gt;</span> (_0, _1, _2, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">Exact filesystem byte counts for the filesystem containing `path` (#1117). Returns (total, free, avail, &quot;&quot;) on success, (0, 0, 0, error) on failure. `avail` (POSIX f_bavail) is the space usable by an unprivileged process — the one you want for &quot;how much can I actually write here&quot; (e.g. auto-filling a write range: `end = avail / file_size`). POSIX statvfs(2); portable across Linux/macOS/BSD. Not available on Windows (returns the error branch there). Same `long`-inference discipline as file_stat (#1021): bind the getters to locals so they keep their `long` type, and return the success arm first so the first `return` pins the tuple slots to long. The getters all read 0 after a failed fs_try_statvfs, so binding them before the ok-check is safe.</p>
     </div>
     <div class="function" id="try_read_binary" data-name="try_read_binary">
       <h3 class="function-name">try_read_binary <span class="kind">extern</span></h3>
@@ -342,6 +393,12 @@
       <h3 class="function-name">dir_list_get <span class="kind">extern</span></h3>
       <pre class="usage"><code>dir_list_get(list, index) <span class="arrow">-&gt;</span> string</code></pre>
       <p class="signature"><span class="sig-params">list: ptr, index: int</span></p>
+    </div>
+    <div class="function" id="dir_list_kind" data-name="dir_list_kind">
+      <h3 class="function-name">dir_list_kind <span class="kind">extern</span></h3>
+      <pre class="usage"><code>dir_list_kind(list, index) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">list: ptr, index: int</span></p>
+      <p class="doc">#966: file kind of entry `index`, straight from readdir's d_type — no stat(2) needed. Same encoding as file_stat's kind: 1 = regular file, 2 = directory, 3 = symlink (target not followed), 4 = other (fifo / socket / device). 0 = unknown: the filesystem didn't report a type (rare) — stat that entry to resolve it.</p>
     </div>
     <div class="function" id="dir_list_free" data-name="dir_list_free">
       <h3 class="function-name">dir_list_free <span class="kind">extern</span></h3>
@@ -431,6 +488,11 @@
       <pre class="usage"><code>pread_raw(file, length, offset) <span class="arrow">-&gt;</span> int</code></pre>
       <p class="signature"><span class="sig-params">file: ptr, length: int, offset: long</span></p>
     </div>
+    <div class="function" id="pread_into_raw" data-name="pread_into_raw">
+      <h3 class="function-name">pread_into_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>pread_into_raw(file, buf, length, offset) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, buf: ptr, length: int, offset: long</span></p>
+    </div>
     <div class="function" id="get_pread" data-name="get_pread">
       <h3 class="function-name">get_pread <span class="kind">extern</span></h3>
       <pre class="usage"><code>get_pread() <span class="arrow">-&gt;</span> string</code></pre>
@@ -455,15 +517,21 @@
     </div>
     <div class="function" id="pwrite" data-name="pwrite">
       <h3 class="function-name">pwrite <span class="kind">fn</span></h3>
-      <pre class="usage"><code>pwrite(file, data, length, offset) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <pre class="usage"><code>pwrite(file, data, length, offset) <span class="arrow">-&gt;</span> (_0, string)</code></pre>
       <p class="signature"><span class="sig-params">file: ptr, data: string, length: int, offset: long</span></p>
-      <p class="doc">Positional binary-safe write. Writes `length` bytes from `data` at `offset` bytes from the start of the file. Returns (written, &quot;&quot;) on success, (-1, error) on failure. Loops on short writes (POSIX permits returning fewer bytes than asked). The file must be opened in a mode admitting writes — &quot;r+&quot;, &quot;w+&quot;, &quot;w&quot;, &quot;a+&quot;, &quot;wb+&quot;, etc. — via `fs.open(path, mode)`. This is the &quot;scatter-write&quot; primitive — reconstructing a file from blocks fetched out of order (rsync, zsync, parallel downloads, sparse-file build). For sequential append, `fs.write` is simpler.</p>
+      <p class="doc">Positional binary-safe write. Writes `length` bytes from `data` at `offset` bytes from the start of the file. Returns (written, &quot;&quot;) on success, (-1, error) on failure. Loops on short writes (POSIX permits returning fewer bytes than asked). The file must be opened in a mode admitting writes — &quot;r+&quot;, &quot;w+&quot;, &quot;w&quot;, &quot;a+&quot;, &quot;wb+&quot;, etc. — via `fs.open(path, mode)`. This is the &quot;scatter-write&quot; primitive — reconstructing a file from blocks fetched out of order (rsync, zsync, parallel downloads, sparse-file build). For sequential append, `fs.write` is simpler. Success arm first — same tuple-slot-inference constraint as `size` (the count slot is `long`).</p>
     </div>
     <div class="function" id="pread" data-name="pread">
       <h3 class="function-name">pread <span class="kind">fn</span></h3>
       <pre class="usage"><code>pread(file, length, offset) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
       <p class="signature"><span class="sig-params">file: ptr, length: int, offset: long</span></p>
       <p class="doc">Positional binary-safe read. Reads up to `length` bytes from `offset` into an owned AetherString. Returns (bytes, n, &quot;&quot;) on success — `n` may be less than `length` if EOF was reached (short reads are NOT an error per the POSIX convention for sparse-file I/O). Returns (&quot;&quot;, 0, error) on failure. Same tuple shape as fs.read_binary so destructuring stays consistent.</p>
+    </div>
+    <div class="function" id="pread_into" data-name="pread_into">
+      <h3 class="function-name">pread_into <span class="kind">fn</span></h3>
+      <pre class="usage"><code>pread_into(file, buf, length, offset) <span class="arrow">-&gt;</span> int!</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr, buf: ptr, length: int, offset: long</span></p>
+      <p class="doc">Read up to `length` bytes at `offset` directly into the existing std.bytes buffer `buf` (a `bytes` handle), clamped to the buffer's capacity, with no per-call allocation or copy. After the call `buf` holds the bytes read and its length is the returned count, so bytes.get_le64 / a bytes.cursor can read them in place. This is the copy-free sibling of `pread` for a reused fixed-size block buffer (#1102): reuse one buffer across a loop instead of allocating a fresh string per block. Returns (n, err): `n` is the byte count (n == 0 = EOF, 0 &lt; n &lt; length = short read), `err` is &quot;&quot; on success or a message on I/O error. Same EOF / short-read / error distinction as `pread`.</p>
     </div>
     <div class="function" id="ftruncate" data-name="ftruncate">
       <h3 class="function-name">ftruncate <span class="kind">fn</span></h3>
@@ -477,6 +545,18 @@
       <p class="signature"><span class="sig-params">file: ptr</span></p>
       <p class="doc">Flush kernel buffers for `file` to durable storage (POSIX fsync / Windows _commit). Required AFTER pwrite for the data-survives-crash guarantee — pwrite alone makes the bytes visible to other handles on the same machine but doesn't promise they reach the disk. Returns &quot;&quot; on success.</p>
     </div>
+    <div class="function" id="file_fd_raw" data-name="file_fd_raw">
+      <h3 class="function-name">file_fd_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>file_fd_raw(file) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr</span></p>
+      <p class="doc">Descriptor accessor (#1003). The OS-level fd inside an open handle, or -1 if the handle is closed/invalid.</p>
+    </div>
+    <div class="function" id="fd" data-name="fd">
+      <h3 class="function-name">fd <span class="kind">fn</span></h3>
+      <pre class="usage"><code>fd(file) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">file: ptr</span></p>
+      <p class="doc">The OS-level file descriptor inside an open handle, or -1 on a null handle (#1003). Exists for capability plumbing: open through the stdlib, then narrow the descriptor with capsicum.rights_limit(fs.fd(handle), ...) before capsicum.enter(). The fd is owned by the handle — do not close it directly; it is released by file_close, which also frees the handle itself, so never call fd() on a handle that has been closed.</p>
+    </div>
     <div class="function" id="glob_raw" data-name="glob_raw">
       <h3 class="function-name">glob_raw <span class="kind">extern</span></h3>
       <pre class="usage"><code>glob_raw(pattern) <span class="arrow">-&gt;</span> ptr</code></pre>
@@ -487,6 +567,17 @@
       <h3 class="function-name">glob_multi_raw <span class="kind">extern</span></h3>
       <pre class="usage"><code>glob_multi_raw(patterns) <span class="arrow">-&gt;</span> ptr</code></pre>
       <p class="signature"><span class="sig-params">patterns: ptr</span></p>
+    </div>
+    <div class="function" id="walk_raw" data-name="walk_raw">
+      <h3 class="function-name">walk_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>walk_raw(path, cb) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">path: string, cb: ptr</span></p>
+      <p class="doc">#977: recursive walk + change notification. Raw externs; the Aether-native wrappers (walk / watch_open below) add the (value, err) surface.</p>
+    </div>
+    <div class="function" id="watch_open_raw" data-name="watch_open_raw">
+      <h3 class="function-name">watch_open_raw <span class="kind">extern</span></h3>
+      <pre class="usage"><code>watch_open_raw(path) <span class="arrow">-&gt;</span> ptr</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
     </div>
     <div class="function" id="open" data-name="open">
       <h3 class="function-name">open <span class="kind">fn</span></h3>
@@ -514,15 +605,15 @@
     </div>
     <div class="function" id="size" data-name="size">
       <h3 class="function-name">size <span class="kind">fn</span></h3>
-      <pre class="usage"><code>size(path) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <pre class="usage"><code>size(path) <span class="arrow">-&gt;</span> (_0, string)</code></pre>
       <p class="signature"><span class="sig-params">path: string</span></p>
-      <p class="doc">Return the size of the file at `path` in bytes. Returns (size, &quot;&quot;) on success, (0, error) on failure.</p>
+      <p class="doc">Return the size of the file at `path` in bytes, as `long` (#1021 — files &gt;= 2 GiB used to wrap negative through the old int surface). Returns (size, &quot;&quot;) on success, (0, error) on failure. The success arm returns FIRST: the first `return` statement pins the inferred tuple slot types, so the `long`-typed arm must come before the int-literal error arm or the size slot narrows back to int.</p>
     </div>
     <div class="function" id="mtime" data-name="mtime">
       <h3 class="function-name">mtime <span class="kind">fn</span></h3>
-      <pre class="usage"><code>mtime(path) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <pre class="usage"><code>mtime(path) <span class="arrow">-&gt;</span> (_0, string)</code></pre>
       <p class="signature"><span class="sig-params">path: string</span></p>
-      <p class="doc">Return the file's mtime as Unix epoch seconds. Returns (mtime, &quot;&quot;) on success, (0, error) on failure. Distinguishes &quot;stat failed&quot; from &quot;file's mtime is 0&quot; (which the older `file_mtime` extern collapses into a single sentinel). Prefer this wrapper for new code; `file_mtime` stays for back-compat.</p>
+      <p class="doc">Return the file's mtime as Unix epoch seconds. Returns (mtime, &quot;&quot;) on success, (0, error) on failure. Distinguishes &quot;stat failed&quot; from &quot;file's mtime is 0&quot; (which the older `file_mtime` extern collapses into a single sentinel). Prefer this wrapper for new code; `file_mtime` stays for back-compat. Success arm first — same tuple-slot-inference constraint as `size`.</p>
     </div>
     <div class="function" id="exists" data-name="exists">
       <h3 class="function-name">exists <span class="kind">fn</span></h3>
@@ -590,6 +681,30 @@
       <p class="signature"><span class="sig-params">patterns: ptr</span></p>
       <p class="doc">Multi-pattern glob.</p>
     </div>
+    <div class="function" id="walk" data-name="walk">
+      <h3 class="function-name">walk <span class="kind">fn</span></h3>
+      <pre class="usage"><code>walk(path, cb) <span class="arrow">-&gt;</span> (int, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string, cb: ptr</span></p>
+      <p class="doc">#977: recursive directory walk. Visits `path` itself first (depth 0), then every entry beneath it, calling `cb` per entry: n, err = fs.walk(root, |path: string, kind: int, depth: int| { // kind: 1 file / 2 dir / 3 symlink / 4 other (same as file_stat) return 0     // 0 = continue, 1 = skip this dir's subtree, 2 = stop }) One readdir sweep per directory — entry kinds come from d_type (#966), so nothing is stat'ed unless the filesystem doesn't report a type. Symlinks are reported but never followed (no cycles). `path` is borrowed inside the callback — copy it (string.copy / list add) to keep it. Traversal order within a directory is the platform's readdir order (unspecified). Returns (entries visited, &quot;&quot;) or (0, error) when `path` can't be read.</p>
+    </div>
+    <div class="function" id="watch_open" data-name="watch_open">
+      <h3 class="function-name">watch_open <span class="kind">fn</span></h3>
+      <pre class="usage"><code>watch_open(path) <span class="arrow">-&gt;</span> (ptr, string)</code></pre>
+      <p class="signature"><span class="sig-params">path: string</span></p>
+      <p class="doc">#977: watch a directory (or file) for changes — create / delete / modify / rename inside it — over the platform primitive (kqueue on macOS/BSD, inotify on Linux, FindFirstChangeNotification on Windows). The event is a coarse &quot;something changed here&quot; ping: re-list the directory to see what. Non-recursive; one handle watches one path; a handle is single-threaded. w, err = fs.watch_open(dir) changed = fs.watch_wait(w, 1000)   // 1 changed / 0 timeout / -1 error fs.watch_close(w) Changes that happen between watch_open and watch_wait are queued, not lost — so &quot;open watch, do work, then wait&quot; never misses an edit.</p>
+    </div>
+    <div class="function" id="watch_wait" data-name="watch_wait">
+      <h3 class="function-name">watch_wait <span class="kind">fn</span></h3>
+      <pre class="usage"><code>watch_wait(watch, timeout_ms) <span class="arrow">-&gt;</span> int</code></pre>
+      <p class="signature"><span class="sig-params">watch: ptr, timeout_ms: int</span></p>
+      <p class="doc">Block up to timeout_ms (negative = forever). 1 = changed, 0 = timeout, -1 = error / closed handle. Drains pending events so one burst of changes reports once.</p>
+    </div>
+    <div class="function" id="watch_close" data-name="watch_close">
+      <h3 class="function-name">watch_close <span class="kind">fn</span></h3>
+      <pre class="usage"><code>watch_close(watch)</code></pre>
+      <p class="signature"><span class="sig-params">watch: ptr</span></p>
+      <p class="doc">Release the watch handle. Safe on null.</p>
+    </div>
     <div class="function" id="write_binary" data-name="write_binary">
       <h3 class="function-name">write_binary <span class="kind">fn</span></h3>
       <pre class="usage"><code>write_binary(path, data, length) <span class="arrow">-&gt;</span> string</code></pre>
@@ -610,9 +725,9 @@
     </div>
     <div class="function" id="file_stat" data-name="file_stat">
       <h3 class="function-name">file_stat <span class="kind">fn</span></h3>
-      <pre class="usage"><code>file_stat(path) <span class="arrow">-&gt;</span> (int, int, int, string)</code></pre>
+      <pre class="usage"><code>file_stat(path) <span class="arrow">-&gt;</span> (_0, _1, _2, string)</code></pre>
       <p class="signature"><span class="sig-params">path: string</span></p>
-      <p class="doc">Single-stat accessor. Returns (kind, size, mtime, &quot;&quot;) on success, (0, 0, 0, error) on failure. `kind` is one of: 1 = file, 2 = directory, 3 = symlink, 4 = other (FIFO, socket, device, ...). `mtime` is a Unix timestamp, `size` is in bytes. Uses lstat(2) — symlinks report kind 3, the target is NOT followed. Cheaper than the existing file_exists + fs_is_symlink + size + file_mtime quartet when callers need more than one field.</p>
+      <p class="doc">Single-stat accessor. Returns (kind, size, mtime, &quot;&quot;) on success, (0, 0, 0, error) on failure. `kind` is one of: 1 = file, 2 = directory, 3 = symlink, 4 = other (FIFO, socket, device, ...). `mtime` is a Unix timestamp, `size` is in bytes. Uses lstat(2) — symlinks report kind 3, the target is NOT followed. Cheaper than the existing file_exists + fs_is_symlink + size + file_mtime quartet when callers need more than one field. Two inference constraints keep size/mtime `long` here (#1021): the getters are bound to locals (a call expression directly inside a tuple return types as int; a variable carries the extern's declared long), and the success arm returns first (the first `return` pins the tuple slot types). The getters all return 0 after a failed fs_try_stat, so binding them before the ok-check is safe.</p>
     </div>
     <div class="function" id="read_binary" data-name="read_binary">
       <h3 class="function-name">read_binary <span class="kind">fn</span></h3>

@@ -16,7 +16,9 @@
   <h2>Modules</h2>
   <ul class="module-list">
     <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
     <li><a href="arena.html">arena</a></li>
+    <li><a href="audio.html">audio</a></li>
     <li><a href="audit.html">audit</a></li>
     <li><a href="bignum.html">bignum</a></li>
     <li><a href="bits.html">bits</a></li>
@@ -27,11 +29,14 @@
     <li><a href="collections.html">collections</a></li>
     <li><a href="config.html">config</a></li>
     <li><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
     <li><a href="dir.html">dir</a></li>
     <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
     <li><a href="file.html">file</a></li>
     <li><a href="floatarr.html">floatarr</a></li>
     <li><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
     <li><a href="host.html">host</a></li>
     <li><a href="http.html">http</a></li>
     <li><a href="intarr.html">intarr</a></li>
@@ -53,13 +58,17 @@
     <li><a href="regex.html">regex</a></li>
     <li><a href="signal.html">signal</a></li>
     <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
     <li><a href="strbuilder.html">strbuilder</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="tcp.html">tcp</a></li>
+    <li><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
     <li><a href="tsid.html">tsid</a></li>
     <li><a href="ulid.html">ulid</a></li>
     <li><a href="url.html">url</a></li>
     <li><a href="uuid.html">uuid</a></li>
+    <li><a href="worker.html">worker</a></li>
     <li><a href="xml.html">xml</a></li>
     <li><a href="zlib.html">zlib</a></li>
   </ul>
@@ -75,10 +84,20 @@
       <p>std.actors — process-global name → actor_ref registry.</p>
       <span class="count">12 exports</span>
     </a>
+    <a href="alloc.html" class="module-card">
+      <h3>alloc</h3>
+      <p>std.alloc (#1045): swappable allocator convention.</p>
+      <span class="count">6 exports</span>
+    </a>
     <a href="arena.html" class="module-card">
       <h3>arena</h3>
       <p>std.arena - Arena (bulk) allocator An arena owns a growable block of memory that it hands out via arena.alloc().</p>
       <span class="count">9 exports</span>
+    </a>
+    <a href="audio.html" class="module-card">
+      <h3>audio</h3>
+      <p>std.audio — audio playback (v1: playback tier).</p>
+      <span class="count">17 exports</span>
     </a>
     <a href="audit.html" class="module-card">
       <h3>audit</h3>
@@ -93,7 +112,7 @@
     <a href="bits.html" class="module-card">
       <h3>bits</h3>
       <p>MIT License (https://opensource.org/licenses/MIT) Portions copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc.</p>
-      <span class="count">30 exports</span>
+      <span class="count">34 exports</span>
     </a>
     <a href="bytes.html" class="module-card">
       <h3>bytes</h3>
@@ -118,7 +137,7 @@
     <a href="collections.html" class="module-card">
       <h3>collections</h3>
       <p>std.collections - Collections Module Import with: import std.collections API shape: - Raw externs end in `_raw` and return ptr/int in the old C-style convention.</p>
-      <span class="count">40 exports</span>
+      <span class="count">43 exports</span>
     </a>
     <a href="config.html" class="module-card">
       <h3>config</h3>
@@ -128,17 +147,27 @@
     <a href="cryptography.html" class="module-card">
       <h3>cryptography</h3>
       <p>std.cryptography - Cryptographic hash primitives + Base64 codec Import with: import std.cryptography Pure functions: bytes in, hex digest or Base64 string out.</p>
-      <span class="count">54 exports</span>
+      <span class="count">45 exports</span>
+    </a>
+    <a href="deque.html" class="module-card">
+      <h3>deque</h3>
+      <p>std.deque — a fixed-capacity double-ended queue / ring buffer of `long` values (a `long` holds any int, and a pointer via mem.ptr_to_long, so this backs work queues, sliding windows, and FIFO/LIFO buffers uniformly).</p>
+      <span class="count">14 exports</span>
     </a>
     <a href="dir.html" class="module-card">
       <h3>dir</h3>
       <p>std.dir - Directory Operations (alias for std.fs) Raw externs end in `_raw`.</p>
-      <span class="count">8 exports</span>
+      <span class="count">11 exports</span>
     </a>
     <a href="dl.html" class="module-card">
       <h3>dl</h3>
       <p>std.dl - cross-platform dynamic library loader.</p>
       <span class="count">8 exports</span>
+    </a>
+    <a href="encoding.html" class="module-card">
+      <h3>encoding</h3>
+      <p>std.encoding — general-purpose binary/text encodings.</p>
+      <span class="count">11 exports</span>
     </a>
     <a href="file.html" class="module-card">
       <h3>file</h3>
@@ -153,7 +182,12 @@
     <a href="fs.html" class="module-card">
       <h3>fs</h3>
       <p>std.fs - File System Module Import with: import std.fs Provides file, directory, path, glob, and copy/move/realpath/chmod operations.</p>
-      <span class="count">102 exports</span>
+      <span class="count">118 exports</span>
+    </a>
+    <a href="hash.html" class="module-card">
+      <h3>hash</h3>
+      <p>std.hash — fast NON-cryptographic hashes for checksums and hashmap seeding.</p>
+      <span class="count">4 exports</span>
     </a>
     <a href="host.html" class="module-card">
       <h3>host</h3>
@@ -183,7 +217,7 @@
     <a href="json.html" class="module-card">
       <h3>json</h3>
       <p>std.json - JSON Module Import with: import std.json Parses and serializes JSON per RFC 8259.</p>
-      <span class="count">53 exports</span>
+      <span class="count">54 exports</span>
     </a>
     <a href="ksuid.html" class="module-card">
       <h3>ksuid</h3>
@@ -193,7 +227,7 @@
     <a href="list.html" class="module-card">
       <h3>list</h3>
       <p>std.list - ArrayList Operations (alias for std.collections) API shape: - Raw externs end in `_raw` and return ptr/int in the old C-style convention.</p>
-      <span class="count">11 exports</span>
+      <span class="count">12 exports</span>
     </a>
     <a href="log.html" class="module-card">
       <h3>log</h3>
@@ -233,12 +267,12 @@
     <a href="net.html" class="module-card">
       <h3>net</h3>
       <p>std.net - Networking Module Import with: import std.net Naming convention: category_action - tcp_* : TCP client/server operations - http_* : HTTP client operations - http_server_* : HTTP server operations</p>
-      <span class="count">63 exports</span>
+      <span class="count">69 exports</span>
     </a>
     <a href="os.html" class="module-card">
       <h3>os</h3>
       <p>std.os - Shell &amp; Process Execution Import with: import std.os</p>
-      <span class="count">63 exports</span>
+      <span class="count">65 exports</span>
     </a>
     <a href="path.html" class="module-card">
       <h3>path</h3>
@@ -260,6 +294,11 @@
       <p>std.snapshot — copy-on-write snapshot cell for read-mostly shared data.</p>
       <span class="count">10 exports</span>
     </a>
+    <a href="sort.html" class="module-card">
+      <h3>sort</h3>
+      <p>std.sort — in-place ascending sort + binary search over the concrete numeric array types (std.intarr / std.longarr / std.floatarr).</p>
+      <span class="count">6 exports</span>
+    </a>
     <a href="strbuilder.html" class="module-card">
       <h3>strbuilder</h3>
       <p>std.strbuilder — amortised-O(1) string append.</p>
@@ -273,7 +312,17 @@
     <a href="tcp.html" class="module-card">
       <h3>tcp</h3>
       <p>std.tcp - TCP Socket Operations (alias for std.net) Raw externs end in `_raw` and return NULL/int in C-style.</p>
-      <span class="count">12 exports</span>
+      <span class="count">24 exports</span>
+    </a>
+    <a href="time.html" class="module-card">
+      <h3>time</h3>
+      <p>std.time — civil date/time over Unix epoch seconds (UTC).</p>
+      <span class="count">19 exports</span>
+    </a>
+    <a href="tracking.html" class="module-card">
+      <h3>tracking</h3>
+      <p>std.tracking (#1049): leak-detecting allocator wrapper.</p>
+      <span class="count">5 exports</span>
     </a>
     <a href="tsid.html" class="module-card">
       <h3>tsid</h3>
@@ -294,6 +343,11 @@
       <h3>uuid</h3>
       <p>std.uuid — UUID v4 and v7 (RFC 9562).</p>
       <span class="count">2 exports</span>
+    </a>
+    <a href="worker.html" class="module-card">
+      <h3>worker</h3>
+      <p>std.worker — run blocking work off the loop thread, deliver the result back on it.</p>
+      <span class="count">16 exports</span>
     </a>
     <a href="xml.html" class="module-card">
       <h3>xml</h3>
@@ -321,6 +375,12 @@
       <li class="function-item" data-name="is_registered"><a href="actors.html#is_registered"><span class="fn-name">is_registered</span><span class="fn-module">actors</span></a></li>
       <li class="function-item" data-name="registry_size"><a href="actors.html#registry_size"><span class="fn-name">registry_size</span><span class="fn-module">actors</span></a></li>
       <li class="function-item" data-name="registry_clear"><a href="actors.html#registry_clear"><span class="fn-name">registry_clear</span><span class="fn-module">actors</span></a></li>
+      <li class="function-item" data-name="system"><a href="alloc.html#system"><span class="fn-name">system</span><span class="fn-module">alloc</span></a></li>
+      <li class="function-item" data-name="of_arena"><a href="alloc.html#of_arena"><span class="fn-name">of_arena</span><span class="fn-module">alloc</span></a></li>
+      <li class="function-item" data-name="arena_free"><a href="alloc.html#arena_free"><span class="fn-name">arena_free</span><span class="fn-module">alloc</span></a></li>
+      <li class="function-item" data-name="raw"><a href="alloc.html#raw"><span class="fn-name">raw</span><span class="fn-module">alloc</span></a></li>
+      <li class="function-item" data-name="resize"><a href="alloc.html#resize"><span class="fn-name">resize</span><span class="fn-module">alloc</span></a></li>
+      <li class="function-item" data-name="release"><a href="alloc.html#release"><span class="fn-name">release</span><span class="fn-module">alloc</span></a></li>
       <li class="function-item" data-name="create"><a href="arena.html#create"><span class="fn-name">create</span><span class="fn-module">arena</span></a></li>
       <li class="function-item" data-name="alloc"><a href="arena.html#alloc"><span class="fn-name">alloc</span><span class="fn-module">arena</span></a></li>
       <li class="function-item" data-name="alloc_aligned"><a href="arena.html#alloc_aligned"><span class="fn-name">alloc_aligned</span><span class="fn-module">arena</span></a></li>
@@ -330,6 +390,23 @@
       <li class="function-item" data-name="get_size"><a href="arena.html#get_size"><span class="fn-name">get_size</span><span class="fn-module">arena</span></a></li>
       <li class="function-item" data-name="used"><a href="arena.html#used"><span class="fn-name">used</span><span class="fn-module">arena</span></a></li>
       <li class="function-item" data-name="size"><a href="arena.html#size"><span class="fn-name">size</span><span class="fn-module">arena</span></a></li>
+      <li class="function-item" data-name="open"><a href="audio.html#open"><span class="fn-name">open</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="close"><a href="audio.html#close"><span class="fn-name">close</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="is_null_backend"><a href="audio.html#is_null_backend"><span class="fn-name">is_null_backend</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="load_wav"><a href="audio.html#load_wav"><span class="fn-name">load_wav</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="last_error"><a href="audio.html#last_error"><span class="fn-name">last_error</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="play"><a href="audio.html#play"><span class="fn-name">play</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="pause"><a href="audio.html#pause"><span class="fn-name">pause</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="stop"><a href="audio.html#stop"><span class="fn-name">stop</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="is_playing"><a href="audio.html#is_playing"><span class="fn-name">is_playing</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="volume"><a href="audio.html#volume"><span class="fn-name">volume</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="get_volume"><a href="audio.html#get_volume"><span class="fn-name">get_volume</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="seek_ms"><a href="audio.html#seek_ms"><span class="fn-name">seek_ms</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="position_ms"><a href="audio.html#position_ms"><span class="fn-name">position_ms</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="duration_ms"><a href="audio.html#duration_ms"><span class="fn-name">duration_ms</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="channels"><a href="audio.html#channels"><span class="fn-name">channels</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="sample_rate"><a href="audio.html#sample_rate"><span class="fn-name">sample_rate</span><span class="fn-module">audio</span></a></li>
+      <li class="function-item" data-name="unload"><a href="audio.html#unload"><span class="fn-name">unload</span><span class="fn-module">audio</span></a></li>
       <li class="function-item" data-name="aether_audit_count"><a href="audit.html#aether_audit_count"><span class="fn-name">aether_audit_count</span><span class="fn-module">audit</span></a></li>
       <li class="function-item" data-name="aether_audit_entry_category"><a href="audit.html#aether_audit_entry_category"><span class="fn-name">aether_audit_entry_category</span><span class="fn-module">audit</span></a></li>
       <li class="function-item" data-name="aether_audit_entry_resource"><a href="audit.html#aether_audit_entry_resource"><span class="fn-name">aether_audit_entry_resource</span><span class="fn-module">audit</span></a></li>
@@ -379,6 +456,8 @@
       <li class="function-item" data-name="udiv64"><a href="bits.html#udiv64"><span class="fn-name">udiv64</span><span class="fn-module">bits</span></a></li>
       <li class="function-item" data-name="urem64"><a href="bits.html#urem64"><span class="fn-name">urem64</span><span class="fn-module">bits</span></a></li>
       <li class="function-item" data-name="ucmp64"><a href="bits.html#ucmp64"><span class="fn-name">ucmp64</span><span class="fn-module">bits</span></a></li>
+      <li class="function-item" data-name="wrapping_add64"><a href="bits.html#wrapping_add64"><span class="fn-name">wrapping_add64</span><span class="fn-module">bits</span></a></li>
+      <li class="function-item" data-name="wrapping_mul64"><a href="bits.html#wrapping_mul64"><span class="fn-name">wrapping_mul64</span><span class="fn-module">bits</span></a></li>
       <li class="function-item" data-name="aether_bits_lsr32"><a href="bits.html#aether_bits_lsr32"><span class="fn-name">aether_bits_lsr32</span><span class="fn-module">bits</span></a></li>
       <li class="function-item" data-name="aether_bits_lsr64"><a href="bits.html#aether_bits_lsr64"><span class="fn-name">aether_bits_lsr64</span><span class="fn-module">bits</span></a></li>
       <li class="function-item" data-name="aether_bits_rotr32"><a href="bits.html#aether_bits_rotr32"><span class="fn-name">aether_bits_rotr32</span><span class="fn-module">bits</span></a></li>
@@ -394,6 +473,8 @@
       <li class="function-item" data-name="aether_bits_udiv64"><a href="bits.html#aether_bits_udiv64"><span class="fn-name">aether_bits_udiv64</span><span class="fn-module">bits</span></a></li>
       <li class="function-item" data-name="aether_bits_urem64"><a href="bits.html#aether_bits_urem64"><span class="fn-name">aether_bits_urem64</span><span class="fn-module">bits</span></a></li>
       <li class="function-item" data-name="aether_bits_ucmp64"><a href="bits.html#aether_bits_ucmp64"><span class="fn-name">aether_bits_ucmp64</span><span class="fn-module">bits</span></a></li>
+      <li class="function-item" data-name="aether_bits_wrapping_add64"><a href="bits.html#aether_bits_wrapping_add64"><span class="fn-name">aether_bits_wrapping_add64</span><span class="fn-module">bits</span></a></li>
+      <li class="function-item" data-name="aether_bits_wrapping_mul64"><a href="bits.html#aether_bits_wrapping_mul64"><span class="fn-name">aether_bits_wrapping_mul64</span><span class="fn-module">bits</span></a></li>
       <li class="function-item" data-name="aether_bytes_new"><a href="bytes.html#aether_bytes_new"><span class="fn-name">aether_bytes_new</span><span class="fn-module">bytes</span></a></li>
       <li class="function-item" data-name="aether_bytes_set"><a href="bytes.html#aether_bytes_set"><span class="fn-name">aether_bytes_set</span><span class="fn-module">bytes</span></a></li>
       <li class="function-item" data-name="aether_bytes_get"><a href="bytes.html#aether_bytes_get"><span class="fn-name">aether_bytes_get</span><span class="fn-module">bytes</span></a></li>
@@ -493,6 +574,7 @@
       <li class="function-item" data-name="pwd_home"><a href="casper.html#pwd_home"><span class="fn-name">pwd_home</span><span class="fn-module">casper</span></a></li>
       <li class="function-item" data-name="sysctl"><a href="casper.html#sysctl"><span class="fn-name">sysctl</span><span class="fn-module">casper</span></a></li>
       <li class="function-item" data-name="list_new"><a href="collections.html#list_new"><span class="fn-name">list_new</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="list_new_in"><a href="collections.html#list_new_in"><span class="fn-name">list_new_in</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="list_add_raw"><a href="collections.html#list_add_raw"><span class="fn-name">list_add_raw</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="list_get_raw"><a href="collections.html#list_get_raw"><span class="fn-name">list_get_raw</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="list_set"><a href="collections.html#list_set"><span class="fn-name">list_set</span><span class="fn-module">collections</span></a></li>
@@ -527,17 +609,19 @@
       <li class="function-item" data-name="string_list_remove"><a href="collections.html#string_list_remove"><span class="fn-name">string_list_remove</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="string_list_clear"><a href="collections.html#string_list_clear"><span class="fn-name">string_list_clear</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="string_list_free"><a href="collections.html#string_list_free"><span class="fn-name">string_list_free</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="string_list_sort"><a href="collections.html#string_list_sort"><span class="fn-name">string_list_sort</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="string_list_sort_lex"><a href="collections.html#string_list_sort_lex"><span class="fn-name">string_list_sort_lex</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="list_add"><a href="collections.html#list_add"><span class="fn-name">list_add</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="list_get"><a href="collections.html#list_get"><span class="fn-name">list_get</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="map_put"><a href="collections.html#map_put"><span class="fn-name">map_put</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="map_get"><a href="collections.html#map_get"><span class="fn-name">map_get</span><span class="fn-module">collections</span></a></li>
       <li class="function-item" data-name="map_keys"><a href="collections.html#map_keys"><span class="fn-name">map_keys</span><span class="fn-module">collections</span></a></li>
-      <li class="function-item" data-name="aether_config_put"><a href="config.html#aether_config_put"><span class="fn-name">aether_config_put</span><span class="fn-module">config</span></a></li>
-      <li class="function-item" data-name="aether_config_get"><a href="config.html#aether_config_get"><span class="fn-name">aether_config_get</span><span class="fn-module">config</span></a></li>
-      <li class="function-item" data-name="aether_config_get_or"><a href="config.html#aether_config_get_or"><span class="fn-name">aether_config_get_or</span><span class="fn-module">config</span></a></li>
-      <li class="function-item" data-name="aether_config_has"><a href="config.html#aether_config_has"><span class="fn-name">aether_config_has</span><span class="fn-module">config</span></a></li>
-      <li class="function-item" data-name="aether_config_size"><a href="config.html#aether_config_size"><span class="fn-name">aether_config_size</span><span class="fn-module">config</span></a></li>
-      <li class="function-item" data-name="aether_config_clear"><a href="config.html#aether_config_clear"><span class="fn-name">aether_config_clear</span><span class="fn-module">config</span></a></li>
+      <li class="function-item" data-name="aether_config_store_put"><a href="config.html#aether_config_store_put"><span class="fn-name">aether_config_store_put</span><span class="fn-module">config</span></a></li>
+      <li class="function-item" data-name="aether_config_store_get"><a href="config.html#aether_config_store_get"><span class="fn-name">aether_config_store_get</span><span class="fn-module">config</span></a></li>
+      <li class="function-item" data-name="aether_config_store_get_or"><a href="config.html#aether_config_store_get_or"><span class="fn-name">aether_config_store_get_or</span><span class="fn-module">config</span></a></li>
+      <li class="function-item" data-name="aether_config_store_has"><a href="config.html#aether_config_store_has"><span class="fn-name">aether_config_store_has</span><span class="fn-module">config</span></a></li>
+      <li class="function-item" data-name="aether_config_store_size"><a href="config.html#aether_config_store_size"><span class="fn-name">aether_config_store_size</span><span class="fn-module">config</span></a></li>
+      <li class="function-item" data-name="aether_config_store_clear"><a href="config.html#aether_config_store_clear"><span class="fn-name">aether_config_store_clear</span><span class="fn-module">config</span></a></li>
       <li class="function-item" data-name="put"><a href="config.html#put"><span class="fn-name">put</span><span class="fn-module">config</span></a></li>
       <li class="function-item" data-name="get"><a href="config.html#get"><span class="fn-name">get</span><span class="fn-module">config</span></a></li>
       <li class="function-item" data-name="get_or"><a href="config.html#get_or"><span class="fn-name">get_or</span><span class="fn-module">config</span></a></li>
@@ -548,12 +632,6 @@
       <li class="function-item" data-name="sha256_hex_raw"><a href="cryptography.html#sha256_hex_raw"><span class="fn-name">sha256_hex_raw</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="hash_hex_raw"><a href="cryptography.html#hash_hex_raw"><span class="fn-name">hash_hex_raw</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="hash_supported"><a href="cryptography.html#hash_supported"><span class="fn-name">hash_supported</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="base64_encode_raw"><a href="cryptography.html#base64_encode_raw"><span class="fn-name">base64_encode_raw</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="base64_encode_padded_raw"><a href="cryptography.html#base64_encode_padded_raw"><span class="fn-name">base64_encode_padded_raw</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="base64_decode_raw"><a href="cryptography.html#base64_decode_raw"><span class="fn-name">base64_decode_raw</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="get_base64_decode"><a href="cryptography.html#get_base64_decode"><span class="fn-name">get_base64_decode</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="get_base64_decode_length"><a href="cryptography.html#get_base64_decode_length"><span class="fn-name">get_base64_decode_length</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="release_base64_decode"><a href="cryptography.html#release_base64_decode"><span class="fn-name">release_base64_decode</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="md4_hex_raw"><a href="cryptography.html#md4_hex_raw"><span class="fn-name">md4_hex_raw</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="md5_hex_raw"><a href="cryptography.html#md5_hex_raw"><span class="fn-name">md5_hex_raw</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="hmac_sha256_hex_raw"><a href="cryptography.html#hmac_sha256_hex_raw"><span class="fn-name">hmac_sha256_hex_raw</span><span class="fn-module">cryptography</span></a></li>
@@ -578,9 +656,6 @@
       <li class="function-item" data-name="sha1_hex"><a href="cryptography.html#sha1_hex"><span class="fn-name">sha1_hex</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="sha256_hex"><a href="cryptography.html#sha256_hex"><span class="fn-name">sha256_hex</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="hash_hex"><a href="cryptography.html#hash_hex"><span class="fn-name">hash_hex</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="base64_encode"><a href="cryptography.html#base64_encode"><span class="fn-name">base64_encode</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="base64_encode_padded"><a href="cryptography.html#base64_encode_padded"><span class="fn-name">base64_encode_padded</span><span class="fn-module">cryptography</span></a></li>
-      <li class="function-item" data-name="base64_decode"><a href="cryptography.html#base64_decode"><span class="fn-name">base64_decode</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="md4_hex"><a href="cryptography.html#md4_hex"><span class="fn-name">md4_hex</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="md5_hex"><a href="cryptography.html#md5_hex"><span class="fn-name">md5_hex</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="hmac_sha256_hex"><a href="cryptography.html#hmac_sha256_hex"><span class="fn-name">hmac_sha256_hex</span><span class="fn-module">cryptography</span></a></li>
@@ -598,6 +673,20 @@
       <li class="function-item" data-name="digest_final_hex"><a href="cryptography.html#digest_final_hex"><span class="fn-name">digest_final_hex</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="digest_final_bytes"><a href="cryptography.html#digest_final_bytes"><span class="fn-name">digest_final_bytes</span><span class="fn-module">cryptography</span></a></li>
       <li class="function-item" data-name="digest_free"><a href="cryptography.html#digest_free"><span class="fn-name">digest_free</span><span class="fn-module">cryptography</span></a></li>
+      <li class="function-item" data-name="Deque"><a href="deque.html#Deque"><span class="fn-name">Deque</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="new"><a href="deque.html#new"><span class="fn-name">new</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="free"><a href="deque.html#free"><span class="fn-name">free</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="len"><a href="deque.html#len"><span class="fn-name">len</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="cap"><a href="deque.html#cap"><span class="fn-name">cap</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="is_empty"><a href="deque.html#is_empty"><span class="fn-name">is_empty</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="is_full"><a href="deque.html#is_full"><span class="fn-name">is_full</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="push_back"><a href="deque.html#push_back"><span class="fn-name">push_back</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="push_front"><a href="deque.html#push_front"><span class="fn-name">push_front</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="pop_front"><a href="deque.html#pop_front"><span class="fn-name">pop_front</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="pop_back"><a href="deque.html#pop_back"><span class="fn-name">pop_back</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="peek_front"><a href="deque.html#peek_front"><span class="fn-name">peek_front</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="peek_back"><a href="deque.html#peek_back"><span class="fn-name">peek_back</span><span class="fn-module">deque</span></a></li>
+      <li class="function-item" data-name="clear"><a href="deque.html#clear"><span class="fn-name">clear</span><span class="fn-module">deque</span></a></li>
       <li class="function-item" data-name="exists"><a href="dir.html#exists"><span class="fn-name">exists</span><span class="fn-module">dir</span></a></li>
       <li class="function-item" data-name="create_raw"><a href="dir.html#create_raw"><span class="fn-name">create_raw</span><span class="fn-module">dir</span></a></li>
       <li class="function-item" data-name="delete_raw"><a href="dir.html#delete_raw"><span class="fn-name">delete_raw</span><span class="fn-module">dir</span></a></li>
@@ -606,6 +695,9 @@
       <li class="function-item" data-name="create"><a href="dir.html#create"><span class="fn-name">create</span><span class="fn-module">dir</span></a></li>
       <li class="function-item" data-name="delete"><a href="dir.html#delete"><span class="fn-name">delete</span><span class="fn-module">dir</span></a></li>
       <li class="function-item" data-name="list"><a href="dir.html#list"><span class="fn-name">list</span><span class="fn-module">dir</span></a></li>
+      <li class="function-item" data-name="list_count"><a href="dir.html#list_count"><span class="fn-name">list_count</span><span class="fn-module">dir</span></a></li>
+      <li class="function-item" data-name="list_get"><a href="dir.html#list_get"><span class="fn-name">list_get</span><span class="fn-module">dir</span></a></li>
+      <li class="function-item" data-name="list_kind"><a href="dir.html#list_kind"><span class="fn-name">list_kind</span><span class="fn-module">dir</span></a></li>
       <li class="function-item" data-name="open_raw"><a href="dl.html#open_raw"><span class="fn-name">open_raw</span><span class="fn-module">dl</span></a></li>
       <li class="function-item" data-name="symbol_raw"><a href="dl.html#symbol_raw"><span class="fn-name">symbol_raw</span><span class="fn-module">dl</span></a></li>
       <li class="function-item" data-name="close_raw"><a href="dl.html#close_raw"><span class="fn-name">close_raw</span><span class="fn-module">dl</span></a></li>
@@ -614,6 +706,17 @@
       <li class="function-item" data-name="symbol"><a href="dl.html#symbol"><span class="fn-name">symbol</span><span class="fn-module">dl</span></a></li>
       <li class="function-item" data-name="close"><a href="dl.html#close"><span class="fn-name">close</span><span class="fn-module">dl</span></a></li>
       <li class="function-item" data-name="last_error"><a href="dl.html#last_error"><span class="fn-name">last_error</span><span class="fn-module">dl</span></a></li>
+      <li class="function-item" data-name="hex_encode"><a href="encoding.html#hex_encode"><span class="fn-name">hex_encode</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="hex_decode"><a href="encoding.html#hex_decode"><span class="fn-name">hex_decode</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="base64_encode"><a href="encoding.html#base64_encode"><span class="fn-name">base64_encode</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="base64_encode_padded"><a href="encoding.html#base64_encode_padded"><span class="fn-name">base64_encode_padded</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="base64_decode"><a href="encoding.html#base64_decode"><span class="fn-name">base64_decode</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="base32_encode"><a href="encoding.html#base32_encode"><span class="fn-name">base32_encode</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="base32_decode"><a href="encoding.html#base32_decode"><span class="fn-name">base32_decode</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="csv_split"><a href="encoding.html#csv_split"><span class="fn-name">csv_split</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="csv_count"><a href="encoding.html#csv_count"><span class="fn-name">csv_count</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="csv_field"><a href="encoding.html#csv_field"><span class="fn-name">csv_field</span><span class="fn-module">encoding</span></a></li>
+      <li class="function-item" data-name="csv_free"><a href="encoding.html#csv_free"><span class="fn-name">csv_free</span><span class="fn-module">encoding</span></a></li>
       <li class="function-item" data-name="below"><a href="file.html#below"><span class="fn-name">below</span><span class="fn-module">file</span></a></li>
       <li class="function-item" data-name="new"><a href="floatarr.html#new"><span class="fn-name">new</span><span class="fn-module">floatarr</span></a></li>
       <li class="function-item" data-name="new_filled"><a href="floatarr.html#new_filled"><span class="fn-name">new_filled</span><span class="fn-module">floatarr</span></a></li>
@@ -653,6 +756,11 @@
       <li class="function-item" data-name="get_stat_kind"><a href="fs.html#get_stat_kind"><span class="fn-name">get_stat_kind</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="get_stat_size"><a href="fs.html#get_stat_size"><span class="fn-name">get_stat_size</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="get_stat_mtime"><a href="fs.html#get_stat_mtime"><span class="fn-name">get_stat_mtime</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="try_statvfs"><a href="fs.html#try_statvfs"><span class="fn-name">try_statvfs</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="get_statvfs_total"><a href="fs.html#get_statvfs_total"><span class="fn-name">get_statvfs_total</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="get_statvfs_free"><a href="fs.html#get_statvfs_free"><span class="fn-name">get_statvfs_free</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="get_statvfs_avail"><a href="fs.html#get_statvfs_avail"><span class="fn-name">get_statvfs_avail</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="statvfs"><a href="fs.html#statvfs"><span class="fn-name">statvfs</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="try_read_binary"><a href="fs.html#try_read_binary"><span class="fn-name">try_read_binary</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="get_read_binary"><a href="fs.html#get_read_binary"><span class="fn-name">get_read_binary</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="get_read_binary_length"><a href="fs.html#get_read_binary_length"><span class="fn-name">get_read_binary_length</span><span class="fn-module">fs</span></a></li>
@@ -660,6 +768,7 @@
       <li class="function-item" data-name="read_binary_tuple"><a href="fs.html#read_binary_tuple"><span class="fn-name">read_binary_tuple</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="dir_list_count"><a href="fs.html#dir_list_count"><span class="fn-name">dir_list_count</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="dir_list_get"><a href="fs.html#dir_list_get"><span class="fn-name">dir_list_get</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="dir_list_kind"><a href="fs.html#dir_list_kind"><span class="fn-name">dir_list_kind</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="dir_list_free"><a href="fs.html#dir_list_free"><span class="fn-name">dir_list_free</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="path_join"><a href="fs.html#path_join"><span class="fn-name">path_join</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="path_dirname"><a href="fs.html#path_dirname"><span class="fn-name">path_dirname</span><span class="fn-module">fs</span></a></li>
@@ -676,6 +785,7 @@
       <li class="function-item" data-name="first_element"><a href="fs.html#first_element"><span class="fn-name">first_element</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="pwrite_raw"><a href="fs.html#pwrite_raw"><span class="fn-name">pwrite_raw</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="pread_raw"><a href="fs.html#pread_raw"><span class="fn-name">pread_raw</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="pread_into_raw"><a href="fs.html#pread_into_raw"><span class="fn-name">pread_into_raw</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="get_pread"><a href="fs.html#get_pread"><span class="fn-name">get_pread</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="get_pread_length"><a href="fs.html#get_pread_length"><span class="fn-name">get_pread_length</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="release_pread"><a href="fs.html#release_pread"><span class="fn-name">release_pread</span><span class="fn-module">fs</span></a></li>
@@ -683,10 +793,15 @@
       <li class="function-item" data-name="fsync_raw"><a href="fs.html#fsync_raw"><span class="fn-name">fsync_raw</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="pwrite"><a href="fs.html#pwrite"><span class="fn-name">pwrite</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="pread"><a href="fs.html#pread"><span class="fn-name">pread</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="pread_into"><a href="fs.html#pread_into"><span class="fn-name">pread_into</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="ftruncate"><a href="fs.html#ftruncate"><span class="fn-name">ftruncate</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="fsync"><a href="fs.html#fsync"><span class="fn-name">fsync</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="file_fd_raw"><a href="fs.html#file_fd_raw"><span class="fn-name">file_fd_raw</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="fd"><a href="fs.html#fd"><span class="fn-name">fd</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="glob_raw"><a href="fs.html#glob_raw"><span class="fn-name">glob_raw</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="glob_multi_raw"><a href="fs.html#glob_multi_raw"><span class="fn-name">glob_multi_raw</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="walk_raw"><a href="fs.html#walk_raw"><span class="fn-name">walk_raw</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="watch_open_raw"><a href="fs.html#watch_open_raw"><span class="fn-name">watch_open_raw</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="open"><a href="fs.html#open"><span class="fn-name">open</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="read"><a href="fs.html#read"><span class="fn-name">read</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="write"><a href="fs.html#write"><span class="fn-name">write</span><span class="fn-module">fs</span></a></li>
@@ -704,6 +819,10 @@
       <li class="function-item" data-name="list_dir"><a href="fs.html#list_dir"><span class="fn-name">list_dir</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="glob"><a href="fs.html#glob"><span class="fn-name">glob</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="glob_multi"><a href="fs.html#glob_multi"><span class="fn-name">glob_multi</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="walk"><a href="fs.html#walk"><span class="fn-name">walk</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="watch_open"><a href="fs.html#watch_open"><span class="fn-name">watch_open</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="watch_wait"><a href="fs.html#watch_wait"><span class="fn-name">watch_wait</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="watch_close"><a href="fs.html#watch_close"><span class="fn-name">watch_close</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="write_binary"><a href="fs.html#write_binary"><span class="fn-name">write_binary</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="write_atomic"><a href="fs.html#write_atomic"><span class="fn-name">write_atomic</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="rename"><a href="fs.html#rename"><span class="fn-name">rename</span><span class="fn-module">fs</span></a></li>
@@ -730,6 +849,10 @@
       <li class="function-item" data-name="KIND_IS_DIR"><a href="fs.html#KIND_IS_DIR"><span class="fn-name">KIND_IS_DIR</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="KIND_NOT_DIR"><a href="fs.html#KIND_NOT_DIR"><span class="fn-name">KIND_NOT_DIR</span><span class="fn-module">fs</span></a></li>
       <li class="function-item" data-name="KIND_UNAVAILABLE"><a href="fs.html#KIND_UNAVAILABLE"><span class="fn-name">KIND_UNAVAILABLE</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="fnv32"><a href="hash.html#fnv32"><span class="fn-name">fnv32</span><span class="fn-module">hash</span></a></li>
+      <li class="function-item" data-name="fnv64"><a href="hash.html#fnv64"><span class="fn-name">fnv64</span><span class="fn-module">hash</span></a></li>
+      <li class="function-item" data-name="murmur3_32"><a href="hash.html#murmur3_32"><span class="fn-name">murmur3_32</span><span class="fn-module">hash</span></a></li>
+      <li class="function-item" data-name="siphash24"><a href="hash.html#siphash24"><span class="fn-name">siphash24</span><span class="fn-module">hash</span></a></li>
       <li class="function-item" data-name="notify"><a href="host.html#notify"><span class="fn-name">notify</span><span class="fn-module">host</span></a></li>
       <li class="function-item" data-name="describe"><a href="host.html#describe"><span class="fn-name">describe</span><span class="fn-module">host</span></a></li>
       <li class="function-item" data-name="input"><a href="host.html#input"><span class="fn-name">input</span><span class="fn-module">host</span></a></li>
@@ -815,6 +938,7 @@
       <li class="function-item" data-name="get_bool"><a href="json.html#get_bool"><span class="fn-name">get_bool</span><span class="fn-module">json</span></a></li>
       <li class="function-item" data-name="get_number"><a href="json.html#get_number"><span class="fn-name">get_number</span><span class="fn-module">json</span></a></li>
       <li class="function-item" data-name="get_int"><a href="json.html#get_int"><span class="fn-name">get_int</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="get_long"><a href="json.html#get_long"><span class="fn-name">get_long</span><span class="fn-module">json</span></a></li>
       <li class="function-item" data-name="get_string_raw"><a href="json.html#get_string_raw"><span class="fn-name">get_string_raw</span><span class="fn-module">json</span></a></li>
       <li class="function-item" data-name="object_get_raw"><a href="json.html#object_get_raw"><span class="fn-name">object_get_raw</span><span class="fn-module">json</span></a></li>
       <li class="function-item" data-name="object_set_raw"><a href="json.html#object_set_raw"><span class="fn-name">object_set_raw</span><span class="fn-module">json</span></a></li>
@@ -861,6 +985,7 @@
       <li class="function-item" data-name="KIND_INVALID_INPUT"><a href="json.html#KIND_INVALID_INPUT"><span class="fn-name">KIND_INVALID_INPUT</span><span class="fn-module">json</span></a></li>
       <li class="function-item" data-name="generate"><a href="ksuid.html#generate"><span class="fn-name">generate</span><span class="fn-module">ksuid</span></a></li>
       <li class="function-item" data-name="new"><a href="list.html#new"><span class="fn-name">new</span><span class="fn-module">list</span></a></li>
+      <li class="function-item" data-name="new_in"><a href="list.html#new_in"><span class="fn-name">new_in</span><span class="fn-module">list</span></a></li>
       <li class="function-item" data-name="add_raw"><a href="list.html#add_raw"><span class="fn-name">add_raw</span><span class="fn-module">list</span></a></li>
       <li class="function-item" data-name="add_string_owned"><a href="list.html#add_string_owned"><span class="fn-name">add_string_owned</span><span class="fn-module">list</span></a></li>
       <li class="function-item" data-name="get_raw"><a href="list.html#get_raw"><span class="fn-name">get_raw</span><span class="fn-module">list</span></a></li>
@@ -1047,11 +1172,17 @@
       <li class="function-item" data-name="generate_n"><a href="nanoid.html#generate_n"><span class="fn-name">generate_n</span><span class="fn-module">nanoid</span></a></li>
       <li class="function-item" data-name="tcp_connect_raw"><a href="net.html#tcp_connect_raw"><span class="fn-name">tcp_connect_raw</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="tcp_send_raw"><a href="net.html#tcp_send_raw"><span class="fn-name">tcp_send_raw</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_send_n_raw"><a href="net.html#tcp_send_n_raw"><span class="fn-name">tcp_send_n_raw</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="tcp_receive_raw"><a href="net.html#tcp_receive_raw"><span class="fn-name">tcp_receive_raw</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_receive_n_raw"><a href="net.html#tcp_receive_n_raw"><span class="fn-name">tcp_receive_n_raw</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="tcp_close"><a href="net.html#tcp_close"><span class="fn-name">tcp_close</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="tcp_listen_raw"><a href="net.html#tcp_listen_raw"><span class="fn-name">tcp_listen_raw</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="tcp_accept_raw"><a href="net.html#tcp_accept_raw"><span class="fn-name">tcp_accept_raw</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="tcp_server_close"><a href="net.html#tcp_server_close"><span class="fn-name">tcp_server_close</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_fd_raw"><a href="net.html#tcp_fd_raw"><span class="fn-name">tcp_fd_raw</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_server_fd_raw"><a href="net.html#tcp_server_fd_raw"><span class="fn-name">tcp_server_fd_raw</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_poll_raw"><a href="net.html#tcp_poll_raw"><span class="fn-name">tcp_poll_raw</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_poll2_raw"><a href="net.html#tcp_poll2_raw"><span class="fn-name">tcp_poll2_raw</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="http_get_raw"><a href="net.html#http_get_raw"><span class="fn-name">http_get_raw</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="http_post_raw"><a href="net.html#http_post_raw"><span class="fn-name">http_post_raw</span><span class="fn-module">net</span></a></li>
       <li class="function-item" data-name="http_put_raw"><a href="net.html#http_put_raw"><span class="fn-name">http_put_raw</span><span class="fn-module">net</span></a></li>
@@ -1126,6 +1257,8 @@
       <li class="function-item" data-name="aether_args_sealed"><a href="os.html#aether_args_sealed"><span class="fn-name">aether_args_sealed</span><span class="fn-module">os</span></a></li>
       <li class="function-item" data-name="args_seal"><a href="os.html#args_seal"><span class="fn-name">args_seal</span><span class="fn-module">os</span></a></li>
       <li class="function-item" data-name="args_sealed"><a href="os.html#args_sealed"><span class="fn-name">args_sealed</span><span class="fn-module">os</span></a></li>
+      <li class="function-item" data-name="args_count"><a href="os.html#args_count"><span class="fn-name">args_count</span><span class="fn-module">os</span></a></li>
+      <li class="function-item" data-name="args_get"><a href="os.html#args_get"><span class="fn-name">args_get</span><span class="fn-module">os</span></a></li>
       <li class="function-item" data-name="execv"><a href="os.html#execv"><span class="fn-name">execv</span><span class="fn-module">os</span></a></li>
       <li class="function-item" data-name="now_utc_iso8601_raw"><a href="os.html#now_utc_iso8601_raw"><span class="fn-name">now_utc_iso8601_raw</span><span class="fn-module">os</span></a></li>
       <li class="function-item" data-name="getpid_raw"><a href="os.html#getpid_raw"><span class="fn-name">getpid_raw</span><span class="fn-module">os</span></a></li>
@@ -1239,6 +1372,12 @@
       <li class="function-item" data-name="store"><a href="snapshot.html#store"><span class="fn-name">store</span><span class="fn-module">snapshot</span></a></li>
       <li class="function-item" data-name="cas"><a href="snapshot.html#cas"><span class="fn-name">cas</span><span class="fn-module">snapshot</span></a></li>
       <li class="function-item" data-name="free"><a href="snapshot.html#free"><span class="fn-name">free</span><span class="fn-module">snapshot</span></a></li>
+      <li class="function-item" data-name="ints"><a href="sort.html#ints"><span class="fn-name">ints</span><span class="fn-module">sort</span></a></li>
+      <li class="function-item" data-name="longs"><a href="sort.html#longs"><span class="fn-name">longs</span><span class="fn-module">sort</span></a></li>
+      <li class="function-item" data-name="floats"><a href="sort.html#floats"><span class="fn-name">floats</span><span class="fn-module">sort</span></a></li>
+      <li class="function-item" data-name="int_search"><a href="sort.html#int_search"><span class="fn-name">int_search</span><span class="fn-module">sort</span></a></li>
+      <li class="function-item" data-name="long_search"><a href="sort.html#long_search"><span class="fn-name">long_search</span><span class="fn-module">sort</span></a></li>
+      <li class="function-item" data-name="float_search"><a href="sort.html#float_search"><span class="fn-name">float_search</span><span class="fn-module">sort</span></a></li>
       <li class="function-item" data-name="aether_strbuilder_new"><a href="strbuilder.html#aether_strbuilder_new"><span class="fn-name">aether_strbuilder_new</span><span class="fn-module">strbuilder</span></a></li>
       <li class="function-item" data-name="aether_strbuilder_append"><a href="strbuilder.html#aether_strbuilder_append"><span class="fn-name">aether_strbuilder_append</span><span class="fn-module">strbuilder</span></a></li>
       <li class="function-item" data-name="aether_strbuilder_append_n"><a href="strbuilder.html#aether_strbuilder_append_n"><span class="fn-name">aether_strbuilder_append_n</span><span class="fn-module">strbuilder</span></a></li>
@@ -1360,16 +1499,52 @@
       <li class="function-item" data-name="glob_match_pathname"><a href="string.html#glob_match_pathname"><span class="fn-name">glob_match_pathname</span><span class="fn-module">string</span></a></li>
       <li class="function-item" data-name="connect_raw"><a href="tcp.html#connect_raw"><span class="fn-name">connect_raw</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="send_raw"><a href="tcp.html#send_raw"><span class="fn-name">send_raw</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="send_n_raw"><a href="tcp.html#send_n_raw"><span class="fn-name">send_n_raw</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="receive_raw"><a href="tcp.html#receive_raw"><span class="fn-name">receive_raw</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="receive_n_raw"><a href="tcp.html#receive_n_raw"><span class="fn-name">receive_n_raw</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="close"><a href="tcp.html#close"><span class="fn-name">close</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="listen_raw"><a href="tcp.html#listen_raw"><span class="fn-name">listen_raw</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="accept_raw"><a href="tcp.html#accept_raw"><span class="fn-name">accept_raw</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="server_close"><a href="tcp.html#server_close"><span class="fn-name">server_close</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="fd_raw"><a href="tcp.html#fd_raw"><span class="fn-name">fd_raw</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="server_fd_raw"><a href="tcp.html#server_fd_raw"><span class="fn-name">server_fd_raw</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="poll_raw"><a href="tcp.html#poll_raw"><span class="fn-name">poll_raw</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="poll2_raw"><a href="tcp.html#poll2_raw"><span class="fn-name">poll2_raw</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="connect"><a href="tcp.html#connect"><span class="fn-name">connect</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="write"><a href="tcp.html#write"><span class="fn-name">write</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="write_n"><a href="tcp.html#write_n"><span class="fn-name">write_n</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="read"><a href="tcp.html#read"><span class="fn-name">read</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="read_n"><a href="tcp.html#read_n"><span class="fn-name">read_n</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="listen"><a href="tcp.html#listen"><span class="fn-name">listen</span><span class="fn-module">tcp</span></a></li>
       <li class="function-item" data-name="accept"><a href="tcp.html#accept"><span class="fn-name">accept</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="fd"><a href="tcp.html#fd"><span class="fn-name">fd</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="server_fd"><a href="tcp.html#server_fd"><span class="fn-name">server_fd</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="poll"><a href="tcp.html#poll"><span class="fn-name">poll</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="poll2"><a href="tcp.html#poll2"><span class="fn-name">poll2</span><span class="fn-module">tcp</span></a></li>
+      <li class="function-item" data-name="DateTime"><a href="time.html#DateTime"><span class="fn-name">DateTime</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="now"><a href="time.html#now"><span class="fn-name">now</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="now_ms"><a href="time.html#now_ms"><span class="fn-name">now_ms</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="from_civil"><a href="time.html#from_civil"><span class="fn-name">from_civil</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="from_unix"><a href="time.html#from_unix"><span class="fn-name">from_unix</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="to_unix"><a href="time.html#to_unix"><span class="fn-name">to_unix</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="weekday"><a href="time.html#weekday"><span class="fn-name">weekday</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="day_of_year"><a href="time.html#day_of_year"><span class="fn-name">day_of_year</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="is_leap_year"><a href="time.html#is_leap_year"><span class="fn-name">is_leap_year</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="days_in_month"><a href="time.html#days_in_month"><span class="fn-name">days_in_month</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="add_seconds"><a href="time.html#add_seconds"><span class="fn-name">add_seconds</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="add_minutes"><a href="time.html#add_minutes"><span class="fn-name">add_minutes</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="add_hours"><a href="time.html#add_hours"><span class="fn-name">add_hours</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="add_days"><a href="time.html#add_days"><span class="fn-name">add_days</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="diff_seconds"><a href="time.html#diff_seconds"><span class="fn-name">diff_seconds</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="is_before"><a href="time.html#is_before"><span class="fn-name">is_before</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="is_after"><a href="time.html#is_after"><span class="fn-name">is_after</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="to_iso8601"><a href="time.html#to_iso8601"><span class="fn-name">to_iso8601</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="parse_iso8601"><a href="time.html#parse_iso8601"><span class="fn-name">parse_iso8601</span><span class="fn-module">time</span></a></li>
+      <li class="function-item" data-name="wrap"><a href="tracking.html#wrap"><span class="fn-name">wrap</span><span class="fn-module">tracking</span></a></li>
+      <li class="function-item" data-name="count"><a href="tracking.html#count"><span class="fn-name">count</span><span class="fn-module">tracking</span></a></li>
+      <li class="function-item" data-name="bytes"><a href="tracking.html#bytes"><span class="fn-name">bytes</span><span class="fn-module">tracking</span></a></li>
+      <li class="function-item" data-name="report"><a href="tracking.html#report"><span class="fn-name">report</span><span class="fn-module">tracking</span></a></li>
+      <li class="function-item" data-name="destroy"><a href="tracking.html#destroy"><span class="fn-name">destroy</span><span class="fn-module">tracking</span></a></li>
       <li class="function-item" data-name="generate"><a href="tsid.html#generate"><span class="fn-name">generate</span><span class="fn-module">tsid</span></a></li>
       <li class="function-item" data-name="generate"><a href="ulid.html#generate"><span class="fn-name">generate</span><span class="fn-module">ulid</span></a></li>
       <li class="function-item" data-name="encode"><a href="url.html#encode"><span class="fn-name">encode</span><span class="fn-module">url</span></a></li>
@@ -1381,6 +1556,22 @@
       <li class="function-item" data-name="query_get_all"><a href="url.html#query_get_all"><span class="fn-name">query_get_all</span><span class="fn-module">url</span></a></li>
       <li class="function-item" data-name="v4"><a href="uuid.html#v4"><span class="fn-name">v4</span><span class="fn-module">uuid</span></a></li>
       <li class="function-item" data-name="v7"><a href="uuid.html#v7"><span class="fn-name">v7</span><span class="fn-module">uuid</span></a></li>
+      <li class="function-item" data-name="aether_worker_run"><a href="worker.html#aether_worker_run"><span class="fn-name">aether_worker_run</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="aether_worker_run_detached"><a href="worker.html#aether_worker_run_detached"><span class="fn-name">aether_worker_run_detached</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="aether_worker_set_main_poster"><a href="worker.html#aether_worker_set_main_poster"><span class="fn-name">aether_worker_set_main_poster</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="aether_worker_deliver"><a href="worker.html#aether_worker_deliver"><span class="fn-name">aether_worker_deliver</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="aether_worker_drain"><a href="worker.html#aether_worker_drain"><span class="fn-name">aether_worker_drain</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="aether_worker_pending"><a href="worker.html#aether_worker_pending"><span class="fn-name">aether_worker_pending</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="aether_worker_pool_configure"><a href="worker.html#aether_worker_pool_configure"><span class="fn-name">aether_worker_pool_configure</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="aether_worker_pool_shutdown"><a href="worker.html#aether_worker_pool_shutdown"><span class="fn-name">aether_worker_pool_shutdown</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="run"><a href="worker.html#run"><span class="fn-name">run</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="run_detached"><a href="worker.html#run_detached"><span class="fn-name">run_detached</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="set_main_poster"><a href="worker.html#set_main_poster"><span class="fn-name">set_main_poster</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="deliver"><a href="worker.html#deliver"><span class="fn-name">deliver</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="drain"><a href="worker.html#drain"><span class="fn-name">drain</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="pending"><a href="worker.html#pending"><span class="fn-name">pending</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="pool_size"><a href="worker.html#pool_size"><span class="fn-name">pool_size</span><span class="fn-module">worker</span></a></li>
+      <li class="function-item" data-name="pool_shutdown"><a href="worker.html#pool_shutdown"><span class="fn-name">pool_shutdown</span><span class="fn-module">worker</span></a></li>
       <li class="function-item" data-name="EVENT_START"><a href="xml.html#EVENT_START"><span class="fn-name">EVENT_START</span><span class="fn-module">xml</span></a></li>
       <li class="function-item" data-name="EVENT_END"><a href="xml.html#EVENT_END"><span class="fn-name">EVENT_END</span><span class="fn-module">xml</span></a></li>
       <li class="function-item" data-name="EVENT_TEXT"><a href="xml.html#EVENT_TEXT"><span class="fn-name">EVENT_TEXT</span><span class="fn-module">xml</span></a></li>

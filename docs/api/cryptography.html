@@ -19,12 +19,6 @@
     <li><a href="#sha256_hex_raw">sha256_hex_raw</a></li>
     <li><a href="#hash_hex_raw">hash_hex_raw</a></li>
     <li><a href="#hash_supported">hash_supported</a></li>
-    <li><a href="#base64_encode_raw">base64_encode_raw</a></li>
-    <li><a href="#base64_encode_padded_raw">base64_encode_padded_raw</a></li>
-    <li><a href="#base64_decode_raw">base64_decode_raw</a></li>
-    <li><a href="#get_base64_decode">get_base64_decode</a></li>
-    <li><a href="#get_base64_decode_length">get_base64_decode_length</a></li>
-    <li><a href="#release_base64_decode">release_base64_decode</a></li>
     <li><a href="#md4_hex_raw">md4_hex_raw</a></li>
     <li><a href="#md5_hex_raw">md5_hex_raw</a></li>
     <li><a href="#hmac_sha256_hex_raw">hmac_sha256_hex_raw</a></li>
@@ -49,9 +43,6 @@
     <li><a href="#sha1_hex">sha1_hex</a></li>
     <li><a href="#sha256_hex">sha256_hex</a></li>
     <li><a href="#hash_hex">hash_hex</a></li>
-    <li><a href="#base64_encode">base64_encode</a></li>
-    <li><a href="#base64_encode_padded">base64_encode_padded</a></li>
-    <li><a href="#base64_decode">base64_decode</a></li>
     <li><a href="#md4_hex">md4_hex</a></li>
     <li><a href="#md5_hex">md5_hex</a></li>
     <li><a href="#hmac_sha256_hex">hmac_sha256_hex</a></li>
@@ -74,7 +65,9 @@
   <h2>Modules</h2>
   <ul class="module-list">
     <li><a href="actors.html">actors</a></li>
+    <li><a href="alloc.html">alloc</a></li>
     <li><a href="arena.html">arena</a></li>
+    <li><a href="audio.html">audio</a></li>
     <li><a href="audit.html">audit</a></li>
     <li><a href="bignum.html">bignum</a></li>
     <li><a href="bits.html">bits</a></li>
@@ -85,11 +78,14 @@
     <li><a href="collections.html">collections</a></li>
     <li><a href="config.html">config</a></li>
     <li class="active"><a href="cryptography.html">cryptography</a></li>
+    <li><a href="deque.html">deque</a></li>
     <li><a href="dir.html">dir</a></li>
     <li><a href="dl.html">dl</a></li>
+    <li><a href="encoding.html">encoding</a></li>
     <li><a href="file.html">file</a></li>
     <li><a href="floatarr.html">floatarr</a></li>
     <li><a href="fs.html">fs</a></li>
+    <li><a href="hash.html">hash</a></li>
     <li><a href="host.html">host</a></li>
     <li><a href="http.html">http</a></li>
     <li><a href="intarr.html">intarr</a></li>
@@ -111,13 +107,17 @@
     <li><a href="regex.html">regex</a></li>
     <li><a href="signal.html">signal</a></li>
     <li><a href="snapshot.html">snapshot</a></li>
+    <li><a href="sort.html">sort</a></li>
     <li><a href="strbuilder.html">strbuilder</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="tcp.html">tcp</a></li>
+    <li><a href="time.html">time</a></li>
+    <li><a href="tracking.html">tracking</a></li>
     <li><a href="tsid.html">tsid</a></li>
     <li><a href="ulid.html">ulid</a></li>
     <li><a href="url.html">url</a></li>
     <li><a href="uuid.html">uuid</a></li>
+    <li><a href="worker.html">worker</a></li>
     <li><a href="xml.html">xml</a></li>
     <li><a href="zlib.html">zlib</a></li>
   </ul>
@@ -148,33 +148,6 @@
       <h3 class="function-name">hash_supported <span class="kind">extern</span></h3>
       <pre class="usage"><code>hash_supported(algo) <span class="arrow">-&gt;</span> int</code></pre>
       <p class="signature"><span class="sig-params">algo: string</span></p>
-    </div>
-    <div class="function" id="base64_encode_raw" data-name="base64_encode_raw">
-      <h3 class="function-name">base64_encode_raw <span class="kind">extern</span></h3>
-      <pre class="usage"><code>base64_encode_raw(data, length) <span class="arrow">-&gt;</span> string</code></pre>
-      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
-    </div>
-    <div class="function" id="base64_encode_padded_raw" data-name="base64_encode_padded_raw">
-      <h3 class="function-name">base64_encode_padded_raw <span class="kind">extern</span></h3>
-      <pre class="usage"><code>base64_encode_padded_raw(data, length) <span class="arrow">-&gt;</span> string</code></pre>
-      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
-    </div>
-    <div class="function" id="base64_decode_raw" data-name="base64_decode_raw">
-      <h3 class="function-name">base64_decode_raw <span class="kind">extern</span></h3>
-      <pre class="usage"><code>base64_decode_raw(b64) <span class="arrow">-&gt;</span> int</code></pre>
-      <p class="signature"><span class="sig-params">b64: string</span></p>
-    </div>
-    <div class="function" id="get_base64_decode" data-name="get_base64_decode">
-      <h3 class="function-name">get_base64_decode <span class="kind">extern</span></h3>
-      <pre class="usage"><code>get_base64_decode() <span class="arrow">-&gt;</span> string</code></pre>
-    </div>
-    <div class="function" id="get_base64_decode_length" data-name="get_base64_decode_length">
-      <h3 class="function-name">get_base64_decode_length <span class="kind">extern</span></h3>
-      <pre class="usage"><code>get_base64_decode_length() <span class="arrow">-&gt;</span> int</code></pre>
-    </div>
-    <div class="function" id="release_base64_decode" data-name="release_base64_decode">
-      <h3 class="function-name">release_base64_decode <span class="kind">extern</span></h3>
-      <pre class="usage"><code>release_base64_decode()</code></pre>
     </div>
     <div class="function" id="md4_hex_raw" data-name="md4_hex_raw">
       <h3 class="function-name">md4_hex_raw <span class="kind">extern</span></h3>
@@ -292,24 +265,6 @@
       <pre class="usage"><code>hash_hex(algo, data, length) <span class="arrow">-&gt;</span> (string, string)</code></pre>
       <p class="signature"><span class="sig-params">algo: string, data: string, length: int</span></p>
       <p class="doc">Algorithm-by-name digest dispatch. `algo` is a string like &quot;sha1&quot; or &quot;sha256&quot; — useful when the algorithm is config-driven rather than compile-time. Returns the same lowercase-hex shape as sha1_hex / sha256_hex, or (&quot;&quot;, error) when: - OpenSSL isn't linked - the algorithm name is unknown (&quot;unknown algorithm&quot;) - the digest computation itself fails Whatever names libcrypto recognizes work here (&quot;sha384&quot;, &quot;sha512&quot;, &quot;sha3-256&quot;, ...), but the supported set may vary by OpenSSL build. Use hash_supported() to check before passing user-supplied names.</p>
-    </div>
-    <div class="function" id="base64_encode" data-name="base64_encode">
-      <h3 class="function-name">base64_encode <span class="kind">fn</span></h3>
-      <pre class="usage"><code>base64_encode(data, length) <span class="arrow">-&gt;</span> (string, string)</code></pre>
-      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
-      <p class="doc">Encode `length` bytes of `data` as Base64 (RFC 4648 §4 standard alphabet, unpadded for compactness). Callers that need `=` padding to make the output length a multiple of 4 can append it themselves; the unpadded length is `((n + 2) / 3) * 4` for an n-byte input. Returns (b64_string, &quot;&quot;) on success, (&quot;&quot;, error) on failure.</p>
-    </div>
-    <div class="function" id="base64_encode_padded" data-name="base64_encode_padded">
-      <h3 class="function-name">base64_encode_padded <span class="kind">fn</span></h3>
-      <pre class="usage"><code>base64_encode_padded(data, length) <span class="arrow">-&gt;</span> (string, string)</code></pre>
-      <p class="signature"><span class="sig-params">data: string, length: int</span></p>
-      <p class="doc">Padded sibling of base64_encode — RFC 4648 §4 standard alphabet WITH `=` padding to a multiple of 4 bytes. Reach for this when the wire format on the other end expects padded base64 — most non-strict decoders accept either, but some auth headers and JSON-encoded blob formats explicitly require padding. Returns (b64_string, &quot;&quot;) on success, (&quot;&quot;, error) on failure.</p>
-    </div>
-    <div class="function" id="base64_decode" data-name="base64_decode">
-      <h3 class="function-name">base64_decode <span class="kind">fn</span></h3>
-      <pre class="usage"><code>base64_decode(b64) <span class="arrow">-&gt;</span> (string, int, string)</code></pre>
-      <p class="signature"><span class="sig-params">b64: string</span></p>
-      <p class="doc">Decode a Base64 string back into raw bytes. Accepts both padded and unpadded RFC 4648 §4 input. Returns (bytes, length, &quot;&quot;) on success — `bytes` is an AetherString preserving any embedded NULs in the decoded payload. Returns (&quot;&quot;, 0, error) on: - malformed Base64 input - OpenSSL unavailable - allocation failure Same shape as fs.read_binary so callers can chain through the same destructure pattern.</p>
     </div>
     <div class="function" id="md4_hex" data-name="md4_hex">
       <h3 class="function-name">md4_hex <span class="kind">fn</span></h3>
