@@ -48,49 +48,13 @@ void aether_message_pool_stats(uint64_t* hits, uint64_t* misses, uint64_t* large
 }
 
 // Initialize thread-local payload pool
-static inline void payload_pool_init_thread(void) {
-    if (g_payload_pool) return;
+/* The acquire side of this pool was removed: it was unreachable, and the
+ * send path below documents why it must stay that way. An actor can be
+ * migrated to another core after a message is sent, so a TLS-pooled
+ * payload would be released by a thread that does not own that pool.
+ * payload_pool_release still runs and simply reports "not mine" for
+ * every heap payload. */
 
-    g_payload_pool = calloc(1, sizeof(PayloadPool));
-    if (!g_payload_pool) return;
-
-    g_payload_pool->next_index = 0;
-    for (int i = 0; i < MSG_PAYLOAD_POOL_SIZE; i++) {
-        g_payload_pool->payloads[i].in_use = 0;
-    }
-    g_payload_pool->initialized = 1;
-}
-
-// Allocate from payload pool (lock-free for single thread)
-static inline void* payload_pool_acquire(size_t size) {
-    // Too large for pool
-    if (size > MSG_PAYLOAD_MAX_SIZE) {
-        atomic_fetch_add_explicit(&g_too_large, 1, memory_order_relaxed);
-        return NULL;
-    }
-
-    // Initialize pool if needed
-    if (!g_payload_pool || !g_payload_pool->initialized) {
-        payload_pool_init_thread();
-        if (!g_payload_pool) return NULL;
-    }
-
-    // Try to find free slot (round-robin, thread-local so no CAS needed)
-    for (int attempts = 0; attempts < MSG_PAYLOAD_POOL_SIZE; attempts++) {
-        int idx = g_payload_pool->next_index++ & (MSG_PAYLOAD_POOL_SIZE - 1);
-        PooledPayload* slot = &g_payload_pool->payloads[idx];
-
-        if (!slot->in_use) {
-            slot->in_use = 1;
-            atomic_fetch_add_explicit(&g_pool_hits, 1, memory_order_relaxed);
-            return slot->buffer;
-        }
-    }
-
-    // Pool exhausted
-    atomic_fetch_add_explicit(&g_pool_misses, 1, memory_order_relaxed);
-    return NULL;
-}
 
 // Return payload to pool
 static inline int payload_pool_release(void* ptr) {
