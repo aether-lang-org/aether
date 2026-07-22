@@ -39,6 +39,7 @@
 // tests, regression tests, and callers continue to work unchanged.
 
 #include "aether_json.h"
+#include "../mem/aether_grow.h"
 #include "../../runtime/aether_resource_caps.h"
 
 #include <stdio.h>
@@ -1779,8 +1780,9 @@ typedef struct {
 static int sb_reserve(StrBuf* b, size_t extra) {
     if (b->oom) return 0;
     if (b->len + extra + 1 > b->cap) {
-        size_t new_cap = b->cap ? b->cap : 256;
-        while (new_cap < b->len + extra + 1) new_cap *= 2;
+        size_t need = b->len + extra + 1;
+        size_t new_cap = aether_buf_grow_capacity(b->cap, 256, need, 1);
+        if (!new_cap) { b->oom = 1; return 0; }
         char* nd = (char*)realloc(b->data, new_cap);
         if (!nd) { b->oom = 1; return 0; }
         b->data = nd;

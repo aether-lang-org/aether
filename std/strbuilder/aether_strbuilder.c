@@ -1,4 +1,5 @@
 #include "aether_strbuilder.h"
+#include "../mem/aether_grow.h"
 #include "../string/aether_string.h"
 #include "../../runtime/aether_resource_caps.h"
 
@@ -22,16 +23,10 @@ struct AetherStrBuilder {
 static int strbuilder_reserve(AetherStrBuilder* b, size_t min_capacity) {
     if (!b) return 0;
     if (b->capacity >= min_capacity) return 1;
-    size_t new_cap = b->capacity ? b->capacity : AETHER_STRBUILDER_DEFAULT_CAP;
-    while (new_cap < min_capacity) {
-        size_t doubled = new_cap * 2;
-        if (doubled < new_cap) {
-            /* overflow — fall back to the requested size */
-            new_cap = min_capacity;
-            break;
-        }
-        new_cap = doubled;
-    }
+    size_t new_cap = aether_buf_grow_capacity(b->capacity,
+                                              AETHER_STRBUILDER_DEFAULT_CAP,
+                                              min_capacity, 1);
+    if (!new_cap) return 0;
     char* new_data = (char*)aether_caps_realloc(b->data, b->capacity, new_cap);
     if (!new_data) return 0;
     b->data = new_data;

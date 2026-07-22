@@ -21,6 +21,7 @@
  */
 
 #include "aether_h2.h"
+#include "../../../mem/aether_grow.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -218,8 +219,9 @@ static void stream_unlink(AetherH2Session* s, int32_t id) {
 static int buf_append(char** buf, size_t* len, size_t* cap,
                       const char* data, size_t data_len) {
     if (*len + data_len + 1 > *cap) {
-        size_t new_cap = (*cap == 0) ? 256 : *cap;
-        while (new_cap < *len + data_len + 1) new_cap *= 2;
+        size_t new_cap = aether_buf_grow_capacity(*cap, 256,
+                                                  *len + data_len + 1, 1);
+        if (!new_cap) return -1;
         char* nb = realloc(*buf, new_cap);
         if (!nb) return -1;
         *buf = nb;
