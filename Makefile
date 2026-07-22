@@ -677,7 +677,7 @@ test-memory: compiler stdlib-memory
 
 test-manual-runtime: compiler
 	@echo "Building manual runtime test..."
-	$(CC) $(CFLAGS) tests/test_runtime_manual.c $(RUNTIME_SRC) $(LDFLAGS) -o build/test_runtime_manual$(EXE_EXT)
+	$(CC) $(CFLAGS) tests/runtime/test_runtime_manual.c $(RUNTIME_SRC) $(LDFLAGS) -o build/test_runtime_manual$(EXE_EXT)
 	@echo "Running manual runtime test..."
 	./build/test_runtime_manual$(EXE_EXT)
 
