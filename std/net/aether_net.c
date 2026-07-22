@@ -40,6 +40,7 @@ int tcp_poll2_raw(TcpSocket* a, TcpSocket* b, int t) { (void)a; (void)b; (void)t
     typedef int socklen_t;
 #else
     #include <sys/socket.h>
+    #include <sys/time.h>   /* struct timeval: glibc leaks it via other headers, musl does not */
     #include <netinet/in.h>
     #include <netdb.h>
     #include <unistd.h>
