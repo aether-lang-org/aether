@@ -138,9 +138,13 @@ its own PR), scoping §4 found live defects in the foundations:
    `tests/regression/test_or_block_value.ae` (verified failing on the
    unfixed compiler) and `tests/integration/or_block_reject/`.
 2. **Noted, lower priority:** `T??` parses but is unguarded and fragile;
-   optional-vs-optional `==` on `string?` compares pointers, not content;
    optionals in tuples / struct-literal fields / actor messages are
    unexercised. None block §6; recorded so they're not rediscovered.
+
+   (The former note here — that `==` on `string?` compares pointers, not
+   content — is resolved: §366 and `language-reference.md` §Optionals both
+   specify content comparison, and it is verified: two distinct allocations of
+   the same text, typed `string?`, compare equal.)
 
 ## 3. What C3's design maps to here — and what doesn't
 
