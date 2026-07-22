@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **A failed write of generated C now fails the compile.** The write-failure
+  guard added in the cleanup sweep printed its error but returned
+  compile_source's success code, so a full disk still handed the truncated
+  .c file to the C compiler; the guard now returns failure like every other
+  error path in that function.
+- **`std.pqueue` priorities are 64-bit on every platform.** The C entry
+  points took `long`, which is 32-bit on Windows while Aether `long` is 64,
+  an ABI mismatch that truncated priorities past 2^31 and only round-tripped
+  small test values by calling-convention luck. The C side now uses
+  `long long`, matching the `string_to_long_raw` convention; the
+  Aether-facing API is unchanged.
+
 ## [0.434.0]
 
 ### Added
