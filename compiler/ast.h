@@ -474,6 +474,12 @@ typedef struct ASTNode {
                                // pre-typecheck inference that fills node_type,
                                // unlike a TYPE_UNKNOWN sentinel. Drives the
                                // #698 silent-narrowing guard.
+
+    /* Allocated slots in `children`. Only add_child maintains this;
+     * code that replaces the array wholesale resets it to 0, which
+     * merely forces the next add_child to regrow. The invariant that
+     * matters is capacity <= slots actually allocated. */
+    int child_capacity;
 } ASTNode;
 
 // Type functions

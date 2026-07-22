@@ -733,10 +733,6 @@ void apkg_print_version() {
     printf("apkg %s\n", APKG_VERSION);
 }
 
-Package* apkg_parse_manifest(const char* path) {
-    return NULL;
-}
-
 void apkg_free_package(Package* pkg) {
     if (!pkg) return;
     free(pkg->name);
@@ -752,10 +748,6 @@ void apkg_free_package(Package* pkg) {
     }
     free(pkg->dependencies);
     free(pkg);
-}
-
-int apkg_save_manifest(Package* pkg, const char* path) {
-    return 0;
 }
 
 PackageInfo apkg_find_package(const char* name) {

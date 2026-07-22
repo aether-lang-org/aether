@@ -1185,6 +1185,24 @@ static void emit_describe_c(FILE* out, ASTNode* program) {
 }
 
 // Compile aether source to C
+/* CRITICAL: codegen writes through fprintf, which reports nothing on
+ * failure. Without checking the stream before closing it, a full disk or
+ * I/O error yields a truncated .c file and a success exit code: with
+ * --emit=c the user gets silent corruption, and on the exe path the
+ * truncated C reaches the C compiler as a cascade of syntax errors that
+ * hides the real cause. Returns 1 when the file was written intact. */
+static int close_generated_file(FILE* f, const char* path) {
+    if (!f) return 1;
+    int failed = ferror(f) != 0;
+    if (fclose(f) != 0) failed = 1;
+    if (failed) {
+        fprintf(stderr, "Error: failed writing '%s' (disk full or I/O error)\n",
+                path ? path : "generated output");
+        return 0;
+    }
+    return 1;
+}
+
 int compile_source(const char* input_path, const char* output_path) {
     // Read input file
     FILE *input = fopen(input_path, "r");
@@ -1196,8 +1214,17 @@ int compile_source(const char* input_path, const char* output_path) {
     fseek(input, 0, SEEK_END);
     long file_size = ftell(input);
     fseek(input, 0, SEEK_SET);
-    
-    char *source = malloc(file_size + 1);
+
+    /* CRITICAL: ftell reports -1 on an unseekable stream (a FIFO, a
+     * character device). Falling through would malloc(0) and then hand
+     * fread a size_t-widened SIZE_MAX, writing past a zero-byte buffer. */
+    if (file_size < 0) {
+        fprintf(stderr, "Error: '%s' is not a seekable file\n", input_path);
+        fclose(input);
+        return 0;
+    }
+
+    char *source = malloc((size_t)file_size + 1);
     if (!source) {
         perror("Memory allocation error");
         fclose(input);
@@ -1699,15 +1726,13 @@ int compile_source(const char* input_path, const char* output_path) {
     codegen->source_file = input_path;
     int errors_before_codegen = aether_error_count();
     generate_program(codegen, program);
-    fclose(output);
-    if (csrc_header) {
-        fclose(csrc_header);
-    }
-    if (csrc_catalog) {
-        fclose(csrc_catalog);
-    }
-    if (header_output) {
-        fclose(header_output);
+    int write_ok = close_generated_file(output, output_path);
+    if (!close_generated_file(csrc_header, csrc_header_path))   write_ok = 0;
+    if (!close_generated_file(csrc_catalog, csrc_catalog_path)) write_ok = 0;
+    if (!close_generated_file(header_output, header_path))      write_ok = 0;
+    if (!write_ok) {
+        if (header_path) free(header_path);
+        return 1;
     }
     if (header_path) {
         free(header_path);

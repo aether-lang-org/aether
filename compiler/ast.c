@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdarg.h>
 #include "ast.h"
+#include <limits.h>
+#include "../std/mem/aether_grow.h"
 
 // Type functions
 Type* create_type(TypeKind kind) {
@@ -396,6 +398,7 @@ ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int colu
     node->node_type = NULL;
     node->children = NULL;
     node->child_count = 0;
+    node->child_capacity = 0;
     node->line = line;
     node->column = column;
     node->annotation = NULL;
@@ -411,12 +414,25 @@ ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int colu
 void add_child(ASTNode* parent, ASTNode* child) {
     if (!parent || !child) return;
     
-    ASTNode** new_children = realloc(parent->children, (parent->child_count + 1) * sizeof(ASTNode*));
-    if (!new_children) {
-        fprintf(stderr, "Fatal: out of memory adding AST child\n");
-        exit(1);
+    if (parent->child_count >= parent->child_capacity) {
+        /* Reallocating to exactly count+1 on every append made building a
+         * node with n children O(n^2); this is the compiler's hottest
+         * allocation path. */
+        size_t want = aether_buf_grow_capacity((size_t)parent->child_capacity, 4,
+                                               (size_t)parent->child_count + 1,
+                                               sizeof(ASTNode*));
+        if (want == 0 || want > (size_t)INT_MAX) {
+            fprintf(stderr, "Fatal: AST child array too large\n");
+            exit(1);
+        }
+        ASTNode** new_children = realloc(parent->children, want * sizeof(ASTNode*));
+        if (!new_children) {
+            fprintf(stderr, "Fatal: out of memory adding AST child\n");
+            exit(1);
+        }
+        parent->children = new_children;
+        parent->child_capacity = (int)want;
     }
-    parent->children = new_children;
     parent->children[parent->child_count] = child;
     parent->child_count++;
 }

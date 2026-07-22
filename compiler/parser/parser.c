@@ -2967,6 +2967,7 @@ ASTNode* parse_for_loop(Parser* parser) {
 
         ASTNode* for_loop = create_ast_node(AST_FOR_LOOP, NULL, var_name->line, var_name->column);
         for_loop->children = malloc(4 * sizeof(ASTNode*));
+    for_loop->child_capacity = 0;
         if (!for_loop->children) { free_ast_node(for_loop); return NULL; }
         for_loop->child_count = 4;
         for_loop->children[0] = init;
@@ -3029,6 +3030,7 @@ ASTNode* parse_for_loop(Parser* parser) {
     ASTNode* for_loop = create_ast_node(AST_FOR_LOOP, NULL, 0, 0);
     // Reserve 4 slots for init, condition, increment, body
     for_loop->children = malloc(4 * sizeof(ASTNode*));
+    for_loop->child_capacity = 0;
     if (!for_loop->children) { free_ast_node(for_loop); return NULL; }
     for_loop->child_count = 4;
     for_loop->children[0] = init;

@@ -11,7 +11,6 @@
 #include "aether_string.h"
 #include "aether_io.h"
 #include "aether_math.h"
-#include "aether_supervision.h"
 #include "aether_tracing.h"
 #include "aether_bounds_check.h"
 #include "aether_runtime_types.h"

@@ -450,7 +450,7 @@ actor ScoreTracker {
 1. **No Race Conditions** - State is private, no shared memory
 2. **Easy Concurrency** - No manual locks or mutexes
 3. **Scalable** - Each actor is independent
-4. **Fault Tolerant** - Actors can be supervised and restarted
+4. **Isolated Failures** - A panicking actor takes down its own mailbox, not its callers' state
 
 ### When to Use Actors
 

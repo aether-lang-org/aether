@@ -193,7 +193,7 @@ static void handle_http_request(int client_socket, const char* request) {
 static void* server_thread_func(void* arg) {
     (void)arg;
     
-    struct sockaddr_in server_addr, client_addr;
+    struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
     
     while (g_profiler.server_running) {
@@ -343,12 +343,39 @@ MetricsSnapshot profiler_get_current_metrics() {
     pthread_mutex_lock(&g_profiler.event_mutex);
     metrics.total_messages_sent = g_profiler.total_messages_sent;
     metrics.total_messages_processed = g_profiler.total_messages_processed;
-    metrics.avg_message_latency_ms = 0.5; // Placeholder
     metrics.active_actors = g_profiler.active_actors_count;
+
+    /* Measured over the retained event ring: each PROCESSED event is paired
+     * with the most recent preceding SENT event addressed to the same actor,
+     * and the mean of those intervals is reported. Events carry no message
+     * id, so this is a per-actor FIFO approximation rather than exact
+     * per-message latency; it is 0 when the ring holds no such pair.
+     * It previously reported a hardcoded 0.5, which read as a real
+     * measurement of the user's program. */
+    double latency_total = 0.0;
+    int    latency_pairs = 0;
+    for (int i = 0; i < g_profiler.event_count; i++) {
+        const ProfilerEvent* done = &g_profiler.events[i];
+        if (done->type != PROF_EVENT_ACTOR_MESSAGE_PROCESSED) continue;
+        for (int j = i - 1; j >= 0; j--) {
+            const ProfilerEvent* sent = &g_profiler.events[j];
+            if (sent->type != PROF_EVENT_ACTOR_MESSAGE_SENT) continue;
+            if (sent->target_actor_id != done->actor_id) continue;
+            if (done->timestamp_ms >= sent->timestamp_ms) {
+                latency_total += done->timestamp_ms - sent->timestamp_ms;
+                latency_pairs++;
+            }
+            break;
+        }
+    }
+    metrics.avg_message_latency_ms =
+        latency_pairs ? latency_total / (double)latency_pairs : 0.0;
     pthread_mutex_unlock(&g_profiler.event_mutex);
-    
+
     metrics.timestamp_ms = get_current_time_ms() - g_profiler.start_time_ms;
-    metrics.active_threads = 4; // Placeholder
+    /* Not instrumented yet. Reported as zero rather than an invented
+     * constant so the dashboard cannot present them as measurements. */
+    metrics.active_threads = 0;
     metrics.tasks_completed = 0;
     metrics.cpu_utilization = 0.0;
     

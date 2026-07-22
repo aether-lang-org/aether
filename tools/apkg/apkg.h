@@ -32,9 +32,7 @@ int apkg_search(const char* query);
 int apkg_update();
 int apkg_run();
 
-Package* apkg_parse_manifest(const char* path);
 void apkg_free_package(Package* pkg);
-int apkg_save_manifest(Package* pkg, const char* path);
 
 PackageInfo apkg_find_package(const char* name);
 int apkg_download_package(const char* name, const char* version);

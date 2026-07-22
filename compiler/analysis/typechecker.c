@@ -4328,6 +4328,7 @@ static void enum_rewrite_member_access(ASTNode* nd) {
             free_ast_node(nd->children[0]);
             free(nd->children);
             nd->children = NULL;
+    nd->child_capacity = 0;
             nd->child_count = 0;
             nd->type = AST_IDENTIFIER;
             if (nd->node_type) free_type(nd->node_type);
@@ -7094,6 +7095,7 @@ static int try_ufcs_rewrite(ASTNode* call, SymbolTable* table) {
         for (int i = 0; i < old; i++) nc[i + 1] = call->children[i];
         if (call->children) free(call->children);
         call->children = nc;
+    call->child_capacity = 0;
         call->child_count = old + 1;
     }
     free(call->value);
@@ -7286,6 +7288,7 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         }
         if (call->children) free(call->children);
         call->children = new_children;
+    call->child_capacity = 0;
         call->child_count = old_count + 1;
 
         // Rename the call from <varname> to "call" so codegen routes

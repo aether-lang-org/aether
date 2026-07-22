@@ -918,7 +918,15 @@ ASTNode* module_parse_file(const char* file_path) {
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    char* source = malloc(size + 1);
+    /* CRITICAL: ftell reports -1 on an unseekable stream (a FIFO, a
+     * character device). Falling through would malloc(0) and then hand
+     * fread a size_t-widened SIZE_MAX, writing past a zero-byte buffer. */
+    if (size < 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    char* source = malloc((size_t)size + 1);
     if (!source) {
         fclose(f);
         return NULL;
@@ -1051,6 +1059,7 @@ static char* resolve_import_path(ASTNode* import_node) {
     }
     free(import_node->children);
     import_node->children = new_children;
+    import_node->child_capacity = 0;
     import_node->child_count++;
 
     free(import_node->value);
@@ -2051,6 +2060,7 @@ static void insert_child_at(ASTNode* parent, ASTNode* child, int index) {
     ASTNode** new_children = realloc(parent->children, (parent->child_count + 1) * sizeof(ASTNode*));
     if (!new_children) { fprintf(stderr, "Fatal: out of memory\n"); exit(1); }
     parent->children = new_children;
+    parent->child_capacity = 0;
     // Shift elements right
     for (int i = parent->child_count; i > index; i--) {
         parent->children[i] = parent->children[i - 1];
