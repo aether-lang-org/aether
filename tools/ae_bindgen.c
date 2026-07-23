@@ -284,18 +284,19 @@ static int bg_is_ident(const char* s) {
     return 1;
 }
 
-/* Stage 1: candidate names via `cc -E -dM`. Object-like, user-named macros
- * only: reserved names (leading underscore) and function-like macros
- * (open paren directly after the name) are not importable constants. */
-static int bg_discover(const char* cc, const char* header,
-                       const char* include_flags, const char* match,
-                       BgSet* set) {
+/* Collect object-like, user-named macro names from one `cc -E -dM` run
+ * into a NUL-separated buffer. Names with a leading underscore (reserved
+ * namespace) and function-like macros are not importable constants. */
+static int bg_dump_names(const char* cc, const char* file,
+                         const char* include_flags,
+                         char* names, size_t names_sz) {
     char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "\"%s\" -E -dM %s \"%s\"", cc, include_flags, header);
+    snprintf(cmd, sizeof(cmd), "\"%s\" -E -dM %s \"%s\"", cc, include_flags, file);
     FILE* p = popen(cmd, "r");
     if (!p) return 0;
+    size_t pos = 0;
     char line[4096];
-    while (fgets(line, sizeof(line), p) && set->count < BG_MAX_MACROS) {
+    while (fgets(line, sizeof(line), p)) {
         if (strncmp(line, "#define ", 8) != 0) continue;
         char* name = line + 8;
         char* sp = strpbrk(name, " (\t\n");
@@ -303,12 +304,55 @@ static int bg_discover(const char* cc, const char* header,
         *sp = '\0';
         if (name[0] == '_') continue;             /* reserved namespace */
         if (!bg_is_ident(name)) continue;
-        if (strlen(name) >= BG_NAME_MAX) continue;
-        if (match && *match && strncmp(name, match, strlen(match)) != 0) continue;
-        snprintf(set->macros[set->count].name, BG_NAME_MAX, "%s", name);
+        size_t n = strlen(name);
+        if (n == 0 || n >= BG_NAME_MAX) continue;
+        if (pos + n + 2 >= names_sz) break;
+        memcpy(names + pos, name, n + 1);
+        pos += n + 1;
+    }
+    names[pos] = '\0';                            /* double-NUL terminator */
+    pclose(p);
+    return 1;
+}
+
+static int bg_name_in(const char* names, const char* name) {
+    for (const char* q = names; *q; q += strlen(q) + 1)
+        if (strcmp(q, name) == 0) return 1;
+    return 0;
+}
+
+/* Stage 1: candidates = macros defined by the HEADER, computed as the set
+ * difference against a baseline dump of an empty file. `-dM` includes the
+ * compiler's predefined macros, and those are not all underscore-reserved:
+ * Linux gcc predefines `linux` and `unix`, which imported as consts and
+ * made the output environment-dependent. */
+static int bg_discover(const char* cc, const char* header,
+                       const char* include_flags, const char* match,
+                       BgSet* set, const char* tmp_dir) {
+    char empty_path[1200];
+    snprintf(empty_path, sizeof(empty_path), "%s/ae_bindgen_empty.c", tmp_dir);
+    FILE* f = fopen(empty_path, "w");
+    if (!f) return 0;
+    if (fclose(f) != 0) { remove(empty_path); return 0; }
+
+    static char base_names[262144];
+    static char hdr_names[262144];
+    int ok = bg_dump_names(cc, empty_path, "", base_names, sizeof(base_names));
+    remove(empty_path);
+    if (!ok) return 0;
+    if (!bg_dump_names(cc, header, include_flags, hdr_names, sizeof(hdr_names)))
+        return 0;
+
+    for (const char* q = hdr_names; *q && set->count < BG_MAX_MACROS;
+         q += strlen(q) + 1) {
+        if (bg_name_in(base_names, q)) continue;   /* compiler-predefined */
+        if (match && *match && strncmp(q, match, strlen(match)) != 0) continue;
+        size_t qn = strlen(q);
+        if (qn >= BG_NAME_MAX) continue;   /* already enforced by the dump */
+        memcpy(set->macros[set->count].name, q, qn + 1);
         set->count++;
     }
-    return pclose(p) != -1 && set->count > 0;
+    return set->count > 0;
 }
 
 /* Stage 2: full expansion of every candidate through `cc -E` on a probe
@@ -403,13 +447,6 @@ int ae_bindgen_consts(const char* cc, int argc, char** argv) {
     if (!set.macros) { fprintf(stderr, "ae bindgen: out of memory\n"); return 1; }
     set.count = 0;
 
-    if (!bg_discover(cc, header, include_flags, match, &set)) {
-        fprintf(stderr, "ae bindgen: no importable macros found in %s "
-                        "(is the path right? does it preprocess standalone?)\n", header);
-        free(set.macros);
-        return 1;
-    }
-
     const char* tmp_dir = getenv("TMPDIR");
 #ifdef _WIN32
     if (!tmp_dir || !*tmp_dir) tmp_dir = getenv("TEMP");
@@ -417,6 +454,14 @@ int ae_bindgen_consts(const char* cc, int argc, char** argv) {
 #else
     if (!tmp_dir || !*tmp_dir) tmp_dir = "/tmp";
 #endif
+
+    if (!bg_discover(cc, header, include_flags, match, &set, tmp_dir)) {
+        fprintf(stderr, "ae bindgen: no importable macros found in %s "
+                        "(is the path right? does it preprocess standalone?)\n", header);
+        free(set.macros);
+        return 1;
+    }
+
     if (!bg_expand(cc, header, include_flags, &set, tmp_dir)) {
         fprintf(stderr, "ae bindgen: preprocessor expansion failed\n");
         free(set.macros);
