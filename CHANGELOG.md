@@ -29,6 +29,18 @@ next version number before tagging the release.
   linker symbols: the libc-collision rename no longer applies to them, and
   definition and call site agree. Redis-style vtables (`rio.read`,
   `rio.write`) now port cleanly.
+- **Rebuilding `ae` itself invalidates the build cache.** The key hashed
+  aetherc's mtime but not the driver's, and the flags ae passes to the C
+  compiler are part of the output, so upgrading ae could serve binaries
+  built with the old flags until `ae cache clear`. The running executable's
+  mtime is now folded into the key.
+- **`ae.c` compiles warning-free under MinGW GCC's full `-Wall -Wextra
+  -Werror`** (15 findings on the previous release, zero now): misleading
+  indentation twice, two POSIX-only globals unused on Windows, nine
+  format-truncation sites fixed by sizing derived buffers past their
+  sources, and one cross-compile source-path join that now reports and
+  skips an overlong path instead of silently truncating it, which could
+  have compiled the wrong file.
 - **Editing a module under `lib/` invalidates the build cache on Windows**
   (#1235). The lib-dir content walk that feeds the cache key was compiled
   out on Windows, leaving only the directory's own mtime, which does not

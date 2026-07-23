@@ -503,6 +503,8 @@ static unsigned long long fnv64_file(const char* path) {
  * and compute_cache_key couldn't include the env-resolved modules'
  * mtimes — so an edit to a vendored module behind that env var would
  * never invalidate the cache. Idempotent: skips if already populated. */
+static bool get_exe_path(char* buf, size_t size);
+
 static void tc_seed_lib_dirs_from_env(void) {
     if (tc.lib_dir_count > 0) return;
     const char* env = getenv("AETHER_LIB_DIR");
@@ -625,6 +627,11 @@ static unsigned long long compute_cache_key(const char* ae_file,
     struct stat st;
     if (stat(tc.compiler, &st) == 0)
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
+    /* The driver's own mtime: flags ae passes to the C compiler are part
+     * of the output, so a rebuilt ae must miss the cache (#1235 family). */
+    char self_path[1200];
+    if (get_exe_path(self_path, sizeof(self_path)) && stat(self_path, &st) == 0)
+        pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":ae=%lld", (long long)st.st_mtime);
     if (tc.has_lib && stat(tc.lib, &st) == 0)
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
 
@@ -1041,32 +1048,48 @@ static char* get_basename(const char* path) {
 }
 
 // Get directory containing this executable
-static bool get_exe_dir(char* buf, size_t size) {
+/* Absolute path of the running `ae` binary itself. Besides seeding
+ * get_exe_dir, compute_cache_key folds this file's mtime into the key:
+ * the key already covered aetherc's mtime, but a rebuilt `ae` (whose
+ * codegen-driving flags such as -Wformat live here) served stale
+ * binaries until `ae cache clear`. */
+static bool get_exe_path(char* buf, size_t size) {
 #ifdef __APPLE__
     uint32_t sz = (uint32_t)size;
     if (_NSGetExecutablePath(buf, &sz) == 0) {
         char resolved[PATH_MAX];
         if (realpath(buf, resolved)) {
-            char* slash = strrchr(resolved, '/');
-            if (slash) { *slash = '\0'; strncpy(buf, resolved, size - 1); buf[size - 1] = '\0'; return true; }
+            strncpy(buf, resolved, size - 1);
+            buf[size - 1] = '\0';
+            return true;
         }
     }
 #elif defined(__linux__)
     ssize_t len = readlink("/proc/self/exe", buf, size - 1);
     if (len > 0) {
         buf[len] = '\0';
-        char* slash = strrchr(buf, '/');
-        if (slash) { *slash = '\0'; return true; }
+        return true;
     }
 #elif defined(_WIN32)
     DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)size);
     if (len > 0 && len < (DWORD)size) {
         buf[len] = '\0';
-        char* slash = strrchr(buf, '\\');
-        if (slash) { *slash = '\0'; return true; }
+        return true;
     }
 #endif
     return false;
+}
+
+static bool get_exe_dir(char* buf, size_t size) {
+    if (!get_exe_path(buf, size)) return false;
+    char* slash = strrchr(buf, '/');
+#ifdef _WIN32
+    char* bslash = strrchr(buf, '\\');
+    if (!slash || (bslash && bslash > slash)) slash = bslash;
+#endif
+    if (!slash) return false;
+    *slash = '\0';
+    return true;
 }
 
 // --------------------------------------------------------------------------
@@ -1774,7 +1797,7 @@ static const char* c_backend_env_override(void) {
     "https://github.com/brechtsanders/winlibs_mingw/releases/download/" \
     WINLIBS_TAG "/" WINLIBS_ZIP
 
-static char s_gcc_bin[1024] = "gcc";  // path to gcc; updated by ensure_gcc_windows()
+static char s_gcc_bin[1100] = "gcc";  // path to gcc; updated by ensure_gcc_windows()
 static bool s_gcc_ready      = false; // set after first successful check
 
 // Checks PATH, then ~/.aether/tools/, then downloads WinLibs on demand.
@@ -1799,7 +1822,10 @@ static bool ensure_gcc_windows(void) {
 
     // 2. Already installed to ~/.aether/tools/ from a previous run?
     const char* home  = get_home_dir();
-    char tools_dir[1024], tools_bin[1024], tools_gcc[1024];
+    /* tools_bin/tools_gcc derive from tools_dir plus a fixed suffix;
+     * sized a tier up so gcc's -Wformat-truncation heuristic (which
+     * assumes the %s can fill its whole source buffer) stays quiet. */
+    char tools_dir[1024], tools_bin[1100], tools_gcc[1100];
     snprintf(tools_dir, sizeof(tools_dir), "%s\\.aether\\tools",           home);
     snprintf(tools_bin, sizeof(tools_bin), "%s\\mingw64\\bin",             tools_dir);
     snprintf(tools_gcc, sizeof(tools_gcc), "%s\\mingw64\\bin\\gcc.exe",    tools_dir);
@@ -1814,7 +1840,7 @@ static bool ensure_gcc_windows(void) {
     mkdirs(tools_dir);  // Create ~/.aether/tools/ (and parents)
 
     // Write a tiny PowerShell script to avoid shell-quoting nightmares.
-    char ps_path[1024], zip_path[1024];
+    char ps_path[1100], zip_path[1100];
     snprintf(ps_path,  sizeof(ps_path),  "%s\\install_gcc.ps1", tools_dir);
     snprintf(zip_path, sizeof(zip_path), "%s\\mingw.zip",        tools_dir);
 
@@ -1846,7 +1872,7 @@ static bool ensure_gcc_windows(void) {
 found:
     // Add bundled bin dir to PATH for this process so gcc is found by name too.
     {
-        char cur[8192] = "", updated[8192];
+        char cur[8192] = "", updated[9400];
         GetEnvironmentVariableA("PATH", cur, sizeof(cur));
         snprintf(updated, sizeof(updated), "%s;%s", tools_bin, cur);
         SetEnvironmentVariableA("PATH", updated);
@@ -3342,7 +3368,7 @@ static int cmd_check(int argc, char** argv) {
         if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
         lf_off += (size_t)w;
     }
-    char cmd[4096];
+    char cmd[8192];
     snprintf(cmd, sizeof(cmd), "\"%s\"%s --check \"%s\"",
              tc.compiler, lib_flags, file);
     return run_cmd(cmd);
@@ -3387,7 +3413,7 @@ static int cmd_inspect(int argc, char** argv) {
         if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
         lf_off += (size_t)w;
     }
-    char cmd[4096];
+    char cmd[8192];
     snprintf(cmd, sizeof(cmd), "\"%s\" --emit=inspect%s \"%s\"",
              tc.compiler, lib_flags, file);
     return run_cmd(cmd);
@@ -4941,7 +4967,7 @@ int cmd_build_namespace(int argc, char** argv) {
     }
 
     /* Full output path with lib<base><ext>, anchored under target_dir. */
-    char out_path[1280];
+    char out_path[2400];
     snprintf(out_path, sizeof(out_path), "%s/lib%s%s", target_dir, base_name, lib_ext);
 
     /* Step 5: build the synthetic .ae as --emit=lib, then re-link with
@@ -5125,7 +5151,13 @@ static int cross_collect_core_list(char out[][CROSS_SRC_PATH_MAX], int max,
         if (*p == '\0' || *p == '#') continue;                 /* comment / blank */
         size_t plen = strlen(p);
         if (plen < 2 || strcmp(p + plen - 2, ".c") != 0) continue;
-        snprintf(out[count], CROSS_SRC_PATH_MAX, "%s/%s", base, p);
+        int need = snprintf(out[count], CROSS_SRC_PATH_MAX, "%s/%s", base, p);
+        if (need < 0 || need >= CROSS_SRC_PATH_MAX) {
+            /* A truncated source path would compile the wrong file or
+             * fail obscurely at the C compiler; skip it loudly instead. */
+            fprintf(stderr, "Warning: source path too long, skipped: %s/%s\n", base, p);
+            continue;
+        }
         count++;
     }
     fclose(f);
@@ -6513,7 +6545,7 @@ static int cmd_examples(int argc, char** argv) {
             while (fgets(c_line, sizeof(c_line), c_pipe)) {
                 c_line[strcspn(c_line, "\n\r")] = '\0';
                 if (strlen(c_line) == 0) continue;
-                char c_path[512];
+                char c_path[1100];
 #ifdef _WIN32
                 snprintf(c_path, sizeof(c_path), "%s\\%s", src_dir, c_line);
 #else
@@ -7425,7 +7457,7 @@ static int cmd_version_use(const char* version) {
             }
             fclose(avf_bak);
             if (cur_ver[0]) {
-                char cur_vtag[64];
+                char cur_vtag[66];
                 if (cur_ver[0] != 'v') snprintf(cur_vtag, sizeof(cur_vtag), "v%s", cur_ver);
                 else { strncpy(cur_vtag, cur_ver, sizeof(cur_vtag) - 1); cur_vtag[sizeof(cur_vtag)-1] = '\0'; }
                 char cur_ver_dir[512];
