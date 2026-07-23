@@ -66,6 +66,7 @@ extern char** environ;
 #include "apkg/toml_parser.h"
 #include "ae_help.h"
 #include "ae_fmt.h"
+#include "ae_bindgen.h"
 
 // Version is set by Makefile from VERSION file
 #ifndef AETHER_VERSION
@@ -7999,6 +8000,7 @@ static void print_usage(void) {
     printf("  build --target wasm  Compile to WebAssembly (.js + .wasm)\n");
     printf("  check [file.ae]      Type-check without compiling\n");
     printf("  fmt [--check] [path] Format source (stdin->stdout, or files/dirs in place)\n");
+    printf("  bindgen consts <h>   Import C macro constants from a header as Aether consts\n");
     printf("  inspect [file.ae]    Show what a script declares (imports, capabilities, exports, decls)\n");
     printf("  test [file|dir]      Discover and run tests\n");
     printf("  add <package>        Add a dependency\n");
@@ -8479,6 +8481,20 @@ int main(int argc, char** argv) {
     // All other commands need the toolchain
     discover_toolchain();
 
+    if (strcmp(cmd, "bindgen") == 0) {
+        if (sub_argc < 1 || strcmp(sub_argv[0], "consts") != 0) {
+            fprintf(stderr, "Usage: ae bindgen consts <header.h> [-I dir]... [--match PREFIX] [-o out.ae]\n");
+            return 1;
+        }
+        /* The same C compiler the build uses; on Windows this is the
+         * WinLibs gcc ensure_gcc_windows resolves. */
+#ifdef _WIN32
+        if (!ensure_gcc_windows()) return 1;
+        return ae_bindgen_consts(s_gcc_bin, sub_argc - 1, sub_argv + 1);
+#else
+        return ae_bindgen_consts("cc", sub_argc - 1, sub_argv + 1);
+#endif
+    }
     if (strcmp(cmd, "run") == 0)      return cmd_run(sub_argc, sub_argv);
     if (strcmp(cmd, "build") == 0)    return cmd_build(sub_argc, sub_argv);
     if (strcmp(cmd, "check") == 0)    return cmd_check(sub_argc, sub_argv);

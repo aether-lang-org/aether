@@ -11,6 +11,20 @@ next version number before tagging the release.
 
 ## [0.436.0]
 
+### Added
+
+- **`ae bindgen consts <header.h>`, import C macro constants** (#1245).
+  Object-like macros that expand to integer constant expressions, string
+  literals, or float literals become Aether `const`s in a generated module,
+  with `-I` include dirs, `--match PREFIX` narrowing, and `-o` output.
+  The C preprocessor does the evaluation (discovery via `-dM`, full nested
+  expansion via a probe), so flag algebra like `(SRI_S_DOWN|SRI_O_DOWN)`
+  folds to exactly what C sees; nothing is executed. Macros that are not
+  scalar constants are skipped and listed in a comment at the end of the
+  generated file, never silently dropped. Ports that hand-copy C flag
+  constants (the Aedis/Redis case that motivated the issue) can generate
+  them instead.
+
 ### Fixed
 
 - **Format bugs in printf-family extern calls are caught again** (#1252).
