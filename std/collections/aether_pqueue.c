@@ -8,7 +8,7 @@
 #define PQUEUE_INITIAL_CAPACITY 16
 
 typedef struct {
-    long  priority;
+    long long priority;
     void* item;
 } PQueueEntry;
 
@@ -80,7 +80,7 @@ AetherPQueue* aether_pqueue_new(void) {
     return pq;
 }
 
-int aether_pqueue_push(AetherPQueue* pq, long priority, void* item) {
+int aether_pqueue_push(AetherPQueue* pq, long long priority, void* item) {
     if (!pq) return 0;
     if (pq->size == pq->capacity && !pqueue_grow(pq)) return 0;
 
@@ -108,7 +108,7 @@ void* aether_pqueue_peek(AetherPQueue* pq) {
     return pq->entries[0].item;
 }
 
-long aether_pqueue_peek_priority(AetherPQueue* pq) {
+long long aether_pqueue_peek_priority(AetherPQueue* pq) {
     if (!pq || pq->size == 0) return 0;
     return pq->entries[0].priority;
 }

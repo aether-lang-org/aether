@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #include "../compiler/parser/lexer.h"
 #include "../compiler/parser/parser.h"
 #include "../compiler/ast.h"
@@ -516,20 +519,25 @@ void lsp_publish_diagnostics(LSPServer* server, const char* uri) {
             if (t->type == TOKEN_EOF || t->type == TOKEN_ERROR) break;
         }
 
-        /* Redirect stderr to capture parser errors. The whole save/
-         * swap/restore dance only works on libc implementations where
-         * `stderr` is an assignable lvalue (glibc, macOS) — Windows
-         * mingw defines it as a non-assignable macro, so the entire
-         * block is gated on AETHER_HAS_FMEMOPEN (already platform-
-         * gated upstream the same way) to avoid an "lvalue required"
-         * compile error on the Windows CI matrix.
+        /* Capture parser errors via fd-level redirection. Do NOT assign to
+         * `stderr`: it is not an assignable lvalue on musl or mingw (glibc
+         * and macOS merely tolerate it). dup2 onto stderr's fd is the
+         * portable capture; the block stays gated off on Windows like the
+         * fmemopen version it replaces.
          */
         char parse_errors[4096] = {0};
 #if AETHER_HAS_FMEMOPEN
-        FILE* old_stderr = stderr;
-        FILE* err_capture = fmemopen(parse_errors, sizeof(parse_errors), "w");
+        int saved_err_fd = -1;
+        FILE* err_capture = tmpfile();
         if (err_capture) {
-            stderr = err_capture;
+            fflush(stderr);
+            saved_err_fd = dup(fileno(stderr));
+            if (saved_err_fd >= 0) {
+                dup2(fileno(err_capture), fileno(stderr));
+            } else {
+                fclose(err_capture);
+                err_capture = NULL;
+            }
         }
 #endif
 
@@ -538,9 +546,13 @@ void lsp_publish_diagnostics(LSPServer* server, const char* uri) {
 
 #if AETHER_HAS_FMEMOPEN
         if (err_capture) {
-            fflush(err_capture);
+            fflush(stderr);
+            dup2(saved_err_fd, fileno(stderr));
+            close(saved_err_fd);
+            rewind(err_capture);
+            size_t err_got = fread(parse_errors, 1, sizeof(parse_errors) - 1, err_capture);
+            parse_errors[err_got] = '\0';
             fclose(err_capture);
-            stderr = old_stderr;
         }
 #endif
 

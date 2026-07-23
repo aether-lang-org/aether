@@ -22,6 +22,27 @@ next version number before tagging the release.
   string literal, so both spellings parse and evaluate correctly.
   `ae fmt` updated to match, so formatting a file using this no longer
   mangles the string. (#1237)
+- **The toolchain now compiles on musl (Alpine Linux).** Two portability
+  fixes surfaced by the first native aarch64 Alpine build of the toolchain:
+  `lsp/aether_lsp.c` captured parser errors by assigning to `stderr`, which
+  is not an assignable lvalue on musl (glibc and macOS merely tolerate it);
+  the capture now uses fd-level redirection (`dup`/`dup2` onto stderr's fd,
+  read back from a `tmpfile`), same behavior on glibc, macOS, and musl, with
+  the Windows gating unchanged. `std/net/aether_net.c` used `struct timeval`
+  without including `sys/time.h`, which glibc leaks via other headers and
+  musl does not. Unblocks static musl builds of downstream binaries such as
+  aeo-agent on aarch64.
+- **A failed write of generated C now fails the compile.** The write-failure
+  guard added in the cleanup sweep printed its error but returned
+  compile_source's success code, so a full disk still handed the truncated
+  .c file to the C compiler; the guard now returns failure like every other
+  error path in that function.
+- **`std.pqueue` priorities are 64-bit on every platform.** The C entry
+  points took `long`, which is 32-bit on Windows while Aether `long` is 64,
+  an ABI mismatch that truncated priorities past 2^31 and only round-tripped
+  small test values by calling-convention luck. The C side now uses
+  `long long`, matching the `string_to_long_raw` convention; the
+  Aether-facing API is unchanged.
 
 ## [0.434.0]
 
