@@ -145,30 +145,15 @@ int list_add_string_owned(ArrayList* list, const void* item) {
      * No string_retain — that would leave the value one refcount above what
      * list_free can reclaim (a per-add leak once values are magic strings).
      * The matching release is in list_free (owned_flags path). */
-    /* Lazy-allocate the flags array on first owned-put. */
-    if (!list->owned_flags) {
-        if (list->capacity > 0) {
-            list->owned_flags = (int*)cl_calloc(list->alloc,
-                (size_t)list->capacity, sizeof(int));
-            if (!list->owned_flags) {
-                /* Best-effort: still store the item even if flag
-                 * tracking failed; the buffer will leak on free
-                 * rather than crash. */
-            }
-        }
-    }
+    /* Lazy-allocate the flags array on first owned-put. Best-effort:
+     * on alloc failure the item is still stored and the buffer leaks
+     * on free rather than crashing. */
+    list_grow_owned_flags(list);
     int slot = list->size;  /* the index list_add_raw will use */
     int ok = list_add_raw(list, (void*)item);
     if (!ok) return 0;
-    /* The first owned-put may have triggered the lazy alloc above
-     * AFTER the items array existed but BEFORE list_add_raw's
-     * grow path — flags array may still be NULL if list->capacity
-     * was 0 at lazy-alloc time. Retry now that list_add_raw has
-     * grown capacity. */
-    if (!list->owned_flags && list->capacity > 0) {
-        list->owned_flags = (int*)cl_calloc(list->alloc,
-            (size_t)list->capacity, sizeof(int));
-    }
+    /* Retry: capacity may have been 0 until list_add_raw's grow. */
+    list_grow_owned_flags(list);
     if (list->owned_flags) list->owned_flags[slot] = 1;
     return 1;
 }
@@ -188,17 +173,12 @@ typedef struct { void (*fn)(void); void* env; } AeClosureBox;
  * coercion). */
 int list_add_closure_owned(ArrayList* list, void* box) {
     if (!list) return 0;
-    if (!list->owned_flags && list->capacity > 0) {
-        list->owned_flags = (int*)cl_calloc(list->alloc,
-            (size_t)list->capacity, sizeof(int));
-    }
+    list_grow_owned_flags(list);
     int slot = list->size;
     int ok = list_add_raw(list, box);
     if (!ok) return 0;
-    if (!list->owned_flags && list->capacity > 0) {
-        list->owned_flags = (int*)cl_calloc(list->alloc,
-            (size_t)list->capacity, sizeof(int));
-    }
+    /* Retry: capacity may have been 0 until list_add_raw's grow. */
+    list_grow_owned_flags(list);
     if (list->owned_flags) list->owned_flags[slot] = 2;
     return 1;
 }
@@ -335,10 +315,6 @@ static unsigned int hash_cstr_len(const char* key, unsigned int* out_len) {
     }
     if (out_len) *out_len = (unsigned int)(p - key);
     return hash;
-}
-
-static unsigned int hash_cstr(const char* key) {
-    return hash_cstr_len(key, NULL);
 }
 
 // Fast equality: cheap length compare first, memcmp only on match.

@@ -306,6 +306,7 @@ void collect_literal_constraints(ASTNode* node, InferenceContext* ctx) {
         Type* inferred = infer_from_literal(node->value);
         if (inferred->kind != TYPE_UNKNOWN) {
             add_constraint(ctx, node, inferred, "literal type inference");
+            free_type(node->node_type);
             node->node_type = clone_type(inferred);
         }
         free_type(inferred);
@@ -374,8 +375,10 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                          * array. */
                         if (init_type->kind == TYPE_ARRAY &&
                             node->children[0]->type == AST_IDENTIFIER) {
+                            free_type(node->node_type);
                             node->node_type = create_type(TYPE_PTR);
                         } else {
+                            free_type(node->node_type);
                             node->node_type = clone_type(init_type);
                             add_constraint(ctx, node, init_type, "variable initialization");
                         }
@@ -445,6 +448,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                 Symbol* sym = lookup_symbol(ctx->symbols, node->value);
                 if (sym && sym->type && sym->type->kind != TYPE_UNKNOWN) {
                     if (!node->node_type || is_type_inferrable(node->node_type)) {
+                        if (node->node_type) free_type(node->node_type);
                         node->node_type = clone_type(sym->type);
                     }
                 }
@@ -471,9 +475,11 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                         if (func_sym->type->kind == TYPE_FUNCTION &&
                             func_sym->type->is_fnptr &&
                             func_sym->type->return_type) {
+                            free_type(node->node_type);
                             node->node_type = clone_type(func_sym->type->return_type);
                         } else {
                             // Function call inherits the function's return type
+                            free_type(node->node_type);
                             node->node_type = clone_type(func_sym->type);
                         }
                     }
@@ -488,6 +494,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                 if (!node->node_type || is_type_inferrable(node->node_type)) {
                     Type* expr_type = node->children[0]->node_type;
                     if (expr_type && expr_type->kind != TYPE_UNKNOWN) {
+                        free_type(node->node_type);
                         node->node_type = clone_type(expr_type);
                     }
                 }
@@ -510,8 +517,10 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                     if (strcmp(node->value, "type") == 0 || 
                         strcmp(node->value, "sender_id") == 0 || 
                         strcmp(node->value, "payload_int") == 0) {
+                        free_type(node->node_type);
                         node->node_type = create_type(TYPE_INT);
                     } else if (strcmp(node->value, "payload_ptr") == 0) {
+                        free_type(node->node_type);
                         node->node_type = create_type(TYPE_VOID); // void* represented as void
                     }
                 }
@@ -525,6 +534,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                             ASTNode* f = bs->node->children[i];
                             if (f && f->type == AST_BITSTRUCT_FIELD && f->value &&
                                 strcmp(f->value, node->value) == 0) {
+                                free_type(node->node_type);
                                 node->node_type = clone_type(f->node_type);
                                 break;
                             }
@@ -545,6 +555,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                                 field->value && strcmp(field->value, node->value) == 0) {
                                 // Found matching field - use its type
                                 if (field->node_type) {
+                                    free_type(node->node_type);
                                     node->node_type = clone_type(field->node_type);
                                 }
                                 break;
@@ -568,6 +579,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                 // Get array type and extract element type
                 Type* array_type = array_expr->node_type;
                 if (array_type && array_type->kind == TYPE_ARRAY && array_type->element_type) {
+                    free_type(node->node_type);
                     node->node_type = clone_type(array_type->element_type);
                 }
             }
@@ -581,6 +593,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                 
                 if (struct_sym && struct_sym->type && struct_sym->type->kind == TYPE_STRUCT) {
                     // Set the struct literal's type to the struct type
+                    free_type(node->node_type);
                     node->node_type = clone_type(struct_sym->type);
                 }
                 
@@ -1299,6 +1312,7 @@ void infer_function_return_types(ASTNode* program, SymbolTable* table) {
                     node->node_type = return_type;
                 } else if (!node->node_type) {
                     // No explicit return, assume void (only on first pass).
+                    free_type(node->node_type);
                     node->node_type = create_type(TYPE_VOID);
                 }
             }
@@ -1388,9 +1402,7 @@ static void widen_ptr_assigned_locals_in_block(ASTNode* block, SymbolTable* symb
                     // Also tag the initializer so later code treats the
                     // literal 0 as a ptr-slot null (codegen reads this
                     // when emitting the `= ...` for the declaration).
-                    if (stmt->children[0]->node_type) {
-                        free_type(stmt->children[0]->node_type);
-                    }
+                    free_type(stmt->children[0]->node_type);
                     stmt->children[0]->node_type = create_type(TYPE_PTR);
                     if (symbols) {
                         Symbol* sym = lookup_symbol(symbols, stmt->value);

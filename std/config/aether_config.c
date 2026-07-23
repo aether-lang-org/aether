@@ -10,7 +10,6 @@
  * for our purposes (readers don't block readers; writers exclusive). */
 #include <windows.h>
 typedef SRWLOCK ae_cfg_rwlock_t;
-static void ae_cfg_rwlock_init  (ae_cfg_rwlock_t* lk) { InitializeSRWLock(lk); }
 static void ae_cfg_rwlock_rdlock(ae_cfg_rwlock_t* lk) { AcquireSRWLockShared(lk); }
 static void ae_cfg_rwlock_rdunlock(ae_cfg_rwlock_t* lk) { ReleaseSRWLockShared(lk); }
 static void ae_cfg_rwlock_wrlock(ae_cfg_rwlock_t* lk) { AcquireSRWLockExclusive(lk); }
@@ -19,7 +18,6 @@ static void ae_cfg_rwlock_wrunlock(ae_cfg_rwlock_t* lk) { ReleaseSRWLockExclusiv
 #else
 #include <pthread.h>
 typedef pthread_rwlock_t ae_cfg_rwlock_t;
-static void ae_cfg_rwlock_init    (ae_cfg_rwlock_t* lk) { pthread_rwlock_init(lk, NULL); }
 static void ae_cfg_rwlock_rdlock  (ae_cfg_rwlock_t* lk) { pthread_rwlock_rdlock(lk); }
 static void ae_cfg_rwlock_rdunlock(ae_cfg_rwlock_t* lk) { pthread_rwlock_unlock(lk); }
 static void ae_cfg_rwlock_wrlock  (ae_cfg_rwlock_t* lk) { pthread_rwlock_wrlock(lk); }

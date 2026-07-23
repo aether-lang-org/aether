@@ -613,6 +613,9 @@ void free_code_generator(CodeGenerator* gen) {
                 free(gen->extern_registry[i].params);
                 free(gen->extern_registry[i].params_aether);
                 free(gen->extern_registry[i].params_retain);
+                /* param_full's entries alias AST-owned Types; only the
+                 * array is ours to free. */
+                free(gen->extern_registry[i].param_full);
             }
             free(gen->extern_registry);
         }
@@ -659,6 +662,18 @@ void register_module_global_var(CodeGenerator* gen, const char* name) {
 }
 
 // Helper: mark variable as declared in current function
+/* Drop declared-var entries above `saved_count` (scope exit). The three
+ * scope-restore sites used to truncate declared_var_count directly, which
+ * leaked every strdup'd name declared inside the scope; in long-lived
+ * hosts of the compiler (aetherc lsp reparses per keystroke) that grew
+ * without bound. */
+void truncate_declared_vars(CodeGenerator* gen, int saved_count) {
+    for (int i = saved_count; i < gen->declared_var_count; i++) {
+        free(gen->declared_vars[i]);
+    }
+    gen->declared_var_count = saved_count;
+}
+
 void mark_var_declared(CodeGenerator* gen, const char* var_name) {
     char** new_vars = realloc(gen->declared_vars, sizeof(char*) * (gen->declared_var_count + 1));
     if (!new_vars) return;

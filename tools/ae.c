@@ -906,6 +906,8 @@ static int append_manifest_srcs(char* out, size_t out_sz,
     return pos > 0;
 }
 
+static void macos_prepare_binary(const char* path);
+
 static bool path_exists(const char* path) {
 #ifdef _WIN32
     DWORD attrs = GetFileAttributesA(path);
@@ -5942,6 +5944,11 @@ static int cmd_build(int argc, char** argv) {
     // Populate the build cache so the next identical-input build is a
     // copy-from-cache instead of an aetherc + gcc round-trip. Copy to a
     // private temp beside the slot, publish by atomic rename (#1032) —
+    /* Ad-hoc re-sign + quarantine-clear BEFORE the cache copy, so both
+     * the fresh exe and its cached clone skip the one-time syspolicyd
+     * evaluation stall on first run. */
+    macos_prepare_binary(exe_file);
+
     // a concurrent `ae run` cache hit must never exec a half-copied exe.
     if (cache_eligible && cache_key != 0 && cached_exe[0]) {
         char cache_tmp[1100];

@@ -5519,7 +5519,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                 if (stmt->child_count > 2) {
                     // Restore: else-branch sees only pre-if declarations.
-                    gen->declared_var_count = saved_var_count;
+                    truncate_declared_vars(gen, saved_var_count);
 
                     print_line(gen, "} else {");
                     indent(gen);
@@ -5529,7 +5529,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                 // Restore after entire if/else: variables declared inside
                 // if/else blocks do not leak to subsequent sibling statements.
-                gen->declared_var_count = saved_var_count;
+                truncate_declared_vars(gen, saved_var_count);
             }
 
             print_line(gen, "}");
@@ -7184,7 +7184,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             exit_scope(gen);  // Emit defers and pop scope
             unindent(gen);
             print_line(gen, "}");
-            gen->declared_var_count = saved_var_count;
+            truncate_declared_vars(gen, saved_var_count);
             break;
         }
         
