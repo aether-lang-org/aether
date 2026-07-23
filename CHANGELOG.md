@@ -45,6 +45,16 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **The toolchain now compiles on musl (Alpine Linux).** Two portability
+  fixes surfaced by the first native aarch64 Alpine build of the toolchain:
+  `lsp/aether_lsp.c` captured parser errors by assigning to `stderr`, which
+  is not an assignable lvalue on musl (glibc and macOS merely tolerate it);
+  the capture now uses fd-level redirection (`dup`/`dup2` onto stderr's fd,
+  read back from a `tmpfile`), same behavior on glibc, macOS, and musl, with
+  the Windows gating unchanged. `std/net/aether_net.c` used `struct timeval`
+  without including `sys/time.h`, which glibc leaks via other headers and
+  musl does not. Unblocks static musl builds of downstream binaries such as
+  aeo-agent on aarch64.
 - **A failed write of generated C now fails the compile.** The write-failure
   guard added in the cleanup sweep printed its error but returned
   compile_source's success code, so a full disk still handed the truncated
