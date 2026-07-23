@@ -1,0 +1,33 @@
+// Regression #1251: a struct field named after a libc symbol (read, write)
+// was renamed to ae_<name> at the member-call site but not in the struct
+// definition, so the emitted C referenced a member that does not exist.
+// Fields are struct members, not linker symbols; only C-keyword mangling
+// applies to them, and definition and call site must agree.
+
+struct rioMethods {
+    read:  fn(ptr, ptr, long) -> long
+    write: fn(ptr, ptr, long) -> long
+}
+
+my_read(r: ptr, buf: ptr, len: long) -> long { return len }
+my_write(r: ptr, buf: ptr, len: long) -> long { return len * 2 }
+
+extern exit(code: int)
+
+main() {
+    t = rioMethods {
+        read:  my_read as fn(ptr, ptr, long) -> long,
+        write: my_write as fn(ptr, ptr, long) -> long
+    }
+    n = t.read(null, null, 7)
+    m = t.write(null, null, 7)
+    if n != 7 {
+        println("FAIL: t.read returned ${n}, expected 7")
+        exit(1)
+    }
+    if m != 14 {
+        println("FAIL: t.write returned ${m}, expected 14")
+        exit(1)
+    }
+    println("PASS: read/write vtable fields callable")
+}

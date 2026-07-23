@@ -3175,8 +3175,15 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     memcpy(recv, expr->value, rlen);
                     recv[rlen] = '\0';
                     char recv_c[200], field_c[200];
-                    snprintf(recv_c, sizeof(recv_c), "%s", safe_c_name(recv));
-                    snprintf(field_c, sizeof(field_c), "%s", safe_c_name(dot + 1));
+                    /* Keyword mangling only (safe_value_name): the receiver
+                     * is a local and the field is a struct member, neither is
+                     * a linker symbol, so the libc-collision rename in
+                     * safe_c_name must not apply. It renamed a field spelled
+                     * `read` to `ae_read` here while the struct definition
+                     * kept `read`, so the emitted C referenced a member that
+                     * does not exist (#1251). */
+                    snprintf(recv_c, sizeof(recv_c), "%s", safe_value_name(recv));
+                    snprintf(field_c, sizeof(field_c), "%s", safe_value_name(dot + 1));
                     fprintf(gen->output, "(%s%s%s)(",
                             recv_c, is_ptr ? "->" : ".", field_c);
                     for (int i = 0; i < expr->child_count; i++) {
@@ -4714,13 +4721,26 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             fprintf(gen->output, ")");
                         } else if (expected == TYPE_PTR && arg->node_type &&
                                    arg->node_type->kind == TYPE_STRING) {
-                            // Cast const char* to void* to silence C's
-                            // "discards qualifiers" warning when passing
-                            // a string literal or const-char expression
-                            // into a ptr parameter.
-                            fprintf(gen->output, "(void*)(");
-                            generate_expression(gen, arg);
-                            fprintf(gen->output, ")");
+                            if (arg->type == AST_LITERAL) {
+                                /* A string literal is char[] in C: it decays
+                                 * and converts to void* implicitly with no
+                                 * qualifier warning, so it needs no cast, and
+                                 * casting it to void* destroys the constant
+                                 * the C compiler's -Wformat check reads. With
+                                 * the cast, a format/argument bug in a printf
+                                 *-family extern call compiled silently
+                                 * (#1252). libc externs keep their real
+                                 * attributed prototypes (declaration skipped),
+                                 * so the check fires end to end. */
+                                generate_expression(gen, arg);
+                            } else {
+                                // Cast const char* expressions to void* to
+                                // silence C's "discards qualifiers" warning
+                                // when passing into a ptr parameter.
+                                fprintf(gen->output, "(void*)(");
+                                generate_expression(gen, arg);
+                                fprintf(gen->output, ")");
+                            }
                         } else if (expected == TYPE_STRING && arg->node_type &&
                                    (arg->node_type->kind == TYPE_STRING ||
                                     arg->node_type->kind == TYPE_PTR) &&

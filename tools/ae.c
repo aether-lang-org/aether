@@ -214,7 +214,9 @@ static bool g_emit_csrc = false;  // #996 --emit=csrc: emit .c + catalog .h, no 
 // and records the .so path + rpath here so build_gcc_cmd links it.
 // Empty for the common all-source build. POSIX-only (the prepass is
 // gated on dlopen availability); stays empty on Windows.
+#ifndef _WIN32
 static char g_binimport_link[4096] = "";
+#endif
 
 // Extra link flags accumulated by the host-bridge import prepass: when
 // a program `import`s `contrib.host.<lang>`, the bridge's static lib
@@ -228,7 +230,9 @@ static char g_binimport_link[4096] = "";
 // hello-world binary to dlopen libpython at runtime). Empty unless
 // `prepare_host_bridge_imports` found a match. POSIX-only (the host
 // bridges aren't built / linked on Windows).
+#ifndef _WIN32
 static char g_host_bridge_link[2048] = "";
+#endif
 
 // Mirror of runtime/aether_lib_meta.h's catalog structs, kept
 // layout-compatible so `ae` can dlopen a `--emit=lib` artifact and walk
@@ -505,6 +509,52 @@ static void tc_seed_lib_dirs_from_env(void) {
     if (env && *env) tc_lib_dir_append(env);
 }
 
+#ifdef _WIN32
+/* Windows twin of the POSIX walk below (#1235). This walk was compiled out
+ * on Windows, so lib-dir contents never entered the cache key: only the
+ * directory's own mtime did, and that does not change on an edit-in-place.
+ * Every module edit under lib/ therefore served a stale cached binary until
+ * `ae cache clear`. FindFirstFileA works on both MinGW and MSVC; dirent.h
+ * does not exist under MSVC, hence a native walk rather than un-guarding
+ * the POSIX one. Semantics mirror the POSIX twin exactly: bounded depth,
+ * shared entry cap, relative-path + content folding. */
+static int hash_lib_dir_entries(const char* dir, const char* rel,
+                                unsigned long long* acc, int* count, int depth) {
+    if (depth > 8 || *count >= 4096) return *count;
+    char pattern[1024];
+    snprintf(pattern, sizeof(pattern), "%s\\*", dir);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return *count;
+    do {
+        const char* name = fd.cFileName;
+        if (name[0] == '.') continue;  // skip . / .. / dotfiles
+        char full[1024];
+        snprintf(full, sizeof(full), "%s\\%s", dir, name);
+        char childrel[1024];
+        if (rel && rel[0])
+            snprintf(childrel, sizeof(childrel), "%s/%s", rel, name);
+        else
+            snprintf(childrel, sizeof(childrel), "%s", name);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            hash_lib_dir_entries(full, childrel, acc, count, depth + 1);
+            continue;
+        }
+        size_t nlen = strlen(name);
+        int interesting = 0;
+        if (nlen > 3 && strcmp(name + nlen - 3, ".ae") == 0) interesting = 1;
+        else if (nlen > 2 && (strcmp(name + nlen - 2, ".c") == 0 ||
+                              strcmp(name + nlen - 2, ".h") == 0)) interesting = 1;
+        if (!interesting) continue;
+        *acc ^= fnv64_str(childrel);
+        *acc = (*acc * 1099511628211ULL) ^ fnv64_file(full);
+        (*count)++;
+    } while (FindNextFileA(h, &fd) && *count < 4096);
+    FindClose(h);
+    return *count;
+}
+#endif
+
 #ifndef _WIN32
 /* Recursively fold every source file (.ae/.c/.h) under `dir` into `*acc`
  * (name + resolved mtime + size), returning the count hashed. Modules live in
@@ -609,7 +659,6 @@ static unsigned long long compute_cache_key(const char* ae_file,
      * stdlib/vendored-modules count. */
     if (tc.lib_dir_count == 0) {
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=(default)");
-#ifndef _WIN32
         /* #1025 Bug A: with no --lib flag and no $AETHER_LIB_DIR, the compiler
          * still searches the default lib dir (module_add_lib_dir(
          * AETHER_DEFAULT_LIB_DIR) in aether_module.c) — the canonical
@@ -626,7 +675,6 @@ static unsigned long long compute_cache_key(const char* ae_file,
                                 ":dlent=%d:dlh=%016llx", n, entry_hash);
             }
         }
-#endif
     }
     for (int i = 0; i < tc.lib_dir_count; i++) {
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
@@ -636,7 +684,6 @@ static unsigned long long compute_cache_key(const char* ae_file,
             pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
                             ":lmt=%lld", (long long)lst.st_mtime);
         }
-#ifndef _WIN32
         /* Recurse the whole lib-dir tree — modules live in subdirectories
          * (#623 follow-up: a top-level-only walk missed every std/contrib
          * module in a subdir, so editing one served a stale cached binary). */
@@ -649,7 +696,6 @@ static unsigned long long compute_cache_key(const char* ae_file,
                                 ":lent=%d:lh=%016llx", n, entry_hash);
             }
         }
-#endif
     }
 
     snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%s:%s",
@@ -2158,8 +2204,13 @@ static int get_extra_sources_for_bin(const char* ae_file, char* out, size_t out_
 // gcc inlines / merges blocks, and the .gcov line attribution gets
 // scrambled (a hit on line 7 might show up on line 9).
 static const char* opt_flags(bool optimize) {
-    if (g_coverage) return "-O0 -g --coverage";
-    return optimize ? "-O2" : "-O0 -g";
+    /* -Wformat: with the interop lowering no longer casting literal format
+     * strings to void* (#1252), the C compiler can check printf-family
+     * extern calls; #line directives map its warning to the user's .ae
+     * source. User cflags from aether.toml append after these flags, so
+     * -Wno-format remains available to opt out. */
+    if (g_coverage) return "-O0 -g --coverage -Wformat";
+    return optimize ? "-O2 -Wformat" : "-O0 -g -Wformat";
 }
 
 static void build_gcc_cmd(char* cmd, size_t size,
@@ -5899,7 +5950,10 @@ static int cmd_build(int argc, char** argv) {
             const char* extra = extra_files[0] ? extra_files : NULL;
             build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, !quick, extra);
         }
-        build_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+        /* Warnings-visible like the `ae run` path: with #1252 fixed the C
+         * compiler's -Wformat findings map to the user's .ae lines, and a
+         * fully quiet compile would hide them. Errors still re-run loud. */
+        build_ret = tc.verbose ? run_cmd(cmd) : run_cmd_show_warnings(cmd);
         if (build_ret != 0) {
             // Retry with visible output for error messages
             if (is_wasm) {
@@ -6643,9 +6697,11 @@ static int cmd_repl(void) {
     if (inner < help_len + 3) inner = help_len + 3;
     printf("  ┌"); for (int i = 0; i < inner; i++) printf("─"); printf("┐\n");
     printf("  │   Aether %s REPL", AE_VERSION);
-    for (int i = title_len; i < inner; i++) printf(" "); printf("│\n");
+    for (int i = title_len; i < inner; i++) printf(" ");
+    printf("│\n");
     printf("  │   :help for commands");
-    for (int i = help_len; i < inner; i++) printf(" "); printf("│\n");
+    for (int i = help_len; i < inner; i++) printf(" ");
+    printf("│\n");
     printf("  └"); for (int i = 0; i < inner; i++) printf("─"); printf("┘\n");
     printf("\n");
 
