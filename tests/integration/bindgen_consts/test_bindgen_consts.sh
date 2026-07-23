@@ -36,7 +36,13 @@ cat > "$TMPDIR/flags.h" <<'HEOF'
 HEOF
 
 mkdir -p "$TMPDIR/proj/lib/flags"
-"$AE" bindgen consts "$TMPDIR/flags.h" -o "$TMPDIR/proj/lib/flags/module.ae" 2>"$TMPDIR/log"
+# `set -e` must not swallow a bindgen failure before its stderr is shown:
+# the harness prints nothing for a shell test that dies silently, which is
+# what made the original Windows break read as "(no output)" in CI.
+if ! "$AE" bindgen consts "$TMPDIR/flags.h" \
+        -o "$TMPDIR/proj/lib/flags/module.ae" 2>"$TMPDIR/log"; then
+    echo "  [FAIL] ae bindgen consts exited non-zero"; cat "$TMPDIR/log"; exit 1
+fi
 grep -q "8 consts imported" "$TMPDIR/log" || {
     echo "  [FAIL] expected 8 imports"; cat "$TMPDIR/log"; exit 1
 }
@@ -77,14 +83,19 @@ main() {
 }
 AEOF
 
-OUT=$("$AE" run main.ae 2>/dev/null | tail -1)
+OUT=$("$AE" run main.ae 2>"$TMPDIR/runlog" | tail -1)
 if [ "$OUT" != "ok" ]; then
     echo "  [FAIL] generated module misbehaved: $OUT"
+    cat "$TMPDIR/runlog"
     exit 1
 fi
 
 # --match narrows the surface.
-"$AE" bindgen consts "$TMPDIR/flags.h" --match F_ -o "$TMPDIR/narrow.ae" 2>"$TMPDIR/log2"
+if ! "$AE" bindgen consts "$TMPDIR/flags.h" --match F_ \
+        -o "$TMPDIR/narrow.ae" 2>"$TMPDIR/log2"; then
+    echo "  [FAIL] ae bindgen consts --match exited non-zero"
+    cat "$TMPDIR/log2"; exit 1
+fi
 grep -q "3 consts imported" "$TMPDIR/log2" || {
     echo "  [FAIL] --match F_ should import exactly F_A, F_B, F_BOTH"
     cat "$TMPDIR/log2"; exit 1

@@ -35,6 +35,33 @@
 #  define BG_ERR_SINK "2>/dev/null"
 #endif
 
+/* Open a pipe on a command whose first token is a quoted program path.
+ *
+ * On Windows `popen` hands the string to `cmd.exe /c`, which strips the
+ * FIRST and LAST quote of the whole line before parsing. A command that
+ * legitimately begins with a quoted path (needed when the path contains
+ * spaces, e.g. the WinLibs gcc under "C:/Users/.../Program Files") is
+ * therefore mangled into `gcc" -E -dM "C:` and fails with "is not
+ * recognized as an internal or external command". cmd.exe's documented
+ * remedy is an extra outer pair, which it consumes and the inner quotes
+ * survive intact. Verified on MSYS2 + MinGW: the current form yields 0
+ * lines, the wrapped form the full macro dump.
+ *
+ * POSIX /bin/sh has no such rule, so the command passes through as-is. */
+static FILE* bg_popen(const char* cmd) {
+#ifdef _WIN32
+    size_t n = strlen(cmd) + 3;
+    char* wrapped = (char*)malloc(n);
+    if (!wrapped) return NULL;
+    snprintf(wrapped, n, "\"%s\"", cmd);
+    FILE* p = popen(wrapped, "r");
+    free(wrapped);
+    return p;
+#else
+    return popen(cmd, "r");
+#endif
+}
+
 #define BG_MAX_MACROS   4096
 #define BG_NAME_MAX     128
 #define BG_EXPANSION_MAX 1024
@@ -291,8 +318,9 @@ static int bg_dump_names(const char* cc, const char* file,
                          const char* include_flags,
                          char* names, size_t names_sz) {
     char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "\"%s\" -E -dM %s \"%s\"", cc, include_flags, file);
-    FILE* p = popen(cmd, "r");
+    snprintf(cmd, sizeof(cmd), "\"%s\" -E -dM %s \"%s\" " BG_ERR_SINK,
+             cc, include_flags, file);
+    FILE* p = bg_popen(cmd);
     if (!p) return 0;
     size_t pos = 0;
     char line[4096];
@@ -374,7 +402,7 @@ static int bg_expand(const char* cc, const char* header,
 
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), "\"%s\" -E %s \"%s\" " BG_ERR_SINK, cc, include_flags, probe_path);
-    FILE* p = popen(cmd, "r");
+    FILE* p = bg_popen(cmd);
     if (!p) { remove(probe_path); return 0; }
     char line[BG_EXPANSION_MAX + BG_NAME_MAX + 32];
     while (fgets(line, sizeof(line), p)) {
