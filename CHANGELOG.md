@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Format bugs in printf-family extern calls are caught again** (#1252).
+  The interop lowering cast literal format strings to `void*`, which
+  stripped the constant the C compiler's `-Wformat` check reads, so a
+  `%s`-vs-int bug compiled silently even against libc's own attributed
+  prototype. String literals now pass into `ptr` parameters bare (they are
+  `char[]` in C and convert implicitly), `ae` passes `-Wformat` when
+  compiling generated C, and `ae build` surfaces compiler warnings the way
+  `ae run` already did. The `#line` mapping points the diagnostic at the
+  offending `.ae` line; `-Wno-format` via aether.toml cflags opts out.
+- **Struct fields named after libc symbols work again** (#1251). A field
+  spelled `read` or `write` was renamed to `ae_read` at the member-call
+  site but kept its own name in the struct definition, so the emitted C
+  referenced a member that does not exist. Fields are struct members, not
+  linker symbols: the libc-collision rename no longer applies to them, and
+  definition and call site agree. Redis-style vtables (`rio.read`,
+  `rio.write`) now port cleanly.
+- **Rebuilding `ae` itself invalidates the build cache.** The key hashed
+  aetherc's mtime but not the driver's, and the flags ae passes to the C
+  compiler are part of the output, so upgrading ae could serve binaries
+  built with the old flags until `ae cache clear`. The running executable's
+  mtime is now folded into the key.
+- **`ae.c` compiles warning-free under MinGW GCC's full `-Wall -Wextra
+  -Werror`** (15 findings on the previous release, zero now): misleading
+  indentation twice, two POSIX-only globals unused on Windows, nine
+  format-truncation sites fixed by sizing derived buffers past their
+  sources, and one cross-compile source-path join that now reports and
+  skips an overlong path instead of silently truncating it, which could
+  have compiled the wrong file.
+- **Editing a module under `lib/` invalidates the build cache on Windows**
+  (#1235). The lib-dir content walk that feeds the cache key was compiled
+  out on Windows, leaving only the directory's own mtime, which does not
+  change on an edit-in-place, so every module edit served a stale cached
+  binary until `ae cache clear`. The walk now has a native
+  FindFirstFileA implementation with the same bounded-depth,
+  content-hashing semantics as the POSIX one, and a cross-platform
+  integration test guards the behavior end to end.
+
 ## [0.435.0]
 
 ### Fixed

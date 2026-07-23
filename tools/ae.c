@@ -214,7 +214,9 @@ static bool g_emit_csrc = false;  // #996 --emit=csrc: emit .c + catalog .h, no 
 // and records the .so path + rpath here so build_gcc_cmd links it.
 // Empty for the common all-source build. POSIX-only (the prepass is
 // gated on dlopen availability); stays empty on Windows.
+#ifndef _WIN32
 static char g_binimport_link[4096] = "";
+#endif
 
 // Extra link flags accumulated by the host-bridge import prepass: when
 // a program `import`s `contrib.host.<lang>`, the bridge's static lib
@@ -228,7 +230,9 @@ static char g_binimport_link[4096] = "";
 // hello-world binary to dlopen libpython at runtime). Empty unless
 // `prepare_host_bridge_imports` found a match. POSIX-only (the host
 // bridges aren't built / linked on Windows).
+#ifndef _WIN32
 static char g_host_bridge_link[2048] = "";
+#endif
 
 // Mirror of runtime/aether_lib_meta.h's catalog structs, kept
 // layout-compatible so `ae` can dlopen a `--emit=lib` artifact and walk
@@ -499,11 +503,59 @@ static unsigned long long fnv64_file(const char* path) {
  * and compute_cache_key couldn't include the env-resolved modules'
  * mtimes — so an edit to a vendored module behind that env var would
  * never invalidate the cache. Idempotent: skips if already populated. */
+static bool get_exe_path(char* buf, size_t size);
+
 static void tc_seed_lib_dirs_from_env(void) {
     if (tc.lib_dir_count > 0) return;
     const char* env = getenv("AETHER_LIB_DIR");
     if (env && *env) tc_lib_dir_append(env);
 }
+
+#ifdef _WIN32
+/* Windows twin of the POSIX walk below (#1235). This walk was compiled out
+ * on Windows, so lib-dir contents never entered the cache key: only the
+ * directory's own mtime did, and that does not change on an edit-in-place.
+ * Every module edit under lib/ therefore served a stale cached binary until
+ * `ae cache clear`. FindFirstFileA works on both MinGW and MSVC; dirent.h
+ * does not exist under MSVC, hence a native walk rather than un-guarding
+ * the POSIX one. Semantics mirror the POSIX twin exactly: bounded depth,
+ * shared entry cap, relative-path + content folding. */
+static int hash_lib_dir_entries(const char* dir, const char* rel,
+                                unsigned long long* acc, int* count, int depth) {
+    if (depth > 8 || *count >= 4096) return *count;
+    char pattern[1024];
+    snprintf(pattern, sizeof(pattern), "%s\\*", dir);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return *count;
+    do {
+        const char* name = fd.cFileName;
+        if (name[0] == '.') continue;  // skip . / .. / dotfiles
+        char full[1024];
+        snprintf(full, sizeof(full), "%s\\%s", dir, name);
+        char childrel[1024];
+        if (rel && rel[0])
+            snprintf(childrel, sizeof(childrel), "%s/%s", rel, name);
+        else
+            snprintf(childrel, sizeof(childrel), "%s", name);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            hash_lib_dir_entries(full, childrel, acc, count, depth + 1);
+            continue;
+        }
+        size_t nlen = strlen(name);
+        int interesting = 0;
+        if (nlen > 3 && strcmp(name + nlen - 3, ".ae") == 0) interesting = 1;
+        else if (nlen > 2 && (strcmp(name + nlen - 2, ".c") == 0 ||
+                              strcmp(name + nlen - 2, ".h") == 0)) interesting = 1;
+        if (!interesting) continue;
+        *acc ^= fnv64_str(childrel);
+        *acc = (*acc * 1099511628211ULL) ^ fnv64_file(full);
+        (*count)++;
+    } while (FindNextFileA(h, &fd) && *count < 4096);
+    FindClose(h);
+    return *count;
+}
+#endif
 
 #ifndef _WIN32
 /* Recursively fold every source file (.ae/.c/.h) under `dir` into `*acc`
@@ -575,6 +627,11 @@ static unsigned long long compute_cache_key(const char* ae_file,
     struct stat st;
     if (stat(tc.compiler, &st) == 0)
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
+    /* The driver's own mtime: flags ae passes to the C compiler are part
+     * of the output, so a rebuilt ae must miss the cache (#1235 family). */
+    char self_path[1200];
+    if (get_exe_path(self_path, sizeof(self_path)) && stat(self_path, &st) == 0)
+        pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":ae=%lld", (long long)st.st_mtime);
     if (tc.has_lib && stat(tc.lib, &st) == 0)
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
 
@@ -609,7 +666,6 @@ static unsigned long long compute_cache_key(const char* ae_file,
      * stdlib/vendored-modules count. */
     if (tc.lib_dir_count == 0) {
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":lib=(default)");
-#ifndef _WIN32
         /* #1025 Bug A: with no --lib flag and no $AETHER_LIB_DIR, the compiler
          * still searches the default lib dir (module_add_lib_dir(
          * AETHER_DEFAULT_LIB_DIR) in aether_module.c) — the canonical
@@ -626,7 +682,6 @@ static unsigned long long compute_cache_key(const char* ae_file,
                                 ":dlent=%d:dlh=%016llx", n, entry_hash);
             }
         }
-#endif
     }
     for (int i = 0; i < tc.lib_dir_count; i++) {
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
@@ -636,7 +691,6 @@ static unsigned long long compute_cache_key(const char* ae_file,
             pos += snprintf(key_buf + pos, sizeof(key_buf) - pos,
                             ":lmt=%lld", (long long)lst.st_mtime);
         }
-#ifndef _WIN32
         /* Recurse the whole lib-dir tree — modules live in subdirectories
          * (#623 follow-up: a top-level-only walk missed every std/contrib
          * module in a subdir, so editing one served a stale cached binary). */
@@ -649,7 +703,6 @@ static unsigned long long compute_cache_key(const char* ae_file,
                                 ":lent=%d:lh=%016llx", n, entry_hash);
             }
         }
-#endif
     }
 
     snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%s:%s",
@@ -995,32 +1048,48 @@ static char* get_basename(const char* path) {
 }
 
 // Get directory containing this executable
-static bool get_exe_dir(char* buf, size_t size) {
+/* Absolute path of the running `ae` binary itself. Besides seeding
+ * get_exe_dir, compute_cache_key folds this file's mtime into the key:
+ * the key already covered aetherc's mtime, but a rebuilt `ae` (whose
+ * codegen-driving flags such as -Wformat live here) served stale
+ * binaries until `ae cache clear`. */
+static bool get_exe_path(char* buf, size_t size) {
 #ifdef __APPLE__
     uint32_t sz = (uint32_t)size;
     if (_NSGetExecutablePath(buf, &sz) == 0) {
         char resolved[PATH_MAX];
         if (realpath(buf, resolved)) {
-            char* slash = strrchr(resolved, '/');
-            if (slash) { *slash = '\0'; strncpy(buf, resolved, size - 1); buf[size - 1] = '\0'; return true; }
+            strncpy(buf, resolved, size - 1);
+            buf[size - 1] = '\0';
+            return true;
         }
     }
 #elif defined(__linux__)
     ssize_t len = readlink("/proc/self/exe", buf, size - 1);
     if (len > 0) {
         buf[len] = '\0';
-        char* slash = strrchr(buf, '/');
-        if (slash) { *slash = '\0'; return true; }
+        return true;
     }
 #elif defined(_WIN32)
     DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)size);
     if (len > 0 && len < (DWORD)size) {
         buf[len] = '\0';
-        char* slash = strrchr(buf, '\\');
-        if (slash) { *slash = '\0'; return true; }
+        return true;
     }
 #endif
     return false;
+}
+
+static bool get_exe_dir(char* buf, size_t size) {
+    if (!get_exe_path(buf, size)) return false;
+    char* slash = strrchr(buf, '/');
+#ifdef _WIN32
+    char* bslash = strrchr(buf, '\\');
+    if (!slash || (bslash && bslash > slash)) slash = bslash;
+#endif
+    if (!slash) return false;
+    *slash = '\0';
+    return true;
 }
 
 // --------------------------------------------------------------------------
@@ -1728,7 +1797,7 @@ static const char* c_backend_env_override(void) {
     "https://github.com/brechtsanders/winlibs_mingw/releases/download/" \
     WINLIBS_TAG "/" WINLIBS_ZIP
 
-static char s_gcc_bin[1024] = "gcc";  // path to gcc; updated by ensure_gcc_windows()
+static char s_gcc_bin[1100] = "gcc";  // path to gcc; updated by ensure_gcc_windows()
 static bool s_gcc_ready      = false; // set after first successful check
 
 // Checks PATH, then ~/.aether/tools/, then downloads WinLibs on demand.
@@ -1753,7 +1822,10 @@ static bool ensure_gcc_windows(void) {
 
     // 2. Already installed to ~/.aether/tools/ from a previous run?
     const char* home  = get_home_dir();
-    char tools_dir[1024], tools_bin[1024], tools_gcc[1024];
+    /* tools_bin/tools_gcc derive from tools_dir plus a fixed suffix;
+     * sized a tier up so gcc's -Wformat-truncation heuristic (which
+     * assumes the %s can fill its whole source buffer) stays quiet. */
+    char tools_dir[1024], tools_bin[1100], tools_gcc[1100];
     snprintf(tools_dir, sizeof(tools_dir), "%s\\.aether\\tools",           home);
     snprintf(tools_bin, sizeof(tools_bin), "%s\\mingw64\\bin",             tools_dir);
     snprintf(tools_gcc, sizeof(tools_gcc), "%s\\mingw64\\bin\\gcc.exe",    tools_dir);
@@ -1768,7 +1840,7 @@ static bool ensure_gcc_windows(void) {
     mkdirs(tools_dir);  // Create ~/.aether/tools/ (and parents)
 
     // Write a tiny PowerShell script to avoid shell-quoting nightmares.
-    char ps_path[1024], zip_path[1024];
+    char ps_path[1100], zip_path[1100];
     snprintf(ps_path,  sizeof(ps_path),  "%s\\install_gcc.ps1", tools_dir);
     snprintf(zip_path, sizeof(zip_path), "%s\\mingw.zip",        tools_dir);
 
@@ -1800,7 +1872,7 @@ static bool ensure_gcc_windows(void) {
 found:
     // Add bundled bin dir to PATH for this process so gcc is found by name too.
     {
-        char cur[8192] = "", updated[8192];
+        char cur[8192] = "", updated[9400];
         GetEnvironmentVariableA("PATH", cur, sizeof(cur));
         snprintf(updated, sizeof(updated), "%s;%s", tools_bin, cur);
         SetEnvironmentVariableA("PATH", updated);
@@ -2158,8 +2230,13 @@ static int get_extra_sources_for_bin(const char* ae_file, char* out, size_t out_
 // gcc inlines / merges blocks, and the .gcov line attribution gets
 // scrambled (a hit on line 7 might show up on line 9).
 static const char* opt_flags(bool optimize) {
-    if (g_coverage) return "-O0 -g --coverage";
-    return optimize ? "-O2" : "-O0 -g";
+    /* -Wformat: with the interop lowering no longer casting literal format
+     * strings to void* (#1252), the C compiler can check printf-family
+     * extern calls; #line directives map its warning to the user's .ae
+     * source. User cflags from aether.toml append after these flags, so
+     * -Wno-format remains available to opt out. */
+    if (g_coverage) return "-O0 -g --coverage -Wformat";
+    return optimize ? "-O2 -Wformat" : "-O0 -g -Wformat";
 }
 
 static void build_gcc_cmd(char* cmd, size_t size,
@@ -3291,7 +3368,7 @@ static int cmd_check(int argc, char** argv) {
         if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
         lf_off += (size_t)w;
     }
-    char cmd[4096];
+    char cmd[8192];
     snprintf(cmd, sizeof(cmd), "\"%s\"%s --check \"%s\"",
              tc.compiler, lib_flags, file);
     return run_cmd(cmd);
@@ -3336,7 +3413,7 @@ static int cmd_inspect(int argc, char** argv) {
         if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
         lf_off += (size_t)w;
     }
-    char cmd[4096];
+    char cmd[8192];
     snprintf(cmd, sizeof(cmd), "\"%s\" --emit=inspect%s \"%s\"",
              tc.compiler, lib_flags, file);
     return run_cmd(cmd);
@@ -4890,7 +4967,7 @@ int cmd_build_namespace(int argc, char** argv) {
     }
 
     /* Full output path with lib<base><ext>, anchored under target_dir. */
-    char out_path[1280];
+    char out_path[2400];
     snprintf(out_path, sizeof(out_path), "%s/lib%s%s", target_dir, base_name, lib_ext);
 
     /* Step 5: build the synthetic .ae as --emit=lib, then re-link with
@@ -5074,7 +5151,13 @@ static int cross_collect_core_list(char out[][CROSS_SRC_PATH_MAX], int max,
         if (*p == '\0' || *p == '#') continue;                 /* comment / blank */
         size_t plen = strlen(p);
         if (plen < 2 || strcmp(p + plen - 2, ".c") != 0) continue;
-        snprintf(out[count], CROSS_SRC_PATH_MAX, "%s/%s", base, p);
+        int need = snprintf(out[count], CROSS_SRC_PATH_MAX, "%s/%s", base, p);
+        if (need < 0 || need >= CROSS_SRC_PATH_MAX) {
+            /* A truncated source path would compile the wrong file or
+             * fail obscurely at the C compiler; skip it loudly instead. */
+            fprintf(stderr, "Warning: source path too long, skipped: %s/%s\n", base, p);
+            continue;
+        }
         count++;
     }
     fclose(f);
@@ -5899,7 +5982,10 @@ static int cmd_build(int argc, char** argv) {
             const char* extra = extra_files[0] ? extra_files : NULL;
             build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, !quick, extra);
         }
-        build_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+        /* Warnings-visible like the `ae run` path: with #1252 fixed the C
+         * compiler's -Wformat findings map to the user's .ae lines, and a
+         * fully quiet compile would hide them. Errors still re-run loud. */
+        build_ret = tc.verbose ? run_cmd(cmd) : run_cmd_show_warnings(cmd);
         if (build_ret != 0) {
             // Retry with visible output for error messages
             if (is_wasm) {
@@ -6459,7 +6545,7 @@ static int cmd_examples(int argc, char** argv) {
             while (fgets(c_line, sizeof(c_line), c_pipe)) {
                 c_line[strcspn(c_line, "\n\r")] = '\0';
                 if (strlen(c_line) == 0) continue;
-                char c_path[512];
+                char c_path[1100];
 #ifdef _WIN32
                 snprintf(c_path, sizeof(c_path), "%s\\%s", src_dir, c_line);
 #else
@@ -6643,9 +6729,11 @@ static int cmd_repl(void) {
     if (inner < help_len + 3) inner = help_len + 3;
     printf("  ┌"); for (int i = 0; i < inner; i++) printf("─"); printf("┐\n");
     printf("  │   Aether %s REPL", AE_VERSION);
-    for (int i = title_len; i < inner; i++) printf(" "); printf("│\n");
+    for (int i = title_len; i < inner; i++) printf(" ");
+    printf("│\n");
     printf("  │   :help for commands");
-    for (int i = help_len; i < inner; i++) printf(" "); printf("│\n");
+    for (int i = help_len; i < inner; i++) printf(" ");
+    printf("│\n");
     printf("  └"); for (int i = 0; i < inner; i++) printf("─"); printf("┘\n");
     printf("\n");
 
@@ -7369,7 +7457,7 @@ static int cmd_version_use(const char* version) {
             }
             fclose(avf_bak);
             if (cur_ver[0]) {
-                char cur_vtag[64];
+                char cur_vtag[66];
                 if (cur_ver[0] != 'v') snprintf(cur_vtag, sizeof(cur_vtag), "v%s", cur_ver);
                 else { strncpy(cur_vtag, cur_ver, sizeof(cur_vtag) - 1); cur_vtag[sizeof(cur_vtag)-1] = '\0'; }
                 char cur_ver_dir[512];
