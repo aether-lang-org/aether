@@ -74,14 +74,31 @@ static int op_len(const char* s){
 
 // Scan a "..." literal starting at s[i]=='"'. Returns index just past the
 // closing quote, or 0 if unterminated. This mirrors the compiler lexer's
-// read_string exactly: the string ends at the first unescaped '"', and `\<c>`
-// is a two-character escape. `${...}` interpolation content is ordinary bytes
-// for boundary purposes (the lexer does not track nested quotes inside it, so
-// valid Aether never puts a bare '"' there).
+// read_string exactly: the string ends at the first unescaped '"' seen
+// outside any ${...} interpolation, and `\<c>` is a two-character escape.
+// Inside a ${...} span (tracked via interp_depth, matching '{'/'}' nesting),
+// a '"' or '\"' opens a NESTED string literal rather than ending the outer
+// one (#1237: `${id("hi")}` and `${id(\"hi\")}` are both valid Aether).
 static size_t scan_quoted(const char* s, size_t i){
     i++; // opening quote
+    int interp_depth=0;
     while (s[i]){
         char c=s[i];
+        if (c=='$' && s[i+1]=='{'){ interp_depth++; i+=2; continue; }
+        if (interp_depth>0 && c=='{'){ interp_depth++; i++; continue; }
+        if (interp_depth>0 && c=='}'){ interp_depth--; i++; continue; }
+        if (interp_depth>0 && (c=='"' || (c=='\\' && s[i+1]=='"'))){
+            if (c=='\\') i++; // drop escaping backslash (opening)
+            i++; // opening "
+            for(;;){
+                if (!s[i]) return 0;
+                if (s[i]=='"'){ i++; break; }
+                if (s[i]=='\\' && s[i+1]=='"'){ i+=2; break; }
+                if (s[i]=='\\'){ if(!s[i+1]) return 0; i+=2; continue; }
+                i++;
+            }
+            continue;
+        }
         if (c=='\\'){ if(!s[i+1]) return 0; i+=2; continue; }
         if (c=='"') return i+1;
         i++;

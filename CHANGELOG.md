@@ -13,6 +13,15 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **String-literal argument to a call inside `${...}` interpolation.**
+  `${id("hi")}` used to be a parse error (the `"` ended the *outer*
+  string), and the workaround developers reached for instead,
+  `${id(\"hi\")}`, compiled clean but silently evaluated to `""` — no
+  error, wrong value. The lexer now tracks interpolation depth and
+  treats a `"` (or `\"`) inside `${...}` as opening a real nested
+  string literal, so both spellings parse and evaluate correctly.
+  `ae fmt` updated to match, so formatting a file using this no longer
+  mangles the string. (#1237)
 - **The toolchain now compiles on musl (Alpine Linux).** Two portability
   fixes surfaced by the first native aarch64 Alpine build of the toolchain:
   `lsp/aether_lsp.c` captured parser errors by assigning to `stderr`, which

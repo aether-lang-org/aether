@@ -1,0 +1,81 @@
+// Regression for #1237: a string-literal argument to a call inside
+// ${...} interpolation had no correct spelling.
+//
+//   ${id("hi")}     -> compile error (the '"' ended the OUTER string)
+//   ${id(\"hi\")}   -> compiled clean but silently evaluated to ""
+//
+// Root cause: read_string() had no concept of being "inside ${...}", so
+// an unescaped '"' there always terminated the outer string, and once
+// has_interp was set, backslash-escapes were preserved raw for the
+// parser to re-lex — but the re-lex just fed \" through to a fresh
+// lexer pass, which has no meaning outside a string it's already
+// inside (a bare '\' is a lex error, silently dropping the ${...}
+// child node). Fixed by tracking interpolation depth in the lexer and
+// treating a nested '"' (or '\"') as opening a real nested string
+// literal instead of ending the outer one.
+
+import std.string
+
+extern exit(code: int)
+
+id(s: string) -> string { return s }
+greet(name: string, punct: string) -> string { return "${name}${punct}" }
+
+main() {
+    println("=== test_issue1237_interp_nested_string_literal ===")
+
+    x = "hi"
+
+    // Baseline: passing the literal via a variable always worked.
+    via_var = "[${id(x)}]"
+    if string.equals(via_var, "[hi]") != 1 {
+        println("  FAIL: via variable -> '${via_var}'"); exit(1)
+    }
+
+    // Plain double-quoted literal inside ${...} must now parse and
+    // evaluate correctly (previously: parse error).
+    plain = "[${id("hi")}]"
+    if string.equals(plain, "[hi]") != 1 {
+        println("  FAIL: plain-quote -> '${plain}'"); exit(1)
+    }
+
+    // Escaped-quote spelling must evaluate correctly too, not
+    // silently collapse to empty string (the original bug report).
+    escaped = "[${id(\"hi\")}]"
+    if string.equals(escaped, "[hi]") != 1 {
+        println("  FAIL: escaped-quote -> '${escaped}'"); exit(1)
+    }
+
+    // Mixed open/close escaping spellings must also work.
+    mixed_open = "[${id(\"hi")}]"
+    if string.equals(mixed_open, "[hi]") != 1 {
+        println("  FAIL: mixed-open -> '${mixed_open}'"); exit(1)
+    }
+
+    mixed_close = "[${id("hi\")}]"
+    if string.equals(mixed_close, "[hi]") != 1 {
+        println("  FAIL: mixed-close -> '${mixed_close}'"); exit(1)
+    }
+
+    // Multiple string-literal arguments in one interpolated call.
+    two_args = "[${greet("bob", "!")}]"
+    if string.equals(two_args, "[bob!]") != 1 {
+        println("  FAIL: two-args -> '${two_args}'"); exit(1)
+    }
+
+    // Literal text (with its own escapes) after the interpolation
+    // must still be processed correctly (no depth-tracking leakage).
+    tail = "${id(x)} then \"literal\""
+    if string.equals(tail, "hi then \"literal\"") != 1 {
+        println("  FAIL: tail -> '${tail}'"); exit(1)
+    }
+
+    // Non-interpolated strings must be entirely unaffected.
+    plain_escape = "say \"hi\""
+    if string.equals(plain_escape, "say \"hi\"") != 1 {
+        println("  FAIL: plain escape -> '${plain_escape}'"); exit(1)
+    }
+
+    println("  PASS: ${via_var} ${plain} ${escaped} ${mixed_open} ${mixed_close} ${two_args}")
+    println("=== test_issue1237_interp_nested_string_literal passed ===")
+}
