@@ -55,7 +55,7 @@ void process_messages(StressActor* actor, int count) {
     
     for (int i = 0; i < count; i++) {
         // Simulate message processing with memory allocation
-        void* data = arena_alloc(actor->arena, 32 + (i % 128));
+        arena_alloc(actor->arena, 32 + (i % 128));
         memory_stats_record_alloc(32 + (i % 128));
         
         actor->messages_processed++;

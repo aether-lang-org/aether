@@ -409,10 +409,15 @@ const char* profiler_events_to_json(int count, int offset) {
     
     int start = (g_profiler.event_index - g_profiler.event_count + g_profiler.config.max_events) 
                 % g_profiler.config.max_events;
-    int num_events = g_profiler.event_count < count ? g_profiler.event_count : count;
+    /* `offset` pages back from the newest event: offset 0 returns the
+     * latest `count` events, offset N skips the N newest. It was accepted
+     * and ignored before, so every page repeated the same events. */
+    if (offset < 0) offset = 0;
+    int available = g_profiler.event_count > offset ? g_profiler.event_count - offset : 0;
+    int num_events = available < count ? available : count;
     
     for (int i = 0; i < num_events && ptr < buffer + sizeof(buffer) - 256; i++) {
-        int idx = (start + g_profiler.event_count - num_events + i + g_profiler.config.max_events) 
+        int idx = (start + g_profiler.event_count - offset - num_events + i + g_profiler.config.max_events) 
                   % g_profiler.config.max_events;
         ProfilerEvent* e = &g_profiler.events[idx];
         

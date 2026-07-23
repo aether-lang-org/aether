@@ -1728,7 +1728,13 @@ ASTNode* parse_binary_expression(Parser* parser, int precedence) {
 
         advance_token(parser);
         ASTNode* right = parse_binary_expression(parser, op_precedence + 1);  // Left-associative
-        if (!right) return NULL;
+        if (!right) {
+            /* The half-built left operand is owned here alone; dropping it
+             * on the error path leaked once per failed expression, which in
+             * the long-lived lsp mode grows per keystroke. */
+            free_ast_node(left);
+            return NULL;
+        }
 
         // #340: `a ?? b` builds a dedicated null-coalesce node (children:
         // [optional, default]) rather than a generic binary expression, so the
@@ -2002,6 +2008,9 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
             advance_token(parser); // consume '('
 
             ASTNode* func_call = create_ast_node(AST_FUNCTION_CALL, func_name, op->line, op->column);
+            /* create_ast_node strdups its value; this working copy leaked
+             * once per parsed call expression. */
+            free((void*)func_name);
 
             // #928 UFCS shape (a): mark the node and seat the detached
             // receiver as the implicit first argument (children[0]). The

@@ -13,6 +13,38 @@ next version number before tagging the release.
 
 ### Fixed
 
+- **The compiler no longer leaks per parse.** Five leak classes made
+  `aetherc lsp`, which reparses on every keystroke, grow without bound: the
+  scope-restore sites in codegen truncated `declared_vars` without freeing
+  the names declared inside the scope; the postfix parser dropped its
+  working copy of every call's function name after `create_ast_node` took
+  its own; `parse_binary_expression` leaked the half-built left operand
+  when the right side failed to parse; sixteen sites in type inference
+  overwrote `node_type` without freeing the previous type; and the extern
+  registry's `param_full` arrays were never freed at generator teardown.
+  A clean parse and a failing parse now both run leak-free under leaks(1),
+  and an import-heavy compile dropped from 287 leaked blocks to 151.
+- **`ae build` output no longer stalls on first run on macOS.** The
+  Gatekeeper mitigation (ad-hoc re-sign plus quarantine clear) existed but
+  was never called; it now runs after every successful executable build,
+  before the cache copy, so cached clones are covered too.
+- **The profiler's event API paginates.** `profiler_events_to_json`
+  accepted an `offset` parameter and ignored it, so every page repeated
+  the same events; it now pages back from the newest event.
+
+### Changed
+
+- **`std.list`'s owned-flag lazy allocation is one helper again.** The
+  helper existed but its logic had been open-coded four times at the two
+  owned-add call sites; they now call it. Also dropped a dead djb2 hash
+  twin and two rwlock-init shims left over after the lazy-lock-init
+  removal, and cleaned the last hidden unused-variable and unused-parameter
+  warnings in the profiler tools.
+
+## [current]
+
+### Fixed
+
 - **A failed write of generated C now fails the compile.** The write-failure
   guard added in the cleanup sweep printed its error but returned
   compile_source's success code, so a full disk still handed the truncated

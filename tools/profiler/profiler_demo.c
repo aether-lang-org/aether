@@ -79,7 +79,7 @@ void simulate_actor_activity() {
     printf("Activity simulation complete. Events recorded: 300\n");
 }
 
-int main(int argc, char** argv) {
+int main(void) {
     printf("╔════════════════════════════════════════════════╗\n");
     printf("║     Aether Profiler Demo                       ║\n");
     printf("╚════════════════════════════════════════════════╝\n\n");
