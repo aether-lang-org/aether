@@ -39,6 +39,7 @@ typedef struct {
 } Toolchain;
 
 extern Toolchain tc;
+extern char s_cache_dir[512];   /* resolved once by init_cache_dir (ae_cache.c) */
 
 /* ae.c helpers shared across TUs. */
 int  run_cmd_show_warnings(const char* cmd);
@@ -46,6 +47,7 @@ bool path_exists(const char* path);
 void mkdirs(const char* path);
 const char* get_cflags(void);
 const char* get_home_dir(void);
+bool get_exe_path(char* buf, size_t size);
 bool dir_exists(const char* path);
 void macos_prepare_binary(const char* path);
 
@@ -70,6 +72,15 @@ int cmd_upgrade(void);
 
 /* ae_repl.c — the interactive REPL. */
 int cmd_repl(void);
+
+/* ae_cache.c — build cache (content-hashed keys, publish, GC, ae cache). */
+int  cache_publish(const char* tmp_path, const char* final_path);
+void remove_dsym_bundle(const char* exe_path);
+void gc_stale_cache_tmp(const char* dir);
+void init_cache_dir(void);
+void tc_lib_dir_append(const char* spec);
+unsigned long long compute_cache_key(const char* ae_file, const char* extra_files,
+                                     const char* opt_level, const char* extra_salt);
 
 /* ae_cross.c — cross-compilation via the zig cc backend (#1105). */
 const char* cross_target_to_zig(const char* t);
