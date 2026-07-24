@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`tools/ae.c` split into cohesive translation units** (#1221). The driver
+  was one 8,514-line TU, so any edit recompiled all of it, the dominant cost
+  in the edit-`ae`-rebuild loop that the cross-compile work touches
+  constantly. Three command clusters moved into their own sources reached
+  through a new `tools/ae_internal.h`: `ae_cross.c` (the zig cross-compile
+  backend), `ae_version.c` (list/install/switch releases), and `ae_repl.c`
+  (the interactive REPL) plus `ae_cache.c` (content-hashed build cache,
+  publish, GC, and `ae cache`), taking `ae.c` to 6,480 lines. Pure code motion:
+  `ae` is already a multi-TU link (`ae_help.c`, `ae_fmt.c`, `ae_bindgen.c`),
+  and it spends its wall-clock in `zig cc` / `posix_run` / disk rather than
+  its own driver code, so there is no runtime cost. Behavior is unchanged.
+- **The `ae` driver now builds per translation unit** (#1221). It was linked
+  from one `gcc` invocation over all `tools/*.c`, so the split above would
+  not have helped incremental builds: every edit still recompiled the whole
+  driver. Each `tools/*.c` now compiles to its own object with `-MMD -MP`
+  dependency tracking, so editing one `ae_*.c` recompiles only that object
+  and relinks, and editing `ae_internal.h` rebuilds exactly the units that
+  include it. The linked binary is identical.
+
 ## [0.436.0]
 
 ### Added
