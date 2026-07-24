@@ -11,6 +11,11 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
+#  include <windows.h>    /* GetCurrentProcessId for temp-file names */
+#  include <process.h>    /* _getpid */
+#  ifndef getpid
+#    define getpid _getpid
+#  endif
 #  define EXE_EXT ".exe"
 #else
 #  include <unistd.h>
