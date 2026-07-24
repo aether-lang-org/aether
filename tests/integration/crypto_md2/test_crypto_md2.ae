@@ -1,0 +1,77 @@
+// Validate std.cryptography.md2 against published RFC 1319 test vectors.
+import std.cryptography.md2
+import std.io
+
+check(label: string, got: string, want: string) -> int {
+    if got == want {
+        println("ok   ${label}")
+        return 0
+    }
+    println("FAIL ${label}")
+    println("  got:  ${got}")
+    println("  want: ${want}")
+    return 1
+}
+
+main() {
+    fails = 0
+
+    // Standard RFC 1319 Test Vectors
+    fails = fails + check("empty",
+        md2.md2_hex("", 0),
+        "8350e5a3e24c153df2275c9f80692773")
+
+    fails = fails + check("a",
+        md2.md2_hex("a", 1),
+        "32ec01ec4a6dac72c0ab96fb34c0b5d1")
+
+    fails = fails + check("abc",
+        md2.md2_hex("abc", 3),
+        "da853b0d3f88d99b30283a69e6ded6bb")
+
+    fails = fails + check("message digest",
+        md2.md2_hex("message digest", 14),
+        "ab4f496bfb2a530b219ff33031fe06b0")
+
+    fails = fails + check("abcdefghijklmnopqrstuvwxyz",
+        md2.md2_hex("abcdefghijklmnopqrstuvwxyz", 26),
+        "4e8ddff3650292ab5a4108c3aa47940b")
+
+    fails = fails + check("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+        md2.md2_hex("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", 62),
+        "da33def2a42df13975352846c30338cd")
+
+    fails = fails + check("1234567890...",
+        md2.md2_hex("12345678901234567890123456789012345678901234567890123456789012345678901234567890", 80),
+        "d5976f79d83d3a0dc9806c3c66f3efd8")
+
+    // Streaming API check
+    ctx, err = md2.new()
+    if err != "" {
+        println("FAIL: md2.new failed: ${err}")
+        fails = fails + 1
+    } else {
+        md2.update(ctx, "abc", 3)
+        res = md2.final_hex(ctx)
+        fails = fails + check("streaming abc", res, "da853b0d3f88d99b30283a69e6ded6bb")
+    }
+
+    // Streaming multi-part update check
+    ctx2, err2 = md2.new()
+    if err2 != "" {
+        println("FAIL: md2.new failed: ${err2}")
+        fails = fails + 1
+    } else {
+        md2.update(ctx2, "message ", 8)
+        md2.update(ctx2, "digest", 6)
+        res2 = md2.final_hex(ctx2)
+        fails = fails + check("streaming multi-part", res2, "ab4f496bfb2a530b219ff33031fe06b0")
+    }
+
+    if fails == 0 {
+        println("ALL PASS")
+        return
+    }
+    println("FAILURES: ${fails}")
+    exit(1)
+}
